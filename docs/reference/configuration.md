@@ -134,7 +134,7 @@ An inline spec like `rimz agents "claude,codex+term"` keeps the same shape gramm
 4. registered agent kinds,
 5. adapter-supported virtual `<kind>-<mode>` and `<kind>-ping` cells (`claude-auto`, `codex-ask`, `codex-yolo`, `claude-ping`, …).
 
-Profiles and roles become addressable handles, so they must not shadow `@all`, agent kinds (`@claude`), kind ordinals (`@claude-2`), or the pane/channel sigils (`:`, `#`). Profile, command, and team names also reserve the `agents` subcommand verbs `list`, `ls`, `show`, `stop`, `focus`, `wait`, `term`, and `exec`. A per-machine config that still uses the removed `[tab]`, `[tab.keywords]`, `[tab.layouts]`, or `[agents.aliases]` tables hard-errors with the rename to `[agents]`, `[agents.profiles]`, `[agents.commands]`, and `[agents.teams]`.
+Profiles and roles become addressable handles, so they must not shadow `@all`, agent kinds (`@claude`), kind ordinals (`@claude-2`), or the pane/channel sigils (`:`, `#`). Profile, command, and team names also reserve the `agents` subcommand verbs `list`, `ls`, `show`, `stop`, `focus`, `wait`, `term`, and `exec`. A config that still uses a removed table fails fast naming the rename rather than silently dropping it: `[tab]` (with its `[tab.keywords]`/`[tab.layouts]` children) → `placement` under `[agents]` plus `[agents.teams]`; `[agents.aliases]` → `[agents.profiles]` and `[agents.commands]`; `[agents.layouts]` → `[agents.teams]`. The room degrades to defaults with a warning while `rimz config` and `rimz doctor` print the precise rename.
 
 ### Placement
 

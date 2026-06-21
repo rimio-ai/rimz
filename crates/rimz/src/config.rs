@@ -114,6 +114,10 @@ pub enum ConfigErr {
         #[source]
         source: crate::agents_spec::LayoutErr,
     },
+    #[error(
+        "removed config table in {path}: {detail} (run `rimz config init --print` for the current shape)"
+    )]
+    RemovedTable { path: PathBuf, detail: String },
 }
 
 pub type Result<T> = std::result::Result<T, ConfigErr>;
@@ -362,11 +366,45 @@ fn parse_theme_text(path: &Path, text: &str) -> Result<ThemeConfig> {
 }
 
 fn parse_agents_text(path: &Path, text: &str) -> Result<AgentsConfig> {
+    check_removed_agents_tables(path, text)?;
     let file: AgentsFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
         source,
     })?;
     Ok(file.agents)
+}
+
+/// Tables the `[agents]` redesign removed. Serde tolerates unknown keys so a
+/// newer config never breaks an older binary, but a *renamed* table is not a
+/// forward-compatible unknown — silently dropping it would launch a surface the
+/// user never declared. Fail fast naming the rename instead. A genuine syntax
+/// error is left to the typed parse to report.
+fn check_removed_agents_tables(path: &Path, text: &str) -> Result<()> {
+    let Ok(doc) = toml::from_str::<toml::Table>(text) else {
+        return Ok(());
+    };
+    let removed = |detail: &str| ConfigErr::RemovedTable {
+        path: path.to_path_buf(),
+        detail: detail.to_owned(),
+    };
+    if doc.contains_key("tab") {
+        return Err(removed(
+            "`[tab]` (with `[tab.keywords]`/`[tab.layouts]`) was removed — set `placement` under `[agents]` and declare layouts as `[agents.teams]`",
+        ));
+    }
+    if let Some(agents) = doc.get("agents").and_then(toml::Value::as_table) {
+        if agents.contains_key("aliases") {
+            return Err(removed(
+                "`[agents.aliases]` was split into `[agents.profiles]` (agent presets) and `[agents.commands]` (raw command panes)",
+            ));
+        }
+        if agents.contains_key("layouts") {
+            return Err(removed(
+                "`[agents.layouts]` was renamed to `[agents.teams]`",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn parse_agents_fragment_text(path: &Path, text: &str) -> Result<AgentsFragment> {

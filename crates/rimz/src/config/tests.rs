@@ -586,6 +586,31 @@ fn profile_name_validation_runs_at_config_load() {
 }
 
 #[test]
+fn removed_agents_tables_fail_fast_with_the_rename() {
+    let dir = tempdir().expect("tempdir");
+    for legacy in [
+        "[tab]\nkeywords = []\n",
+        "[agents.aliases]\nvim = \"nvim\"\n",
+        "[agents.layouts]\nreview = \"claude,codex\"\n",
+    ] {
+        assert!(
+            matches!(
+                MachineConfig::load_from(&write_named(&dir, "agents.toml", legacy)),
+                Err(ConfigErr::RemovedTable { .. })
+            ),
+            "expected a removed-table error for: {legacy}"
+        );
+    }
+    // The current shape still loads.
+    MachineConfig::load_from(&write_named(
+        &dir,
+        "agents.toml",
+        "[agents]\nplacement = \"tab\"\n\n[agents.commands]\nvim = \"nvim\"\n",
+    ))
+    .expect("current agents config loads");
+}
+
+#[test]
 fn per_agent_toggles_parse_independently() {
     let dir = tempdir().expect("tempdir");
     let config =
