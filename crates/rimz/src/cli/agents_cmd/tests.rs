@@ -172,13 +172,15 @@ fn pane_command_stamps_agent_role_and_team() {
 
     let pane = pane_cmd_with_name(
         &cell,
-        Path::new("/usr/bin/rimz"),
-        Path::new("/tmp/project"),
-        None,
-        false,
-        false,
-        Some("pcr"),
-        None,
+        PaneCmdOptions {
+            rimz_bin: Path::new("/usr/bin/rimz"),
+            cwd: Path::new("/tmp/project"),
+            prompt: None,
+            cleanup_worktree: false,
+            in_place: false,
+            team: Some("pcr"),
+            launch: None,
+        },
     )
     .expect("pane command");
 
@@ -220,13 +222,15 @@ fn in_place_pane_command_leaves_user_pane_open() {
 
     let pane = pane_cmd_with_name(
         &cell,
-        Path::new("/usr/bin/rimz"),
-        Path::new("/tmp/project"),
-        None,
-        false,
-        true,
-        None,
-        None,
+        PaneCmdOptions {
+            rimz_bin: Path::new("/usr/bin/rimz"),
+            cwd: Path::new("/tmp/project"),
+            prompt: None,
+            cleanup_worktree: false,
+            in_place: true,
+            team: None,
+            launch: None,
+        },
     )
     .expect("pane command");
 

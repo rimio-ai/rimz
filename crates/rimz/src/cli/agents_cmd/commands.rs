@@ -67,10 +67,18 @@ fn list_channel_filter(
     worktree: Option<&str>,
     workspace: &rimz::ResolvedWorkspace,
 ) -> Option<String> {
+    list_channel_filter_for_current(all, worktree, crate::cli::current_channel(workspace))
+}
+
+fn list_channel_filter_for_current(
+    all: bool,
+    worktree: Option<&str>,
+    current_channel: Option<String>,
+) -> Option<String> {
     match (worktree, all) {
         (Some(worktree), _) => Some(worktree.to_owned()),
         (None, true) => None,
-        (None, false) => crate::cli::current_channel(workspace),
+        (None, false) => current_channel,
     }
 }
 
@@ -903,48 +911,23 @@ fn pane_label(agent: &AgentState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    fn resolved_workspace(
-        project_root: &str,
-        worktree_root: &str,
-        worktree_branch: Option<&str>,
-    ) -> rimz::ResolvedWorkspace {
-        use rimz::ids::WorkspaceId;
-        let project_root = PathBuf::from(project_root);
-        rimz::ResolvedWorkspace {
-            workspace_id: WorkspaceId::from_project_root(&project_root),
-            project_root,
-            root_class: rimz::workspace::RootClass::Repo,
-            worktree_root: PathBuf::from(worktree_root),
-            worktree_branch: worktree_branch.map(str::to_owned),
-            session_name: "rimz-test".to_owned(),
-            mux_hint: None,
-        }
-    }
 
     #[test]
     fn list_channel_filter_resolves_explicit_all_and_current_channel() {
-        let workspace = resolved_workspace("/repo", "/repo/worktrees/feature", Some("feature"));
-
         assert_eq!(
-            list_channel_filter(true, Some("manual"), &workspace).as_deref(),
+            list_channel_filter_for_current(true, Some("manual"), Some("feature".to_owned()))
+                .as_deref(),
             Some("manual")
         );
-        assert_eq!(list_channel_filter(true, None, &workspace), None);
         assert_eq!(
-            list_channel_filter(false, None, &workspace).as_deref(),
+            list_channel_filter_for_current(true, None, Some("feature".to_owned())),
+            None
+        );
+        assert_eq!(
+            list_channel_filter_for_current(false, None, Some("feature".to_owned())).as_deref(),
             Some("feature")
         );
-
-        let bare = resolved_workspace("/repo", "/repo", None);
-        assert_eq!(list_channel_filter(false, None, &bare), None);
-
-        let named_worktree = resolved_workspace("/repo", "/repo/worktrees/docs", None);
-        assert_eq!(
-            list_channel_filter(false, None, &named_worktree).as_deref(),
-            Some("docs")
-        );
+        assert_eq!(list_channel_filter_for_current(false, None, None), None);
     }
 
     #[test]

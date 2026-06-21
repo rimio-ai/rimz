@@ -844,13 +844,15 @@ pub(super) fn layout_panes_with_names(
                     };
                     pane_cmd_with_name(
                         cell,
-                        &rimz_bin,
-                        cwd,
-                        prompt,
-                        cleanup_worktree,
-                        in_place,
-                        team,
-                        launch,
+                        PaneCmdOptions {
+                            rimz_bin: &rimz_bin,
+                            cwd,
+                            prompt,
+                            cleanup_worktree,
+                            in_place,
+                            team,
+                            launch,
+                        },
                     )
                 })
                 .collect::<Result<Vec<_>>>()
@@ -859,17 +861,17 @@ pub(super) fn layout_panes_with_names(
     Ok(LayoutPanes { columns })
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn pane_cmd_with_name(
-    cell: &Cell,
-    rimz_bin: &Path,
-    cwd: &Path,
-    prompt: Option<&str>,
-    cleanup_worktree: bool,
-    in_place: bool,
-    team: Option<&str>,
-    launch: Option<&LaunchIdentity>,
-) -> Result<PaneCmd> {
+pub(super) struct PaneCmdOptions<'a> {
+    pub rimz_bin: &'a Path,
+    pub cwd: &'a Path,
+    pub prompt: Option<&'a str>,
+    pub cleanup_worktree: bool,
+    pub in_place: bool,
+    pub team: Option<&'a str>,
+    pub launch: Option<&'a LaunchIdentity>,
+}
+
+pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<PaneCmd> {
     let argv = match cell {
         Cell::Command { argv } if argv.is_empty() => {
             vec![rimz::launch::user_shell_program()]
@@ -885,12 +887,12 @@ pub(super) fn pane_cmd_with_name(
             ..
         } => {
             let mut argv = vec![
-                rimz_bin.to_string_lossy().into_owned(),
+                options.rimz_bin.to_string_lossy().into_owned(),
                 "agents".to_owned(),
                 "exec".to_owned(),
                 kind.as_str().to_owned(),
             ];
-            if !cleanup_worktree && !in_place {
+            if !options.cleanup_worktree && !options.in_place {
                 argv.push("--close-pane-on-exit".to_owned());
             }
             if let Some(profile) = profile {
@@ -899,7 +901,7 @@ pub(super) fn pane_cmd_with_name(
             if let Some(role) = role {
                 argv.extend(["--agent-role".to_owned(), role.clone()]);
             }
-            if let Some(team) = team {
+            if let Some(team) = options.team {
                 argv.extend(["--agent-team".to_owned(), team.to_owned()]);
             }
             if let Some(model) = model {
@@ -908,7 +910,7 @@ pub(super) fn pane_cmd_with_name(
             if let Some(effort) = effort {
                 argv.extend(["--agent-effort".to_owned(), effort.clone()]);
             }
-            if let Some(launch) = launch {
+            if let Some(launch) = options.launch {
                 validate_agent_name(&launch.name)?;
                 argv.extend(["--agent-name".to_owned(), launch.name.clone()]);
                 argv.extend([
@@ -916,13 +918,13 @@ pub(super) fn pane_cmd_with_name(
                     launch.agent_id.as_str().to_owned(),
                 ]);
             }
-            if cleanup_worktree {
+            if options.cleanup_worktree {
                 argv.extend([
                     "--worktree-path".to_owned(),
-                    cwd.to_string_lossy().into_owned(),
+                    options.cwd.to_string_lossy().into_owned(),
                 ]);
             }
-            if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
+            if let Some(prompt) = options.prompt.filter(|value| !value.is_empty()) {
                 argv.extend(["--prompt".to_owned(), prompt.to_owned()]);
             }
             if !args.is_empty() {
