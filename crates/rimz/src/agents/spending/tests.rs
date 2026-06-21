@@ -141,6 +141,13 @@ fn cached_file(path: &Path, entries: Vec<CachedEntry>) -> (String, FileCacheEntr
     )
 }
 
+fn scoped_cached_entry(ts_secs: u64, cost_usd: f64, thread_id: &str, origin: &Path) -> CachedEntry {
+    CachedEntry {
+        origin_path: Some(origin.to_path_buf()),
+        ..cached_entry(ts_secs, cost_usd, thread_id)
+    }
+}
+
 #[test]
 fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
     let dir = TempDir::new().unwrap();
@@ -488,6 +495,40 @@ fn today_headline_window_starts_at_configured_local_midnight() {
 }
 
 #[test]
+fn scoped_today_headline_window_starts_at_configured_local_midnight() {
+    let dir = TempDir::new().unwrap();
+    let project = dir.path().join("repo");
+    let other = dir.path().join("other");
+    let file = dir.path().join("claude.jsonl");
+    let day_start = (NOW_SECS / 86_400) * 86_400;
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(
+            &file,
+            vec![
+                scoped_cached_entry(day_start - 1, 1.0, "before-midnight", &project),
+                scoped_cached_entry(day_start + 60, 2.0, "after-midnight", &project),
+                scoped_cached_entry(day_start + 60, 4.0, "outside", &other),
+            ],
+        )]),
+        ..Default::default()
+    };
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file)];
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Today,
+        timezone: Some("UTC".to_owned()),
+    };
+
+    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS, &spec);
+
+    assert!((scoped.headline.usd - 2.0).abs() < 1e-9);
+    assert_eq!(scoped.headline.tokens, 15);
+    assert_eq!(scoped.headline.sessions, 1);
+    assert!((scoped.week.usd - 3.0).abs() < 1e-9);
+    assert_eq!(scoped.week.sessions, 2);
+}
+
+#[test]
 fn session_headline_window_uses_latest_activity_run_and_idles_to_zero() {
     const HOUR: u64 = 3_600;
     let file = PathBuf::from("/x/claude.jsonl");
@@ -545,6 +586,42 @@ fn session_headline_window_uses_latest_activity_run_and_idles_to_zero() {
     assert_eq!(idle.total.headline.tokens, 0);
     assert_eq!(idle.total.headline.sessions, 0);
     assert!((idle.total.week.usd - 9.0).abs() < 1e-9);
+}
+
+#[test]
+fn scoped_session_headline_window_uses_latest_activity_run() {
+    const HOUR: u64 = 3_600;
+    let dir = TempDir::new().unwrap();
+    let project = dir.path().join("repo");
+    let other = dir.path().join("other");
+    let file = dir.path().join("claude.jsonl");
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(
+            &file,
+            vec![
+                scoped_cached_entry(NOW_SECS - 10 * HOUR, 1.0, "old", &project),
+                scoped_cached_entry(NOW_SECS - 9 * HOUR, 1.0, "old", &project),
+                scoped_cached_entry(NOW_SECS - 4 * HOUR, 2.0, "current", &project),
+                scoped_cached_entry(NOW_SECS - HOUR, 3.0, "current", &project),
+                scoped_cached_entry(NOW_SECS, 100.0, "outside", &other),
+            ],
+        )]),
+        ..Default::default()
+    };
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file)];
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Session,
+        timezone: None,
+    };
+
+    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS, &spec);
+
+    assert!((scoped.headline.usd - 5.0).abs() < 1e-9);
+    assert_eq!(scoped.headline.tokens, 30);
+    assert_eq!(scoped.headline.sessions, 1);
+    assert!((scoped.week.usd - 7.0).abs() < 1e-9);
+    assert_eq!(scoped.week.sessions, 2);
 }
 
 #[test]
