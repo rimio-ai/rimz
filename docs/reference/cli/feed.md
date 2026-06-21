@@ -28,13 +28,13 @@ rimz resolver add readonly-policy --order 10 --budget 30s --binary ~/.local/bin/
 
 ## Feed items and decisions
 
-Every actionable feed item carries a `surface` that decides which action is meaningful:
+Every actionable feed item carries a `surface`, set when it is created (see [the three operating paths](../../../DESIGN.md#the-three-operating-paths) for what each one means). The surface decides which feed verb is meaningful:
 
-| Surface | Created by | Answer path |
+| Surface | Source | Meaningful verb |
 | --- | --- | --- |
-| `native_ui` | An agent hook when no fresh enrolled resolver is active. | The agent's own UI asks the human; `rimz feed dismiss` records local acknowledgement after the pane handles it. |
-| `bridge` | An agent hook when a fresh enrolled resolver is active. | `rimz feed resolve` delivers a decision to the waiting hook; `rimz feed abstain` advances the chain. |
-| `script` | `rimz feed ask`. | `rimz feed resolve` delivers JSON to the blocked script; `rimz feed abstain` lets the next resolver try. |
+| `native_ui` | agent hook, no fresh resolver | `rimz feed dismiss` records local acknowledgement after the pane handles it |
+| `bridge` | agent hook, fresh resolver | `rimz feed resolve` answers the waiting hook; `rimz feed abstain` advances the chain |
+| `script` | `rimz feed ask` | `rimz feed resolve` answers the blocked script; `rimz feed abstain` lets the next resolver try |
 
 The verbs (run `rimz feed --help` for their flags):
 

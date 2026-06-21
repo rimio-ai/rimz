@@ -68,14 +68,7 @@ Permission-mode cells exist where the adapter supports them: `-auto`, `-ask`, `-
 
 ### Shared launch params
 
-These broadcast to every agent cell and each adapter renders them into its own native flags, so one flag works across providers:
-
-- `--model <MODEL>` selects the provider model.
-- `--effort <LEVEL>` sets reasoning effort where the agent exposes it. Levels are provider-specific (Claude `low|medium|high|xhigh|max`, Codex `minimal|low|medium|high|xhigh`, Pi `off|minimal|low|medium|high|xhigh`).
-- `--system-prompt-file <PATH>` replaces the agent's base system prompt; `--append-system-prompt-file <PATH>` keeps the base and appends rules where supported.
-- `--description <TEXT>` is a card label only — it seeds the card's second line and never enters the agent's argv or environment, and the agent's own session preview replaces it.
-
-A configured profile renders first, so an explicit flag on the command line wins. The launcher resolves prompt files to absolute paths and refuses a missing one before launch; a param the chosen adapter has no flag for fails the launch and names the offending flag.
+These broadcast to every agent cell, and each adapter renders them into its own native flags. `--model`, `--effort`, `--system-prompt-file`, and `--append-system-prompt-file` carry the same meaning and resolution rules as the [profile fields](../configuration.md#profiles) of the same names — a command-line flag renders after any profile and wins. `--effort` levels are provider-specific: Claude `low|medium|high|xhigh|max`, Codex `minimal|low|medium|high|xhigh`, Pi `off|minimal|low|medium|high|xhigh`. `--description <TEXT>` is a card label only: it seeds the card's second line, never enters the agent's argv or environment, and the agent's own session preview replaces it.
 
 ### Worktree and placement
 
