@@ -11,7 +11,8 @@
 //! Windows: the heatmap, model breakdown, and agent breakdown read the full
 //! available history (the cache spans the trailing year); "Active days" reports
 //! the trailing four weeks; the Week/Month/Year totals are the trailing 7/30/365
-//! days. `--refresh` holds the panel open and redraws it every minute.
+//! days. `--refresh` holds the panel open, redraws it every minute, and
+//! re-centres promptly after a width change.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
@@ -84,7 +85,7 @@ pub struct StatsArgs {
     /// Emit the stats as JSON instead of the panel.
     #[arg(long)]
     pub json: bool,
-    /// Hold the panel open and redraw it every 60s; exit with Ctrl-C.
+    /// Hold the panel open, redraw every 60s, and re-centre on resize.
     #[arg(long, conflicts_with = "json")]
     pub refresh: bool,
 }

@@ -53,6 +53,7 @@ fn stats_refresh_recenters_on_resize() {
     cmd.env("XDG_RUNTIME_DIR", xdg.path());
     cmd.env("XDG_DATA_HOME", xdg.path());
     cmd.env("XDG_CACHE_HOME", xdg.path());
+    cmd.env("RIMZ_PRICING_OFFLINE", "1");
     cmd.env_remove("CLAUDE_CONFIG_DIR");
     cmd.env_remove("CODEX_HOME");
     cmd.env_remove("PI_AGENT_DIR");
