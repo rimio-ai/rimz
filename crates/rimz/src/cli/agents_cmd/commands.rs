@@ -460,6 +460,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         cwd: launch.cwd.clone(),
         config: mux_config.clone(),
         detected_size,
+        truecolor: rimz::tui::truecolor(),
     })?;
     // A supervised run can birth the room, so the focus chord registers here
     // too (tmux binds it; Zellij routes it through the presence plugin below) —

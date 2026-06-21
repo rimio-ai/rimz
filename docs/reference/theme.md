@@ -78,7 +78,7 @@ scheme = "~/themes/rimz.toml"
 
 ## Color Depth
 
-`[theme] mode` sets the palette depth. `auto` (default) uses truecolor when `COLORTERM` advertises it or the terminfo entry for `$TERM` declares direct color (`RGB`, `Tc`, or the `setrgbf`/`setrgbb` pair), so Ghostty, kitty, and WezTerm over SSH get RGB without forwarding `COLORTERM`; otherwise it quantizes the selected RGB tones to xterm 256 indexes. `truecolor` forces RGB for a terminal whose terminfo lacks the capability; `256` pins indexed output. Use [`glow = "always"`](#glow) separately when the same hop also under-advertises transition-flash support.
+`[theme] mode` sets the palette depth. `auto` (default) uses truecolor when `COLORTERM` advertises it or the terminfo entry for `$TERM` declares direct color (`RGB`, `Tc`, or the `setrgbf`/`setrgbb` pair), so Ghostty, kitty, and WezTerm over SSH get RGB without forwarding `COLORTERM`; otherwise it quantizes the selected RGB tones to xterm 256 indexes. Inside a Rimz tmux room, Rimz stamps `COLORTERM=truecolor` at birth when the launcher advertises truecolor, so `auto` resolves to truecolor despite tmux's `tmux-256color` default. `truecolor` forces RGB for a terminal whose terminfo lacks the capability; `256` pins indexed output. Use [`glow = "always"`](#glow) separately when the same hop also under-advertises transition-flash support.
 
 ```toml
 [theme]

@@ -223,6 +223,12 @@ pub struct SessionOptions {
     /// leaves the backend's default geometry. Zellij ignores it (a background
     /// session adopts the client size on attach).
     pub detected_size: Option<(u16, u16)>,
+    /// The launching terminal advertises 24-bit color ([`crate::tui::truecolor`]).
+    /// When true, the tmux birth stamps `COLORTERM=truecolor` into the session
+    /// environment so panes inside the room detect truecolor despite tmux's
+    /// `tmux-256color`/empty-`COLORTERM` default. Zellij ignores it: its panes
+    /// inherit the attaching client's env.
+    pub truecolor: bool,
 }
 
 /// Normalize a raw per-pane mux env value into a [`PaneId`]: Zellij exposes a

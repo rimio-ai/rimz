@@ -703,6 +703,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         cwd: workspace.worktree_root.clone(),
         config: mux_config.clone(),
         detected_size,
+        truecolor: rimz::tui::truecolor(),
     })?;
     // Register the focus-sidebar chord (tmux binds it here; Zellij routes it
     // through the presence plugin). Best-effort: a convenience key never blocks
@@ -862,6 +863,7 @@ fn attach_cwd(
         cwd: workspace.worktree_root.clone(),
         config: mux_config.clone(),
         detected_size,
+        truecolor: rimz::tui::truecolor(),
     })?;
     register_focus_key(backend.as_ref(), &machine_config);
     let resume_plan = resume_plan_for_birth(
@@ -928,6 +930,7 @@ fn attach_named(
                 cwd: record.project_root.clone(),
                 config: mux_config.clone(),
                 detected_size,
+                truecolor: rimz::tui::truecolor(),
             })?;
             register_focus_key(backend.as_ref(), &machine_config);
             let resume_plan = resume_plan_for_birth(

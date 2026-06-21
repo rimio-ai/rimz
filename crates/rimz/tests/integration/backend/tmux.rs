@@ -379,6 +379,7 @@ fn ensure_session_applies_room_options_in_one_batch() {
             cwd: cwd.path().to_path_buf(),
             config: rimz::config::MultiplexerConfig::default(),
             detected_size: None,
+            truecolor: false,
         })
         .expect("ensure");
 
@@ -420,6 +421,31 @@ fn ensure_session_applies_room_options_in_one_batch() {
             rimz::workspace::ENV_PROJECT_ROOT,
             cwd.path().display(),
         ),
+    );
+}
+
+#[test]
+fn ensure_session_stamps_colorterm() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: "rimz-truecolor".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(cwd.path()),
+            project_root: cwd.path().to_path_buf(),
+            cwd: cwd.path().to_path_buf(),
+            config: rimz::config::MultiplexerConfig::default(),
+            detected_size: None,
+            truecolor: true,
+        })
+        .expect("ensure_session");
+
+    assert_eq!(
+        show_session_environment(&server, "rimz-truecolor", "COLORTERM"),
+        "COLORTERM=truecolor",
     );
 }
 
@@ -493,6 +519,7 @@ fn new_window_pins_the_start_verdict_after_a_resize() {
             cwd: std::env::temp_dir(),
             config: rimz::config::MultiplexerConfig::default(),
             detected_size: Some((200, 50)),
+            truecolor: false,
         })
         .expect("ensure_session");
     let (_stub_dir, stub) = sidebar_command_stub();
@@ -1101,6 +1128,7 @@ fn closing_agent_tab_records_end_trace_when_session_survives() {
             cwd: workspace.worktree_root.clone(),
             config: rimz::config::MultiplexerConfig::default(),
             detected_size: Some((160, 40)),
+            truecolor: false,
         })
         .expect("ensure session");
 
@@ -1203,6 +1231,7 @@ fn open_tab_builds_multi_column_layout() {
             // Wide enough that the sidebar plus two work columns — one split in
             // two — all fit without tmux refusing a split for want of space.
             detected_size: Some((300, 50)),
+            truecolor: false,
         })
         .expect("ensure_session");
 
@@ -1328,6 +1357,7 @@ fn open_tab_single_pane_layout_docks_one_work_pane_beside_the_sidebar() {
             cwd: cwd.path().to_path_buf(),
             config: rimz::config::MultiplexerConfig::default(),
             detected_size: Some((200, 50)),
+            truecolor: false,
         })
         .expect("ensure_session");
     let (_stub_dir, stub) = sidebar_command_stub();

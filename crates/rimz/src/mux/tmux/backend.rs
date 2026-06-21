@@ -19,7 +19,14 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn ensure_session(&self, opts: &SessionOptions) -> Result<()> {
-        let pin = crate::workspace::pin_env(&opts.workspace_id, &opts.project_root);
+        let mut env = crate::workspace::pin_env(&opts.workspace_id, &opts.project_root);
+        // tmux strips COLORTERM and births panes under `tmux-256color`, whose
+        // terminfo carries no RGB cap, so apps inside the room — the sidebar and
+        // the user's own TUIs — downgrade to 256-color. Restore it for the room
+        // when the launching terminal advertises 24-bit color.
+        if opts.truecolor {
+            env.insert("COLORTERM".to_owned(), "truecolor".to_owned());
+        }
         // `new-session -d` births detached; an already-live room answers
         // `duplicate session` (exit 1), which is the goal state and treated as
         // success below. `-A` is unusable here: on a live session it switches
@@ -34,10 +41,10 @@ impl MuxBackend for TmuxBackend {
             "-c".to_owned(),
             opts.cwd.to_string_lossy().into_owned(),
         ]);
-        // The identity pin lands in the session environment at birth (`-e`),
+        // The birth env lands in the session environment at birth (`-e`),
         // so the first window's panes already inherit it — `set-environment`
         // below would only reach panes created after it runs.
-        for (key, value) in &pin {
+        for (key, value) in &env {
             spec = spec.args(["-e".to_owned(), format!("{key}={value}")]);
         }
         // Birth the detached session at the launching terminal's geometry
@@ -58,11 +65,11 @@ impl MuxBackend for TmuxBackend {
                 if stderr.to_ascii_lowercase().contains("duplicate session") => {}
             Err(err) => return Err(err),
         }
-        // The duplicate path never saw `-e`, so the pin is re-asserted
-        // idempotently: future panes of a pre-pin room inherit it; existing
+        // The duplicate path never saw `-e`, so the birth env is re-asserted
+        // idempotently: future panes of a pre-stamp room inherit it; existing
         // panes keep the env they were born with and their participants fall
         // back to the static ladder.
-        for (key, value) in &pin {
+        for (key, value) in &env {
             self.cmd()
                 .args(["set-environment", "-t", &opts.session_name, key, value])
                 .run()?;
