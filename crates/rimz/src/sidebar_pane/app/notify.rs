@@ -53,7 +53,7 @@ pub(super) fn emit_terminal_notification(
 /// Why this renderer did or did not ring the sticky tab bell for a notification.
 /// The bell is a mux tab marker the renderer cannot retract, so it is bound to
 /// genuine, current unread attention: a daemon-only view never rings (its
-/// siblings are infrastructure host panes, never agents that need you), and an
+/// siblings are infrastructure panes, never agents that need you), and an
 /// agent notification rings only while a targeted, owned pane's row is still
 /// unread — the durable unread episode bit folded onto `SidebarRow::unread`,
 /// which stays set until a human looks. Pre-vetted unread reminders clear

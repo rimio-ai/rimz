@@ -17,23 +17,43 @@ pub(super) fn build_daemon_view(
             return None;
         }
     };
-    let hosts = background_view_hosts(
+    Some(build_daemon_view_options(
         config,
+        workspace,
+        mux_config,
+        room,
+        rimz_bin,
         which::which("claude").is_ok(),
         which::which("codex").is_ok(),
+    ))
+}
+
+fn build_daemon_view_options(
+    config: &rimz::config::RemoteControlConfig,
+    workspace: &rimz::ResolvedWorkspace,
+    mux_config: &rimz::config::MultiplexerConfig,
+    room: &RoomTarget<'_>,
+    rimz_bin: PathBuf,
+    claude_present: bool,
+    codex_present: bool,
+) -> BackgroundViewOptions {
+    let stats = stats_pane(&rimz_bin, &workspace.worktree_root);
+    let hosts = daemon_hosts(
+        config,
+        claude_present,
+        codex_present,
         &rimz_bin,
         &workspace.workspace_id,
         &workspace.session_name,
         &workspace.project_root,
         &workspace.worktree_root,
     );
-    if hosts.is_empty() {
-        return None;
-    }
-    // The daemon view is born `sidebar | hosts…`, so it carries the same global
-    // sidebar the working view runs (same session, workspace, and `rimz` bin).
-    Some(BackgroundViewOptions {
+    // The daemon view is born `sidebar | stats | hosts…`, so it carries the same
+    // global sidebar the working view runs (same session, workspace, and `rimz`
+    // bin). Stats keeps the view useful even with no daemon host.
+    BackgroundViewOptions {
         name: rimz::remote_control::VIEW_NAME.to_owned(),
+        stats,
         hosts,
         sidebar: SidebarPaneOptions {
             session_name: workspace.session_name.clone(),
@@ -48,7 +68,7 @@ pub(super) fn build_daemon_view(
             resume_tabs: Vec::new(),
             refresh_ms: room.refresh_ms,
         },
-    })
+    }
 }
 
 /// Ensure the per-user Codex remote-control daemon (a detached singleton keyed by
@@ -57,7 +77,8 @@ pub(super) fn build_daemon_view(
 /// daemon view, best-effort. On Zellij the view already leads from session birth
 /// ([`MuxBackend::open_sidebar`] renders it first), so this is the idempotent
 /// `AlreadyRunning` no-op there; on tmux it opens the window and leads it via
-/// `swap-window`. Skipped when there is no host pane.
+/// `swap-window`. The view always carries the live stats pane; daemon hosts are
+/// conditional.
 pub(super) fn maybe_launch_remote_control(
     backend: &dyn MuxBackend,
     workspace: &rimz::ResolvedWorkspace,
@@ -87,15 +108,14 @@ pub(super) fn maybe_launch_remote_control(
     }
 }
 
-/// The host panes for the [`rimz::remote_control::VIEW_NAME`] daemon view, in
+/// The daemon host panes for the [`rimz::remote_control::VIEW_NAME`] view, in
 /// display order (the first takes focus) — split out pure for testing. The Claude
 /// remote-control host leads when its toggle is on *and* `claude` is on PATH (the
 /// interactive host); the local Codex app-server broker follows whenever `codex`
-/// is on PATH (ungated — it links no account, only reads). A trailing live stats
-/// pane rides that existing host gate, so the caller still opens no view when no
-/// host applies.
+/// is on PATH (ungated — it links no account, only reads). Live stats is a
+/// separate always-present pane, not a daemon host.
 #[allow(clippy::too_many_arguments)]
-fn background_view_hosts(
+fn daemon_hosts(
     config: &rimz::config::RemoteControlConfig,
     claude_present: bool,
     codex_present: bool,
@@ -127,17 +147,18 @@ fn background_view_hosts(
             cwd: worktree_root.to_path_buf(),
         });
     }
-    if !hosts.is_empty() {
-        hosts.push(HostPane {
-            argv: vec![
-                rimz_bin.to_string_lossy().into_owned(),
-                "stats".to_owned(),
-                "--refresh".to_owned(),
-            ],
-            cwd: worktree_root.to_path_buf(),
-        });
-    }
     hosts
+}
+
+fn stats_pane(rimz_bin: &Path, worktree_root: &Path) -> HostPane {
+    HostPane {
+        argv: vec![
+            rimz_bin.to_string_lossy().into_owned(),
+            "stats".to_owned(),
+            "--refresh".to_owned(),
+        ],
+        cwd: worktree_root.to_path_buf(),
+    }
 }
 
 #[cfg(test)]
@@ -145,7 +166,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn background_view_hosts_orders_claude_then_the_ungated_broker() {
+    fn daemon_hosts_orders_claude_then_the_ungated_broker() {
         use rimz::config::RemoteControlConfig;
         use rimz::ids::WorkspaceId;
 
@@ -154,7 +175,7 @@ mod tests {
         let project = Path::new("/proj");
         let worktree = Path::new("/proj/wt");
         let hosts = |config: &RemoteControlConfig, claude: bool, codex: bool| {
-            background_view_hosts(
+            daemon_hosts(
                 config,
                 claude,
                 codex,
@@ -165,26 +186,14 @@ mod tests {
                 worktree,
             )
         };
-        let assert_stats_pane = |pane: &HostPane| {
-            assert_eq!(
-                pane.argv,
-                vec![
-                    rimz_bin.to_string_lossy().into_owned(),
-                    "stats".to_owned(),
-                    "--refresh".to_owned(),
-                ]
-            );
-            assert_eq!(pane.cwd.as_path(), worktree);
-        };
 
         assert!(hosts(&RemoteControlConfig::default(), true, false).is_empty());
 
         let codex = hosts(&RemoteControlConfig::default(), false, true);
-        assert_eq!(codex.len(), 2);
+        assert_eq!(codex.len(), 1);
         assert_eq!(codex[0].argv[0], "/usr/bin/rimz");
         assert!(codex[0].argv.iter().any(|arg| arg == "app-server"));
         assert_eq!(codex[0].cwd.as_path(), worktree);
-        assert_stats_pane(&codex[1]);
 
         let claude_only = RemoteControlConfig {
             claude: true,
@@ -192,7 +201,7 @@ mod tests {
         };
         assert!(hosts(&claude_only, false, false).is_empty());
         let claude = hosts(&claude_only, true, false);
-        assert_eq!(claude.len(), 2);
+        assert_eq!(claude.len(), 1);
         assert_eq!(claude[0].argv[0], "env");
         assert_eq!(
             claude[0].argv,
@@ -200,17 +209,83 @@ mod tests {
             "the daemon host unsets the pane-only Claude agent-view pin"
         );
         assert_eq!(claude[0].cwd.as_path(), project);
-        assert_stats_pane(&claude[1]);
 
         let both = RemoteControlConfig {
             claude: true,
             codex: true,
         };
         let pair = hosts(&both, true, true);
-        assert_eq!(pair.len(), 3);
+        assert_eq!(pair.len(), 2);
         assert_eq!(pair[0].argv[0], "env");
         assert_eq!(pair[1].argv[0], "/usr/bin/rimz");
         assert!(pair[1].argv.iter().any(|arg| arg == "app-server"));
-        assert_stats_pane(&pair[2]);
+    }
+
+    #[test]
+    fn stats_pane_runs_refreshing_stats_from_worktree() {
+        let rimz_bin = Path::new("/usr/bin/rimz");
+        let worktree = Path::new("/proj/wt");
+        let pane = stats_pane(rimz_bin, worktree);
+        assert_eq!(
+            pane.argv,
+            vec![
+                rimz_bin.to_string_lossy().into_owned(),
+                "stats".to_owned(),
+                "--refresh".to_owned(),
+            ]
+        );
+        assert_eq!(pane.cwd.as_path(), worktree);
+    }
+
+    #[test]
+    fn daemon_view_options_keep_stats_when_hosts_are_empty() {
+        use rimz::config::{MultiplexerConfig, RemoteControlConfig};
+        use rimz::ids::WorkspaceId;
+        use rimz::mux::SidebarWidth;
+        use rimz::workspace::RootClass;
+
+        let wid = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("valid id");
+        let workspace = rimz::ResolvedWorkspace {
+            workspace_id: wid.clone(),
+            project_root: PathBuf::from("/proj"),
+            root_class: RootClass::Repo,
+            worktree_root: PathBuf::from("/proj/wt"),
+            worktree_branch: None,
+            session_name: "rimz-demo".to_owned(),
+            mux_hint: None,
+        };
+        let mux_config = MultiplexerConfig::default();
+        let width = SidebarWidth::default();
+        let room = RoomTarget {
+            workspace_id: &wid,
+            project_root: Path::new("/proj"),
+            session_name: "rimz-demo",
+            cwd: Path::new("/proj/wt"),
+            mux_config: &mux_config,
+            width,
+            detected_size: Some((120, 40)),
+            refresh_ms: None,
+        };
+        let view = build_daemon_view_options(
+            &RemoteControlConfig::default(),
+            &workspace,
+            &mux_config,
+            &room,
+            PathBuf::from("/usr/bin/rimz"),
+            false,
+            false,
+        );
+        assert_eq!(view.name, rimz::remote_control::VIEW_NAME);
+        assert!(view.hosts.is_empty());
+        assert_eq!(
+            view.stats.argv,
+            vec![
+                "/usr/bin/rimz".to_owned(),
+                "stats".to_owned(),
+                "--refresh".to_owned(),
+            ]
+        );
+        assert_eq!(view.stats.cwd, PathBuf::from("/proj/wt"));
+        assert_eq!(view.sidebar.birth_size, width.birth_size(Some(120)));
     }
 }

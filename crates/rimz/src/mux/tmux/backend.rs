@@ -440,18 +440,13 @@ impl MuxBackend for TmuxBackend {
             self.lead_window(session, &opts.name);
             return Ok(BackgroundViewLaunch::AlreadyRunning);
         }
-        let Some((first, rest)) = opts.hosts.split_first() else {
-            return Err(MuxErr::Output {
-                program: "tmux".to_owned(),
-                reason: "background view has no host panes".to_owned(),
-            });
-        };
         // `-d` opens the window without pulling the user's focus to it; `-P -F`
-        // prints the host pane id so extra hosts split beside it, never the
-        // sidebar. The session's `after-new-window` hook (installed by
-        // `open_sidebar`) docks the global sidebar on its left, so the window is
-        // born `sidebar | host0` — the host is always reachable, never a bare
-        // trap. Each host closes with its process, so no `remain-on-exit`.
+        // prints the window and stats pane ids so daemon hosts split beside
+        // stats, never the sidebar. The session's `after-new-window` hook
+        // (installed by `open_sidebar`) docks the global sidebar on its left, so
+        // the window is born `sidebar | stats`. Daemon hosts, when present, split
+        // into a right column sized with the same width verdict as the sidebar.
+        // Each process exits with its pane, so no `remain-on-exit`.
         let output = self
             .cmd()
             .args([
@@ -459,32 +454,82 @@ impl MuxBackend for TmuxBackend {
                 "-d".to_owned(),
                 "-P".to_owned(),
                 "-F".to_owned(),
-                "#{pane_id}".to_owned(),
+                "#{window_id}\t#{pane_id}".to_owned(),
                 "-t".to_owned(),
                 session.clone(),
                 "-n".to_owned(),
                 opts.name.clone(),
                 "-c".to_owned(),
-                first.cwd.to_string_lossy().into_owned(),
+                opts.stats.cwd.to_string_lossy().into_owned(),
             ])
-            .args(first.argv.clone())
+            .args(opts.stats.argv.clone())
             .run()?;
-        let host0 = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        // Extra hosts (typically just the Codex broker) split beside host0,
-        // stacked left-to-right; `-d` keeps host0 the window's active pane.
-        for host in rest {
-            self.cmd()
-                .args([
-                    "split-window".to_owned(),
-                    "-d".to_owned(),
-                    "-h".to_owned(),
-                    "-t".to_owned(),
-                    host0.clone(),
-                    "-c".to_owned(),
-                    host.cwd.to_string_lossy().into_owned(),
-                ])
-                .args(host.argv.clone())
-                .run()?;
+        let (window_id, stats_pane) = parse_new_window_ids(&output.stdout)?;
+        if let Some((first, rest)) = opts.hosts.split_first() {
+            let mut split = vec![
+                "split-window".to_owned(),
+                "-d".to_owned(),
+                "-h".to_owned(),
+                "-P".to_owned(),
+                "-F".to_owned(),
+                "#{pane_id}".to_owned(),
+                "-t".to_owned(),
+                stats_pane,
+            ];
+            if let Some(total) = self.window_width(&window_id) {
+                split.extend([
+                    "-l".to_owned(),
+                    opts.sidebar.width.target_cols(total).to_string(),
+                ]);
+            }
+            split.extend(["-c".to_owned(), first.cwd.to_string_lossy().into_owned()]);
+            let output = self.cmd().args(split).args(first.argv.clone()).run()?;
+            let first_daemon = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if first_daemon.is_empty() {
+                return Err(MuxErr::Output {
+                    program: "tmux".to_owned(),
+                    reason: "split-window did not print a daemon pane id".to_owned(),
+                });
+            }
+            let mut previous = first_daemon.clone();
+            for host in rest {
+                let output = self
+                    .cmd()
+                    .args([
+                        "split-window".to_owned(),
+                        "-d".to_owned(),
+                        "-v".to_owned(),
+                        "-P".to_owned(),
+                        "-F".to_owned(),
+                        "#{pane_id}".to_owned(),
+                        "-t".to_owned(),
+                        previous,
+                        "-c".to_owned(),
+                        host.cwd.to_string_lossy().into_owned(),
+                    ])
+                    .args(host.argv.clone())
+                    .run()?;
+                previous = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                if previous.is_empty() {
+                    return Err(MuxErr::Output {
+                        program: "tmux".to_owned(),
+                        reason: "split-window did not print a daemon pane id".to_owned(),
+                    });
+                }
+            }
+            if let Err(err) = self
+                .cmd()
+                .args(["select-pane".to_owned(), "-t".to_owned(), first_daemon])
+                .run()
+            {
+                tracing::warn!(
+                    session = %session,
+                    view = %opts.name,
+                    tags.operation = "tmux.daemon_view.focus",
+                    error = &err as &dyn std::error::Error,
+                    "could not focus the first daemon pane",
+                );
+            }
         }
         self.lead_window(session, &opts.name);
         Ok(BackgroundViewLaunch::Launched)

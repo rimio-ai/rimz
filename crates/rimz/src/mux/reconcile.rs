@@ -63,9 +63,10 @@ pub struct SidebarLiveness {
 }
 
 /// One view's sidebar panes (in mux order) and how it is otherwise occupied: a
-/// user-working pane (neither a sidebar nor a managed daemon host), and/or a
-/// managed daemon host. A view with neither is sidebar-only — an orphan to
-/// collapse; one with a daemon host is the intentional `rimzd` view.
+/// user-working pane (neither a sidebar nor daemon-dashboard infrastructure),
+/// and/or daemon-dashboard infrastructure. A view with neither is sidebar-only
+/// — an orphan to collapse; one with daemon infrastructure is the intentional
+/// `rimzd` view.
 pub(crate) struct ViewSidebars {
     pub view: String,
     pub sidebar_panes: Vec<PaneId>,
@@ -93,8 +94,9 @@ pub(crate) struct ReconcilePlan {
 ///   heartbeat simply hasn't landed, and the next pass settles it either way.
 ///   A young extra beside a claimed keeper still closes: that is a botched-add
 ///   duplicate, not a starting renderer. The daemon view (`rimzd`) is born with
-///   a sidebar beside its managed hosts and earns the same convergence — but
-///   never the collapse below, since its hosts are managed, not work.
+///   a sidebar and live stats beside its managed hosts and earns the same
+///   convergence — but never the collapse below, since its hosts are managed,
+///   not work.
 /// - **Orphan sidebar-only view** — no working pane and no daemon host, so its
 ///   working siblings all closed but the sidebar never self-closed (a wedged
 ///   renderer that stopped ticking). Close every sidebar pane and let the view

@@ -702,10 +702,11 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // through the presence plugin). Best-effort: a convenience key never blocks
     // the room from opening.
     register_focus_key(backend.as_ref(), &machine_config);
-    // The daemon view (`rimzd`) is computed once, before the session is born: its
-    // hosts depend on config and which agents are on PATH. When present, it leads
-    // the session — on Zellij that order is fixed at birth (`open_sidebar` renders
-    // the daemon tab first), since Zellij can't reorder tabs afterwards.
+    // The daemon view (`rimzd`) is computed once: stats is always present, and
+    // its daemon hosts depend on config and which agents are on PATH. When
+    // present, it leads the session — on Zellij that order is fixed at birth
+    // (`open_sidebar` renders the daemon tab first), since Zellij can't reorder
+    // tabs afterwards.
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
@@ -719,6 +720,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     let daemon_view = build_daemon_view(remote_control, &workspace, &mux_config, &room);
     let daemon = daemon_view.as_ref().map(|view| DaemonView {
         name: view.name.clone(),
+        stats: view.stats.clone(),
         hosts: view.hosts.clone(),
     });
     // Plan which prior agents the reborn room can recover, from the durable

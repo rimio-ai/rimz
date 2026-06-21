@@ -763,11 +763,11 @@ fn list_panes_with_session_returns_terminals() {
     );
 }
 
-/// `open_background_view` opens a dedicated, named window for the host; the
+/// `open_background_view` opens a dedicated, named window for stats and the host; the
 /// session's `after-new-window` hook (installed by `open_sidebar`, as `rimz
 /// start` does) docks the global sidebar on its left, so the window is born
-/// `sidebar | host`. Idempotent on the window name: a second call launches
-/// nothing.
+/// `sidebar | stats | host`. Idempotent on the window name: a second call
+/// launches nothing.
 #[test]
 fn open_background_view_creates_named_window_idempotently() {
     require_tmux!();
@@ -797,6 +797,10 @@ fn open_background_view_creates_named_window_idempotently() {
 
     let opts = rimz::mux::BackgroundViewOptions {
         name: "rimzd".to_owned(),
+        stats: rimz::mux::HostPane {
+            argv: vec!["sleep".to_owned(), "120".to_owned()],
+            cwd: std::env::temp_dir(),
+        },
         hosts: vec![rimz::mux::HostPane {
             argv: vec!["sleep".to_owned(), "120".to_owned()],
             cwd: std::env::temp_dir(),
@@ -827,7 +831,8 @@ fn open_background_view_creates_named_window_idempotently() {
         "daemon window must lead the session, got {:?}",
         server.window_names("rimz-bgview"),
     );
-    // Born `sidebar | host`: the hook-docked sidebar beside the host pane.
+    // Born `sidebar | stats | host`: the hook-docked sidebar beside stats and
+    // the daemon host pane.
     let rc_panes = server
         .backend
         .list_panes(PaneListOptions {
@@ -839,7 +844,10 @@ fn open_background_view_creates_named_window_idempotently() {
         .into_iter()
         .filter(|pane| pane.view_name.as_deref() == Some("rimzd"))
         .count();
-    assert_eq!(rc_panes, 2, "rimzd window should be born sidebar | host");
+    assert_eq!(
+        rc_panes, 3,
+        "rimzd window should be born sidebar | stats | host"
+    );
 
     let second = server
         .backend

@@ -51,8 +51,8 @@ pub(super) fn is_tmux_sidebar(pane: &PaneRef) -> bool {
 }
 
 /// Group a pane list into per-window [`ViewSidebars`] for the reconcile planner:
-/// each window's sidebar panes and whether it holds a user-working pane. Managed
-/// daemon hosts in `rimzd` are not work. Panes with no window id are skipped.
+/// each window's sidebar panes and whether it holds a user-working pane. Daemon
+/// dashboard panes in `rimzd` are not work. Panes with no window id are skipped.
 /// First-seen window order.
 pub(super) fn tmux_views_with_sidebars(panes: &[PaneRef]) -> Vec<ViewSidebars> {
     let mut views: Vec<ViewSidebars> = Vec::new();
@@ -229,7 +229,8 @@ mod tests {
             "both sidebar panes, in order",
         );
 
-        // window @1 is a sidebar-only orphan: no working pane and no daemon host.
+        // window @1 is a sidebar-only orphan: no working pane and no daemon
+        // infrastructure.
         assert_eq!(views[1].view, "@1");
         assert!(
             !views[1].has_working,
@@ -242,7 +243,7 @@ mod tests {
         assert!(!views[2].has_working);
         assert!(
             views[2].has_daemon_host,
-            "a daemon host marks the view so reload never collapses it as an orphan",
+            "daemon infrastructure marks the view so reload never collapses it as an orphan",
         );
         assert!(views[2].sidebar_panes.is_empty());
     }

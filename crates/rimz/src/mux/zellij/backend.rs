@@ -472,10 +472,10 @@ impl MuxBackend for ZellijBackend {
         // became available after first start) and now carries one or more working
         // tabs. Zellij can't move a tab to the front, so this appended tab does
         // *not* lead — leading is a birth-time property. `--layout` gives the tab
-        // its `sidebar | hosts…` shape directly (bypassing the tab template, so the
-        // sidebar is spelled out); `new-tab` is synchronous (it prints the tab id),
-        // so the temp layout can drop once it returns. Each pane carries its own
-        // `cwd`, so no tab-level `--cwd` is needed.
+        // its `sidebar | stats | hosts…` shape directly (bypassing the tab
+        // template, so the sidebar is spelled out); `new-tab` is synchronous (it
+        // prints the tab id), so the temp layout can drop once it returns. Each
+        // pane carries its own `cwd`, so no tab-level `--cwd` is needed.
         let layout = TempLayoutFile::new(render_background_view_layout(opts)?)?;
         self.zellij_action(session)
             .args([

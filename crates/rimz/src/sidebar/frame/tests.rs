@@ -660,8 +660,8 @@ fn own_view_daemon_detection_matches_host_panes() {
     .expect("own pane present");
     assert!(zellij.own_view_is_daemon);
 
-    // tmux: a host pane is recognised by the window-name fallback even when
-    // its command carries no marker.
+    // tmux: daemon infrastructure is recognised by the window-name fallback
+    // even when its command carries no marker.
     let tmux = own_view(
         "terminal_0",
         vec![

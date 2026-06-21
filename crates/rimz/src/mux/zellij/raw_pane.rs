@@ -31,7 +31,7 @@ pub(super) fn is_sidebar_pane(pane: &RawPane) -> bool {
 
 /// Group a pane list into per-tab [`ViewSidebars`] for the reconcile planner:
 /// each tab's sidebar panes (as normalized [`PaneId`]s) and whether it holds a
-/// user-working terminal pane. Managed daemon hosts in `rimzd` are not work.
+/// user-working terminal pane. Daemon dashboard panes in `rimzd` are not work.
 /// First-seen tab order; pane order within a tab preserved.
 pub(super) fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
     let mut views: Vec<ViewSidebars> = Vec::new();
@@ -68,8 +68,8 @@ pub(super) fn tabs_with_sidebars(panes: &[RawPane]) -> std::collections::HashSet
         .collect()
 }
 
-/// A managed daemon-host pane: any pane in the `rimzd` tab, or one whose spawn
-/// or foreground command carries a host marker. The spawn command is the
+/// A daemon dashboard pane: any pane in the `rimzd` tab, or one whose spawn or
+/// foreground command carries a host marker. The spawn command is the
 /// authoritative Zellij signal for hosts that re-exec after launch.
 fn is_daemon_host_pane(pane: &RawPane) -> bool {
     pane.tab_name.as_deref() == Some(crate::remote_control::VIEW_NAME)

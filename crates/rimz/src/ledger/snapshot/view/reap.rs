@@ -127,11 +127,11 @@ impl SidebarSnapshot {
     }
 
     /// Whether every live, non-sidebar view in `panes` is the `rimzd` daemon
-    /// view — i.e. the user has nothing left but the managed daemon tab. A view
-    /// is a *daemon* view iff, after dropping its sidebar pane, it is non-empty
-    /// and every remaining pane is a managed host
+    /// view — i.e. the user has nothing left but the managed daemon dashboard. A
+    /// view is a *daemon* view iff, after dropping its sidebar pane, it is
+    /// non-empty and every remaining pane is daemon-dashboard infrastructure
     /// ([`crate::remote_control::pane_is_host`]); a *working* view iff it holds
-    /// any non-sidebar, non-host pane. A sidebar-only view (a working tab
+    /// any non-sidebar, non-dashboard pane. A sidebar-only view (a working tab
     /// mid-self-close) counts as neither, so it neither trips nor blocks the
     /// signal. Returns `false` for an empty or not-yet-born session.
     ///
@@ -139,9 +139,9 @@ impl SidebarSnapshot {
     /// the `rimzd` view name — both backends report the view name), so it
     /// behaves identically on Zellij and tmux.
     pub fn only_daemon_view(panes: &[PaneRef]) -> bool {
-        // Per view_id: (host pane count, working pane count). Sidebar panes are
-        // dropped but still register the view, so a sidebar-only view exists as
-        // an entry with zero of each — counted as neither daemon nor working.
+        // Per view_id: (dashboard pane count, working pane count). Sidebar panes
+        // are dropped but still register the view, so a sidebar-only view exists
+        // as an entry with zero of each — counted as neither daemon nor working.
         let mut views: BTreeMap<&str, (u32, u32)> = BTreeMap::new();
         for pane in panes {
             let Some(view_id) = pane.view_id.as_deref() else {

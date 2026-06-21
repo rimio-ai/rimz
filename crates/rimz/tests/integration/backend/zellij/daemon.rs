@@ -1,12 +1,16 @@
 use super::*;
 use rimz::mux::{DaemonView, HostPane};
 
-/// A `BackgroundViewOptions` for a session whose host is a long-lived `sleep`
-/// and whose sidebar runs the alive-keeping `stub`, so the launched tab is a
-/// faithful `sidebar | host`.
+/// A `BackgroundViewOptions` for a session whose stats and host panes are
+/// long-lived `sleep` commands and whose sidebar runs the alive-keeping `stub`,
+/// so the launched tab is a faithful `sidebar | stats | host`.
 fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundViewOptions {
     rimz::mux::BackgroundViewOptions {
         name: "rimzd".to_owned(),
+        stats: rimz::mux::HostPane {
+            argv: vec!["sleep".to_owned(), "120".to_owned()],
+            cwd: std::env::temp_dir(),
+        },
         hosts: vec![rimz::mux::HostPane {
             argv: vec!["sleep".to_owned(), "120".to_owned()],
             cwd: std::env::temp_dir(),
@@ -27,8 +31,8 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
     }
 }
 
-/// `open_background_view` opens a dedicated, named tab born `sidebar | host`, and
-/// is idempotent on that tab name: a second call launches nothing.
+/// `open_background_view` opens a dedicated, named tab born `sidebar | stats |
+/// host`, and is idempotent on that tab name: a second call launches nothing.
 #[test]
 fn open_background_view_creates_named_tab_idempotently() {
     require_zellij!();
@@ -74,6 +78,10 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
 
     let daemon = DaemonView {
         name: "rimzd".to_owned(),
+        stats: HostPane {
+            argv: vec!["sleep".to_owned(), "120".to_owned()],
+            cwd: cwd.path().to_path_buf(),
+        },
         hosts: vec![HostPane {
             argv: vec!["sleep".to_owned(), "120".to_owned()],
             cwd: cwd.path().to_path_buf(),

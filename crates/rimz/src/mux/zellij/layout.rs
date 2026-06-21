@@ -105,8 +105,8 @@ fn sidebar_pane_kdl(
 /// The session-birth layout for a room that leads with a daemon view and/or
 /// re-seeds prior agents. Zellij can't reorder tabs or add command panes after
 /// birth, so the order and content are fixed here: the daemon tab
-/// (`sidebar | hosts…`, first, when present), then one `#channel` tab per
-/// resumed worktree (`sidebar | agents…`), then the working tab
+/// (`sidebar | stats | hosts…`, first, when present), then one `#channel` tab
+/// per resumed worktree (`sidebar | agents…`), then the working tab
 /// (`sidebar | terminal`). Focus lands on the most-recently-active resumed
 /// channel when there is one, else on the working terminal — so attach drops
 /// the user straight onto a restored agent.
@@ -135,20 +135,14 @@ pub(super) fn render_session_layout(
     // The daemon tab leads, when present.
     let daemon_tab = match daemon {
         Some(daemon) => {
-            if daemon.hosts.is_empty() {
-                return Err(MuxErr::Output {
-                    program: "zellij".to_owned(),
-                    reason: "daemon view has no host panes".to_owned(),
-                });
-            }
             let daemon_name = kdl_string(&daemon.name)?;
-            let host_panes = daemon
-                .hosts
-                .iter()
-                .enumerate()
-                .map(|(index, host)| render_host_pane(host, index == 0, 16))
-                .collect::<Result<String>>()?;
-            let body = render_sidebar_work_area(&sidebar, &host_panes, 8);
+            let body = render_daemon_columns(
+                &sidebar,
+                &daemon.stats,
+                &daemon.hosts,
+                opts.birth_size.percent,
+                8,
+            )?;
             format!(
                 r#"    tab name={daemon_name} {{
 {body}
@@ -168,7 +162,9 @@ pub(super) fn render_session_layout(
             .panes
             .iter()
             .enumerate()
-            .map(|(pane_index, argv)| render_command_pane(argv, &tab.cwd, pane_index == 0, 16))
+            .map(|(pane_index, argv)| {
+                render_command_pane(argv, &tab.cwd, pane_index == 0, 16, None)
+            })
             .collect::<Result<String>>()?;
         let body = render_sidebar_work_area(&sidebar, &agent_panes, 8);
         let focus_attr = if index == 0 { " focus=true" } else { "" };
@@ -211,36 +207,32 @@ fn kdl_string(value: &str) -> Result<String> {
     })
 }
 
-/// A tab layout born `sidebar | hosts…`: the global sidebar docked on the left,
-/// the view's hosts side by side to its right (the first focused), and the
-/// compact-bar below — mirroring the session's working-tab shape. Supplying
-/// this as `new-tab --layout` overrides the session template, so the sidebar is
-/// spelled out here rather than inherited. The sidebar runs from its own
-/// worktree cwd and each host from its own `cwd`. Every host closes with its
-/// process (`close_on_exit true`): an exit means it is gone.
+/// A tab layout born `sidebar | stats | hosts…`: the global sidebar docked on
+/// the left, the live stats pane in the middle, daemon hosts stacked on the
+/// right when present, and the compact-bar below. The render and daemon columns
+/// share the sidebar width verdict; stats absorbs the center remainder.
+/// Supplying this as `new-tab --layout` overrides the session template, so the
+/// sidebar is spelled out here rather than inherited. The sidebar runs from its
+/// own worktree cwd and each command pane from its own `cwd`. Every command pane
+/// closes with its process (`close_on_exit true`): an exit means it is gone.
 pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Result<String> {
-    if opts.hosts.is_empty() {
-        return Err(MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: "background view has no host panes".to_owned(),
-        });
-    }
     // `new-tab --layout` does not set a tab `--default-cwd`, so the sidebar pane
-    // spells its own worktree cwd; each host carries its own. The view can be
-    // opened before the launch attaches a client, so it sizes detached-safe.
+    // spells its own worktree cwd; each command pane carries its own. The view
+    // can be opened before the launch attaches a client, so it sizes
+    // detached-safe.
     let sidebar = sidebar_pane_kdl(
         &opts.sidebar,
         Some(&opts.sidebar.cwd),
         BirthGeometry::Detached,
         None,
     )?;
-    let host_panes = opts
-        .hosts
-        .iter()
-        .enumerate()
-        .map(|(index, host)| render_host_pane(host, index == 0, 12))
-        .collect::<Result<String>>()?;
-    let body = render_sidebar_work_area(&sidebar, &host_panes, 4);
+    let body = render_daemon_columns(
+        &sidebar,
+        &opts.stats,
+        &opts.hosts,
+        opts.sidebar.birth_size.percent,
+        4,
+    )?;
     let swap_layout = rimz_swap_layout_kdl(opts.sidebar.birth_size.cols.get());
     // The body (sidebar + work area) is a nested vertical split above the
     // one-row compact-bar.
@@ -334,6 +326,58 @@ fn rimz_swap_layout_kdl(sidebar_cols: u16) -> String {
     )
 }
 
+fn render_daemon_columns(
+    sidebar: &str,
+    stats: &HostPane,
+    daemons: &[HostPane],
+    width_percent: u16,
+    indent: usize,
+) -> Result<String> {
+    let base = " ".repeat(indent);
+    let child = " ".repeat(indent + 4);
+    let stat_pane = render_command_pane(
+        &stats.argv,
+        &stats.cwd,
+        daemons.is_empty(),
+        indent + 4,
+        None,
+    )?;
+    let daemon_column = render_daemon_column(daemons, width_percent, indent + 4)?;
+    Ok(format!(
+        r#"{base}pane split_direction="vertical" {{
+{child}{sidebar}
+{stat_pane}{daemon_column}{base}}}
+"#,
+    ))
+}
+
+fn render_daemon_column(daemons: &[HostPane], width_percent: u16, indent: usize) -> Result<String> {
+    let size = format!("{}%", width_percent);
+    match daemons {
+        [] => Ok(String::new()),
+        [daemon] => render_command_pane(&daemon.argv, &daemon.cwd, true, indent, Some(&size)),
+        daemons => {
+            let mut rendered = String::new();
+            for (index, daemon) in daemons.iter().enumerate() {
+                rendered.push_str(&render_command_pane(
+                    &daemon.argv,
+                    &daemon.cwd,
+                    index == 0,
+                    indent + 4,
+                    None,
+                )?);
+            }
+            let base = " ".repeat(indent);
+            let size = kdl_string(&size)?;
+            Ok(format!(
+                r#"{base}pane size={size} split_direction="horizontal" {{
+{rendered}{base}}}
+"#,
+            ))
+        }
+    }
+}
+
 fn render_sidebar_work_area(sidebar: &str, work_panes: &str, indent: usize) -> String {
     let base = " ".repeat(indent);
     let child = " ".repeat(indent + 4);
@@ -365,14 +409,20 @@ fn render_tab_column(
         [pane] => {
             let focus = !*focused;
             *focused = true;
-            render_command_pane(&pane.argv, cwd, focus, indent)
+            render_command_pane(&pane.argv, cwd, focus, indent, None)
         }
         rows => {
             let mut rendered = String::new();
             for pane in rows {
                 let focus = !*focused;
                 *focused = true;
-                rendered.push_str(&render_command_pane(&pane.argv, cwd, focus, indent + 4)?);
+                rendered.push_str(&render_command_pane(
+                    &pane.argv,
+                    cwd,
+                    focus,
+                    indent + 4,
+                    None,
+                )?);
             }
             let base = " ".repeat(indent);
             Ok(format!(
@@ -385,17 +435,27 @@ fn render_tab_column(
 }
 
 /// One command pane in a tab's right side (`argv` run in `cwd`), indented to
-/// nest under the vertical split beside the sidebar. Born unsuspended and
-/// closing with its process — an exit means the pane is gone. `focus` pins the
-/// tab's focus on it. Shared by the daemon hosts and the resumed agents, so both
-/// render identically.
-fn render_command_pane(argv: &[String], cwd: &Path, focus: bool, indent: usize) -> Result<String> {
+/// nest under the split that contains it. Born unsuspended and closing with its
+/// process — an exit means the pane is gone. `focus` pins the tab's focus on it;
+/// `size` pins a daemon edge column to the same percentage verdict as the
+/// sidebar while stats remains sizeless and absorbs the center remainder.
+fn render_command_pane(
+    argv: &[String],
+    cwd: &Path,
+    focus: bool,
+    indent: usize,
+    size: Option<&str>,
+) -> Result<String> {
     let (program, args) = argv.split_first().ok_or_else(|| MuxErr::Output {
         program: "zellij".to_owned(),
         reason: "command pane has no program".to_owned(),
     })?;
     let program = kdl_string(program)?;
     let cwd = kdl_string(&cwd.to_string_lossy())?;
+    let size_attr = match size {
+        Some(size) => format!(" size={}", kdl_string(size)?),
+        None => String::new(),
+    };
     let focus_attr = if focus { " focus=true" } else { "" };
     let args_line = if args.is_empty() {
         String::new()
@@ -410,19 +470,13 @@ fn render_command_pane(argv: &[String], cwd: &Path, focus: bool, indent: usize) 
     let base = " ".repeat(indent);
     let child = " ".repeat(indent + 4);
     Ok(format!(
-        r#"{base}pane{focus_attr} cwd={cwd} {{
+        r#"{base}pane{size_attr}{focus_attr} cwd={cwd} {{
 {child}command {program}{args_line}
 {child}start_suspended false
 {child}close_on_exit true
 {base}}}
 "#,
     ))
-}
-
-/// One host pane in the daemon view's right side. Thin wrapper over
-/// [`render_command_pane`] for the daemon hosts.
-fn render_host_pane(host: &HostPane, focus: bool, indent: usize) -> Result<String> {
-    render_command_pane(&host.argv, &host.cwd, focus, indent)
 }
 
 #[cfg(test)]
@@ -459,9 +513,14 @@ mod tests {
         }
     }
 
+    fn stats_host() -> HostPane {
+        host(&["/usr/bin/rimz", "stats", "--refresh"], "/proj/worktree")
+    }
+
     fn background_view_opts(hosts: Vec<HostPane>) -> BackgroundViewOptions {
         BackgroundViewOptions {
             name: "rimzd".to_owned(),
+            stats: stats_host(),
             hosts,
             sidebar: sidebar_opts("rimz-bg", None, None),
         }
@@ -470,8 +529,15 @@ mod tests {
     fn daemon_view(hosts: Vec<HostPane>) -> DaemonView {
         DaemonView {
             name: "rimzd".to_owned(),
+            stats: stats_host(),
             hosts,
         }
+    }
+
+    fn pane_header_before<'a>(layout: &'a str, needle: &str) -> &'a str {
+        let args_at = layout.find(needle).expect("pane args present");
+        let pane_at = layout[..args_at].rfind("pane").expect("pane header");
+        &layout[pane_at..args_at]
     }
 
     fn resume_tab(label: &str, panes: &[&[&str]], cwd: &str) -> ResumeTab {
@@ -560,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn background_view_layout_renders_hosts_and_rejects_empty() {
+    fn background_view_layout_renders_stats_and_stacked_daemons() {
         let layout = render_background_view_layout(&background_view_opts(vec![
             host(
                 &["claude", "remote-control", "--spawn", "worktree"],
@@ -572,6 +638,11 @@ mod tests {
             ),
         ]))
         .expect("render background view layout");
+        assert!(layout.contains(r#"args "stats" "--refresh""#), "{layout}");
+        assert!(
+            !pane_header_before(&layout, r#"args "stats" "--refresh""#).contains("size="),
+            "stats stays sizeless so it absorbs the middle column:\n{layout}",
+        );
         assert!(layout.contains(r#"command "claude""#), "{layout}");
         assert!(
             layout.contains(r#"args "remote-control" "--spawn" "worktree""#),
@@ -581,6 +652,10 @@ mod tests {
         assert!(
             layout.contains(r#"args "codex" "app-server" "serve""#),
             "{layout}",
+        );
+        assert!(
+            layout.contains(r#"pane size="30%" split_direction="horizontal""#),
+            "daemon hosts stack in a right column at the sidebar birth width:\n{layout}",
         );
         assert!(layout.contains("pane focus=true"), "{layout}");
         assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
@@ -612,7 +687,19 @@ mod tests {
         );
         assert!(layout.contains(r#"cwd="/proj/worktree""#), "{layout}");
         assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
-        assert!(render_background_view_layout(&background_view_opts(vec![])).is_err());
+
+        let layout = render_background_view_layout(&background_view_opts(vec![]))
+            .expect("render stats-only background view layout");
+        assert!(layout.contains(r#"args "stats" "--refresh""#), "{layout}");
+        assert!(
+            !layout.contains(r#"split_direction="horizontal""#),
+            "no daemon column when there are no daemon hosts:\n{layout}",
+        );
+        assert_eq!(
+            layout.matches("focus=true").count(),
+            1,
+            "stats takes focus in a daemon-less view:\n{layout}",
+        );
     }
 
     #[test]
@@ -756,7 +843,7 @@ mod tests {
     }
 
     #[test]
-    fn session_layout_leads_daemon_tab_and_rejects_empty_daemon() {
+    fn session_layout_leads_daemon_tab_with_three_column_daemon_view() {
         let bg = background_view_opts(vec![
             host(&["claude", "remote-control"], "/proj/root"),
             host(
@@ -779,6 +866,15 @@ mod tests {
             layout.contains(r#"args "codex" "app-server" "serve""#),
             "{layout}",
         );
+        assert!(layout.contains(r#"args "stats" "--refresh""#), "{layout}");
+        assert!(
+            !pane_header_before(&layout, r#"args "stats" "--refresh""#).contains("size="),
+            "stats stays sizeless so it absorbs the middle column:\n{layout}",
+        );
+        assert!(
+            layout.contains(r#"pane size="30%" split_direction="horizontal""#),
+            "daemon hosts stack in a right column at the sidebar birth width:\n{layout}",
+        );
         assert!(
             layout.contains(r#"name="rimz-sidebar" borderless=true"#),
             "{layout}"
@@ -800,13 +896,14 @@ mod tests {
         );
         assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
 
+        let bg = background_view_opts(vec![]);
+        let layout = render_session_layout(&bg.sidebar, Some(&daemon_view(vec![])), &[])
+            .expect("render stats-only daemon tab");
+        assert!(layout.contains(r#"tab name="rimzd""#), "{layout}");
+        assert!(layout.contains(r#"args "stats" "--refresh""#), "{layout}");
         assert!(
-            render_session_layout(
-                &background_view_opts(vec![]).sidebar,
-                Some(&daemon_view(vec![])),
-                &[],
-            )
-            .is_err()
+            !layout.contains(r#"split_direction="horizontal""#),
+            "no daemon column when there are no daemon hosts:\n{layout}",
         );
     }
 }

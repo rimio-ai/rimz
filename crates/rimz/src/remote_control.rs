@@ -42,8 +42,9 @@ use crate::ids::AgentKind;
 
 /// View name for the managed daemon tab. Shared by the launcher (the idempotency
 /// key for the tmux window / Zellij tab) and the sidebar classifier
-/// ([`pane_is_host`]), so both speak the same name. The tab hosts the Claude
-/// remote-control host and the per-session Codex app-server broker side by side.
+/// ([`pane_is_host`]), so both speak the same name. The tab hosts live stats in
+/// the middle and stacks the Claude remote-control host and per-session Codex
+/// app-server broker on the right when they apply.
 pub const VIEW_NAME: &str = "rimzd";
 
 /// Substring marking the Claude remote-control host in a pane's command line —
@@ -397,17 +398,15 @@ fn env_var_present(key: &str) -> bool {
     std::env::var_os(key).is_some_and(|value| !value.is_empty())
 }
 
-/// Whether `pane` hosts a managed daemon — the Claude remote-control host or the
-/// Codex app-server broker. Both live in the [`VIEW_NAME`] view.
-///
-/// Two signals, because the backends expose different metadata: Zellij reports
-/// the full command line (so the `remote-control` / `app-server` subcommand is
-/// visible), while tmux reports only the foreground binary basename but names the
-/// window — which is the view name we launched it under, catching either host.
+/// Whether a command line is one of Rimz's managed daemon hosts.
 pub fn command_is_host(command: &str) -> bool {
     command.contains(COMMAND_MARKER) || command.contains(APP_SERVER_MARKER)
 }
 
+/// Whether `pane` belongs to the daemon dashboard. Command markers catch daemon
+/// hosts wherever they are reported; the `rimzd` view name catches the full
+/// dashboard, including the stats pane on backends that report only a foreground
+/// binary basename.
 pub fn pane_is_host(pane: &PaneRef) -> bool {
     pane.spawn_command.as_deref().is_some_and(command_is_host)
         || pane.command.as_deref().is_some_and(command_is_host)
