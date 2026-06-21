@@ -23,7 +23,8 @@ use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{
     ClientFocusOptions, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, SessionHealth,
-    SidebarPaneOptions, SidebarWidth, SplitPaneOptions, TabOptions, ZellijBackend, zellij,
+    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions,
+    TabOptions, ZellijBackend, zellij,
 };
 use tempfile::TempDir;
 
@@ -997,35 +998,31 @@ fn reconcile_defers_the_add_on_a_detached_session() {
     );
 
     let (_stub_dir, stub) = sidebar_command_stub();
-    let report = ZellijBackend::with_runtime_dir(xdg.path())
-        .reconcile_sidebars(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-defer")),
-                project_root: cwd.path().to_path_buf(),
-                cwd: cwd.path().to_path_buf(),
-                width: SidebarWidth::default(),
-                birth_size: SidebarWidth::default().birth_size(Some(120)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_tabs: Vec::new(),
-                refresh_ms: None,
-            },
-            &rimz::mux::SidebarLiveness::default(),
-        )
-        .expect("reconcile_sidebars");
+    let opts = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-defer")),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width: SidebarWidth::default(),
+        birth_size: SidebarWidth::default().birth_size(Some(120)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    // A freshly born --create-background session whose only pane is still
+    // materializing is the case most prone to reconcile's transient-empty read,
+    // so retry until reconcile actually observes the working pane.
+    let report = reconcile_until_observed(xdg.path(), &opts, &SidebarLiveness::default());
 
     assert_eq!(report.deferred, 1, "the detached session's add is deferred");
     assert_eq!(report.recovered, 0, "nothing is added without a client");
     assert_eq!(report.failed, 0, "a deferral is not a failure");
-    let after = ZellijBackend::with_runtime_dir(xdg.path())
-        .list_panes(PaneListOptions {
-            session_name: Some(name.clone()),
-            ..Default::default()
-        })
-        .expect("list_panes after")
-        .panes;
+    // Poll rather than read once: a recovered add would already have tripped the
+    // `recovered == 0` assertion above, so here a single empty `list-panes` answer
+    // under load would only flake a settled result. `before` polls for the same reason.
+    let after = wait_for_pane_count(xdg.path(), &name, 1);
     assert_eq!(after.len(), 1, "no pane was added detached: {after:?}");
     assert_eq!(
         serve_processes_for(&name),
@@ -2147,6 +2144,34 @@ fn wait_for_pane_count(xdg: &Path, session: &str, want: usize) -> Vec<PaneRef> {
             .panes;
         if panes.len() >= want || Instant::now() >= deadline {
             return panes;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Run `reconcile_sidebars` until it observes the session's live panes.
+///
+/// Reconcile reads the pane list once and early-returns a no-op
+/// `SidebarRecovery::default()` when that read comes back empty. Under heavy CI
+/// load Zellij's screen thread can briefly answer `[]` past the backend's
+/// bounded empty-retry, so a freshly born session's first reconcile occasionally
+/// sees nothing and does nothing. Every reconcile test sets up a view that needs
+/// work, so an all-zeros report is that transient-empty race rather than the real
+/// outcome — retry it. A no-op pass touches no panes, so re-running is safe; a
+/// genuine regression keeps returning the default until the deadline, letting the
+/// caller's assertion fire on the real (still wrong) report.
+fn reconcile_until_observed(
+    xdg: &Path,
+    opts: &SidebarPaneOptions,
+    live: &SidebarLiveness,
+) -> SidebarRecovery {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let report = ZellijBackend::with_runtime_dir(xdg)
+            .reconcile_sidebars(opts, live)
+            .expect("reconcile_sidebars");
+        if report != SidebarRecovery::default() || Instant::now() >= deadline {
+            return report;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
