@@ -217,7 +217,7 @@ Two invariants hold the seam shut:
 
 **Lifecycle — fast, non-blocking.** Drives agent status, the turn phase, task, and enrichment. Each flows through `observe_lifecycle`; an event carrying no transition returns `None` and records nothing.
 
-**Blocking-feed — holds the agent open.** A permission request, plan approval, or user question. It becomes a [`FeedItem`](../../../crates/rimz/src/feed.rs) and engages the three operating paths in [ledger.md](../sidebar/ledger.md#the-three-paths-at-a-glance): bind a per-request socket and wait for a resolver (`bridge`), or write the item and return neutral so the agent's own UI asks (`native_ui`). The `native_ui` hand-off requires a surface to hand to: an agent whose descriptor declares `native_ask_ui` off (pi) resolves the same ask neutrally with **no feed item**, since there is nothing an item could route the human to.
+**Blocking-feed — holds the agent open.** A permission request, plan approval, or user question. It becomes a [`FeedItem`](../../../crates/rimz/src/feed.rs) and engages the [feed lifecycle and decision bridge](../sidebar/ledger.md#feed-lifecycle-and-the-decision-bridge): bind a per-request socket and wait for a resolver (`bridge`), or write the item and return neutral so the agent's own UI asks (`native_ui`). The `native_ui` hand-off requires a surface to hand to: an agent whose descriptor declares `native_ask_ui` off (pi) resolves the same ask neutrally with **no feed item**, since there is nothing an item could route the human to.
 
 Blocking decision hooks must be **sync** — an async one would ignore the decision printed on stdout, so the installer rejects it.
 

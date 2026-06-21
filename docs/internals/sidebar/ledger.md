@@ -1,170 +1,100 @@
 # Ledger and bridge
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes, and [performance.md](../health/performance.md) for the cost model over these mechanisms.
 
-The ledger is the source of truth. The bridge is the optional blocking path that carries decisions back to a waiting hook or script. Correctness lives here; everything else (sidebar, notifications, agent UIs) reads through it.
+The ledger is the workspace's durable source of truth: a directory of flat files that every writer appends to and every renderer reads. Correctness lives here — the sidebar, notifications, and the agent UIs are all views over it. The bridge is the optional blocking path layered on top: it carries a decision back to a hook or script that is waiting on an answer.
 
-## The three paths at a glance
-
-```text
-Default path                Bridge path                 Script path
-(no fresh resolver)         (resolver enrolled)         (rimz feed ask)
-
-agent hook fires            agent hook fires            script calls feed ask
-        │                            │                            │
-        ▼                            ▼                            ▼
-write feed item             write feed item             write feed item
-surface = native_ui         surface = bridge            surface = script
-        │                            │                            │
-        ▼                            ▼                            ▼
-wake sidebars               bind per-request socket     bind per-request socket
-return neutral no-op        wait up to hook cap         wait up to --timeout
-exit                                 │                            │
-        │                            ▼                            ▼
-        ▼                  resolver answers (CAS)      human/resolver answers
-agent's own UI asks         hook prints agent JSON     script unblocks
-human focuses pane          (or times out →            (or timeout → expires)
-                             native fallback)
-```
-
-The wire-level signal that distinguishes the three is the `surface` field on the feed item. Sidebar rendering, feed-verb gating, and resolver matching all read it.
-
-## Surfaces
-
-The `native_ui` / `bridge` / `script` vocabulary is defined in [DESIGN.md → The three operating paths](../../../DESIGN.md#the-three-operating-paths). This doc describes how each path moves through the ledger; the table of which path holds the hook open and where the answer comes from lives there.
-
-`rimz feed resolve` is valid only for `bridge` and `script`. `rimz feed dismiss` is the local acknowledgement path for `native_ui` — it never reaches the agent.
+This doc owns the durability contract — the on-disk shape, the write classes, the feed lifecycle, the CAS rules, and the decision bridge. The write- and read-path *choreography* lives beside the code in [`ledger/AGENTS.md`](../../../crates/rimz/src/ledger/AGENTS.md), and each file's mechanics live in the module linked from the rule that names it.
 
 ## Durable state
 
 Under `${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/`:
 
 ```text
-workspace.json
-events.log.jsonl
-events.log.archive/events.<uuidv7>.jsonl
-agents.carryover.json
-snapshots/latest.json
-snapshots/rollup.json
-feed/<request_id>.json
-feed/terminal/<request_id>.json
-locks/workspace.lock
-locks/publish.lock
-locks/abandon-sweep.stamp
-locks/log-sync.stamp
-locks/publish.stamp
+workspace.json                                  project root, root class, session name
+events.log.jsonl                                the framed event log — crash-recoverable truth
+events.log.archive/events.<uuidv7>.jsonl        rotated logs, chronologically sortable
+agents.carryover.json                           agent rollup carried across rotation
+snapshots/latest.json                           published view-model checkpoint (cache)
+snapshots/rollup.json                           resumable agent-rollup fold base (cache)
+feed/<request_id>.json                          pending feed items — CAS coordination
+feed/terminal/<request_id>.json                 decided feed items, relocated on terminal status
+locks/workspace.lock                            the single-writer flock
+locks/{publish,abandon-sweep,log-sync}.stamp    debounce stamps for the off-lock write tail
 ```
+
+`<workspace_id>` is `ws_` plus the first 24 hex of the SHA-256 of the canonical root path — the same derivation for every root class (repo, marker, directory), so introducing a class never re-keys a ledger. Every feed file carries `workspace_id`, `request_id`, nonce, resolver id, and timestamps.
+
+The split of truth from cache is the organizing rule: **`events.log.jsonl` and the `feed/` files are the crash-recoverable truth; everything under `snapshots/` is a reconstructible cache.** A reader rebuilds the cache from the log on any mismatch or parse failure, so a writer that crashes before publishing costs the next reader a bounded fold, never staleness.
+
+- `workspace.json` records the project root, root class, and session name for maintenance commands. A record predating `root_class` decodes as `repo` and self-heals on the next start. Launch reads it before overwriting: when the derived session name diverges from a still-live recorded session, launch rebirths the workspace under the new name rather than stranding the session ([`workspace_record.rs`](../../../crates/rimz/src/ledger/workspace_record.rs)).
+- `snapshots/latest.json` is the published view-model and `snapshots/rollup.json` the resumable fold base; writers publish both off-lock, debounced through stamps, stamped with the log `(generation, offset)` they reflect. A reader trusts a checkpoint exactly when its stamp matches the live log and folds the missing tail itself otherwise ([`snapshot/fold.rs`](../../../crates/rimz/src/ledger/snapshot/fold.rs), [`writer/publish.rs`](../../../crates/rimz/src/ledger/writer/publish.rs)).
+- `rimz workspace rotate-events` archives the active log once it crosses a byte threshold and prunes old archives. Rotation first merges the rotating log's agent rollup into `agents.carryover.json` and reseeds the rollup base, so the sidebar's agent panel stays correct across rotations without rescanning archives ([`event_log/rotation.rs`](../../../crates/rimz/src/ledger/event_log/rotation.rs)).
+- `rimz reset` is a room boundary in the ledger: it abandons pending items with reason `workspace_reset`, cancels active runs, force-rotates the log, clears feed and diagnostic files, and removes the runtime directory. Soft reset keeps `agents.carryover.json` for audit; `--hard` also drops it ([`writer/reset.rs`](../../../crates/rimz/src/ledger/writer/reset.rs)).
 
 ### Write classes
 
-Every disk write belongs to one of four classes, and the classification rule is stated once: fsync leaves the hot path; cold paths keep it even where the same-host argument would allow relaxing, because removing it there buys nothing. Every fsync syscall funnels through `ledger/atomic.rs` (CI grep), so the contract is enforced, not reviewed.
+Every disk write belongs to one of four classes. The classification rule is one line: **durable truth and cold metadata fsync; the hot event-log append and the disposable caches do not** — a cache rebuilds, and the event log's group sync bounds its loss. Every fsync syscall funnels through [`atomic.rs`](../../../crates/rimz/src/ledger/atomic.rs) (CI grep), so the discipline is enforced, not reviewed.
 
 | Class | Files | Write discipline | After a power cut |
 | --- | --- | --- | --- |
-| Event log | `events.log.jsonl` | one `write()` per CRC-framed record, no per-record fsync; the off-lock write tail issues a group fdatasync debounced to at most one per second (`locks/log-sync.stamp`), and rotation syncs the file before the rename | intact through the last group sync. The loss window is up to one debounce interval of trailing events under sustained load — decision events (`feed.resolve`) included, not just observational ones — and a final pre-quiescence tail additionally rides kernel writeback (~30s default), with the frame CRC turning any lost writeback into deterministic corruption that repair truncates. A lost resolution is benign by construction: the power cut killed its waiter too, so the resurrected pending ask is expelled at read time and durably abandoned by the sweep |
-| Coordination | `feed/*.json`, `feed/terminal/*.json` | temp file + atomic rename, no fsync | a lost item file costs at most the audit-completeness of its final window; the dead-owner expel abandons any ask whose waiter died with the machine |
-| Cache | `snapshots/latest.json`, `snapshots/rollup.json`, heartbeats, sidecars | temp file + atomic rename, no fsync (`write_temp_then_rename_cache`) | rebuilt from the log on the next read |
-| Cold path | `workspace.json`, `agents.carryover.json`, trust grants, resolver allowlists, hook installs | temp file, fsync, rename, parent-dir sync (`write_temp_then_rename`) | survives |
+| Event log | `events.log.jsonl` | one CRC-framed `write()` per record; the off-lock tail issues a group `fdatasync` (~1/s), and rotation syncs before the rename | intact through the last group sync. The trailing window can be lost (decisions included); the frame CRC turns any torn suffix into deterministic corruption that repair truncates. A lost resolution is benign — the crash killed its waiter too, so the resurrected ask is abandoned at read time |
+| Coordination | `feed/*.json`, `feed/terminal/*.json` | temp file + atomic rename, no fsync | a lost item costs at most its window's audit completeness; the dead-owner expel abandons any ask whose waiter died with the machine |
+| Cache | `snapshots/*.json`, heartbeats, sidecars | temp file + atomic rename, no fsync | rebuilt from the log on the next read |
+| Cold path | `workspace.json`, `agents.carryover.json`, trust grants, resolver allowlists, hook installs | temp file, fsync, rename, parent-dir sync | survives |
 
-Rules:
-
-- `<workspace_id>` is `ws_` plus the first 24 hex characters of the SHA-256 of the canonical root path — the same derivation for every root class (repo, marker, directory), so introducing a class never re-keys a ledger.
-- `workspace.json` records the last known project root, root class, and session name for maintenance commands; feed files and the event log remain the request source of truth. A record predating the `root_class` field decodes as `repo` and self-heals on the next start/attach re-record. Launch reads the prior record before overwriting it: when the derived session name diverges from the recorded one and a session still answers to the recorded name, launch retires that session and rebirths the workspace under the new name, so a changed derivation never strands a live session or its sidebar.
-- Feed files are CAS coordination state: the CAS re-checks under the workspace lock, same-host writers always read their own renames, and the event log carries the durable audit trail, so rename atomicity is the whole durability requirement (coordination class).
-- Resolutions take the workspace lock, then CAS on `status = pending`. First valid writer wins.
-- A feed item that reaches a terminal status (`resolved`, `timed_out`, `abandoned`) relocates into `feed/terminal/` with an atomic rename under the same lock, so decision-path scans stay O(pending). Audit reads (`feed list --audit`, `feed show`) span both directories.
-- `events.log.jsonl` uses length-plus-CRC framing (`<len> <crc32> <json>`), the CRC computed over the JSON payload; pre-CRC frames still decode, so old logs fold cleanly. The event log and the feed files are the crash-recoverable truth; everything under `snapshots/` is a reconstructible cache.
-- A torn trailing record at SIGKILL is skipped on rebuild and logged. A corrupt frame *behind* later frames hard-errors every read; the next write tail (or `rimz gc`) repairs by truncating at the first invalid frame and republishing from the surviving prefix.
-- The workspace flock makes the log single-writer-at-a-time, and recovery is built on that: only the *trailing* frame can ever be in flight, so a torn frame anywhere earlier is corruption and rebuild fails loudly rather than silently dropping the events behind it. This is load-bearing — lock-free appends (`O_APPEND` from concurrent writers) would let writeback reordering tear a *middle* frame after a crash, and are unsafe until the framing grows per-frame magic for resync (the CRC validates a frame; it cannot relocate the next boundary past a torn middle). See the rejected-candidates list in [performance.md](../health/performance.md#bottlenecks-and-deferred-work).
-- Rollup reads are lock-free. The snapshot resumes from the persisted fold base in `snapshots/rollup.json` and folds only the log bytes appended since, so a writer's half-written trailing frame is simply not folded until it completes — it can never drop a previously-folded event. The write that completes the frame posts the wakeup that folds it.
-- `rimz workspace rotate-events` archives the active log into `events.log.archive/events.<uuidv7>.jsonl` once it exceeds the operator-supplied byte threshold (default `64MiB`); UUIDv7 filenames sort chronologically. The same command prunes archives older than `--archive-older-than`.
-- Before rename, the agent rollup of the rotating log is merged into `agents.carryover.json`. The snapshot reducer loads carryover and lets newer in-log observations override; this keeps the sidebar's agent panel correct across rotations without rescanning archives. Rotation also bumps the rollup generation and reseeds `snapshots/rollup.json` from the carryover, so incremental readers detect the boundary and never fold across it.
-- `rimz reset` is a room boundary in the ledger as well as in the multiplexer: pending feed items are abandoned with reason `workspace_reset`, active runs are marked `canceled`, the active log is force-rotated into `events.log.archive/`, feed coordination files and diagnostic captures are cleared, and the workspace runtime directory is removed. Soft reset keeps `agents.carryover.json` for history and audit, but the reset rebirth starts empty; `rimz reset --hard` also removes the carryover. `workspace.json`, run records, and archives stay.
-- Every feed file carries `workspace_id`, `request_id`, nonce, resolver id, and timestamps.
-- `snapshots/latest.json` is a derived view, published by writers after the workspace lock releases — serialized through `locks/publish.lock`, atomic rename, no fsync, and debounced through `locks/publish.stamp` to at most one checkpoint per second, or sooner once the unpublished tail crosses 64 KiB. Wakeups fire before the publish and consumers fold the log tail from their own cursor, so the checkpoint is a catch-up accelerator, never the freshness path — a skipped publish costs a cold reader a bounded fold, not staleness. Queued publishers group-commit: each holder folds to the log's current end. It is stamped with the log generation and byte offset it reflects; a reader trusts it exactly when the stamp matches the live log, folds the missing tail itself when writes outran it (O(delta bytes)), and rebuilds from scratch on any mismatch or parse failure.
-- `snapshots/rollup.json` is the resumable agent-rollup fold base — the raw pre-projection state plus the `(generation, offset)` stamp — cache-class like `latest.json`. A writer that crashes between releasing the lock and publishing costs nothing: the next reader folds the delta from the durable log itself.
-
-## Runtime projection
-
-History and runtime are separate views over the same durable ledger.
-
-- **Expel** is read-time filtering. Default runtime views (`rimz sidebar snapshot`, `rimz feed list`, and the default agent summary in `rimz doctor`) include only feed items and agent rollups whose `runtime_owner` points at the same live process that created them. Ownerless legacy records, dead owners, and Linux PID-start mismatches are audit-only.
-- **Audit** is durable history. `rimz feed show <request-id>` is exact, `rimz feed list --audit` lists all feed items, and `rimz doctor --audit` reads the full agent rollup history.
-- **Abandon** is a durable terminal transition. A periodic sweep — the next ledger write past a ~2s debounce, or `rimz gc` — finds a pending item with a recorded but dead owner process, writes `status = abandoned`, records reason `owner_process_exited`, and appends a `feed.abandon` audit event. Expel hides a dead-owner item from runtime views the instant it dies; the sweep makes that durable within the debounce window, and the write path itself stays O(1) — one stamp stat, never a history scan.
-
-`runtime_owner` records `kind = agent | script`, a stable subject id, `pid`, and the Linux process-start token when available. Agent hooks publish the detected agent process and session id; blocking script asks publish the running `rimz feed ask` waiter. Short-lived `feed push` and `feed ask --no-block` records are still written for audit, but once their CLI process exits they leave default runtime views.
+Crash recovery rests on the framing and the flock. Each record is framed `<len> <crc32> <json>`, the CRC over the payload, and pre-CRC frames still decode ([`event_log/frame.rs`](../../../crates/rimz/src/ledger/event_log/frame.rs)). The workspace flock makes the log single-writer-at-a-time, so only the *trailing* frame can be in flight at a crash: a torn suffix is truncated and logged, while a bad frame *behind* a good one is real corruption that fails the read loudly rather than silently dropping the events behind it ([`event_log/recovery.rs`](../../../crates/rimz/src/ledger/event_log/recovery.rs)). Lock-free `O_APPEND` would let writeback reorder and tear a *middle* frame; [performance.md](../health/performance.md#bottlenecks-and-deferred-work) records why that trade is rejected.
 
 ## Runtime state
 
-Under `${XDG_RUNTIME_DIR}/rimz/<workspace_id>/`, or `/tmp/rimz-<uid>/rimz/<workspace_id>/` at mode `0700` when `XDG_RUNTIME_DIR` is unset (common inside containers and on minimal hosts):
+Liveness hints live apart from the ledger, under `${XDG_RUNTIME_DIR}/rimz/<workspace_id>/` (or `/tmp/rimz-<uid>/rimz/<workspace_id>/` at mode `0700` when `XDG_RUNTIME_DIR` is unset):
 
 ```text
-sock/feed.<short_id>.sock           per-request decision socket; bound by the
-                                    waiting hook subprocess, torn down on exit
-sock/sidebar.<short_instance_id>.sock
-                                    per-instance wakeup socket; bound by each
-                                    live sidebar
-heartbeat/sidebar.<instance_id>.json
-heartbeat/resolver.<resolver_id>.json
-read-marks/sidebar.<instance_id>.json
-read-marks/manual.json
+sock/feed.<short_id>.sock               per-request decision socket; the waiting hook binds and tears it down
+sock/sidebar.<short_instance_id>.sock   per-instance wakeup socket; each live sidebar binds one
+heartbeat/{sidebar,resolver}.*.json     liveness timestamps
+read-marks/{sidebar.<id>,manual}.json   renderer and room-runtime read receipts
 ```
 
-Sockets, heartbeats, and renderer read-mark receipts are liveness/runtime hints, not durable state. The manual read-mark file is a room-runtime API receipt, kept until the room runtime is reset or collected. They're split from the ledger directory because `AF_UNIX` socket paths are short: 108 bytes on Linux and 104 bytes on macOS, including the terminator.
+Sockets, heartbeats, and read receipts are liveness hints — rebuilt or rebound as processes come and go, and the [survival table](#what-survives-what) treats them as expendable. They live apart from the ledger because `AF_UNIX` socket paths are short (108 bytes on Linux, 104 on macOS, terminator included), so a deep state path would overrun them.
 
-`rimz gc --older-than <duration>` removes stale resolver/sidebar heartbeat files, stale sidebar wakeup sockets named by those heartbeat files, and stale renderer read-mark receipts whose owning sidebar heartbeat has expired. It keeps `read-marks/manual.json` with the room runtime and does not remove `feed.*.sock` files because a long-running `rimz feed ask` may still own one. It also abandons pending feed items whose recorded owner process has exited. As the global garbage collector it additionally prunes provably-dead durable workspaces — a recorded project root that no longer exists, or an abandoned `rimz start` scaffold with no history. A workspace whose `workspace.json` is unreadable but that still holds history is kept and reported, never deleted.
+`rimz gc` collects this directory: it removes expired heartbeats, the wakeup sockets they named, and read receipts whose owning sidebar has expired, keeping `read-marks/manual.json` with the room runtime and leaving `feed.*.sock` alone because a long `rimz feed ask` may still own one. As the global collector it also abandons pending items whose owner has exited and prunes provably-dead workspaces — a vanished project root, or an abandoned scaffold with no history — while keeping and reporting any workspace that still holds history ([`gc/collect.rs`](../../../crates/rimz/src/ledger/gc/collect.rs), [`gc/prune.rs`](../../../crates/rimz/src/ledger/gc/prune.rs)).
 
-## Default path
+## Feed lifecycle and the decision bridge
 
-No fresh enrolled resolver heartbeat at hook fire time:
+An actionable feed item is created with one `surface` — `native_ui`, `bridge`, or `script` — and the surface is the wire signal the rest of the system reads: sidebar rendering, feed-verb gating, and resolver matching all branch on it. [DESIGN.md → the three operating paths](../../../DESIGN.md#the-three-operating-paths) defines who holds the agent's hook open and where each answer comes from; this section covers what each path commits to the ledger.
 
-1. Hook reads agent payload from stdin.
-2. Hook writes a feed item with `surface = native_ui`.
-3. Hook wakes any live sidebars.
-4. Hook returns the event-specific neutral no-op.
-5. Hook exits within milliseconds.
-6. Agent's own UI asks the human.
+Three rules hold across all surfaces:
 
-No per-request socket is bound, and the human answers in the agent's own UI — Rimz never learns the decision, so the item never reaches `resolved`. Instead the next ledger event that proves the session moved on expires it: a fresh ask supersedes it before being pushed, a turn-boundary lifecycle event (a fresh prompt or a turn's end) clears it, and a session-end event clears every surface the session left pending (the adapter marks these events via `moves_on` / `ends_session` — see [agent.md → The adapter boundary](../agents/agent.md#the-adapter-boundary)). Each match moves to `abandoned` with an `agent_moved_on` (or `agent_session_ended`) reason, so a session can never stack more than one native_ui row. The broad per-tool hook is silent on the ledger, so it is *not* a trigger; the read-side snapshot also collapses a session's pending asks to one row as a backstop.
+- A pending item lives at `feed/<request_id>.json` and carries `workspace_id`, `request_id`, nonce, resolver id, and timestamps.
+- A resolution takes the workspace lock, then CAS on `status = pending`, validating the active chain step, `workspace_id`, `request_id`, and nonce. The first valid writer wins ([`writer/resolve.rs`](../../../crates/rimz/src/ledger/writer/resolve.rs)).
+- Reaching a terminal status (`resolved`, `timed_out`, `abandoned`) relocates the file into `feed/terminal/` under the same lock with an atomic rename — no crash window resurrects a decided ask, and decision-path scans stay O(pending). Audit reads (`feed list --audit`, `feed show`) span both directories.
 
-## Bridge path
+**native_ui — the default.** The hook writes the item, wakes sidebars, and exits within milliseconds. No socket is bound and Rimz never learns the decision, so the item never reaches `resolved`. The next ledger event that proves the session moved on expires it: a fresh ask supersedes it, a turn boundary clears it, and a session end clears every surface the session left pending — the adapter tags these events via `moves_on` / `ends_session` ([agent.md → The adapter boundary](../agents/agent.md#the-adapter-boundary)). Each match moves to `abandoned` with reason `agent_moved_on` or `agent_session_ended`, so a session never stacks more than one native_ui row; the snapshot read collapses any residue to one row as a backstop. `rimz feed dismiss` is the local acknowledgement and never reaches the agent.
 
-Fresh enrolled resolver heartbeat at hook fire time:
+**bridge — a fresh enrolled resolver.** The hook writes the item with `surface = bridge`, binds a per-request socket, and writes its path into the file. It then re-stats the resolver heartbeat (TOCTOU guard) and downgrades to native_ui if the resolver died in the gap. A resolver's `rimz feed resolve` passes CAS, and the waiting hook unblocks and prints exactly one agent-native decision JSON. On hook-cap timeout the item moves to `timed_out`, the hook returns neutral, the sidebar labels it **"Delegated to native prompt,"** and the agent's own UI takes over — the native_ui outcome reached by another route ([`bridge.rs`](../../../crates/rimz/src/bridge.rs), [`writer/expiry.rs`](../../../crates/rimz/src/ledger/writer/expiry.rs)).
 
-1. Hook writes a feed item with `surface = bridge` and binds a per-request socket; the socket path is written into the feed file.
-2. Hook re-stats the resolver heartbeat directory (TOCTOU guard) — if the resolver died between the initial stat and the bind, the hook downgrades to `native_ui` and exits.
-3. Resolver calls `rimz feed resolve`.
-4. CAS validates `status = pending`, active chain step, `workspace_id`, `request_id`, and nonce.
-5. The waiting hook unblocks and prints exactly one agent-native decision JSON.
+**script — `rimz feed ask`.** The caller chose Rimz as its decision surface, so the wait blocks regardless of resolver presence, bounded only by the caller's `--timeout`. Resolution comes from any shell (`rimz feed resolve`), the sidebar UI, or an enrolled resolver.
 
-On hook-cap timeout (the per-agent ceiling — see [agent.md → The adapter boundary](../agents/agent.md#the-adapter-boundary) for the value each adapter ships), the hook returns neutral, the feed item moves to `timed_out`, and the sidebar labels it **"Delegated to native prompt"** — the agent's own UI takes over, exactly as in the default path.
+`rimz feed resolve` is valid for `bridge` and `script`; `rimz feed dismiss` is the native_ui acknowledgement.
 
-## Script path
+**Late answers.** A `feed resolve` that arrives after the item is `timed_out` is still accepted by CAS and appended to the event log as `effective = false`, `late = true`, `reason = "hook_already_returned_neutral"`. It changes no agent behaviour and never surfaces as attention; the record exists for audit.
 
-`rimz feed ask` always blocks. Resolver presence is irrelevant — the script chose Rimz as its decision surface. The wait has no agent-imposed cap; the caller's `--timeout` is the only ceiling. Resolution can come from any shell (`rimz feed resolve`), the sidebar UI, or an enrolled resolver client.
+## Runtime projection
+
+History and runtime are separate views over the one durable ledger ([`runtime.rs`](../../../crates/rimz/src/ledger/runtime.rs)).
+
+- **Expel** is read-time filtering. Default runtime views (`rimz sidebar snapshot`, `rimz feed list`, the default `rimz doctor` agent summary) keep only items and agent rollups whose `runtime_owner` is still the live process that wrote them. Ownerless legacy records, dead owners, and Linux PID-start mismatches are audit-only.
+- **Audit** is durable history. `rimz feed show` is exact, `rimz feed list --audit` lists every item, and `rimz doctor --audit` reads the full rollup.
+- **Abandon** is the durable terminal transition. A debounced sweep — the next write past ~2s, or `rimz gc` — finds a pending item with a dead recorded owner, writes `status = abandoned` with reason `owner_process_exited`, and appends a `feed.abandon` event. Expel hides such an item the instant it dies; the sweep makes that durable, and the write path stays O(1) — one stamp stat, never a history scan.
+
+`runtime_owner` records the owner kind (`agent` or `script`), a stable subject id, pid, and the Linux process-start token when available. Short-lived `feed push` and `feed ask --no-block` records are written for audit and drop out of runtime views once their CLI process exits.
 
 ## Wakeups
 
-After every ledger write the CLI or hook subprocess:
+After every write, the writer wakes live consumers off-lock: it walks fresh sidebar heartbeats (TTL ~5s) and sends each a `ledger_delta` wakeup datagram, and it pings any per-request bridge socket. The envelope and its event taxonomy live in [state.md → event taxonomy](./state.md#event-taxonomy) and [`schema/sidebar_event.rs`](../../../crates/rimz/src/schema/sidebar_event.rs).
 
-1. Walks fresh `heartbeat/sidebar.*.json` entries on the current sidebar protocol version (TTL ~5s).
-2. Sends a small wakeup datagram — a typed `SidebarEventEnvelope` carrying a `ledger_delta` event body ([`schema/sidebar_event.rs`](../../../crates/rimz/src/schema/sidebar_event.rs); taxonomy in [state.md](./state.md#event-taxonomy)) — to each socket path carried verbatim by a fresh heartbeat, normally `sock/sidebar.<short_instance_id>.sock`.
-
-The socket datagram is the only wakeup the walk fires, on both backends — one per fresh instance.
-
-The native sidebar's response to a wakeup is an in-process fetch cycle: it first folds the event-fresh rollup over the published pane frame and, if it is the producer, reconciles through `rimz::sidebar::produce`. A missed wakeup is closed by the next tick (`--tick-seconds`, default 1s).
-
-## Late answers
-
-A `feed resolve` arriving after the item is `timed_out` is accepted by CAS and appended to `events.log.jsonl` as:
-
-```text
-effective = false
-late = true
-reason = "hook_already_returned_neutral"
-```
-
-It does not change agent behaviour, never surfaces as a sidebar attention item, and is never typed into a pane by Rimz core. The record exists for audit.
+A wakeup carries latency, not truth: the consumer folds the log tail from its own cursor, and the published checkpoint is a catch-up accelerator it can skip. A missed wakeup is closed by the next sidebar tick (`--tick-seconds`, default 1s) ([`wakeup.rs`](../../../crates/rimz/src/ledger/wakeup.rs)).
 
 ## What survives what
 
@@ -173,7 +103,7 @@ It does not change agent behaviour, never surfaces as a sidebar attention item, 
 | Detach | yes | yes (mux server stays alive) | yes |
 | Sidebar reload | yes | sidebar socket rebound on attach | yes |
 | Multiplexer server crash | yes | no | no |
-| Host reboot | yes | no | no — needs host supervisor (tmux-resurrect, Zellij resurrect, systemd) |
-| Host power cut | yes — through the last group fdatasync; up to ~1s of trailing events (decisions included) can be lost, and repair truncates any torn suffix (see [write classes](#write-classes)) | no | no — needs host supervisor |
+| Host reboot | yes | no | no — needs a host supervisor (tmux-resurrect, Zellij resurrect, systemd) |
+| Host power cut | yes — through the last group `fdatasync`; the trailing window (decisions included) can be lost, and repair truncates any torn suffix (see [write classes](#write-classes)) | no | no — needs a host supervisor |
 
-Rimz guarantees the ledger across all of these — at a power cut, through the last group sync, with repair bounding the damage to the final window. The session and processes survive only what the host supervisor and the multiplexer server keep alive.
+Rimz guarantees the ledger across all of these: at a power cut, through the last group sync, with repair bounding the damage to the final window. The session and its processes survive only what the multiplexer server and the host supervisor keep alive.
