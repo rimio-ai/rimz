@@ -123,6 +123,62 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
     );
 }
 
+/// `open_sidebar` also accepts a daemon view with no daemon hosts: `rimzd`
+/// still leads and is born as the two-column `sidebar | stats` tab.
+#[test]
+fn open_sidebar_with_stats_only_daemon_view_leads_with_two_columns() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("bgstats");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+
+    let daemon = DaemonView {
+        name: "rimzd".to_owned(),
+        stats: HostPane {
+            argv: vec!["sleep".to_owned(), "120".to_owned()],
+            cwd: cwd.path().to_path_buf(),
+        },
+        hosts: Vec::new(),
+    };
+    backend
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgstats")),
+                project_root: cwd.path().to_path_buf(),
+                cwd: cwd.path().to_path_buf(),
+                width: SidebarWidth::default(),
+                birth_size: SidebarWidth::default().birth_size(Some(120)),
+                rimz_bin: stub,
+                replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
+                resume_tabs: Vec::new(),
+                refresh_ms: None,
+            },
+            Some(&daemon),
+        )
+        .expect("open_sidebar with stats-only daemon");
+
+    assert!(
+        wait_for_first_tab(xdg.path(), &name, "rimzd"),
+        "stats-only daemon tab must lead the session; saw {:?}",
+        tab_names_in_order(xdg.path(), &name),
+    );
+    let panes = wait_for_tab_pane_count(&backend, &name, "rimzd", 2);
+    assert_eq!(
+        panes.len(),
+        2,
+        "rimzd should be born sidebar | stats with no daemon hosts: {panes:?}",
+    );
+}
+
 /// The session's tab names in tab order (`query-tab-names` prints one per line).
 fn tab_names_in_order(xdg: &Path, session: &str) -> Vec<String> {
     let out = scoped_zellij(xdg)
@@ -138,6 +194,36 @@ fn tab_names_in_order(xdg: &Path, session: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Poll `list_panes` until `tab_name` has `want` terminal panes, or time out.
+fn wait_for_tab_pane_count(
+    backend: &ZellijBackend,
+    session: &str,
+    tab_name: &str,
+    want: usize,
+) -> Vec<PaneRef> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last = Vec::new();
+    loop {
+        if let Ok(listing) = backend.list_panes(PaneListOptions {
+            session_name: Some(session.to_owned()),
+            ..Default::default()
+        }) {
+            last = listing
+                .panes
+                .into_iter()
+                .filter(|pane| pane.view_name.as_deref() == Some(tab_name))
+                .collect();
+            if last.len() == want {
+                return last;
+            }
+        }
+        if Instant::now() >= deadline {
+            return last;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
 }
 
 /// Poll until the session's first tab is `expected`, or time out.

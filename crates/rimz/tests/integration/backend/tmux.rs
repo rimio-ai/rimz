@@ -860,6 +860,75 @@ fn open_background_view_creates_named_window_idempotently() {
     );
 }
 
+/// `open_background_view` creates a stats-only `rimzd` window when no daemon
+/// hosts apply: the sidebar hook docks render on the left and stats fills the
+/// remaining work area.
+#[test]
+fn open_background_view_creates_stats_only_window() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("rimz-bgstats");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = SidebarPaneOptions {
+        session_name: "rimz-bgstats".to_owned(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgstats")),
+        project_root: std::env::temp_dir(),
+        cwd: std::env::temp_dir(),
+        width: SidebarWidth::default(),
+        birth_size: SidebarWidth::default().birth_size(Some(80)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    server
+        .backend
+        .open_sidebar(&sidebar, None)
+        .expect("open_sidebar");
+
+    let opts = rimz::mux::BackgroundViewOptions {
+        name: "rimzd".to_owned(),
+        stats: rimz::mux::HostPane {
+            argv: vec!["sleep".to_owned(), "120".to_owned()],
+            cwd: std::env::temp_dir(),
+        },
+        hosts: Vec::new(),
+        sidebar,
+    };
+
+    let first = server
+        .backend
+        .open_background_view(&opts)
+        .expect("first launch");
+    assert_eq!(first, rimz::mux::BackgroundViewLaunch::Launched);
+    assert_eq!(
+        server
+            .window_names("rimz-bgstats")
+            .first()
+            .map(String::as_str),
+        Some("rimzd"),
+        "stats-only daemon window must lead the session, got {:?}",
+        server.window_names("rimz-bgstats"),
+    );
+    let rc_panes = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-bgstats".to_owned()),
+            ..Default::default()
+        })
+        .expect("list panes")
+        .panes
+        .into_iter()
+        .filter(|pane| pane.view_name.as_deref() == Some("rimzd"))
+        .count();
+    assert_eq!(
+        rc_panes, 2,
+        "rimzd window should be born sidebar | stats without daemon hosts"
+    );
+}
+
 /// `open_sidebar` re-seeds the reborn session's prior agents: each
 /// `resume_tabs` entry becomes its own `#channel` window, born
 /// `sidebar | agents…` via the `after-new-window` hook. Idempotent on the
