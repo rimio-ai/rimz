@@ -102,7 +102,7 @@
 ## speed = "normal"
 ## [theme.animations.paused]
 ## frames = ["⏸︎"]
-## color = "caution"
+## color = "cool"
 ## [theme.animations.waiting]
 ## frames = "?"
 ## color = "warn"
