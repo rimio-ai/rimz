@@ -151,8 +151,11 @@ pub fn block_untrusted_profile_reference(
         return Ok(());
     }
     let config_path = project_root.join(PROJECT_CONFIG_REL);
-    let repo_profiles = repo_profile_names(&config_path)?;
-    let repo_teams = repo_team_names(&config_path)?;
+    let Some(repo_value) = repo_value(&config_path)? else {
+        return Ok(());
+    };
+    let repo_profiles = profile_names(&repo_value);
+    let repo_teams = team_names(&repo_value);
     if (repo_profiles.is_empty()
         || !spec_references_repo_profile(spec, &repo_profiles, profiles, commands, teams))
         && !repo_teams.contains(spec)
@@ -230,29 +233,23 @@ fn repo_value(path: &Path) -> Result<Option<toml::Value>> {
     }
 }
 
-fn repo_profile_names(path: &Path) -> Result<BTreeSet<String>> {
-    let Some(value) = repo_value(path)? else {
-        return Ok(BTreeSet::new());
-    };
-    Ok(value
+fn profile_names(value: &toml::Value) -> BTreeSet<String> {
+    value
         .as_table()
         .and_then(|table| table.get("profiles"))
         .and_then(toml::Value::as_table)
         .map(|profiles| profiles.keys().cloned().collect())
-        .unwrap_or_default())
+        .unwrap_or_default()
 }
 
-fn repo_team_names(path: &Path) -> Result<BTreeSet<String>> {
-    let Some(value) = repo_value(path)? else {
-        return Ok(BTreeSet::new());
-    };
-    Ok(value
+fn team_names(value: &toml::Value) -> BTreeSet<String> {
+    value
         .get("agents")
         .and_then(toml::Value::as_table)
         .and_then(|agents| agents.get("teams"))
         .and_then(toml::Value::as_table)
         .map(|teams| teams.keys().cloned().collect())
-        .unwrap_or_default())
+        .unwrap_or_default()
 }
 
 fn spec_references_repo_profile(

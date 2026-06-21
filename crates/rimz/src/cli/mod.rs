@@ -716,24 +716,6 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // re-seeds nothing; only a birth (absent or stuck) resumes prior agents.
     let was_live = session_is_healthy_live(backend.as_ref(), &workspace.session_name);
     record_workspace(&workspace)?;
-    backend.ensure_session(&SessionOptions {
-        session_name: workspace.session_name.clone(),
-        workspace_id: workspace.workspace_id.clone(),
-        project_root: workspace.project_root.clone(),
-        cwd: workspace.worktree_root.clone(),
-        config: mux_config.clone(),
-        detected_size,
-        truecolor: rimz::tui::truecolor(),
-    })?;
-    // Register the focus-sidebar chord (tmux binds it here; Zellij routes it
-    // through the presence plugin). Best-effort: a convenience key never blocks
-    // the room from opening.
-    register_focus_key(backend.as_ref(), &machine_config);
-    // The daemon view (`rimzd`) is computed once: stats is always present, and
-    // its daemon hosts depend on config and which agents are on PATH. When
-    // present, it leads the session — on Zellij that order is fixed at birth
-    // (`open_sidebar` renders the daemon tab first), since Zellij can't reorder
-    // tabs afterwards.
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
@@ -744,46 +726,34 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         detected_size,
         refresh_ms: args.refresh_ms,
     };
+    // The daemon view (`rimzd`) is computed once: stats is always present, and
+    // its daemon hosts depend on config and which agents are on PATH. When
+    // present, it leads the session — on Zellij that order is fixed at birth
+    // (`open_sidebar` renders the daemon tab first), since Zellij can't reorder
+    // tabs afterwards.
     let daemon_view = build_daemon_view(remote_control, &workspace, &mux_config, &room);
     let daemon = daemon_view.as_ref().map(|view| &view.view);
-    // Plan which prior agents the reborn room can recover, from the durable
-    // rollup. Empty on a healthy reattach (the agents are still alive), when
-    // nothing is recoverable, or when the user opted out — then the birth is
-    // exactly today's bare working room.
-    let resume_plan = resume_plan_for_birth(
+    birth_room(&RoomBirth {
+        backend: backend.as_ref(),
+        machine_config: &machine_config,
+        room,
         was_live,
-        &workspace.workspace_id,
-        &workspace.session_name,
-        &machine_config.resume,
-        args.no_resume,
-    )?;
-    launch_sidebar_for_workspace(backend.as_ref(), &room, daemon, &resume_plan.tabs);
-    maybe_launch_remote_control(
-        backend.as_ref(),
-        &workspace,
-        remote_control,
-        daemon_view.as_ref(),
-    );
-    // Authoritative gate before the resurrecting `attach --create`: rebirth an
-    // inspected stale/serialized room, and on one that cannot self-heal or
-    // cannot be inspected, offer a reset (interactive) or fail fast with the fix
-    // (non-interactive). Accepted recovery seeds the reborn room with resume tabs.
-    gate_room_before_attach(backend.as_ref(), &room, daemon, &resume_plan.tabs)?;
-    report_resume(&resume_plan);
-    ensure_presence_plugin(
+        no_resume: args.no_resume,
+        daemon,
+        remote: Some(RemoteControlLaunch {
+            workspace: &workspace,
+            config: remote_control,
+            daemon_view: daemon_view.as_ref(),
+        }),
+    })?;
+    finish_attach(
         backend.as_ref(),
         &workspace.session_name,
-        &workspace.workspace_id,
-        machine_config.sidebar.focus_key_label(),
-    );
-    let spec = backend.attach_command(&workspace.session_name, &mux_config);
-    tracing::info!(
-        workspace = %workspace.workspace_id,
-        session = %workspace.session_name,
-        mux = %mux,
-        "workspace ready",
-    );
-    run_attach_action(&spec, args.attach.mode(), mux)
+        Some(&workspace.workspace_id),
+        &mux_config,
+        args.attach.mode(),
+        mux,
+    )
 }
 
 /// Best-effort load of the session's presence plugin — the Zellij push
@@ -872,23 +842,6 @@ fn attach_cwd(
     retire_renamed_session(backend.as_ref(), &workspace);
     let was_live = session_is_healthy_live(backend.as_ref(), &workspace.session_name);
     record_workspace(&workspace)?;
-    backend.ensure_session(&SessionOptions {
-        session_name: workspace.session_name.clone(),
-        workspace_id: workspace.workspace_id.clone(),
-        project_root: workspace.project_root.clone(),
-        cwd: workspace.worktree_root.clone(),
-        config: mux_config.clone(),
-        detected_size,
-        truecolor: rimz::tui::truecolor(),
-    })?;
-    register_focus_key(backend.as_ref(), &machine_config);
-    let resume_plan = resume_plan_for_birth(
-        was_live,
-        &workspace.workspace_id,
-        &workspace.session_name,
-        &machine_config.resume,
-        no_resume,
-    )?;
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
@@ -899,17 +852,23 @@ fn attach_cwd(
         detected_size,
         refresh_ms,
     };
-    launch_sidebar_for_workspace(backend.as_ref(), &room, None, &resume_plan.tabs);
-    gate_room_before_attach(backend.as_ref(), &room, None, &resume_plan.tabs)?;
-    report_resume(&resume_plan);
-    ensure_presence_plugin(
+    birth_room(&RoomBirth {
+        backend: backend.as_ref(),
+        machine_config: &machine_config,
+        room,
+        was_live,
+        no_resume,
+        daemon: None,
+        remote: None,
+    })?;
+    finish_attach(
         backend.as_ref(),
         &workspace.session_name,
-        &workspace.workspace_id,
-        machine_config.sidebar.focus_key_label(),
-    );
-    let spec = backend.attach_command(&workspace.session_name, &mux_config);
-    run_attach_action(&spec, mode, mux)
+        Some(&workspace.workspace_id),
+        &mux_config,
+        mode,
+        mux,
+    )
 }
 
 fn attach_named(
@@ -937,25 +896,9 @@ fn attach_named(
     }
     // Captured before `ensure_session` so a tmux create never masks a reattach.
     let was_live = session_is_healthy_live(backend.as_ref(), session);
+    let mut attached_workspace_id = None;
     match record {
         Ok(Some(record)) => {
-            backend.ensure_session(&SessionOptions {
-                session_name: record.session_name.clone(),
-                workspace_id: record.workspace_id.clone(),
-                project_root: record.project_root.clone(),
-                cwd: record.project_root.clone(),
-                config: mux_config.clone(),
-                detected_size,
-                truecolor: rimz::tui::truecolor(),
-            })?;
-            register_focus_key(backend.as_ref(), &machine_config);
-            let resume_plan = resume_plan_for_birth(
-                was_live,
-                &record.workspace_id,
-                &record.session_name,
-                &machine_config.resume,
-                no_resume,
-            )?;
             let room = RoomTarget {
                 workspace_id: &record.workspace_id,
                 project_root: &record.project_root,
@@ -966,17 +909,18 @@ fn attach_named(
                 detected_size,
                 refresh_ms,
             };
-            launch_sidebar_for_workspace(backend.as_ref(), &room, None, &resume_plan.tabs);
             // Only a session Rimz owns (a matching record) is force-reset; a bare
             // external session by this name is never torn down.
-            gate_room_before_attach(backend.as_ref(), &room, None, &resume_plan.tabs)?;
-            report_resume(&resume_plan);
-            ensure_presence_plugin(
-                backend.as_ref(),
-                &record.session_name,
-                &record.workspace_id,
-                machine_config.sidebar.focus_key_label(),
-            );
+            birth_room(&RoomBirth {
+                backend: backend.as_ref(),
+                machine_config: &machine_config,
+                room,
+                was_live,
+                no_resume,
+                daemon: None,
+                remote: None,
+            })?;
+            attached_workspace_id = Some(record.workspace_id);
         }
         Ok(None) => {
             tracing::warn!(
@@ -992,8 +936,14 @@ fn attach_named(
             );
         }
     }
-    let spec = backend.attach_command(session, &mux_config);
-    run_attach_action(&spec, mode, mux)
+    finish_attach(
+        backend.as_ref(),
+        session,
+        attached_workspace_id.as_ref(),
+        &mux_config,
+        mode,
+        mux,
+    )
 }
 
 fn resume_plan_for_birth(
@@ -1023,14 +973,110 @@ fn prompt_recover_or_fresh(plan: rimz::resume::ResumePlan) -> Result<rimz::resum
         .map(|tab| tab.label.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    if confirm_default_yes(&format!(
-        "Recover {agents} agent{} ({labels})?",
-        if agents == 1 { "" } else { "s" },
-    ))? {
+    if confirm_with_default(
+        &format!(
+            "Recover {agents} agent{} ({labels})?",
+            if agents == 1 { "" } else { "s" },
+        ),
+        true,
+    )? {
         Ok(plan)
     } else {
         Ok(rimz::resume::ResumePlan::default())
     }
+}
+
+struct RoomBirth<'a> {
+    backend: &'a dyn MuxBackend,
+    machine_config: &'a rimz::config::MachineConfig,
+    room: RoomTarget<'a>,
+    was_live: bool,
+    no_resume: bool,
+    daemon: Option<&'a DaemonView>,
+    remote: Option<RemoteControlLaunch<'a>>,
+}
+
+struct RemoteControlLaunch<'a> {
+    workspace: &'a rimz::ResolvedWorkspace,
+    config: &'a rimz::config::RemoteControlConfig,
+    daemon_view: Option<&'a BackgroundViewOptions>,
+}
+
+fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
+    let room = &birth.room;
+    let machine_config = birth.machine_config;
+    birth.backend.ensure_session(&SessionOptions {
+        session_name: room.session_name.to_owned(),
+        workspace_id: room.workspace_id.clone(),
+        project_root: room.project_root.to_path_buf(),
+        cwd: room.cwd.to_path_buf(),
+        config: room.mux_config.clone(),
+        detected_size: room.detected_size,
+        truecolor: rimz::tui::truecolor(),
+    })?;
+    // Register the focus-sidebar chord (tmux binds it here; Zellij routes it
+    // through the presence plugin). Best-effort: a convenience key never blocks
+    // the room from opening.
+    register_focus_key(birth.backend, machine_config);
+    // Plan which prior agents the reborn room can recover, from the durable
+    // rollup. Empty on a healthy reattach (the agents are still alive), when
+    // nothing is recoverable, or when the user opted out — then the birth is
+    // exactly today's bare working room.
+    let resume_plan = resume_plan_for_birth(
+        birth.was_live,
+        room.workspace_id,
+        room.session_name,
+        &machine_config.resume,
+        birth.no_resume,
+    )?;
+    launch_sidebar_for_workspace(birth.backend, room, birth.daemon, &resume_plan.tabs);
+    if let Some(remote) = &birth.remote {
+        maybe_launch_remote_control(
+            birth.backend,
+            remote.workspace,
+            remote.config,
+            remote.daemon_view,
+        );
+    }
+    // Authoritative gate before the resurrecting `attach --create`: rebirth an
+    // inspected stale/serialized room, and on one that cannot self-heal or
+    // cannot be inspected, offer a reset (interactive) or fail fast with the fix
+    // (non-interactive). Accepted recovery seeds the reborn room with resume tabs.
+    gate_room_before_attach(birth.backend, room, birth.daemon, &resume_plan.tabs)?;
+    report_resume(&resume_plan);
+    ensure_presence_plugin(
+        birth.backend,
+        room.session_name,
+        room.workspace_id,
+        machine_config.sidebar.focus_key_label(),
+    );
+    Ok(())
+}
+
+fn finish_attach(
+    backend: &dyn MuxBackend,
+    session_name: &str,
+    workspace_id: Option<&WorkspaceId>,
+    mux_config: &rimz::config::MultiplexerConfig,
+    mode: AttachMode,
+    mux: MuxName,
+) -> Result<()> {
+    let spec = backend.attach_command(session_name, mux_config);
+    if let Some(workspace_id) = workspace_id {
+        tracing::info!(
+            workspace = %workspace_id,
+            session = %session_name,
+            mux = %mux,
+            "workspace ready",
+        );
+    } else {
+        tracing::info!(
+            session = %session_name,
+            mux = %mux,
+            "workspace ready",
+        );
+    }
+    run_attach_action(&spec, mode, mux)
 }
 
 /// The room a sidebar launch or pre-attach gate targets: workspace identity
@@ -1133,17 +1179,6 @@ pub(crate) fn confirm_with_default(prompt: &str, default_yes: bool) -> Result<bo
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
-pub(crate) fn confirm_default_yes(prompt: &str) -> Result<bool> {
-    let mut stderr = std::io::stderr().lock();
-    write!(stderr, "{prompt} [Y/n] ")?;
-    stderr.flush()?;
-    drop(stderr);
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer)?;
-    let answer = answer.trim();
-    Ok(answer.is_empty() || answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
-}
-
 pub(crate) fn machine_config() -> rimz::config::MachineConfig {
     rimz::config::MachineConfig::load_lenient()
 }
@@ -1161,14 +1196,7 @@ pub(crate) fn open_ledger(workspace: &rimz::ResolvedWorkspace) -> Result<Ledger>
 }
 
 pub(crate) fn record_workspace(workspace: &rimz::ResolvedWorkspace) -> Result<()> {
-    let paths = StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing ledger paths")?;
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
-    let ledger = Ledger::open(paths, runtime).context("opening ledger")?;
-    ledger
-        .record_workspace(workspace)
-        .context("recording workspace metadata")
+    open_ledger(workspace).map(|_| ())
 }
 
 #[cfg(test)]
