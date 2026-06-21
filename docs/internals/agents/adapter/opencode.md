@@ -19,6 +19,7 @@ Native surface → internal mapping; the upstream hooks, bus payloads, SQLite sc
 | `session.idle` / `session.error` child | `SubagentStop` | lifecycle | `SubagentStopped { errored }` | child `session_id`, `parent_session_id` |
 | `experimental.session.compacting` | `session_compacting` | lifecycle | `Compacting` | leading compaction head |
 | `session.compacted` | `session_compacted` | lifecycle | `CompactionEnded { auto: None }` | clears the compaction head |
+| pane liveness + rollup reaper | — | derived | session removal for the hooks matrix `ended` row | gap: no per-session end event |
 | `permission.ask` | `permission_ask` | **blocking-feed** (`Permission`) | — | `tool_name`, `permission_type`, `title`; OpenCode awaits the handler |
 | `dispose` | — | — | — | server-scoped and carries no session id, so it is not forwarded |
 

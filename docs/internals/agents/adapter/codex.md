@@ -6,9 +6,9 @@ This doc is the single home for everything Codex-specific: the native-event mapp
 
 ## Hooks and lifecycle
 
-Native event → internal mapping; the upstream events, payloads, and decision schema are in [codex-reference.md](../../../externals/agent-adapter/codex-reference.md).
+Native event or derived surface → internal mapping; the upstream events, payloads, and decision schema are in [codex-reference.md](../../../externals/agent-adapter/codex-reference.md).
 
-| Native event                         | Channel       | `observe_lifecycle` → [`LifecycleSignal`](../../../../crates/rimz/src/agents/lifecycle.rs) | Normalized fields                                |
+| Native event / surface               | Channel       | `observe_lifecycle` → [`LifecycleSignal`](../../../../crates/rimz/src/agents/lifecycle.rs) | Normalized fields                                |
 | ------------------------------------ | ------------- | ----------------------------------- | ------------------------------------------------ |
 | `SessionStart`                       | lifecycle     | `Registered`; `source = "compact"` maps to `CompactionEnded { auto: None }` | model, effort                  |
 | `UserPromptSubmit`                   | lifecycle     | `TurnStarted`                       | sanitized `task`/`prompt`                        |
@@ -21,6 +21,7 @@ Native event → internal mapping; the upstream events, payloads, and decision s
 | `PreToolUse` (other tools)           | lifecycle     | `ToolUsed { mutates: false, edits: false }` as proof-of-work only | persisted when it reconciles a resting row or closes a compaction bracket |
 | `PreCompact`                         | lifecycle     | `Compacting`                        | stamps the head                                  |
 | `PostCompact`                        | lifecycle     | `CompactionEnded` with known trigger | safely redundant as a close; carries the auto/manual trigger bit |
+| pane liveness + rollup reaper        | derived       | session removal for the hooks matrix `ended` row | gap: no `SessionEnd` hook                        |
 
 `request_user_input` self-classifies from `tool_name` on the broad `PreToolUse` hook. Codex has no plan-approval gate: `update_plan` is a non-blocking todo tracker, and every non-question `PreToolUse` remains lifecycle proof-of-work only.
 

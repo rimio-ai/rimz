@@ -20,6 +20,46 @@ use serde::{Deserialize, Serialize};
 
 use crate::feed::AgentStatus;
 
+macro_rules! lifecycle_signal_kinds {
+    ($($variant:ident => $label:literal),+ $(,)?) => {
+        /// Data-less lifecycle signal kinds every adapter declares explicitly.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum LifecycleSignalKind {
+            $($variant),+
+        }
+
+        impl LifecycleSignalKind {
+            pub const ALL: [Self; lifecycle_signal_kinds!(@count $($variant),+)] = [
+                $(Self::$variant),+
+            ];
+
+            pub const fn short_label(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $label),+
+                }
+            }
+        }
+    };
+    (@count $($variant:ident),+ $(,)?) => {
+        <[()]>::len(&[$(lifecycle_signal_kinds!(@unit $variant)),+])
+    };
+    (@unit $variant:ident) => {
+        ()
+    };
+}
+
+lifecycle_signal_kinds! {
+    Registered => "registered",
+    TurnStarted => "turn_started",
+    TurnEnded => "turn_ended",
+    ToolUsed => "tool_used",
+    SubagentStarted => "subagent_started",
+    SubagentStopped => "subagent_stopped",
+    Compacting => "compacting",
+    CompactionEnded => "compaction_ended",
+    Ended => "ended",
+}
+
 /// The agent-agnostic intent each native lifecycle event carries. An adapter's
 /// `observe_lifecycle` maps a native event onto exactly one of these (plus the
 /// enrichment); it no longer decides an [`AgentStatus`].
@@ -86,6 +126,21 @@ pub enum LifecycleSignal {
 }
 
 impl LifecycleSignal {
+    /// Data-less kind for matrix rows and descriptor conformance.
+    pub const fn kind(self) -> LifecycleSignalKind {
+        match self {
+            Self::Registered => LifecycleSignalKind::Registered,
+            Self::TurnStarted => LifecycleSignalKind::TurnStarted,
+            Self::TurnEnded { .. } => LifecycleSignalKind::TurnEnded,
+            Self::SubagentStarted => LifecycleSignalKind::SubagentStarted,
+            Self::SubagentStopped { .. } => LifecycleSignalKind::SubagentStopped,
+            Self::ToolUsed { .. } => LifecycleSignalKind::ToolUsed,
+            Self::Compacting => LifecycleSignalKind::Compacting,
+            Self::CompactionEnded { .. } => LifecycleSignalKind::CompactionEnded,
+            Self::Ended => LifecycleSignalKind::Ended,
+        }
+    }
+
     /// Whether this signal establishes a rollup identity when no prior row
     /// exists for the `(kind, agent_id)` key.
     pub const fn establishes_identity(self) -> bool {

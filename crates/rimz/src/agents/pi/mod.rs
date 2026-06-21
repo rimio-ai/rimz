@@ -46,10 +46,10 @@ use super::context::{
     WindowSource,
 };
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, IntegrationConcern, PlanLabel,
-    RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
+    PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::observation::payload_context_pct;
 use super::pricing::PriceBook;
 use super::{
@@ -111,6 +111,7 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         },
     },
     coverage: PI_COVERAGE,
+    lifecycle_hooks: PI_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
     // Pi awaits the `tool_call` handler with no kill window of its own, so
@@ -226,6 +227,61 @@ const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         IntegrationConcern::RemoteControl,
         ConcernCoverage::Unsupported {
             reason: "no remote-control surface",
+        },
+    ),
+];
+
+const PI_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
+    (
+        LifecycleSignalKind::Registered,
+        HookCoverage::Native {
+            event: "session_start",
+        },
+    ),
+    (
+        LifecycleSignalKind::TurnStarted,
+        HookCoverage::Native {
+            event: "before_agent_start",
+        },
+    ),
+    (
+        LifecycleSignalKind::TurnEnded,
+        HookCoverage::Native { event: "agent_end" },
+    ),
+    (
+        LifecycleSignalKind::ToolUsed,
+        HookCoverage::Native {
+            event: "tool_execution_end",
+        },
+    ),
+    (
+        LifecycleSignalKind::SubagentStarted,
+        HookCoverage::Absent {
+            reason: "pi has no subagents",
+        },
+    ),
+    (
+        LifecycleSignalKind::SubagentStopped,
+        HookCoverage::Absent {
+            reason: "pi has no subagents",
+        },
+    ),
+    (
+        LifecycleSignalKind::Compacting,
+        HookCoverage::Native {
+            event: "session_before_compact",
+        },
+    ),
+    (
+        LifecycleSignalKind::CompactionEnded,
+        HookCoverage::Native {
+            event: "session_compact",
+        },
+    ),
+    (
+        LifecycleSignalKind::Ended,
+        HookCoverage::Native {
+            event: "session_shutdown",
         },
     ),
 ];

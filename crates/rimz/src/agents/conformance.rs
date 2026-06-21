@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde_json::json;
 
-use super::lifecycle::{LifecycleSignal, TurnPhase};
+use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, TurnPhase};
 use super::{
     ADAPTERS, AgentAdapter, AgentErr, AgentHookClass, ClassificationSample, ConcernCoverage,
-    IntegrationConcern, PriceBook, SpendFixture, SpendFixtureBody,
+    HookCoverage, IntegrationConcern, PriceBook, SpendFixture, SpendFixtureBody,
 };
 use crate::feed::{AgentStatus, FeedKind, Resolution, ResolutionMethod, Surface};
 use crate::ledger::snapshot::{AgentCard, RowCard, SidebarRow, fold_ask_onto_row};
@@ -162,6 +162,79 @@ fn coverage_is_complete_and_honest() {
             }
             assert_coverage_honest(*adapter, &samples, &installed_events, concern, coverage);
         }
+    }
+}
+
+#[test]
+fn lifecycle_hooks_are_complete_and_honest() {
+    for adapter in ADAPTERS {
+        let descriptor = adapter.descriptor();
+        let kind = descriptor.kind;
+        let samples = corpus(*adapter);
+        let installed_events = adapter.installed_hook_events();
+
+        assert_eq!(
+            descriptor.lifecycle_hooks.len(),
+            LifecycleSignalKind::ALL.len(),
+            "{kind} lifecycle_hooks must list every lifecycle signal exactly once"
+        );
+
+        for signal_kind in LifecycleSignalKind::ALL {
+            let matching: Vec<_> = descriptor
+                .lifecycle_hooks
+                .iter()
+                .filter(|(declared, _)| *declared == signal_kind)
+                .collect();
+            assert_eq!(
+                matching.len(),
+                1,
+                "{kind} lifecycle_hooks must list {signal_kind:?} exactly once"
+            );
+            let &(_, coverage) = matching[0];
+            assert!(
+                !coverage.detail().trim().is_empty(),
+                "{kind} {signal_kind:?} hook coverage must name its native event, derivation gap, or absent reason"
+            );
+            if let HookCoverage::Derived { via, .. } = coverage {
+                assert!(
+                    !via.trim().is_empty(),
+                    "{kind} {signal_kind:?} derived hook coverage must name the derivation that reconstructs it"
+                );
+            }
+            assert_lifecycle_hook_honest(
+                *adapter,
+                &samples,
+                &installed_events,
+                signal_kind,
+                coverage,
+            );
+        }
+
+        assert_hook_matches_concern(
+            *adapter,
+            LifecycleSignalKind::Ended,
+            IntegrationConcern::SessionEnd,
+        );
+        assert_hook_matches_concern(
+            *adapter,
+            LifecycleSignalKind::SubagentStarted,
+            IntegrationConcern::Subagents,
+        );
+        assert_hook_matches_concern(
+            *adapter,
+            LifecycleSignalKind::SubagentStopped,
+            IntegrationConcern::Subagents,
+        );
+        assert_hook_matches_concern(
+            *adapter,
+            LifecycleSignalKind::Compacting,
+            IntegrationConcern::Compaction,
+        );
+        assert_hook_matches_concern(
+            *adapter,
+            LifecycleSignalKind::CompactionEnded,
+            IntegrationConcern::Compaction,
+        );
     }
 }
 
@@ -341,6 +414,81 @@ fn coverage_for(adapter: &dyn AgentAdapter, concern: IntegrationConcern) -> Conc
         .unwrap_or(ConcernCoverage::Unsupported {
             reason: "coverage row missing",
         })
+}
+
+fn hook_coverage_for(adapter: &dyn AgentAdapter, signal_kind: LifecycleSignalKind) -> HookCoverage {
+    adapter
+        .descriptor()
+        .lifecycle_hooks
+        .iter()
+        .find(|(declared, _)| *declared == signal_kind)
+        .map(|(_, coverage)| *coverage)
+        .unwrap_or(HookCoverage::Absent {
+            reason: "lifecycle hook row missing",
+        })
+}
+
+fn assert_lifecycle_hook_honest(
+    adapter: &dyn AgentAdapter,
+    samples: &[ClassificationSample],
+    installed_events: &[&str],
+    signal_kind: LifecycleSignalKind,
+    coverage: HookCoverage,
+) {
+    let kind = adapter.descriptor().kind;
+    match coverage {
+        HookCoverage::Native { event } => {
+            assert!(
+                installed_events.contains(&event),
+                "{kind} {signal_kind:?} native event {event} must be installed"
+            );
+            assert!(
+                samples.iter().any(|sample| {
+                    sample.event_name == event
+                        && adapter
+                            .observe_lifecycle(sample.event_name, &sample.payload)
+                            .is_some_and(|obs| obs.signal.kind() == signal_kind)
+                }),
+                "{kind} {signal_kind:?} native event {event} must produce the declared lifecycle signal in the corpus"
+            );
+        }
+        HookCoverage::Derived { .. } | HookCoverage::Absent { .. } => {
+            assert!(
+                !samples.iter().any(|sample| {
+                    adapter
+                        .observe_lifecycle(sample.event_name, &sample.payload)
+                        .is_some_and(|obs| obs.signal.kind() == signal_kind)
+                }),
+                "{kind} {signal_kind:?} is declared non-native but a corpus sample produces it"
+            );
+        }
+    }
+}
+
+fn assert_hook_matches_concern(
+    adapter: &dyn AgentAdapter,
+    signal_kind: LifecycleSignalKind,
+    concern: IntegrationConcern,
+) {
+    let kind = adapter.descriptor().kind;
+    let hook = hook_coverage_for(adapter, signal_kind);
+    let concern_coverage = coverage_for(adapter, concern);
+    let matches = matches!(
+        (hook, concern_coverage),
+        (HookCoverage::Native { .. }, ConcernCoverage::Wired { .. })
+            | (
+                HookCoverage::Derived { .. },
+                ConcernCoverage::Partial { .. }
+            )
+            | (
+                HookCoverage::Absent { .. },
+                ConcernCoverage::Unsupported { .. }
+            )
+    );
+    assert!(
+        matches,
+        "{kind} {signal_kind:?} hook coverage must agree with {concern:?} concern coverage"
+    );
 }
 
 fn realtime_cost_from_fixture(adapter: &dyn AgentAdapter) -> bool {

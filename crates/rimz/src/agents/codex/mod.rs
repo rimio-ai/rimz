@@ -64,11 +64,11 @@ use self::transcript::{
 };
 use super::context::AgentContext;
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, IntegrationConcern, PlanLabel,
-    RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
+    PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
 use super::hook_types::SessionSource;
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
@@ -148,6 +148,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         },
     },
     coverage: CODEX_COVERAGE,
+    lifecycle_hooks: CODEX_LIFECYCLE_HOOKS,
     default_context_window: Some(DEFAULT_CONTEXT_WINDOW),
     default_model: Some(DEFAULT_MODEL),
     hook_cap: CODEX_HOOK_CAP,
@@ -259,6 +260,62 @@ const CODEX_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         IntegrationConcern::RemoteControl,
         ConcernCoverage::Wired {
             via: "pane/background",
+        },
+    ),
+];
+
+const CODEX_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
+    (
+        LifecycleSignalKind::Registered,
+        HookCoverage::Native {
+            event: "SessionStart",
+        },
+    ),
+    (
+        LifecycleSignalKind::TurnStarted,
+        HookCoverage::Native {
+            event: "UserPromptSubmit",
+        },
+    ),
+    (
+        LifecycleSignalKind::TurnEnded,
+        HookCoverage::Native { event: "Stop" },
+    ),
+    (
+        LifecycleSignalKind::ToolUsed,
+        HookCoverage::Native {
+            event: "PostToolUse",
+        },
+    ),
+    (
+        LifecycleSignalKind::SubagentStarted,
+        HookCoverage::Native {
+            event: "SubagentStart",
+        },
+    ),
+    (
+        LifecycleSignalKind::SubagentStopped,
+        HookCoverage::Native {
+            event: "SubagentStop",
+        },
+    ),
+    (
+        LifecycleSignalKind::Compacting,
+        HookCoverage::Native {
+            event: "PreCompact",
+        },
+    ),
+    (
+        LifecycleSignalKind::CompactionEnded,
+        HookCoverage::Native {
+            event: "PostCompact",
+        },
+    ),
+    (
+        LifecycleSignalKind::Ended,
+        HookCoverage::Derived {
+            via: "pane liveness + reaper",
+            gap: "no SessionEnd hook",
         },
     ),
 ];

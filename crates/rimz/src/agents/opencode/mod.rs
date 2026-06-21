@@ -20,10 +20,10 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, IntegrationConcern, PlanLabel,
-    RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
+    PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
@@ -68,6 +68,7 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         },
     },
     coverage: OPENCODE_COVERAGE,
+    lifecycle_hooks: OPENCODE_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
     hook_cap: Duration::from_secs(120),
@@ -178,6 +179,64 @@ const OPENCODE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         IntegrationConcern::RemoteControl,
         ConcernCoverage::Unsupported {
             reason: "no remote-control surface",
+        },
+    ),
+];
+
+const OPENCODE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
+    (
+        LifecycleSignalKind::Registered,
+        HookCoverage::Native {
+            event: "session_created",
+        },
+    ),
+    (
+        LifecycleSignalKind::TurnStarted,
+        HookCoverage::Native {
+            event: "chat_message",
+        },
+    ),
+    (
+        LifecycleSignalKind::TurnEnded,
+        HookCoverage::Native {
+            event: "session_idle",
+        },
+    ),
+    (
+        LifecycleSignalKind::ToolUsed,
+        HookCoverage::Native {
+            event: "tool_after",
+        },
+    ),
+    (
+        LifecycleSignalKind::SubagentStarted,
+        HookCoverage::Native {
+            event: "SubagentStart",
+        },
+    ),
+    (
+        LifecycleSignalKind::SubagentStopped,
+        HookCoverage::Native {
+            event: "SubagentStop",
+        },
+    ),
+    (
+        LifecycleSignalKind::Compacting,
+        HookCoverage::Native {
+            event: "session_compacting",
+        },
+    ),
+    (
+        LifecycleSignalKind::CompactionEnded,
+        HookCoverage::Native {
+            event: "session_compacted",
+        },
+    ),
+    (
+        LifecycleSignalKind::Ended,
+        HookCoverage::Derived {
+            via: "session idle + liveness",
+            gap: "no session-end event",
         },
     ),
 ];

@@ -54,10 +54,13 @@ pub use context::{
 };
 pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe};
 pub use descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, IntegrationConcern, PlanLabel,
-    RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
+    PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
-pub use lifecycle::{LifecycleSignal, LifecycleState, Transition, TransitionKind, TurnPhase, step};
+pub use lifecycle::{
+    LifecycleSignal, LifecycleSignalKind, LifecycleState, Transition, TransitionKind, TurnPhase,
+    step,
+};
 pub use observation::AgentLifecycleObservation;
 pub use pricing::{PriceBook, Pricing};
 pub use registry::{ADAPTERS, adapter_by_kind, descriptor_by_kind, find_adapter, known_kinds};

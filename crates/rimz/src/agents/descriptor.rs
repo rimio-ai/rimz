@@ -13,6 +13,8 @@ use serde_json::Value;
 
 use crate::feed::FeedKind;
 
+use super::lifecycle::LifecycleSignalKind;
+
 /// Static identity, branding, capabilities, and classification tables for one
 /// agent. See the module doc for the descriptor-vs-trait split.
 #[derive(Debug)]
@@ -42,6 +44,11 @@ pub struct AgentDescriptor {
     /// cross-check the declaration against the descriptor and classification
     /// corpus.
     pub coverage: &'static [(IntegrationConcern, ConcernCoverage)],
+    /// Declared lifecycle-hook checklist. Every [`LifecycleSignalKind`] appears
+    /// exactly once as native, derived, or absent; conformance checks the
+    /// native event names against the installed hook events and classification
+    /// corpus.
+    pub lifecycle_hooks: &'static [(LifecycleSignalKind, HookCoverage)],
     /// Provider-owned fallback for the model context window shown in an agent
     /// card before a richer runtime source reports the exact value.
     pub default_context_window: Option<u64>,
@@ -209,6 +216,39 @@ impl ConcernCoverage {
             Self::Wired { via } => via,
             Self::Partial { gap, .. } => gap,
             Self::Unsupported { reason } => reason,
+        }
+    }
+}
+
+/// How an adapter covers a lifecycle signal: a native event carries it directly,
+/// derivation reconstructs it where the native event is absent, or the agent
+/// cannot produce the signal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookCoverage {
+    /// A native event carries the lifecycle signal directly.
+    Native { event: &'static str },
+    /// No native event, but Rimz reconstructs the behaviour from other state:
+    /// `via` is the derivation, `gap` what the reconstruction still lacks.
+    Derived {
+        via: &'static str,
+        gap: &'static str,
+    },
+    /// Unreachable from the current protocol surface; `reason` says why.
+    Absent { reason: &'static str },
+}
+
+impl HookCoverage {
+    pub const fn is_native(self) -> bool {
+        matches!(self, Self::Native { .. })
+    }
+
+    /// The reason-like text: event for native, gap for derived, reason for
+    /// absent — what the matrix prints after the signal label.
+    pub const fn detail(self) -> &'static str {
+        match self {
+            Self::Native { event } => event,
+            Self::Derived { gap, .. } => gap,
+            Self::Absent { reason } => reason,
         }
     }
 }

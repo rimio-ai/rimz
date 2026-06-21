@@ -52,11 +52,11 @@ use super::RemoteControlStatus;
 #[cfg(test)]
 use super::StatusLineChange;
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, IntegrationConcern, PlanLabel,
-    RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
+    PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
 use super::hook_types::{BackgroundTask, SessionSource};
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
@@ -119,6 +119,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         },
     },
     coverage: CLAUDE_COVERAGE,
+    lifecycle_hooks: CLAUDE_LIFECYCLE_HOOKS,
     default_context_window: Some(200_000),
     default_model: None,
     hook_cap: CLAUDE_HOOK_CAP,
@@ -225,6 +226,61 @@ const CLAUDE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         IntegrationConcern::RemoteControl,
         ConcernCoverage::Wired {
             via: "pane/background",
+        },
+    ),
+];
+
+const CLAUDE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
+    (
+        LifecycleSignalKind::Registered,
+        HookCoverage::Native {
+            event: "SessionStart",
+        },
+    ),
+    (
+        LifecycleSignalKind::TurnStarted,
+        HookCoverage::Native {
+            event: "UserPromptSubmit",
+        },
+    ),
+    (
+        LifecycleSignalKind::TurnEnded,
+        HookCoverage::Native { event: "Stop" },
+    ),
+    (
+        LifecycleSignalKind::ToolUsed,
+        HookCoverage::Native {
+            event: "PostToolUse",
+        },
+    ),
+    (
+        LifecycleSignalKind::SubagentStarted,
+        HookCoverage::Native {
+            event: "SubagentStart",
+        },
+    ),
+    (
+        LifecycleSignalKind::SubagentStopped,
+        HookCoverage::Native {
+            event: "SubagentStop",
+        },
+    ),
+    (
+        LifecycleSignalKind::Compacting,
+        HookCoverage::Native {
+            event: "PreCompact",
+        },
+    ),
+    (
+        LifecycleSignalKind::CompactionEnded,
+        HookCoverage::Native {
+            event: "PostCompact",
+        },
+    ),
+    (
+        LifecycleSignalKind::Ended,
+        HookCoverage::Native {
+            event: "SessionEnd",
         },
     ),
 ];

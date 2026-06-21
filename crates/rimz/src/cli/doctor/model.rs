@@ -32,7 +32,8 @@ pub(super) struct DoctorReport {
     pub(super) sidebar_renderer: &'static str,
     pub(super) terminal: Terminal,
     pub(super) hooks: Vec<HookRow>,
-    pub(super) coverage: Vec<AgentCoverage>,
+    pub(super) coverage: CoverageMatrix,
+    pub(super) hooks_matrix: CoverageMatrix,
     pub(super) loop_tasks: LoopTasks,
     pub(super) remote_control: RemoteControl,
     pub(super) rooms: Probe<Rooms>,
@@ -196,31 +197,55 @@ impl HookStatus {
     }
 }
 
-/// One adapter's integration-concern coverage: the wired concerns, the partial
-/// ones Rimz reconstructs by derivation, and the unsupported gaps with reasons.
+/// A cross-adapter coverage grid: rows are concerns or lifecycle signals,
+/// columns are agents in registry order.
 #[derive(Debug, Serialize)]
-pub(super) struct AgentCoverage {
-    pub(super) kind: String,
-    pub(super) wired: usize,
-    pub(super) total: usize,
-    pub(super) supported: Vec<String>,
-    pub(super) partial: Vec<PartialConcern>,
-    pub(super) unsupported: Vec<UnsupportedConcern>,
-}
-
-/// A concern with no native signal that Rimz reconstructs by derivation: `via`
-/// is how, `gap` is what the reconstruction still lacks.
-#[derive(Debug, Serialize)]
-pub(super) struct PartialConcern {
-    pub(super) concern: String,
-    pub(super) via: String,
-    pub(super) gap: String,
+pub(super) struct CoverageMatrix {
+    pub(super) agents: Vec<String>,
+    pub(super) rows: Vec<MatrixRow>,
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct UnsupportedConcern {
-    pub(super) concern: String,
-    pub(super) reason: String,
+pub(super) struct MatrixRow {
+    pub(super) label: String,
+    pub(super) cells: Vec<MatrixCell>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct MatrixCell {
+    pub(super) state: MatrixCellState,
+    pub(super) detail: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum MatrixCellState {
+    Ok,
+    Partial,
+    Absent,
+}
+
+impl MatrixCell {
+    pub(super) fn ok(detail: impl Into<String>) -> Self {
+        Self {
+            state: MatrixCellState::Ok,
+            detail: detail.into(),
+        }
+    }
+
+    pub(super) fn partial(detail: impl Into<String>) -> Self {
+        Self {
+            state: MatrixCellState::Partial,
+            detail: detail.into(),
+        }
+    }
+
+    pub(super) fn absent(detail: impl Into<String>) -> Self {
+        Self {
+            state: MatrixCellState::Absent,
+            detail: detail.into(),
+        }
+    }
 }
 
 /// Configured loop tasks: the scheduled-execution surface this machine carries,

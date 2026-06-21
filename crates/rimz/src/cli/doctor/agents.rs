@@ -1,15 +1,15 @@
 use std::fs;
 
 use rimz::RuntimePaths;
-use rimz::agents::{ConcernCoverage, IntegrationConcern};
+use rimz::agents::{ConcernCoverage, HookCoverage, IntegrationConcern, LifecycleSignalKind};
 use rimz::ids::ResolverId;
 use rimz::resolver::Allowlist;
 use rimz::trust::{self};
 
 use super::super::open_ledger;
 use super::model::{
-    AgentCoverage, AgentKindGroup, AgentRollup, AgentRow, HookRow, HookStatus, PartialConcern,
-    Probe, Trust, UnsupportedConcern,
+    AgentKindGroup, AgentRollup, AgentRow, CoverageMatrix, HookRow, HookStatus, MatrixCell,
+    MatrixRow, Probe, Trust,
 };
 
 /// Walk the snapshot's agent rollup into one row per `(kind, agent_id)` observed
@@ -105,48 +105,89 @@ pub(super) fn collect_hooks() -> Vec<HookRow> {
         .collect()
 }
 
-/// Each adapter's integration-concern coverage: the wired concerns and, for each
-/// gap, its full reason.
-pub(super) fn collect_coverage() -> Vec<AgentCoverage> {
+/// Cross-adapter integration-concern coverage.
+pub(super) fn collect_coverage() -> CoverageMatrix {
+    let agents = matrix_agents();
+    let mut rows = Vec::new();
+    for concern in IntegrationConcern::ALL {
+        let mut cells = Vec::new();
+        for agent in rimz::agents::ADAPTERS {
+            let descriptor = agent.descriptor();
+            let coverage = concern_coverage(descriptor, concern);
+            match coverage {
+                ConcernCoverage::Wired { via } => cells.push(MatrixCell::ok(via)),
+                ConcernCoverage::Partial { via, gap } => {
+                    cells.push(MatrixCell::partial(format!("{via} — {gap}")));
+                }
+                ConcernCoverage::Unsupported { reason } => cells.push(MatrixCell::absent(reason)),
+            }
+        }
+        rows.push(MatrixRow {
+            label: concern.short_label().to_owned(),
+            cells,
+        });
+    }
+    CoverageMatrix { agents, rows }
+}
+
+/// Cross-adapter lifecycle-hook coverage.
+pub(super) fn collect_hook_matrix() -> CoverageMatrix {
+    let agents = matrix_agents();
+    let mut rows = Vec::new();
+    for signal_kind in LifecycleSignalKind::ALL {
+        let mut cells = Vec::new();
+        for agent in rimz::agents::ADAPTERS {
+            let descriptor = agent.descriptor();
+            let coverage = hook_coverage(descriptor, signal_kind);
+            match coverage {
+                HookCoverage::Native { event } => cells.push(MatrixCell::ok(event)),
+                HookCoverage::Derived { via, gap } => {
+                    cells.push(MatrixCell::partial(format!("{via} — {gap}")));
+                }
+                HookCoverage::Absent { reason } => cells.push(MatrixCell::absent(reason)),
+            }
+        }
+        rows.push(MatrixRow {
+            label: signal_kind.short_label().to_owned(),
+            cells,
+        });
+    }
+    CoverageMatrix { agents, rows }
+}
+
+fn matrix_agents() -> Vec<String> {
     rimz::agents::ADAPTERS
         .iter()
-        .map(|agent| coverage_for(agent.descriptor()))
+        .map(|agent| agent.descriptor().kind.to_owned())
         .collect()
 }
 
-fn coverage_for(descriptor: &rimz::agents::AgentDescriptor) -> AgentCoverage {
-    let mut supported = Vec::new();
-    let mut partial = Vec::new();
-    let mut unsupported = Vec::new();
-    for concern in IntegrationConcern::ALL {
-        let Some((_, coverage)) = descriptor
-            .coverage
-            .iter()
-            .find(|(declared, _)| *declared == concern)
-        else {
-            continue;
-        };
-        match coverage {
-            ConcernCoverage::Wired { .. } => supported.push(concern.short_label().to_owned()),
-            ConcernCoverage::Partial { via, gap } => partial.push(PartialConcern {
-                concern: concern.short_label().to_owned(),
-                via: (*via).to_owned(),
-                gap: (*gap).to_owned(),
-            }),
-            ConcernCoverage::Unsupported { reason } => unsupported.push(UnsupportedConcern {
-                concern: concern.short_label().to_owned(),
-                reason: (*reason).to_owned(),
-            }),
-        }
-    }
-    AgentCoverage {
-        kind: descriptor.kind.to_owned(),
-        wired: supported.len(),
-        total: supported.len() + partial.len() + unsupported.len(),
-        supported,
-        partial,
-        unsupported,
-    }
+fn concern_coverage(
+    descriptor: &rimz::agents::AgentDescriptor,
+    concern: IntegrationConcern,
+) -> ConcernCoverage {
+    descriptor
+        .coverage
+        .iter()
+        .find(|(declared, _)| *declared == concern)
+        .map(|(_, coverage)| *coverage)
+        .unwrap_or(ConcernCoverage::Unsupported {
+            reason: "coverage row missing",
+        })
+}
+
+fn hook_coverage(
+    descriptor: &rimz::agents::AgentDescriptor,
+    signal_kind: LifecycleSignalKind,
+) -> HookCoverage {
+    descriptor
+        .lifecycle_hooks
+        .iter()
+        .find(|(declared, _)| *declared == signal_kind)
+        .map(|(_, coverage)| *coverage)
+        .unwrap_or(HookCoverage::Absent {
+            reason: "lifecycle hook row missing",
+        })
 }
 
 /// Project-trust state. `Stale` is the case worth seeing: the executable surface
@@ -212,82 +253,144 @@ pub(super) fn collect_unauthorized_resolvers(ws: &rimz::ResolvedWorkspace) -> Pr
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::MatrixCellState;
     use super::*;
 
-    fn coverage(kind: &str) -> AgentCoverage {
-        coverage_for(rimz::agents::descriptor_by_kind(kind).expect("registered descriptor"))
+    fn agent_cells(matrix: &CoverageMatrix, agent: &str) -> Vec<MatrixCellState> {
+        let idx = matrix
+            .agents
+            .iter()
+            .position(|kind| kind == agent)
+            .expect("agent column");
+        matrix.rows.iter().map(|row| row.cells[idx].state).collect()
+    }
+
+    fn agent_labels<'a>(
+        matrix: &'a CoverageMatrix,
+        agent: &str,
+        state: MatrixCellState,
+    ) -> Vec<&'a str> {
+        let idx = matrix
+            .agents
+            .iter()
+            .position(|kind| kind == agent)
+            .expect("agent column");
+        matrix
+            .rows
+            .iter()
+            .filter(|row| row.cells[idx].state == state)
+            .map(|row| row.label.as_str())
+            .collect()
+    }
+
+    fn row<'a>(matrix: &'a CoverageMatrix, label: &str) -> &'a MatrixRow {
+        matrix
+            .rows
+            .iter()
+            .find(|row| row.label == label)
+            .expect("matrix row")
+    }
+
+    fn cell_detail<'a>(matrix: &CoverageMatrix, row: &'a MatrixRow, agent: &str) -> &'a str {
+        let idx = matrix
+            .agents
+            .iter()
+            .position(|kind| kind == agent)
+            .expect("agent column");
+        row.cells[idx].detail.as_str()
+    }
+
+    fn states(row: &MatrixRow) -> Vec<MatrixCellState> {
+        row.cells.iter().map(|cell| cell.state).collect()
+    }
+
+    fn count(cells: &[MatrixCellState], needle: MatrixCellState) -> usize {
+        cells.iter().filter(|cell| **cell == needle).count()
     }
 
     #[test]
     fn coverage_pins_agent_matrix() {
-        let claude = coverage("claude");
-        assert_eq!(claude.wired, claude.total);
-        assert_eq!(
-            claude.supported,
-            [
-                "turn", "perm", "plan", "ask", "compact", "sub", "bg", "end", "idle", "usage",
-                "live$", "rich", "install", "spend", "remote",
-            ]
-        );
-        assert!(claude.unsupported.is_empty());
+        let matrix = collect_coverage();
+        assert_eq!(matrix.agents, ["claude", "codex", "pi", "opencode"]);
+        assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
 
-        let codex = coverage("codex");
-        assert_eq!(codex.wired, 11);
-        assert_eq!(codex.total, 15);
+        let claude = agent_cells(&matrix, "claude");
         assert_eq!(
-            codex.supported,
-            [
-                "turn", "perm", "ask", "compact", "sub", "usage", "live$", "rich", "install",
-                "spend", "remote"
-            ]
+            count(&claude, MatrixCellState::Ok),
+            IntegrationConcern::ALL.len()
         );
+        assert_eq!(count(&claude, MatrixCellState::Partial), 0);
+        assert_eq!(count(&claude, MatrixCellState::Absent), 0);
+
+        let codex = agent_cells(&matrix, "codex");
+        assert_eq!(count(&codex, MatrixCellState::Ok), 11);
+        assert_eq!(count(&codex, MatrixCellState::Partial), 2);
+        assert_eq!(count(&codex, MatrixCellState::Absent), 2);
         // `end` and `idle` have no native hook, but pane liveness/the reaper and
         // the turn-boundary/stall path reconstruct them — partial, not absent.
-        let codex_partial: Vec<&str> = codex.partial.iter().map(|p| p.concern.as_str()).collect();
-        assert_eq!(codex_partial, ["end", "idle"]);
-        assert!(
-            codex
-                .partial
-                .iter()
-                .all(|p| !p.via.is_empty() && !p.gap.is_empty())
-        );
-        let codex_gaps: Vec<&str> = codex
-            .unsupported
-            .iter()
-            .map(|gap| gap.concern.as_str())
-            .collect();
-        assert_eq!(codex_gaps, ["plan", "bg"]);
-        assert!(codex.unsupported.iter().all(|gap| !gap.reason.is_empty()));
-
-        let pi = coverage("pi");
         assert_eq!(
-            pi.supported,
-            [
-                "turn", "perm", "compact", "end", "usage", "install", "spend"
-            ]
+            agent_labels(&matrix, "codex", MatrixCellState::Partial),
+            ["end", "idle"]
         );
+        assert_eq!(
+            agent_labels(&matrix, "codex", MatrixCellState::Absent),
+            ["plan", "bg"]
+        );
+        assert!(cell_detail(&matrix, row(&matrix, "end"), "codex").contains("SessionEnd"));
+
+        let pi = agent_cells(&matrix, "pi");
+        assert_eq!(count(&pi, MatrixCellState::Ok), 7);
+        assert_eq!(count(&pi, MatrixCellState::Partial), 2);
+        assert_eq!(count(&pi, MatrixCellState::Absent), 6);
         // Pi has no idle Notification hook, but `agent_end` plus the stall
         // window reconstruct the attention slice — partial, like Codex, not
         // absent.
-        let pi_partial: Vec<&str> = pi.partial.iter().map(|p| p.concern.as_str()).collect();
-        assert_eq!(pi_partial, ["idle", "live$"]);
-        assert!(
-            pi.partial
-                .iter()
-                .all(|p| !p.via.is_empty() && !p.gap.is_empty())
+        assert_eq!(
+            agent_labels(&matrix, "pi", MatrixCellState::Partial),
+            ["idle", "live$"]
         );
-        let pi_gaps: Vec<&str> = pi
-            .unsupported
-            .iter()
-            .map(|gap| gap.concern.as_str())
-            .collect();
-        assert_eq!(pi_gaps, ["plan", "ask", "sub", "bg", "rich", "remote"]);
+        assert_eq!(
+            agent_labels(&matrix, "pi", MatrixCellState::Absent),
+            ["plan", "ask", "sub", "bg", "rich", "remote"]
+        );
     }
 
     #[test]
     fn full_coverage_reports_no_gaps() {
-        let claude = coverage("claude");
-        assert_eq!(claude.wired, 15);
-        assert!(claude.unsupported.is_empty());
+        let matrix = collect_coverage();
+        let claude = agent_cells(&matrix, "claude");
+        assert_eq!(count(&claude, MatrixCellState::Ok), 15);
+        assert_eq!(count(&claude, MatrixCellState::Partial), 0);
+        assert_eq!(count(&claude, MatrixCellState::Absent), 0);
+    }
+
+    #[test]
+    fn hook_matrix_pins_lifecycle_signals() {
+        let matrix = collect_hook_matrix();
+        assert_eq!(matrix.agents, ["claude", "codex", "pi", "opencode"]);
+        assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
+
+        let ended = row(&matrix, "ended");
+        assert_eq!(
+            states(ended),
+            [
+                MatrixCellState::Ok,
+                MatrixCellState::Partial,
+                MatrixCellState::Ok,
+                MatrixCellState::Partial
+            ]
+        );
+        assert!(cell_detail(&matrix, ended, "codex").contains("SessionEnd hook"));
+
+        let subagent_started = row(&matrix, "subagent_started");
+        assert_eq!(
+            states(subagent_started),
+            [
+                MatrixCellState::Ok,
+                MatrixCellState::Ok,
+                MatrixCellState::Absent,
+                MatrixCellState::Ok
+            ]
+        );
     }
 }

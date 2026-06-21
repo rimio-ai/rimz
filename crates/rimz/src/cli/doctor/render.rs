@@ -16,9 +16,9 @@ use rimz::schema::diag::DiagSeverity;
 use rimz::trust::TrustState;
 
 use super::model::{
-    AgentCoverage, AgentRollup, Capabilities, Diagnostics, DoctorReport, HookStatus, LoopTasks,
-    Mux, Presence, Probe, RemoteControl, Rooms, SessionHealth, Storage, Terminal, Trust, Version,
-    Workspace,
+    AgentRollup, Capabilities, CoverageMatrix, Diagnostics, DoctorReport, HookStatus, LoopTasks,
+    MatrixCellState, Mux, Presence, Probe, RemoteControl, Rooms, SessionHealth, Storage, Terminal,
+    Trust, Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -82,6 +82,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_terminal(w, &report.terminal)?;
     render_hooks(w, report)?;
     render_coverage(w, report)?;
+    render_hook_matrix(w, report)?;
     render_loop(w, &report.loop_tasks)?;
     render_remote_control(w, &report.remote_control)?;
     render_rooms(w, &report.rooms)?;
@@ -403,34 +404,39 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport) -> io::Result<()> {
 
 fn render_coverage(w: &mut impl Write, report: &DoctorReport) -> io::Result<()> {
     section(w, "AGENT COVERAGE")?;
-    for (i, coverage) in report.coverage.iter().enumerate() {
-        if i > 0 {
-            writeln!(w)?;
-        }
-        writeln!(
-            w,
-            "  {}   {}",
-            paint(palette::ACCENT.bold(), &coverage.kind),
-            paint(palette::MUTED, &coverage_tally(coverage))
-        )?;
-        render_concern_list(w, &coverage.supported)?;
-        for derived in &coverage.partial {
+    render_matrix(w, "CONCERN", &report.coverage)
+}
+
+fn render_hook_matrix(w: &mut impl Write, report: &DoctorReport) -> io::Result<()> {
+    section(w, "HOOKS MATRIX")?;
+    render_matrix(w, "SIGNAL", &report.hooks_matrix)
+}
+
+fn render_matrix(
+    w: &mut impl Write,
+    label_header: &str,
+    matrix: &CoverageMatrix,
+) -> io::Result<()> {
+    let headers = std::iter::once(label_header.to_owned()).chain(matrix.agents.iter().cloned());
+    let mut table = Table::new(headers);
+    for row in &matrix.rows {
+        let cells = std::iter::once(cell(row.label.as_str()).fg(palette::ACCENT))
+            .chain(row.cells.iter().map(|cell| matrix_cell(cell.state)));
+        table.row(cells);
+    }
+    table.render(w)?;
+    for row in &matrix.rows {
+        for (agent, cell) in matrix.agents.iter().zip(&row.cells) {
+            if cell.state == MatrixCellState::Ok {
+                continue;
+            }
+            let (glyph, style) = matrix_parts(cell.state);
             writeln!(
                 w,
                 "    {}",
                 paint(
-                    palette::WARN,
-                    &format!("◐ {:<8} {} — {}", derived.concern, derived.via, derived.gap)
-                )
-            )?;
-        }
-        for gap in &coverage.unsupported {
-            writeln!(
-                w,
-                "    {}",
-                paint(
-                    palette::MUTED,
-                    &format!("✗ {:<8} {}", gap.concern, gap.reason)
+                    style,
+                    &format!("{glyph} {} ({}): {}", row.label, agent, cell.detail)
                 )
             )?;
         }
@@ -438,47 +444,17 @@ fn render_coverage(w: &mut impl Write, report: &DoctorReport) -> io::Result<()> 
     Ok(())
 }
 
-/// The header tally: wired count out of total, then the partial and unsupported
-/// counts when either is non-empty (`10/14 wired · 2 partial · 2 unsupported`).
-fn coverage_tally(coverage: &AgentCoverage) -> String {
-    let mut tally = format!("{}/{} wired", coverage.wired, coverage.total);
-    if !coverage.partial.is_empty() {
-        tally.push_str(&format!(" · {} partial", coverage.partial.len()));
-    }
-    if !coverage.unsupported.is_empty() {
-        tally.push_str(&format!(" · {} unsupported", coverage.unsupported.len()));
-    }
-    tally
+fn matrix_cell(value: MatrixCellState) -> Cell {
+    let (glyph, style) = matrix_parts(value);
+    cell(glyph).fg(style)
 }
 
-/// The wired concerns as a green check list, wrapped near reading width with
-/// continuation lines aligned under the first concern.
-fn render_concern_list(w: &mut impl Write, items: &[String]) -> io::Result<()> {
-    const MAX: usize = 52;
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for item in items {
-        let width =
-            current.chars().count() + if current.is_empty() { 0 } else { 1 } + item.chars().count();
-        if !current.is_empty() && width > MAX {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(item);
+fn matrix_parts(value: MatrixCellState) -> (&'static str, anstyle::Style) {
+    match value {
+        MatrixCellState::Ok => ("✓", palette::GOOD),
+        MatrixCellState::Partial => ("◐", palette::WARN),
+        MatrixCellState::Absent => ("✗", palette::MUTED),
     }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    for (i, line) in lines.iter().enumerate() {
-        if i == 0 {
-            writeln!(w, "    {}", paint(palette::GOOD, &format!("✓ {line}")))?;
-        } else {
-            writeln!(w, "      {}", paint(palette::GOOD, line))?;
-        }
-    }
-    Ok(())
 }
 
 fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks) -> io::Result<()> {
@@ -820,8 +796,7 @@ fn age_label(secs: u64) -> String {
 mod tests {
     use super::*;
     use crate::cli::doctor::model::{
-        AgentCoverage, HookRow, LoopTaskRow, PartialConcern, RemoteAgent, StorageRootView,
-        UnsupportedConcern,
+        CoverageMatrix, HookRow, LoopTaskRow, MatrixCell, MatrixRow, RemoteAgent, StorageRootView,
     };
 
     fn strip(
@@ -848,6 +823,13 @@ mod tests {
         Storage {
             total_bytes: 0,
             roots: Vec::new(),
+        }
+    }
+
+    fn empty_matrix() -> CoverageMatrix {
+        CoverageMatrix {
+            agents: Vec::new(),
+            rows: Vec::new(),
         }
     }
 
@@ -897,7 +879,8 @@ mod tests {
                     },
                 },
             ],
-            coverage: Vec::new(),
+            coverage: empty_matrix(),
+            hooks_matrix: empty_matrix(),
             loop_tasks: LoopTasks { tasks: Vec::new() },
             remote_control: RemoteControl::Off,
             rooms: Probe::Ready(Rooms {
@@ -937,21 +920,26 @@ mod tests {
             sidebar_renderer: "built into rimz",
             terminal: terminal_fixture(),
             hooks: Vec::new(),
-            coverage: vec![AgentCoverage {
-                kind: "codex".to_owned(),
-                wired: 1,
-                total: 3,
-                supported: vec!["turn".to_owned()],
-                partial: vec![PartialConcern {
-                    concern: "end".to_owned(),
-                    via: "pane liveness + reaper".to_owned(),
-                    gap: "no SessionEnd hook".to_owned(),
-                }],
-                unsupported: vec![UnsupportedConcern {
-                    concern: "plan".to_owned(),
-                    reason: "no plan-approval gate".to_owned(),
-                }],
-            }],
+            coverage: CoverageMatrix {
+                agents: vec!["codex".to_owned()],
+                rows: vec![
+                    MatrixRow {
+                        label: "turn".to_owned(),
+                        cells: vec![MatrixCell::ok("SessionStart/UserPromptSubmit/Stop")],
+                    },
+                    MatrixRow {
+                        label: "end".to_owned(),
+                        cells: vec![MatrixCell::partial(
+                            "pane liveness + reaper — no SessionEnd hook",
+                        )],
+                    },
+                    MatrixRow {
+                        label: "plan".to_owned(),
+                        cells: vec![MatrixCell::absent("no plan-approval gate")],
+                    },
+                ],
+            },
+            hooks_matrix: empty_matrix(),
             loop_tasks: LoopTasks { tasks: Vec::new() },
             remote_control: RemoteControl::Off,
             rooms: Probe::Ready(Rooms {
@@ -970,19 +958,82 @@ mod tests {
         let out = strip(|w| render_coverage(w, &report));
         assert!(out.contains("codex"), "{out}");
         assert!(
-            out.contains("1/3 wired · 1 partial · 1 unsupported"),
-            "tally counts each bucket:\n{out}"
+            out.contains("CONCERN") && out.contains("turn") && out.contains("plan"),
+            "matrix carries concern rows:\n{out}"
         );
-        assert!(out.contains("✓ turn"), "wired list:\n{out}");
+        assert!(out.contains('✓'), "wired cell:\n{out}");
         assert!(
             out.contains("◐ end")
                 && out.contains("pane liveness + reaper")
                 && out.contains("no SessionEnd hook"),
-            "partial row carries derivation and gap:\n{out}"
+            "partial footnote carries derivation and gap:\n{out}"
         );
         assert!(
             out.contains("✗ plan") && out.contains("no plan-approval gate"),
-            "gap with full reason:\n{out}"
+            "gap footnote with full reason:\n{out}"
+        );
+    }
+
+    #[test]
+    fn hook_matrix_renders_signal_grid() {
+        let report = DoctorReport {
+            workspace: Probe::Unavailable {
+                error: "x".to_owned(),
+            },
+            mux: Probe::Unavailable {
+                error: "x".to_owned(),
+            },
+            sidebar_renderer: "built into rimz",
+            terminal: terminal_fixture(),
+            hooks: Vec::new(),
+            coverage: empty_matrix(),
+            hooks_matrix: CoverageMatrix {
+                agents: vec!["claude".to_owned(), "codex".to_owned()],
+                rows: vec![
+                    MatrixRow {
+                        label: "registered".to_owned(),
+                        cells: vec![
+                            MatrixCell::ok("SessionStart"),
+                            MatrixCell::ok("SessionStart"),
+                        ],
+                    },
+                    MatrixRow {
+                        label: "ended".to_owned(),
+                        cells: vec![
+                            MatrixCell::ok("SessionEnd"),
+                            MatrixCell::partial("pane liveness + reaper — no SessionEnd hook"),
+                        ],
+                    },
+                ],
+            },
+            loop_tasks: LoopTasks { tasks: Vec::new() },
+            remote_control: RemoteControl::Off,
+            rooms: Probe::Ready(Rooms {
+                recorded: 0,
+                live: 0,
+                rooms: Vec::new(),
+                overlaps: Vec::new(),
+            }),
+            storage: storage_fixture(),
+            protocols: None,
+            trust: None,
+            resolver_heartbeats: None,
+            agents: None,
+            diagnostics: None,
+        };
+        let out = strip(|w| render_hook_matrix(w, &report));
+        assert!(out.contains("HOOKS MATRIX"), "{out}");
+        assert!(
+            out.contains("SIGNAL") && out.contains("registered") && out.contains("ended"),
+            "signal rows render:\n{out}"
+        );
+        assert!(
+            out.contains("claude") && out.contains("codex"),
+            "agent columns render:\n{out}"
+        );
+        assert!(
+            out.contains("◐ ended (codex): pane liveness + reaper — no SessionEnd hook"),
+            "derived gap footnote renders:\n{out}"
         );
     }
 
