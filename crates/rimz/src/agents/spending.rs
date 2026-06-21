@@ -608,6 +608,7 @@ pub fn compute_spending_with_origins_and_scope(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_spending_with_origins_and_scope_progress(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &mut SpendingDiskCache,
