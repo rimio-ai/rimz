@@ -136,6 +136,7 @@ mod tests {
             kind_ordinal: None,
             profile: None,
             role: None,
+            team: None,
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: None,

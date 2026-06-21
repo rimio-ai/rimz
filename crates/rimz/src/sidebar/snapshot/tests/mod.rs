@@ -91,6 +91,7 @@ fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
         kind_ordinal: Some(test_agent_ordinal(agent_id)),
         profile: None,
         role: None,
+        team: None,
         status: AgentStatus::Running,
         phase: TurnPhase::Idle,
         pane: None,

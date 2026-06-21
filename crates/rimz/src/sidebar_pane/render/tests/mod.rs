@@ -161,6 +161,7 @@ fn agent(
         kind_ordinal: None,
         profile: None,
         role: None,
+        team: None,
         status,
         phase: crate::agents::TurnPhase::Idle,
         pane: None,

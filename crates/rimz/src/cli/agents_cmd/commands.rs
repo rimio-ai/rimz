@@ -499,6 +499,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         &layout,
         args.name.as_deref(),
         generated_worktree_name(&launch),
+        None,
     )?;
     let launch_requests = launch_requests
         .into_iter()

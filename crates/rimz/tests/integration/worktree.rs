@@ -884,6 +884,7 @@ fn seed_agent_launch(
             agent_name: agent_name.to_owned(),
             profile: None,
             role: None,
+            team: None,
             kind_ordinal: None,
             state,
             run_id: None,

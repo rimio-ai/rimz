@@ -89,6 +89,7 @@ fn launch_identity_env(
 ) -> Option<String> {
     match var {
         rimz::run::ENV_AGENT_ROLE => Some("coder".to_owned()),
+        rimz::run::ENV_TEAM => Some("pcr".to_owned()),
         rimz::run::ENV_AGENT_PROFILE => Some("codex-coder".to_owned()),
         rimz::run::ENV_AGENT_MODEL => Some("env-model".to_owned()),
         rimz::run::ENV_AGENT_EFFORT => Some("env-effort".to_owned()),
@@ -189,12 +190,14 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
         launch_identity_env,
     );
     assert_eq!(observed.role.as_deref(), Some("coder"));
+    assert_eq!(observed.team.as_deref(), Some("pcr"));
     assert_eq!(observed.profile.as_deref(), Some("codex-coder"));
     assert_eq!(observed.model.as_deref(), Some("env-model"));
     assert_eq!(observed.effort.as_deref(), Some("env-effort"));
 
     let mut payload = root_observation();
     payload.role = Some("payload-role".to_owned());
+    payload.team = Some("payload-team".to_owned());
     payload.profile = Some("payload-profile".to_owned());
     payload.model = Some("payload-model".to_owned());
     payload.effort = Some("payload-effort".to_owned());
@@ -204,6 +207,7 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
         launch_identity_env,
     );
     assert_eq!(payload.role.as_deref(), Some("payload-role"));
+    assert_eq!(payload.team.as_deref(), Some("payload-team"));
     assert_eq!(payload.profile.as_deref(), Some("payload-profile"));
     assert_eq!(payload.model.as_deref(), Some("payload-model"));
     assert_eq!(payload.effort.as_deref(), Some("payload-effort"));
@@ -214,6 +218,7 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
         (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
         |_observation, var| match var {
             rimz::run::ENV_AGENT_ROLE => Some("coder".to_owned()),
+            rimz::run::ENV_TEAM => Some("pcr".to_owned()),
             rimz::run::ENV_AGENT_PROFILE => Some("codex-coder".to_owned()),
             _ => None,
         },
@@ -234,6 +239,7 @@ fn subagent_launch_identity_is_not_inherited_from_parent_env() {
     );
 
     assert_eq!(observed.role, None);
+    assert_eq!(observed.team, None);
     assert_eq!(observed.profile, None);
     assert_eq!(observed.model, None);
     assert_eq!(observed.effort, None);

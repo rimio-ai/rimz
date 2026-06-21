@@ -175,6 +175,47 @@ fn none_current_channel_means_all_channels() {
 }
 
 #[test]
+fn in_place_team_channel_uses_directory_and_team() {
+    let mut snapshot = empty_snapshot();
+    let mut planner = agent("claude", "session-planner", None, "terminal_1");
+    planner.worktree_path = Some("/code/team-channel".to_owned());
+    planner.team = Some("pcr".to_owned());
+    let mut coder = agent("codex", "session-coder", None, "terminal_2");
+    coder.worktree_path = Some("/code/team-channel".to_owned());
+    coder.team = Some("pcr".to_owned());
+    let mut other = agent("codex", "session-other", None, "terminal_3");
+    other.worktree_path = Some("/code/team-channel".to_owned());
+    other.team = Some("docs".to_owned());
+    snapshot.agents = vec![planner, coder, other];
+
+    assert_eq!(
+        agent_channel(&snapshot.agents[0]).as_deref(),
+        Some("team-channel/pcr")
+    );
+    assert_eq!((&snapshot.agents[0]).channel_label(), "team-channel/pcr");
+    assert!((&snapshot.agents[0]).in_worktree("team-channel/pcr"));
+    assert!((&snapshot.agents[0]).in_worktree("team-channel"));
+
+    let ids: Vec<&str> = resolve_many(&snapshot, "@all", None, Some("team-channel/pcr"))
+        .unwrap()
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["session-planner", "session-coder"]);
+}
+
+#[test]
+fn branch_channel_wins_over_team() {
+    let mut team_agent = agent("claude", "session-feat", Some("feat/auth"), "terminal_1");
+    team_agent.team = Some("pcr".to_owned());
+
+    assert_eq!(agent_channel(&team_agent).as_deref(), Some("feat/auth"));
+    assert_eq!((&team_agent).channel_label(), "feat/auth");
+    assert!((&team_agent).in_worktree("feat/auth"));
+    assert!(!(&team_agent).in_worktree("auth/pcr"));
+}
+
+#[test]
 fn zero_in_channel_but_matches_elsewhere() {
     let mut snapshot = empty_snapshot();
     let main_codex = agent("codex", "session-codex", Some("main"), "terminal_1");
@@ -682,6 +723,7 @@ fn agent(kind: &str, id: &str, branch: Option<&str>, raw_pane: &str) -> AgentSta
         kind_ordinal: None,
         profile: None,
         role: None,
+        team: None,
         status: AgentStatus::Idle,
         phase: crate::agents::TurnPhase::Idle,
         pane: Some(PaneRef::from_id(PaneId::from_parts(
@@ -731,6 +773,7 @@ fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
         name: None,
         profile: None,
         role: None,
+        team: None,
         agent_id: None,
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
         worktree_path: Some(worktree_path.to_owned()),
@@ -754,6 +797,7 @@ fn bound_pane(
         name: Some(name.to_owned()),
         profile: None,
         role: None,
+        team: None,
         agent_id: Some(AgentSessionId::from(session)),
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
         worktree_path: Some(format!("/repo/{branch}")),

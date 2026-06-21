@@ -179,6 +179,10 @@ pub struct PaneAgent {
     /// a lazy pane or a roleless launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// The `[agents.teams]` team the bound session launched under, copied from
+    /// the rollup so in-place team panes resolve within their team channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
     /// The bound session, or `None` for a lazy pane with no session yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentSessionId>,
@@ -202,14 +206,35 @@ impl PaneAgent {
     }
 
     /// The channel this pane participates in: branch, else worktree directory
-    /// basename. `None` means the pane is outside a known worktree.
+    /// basename plus team when present. `None` means the pane is outside a
+    /// known worktree and team.
     pub fn channel(&self) -> Option<String> {
-        self.worktree_branch.clone().or_else(|| {
+        compose_channel(
+            self.worktree_branch.as_deref(),
             self.worktree_path
                 .as_deref()
-                .and_then(|path| path.rsplit('/').next())
-                .map(ToOwned::to_owned)
-        })
+                .and_then(|path| path.rsplit('/').next()),
+            self.team.as_deref(),
+        )
+    }
+}
+
+fn compose_channel(
+    branch: Option<&str>,
+    dir_basename: Option<&str>,
+    team: Option<&str>,
+) -> Option<String> {
+    if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
+        return Some(branch.to_owned());
+    }
+    match (
+        dir_basename.filter(|dir| !dir.is_empty()),
+        team.filter(|team| !team.is_empty()),
+    ) {
+        (Some(dir), Some(team)) => Some(format!("{dir}/{team}")),
+        (Some(dir), None) => Some(dir.to_owned()),
+        (None, Some(team)) => Some(team.to_owned()),
+        (None, None) => None,
     }
 }
 

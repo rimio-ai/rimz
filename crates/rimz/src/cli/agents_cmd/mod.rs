@@ -226,6 +226,10 @@ struct ExecArgs {
     /// pane's sender-attribution identity.
     #[arg(long)]
     agent_role: Option<String>,
+    /// The `[agents.teams]` team this agent launched under. The launch event
+    /// makes in-place members resolve inside `<dir>/<team>`.
+    #[arg(long)]
+    agent_team: Option<String>,
     /// The profile/CLI-selected model to stamp into lifecycle observations.
     #[arg(long)]
     agent_model: Option<String>,

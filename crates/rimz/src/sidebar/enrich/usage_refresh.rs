@@ -335,6 +335,7 @@ mod tests {
             kind_ordinal: None,
             profile: None,
             role: None,
+            team: None,
             status: AgentStatus::Running,
             phase: TurnPhase::Reasoning,
             pane: Some(pane()),

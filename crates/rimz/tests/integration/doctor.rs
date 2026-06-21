@@ -25,6 +25,7 @@ fn inject_lifecycle(
         agent_id: Some(agent_id.into()),
         agent_name: None,
         role: None,
+        team: None,
         profile: None,
         kind_ordinal: None,
         signal,

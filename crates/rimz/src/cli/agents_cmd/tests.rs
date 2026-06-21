@@ -118,6 +118,7 @@ fn full_launch_env_marks_agent_kind() {
             agent_name: Some("swift-otter"),
             agent_profile: Some("planner"),
             agent_role: Some("coder"),
+            agent_team: Some("pcr"),
             agent_model: Some("gpt-5.5"),
             agent_effort: Some("xhigh"),
             ..AgentLaunchEnvIdentity::default()
@@ -142,6 +143,10 @@ fn full_launch_env_marks_agent_kind() {
         Some("coder")
     );
     assert_eq!(
+        env.get(rimz::run::ENV_TEAM).map(String::as_str),
+        Some("pcr")
+    );
+    assert_eq!(
         env.get(rimz::run::ENV_AGENT_MODEL).map(String::as_str),
         Some("gpt-5.5")
     );
@@ -152,7 +157,7 @@ fn full_launch_env_marks_agent_kind() {
 }
 
 #[test]
-fn pane_command_stamps_agent_role() {
+fn pane_command_stamps_agent_role_and_team() {
     let cell = Cell::Agent {
         kind: AgentKind::new_unchecked("claude"),
         args: Vec::new(),
@@ -172,6 +177,7 @@ fn pane_command_stamps_agent_role() {
         None,
         false,
         false,
+        Some("pcr"),
         None,
     )
     .expect("pane command");
@@ -188,6 +194,8 @@ fn pane_command_stamps_agent_role() {
             "claude-planner",
             "--agent-role",
             "planner",
+            "--agent-team",
+            "pcr",
             "--agent-model",
             "claude-sonnet",
             "--agent-effort",
@@ -217,6 +225,7 @@ fn in_place_pane_command_leaves_user_pane_open() {
         None,
         false,
         true,
+        None,
         None,
     )
     .expect("pane command");
@@ -875,13 +884,14 @@ fn explicit_mode_skips_cells_with_virtual_or_profile_mode() {
 fn generated_worktree_name_is_soft_agent_name_candidate() {
     let layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
 
-    let requests = launch_identity_requests(&layout, None, Some("docs")).unwrap();
+    let requests = launch_identity_requests(&layout, None, Some("docs"), Some("pcr")).unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].name, AgentLaunchName::Soft("docs".to_owned()));
     assert_eq!(requests[0].profile, None);
     assert_eq!(requests[0].role, None);
+    assert_eq!(requests[0].team.as_deref(), Some("pcr"));
 
-    let requests = launch_identity_requests(&layout, None, Some("my_feature")).unwrap();
+    let requests = launch_identity_requests(&layout, None, Some("my_feature"), None).unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].name,
@@ -890,7 +900,7 @@ fn generated_worktree_name_is_soft_agent_name_candidate() {
 }
 
 #[test]
-fn launch_identity_requests_carry_cell_profile_and_role() {
+fn launch_identity_requests_carry_cell_profile_role_and_team() {
     let layout = LayoutSpec::single(Cell::Agent {
         kind: AgentKind::new_unchecked("codex"),
         args: Vec::new(),
@@ -903,12 +913,13 @@ fn launch_identity_requests_carry_cell_profile_and_role() {
         effort: Some("high".to_owned()),
     });
 
-    let requests = launch_identity_requests(&layout, None, None).unwrap();
+    let requests = launch_identity_requests(&layout, None, None, Some("pcr")).unwrap();
 
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].kind.as_str(), "codex");
     assert_eq!(requests[0].profile.as_deref(), Some("codex-coder"));
     assert_eq!(requests[0].role.as_deref(), Some("coder"));
+    assert_eq!(requests[0].team.as_deref(), Some("pcr"));
 }
 
 #[test]
@@ -916,7 +927,7 @@ fn explicit_agent_name_still_hard_fails_on_invalid() {
     let layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
 
     assert!(
-        launch_identity_requests(&layout, Some("my_feature"), None)
+        launch_identity_requests(&layout, Some("my_feature"), None, None)
             .unwrap_err()
             .to_string()
             .contains("invalid agent name")
@@ -935,6 +946,8 @@ fn exec_subcommand_captures_agent_args_after_separator() {
         "lucid-atlas",
         "--agent-role",
         "coder",
+        "--agent-team",
+        "pcr",
         "--agent-model",
         "gpt-5.5",
         "--agent-effort",
@@ -963,6 +976,7 @@ fn exec_subcommand_captures_agent_args_after_separator() {
     );
     assert_eq!(args.agent_name.as_deref(), Some("lucid-atlas"));
     assert_eq!(args.agent_role.as_deref(), Some("coder"));
+    assert_eq!(args.agent_team.as_deref(), Some("pcr"));
     assert_eq!(args.agent_model.as_deref(), Some("gpt-5.5"));
     assert_eq!(args.agent_effort.as_deref(), Some("xhigh"));
     assert_eq!(
@@ -1003,6 +1017,7 @@ fn bare_exec_args() -> ExecArgs {
         agent_name: Some("lucid-atlas".to_owned()),
         agent_profile: None,
         agent_role: None,
+        agent_team: None,
         agent_model: None,
         agent_effort: None,
         launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),

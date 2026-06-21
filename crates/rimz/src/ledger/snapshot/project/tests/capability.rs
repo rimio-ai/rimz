@@ -11,6 +11,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
             agent_name: "lucid-atlas".to_owned(),
             profile: Some("codex-coder".to_owned()),
             role: Some("coder".to_owned()),
+            team: Some("pcr".to_owned()),
             kind_ordinal: None,
             state: AgentLaunchState::Starting,
             run_id: None,
@@ -75,6 +76,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
     assert_eq!(agent.todo_total, Some(5));
     assert_eq!(agent.profile.as_deref(), Some("codex-coder"));
     assert_eq!(agent.role.as_deref(), Some("coder"));
+    assert_eq!(agent.team.as_deref(), Some("pcr"));
     assert_eq!(agent.worktree_branch.as_deref(), Some("main"));
 }
 

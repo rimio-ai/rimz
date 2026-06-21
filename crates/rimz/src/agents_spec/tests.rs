@@ -1094,19 +1094,29 @@ fn team_layout_validation_requires_each_role_exactly_once() {
 fn title_uses_first_agent_or_terminal_and_worktree_name() {
     let agent = parse_layout_spec("term,codex", &no_profiles(), &no_commands()).expect("parse");
     assert_eq!(
-        default_tab_title(&agent, Path::new("/code/query-engine"), None),
+        default_tab_title(&agent, Path::new("/code/query-engine"), None, None),
         "codex:query-engine"
     );
     assert_eq!(
         default_tab_title(
             &LayoutSpec::single(Cell::shell()),
             Path::new("/code/main"),
+            None,
             None
         ),
         "term:main"
     );
     assert_eq!(
-        default_tab_title(&agent, Path::new("/code/wt/tab-name"), Some("tab-name")),
+        default_tab_title(
+            &agent,
+            Path::new("/code/wt/tab-name"),
+            Some("tab-name"),
+            Some("pcr")
+        ),
         "#tab-name"
+    );
+    assert_eq!(
+        default_tab_title(&agent, Path::new("/code/query-engine"), None, Some("pcr")),
+        "team:pcr"
     );
 }

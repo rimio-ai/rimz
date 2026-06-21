@@ -24,6 +24,9 @@ pub const ENV_AGENT_PROFILE: &str = "RIMZ_AGENT_PROFILE";
 /// The `[agents.teams]` role name an agent launched as, so it answers to
 /// `@<role>`. Set by the launch wrapper; read into the lifecycle observation.
 pub const ENV_AGENT_ROLE: &str = "RIMZ_AGENT_ROLE";
+/// The `[agents.teams]` team name an agent launched under. Set by the launch
+/// wrapper; read by member CLI calls so in-place teams scope to their channel.
+pub const ENV_TEAM: &str = "RIMZ_TEAM";
 /// The model selected by launch flags or profile presets. Set by the launch
 /// wrapper; read into the lifecycle observation as card identity fallback.
 pub const ENV_AGENT_MODEL: &str = "RIMZ_AGENT_MODEL";
@@ -763,6 +766,7 @@ mod tests {
             kind_ordinal: None,
             profile: None,
             role: None,
+            team: None,
             status,
             phase: TurnPhase::Idle,
             pane: None,

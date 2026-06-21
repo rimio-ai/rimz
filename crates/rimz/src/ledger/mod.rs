@@ -200,6 +200,7 @@ pub struct AgentLaunchRequest {
     pub name: AgentLaunchName,
     pub profile: Option<String>,
     pub role: Option<String>,
+    pub team: Option<String>,
     pub run_id: Option<RunId>,
 }
 
@@ -210,6 +211,7 @@ pub struct AgentLaunchIdentity {
     pub name: String,
     pub profile: Option<String>,
     pub role: Option<String>,
+    pub team: Option<String>,
     pub run_id: Option<RunId>,
 }
 

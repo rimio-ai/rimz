@@ -116,6 +116,7 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         kind_ordinal: None,
         profile: None,
         role: None,
+        team: None,
         status,
         phase: TurnPhase::Idle,
         pane: None,

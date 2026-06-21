@@ -35,6 +35,9 @@ pub struct AgentLifecycleObservation {
     /// The `[agents.teams]` role the launcher selected, passed through
     /// `RIMZ_AGENT_ROLE`. The reducer projects it to the card handle.
     pub role: Option<String>,
+    /// The `[agents.teams]` team name the launcher selected, passed through
+    /// `RIMZ_TEAM`. The reducer projects it to the routing channel.
+    pub team: Option<String>,
     /// The `[agents.profiles]` profile the launcher selected, passed through
     /// `RIMZ_AGENT_PROFILE`. Used as the card handle when no role is present.
     pub profile: Option<String>,
@@ -117,6 +120,7 @@ impl AgentLifecycleObservation {
             agent_id,
             agent_name: None,
             role: None,
+            team: None,
             profile: None,
             kind_ordinal: None,
             signal,

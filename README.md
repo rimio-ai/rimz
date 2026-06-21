@@ -111,7 +111,7 @@ rimz agents 'vim,codex+term' --worktree=feat/y    # or gen dynamically
 rimz steer @claude#feat-a -- "focus on the failing parser test"        # talk to it now
 rimz queue @codex#feat-b --on done -- "open a PR summary"              # leave a task for its next free turn
 
-# or when you inside same worktree (every worktree is a channel)
+# or when you are inside the same worktree/team channel
 rimz steer @claude -- "have you checked the code at xxx"        # talk to it now
 ```
 

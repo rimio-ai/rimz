@@ -370,6 +370,9 @@ pub(super) fn fill_root_launch_identity(
     if observation.role.is_none() {
         observation.role = identity_env(observation, rimz::run::ENV_AGENT_ROLE);
     }
+    if observation.team.is_none() {
+        observation.team = identity_env(observation, rimz::run::ENV_TEAM);
+    }
     if observation.profile.is_none() {
         observation.profile = identity_env(observation, rimz::run::ENV_AGENT_PROFILE);
     }

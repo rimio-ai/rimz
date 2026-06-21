@@ -40,6 +40,8 @@ pub struct AgentLaunchPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_ordinal: Option<u32>,
     #[serde(default)]
     pub state: AgentLaunchState,
@@ -184,6 +186,7 @@ impl AgentLifecyclePayload {
                 agent_id: optional_string(params, "agent_id").map(AgentSessionId::from),
                 agent_name: optional_string(params, "agent_name"),
                 role: optional_string(params, "role"),
+                team: optional_string(params, "team"),
                 profile: optional_string(params, "profile"),
                 kind_ordinal: optional_u64(params, "kind_ordinal").map(clamp_u32),
                 signal,
@@ -486,6 +489,7 @@ mod tests {
             agent_id: Some(AgentSessionId::from("sess-1")),
             agent_name: Some("amber-atlas".to_owned()),
             role: Some("reviewer".to_owned()),
+            team: Some("pcr".to_owned()),
             profile: Some("claude-reviewer".to_owned()),
             kind_ordinal: Some(2),
             signal: LifecycleSignal::TurnEnded {
@@ -544,6 +548,7 @@ mod tests {
                 "agent_id": "sess-1",
                 "agent_name": "amber-atlas",
                 "role": "reviewer",
+                "team": "pcr",
                 "profile": "claude-reviewer",
                 "kind_ordinal": 2,
                 "signal": {
@@ -613,6 +618,7 @@ mod tests {
             "agent_pid",
             "agent_name",
             "role",
+            "team",
             "profile",
             "kind_ordinal",
             "agent_process_start",
@@ -642,6 +648,20 @@ mod tests {
                 "{key} must stay present as null to preserve partial-event bytes",
             );
         }
+    }
+
+    #[test]
+    fn agent_launch_payload_round_trips_team() {
+        let payload: AgentLaunchPayload = serde_json::from_value(json!({
+            "agent_id": "launch-1",
+            "agent_name": "swift-otter",
+            "role": "coder",
+            "team": "pcr",
+        }))
+        .unwrap();
+
+        assert_eq!(payload.team.as_deref(), Some("pcr"));
+        assert_eq!(serde_json::to_value(payload).unwrap()["team"], "pcr");
     }
 
     #[test]

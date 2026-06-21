@@ -566,12 +566,21 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
     Ok(resolved)
 }
 
-/// The default tab title for a launch. A worktree launch uses the same
-/// `#channel` spelling as agent addresses; otherwise the title is the first
-/// agent kind (or `term`) over the cwd basename.
-pub fn default_tab_title(spec: &LayoutSpec, cwd: &Path, worktree_name: Option<&str>) -> String {
+/// The default tab title for a launch. Worktree launches use the `#channel`
+/// spelling shared with agent addresses; a named-team launch uses
+/// `team:<name>`; otherwise the title is the first agent kind (or `term`)
+/// over the cwd basename.
+pub fn default_tab_title(
+    spec: &LayoutSpec,
+    cwd: &Path,
+    worktree_name: Option<&str>,
+    team: Option<&str>,
+) -> String {
     if let Some(name) = worktree_name.filter(|name| !name.is_empty()) {
         return format!("#{name}");
+    }
+    if let Some(team) = team.filter(|team| !team.is_empty()) {
+        return format!("team:{team}");
     }
     let kind = spec.first_agent_kind().unwrap_or("term");
     crate::resume::build_label(kind, None, cwd)

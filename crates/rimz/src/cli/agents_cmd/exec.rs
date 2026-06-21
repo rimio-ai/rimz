@@ -49,6 +49,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             agent_name: args.agent_name.as_deref(),
             agent_profile: args.agent_profile.as_deref(),
             agent_role: args.agent_role.as_deref(),
+            agent_team: args.agent_team.as_deref(),
             agent_model: args.agent_model.as_deref(),
             agent_effort: args.agent_effort.as_deref(),
         },
@@ -311,6 +312,7 @@ fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
                 name: name.to_owned(),
                 profile: args.agent_profile.clone(),
                 role: args.agent_role.clone(),
+                team: args.agent_team.clone(),
                 run_id: args.run_id.clone(),
             }))
         }

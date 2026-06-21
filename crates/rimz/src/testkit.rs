@@ -58,6 +58,7 @@ pub mod fleet {
             agent_id: Some(AgentSessionId::from(format!("agent-{slot}"))),
             agent_name: None,
             role: None,
+            team: None,
             profile: None,
             kind_ordinal: None,
             signal: LifecycleSignal::Registered,

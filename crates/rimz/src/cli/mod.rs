@@ -217,19 +217,40 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
 
 /// The current channel a command runs in: the worktree's branch, else its
 /// directory basename when we are genuinely inside a separate worktree. A bare
-/// directory workspace (root == worktree) yields `None`, which the resolver
-/// reads as "all channels" rather than a silent narrowing.
+/// directory workspace (root == worktree) yields `None` for humans, but a
+/// Rimz-launched in-place team member carries `RIMZ_TEAM`, so its calls scope
+/// to `<dir>/<team>`.
 pub(crate) fn current_channel(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
-    workspace.worktree_branch.clone().or_else(|| {
-        (workspace.worktree_root != workspace.project_root)
-            .then(|| {
-                workspace
-                    .worktree_root
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-            })
-            .flatten()
-    })
+    let team = std::env::var(rimz::run::ENV_TEAM)
+        .ok()
+        .filter(|value| !value.is_empty());
+    current_channel_for_team(workspace, team.as_deref())
+}
+
+fn current_channel_for_team(
+    workspace: &rimz::ResolvedWorkspace,
+    team: Option<&str>,
+) -> Option<String> {
+    if let Some(branch) = workspace.worktree_branch.as_deref() {
+        return Some(branch.to_owned());
+    }
+    if workspace.worktree_root != workspace.project_root {
+        return workspace
+            .worktree_root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+    }
+    match (
+        workspace
+            .project_root
+            .file_name()
+            .map(|name| name.to_string_lossy()),
+        team.filter(|value| !value.is_empty()),
+    ) {
+        (Some(dir), Some(team)) => Some(format!("{dir}/{team}")),
+        (None, Some(team)) => Some(team.to_owned()),
+        _ => None,
+    }
 }
 
 /// A human handle for an agent: its pet name, else `kind-ordinal`, else kind.
@@ -386,6 +407,7 @@ fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<rimz::SidebarSnapshot> 
                 name: agent.name.clone(),
                 profile: agent.profile.clone(),
                 role: agent.role.clone(),
+                team: agent.team.clone(),
                 agent_id: Some(agent.agent_id.clone()),
                 pane_id: pane.pane_id.clone(),
                 worktree_path: agent.worktree_path.clone(),
@@ -1158,6 +1180,49 @@ pub(crate) fn record_workspace(workspace: &rimz::ResolvedWorkspace) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn workspace(
+        project_root: &str,
+        worktree_root: &str,
+        worktree_branch: Option<&str>,
+    ) -> rimz::ResolvedWorkspace {
+        let project_root = PathBuf::from(project_root);
+        rimz::ResolvedWorkspace {
+            workspace_id: rimz::WorkspaceId::from_project_root(&project_root),
+            project_root,
+            root_class: rimz::workspace::RootClass::Repo,
+            worktree_root: PathBuf::from(worktree_root),
+            worktree_branch: worktree_branch.map(ToOwned::to_owned),
+            session_name: "rimz-test".to_owned(),
+            mux_hint: None,
+        }
+    }
+
+    #[test]
+    fn current_channel_scopes_in_place_team_members() {
+        let workspace = workspace("/code/team-channel", "/code/team-channel", None);
+
+        assert_eq!(
+            current_channel_for_team(&workspace, Some("pcr")).as_deref(),
+            Some("team-channel/pcr")
+        );
+        assert_eq!(current_channel_for_team(&workspace, None), None);
+    }
+
+    #[test]
+    fn current_channel_keeps_worktree_precedence() {
+        let branch = workspace("/code/project", "/code/project", Some("feat/auth"));
+        assert_eq!(
+            current_channel_for_team(&branch, Some("pcr")).as_deref(),
+            Some("feat/auth")
+        );
+
+        let child_worktree = workspace("/code/project", "/code/project-wt/auth", None);
+        assert_eq!(
+            current_channel_for_team(&child_worktree, Some("pcr")).as_deref(),
+            Some("auth")
+        );
+    }
 
     #[test]
     fn removed_top_level_command_rejects_before_global_help() {

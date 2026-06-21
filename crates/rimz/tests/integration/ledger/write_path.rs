@@ -96,6 +96,7 @@ fn launch_allocation_reserves_names_owned_by_reaped_rollup_agents() {
         name: AgentLaunchName::Soft("ghost-pet".to_owned()),
         profile: Some("codex-coder".to_owned()),
         role: Some("coder".to_owned()),
+        team: Some("pcr".to_owned()),
         run_id: None,
     };
     let append = AgentLaunchAppend {

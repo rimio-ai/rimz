@@ -15,7 +15,7 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 
 ## Addressing agents
 
-`steer`, `queue`, `transcript`, and the `agents show`/`focus`/`wait`/`stop` verbs share one address grammar: **`@<handle>` names who, an optional `#<channel>` names the worktree,** and a raw pane id is the precise fallback. This is the one place it is spelled out; every command below assumes it.
+`steer`, `queue`, `transcript`, and the `agents show`/`focus`/`wait`/`stop` verbs share one address grammar: **`@<handle>` names who, an optional `#<channel>` names the worktree or in-place team channel,** and a raw pane id is the precise fallback. This is the one place it is spelled out; every command below assumes it.
 
 **Handles that name one agent:**
 
@@ -29,10 +29,12 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 - `@planner` — a [profile](../configuration.md#agent-profiles-commands-and-teams) you defined; every agent launched under it.
 - `@all` — everyone in the channel.
 
-**Channels** scope the lookup to a worktree:
+**Channels** scope the lookup to a worktree or in-place team:
 
 - `#auth-refresh` matches by branch, generated worktree name, or directory basename; `--worktree auth-refresh` is the flag spelling.
+- `#query-engine/pcr` matches the named team `pcr` launched in-place from the `query-engine` directory.
 - The default channel is the worktree you run the command in.
+- A team member pane launched in-place carries its team channel, so its own `rimz` commands default to `<dir>/<team>`.
 - A pane id (`tmux:%12`, `zellij:terminal_3`) addresses one pane directly and ignores channels.
 
 **One agent or many:**

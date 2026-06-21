@@ -625,6 +625,7 @@ mod tests {
             kind_ordinal: Some(1),
             profile: None,
             role: None,
+            team: None,
             status: AgentStatus::Idle,
             phase: crate::agents::TurnPhase::Idle,
             pane: None,

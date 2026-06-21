@@ -995,6 +995,11 @@ pub struct AgentState {
     /// `RIMZ_AGENT_ROLE` remains the pane's sender-attribution identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// The `[agents.teams]` team this agent launched under, stamped by the
+    /// launch event and carried forward like `role`. In-place team launches use
+    /// it as the channel suffix when no worktree branch exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
     pub status: AgentStatus,
     /// The running turn's shape (reasoning / acting / parked on background
     /// work), written verbatim from the lifecycle machine's output. Always
@@ -1317,6 +1322,7 @@ mod tests {
             kind_ordinal: None,
             profile: None,
             role: None,
+            team: None,
             status: AgentStatus::Running,
             phase: TurnPhase::Reasoning,
             pane: None,

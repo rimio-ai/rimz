@@ -13,10 +13,11 @@
 //! agent.
 //!
 //! The channel is the workspace segment the room groups by — a worktree branch,
-//! else a directory basename. Callers pass the *current* channel; an explicit
-//! `#name` or `--worktree name` overrides it. A `None` current channel means
-//! **all channels** — it never silently narrows to "only worktree-less agents",
-//! so addressing the room from a bare directory workspace still reaches every
+//! else a directory basename, with an in-place named team appended as
+//! `<dir>/<team>`. Callers pass the *current* channel; an explicit `#name` or
+//! `--worktree name` overrides it. A `None` current channel means **all
+//! channels** — it never silently narrows to "only worktree-less agents", so
+//! addressing the room from a bare directory workspace still reaches every
 //! agent.
 
 use crate::feed::AgentState;
@@ -90,26 +91,33 @@ trait Candidate<'a>: Copy {
     /// name/profile matcher returns every profile match and lets arity decide.
     fn profile(self) -> Option<&'a str>;
     fn role(self) -> Option<&'a str>;
+    fn team(self) -> Option<&'a str>;
     fn session_id(self) -> Option<&'a str>;
     fn worktree_branch(self) -> Option<&'a str>;
     fn worktree_path(self) -> Option<&'a str>;
     fn pane_id(self) -> Option<&'a PaneId>;
 
-    /// The channel label: branch, else worktree-directory basename, else a
-    /// placeholder.
+    /// The channel label: branch, else worktree-directory basename plus team
+    /// when present, else a placeholder.
     fn channel_label(self) -> String {
-        self.worktree_branch()
-            .map(ToOwned::to_owned)
-            .or_else(|| {
-                self.worktree_path()
-                    .and_then(|path| path.rsplit('/').next())
-                    .map(ToOwned::to_owned)
-            })
-            .unwrap_or_else(|| "no-worktree".to_owned())
+        compose_channel(
+            self.worktree_branch(),
+            self.worktree_path()
+                .and_then(|path| path.rsplit('/').next()),
+            self.team(),
+        )
+        .unwrap_or_else(|| "no-worktree".to_owned())
     }
 
     fn in_worktree(self, filter: &str) -> bool {
-        self.worktree_branch() == Some(filter)
+        let channel = compose_channel(
+            self.worktree_branch(),
+            self.worktree_path()
+                .and_then(|path| path.rsplit('/').next()),
+            self.team(),
+        );
+        channel.as_deref() == Some(filter)
+            || self.worktree_branch() == Some(filter)
             || self
                 .worktree_path()
                 .is_some_and(|path| path == filter || path.rsplit('/').next() == Some(filter))
@@ -131,6 +139,9 @@ impl<'a> Candidate<'a> for &'a AgentState {
     }
     fn role(self) -> Option<&'a str> {
         self.role.as_deref()
+    }
+    fn team(self) -> Option<&'a str> {
+        self.team.as_deref()
     }
     fn session_id(self) -> Option<&'a str> {
         Some(self.agent_id.as_str())
@@ -161,6 +172,9 @@ impl<'a> Candidate<'a> for &'a PaneAgent {
     }
     fn role(self) -> Option<&'a str> {
         self.role.as_deref()
+    }
+    fn team(self) -> Option<&'a str> {
+        self.team.as_deref()
     }
     fn session_id(self) -> Option<&'a str> {
         self.agent_id.as_ref().map(|id| id.as_str())
@@ -537,17 +551,40 @@ fn no_match_error<'a, C: Candidate<'a>>(
     }
 }
 
-/// The agent's channel — the worktree it cooperates in: its branch, else its
-/// worktree directory basename. `None` when the agent runs outside any worktree.
+/// Compose a routing channel from launch identity. Branch wins; otherwise an
+/// in-place named team extends the directory channel as `<dir>/<team>`.
+pub fn compose_channel(
+    branch: Option<&str>,
+    dir_basename: Option<&str>,
+    team: Option<&str>,
+) -> Option<String> {
+    if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
+        return Some(branch.to_owned());
+    }
+    match (
+        dir_basename.filter(|dir| !dir.is_empty()),
+        team.filter(|team| !team.is_empty()),
+    ) {
+        (Some(dir), Some(team)) => Some(format!("{dir}/{team}")),
+        (Some(dir), None) => Some(dir.to_owned()),
+        (None, Some(team)) => Some(team.to_owned()),
+        (None, None) => None,
+    }
+}
+
+/// The agent's channel — the worktree/team it cooperates in: its branch, else
+/// its worktree directory basename plus in-place team when present. `None` when
+/// the agent runs outside any worktree or team.
 /// The display-side `Option` peer of the resolver's [`Candidate::channel_label`].
 pub fn agent_channel(agent: &AgentState) -> Option<String> {
-    agent.worktree_branch.clone().or_else(|| {
+    compose_channel(
+        agent.worktree_branch.as_deref(),
         agent
             .worktree_path
             .as_deref()
-            .and_then(|path| path.rsplit('/').next())
-            .map(ToOwned::to_owned)
-    })
+            .and_then(|path| path.rsplit('/').next()),
+        agent.team.as_deref(),
+    )
 }
 
 /// The canonical rendered address of an agent — the inverse of [`parse_target`].

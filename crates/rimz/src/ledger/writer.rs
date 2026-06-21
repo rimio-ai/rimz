@@ -426,6 +426,7 @@ fn allocate_agent_launch_identities(
             name,
             profile: request.profile.clone(),
             role: request.role.clone(),
+            team: request.team.clone(),
             run_id: request.run_id.clone(),
         });
     }
@@ -473,6 +474,7 @@ fn agent_launch_event(append: &AgentLaunchAppend, identity: &AgentLaunchIdentity
             agent_name: identity.name.clone(),
             profile: identity.profile.clone(),
             role: identity.role.clone(),
+            team: identity.team.clone(),
             kind_ordinal: None,
             state: append.state,
             run_id: identity.run_id.clone(),
@@ -562,6 +564,7 @@ mod tests {
                     agent_name: "lucid-atlas".to_owned(),
                     profile: None,
                     role: None,
+                    team: None,
                     kind_ordinal: None,
                     state: crate::schema::event::AgentLaunchState::Bound,
                     run_id: None,
@@ -614,6 +617,7 @@ mod tests {
             name: AgentLaunchName::Explicit("lucid-atlas".to_owned()),
             profile: None,
             role: None,
+            team: None,
             run_id: None,
         };
         let prefix = AgentLaunchRequest {
@@ -622,6 +626,7 @@ mod tests {
             name: AgentLaunchName::Explicit("prefix".to_owned()),
             profile: None,
             role: None,
+            team: None,
             run_id: None,
         };
 
@@ -642,6 +647,7 @@ mod tests {
             name: AgentLaunchName::Soft("lucid-atlas".to_owned()),
             profile: None,
             role: None,
+            team: None,
             run_id: None,
         };
 
@@ -661,6 +667,7 @@ mod tests {
             kind_ordinal: Some(1),
             profile: None,
             role: None,
+            team: None,
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: None,

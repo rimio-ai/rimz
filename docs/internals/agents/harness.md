@@ -12,7 +12,7 @@ Spawning the fleet separates three independent choices, so any combination is on
 
 Three words name the parts:
 
-- A **channel** is a [worktree](./worktree.md) — one copy of the code where a few members cooperate. The sidebar groups the room by it, and an address narrows to it with `#<channel>`.
+- A **channel** is a [worktree](./worktree.md), or an in-place named team as `<dir>/<team>` — one cooperation lane where a few members work together. The sidebar groups the room by it, and an address narrows to it with `#<channel>`.
 - A **member** is an agent, named by a **handle**: `@claude` the kind, `@planner` the profile, `@swift-otter` the one running instance.
 - An **address** joins them — `@handle#channel` — and is how every command names who it is reaching.
 
@@ -50,7 +50,7 @@ The compile target is the seam the whole harness hangs off. Each cell becomes a 
 
 ### Backend shape and placement
 
-Each backend renders the same compiled layout into a tab, and a single non-worktree agent can run in the current pane instead. Both backends receive the same `TabOptions` — session, title, cwd, focus flag, sidebar options, and the pre-built pane argv — and dock the global sidebar once before adding the layout cells; the per-backend split commands live in [`mux/`](../../../crates/rimz/src/mux/AGENTS.md). A worktree launch names its tab `#<NAME>`, matching the channel suffix in agent addresses; a launch without a worktree names it `<kind>:<dir>`. `--bg` keeps focus on the launching pane wherever the backend can.
+Each backend renders the same compiled layout into a tab, and a single non-worktree agent can run in the current pane instead. Both backends receive the same `TabOptions` — session, title, cwd, focus flag, sidebar options, and the pre-built pane argv — and dock the global sidebar once before adding the layout cells; the per-backend split commands live in [`mux/`](../../../crates/rimz/src/mux/AGENTS.md). A worktree launch names its tab `#<NAME>`, matching the channel suffix in agent addresses; a named team launch names it `team:<name>`, and its in-place channel is `<dir>/<team>`; any other non-worktree launch names it `<kind>:<dir>`. `--bg` keeps focus on the launching pane wherever the backend can.
 
 **Placement resolves before the launch touches the ledger or creates a worktree**, so a rejected placement leaves no provisional rows or worktree behind. Under the `auto` default a single non-worktree agent launches *in the current pane*: the CLI execs the wrapper argv in place, the wrapper binds the pane and direct-execs the agent, and the pane returns to its shell on exit with liveness resolved from the pane rather than an end trace. A team, multi-cell layout, or worktree launch opens its own tab. `--new-pane` splits the current tab, `--new-tab` opens a tab, and the per-machine [`[agents] placement`](../../reference/configuration.md#agent-profiles-commands-and-teams) default chooses when no flag is given. `--bg` and create-on-miss downgrade an in-place launch to a split, because the caller's pane stays available; the split carries the launch-identity env on both backends and honors the same focus flag.
 
@@ -58,7 +58,7 @@ Each backend renders the same compiled layout into a tab, and a single non-workt
 
 Every member has an address you type like an @-mention: `@<handle>#<channel>`. The handle names who, the channel names where, and both read from context — `@claude` uses the channel you are in, `#auth` alone filters a listing to that channel. [cli/agents.md → Addressing agents](../../reference/cli/agents.md#addressing-agents) is the handle catalog; this section owns how an address resolves.
 
-The **channel** is the workspace segment the room already groups by: a worktree branch, else a child repo's directory name, else the directory itself ([sidebar.md → Worktree groups](../sidebar/sidebar.md#worktree-groups)). It matches by branch, path basename, or full path, and defaults to the channel the command runs in; an inline `#<name>` or `--worktree` overrides it. A bare directory workspace has no current channel, so an address there reaches *every* channel rather than silently narrowing to one. Mux tab names stay display-only — they are mutable and live outside the ledger, so they never form an address.
+The **channel** is the workspace segment the room already groups by: a worktree branch, else a child repo's directory name, else the directory itself; an in-place named team appends its team name as `<dir>/<team>` ([sidebar.md → Worktree groups](../sidebar/sidebar.md#worktree-groups)). It matches by branch, path basename, full path, or team channel, and defaults to the channel the command runs in; an inline `#<name>` or `--worktree` overrides it. A bare directory workspace has no current channel for humans, so an address there reaches *every* channel rather than silently narrowing to one; team member panes carry `RIMZ_TEAM`, so their own `rimz` calls default to `<dir>/<team>`. Mux tab names stay display-only — they are mutable and live outside the ledger, so they never form an address.
 
 A **handle** falls into three classes, narrowing from group to instance:
 

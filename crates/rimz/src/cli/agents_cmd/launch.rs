@@ -76,11 +76,15 @@ pub(super) fn launch_layout(
         args.worktree.as_deref(),
         args.from_pr.as_ref(),
     )?;
+    let team_name = spec
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && teams.0.contains_key(*name));
     let ledger = open_ledger(&workspace)?;
     let launch_requests = launch_identity_requests(
         &layout,
         args.name.as_deref(),
         generated_worktree_name(&launch),
+        team_name,
     )?;
     let launch_identities = ledger.append_agent_launches_allocating(
         &launch_requests,
@@ -97,7 +101,8 @@ pub(super) fn launch_layout(
     )?;
     let worktree_name = launch.worktree_name.clone();
     let cwd = launch.cwd;
-    let title = rimz::agents_spec::default_tab_title(&layout, &cwd, worktree_name.as_deref());
+    let title =
+        rimz::agents_spec::default_tab_title(&layout, &cwd, worktree_name.as_deref(), team_name);
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
@@ -115,6 +120,7 @@ pub(super) fn launch_layout(
         args.prompt.as_deref(),
         worktree_launch,
         in_place,
+        team_name,
         &launch_identities,
     )?;
     let (open_result, what): (Result<()>, &str) = match placement {
@@ -314,6 +320,7 @@ pub(super) struct AgentLaunchEnvIdentity<'a> {
     pub(super) agent_name: Option<&'a str>,
     pub(super) agent_profile: Option<&'a str>,
     pub(super) agent_role: Option<&'a str>,
+    pub(super) agent_team: Option<&'a str>,
     pub(super) agent_model: Option<&'a str>,
     pub(super) agent_effort: Option<&'a str>,
 }
@@ -343,6 +350,9 @@ pub(super) fn full_agent_launch_env(
     }
     if let Some(agent_role) = identity.agent_role {
         env.insert(rimz::run::ENV_AGENT_ROLE.to_owned(), agent_role.to_owned());
+    }
+    if let Some(agent_team) = identity.agent_team {
+        env.insert(rimz::run::ENV_TEAM.to_owned(), agent_team.to_owned());
     }
     if let Some(agent_model) = identity.agent_model {
         env.insert(
@@ -693,6 +703,7 @@ pub(super) fn launch_identity_requests(
     layout: &LayoutSpec,
     explicit_name: Option<&str>,
     generated_worktree_name: Option<&str>,
+    team: Option<&str>,
 ) -> Result<Vec<AgentLaunchRequest>> {
     let agent_cells: Vec<&Cell> = layout.agent_cells().collect();
     let agent_count = agent_cells.len();
@@ -726,6 +737,7 @@ pub(super) fn launch_identity_requests(
             name,
             profile: profile.clone(),
             role: role.clone(),
+            team: team.map(ToOwned::to_owned),
             run_id: None,
         });
     }
@@ -785,6 +797,7 @@ pub(super) fn append_launch_event(
             agent_name: identity.name.clone(),
             profile: identity.profile.clone(),
             role: identity.role.clone(),
+            team: identity.team.clone(),
             kind_ordinal: None,
             state: params.state,
             run_id: identity.run_id.clone(),
@@ -809,6 +822,7 @@ pub(super) fn layout_panes_with_names(
     prompt: Option<&str>,
     cleanup_worktree: bool,
     in_place: bool,
+    team: Option<&str>,
     launch_identities: &[LaunchIdentity],
 ) -> Result<LayoutPanes> {
     let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
@@ -835,6 +849,7 @@ pub(super) fn layout_panes_with_names(
                         prompt,
                         cleanup_worktree,
                         in_place,
+                        team,
                         launch,
                     )
                 })
@@ -851,6 +866,7 @@ pub(super) fn pane_cmd_with_name(
     prompt: Option<&str>,
     cleanup_worktree: bool,
     in_place: bool,
+    team: Option<&str>,
     launch: Option<&LaunchIdentity>,
 ) -> Result<PaneCmd> {
     let argv = match cell {
@@ -881,6 +897,9 @@ pub(super) fn pane_cmd_with_name(
             }
             if let Some(role) = role {
                 argv.extend(["--agent-role".to_owned(), role.clone()]);
+            }
+            if let Some(team) = team {
+                argv.extend(["--agent-team".to_owned(), team.to_owned()]);
             }
             if let Some(model) = model {
                 argv.extend(["--agent-model".to_owned(), model.clone()]);

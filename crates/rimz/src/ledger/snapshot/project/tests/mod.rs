@@ -66,6 +66,7 @@ fn raw_launch_with_description(
             agent_name: agent_name.to_owned(),
             profile: None,
             role: None,
+            team: None,
             kind_ordinal: None,
             state,
             run_id: None,
@@ -256,6 +257,7 @@ fn launch_description_without_prompt_creates_idle_card() {
             agent_name: "lucid-atlas".to_owned(),
             profile: None,
             role: None,
+            team: None,
             kind_ordinal: None,
             state: AgentLaunchState::Bound,
             run_id: None,
@@ -285,6 +287,7 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
             agent_name: "lucid-atlas".to_owned(),
             profile: Some("codex-coder".to_owned()),
             role: Some("coder".to_owned()),
+            team: Some("pcr".to_owned()),
             kind_ordinal: None,
             state: AgentLaunchState::Starting,
             run_id: None,
@@ -311,6 +314,7 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
     assert_eq!(agents[0].agent_id.as_str(), "sess-1");
     assert_eq!(agents[0].profile.as_deref(), Some("codex-coder"));
     assert_eq!(agents[0].role.as_deref(), Some("coder"));
+    assert_eq!(agents[0].team.as_deref(), Some("pcr"));
 }
 
 #[test]
@@ -324,6 +328,7 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
             agent_name: "lucid-atlas".to_owned(),
             profile: Some("codex-coder".to_owned()),
             role: Some("coder".to_owned()),
+            team: Some("pcr".to_owned()),
             kind_ordinal: None,
             state: AgentLaunchState::Bound,
             run_id: None,
@@ -350,6 +355,7 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
     assert_eq!(agents[0].agent_id.as_str(), "sess-1");
     assert_eq!(agents[0].profile.as_deref(), Some("codex-coder"));
     assert_eq!(agents[0].role.as_deref(), Some("coder"));
+    assert_eq!(agents[0].team.as_deref(), Some("pcr"));
     assert_eq!(
         agents[0].pane.as_ref().map(|pane| pane.pane_id.to_string()),
         Some("zellij:terminal_1".to_owned())
