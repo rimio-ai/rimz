@@ -109,6 +109,69 @@ fn backfill_pane_cwds_skips_reported_pidless_missing_and_deleted_cwds() {
 }
 
 #[test]
+fn backfill_wrapper_spawn_commands_recovers_tmux_agent_wrapper() {
+    let wrapper = "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt --";
+    let mut frame = frame(vec![tmux_pane("rimz")]);
+    first_mut(&mut frame).current.pid = Some(4242);
+    first_mut(&mut frame).current.cwd = None;
+
+    backfill_wrapper_spawn_commands(&mut frame, &|pid| {
+        assert_eq!(pid, 4242);
+        Some(wrapper.to_owned())
+    });
+
+    let pane = frame.to_pane_refs().into_iter().next().expect("pane ref");
+    assert_eq!(pane.spawn_command.as_deref(), Some(wrapper));
+    assert_eq!(
+        crate::ledger::snapshot::pane_agent_kind(&pane),
+        Some("codex")
+    );
+    assert_eq!(
+        crate::ledger::snapshot::pane_worktree_path(&pane),
+        Some("/repo/wt")
+    );
+}
+
+#[test]
+fn backfill_wrapper_spawn_commands_ignores_real_foregrounds() {
+    let mut frame = frame(vec![tmux_pane("rimz")]);
+    first_mut(&mut frame).current.pid = Some(4242);
+
+    backfill_wrapper_spawn_commands(&mut frame, &|pid| {
+        assert_eq!(pid, 4242);
+        Some("zsh".to_owned())
+    });
+
+    assert_eq!(first(&frame).current.spawn_command, None);
+}
+
+#[test]
+fn backfill_wrapper_spawn_commands_never_overwrites_existing_spawn_command() {
+    let mut frame = frame(vec![tmux_pane("rimz")]);
+    first_mut(&mut frame).current.pid = Some(4242);
+    first_mut(&mut frame).current.spawn_command = Some("zellij-born".to_owned());
+
+    backfill_wrapper_spawn_commands(&mut frame, &|_| {
+        panic!("reported spawn command is authoritative")
+    });
+
+    assert_eq!(
+        first(&frame).current.spawn_command.as_deref(),
+        Some("zellij-born")
+    );
+}
+
+#[test]
+fn backfill_wrapper_spawn_commands_abstains_without_pid() {
+    let mut frame = frame(vec![tmux_pane("rimz")]);
+    first_mut(&mut frame).current.pid = None;
+
+    backfill_wrapper_spawn_commands(&mut frame, &|_| panic!("pid gates /proc reads"));
+
+    assert_eq!(first(&frame).current.spawn_command, None);
+}
+
+#[test]
 fn rotate_against_prior_handles_spawn_handoff_start_stamps() {
     let old_start: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
     for (name, command, spawn_command, expected_start, expected_previous) in [

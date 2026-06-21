@@ -39,6 +39,9 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
         } else {
             trimmed_nonempty(3)
         },
+        // tmux reports no spawn command; the sidebar producer backfills Rimz's
+        // supervised agent wrapper from `pane_pid` via `/proc`
+        // (`sidebar::produce::panes::backfill_wrapper_spawn_commands`).
         spawn_command: None,
         cwd: trimmed_nonempty(4),
         pane_pid: cols

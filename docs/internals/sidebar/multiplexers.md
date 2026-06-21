@@ -184,6 +184,8 @@ The pane is best-effort. A fresh sidebar heartbeat suppresses producer relaunch;
 
 Layouts compile to tmux command sequences from the same layout IR Zellij uses.
 
+For supervised agent panes, the producer derives the wrapper spawn command from `/proc/<pane_pid>/cmdline`, paralleling its `/proc`-derived `pane_process_start`, so lazy-registering agents bind and panes group by worktree on tmux as on Zellij.
+
 tmux has no plugin surface to dock into, so the native pane is its only renderer. The docked-rail upgrade is Zellij-specific; tmux reaches the same sidebar surface through this managed pane.
 
 ### tmux presence fast path

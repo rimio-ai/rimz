@@ -134,6 +134,7 @@ fn repair_pane_frame(
     } else {
         super::metrics::backfill_zellij_pane_pids_from_proc(frame, session);
     }
+    backfill_wrapper_spawn_commands(frame, &crate::proc::cmdline);
     drop_finished_active_commands(
         frame,
         &crate::proc::cmdline,
@@ -160,6 +161,31 @@ fn repair_pane_frame(
     }
     annotate_elevated_agents(frame, &crate::remote_control::elevated_in_pane_agent);
     stamp_first_seen(frame);
+}
+
+/// Recover a pane's spawn command from Rimz's supervised agent wrapper when the
+/// mux did not retain one. tmux reports only the foreground program basename
+/// and no spawn command, so a `rimz agents exec <kind>` wrapper pane otherwise
+/// classifies as neither its agent kind nor its worktree. Only an empty spawn
+/// command is filled, and only from a cmdline that classifies as an agent, so a
+/// real foreground is never overwritten.
+fn backfill_wrapper_spawn_commands(
+    frame: &mut PaneFrame,
+    proc_cmdline: &dyn Fn(u32) -> Option<String>,
+) {
+    for pane in frame.pane_states_mut() {
+        if pane.current.spawn_command.is_some() {
+            continue;
+        }
+        let Some(pid) = pane.current.pid else {
+            continue;
+        };
+        if let Some(cmdline) = proc_cmdline(pid)
+            .filter(|cmdline| crate::ledger::snapshot::command_agent_kind(cmdline).is_some())
+        {
+            pane.current.spawn_command = Some(cmdline);
+        }
+    }
 }
 
 fn stamp_first_seen(frame: &mut PaneFrame) {
