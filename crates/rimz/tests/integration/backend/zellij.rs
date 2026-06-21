@@ -2568,12 +2568,25 @@ fn focused_client_panes_tracks_the_attached_client() {
     wait_until_session_ready(xdg.path(), &name);
 
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    let detached = backend
-        .focused_client_panes(ClientFocusOptions {
-            session_name: Some(name.clone()),
-            ..Default::default()
-        })
-        .expect("focused_client_panes detached");
+    // `--create-background` births the session without attaching, but the
+    // bootstrap client that created it can still surface in `list-clients` for a
+    // beat before it detaches — a window that widens under load. Poll until the
+    // roster drains, then assert the steady state: a background session with no
+    // client focuses nothing. A real regression (a detached session that keeps a
+    // focused client) never drains and still fails here.
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let detached = loop {
+        let panes = backend
+            .focused_client_panes(ClientFocusOptions {
+                session_name: Some(name.clone()),
+                ..Default::default()
+            })
+            .expect("focused_client_panes detached");
+        if panes.is_empty() || Instant::now() >= deadline {
+            break panes;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert!(
         detached.is_empty(),
         "a background session with no client focuses nothing: {detached:?}",

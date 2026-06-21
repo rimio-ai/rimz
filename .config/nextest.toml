@@ -15,6 +15,17 @@
 # within a single run. This is per-run accounting, NOT a shared lock: the
 # worktrees never block on each other.
 #
+# CI multiplies that aggregate beyond two worktrees. The shared self-hosted
+# runner executes several `cargo llvm-cov nextest` jobs at once — a push and its
+# pull_request land in different concurrency groups (sha vs ref), so the same
+# commit verifies twice over, and back-to-back landings stack a third. Coverage
+# instrumentation also makes every live server cost more CPU than the plain
+# `nextest` the ~4-safe figure was measured under, so the real ceiling is lower
+# there. The `ci` profile pins the Zellij cap to one server per run: N concurrent
+# coverage jobs then put ~N live servers on the host instead of 2N, holding the
+# aggregate inside the safe envelope no matter how the events overlap. `coverage`
+# in xtask selects it (`-P ci`); local `nextest`/`test` keep the cap-2 default.
+#
 # Retries absorb the startup races that slip through under load (a different
 # test each time — momentary contention, not a real failure): a starved runner
 # can kill a live server mid-test ("There is no active session!"), and the whole
@@ -31,6 +42,9 @@
 # the Zellij group already absorbs.
 [test-groups]
 live-zellij = { max-threads = 2 }
+# The coverage-run cap: one live Zellij server per run, so overlapping CI jobs on
+# the shared runner sum to ~N servers across N runs rather than 2N.
+live-zellij-ci = { max-threads = 1 }
 live-tmux = { max-threads = 4 }
 
 [[profile.default.overrides]]
@@ -41,4 +55,16 @@ retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s",
 [[profile.default.overrides]]
 filter = 'package(rimz) & test(/^backend::tmux::/)'
 test-group = 'live-tmux'
+retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
+
+# CI runs under coverage instrumentation on a shared runner; `coverage` selects
+# this profile with `-P ci`. It inherits everything from `default` and remaps
+# only the Zellij live group onto the cap-1 `live-zellij-ci` group so concurrent
+# coverage jobs cannot stack two servers each. The tmux override and the retry
+# budget carry over from `default` through profile inheritance.
+[profile.ci]
+
+[[profile.ci.overrides]]
+filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^journey::deep::zellij/))'
+test-group = 'live-zellij-ci'
 retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }

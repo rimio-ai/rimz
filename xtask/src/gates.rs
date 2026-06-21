@@ -210,7 +210,9 @@ pub(crate) fn test(root: &Path) -> Result<()> {
 
 // Coverage is the *only* test run in `ci`: `llvm-cov nextest` runs the suite
 // under instrumentation, so there is no separate uninstrumented `test` pass to
-// build and execute the workspace a second time.
+// build and execute the workspace a second time. `-P ci` pins the live-Zellij
+// cap to one server per run so overlapping coverage jobs on the shared runner
+// stay inside the safe server envelope (see .config/nextest.toml).
 pub(crate) fn coverage(root: &Path) -> Result<()> {
     run_with_env_removed(
         root,
@@ -218,6 +220,8 @@ pub(crate) fn coverage(root: &Path) -> Result<()> {
         [
             "llvm-cov",
             "nextest",
+            "--profile",
+            "ci",
             "--workspace",
             "--all-features",
             "--locked",
