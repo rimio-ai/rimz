@@ -103,6 +103,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
   - [performance.md](./docs/internals/health/performance.md) — render-thread budget, the cost map, the CPU/RAM/IO/storage/network overhead estimated for a 20-100 agent fleet, and the rules a performance change follows.
   - [observability.md](./docs/internals/health/observability.md) — off-box error reporting: the per-machine Sentry opt-in, the single init point across every process, the `tracing` bridge that lifts `warn!`/`error!` and agent rate-limit/overload conditions into events, and the data boundary.
 - **`reach/`** — how clients reach the room.
+  - [welcome.md](./docs/internals/reach/welcome.md) — the lobby (the room picker shown when the entry path has no room to enter) and the standalone `rimz stats` pace surface, both projections of `rimz list` and the spend aggregate.
   - [remote.md](./docs/internals/reach/remote.md) — SSH remote attach, reconnect policy, ControlMaster probe stream, and link-health sidecar.
   - [web.md](./docs/internals/reach/web.md) — Zellij-only browser access and session-route design.
 
