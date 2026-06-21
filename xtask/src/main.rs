@@ -144,7 +144,7 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "ci",
         summary: "Run the full local CI gate stack.",
-        runs: "fmt, invariants, docs-links, audits, build-plugin, lint, coverage, doctest, semver",
+        runs: "fmt, invariants, docs-links, audits, build-plugin, lint, doctest, coverage, semver",
     },
 ];
 

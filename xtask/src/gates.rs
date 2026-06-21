@@ -89,8 +89,8 @@ fn workspace_version(root: &Path) -> Result<String> {
 //   3. The compile gates run sequentially on this thread: two concurrent cargo
 //      builds only serialize on the target-dir lock, so parallelizing them buys
 //      nothing. `coverage` is the single instrumented test run (no separate
-//      uninstrumented `test` pass); `lint` precedes it so a clippy break fails
-//      before the expensive instrumented build.
+//      uninstrumented `test` pass); `lint` and doctests precede it so cheaper
+//      compile failures land before the expensive instrumented build.
 type Gate = fn(&Path) -> Result<()>;
 
 pub(crate) fn ci(root: &Path) -> Result<()> {
@@ -124,16 +124,18 @@ pub(crate) fn ci(root: &Path) -> Result<()> {
         .collect();
 
     // Compile gates serialize on the build lock, so run them sequentially.
-    // `lint` precedes `coverage` so a clippy break fails before the expensive
-    // instrumented test build; `coverage` is the single instrumented test run.
+    // `lint` and doctests precede `coverage` so cheaper failures land before
+    // the expensive instrumented test build. Keep doctests before
+    // `cargo llvm-cov`: the coverage run owns and may rewrite target artifacts
+    // that rustdoc otherwise reuses by fingerprint.
     let mut first_err: Option<anyhow::Error> = None;
     for (name, gate) in [
         // The wasm plugin compile is the cheapest compile gate; it fails fast
         // before the host lint/coverage builds are paid for.
         ("build-plugin", build_plugin as Gate),
         ("lint", lint),
-        ("coverage", coverage),
         ("doctest", doctest),
+        ("coverage", coverage),
         ("semver", semver),
     ] {
         let (name, elapsed, result) = timed(name, || gate(root));
@@ -214,6 +216,8 @@ pub(crate) fn test(root: &Path) -> Result<()> {
 // cap to one server per run so overlapping coverage jobs on the shared runner
 // stay inside the safe server envelope (see .config/nextest.toml).
 pub(crate) fn coverage(root: &Path) -> Result<()> {
+    // Stale profraw files from an interrupted local run can poison the merge.
+    run(root, "cargo", ["llvm-cov", "clean", "--workspace"])?;
     run_with_env_removed(
         root,
         "cargo",
