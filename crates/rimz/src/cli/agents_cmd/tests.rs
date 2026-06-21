@@ -440,9 +440,13 @@ fn preset_renders_effort_per_adapter() {
     assert_eq!(args, &["--thinking", "high"]);
 
     let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("opencode")));
-    apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[]).expect("opencode effort");
-    let (args, _) = only_agent(&layout);
-    assert_eq!(args, &["--variant", "high"]);
+    let err = apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[])
+        .expect_err("opencode rejects effort");
+    assert!(
+        err.to_string()
+            .contains("opencode does not support --effort"),
+        "{err:#}"
+    );
 }
 
 #[test]

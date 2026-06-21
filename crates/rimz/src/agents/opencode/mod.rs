@@ -459,8 +459,15 @@ impl AgentAdapter for OpencodeAdapter {
         if let Some(model) = preset.model.as_deref().filter(|model| !model.is_empty()) {
             argv.extend(["--model".to_owned(), model.to_owned()]);
         }
-        if let Some(effort) = preset.effort.as_deref().filter(|effort| !effort.is_empty()) {
-            argv.extend(["--variant".to_owned(), effort.to_owned()]);
+        if preset
+            .effort
+            .as_deref()
+            .is_some_and(|effort| !effort.is_empty())
+        {
+            return Err(super::PresetErr::UnsupportedField {
+                agent: self.descriptor().kind,
+                field: "effort",
+            });
         }
         if preset.system_prompt_file.is_some() {
             return Err(super::PresetErr::UnsupportedField {

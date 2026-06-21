@@ -37,21 +37,25 @@ fn opencode_activity_filter_and_launch_commands_build() {
 }
 
 #[test]
-fn opencode_render_preset_maps_model_and_variant() {
+fn opencode_render_preset_maps_model_and_rejects_unsupported_fields() {
     use crate::agents::{LaunchPreset, PresetErr};
 
     assert_eq!(
         OpencodeAdapter.render_preset(&LaunchPreset {
             model: Some("openai/gpt-5".to_owned()),
+            ..Default::default()
+        }),
+        Ok(vec!["--model".to_owned(), "openai/gpt-5".to_owned()])
+    );
+    assert_eq!(
+        OpencodeAdapter.render_preset(&LaunchPreset {
             effort: Some("high".to_owned()),
             ..Default::default()
         }),
-        Ok(vec![
-            "--model".to_owned(),
-            "openai/gpt-5".to_owned(),
-            "--variant".to_owned(),
-            "high".to_owned(),
-        ])
+        Err(PresetErr::UnsupportedField {
+            agent: "opencode",
+            field: "effort",
+        })
     );
     assert_eq!(
         OpencodeAdapter.render_preset(&LaunchPreset {
