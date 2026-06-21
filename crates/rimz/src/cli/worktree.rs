@@ -448,9 +448,9 @@ fn exec_shell(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::agents::{AgentStatus, lifecycle::TurnPhase};
     use rimz::ids::{AgentKind, AgentSessionId};
     use rimz::{MuxName, PaneId};
-    use rimz::{agents::lifecycle::TurnPhase, feed::AgentStatus};
 
     #[test]
     fn other_live_user_pane_inside_filters_sidebar_own_and_counts_user_panes() {
