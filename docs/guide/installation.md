@@ -144,20 +144,7 @@ pane_border_lines = "single"  # "simple" by default
 
 Set these in Rimz's config, the file it reads on attach — the same keys in your own Zellij or tmux config are overwritten when Rimz reasserts the room. `rimz config init --print` lists every room option with its default, and the full model lives in the [configuration reference](../reference/configuration.md#multiplexer-room-options).
 
-Your own Zellij and tmux config still owns everything Rimz leaves alone — the theme, true-color output, your default shell, copy-mode keybindings, status-bar styling, and the focused pane-border color. A baseline keeps the multiplexer pleasant in your sessions outside Rimz too.
-
-```text
-# ~/.tmux.conf — true color, vi copy-mode, a visible active border
-set -g default-terminal "tmux-256color"
-set -ga terminal-overrides ",*256col*:RGB"
-setw -g mode-keys vi
-set -g pane-active-border-style "fg=colour39"
-```
-
-```kdl
-// ~/.config/zellij/config.kdl — for your own sessions outside Rimz
-default_mode "locked"   // hand the keyboard to a TUI until you ask for Zellij
-```
+Your own Zellij and tmux config still owns everything Rimz leaves alone — the theme, true-color output, your default shell, copy-mode keybindings, and status-bar styling — and a baseline keeps the multiplexer pleasant in your sessions outside Rimz too. The [Zellij setup guide](./zellij.md) and the [tmux setup guide](./tmux.md) give the essential and recommended settings for each.
 
 ## Troubleshooting
 
