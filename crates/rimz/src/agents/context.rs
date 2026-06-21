@@ -14,7 +14,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 /// Rich per-session enrichment that has no first-class home on
-/// [`crate::feed::AgentState`]. Attached whole as `AgentState.context` and
+/// [`crate::agents::AgentState`]. Attached whole as `AgentState.context` and
 /// dropped whole when the session ends. The record is identity-free — the
 /// session it belongs to is the key it is filed under, never a field here, so
 /// the two cannot drift. Overlapping scalars (`model`, `effort`) are carried

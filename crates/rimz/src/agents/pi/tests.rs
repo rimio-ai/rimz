@@ -1,7 +1,8 @@
 use super::*;
 
+use crate::agents::AgentStatus;
 use crate::agents::lifecycle::{LifecycleState, TurnPhase, step};
-use crate::feed::{AgentStatus, FeedKind, ResolutionMethod, Surface};
+use crate::feed::{FeedKind, ResolutionMethod, Surface};
 use crate::ids::WorkspaceId;
 use serde_json::json;
 

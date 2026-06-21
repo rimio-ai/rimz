@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
-use crate::feed::{ResumeArm, resume_park};
+use crate::agents::{ResumeArm, resume_park};
 
 /// The reset deadline the producer would durably arm for one agent this frame, or
 /// `None` when there is nothing to arm. Mirrors what `sidebar::enrich`

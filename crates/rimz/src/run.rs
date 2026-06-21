@@ -7,7 +7,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentLifecycleObservation, LifecycleSignal, TurnPhase};
-use crate::feed::{AgentState, AgentStatus, FeedItem, Surface};
+use crate::agents::{AgentState, AgentStatus};
+use crate::feed::{FeedItem, Surface};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, RunId, WorkspaceId};
 use crate::ledger::lock::WorkspaceLock;
 use crate::ledger::run_store::{self, RunStoreErr};
@@ -364,8 +365,9 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    use crate::agents::AgentState;
     use crate::agents::LifecycleSignal;
-    use crate::feed::{AgentState, FeedKind};
+    use crate::feed::FeedKind;
     use crate::ids::MuxName;
     use crate::pane::PaneRef;
     use serde_json::json;

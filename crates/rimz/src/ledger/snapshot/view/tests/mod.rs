@@ -29,7 +29,8 @@ use super::{SidebarSnapshot, SidebarWorktreeKind, row_identity_violations};
 use crate::agent_activity::AgentActivity;
 use crate::agents::lifecycle::{LifecycleSignal, TurnPhase};
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally, SpendWindow};
-use crate::feed::{AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, Surface};
+use crate::agents::{AgentState, AgentStatus};
+use crate::feed::{FeedItem, FeedKind, FeedStatus, Surface};
 use crate::ids::AgentKind;
 use crate::ledger::snapshot::project::reduce_agent_states;
 use crate::ledger::snapshot::row::SidebarRow;
@@ -55,7 +56,7 @@ fn agent_ask(kind: FeedKind, source: &str, session_id: &str) -> FeedItem {
 }
 
 fn default_stall_secs() -> i64 {
-    i64::from(crate::feed::DEFAULT_STALL_AFTER_SECS)
+    i64::from(crate::agents::DEFAULT_STALL_AFTER_SECS)
 }
 
 fn paneless_codex(id: &str, worktree: &str, rank: i64) -> AgentState {

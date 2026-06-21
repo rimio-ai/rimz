@@ -26,11 +26,12 @@ use super::{GlobalFlags, open_ledger};
 use rimz::EventEnvelope;
 use rimz::Ledger;
 use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, TransitionKind};
-use rimz::agents::{AgentAdapter, AgentHookClass, AgentLifecycleObservation, adapter_by_kind};
+use rimz::agents::{
+    AgentAdapter, AgentHookClass, AgentLifecycleObservation, AgentState, adapter_by_kind,
+};
 use rimz::bridge::{self as bridge_api, BridgeOutcome, ExpectedFrame, SocketGuard};
 use rimz::feed::{
-    AbandonReason, AgentState, FeedItem, FeedKind, FeedStatus, ResolverStep, ResolverStepState,
-    Surface,
+    AbandonReason, FeedItem, FeedKind, FeedStatus, ResolverStep, ResolverStepState, Surface,
 };
 use rimz::ids::{MuxName, PaneId};
 use rimz::ledger::AskExpiry;

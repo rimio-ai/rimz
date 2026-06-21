@@ -18,7 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::feed::AgentStatus;
+use crate::agents::AgentStatus;
 
 macro_rules! lifecycle_signal_kinds {
     ($($variant:ident => $label:literal),+ $(,)?) => {

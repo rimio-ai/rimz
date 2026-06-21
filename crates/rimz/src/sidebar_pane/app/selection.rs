@@ -2,7 +2,7 @@
 //! the transient arrow-key browse layer above it, the key/mouse handlers that
 //! act on it, and the hit-test reader over the render-built line map.
 
-use crate::feed::AgentStatus;
+use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::{SidebarSnapshot, lead_unread_row};
 

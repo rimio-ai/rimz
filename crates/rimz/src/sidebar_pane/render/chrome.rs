@@ -1,5 +1,5 @@
+use crate::agents::AgentStatus;
 use crate::config::GlyphRole;
-use crate::feed::AgentStatus;
 use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot};
 use jiff::Timestamp;
 use ratatui::style::Modifier;

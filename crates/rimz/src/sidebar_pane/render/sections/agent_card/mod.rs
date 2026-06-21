@@ -4,8 +4,8 @@
 //! docs/internals/sidebar/sidebar.md.
 
 use crate::agents::{AgentContext, TurnPhase};
+use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
-use crate::feed::{AgentStatus, ContextSeverity};
 use crate::{AgentCard, SidebarProviderPanel, SidebarRow, SidebarSubAgent};
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};

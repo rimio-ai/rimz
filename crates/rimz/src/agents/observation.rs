@@ -47,7 +47,7 @@ pub struct AgentLifecycleObservation {
     /// The agent-agnostic lifecycle intent this event carries. The reducer and
     /// the ingestion path fold it onto the rollup through the one
     /// [`step`](super::lifecycle::step) table; the adapter no longer decides a
-    /// final [`AgentStatus`](crate::feed::AgentStatus).
+    /// final [`AgentStatus`](crate::agents::AgentStatus).
     pub signal: LifecycleSignal,
     /// Process identity observed by the hook runner. The sidebar uses this
     /// best-effort liveness marker to suppress stale ledger overlays when the

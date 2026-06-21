@@ -81,7 +81,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
             theme.style(
                 theme
                     .animations
-                    .status(crate::feed::AgentStatus::Waiting)
+                    .status(crate::agents::AgentStatus::Waiting)
                     .color(),
                 Modifier::BOLD,
             ),

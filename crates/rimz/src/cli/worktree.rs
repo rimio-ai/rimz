@@ -10,8 +10,8 @@ use clap::{Args, Subcommand};
 
 use super::GlobalFlags;
 use crate::cli::render;
+use rimz::agents::AgentState;
 use rimz::config::WorktreeBase;
-use rimz::feed::AgentState;
 use rimz::mux::own_pane_id;
 use rimz::workspace::{RootClass, WorkspaceResolver};
 

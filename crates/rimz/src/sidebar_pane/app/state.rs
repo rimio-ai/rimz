@@ -451,7 +451,7 @@ pub(super) fn read_receipt_for_row(
     };
     let needs_look = row
         .status()
-        .is_some_and(crate::feed::AgentStatus::needs_a_look);
+        .is_some_and(crate::agents::AgentStatus::needs_a_look);
     if !row.unread && (!needs_look || unread::receipt_reaches(marks, &row.id, row.last_activity)) {
         return ReadClear::default();
     }

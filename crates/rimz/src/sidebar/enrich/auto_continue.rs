@@ -8,7 +8,7 @@
 //! on the ephemeral per-session context surviving the wait:
 //!
 //! - **Arm.** Each frame an agent is parked on a resumable certificate
-//!   ([`crate::feed::resume_park`]), the producer writes a durable [`ParkRecord`]
+//!   ([`crate::agents::resume_park`]), the producer writes a durable [`ParkRecord`]
 //!   capturing the park class and the agent's frozen `last_activity`. A
 //!   rate-limit record also captures the latest spent-window reset deadline while
 //!   the reading is still spent; an overloaded record carries the turn-error
@@ -21,7 +21,7 @@
 //!   its own) advances `last_activity`, and the stale record is removed.
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
-//! arm decision is the pure, unit-tested [`crate::feed::resume_park`].
+//! arm decision is the pure, unit-tested [`crate::agents::resume_park`].
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -31,8 +31,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
+use crate::agents::{AgentState, ResumeArm, resume_park};
 use crate::config::{DEFAULT_OVERLOAD_BACKOFF_SECS, ResumeConfig};
-use crate::feed::{AgentState, ResumeArm, resume_park};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::ledger::atomic::write_temp_then_rename_cache;
 use crate::ledger::snapshot::PaneAgent;

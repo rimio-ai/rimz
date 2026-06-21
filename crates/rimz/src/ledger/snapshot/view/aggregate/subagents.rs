@@ -1,7 +1,7 @@
 use jiff::Timestamp;
 use tracing::{debug, warn};
 
-use crate::feed::{AgentState, AgentStatus};
+use crate::agents::{AgentState, AgentStatus};
 use crate::ledger::snapshot::row::{SidebarRow, SidebarSubAgent};
 
 use super::super::layout::cmp_start_asc;
@@ -112,7 +112,7 @@ pub(super) fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
         if matches!(status, AgentStatus::Waiting | AgentStatus::Failed) {
             continue;
         }
-        if crate::feed::is_turn_dead(status, agent.context.as_ref(), row.last_activity) {
+        if crate::agents::is_turn_dead(status, agent.context.as_ref(), row.last_activity) {
             continue;
         }
         if let Some(freshest) = agent

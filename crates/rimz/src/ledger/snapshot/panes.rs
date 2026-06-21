@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::process::{pane_agent_kind, pane_command_is_known};
-use crate::feed::AgentState;
+use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
 

@@ -1,8 +1,8 @@
 //! Bare process rows: the shell/build line, its right-pinned resource stats,
 //! the full-command detail line, and the resolver's composed row.
 
+use crate::agents::AgentStatus;
 use crate::config::GlyphRole;
-use crate::feed::AgentStatus;
 use crate::{ProcessState, SidebarRow};
 use jiff::Timestamp;
 use ratatui::style::Modifier;

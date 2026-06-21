@@ -6,7 +6,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::lifecycle::LifecycleSignal;
-use crate::feed::{AgentState, AgentStatus};
+use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, WorkspaceId};
 
 pub const DEFAULT_SETTLE: Duration = Duration::from_millis(400);

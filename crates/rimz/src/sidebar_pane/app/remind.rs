@@ -6,8 +6,8 @@ use ratatui::backend::CrosstermBackend;
 use tracing::debug;
 
 use crate::SidebarSnapshot;
+use crate::agents::AgentStatus;
 use crate::config::NotificationsPrefs;
-use crate::feed::AgentStatus;
 use crate::ids::PaneId;
 use crate::sidebar::notify::{Notification, NotificationKind, spawn_notify_command};
 

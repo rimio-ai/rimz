@@ -2,8 +2,9 @@ use crate::agents::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage, AgentTurnError,
     RateLimitWindow, TurnErrorClass,
 };
+use crate::agents::{AgentState, AgentStatus};
 use crate::config::{AnimationSpec, ScrollbarMode};
-use crate::feed::{AgentState, AgentStatus, FeedKind};
+use crate::feed::FeedKind;
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::pane::PaneRef;
 use crate::{EventEnvelope, FeedItem, FeedStatus, SidebarSnapshot, Surface, WorkspaceId};

@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::time::Duration;
 
-use crate::feed::AgentStatus;
+use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::{SidebarRow, SidebarSnapshot};
 use ratatui::buffer::Buffer;

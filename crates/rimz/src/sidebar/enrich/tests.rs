@@ -1,6 +1,5 @@
 use super::*;
-use crate::agents::TurnPhase;
-use crate::feed::AgentStatus;
+use crate::agents::{AgentStatus, TurnPhase};
 use crate::ledger::atomic;
 use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
 use crate::sidebar::cache::{AccountsCache, unix_now_ms};
@@ -303,12 +302,12 @@ fn config_fold_stamps_agent_context_severity() {
     let rows = &groups[0].rows;
     assert_eq!(
         rows[0].as_agent().and_then(|agent| agent.context_severity),
-        Some(crate::feed::ContextSeverity::Amber),
+        Some(crate::agents::ContextSeverity::Amber),
         "85% crosses the default amber band"
     );
     assert_eq!(
         rows[1].as_agent().and_then(|agent| agent.context_severity),
-        Some(crate::feed::ContextSeverity::Calm)
+        Some(crate::agents::ContextSeverity::Calm)
     );
     assert_eq!(
         rows[2].as_agent().and_then(|agent| agent.context_severity),

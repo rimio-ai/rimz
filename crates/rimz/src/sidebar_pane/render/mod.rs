@@ -45,9 +45,9 @@ pub(crate) use scrollbar::ScrollbarFade;
 
 use std::io::{self, Write};
 
+use crate::agents::AgentStatus;
 use crate::agents::TurnPhase;
 use crate::config::AnimationSpec;
-use crate::feed::AgentStatus;
 use crate::sidebar_pane::pets::PetAction;
 use crate::{ProcessState, SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
@@ -63,9 +63,9 @@ use self::theme::Theme;
 
 #[cfg(test)]
 fn age_heat_amount_for_test(age_secs: i64) -> f32 {
-    let first_quarter = crate::feed::ATTENTION_AGE_CEILING_SECS / 4;
+    let first_quarter = crate::agents::ATTENTION_AGE_CEILING_SECS / 4;
     debug_assert!(age_secs > first_quarter);
-    let heat_span = crate::feed::ATTENTION_AGE_CEILING_SECS - first_quarter;
+    let heat_span = crate::agents::ATTENTION_AGE_CEILING_SECS - first_quarter;
     ((age_secs - first_quarter) as f32 / heat_span as f32).min(1.0)
 }
 

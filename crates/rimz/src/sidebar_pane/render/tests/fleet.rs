@@ -627,7 +627,7 @@ fn render_make_up_filter_narrows_the_body() {
         card: crate::RowCard::Process(crate::ProcessCard::default()),
     });
     let ui = UiState {
-        make_up_filter: Some(BodyFilter::Status(crate::feed::AgentStatus::Failed)),
+        make_up_filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Failed)),
         ..Default::default()
     };
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);

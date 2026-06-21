@@ -10,8 +10,9 @@ use serde::Serialize;
 
 use super::{GlobalFlags, current_channel, open_ledger};
 use crate::cli::render;
+use rimz::agents::AgentState;
 use rimz::agents::transcript::{TranscriptRole, fuse_timeline, group_turns};
-use rimz::feed::{AgentState, FeedItem, pending_ask_for};
+use rimz::feed::{FeedItem, pending_ask_for};
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]

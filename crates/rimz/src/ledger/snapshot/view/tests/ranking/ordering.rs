@@ -1,6 +1,6 @@
 use super::*;
 use crate::SidebarWorktreeGroup;
-use crate::feed::ATTENTION_AGE_CEILING_SECS;
+use crate::agents::ATTENTION_AGE_CEILING_SECS;
 use crate::ids::{MuxName, PaneId};
 
 #[test]

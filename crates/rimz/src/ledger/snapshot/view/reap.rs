@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 
-use crate::feed::{AgentState, FeedItem};
+use crate::agents::AgentState;
+use crate::feed::FeedItem;
 use crate::ledger::snapshot::panes::{agent_owner_pid, is_daemon_mode_codex};
 use crate::ledger::snapshot::process::command_is_sidebar_chrome;
 use crate::pane::PaneRef;

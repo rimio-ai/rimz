@@ -5,7 +5,8 @@ use clap::Args;
 
 use super::send::{self, SendFlags, resolve_message};
 use super::{GlobalFlags, current_channel, open_ledger};
-use rimz::feed::{AgentState, pending_ask_for};
+use rimz::agents::AgentState;
+use rimz::feed::pending_ask_for;
 use rimz::message::{AutoCompact, MessageSender};
 use rimz::mux::MuxBackend;
 use rimz::schema::event::{AgentSteeredPayload, EventEnvelope};

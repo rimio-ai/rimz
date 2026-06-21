@@ -1,7 +1,8 @@
 use jiff::Timestamp;
 
 use crate::agents::lifecycle::TurnPhase;
-use crate::feed::{AgentState, AgentStatus, FeedItem, FeedStatus, ResolverStepState, Surface};
+use crate::agents::{AgentState, AgentStatus};
+use crate::feed::{FeedItem, FeedStatus, ResolverStepState, Surface};
 use crate::ledger::snapshot::row::{AgentCard, RowCard, SidebarResolverState, SidebarRow};
 use crate::pane::PaneRef;
 
@@ -62,7 +63,7 @@ pub(in crate::ledger::snapshot) fn row_from_agent(
 /// never produces another signal.
 fn is_compacting(agent: &AgentState, now: Timestamp) -> bool {
     agent.compacting_since.is_some_and(|since| {
-        now.duration_since(since).as_secs() < crate::feed::COMPACTING_WINDOW_SECS
+        now.duration_since(since).as_secs() < crate::agents::COMPACTING_WINDOW_SECS
     })
 }
 

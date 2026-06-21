@@ -64,7 +64,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         "terminal_21",
         "/srv/code/query-engine",
         "feature/auth-router",
-        rimz::feed::AgentStatus::Running,
+        rimz::agents::AgentStatus::Running,
         rimz::agents::TurnPhase::Acting,
         "port auth watcher",
         "Opus 4.1",
@@ -77,7 +77,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         "terminal_22",
         "/srv/code/query-engine/.rimz/worktrees/pricing",
         "pricing-refresh",
-        rimz::feed::AgentStatus::Waiting,
+        rimz::agents::AgentStatus::Waiting,
         rimz::agents::TurnPhase::Idle,
         "approve pricing cache write",
         "GPT-5.1-Codex",
@@ -90,7 +90,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         "terminal_23",
         "/srv/code/query-engine/.rimz/worktrees/mux",
         "zellij-health",
-        rimz::feed::AgentStatus::Failed,
+        rimz::agents::AgentStatus::Failed,
         rimz::agents::TurnPhase::Idle,
         "debug zellij health probe",
         "Pi",
@@ -126,8 +126,8 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             label: "main".to_owned(),
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: vec![
-                status_count(rimz::feed::AgentStatus::Running, 1),
-                status_count(rimz::feed::AgentStatus::Waiting, 1),
+                status_count(rimz::agents::AgentStatus::Running, 1),
+                status_count(rimz::agents::AgentStatus::Waiting, 1),
             ],
             rows: vec![claude, codex, process],
             hidden_count: 0,
@@ -143,7 +143,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             key: "/srv/code/query-engine/.rimz/worktrees/mux".to_owned(),
             label: "zellij-health".to_owned(),
             kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: vec![status_count(rimz::feed::AgentStatus::Failed, 1)],
+            status_counts: vec![status_count(rimz::agents::AgentStatus::Failed, 1)],
             rows: vec![pi],
             hidden_count: 0,
             diff_added: Some(14),
@@ -167,7 +167,7 @@ fn agent_row(
     pane_raw: &str,
     cwd: &str,
     branch: &str,
-    status: rimz::feed::AgentStatus,
+    status: rimz::agents::AgentStatus,
     phase: rimz::agents::TurnPhase,
     task: &str,
     model: &str,
@@ -193,7 +193,7 @@ fn agent_row(
         todo_done: Some(4),
         todo_total: Some(7),
         context_severity: context_pct.map(|pct| {
-            rimz::feed::ContextSeverity::classify(
+            rimz::agents::ContextSeverity::classify(
                 pct,
                 total_tokens,
                 &rimz::config::ContextMeterConfig::default(),
@@ -202,17 +202,17 @@ fn agent_row(
         registered_at: Some(now),
         ..rimz::AgentCard::default()
     };
-    if status == rimz::feed::AgentStatus::Failed {
+    if status == rimz::agents::AgentStatus::Failed {
         card.turn_error_label = Some("API error".to_owned());
         card.todo_done = Some(2);
         card.todo_total = Some(5);
     }
-    if status == rimz::feed::AgentStatus::Running {
+    if status == rimz::agents::AgentStatus::Running {
         card.sub_agents = vec![
             rimz::SidebarSubAgent {
                 id: "child:review".to_owned(),
                 name: "review".to_owned(),
-                status: rimz::feed::AgentStatus::Running,
+                status: rimz::agents::AgentStatus::Running,
                 phase: rimz::agents::TurnPhase::Reasoning,
                 task: Some("check unsafe edges".to_owned()),
                 model: Some("Haiku".to_owned()),
@@ -227,7 +227,7 @@ fn agent_row(
             rimz::SidebarSubAgent {
                 id: "child:test".to_owned(),
                 name: "test".to_owned(),
-                status: rimz::feed::AgentStatus::Success,
+                status: rimz::agents::AgentStatus::Success,
                 phase: rimz::agents::TurnPhase::Idle,
                 task: Some("run focused nextest".to_owned()),
                 model: Some("Haiku".to_owned()),
@@ -275,7 +275,7 @@ fn pane_ref(raw: &str, command: &str, cwd: &str, focused: bool) -> rimz::pane::P
     }
 }
 
-fn status_count(status: rimz::feed::AgentStatus, count: usize) -> rimz::SidebarStatusCount {
+fn status_count(status: rimz::agents::AgentStatus, count: usize) -> rimz::SidebarStatusCount {
     rimz::SidebarStatusCount { status, count }
 }
 

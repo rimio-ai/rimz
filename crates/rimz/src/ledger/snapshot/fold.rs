@@ -12,8 +12,8 @@ use super::project::{
     AgentIdentityState, backfill_agent_identities, reduce_agent_states_seeded_with_identity,
 };
 use super::{Result, SnapshotErr};
+use crate::agents::AgentState;
 use crate::agents::lifecycle::LifecycleSignal;
-use crate::feed::AgentState;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::ledger::atomic::{self, write_temp_then_rename};
 use crate::ledger::event_log::{self};

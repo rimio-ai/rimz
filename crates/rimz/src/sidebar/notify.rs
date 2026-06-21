@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 use std::io;
 use std::process::{Command, Stdio};
 
+use crate::agents::AgentStatus;
 use crate::config::NotificationsPrefs;
-use crate::feed::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::remote::link::LinkTier;
 use crate::sidebar::unread::OpenedUnread;

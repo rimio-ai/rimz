@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 
 use super::GlobalFlags;
 use crate::cli::render;
-use rimz::feed::AgentState;
+use rimz::agents::AgentState;
 use rimz::ids::PaneId;
 use rimz::mux::{MuxBackend, NamedKey, PaneListOptions, SplitPaneOptions};
 use rimz::pane::PaneRef;
@@ -527,7 +527,7 @@ fn parse_key(raw: &str) -> std::result::Result<NamedKey, String> {
 mod tests {
     use super::*;
     use jiff::Timestamp;
-    use rimz::feed::AgentStatus;
+    use rimz::agents::AgentStatus;
     use rimz::ids::{AgentKind, AgentSessionId, MuxName};
 
     fn pane(raw: &str, view: &str, name: &str, command: &str, cwd: &str, focused: bool) -> PaneRef {

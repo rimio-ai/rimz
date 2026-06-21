@@ -3,8 +3,9 @@
 //! renaming a variant is a compile error here rather than a silent fall-through
 //! to the default tone in one command and a different tone in another.
 
+use rimz::agents::AgentStatus;
 use rimz::agents::TurnPhase;
-use rimz::feed::{AgentStatus, FeedStatus};
+use rimz::feed::FeedStatus;
 use rimz::message::MessageStatus;
 use rimz::run::RunStatus;
 use rimz::trust::TrustState;

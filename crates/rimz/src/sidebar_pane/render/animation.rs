@@ -1,8 +1,8 @@
+use crate::agents::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
 use crate::config::{
     AnimationColor, AnimationEffect as ConfigEffect, AnimationSpec, AnimationSpeed as ConfigSpeed,
     GlyphRole, ThemeAnimationsConfig, UnreadEffect as ConfigUnreadEffect,
 };
-use crate::feed::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
 use ratatui::style::{Color, Modifier, Style};
 
 use super::theme::{GlyphSet, Palette, Theme};

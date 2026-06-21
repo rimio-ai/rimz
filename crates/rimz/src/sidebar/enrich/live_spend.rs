@@ -94,7 +94,7 @@ mod tests {
     use jiff::{SignedDuration, Timestamp};
 
     use super::*;
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     use crate::ids::WorkspaceId;
     use crate::ledger::atomic;
     use crate::sidebar::cache::{AccountsCache, unix_now_ms};

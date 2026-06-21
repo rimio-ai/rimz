@@ -60,7 +60,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
             inactive: false,
             last_activity: Timestamp::now(),
             card: crate::RowCard::Agent(Box::new(crate::AgentCard {
-                status: Some(crate::feed::AgentStatus::Waiting),
+                status: Some(crate::agents::AgentStatus::Waiting),
                 phase: crate::agents::TurnPhase::Idle,
                 task: Some("allow cargo fmt".to_owned()),
                 ..crate::AgentCard::default()
@@ -84,7 +84,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     slow.worktree_groups[0].rows[0]
         .as_agent_mut()
         .unwrap()
-        .status = Some(crate::feed::AgentStatus::Running);
+        .status = Some(crate::agents::AgentStatus::Running);
     assert_eq!(
         frame_interval(&slow, &UiState::default(), false),
         crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
@@ -301,7 +301,7 @@ fn notification_targeting_matches_mux_reachability_rules() {
 
 #[test]
 fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
 
     let ws = workspace();
     let work = PaneId::from_parts(MuxName::Zellij, "terminal_11");

@@ -11,7 +11,7 @@ use jiff::Timestamp;
 use crate::cli::render::{
     Cell, KeyVals, Table, cell, fmt_bytes, home_relative, paint, palette, status,
 };
-use rimz::feed::AgentStatus;
+use rimz::agents::AgentStatus;
 use rimz::schema::diag::DiagSeverity;
 use rimz::trust::TrustState;
 

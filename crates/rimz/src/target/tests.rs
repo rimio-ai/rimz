@@ -3,7 +3,7 @@
 use jiff::Timestamp;
 
 use super::*;
-use crate::feed::AgentStatus;
+use crate::agents::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
 use crate::pane::PaneRef;
 

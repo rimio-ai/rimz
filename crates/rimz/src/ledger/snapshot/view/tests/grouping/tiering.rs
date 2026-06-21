@@ -1,5 +1,5 @@
 use super::*;
-use crate::feed::ATTENTION_AGE_CEILING_SECS;
+use crate::agents::ATTENTION_AGE_CEILING_SECS;
 
 #[test]
 fn group_tiering_floats_attention_and_always_tails_external() {

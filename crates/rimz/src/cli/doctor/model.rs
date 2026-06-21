@@ -7,7 +7,7 @@
 use jiff::Timestamp;
 use serde::Serialize;
 
-use rimz::feed::AgentStatus;
+use rimz::agents::AgentStatus;
 use rimz::ids::MuxName;
 use rimz::schema::diag::DiagSeverity;
 use rimz::trust::TrustState;

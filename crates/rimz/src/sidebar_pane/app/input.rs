@@ -6,7 +6,7 @@
 use std::io;
 use std::os::unix::net::UnixDatagram;
 
-use crate::feed::AgentStatus;
+use crate::agents::AgentStatus;
 use crate::schema::sidebar_event::{RELOAD_CONTROL_WORD, SidebarEventEnvelope};
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 

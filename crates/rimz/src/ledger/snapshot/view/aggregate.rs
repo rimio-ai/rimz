@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
-use crate::feed::AgentState;
+use crate::agents::AgentState;
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 

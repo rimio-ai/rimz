@@ -1,6 +1,6 @@
 use super::*;
+use rimz::agents::{AgentState, AgentStatus};
 use rimz::bridge::{ExpectedRunFrame, WakeupFrame};
-use rimz::feed::{AgentState, AgentStatus};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::ledger::{RuntimePaths, StatePaths};
 use rimz::pane::PaneRef;

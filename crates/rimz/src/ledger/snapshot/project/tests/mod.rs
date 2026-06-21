@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 
 use super::super::view::{attach_sub_agents, row_from_agent, sub_agent_from_state};
+use crate::agents::AgentStatus;
 use crate::agents::lifecycle::TurnPhase;
-use crate::feed::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::snapshot::SidebarSnapshot;
 use crate::ledger::snapshot::testkit::*;

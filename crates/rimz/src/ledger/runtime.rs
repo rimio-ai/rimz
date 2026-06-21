@@ -4,7 +4,8 @@
 //! recorded owner process is still the same live process. Audit views bypass
 //! this filter and read durable history as written.
 
-use crate::feed::{AgentState, FeedItem, Surface};
+use crate::agents::AgentState;
+use crate::feed::{FeedItem, Surface};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::schema::event::EventEnvelope;
 
@@ -123,8 +124,9 @@ fn linux_process_start_from_stat(stat: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::AgentStatus;
     use crate::agents::TurnPhase;
-    use crate::feed::{AgentStatus, FeedKind, Surface};
+    use crate::feed::{FeedKind, Surface};
     use crate::ids::WorkspaceId;
     use jiff::Timestamp;
     use std::path::Path;

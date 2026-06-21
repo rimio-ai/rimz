@@ -303,7 +303,7 @@ fn pi_card_renders_cache_write_in_the_per_call_composition() {
 #[test]
 fn calm_context_bar_orders_segments_left_to_right() {
     let theme = Theme::fixed(false);
-    let bar_styles_for = |agent: crate::feed::AgentState| {
+    let bar_styles_for = |agent: crate::agents::AgentState| {
         let snapshot = snapshot_with(Vec::new(), vec![agent]);
         let mut lines = Vec::new();
         let mut map = Vec::new();

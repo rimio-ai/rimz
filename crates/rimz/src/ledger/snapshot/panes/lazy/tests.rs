@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::feed::AgentStatus;
+use crate::agents::AgentStatus;
 use crate::ids::{MuxName, PaneId};
 use crate::ledger::snapshot::testkit::{AgentStateFx, agent, ago, pane};
 

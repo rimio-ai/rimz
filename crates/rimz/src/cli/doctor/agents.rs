@@ -35,7 +35,7 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
     if projection.agents.is_empty() {
         return AgentRollup::None;
     }
-    let mut by_kind: std::collections::BTreeMap<&str, Vec<&rimz::feed::AgentState>> =
+    let mut by_kind: std::collections::BTreeMap<&str, Vec<&rimz::agents::AgentState>> =
         std::collections::BTreeMap::new();
     for agent in &projection.agents {
         by_kind.entry(agent.kind.as_str()).or_default().push(agent);

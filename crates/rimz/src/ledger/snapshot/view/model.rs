@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::agents::AgentStatus;
 use crate::agents::{ExtraCredits, RateLimitWindow, SpendTally};
 use crate::config::PaletteRole;
-use crate::feed::AgentStatus;
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::remote::link::LinkTier;
 

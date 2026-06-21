@@ -403,7 +403,7 @@ mod tests {
         read_spending_cache, read_workspace_spending_cache, unix_secs_now,
         write_provider_spending_cache, write_spending_cache, write_workspace_spending_cache,
     };
-    use crate::feed::{AgentState, AgentStatus};
+    use crate::agents::{AgentState, AgentStatus};
     use crate::ids::AgentKind;
     use crate::ids::WorkspaceId;
     use crate::ledger::single_flight::{Coalesced, coalesce};

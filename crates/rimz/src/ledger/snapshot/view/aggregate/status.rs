@@ -2,7 +2,7 @@ use jiff::Timestamp;
 
 use crate::agents::TurnErrorClass;
 use crate::agents::lifecycle::TurnPhase;
-use crate::feed::{AgentState, AgentStatus, display_turn_error, rate_limit_window_kinds};
+use crate::agents::{AgentState, AgentStatus, display_turn_error, rate_limit_window_kinds};
 use crate::ledger::snapshot::row::SidebarRow;
 
 /// Project each agent row's *displayed* status from its raw lifecycle status,
@@ -67,13 +67,13 @@ pub(super) fn project_display_status(
         {
             agent.turn_error_label = error.label.clone();
             AgentStatus::Failed
-        } else if crate::feed::is_turn_complete(status, agent.context.as_ref(), last_activity) {
+        } else if crate::agents::is_turn_complete(status, agent.context.as_ref(), last_activity) {
             // A turn that finished without a `Stop` hook (Codex `/review` review
             // mode) settles to success instead of spinning until the stall
             // window misreads it as failed.
             AgentStatus::Success
         } else {
-            let stalled = crate::feed::is_stalled(status, last_activity, now, stalled_after_secs);
+            let stalled = crate::agents::is_stalled(status, last_activity, now, stalled_after_secs);
             if stalled && rate_limit_kinds.spent.contains(row_name.as_str()) {
                 AgentStatus::Paused
             } else if stalled {

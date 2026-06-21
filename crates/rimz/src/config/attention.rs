@@ -20,9 +20,9 @@ pub struct AttentionConfig {
 impl Default for AttentionConfig {
     fn default() -> Self {
         Self {
-            stalled_after_secs: NonZeroU32::new(crate::feed::DEFAULT_STALL_AFTER_SECS)
+            stalled_after_secs: NonZeroU32::new(crate::agents::DEFAULT_STALL_AFTER_SECS)
                 .expect("non-zero default stall window"),
-            inactive_after_secs: NonZeroU32::new(crate::feed::DEFAULT_INACTIVE_AFTER_SECS)
+            inactive_after_secs: NonZeroU32::new(crate::agents::DEFAULT_INACTIVE_AFTER_SECS)
                 .expect("non-zero default inactive window"),
         }
     }

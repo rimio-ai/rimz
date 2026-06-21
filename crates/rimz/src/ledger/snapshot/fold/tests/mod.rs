@@ -2,8 +2,8 @@ use std::path::Path;
 
 use super::*;
 
+use crate::agents::AgentStatus;
 use crate::agents::lifecycle;
-use crate::feed::AgentStatus;
 use crate::ids::WorkspaceId;
 use crate::ledger::snapshot::testkit::*;
 

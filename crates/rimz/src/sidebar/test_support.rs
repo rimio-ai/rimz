@@ -2,8 +2,7 @@ use std::path::Path;
 
 use jiff::Timestamp;
 
-use crate::agents::{RateLimitWindow, TurnPhase};
-use crate::feed::{AgentState, AgentStatus};
+use crate::agents::{AgentState, AgentStatus, RateLimitWindow, TurnPhase};
 use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 use crate::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};

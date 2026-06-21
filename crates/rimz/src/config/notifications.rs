@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::feed::AgentStatus;
+use crate::agents::AgentStatus;
 
 /// Best-effort attention delivery preferences. These are per-machine because
 /// they describe how this terminal or host should reach this user; a clone never

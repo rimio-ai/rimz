@@ -142,7 +142,7 @@ fn next_lifecycle_signal_closes_missed_compaction_bracket() {
             "expired display marker",
             lifecycle_at(
                 "claude",
-                crate::feed::COMPACTING_WINDOW_SECS + 5,
+                crate::agents::COMPACTING_WINDOW_SECS + 5,
                 "Stop",
                 serde_json::json!({
                     "signal": "turn_ended",

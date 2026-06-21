@@ -3,7 +3,7 @@ use std::time::Duration;
 
 #[test]
 fn worktree_keys_respect_the_make_up_filter() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
     let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
@@ -24,7 +24,7 @@ fn worktree_keys_respect_the_make_up_filter() {
 }
 #[test]
 fn make_up_click_picks_switches_and_clears_the_filter() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
     let mut ui = UiState {
@@ -73,7 +73,7 @@ fn make_up_click_picks_switches_and_clears_the_filter() {
 }
 #[test]
 fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
     let mut ui = UiState::default();
@@ -129,7 +129,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
 }
 #[test]
 fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
     let mut ui = UiState::default();
@@ -197,7 +197,7 @@ fn byte_index_at_cell(text: &str, target: usize) -> usize {
 
 #[test]
 fn make_up_filter_auto_clears_when_its_bucket_empties() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
 
@@ -220,7 +220,7 @@ fn make_up_filter_auto_clears_when_its_bucket_empties() {
 }
 #[test]
 fn make_up_filter_narrows_ordinals_in_lockstep_with_the_line_map() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
     let filter = Some(BodyFilter::Status(AgentStatus::Failed));
@@ -251,7 +251,7 @@ fn make_up_filter_narrows_ordinals_in_lockstep_with_the_line_map() {
 }
 #[test]
 fn next_attention_jump_respects_the_filter() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
 
@@ -313,7 +313,7 @@ fn unread_filter_narrows_to_unread_rows() {
 
 #[test]
 fn next_attention_jump_targets_unread_before_read_attention() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let ws = workspace();
     let mut snapshot = filterable_snapshot(&ws);
     let read_failed = &mut snapshot.worktree_groups[1].rows[0];
@@ -352,7 +352,7 @@ fn next_attention_jump_targets_unread_before_read_attention() {
 
 #[test]
 fn next_attention_jump_orders_unread_episodes_by_age() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let ws = workspace();
     let mut snapshot = filterable_snapshot(&ws);
     snapshot.worktree_groups[0].rows[0].unread = true;
@@ -399,7 +399,7 @@ fn next_attention_jump_orders_unread_episodes_by_age() {
 }
 #[test]
 fn step_attention_index_reverses_the_inbox_walk() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let ws = workspace();
     let mut snapshot = filterable_snapshot(&ws);
     let read_failed = &mut snapshot.worktree_groups[1].rows[0];
@@ -435,7 +435,7 @@ fn step_attention_index_reverses_the_inbox_walk() {
 }
 #[test]
 fn filtered_out_selection_drops_and_reseats_from_the_held_baseline() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
     let running = PaneId::from_parts(MuxName::Zellij, "terminal_1");
@@ -466,7 +466,7 @@ fn filtered_out_selection_drops_and_reseats_from_the_held_baseline() {
 }
 #[test]
 fn jumping_to_a_card_ends_the_make_up_filter() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
     let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");

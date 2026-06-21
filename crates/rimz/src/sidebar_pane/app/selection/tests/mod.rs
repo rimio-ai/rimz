@@ -45,7 +45,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         inactive: false,
         last_activity: Timestamp::now(),
         card: crate::RowCard::Agent(Box::new(crate::AgentCard {
-            status: Some(crate::feed::AgentStatus::Running),
+            status: Some(crate::agents::AgentStatus::Running),
             phase: crate::agents::TurnPhase::Idle,
             task: Some("inspect auth".to_owned()),
             model: Some("Opus".to_owned()),
@@ -73,7 +73,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         label: "main".to_owned(),
         kind: crate::SidebarWorktreeKind::Worktree,
         status_counts: vec![crate::SidebarStatusCount {
-            status: crate::feed::AgentStatus::Running,
+            status: crate::agents::AgentStatus::Running,
             count: 1,
         }],
         rows: vec![agent, process],
@@ -145,7 +145,7 @@ fn filter_row(
     is_agent: bool,
     id: &str,
     name: &str,
-    status: Option<crate::feed::AgentStatus>,
+    status: Option<crate::agents::AgentStatus>,
     pane_name: &str,
     worktree: &str,
 ) -> crate::SidebarRow {
@@ -175,7 +175,7 @@ fn filter_row(
 /// failed agent (`terminal_3`) in `feature`. Failed and running each read 1
 /// in the cockpit; waiting reads 0.
 fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     let mut snapshot = snapshot(ws);
     snapshot.worktree_groups = vec![
         crate::SidebarWorktreeGroup {

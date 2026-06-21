@@ -22,7 +22,7 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
     SidebarSubAgent {
         id: format!("{parent}-sub-{index}"),
         name: "Explore".to_owned(),
-        status: crate::feed::AgentStatus::Running,
+        status: crate::agents::AgentStatus::Running,
         phase: crate::agents::TurnPhase::Acting,
         task: None,
         model: Some("claude-opus-4-8".to_owned()),
@@ -64,7 +64,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
         inactive: false,
         last_activity: super::fixed_now(),
         card: RowCard::Agent(Box::new(AgentCard {
-            status: Some(crate::feed::AgentStatus::Running),
+            status: Some(crate::agents::AgentStatus::Running),
             phase: crate::agents::TurnPhase::Acting,
             task: Some(format!("refactor module {index} of worktree {group}")),
             model: Some("Opus".to_owned()),
@@ -74,7 +74,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
             total_tokens: Some(10_000 + (index as u64) * 991),
             todo_done: Some(3),
             todo_total: Some(7),
-            context_severity: Some(crate::feed::ContextSeverity::Yellow),
+            context_severity: Some(crate::agents::ContextSeverity::Yellow),
             // Row 0 is the default selection, so its card expands these in every
             // composed frame — the sub-agent loop stays inside the measured work.
             sub_agents: (0..3).map(|sub| sub_agent(&id, sub)).collect(),
@@ -157,7 +157,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 label: format!("feature-{group}"),
                 kind: SidebarWorktreeKind::Worktree,
                 status_counts: vec![SidebarStatusCount {
-                    status: crate::feed::AgentStatus::Running,
+                    status: crate::agents::AgentStatus::Running,
                     count: per_group,
                 }],
                 rows: (0..per_group)

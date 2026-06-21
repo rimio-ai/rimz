@@ -385,7 +385,7 @@ impl Ledger {
 
 fn allocate_agent_launch_identities(
     requests: &[AgentLaunchRequest],
-    agents: &[crate::feed::AgentState],
+    agents: &[crate::agents::AgentState],
 ) -> Result<Vec<AgentLaunchIdentity>> {
     // Pet names are live-card handles, not permanent ids: ended cards release
     // them so long-lived rooms do not grow a retired-name set. Kind ordinals
@@ -505,7 +505,7 @@ mod tests {
 
     use super::*;
     use crate::agents::TurnPhase;
-    use crate::feed::{AgentState, AgentStatus};
+    use crate::agents::{AgentState, AgentStatus};
     use crate::ids::WorkspaceId;
     use crate::ids::{AgentKind, AgentSessionId};
     use crate::ledger::paths::{RuntimePaths, StatePaths};

@@ -148,7 +148,7 @@ fn focus_keys_fire_without_mutating_selection() {
     );
     snapshot.worktree_groups[0].rows[1].name = "claude".to_owned();
     snapshot.worktree_groups[0].rows[1].card = crate::RowCard::Agent(Box::new(crate::AgentCard {
-        status: Some(crate::feed::AgentStatus::Waiting),
+        status: Some(crate::agents::AgentStatus::Waiting),
         phase: crate::agents::TurnPhase::Idle,
         ..crate::AgentCard::default()
     }));
@@ -456,7 +456,7 @@ fn mark_keys_ignore_process_rows() {
 }
 #[test]
 fn the_unread_snap_overrides_selection_follow_to_the_top() {
-    use crate::feed::AgentStatus;
+    use crate::agents::AgentStatus;
     // A tall room: a top-ranked unread waiting lead, then nine calm rows.
     let ws = workspace();
     let mut snapshot = snapshot(&ws);

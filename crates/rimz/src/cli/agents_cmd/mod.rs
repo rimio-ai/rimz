@@ -20,10 +20,10 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use super::{GlobalFlags, RoomTarget};
 use rimz::agents::AgentAdapter;
+use rimz::agents::AgentState;
 use rimz::agents_spec::{Cell, LayoutSpec};
 use rimz::bridge::{self, ExpectedRunFrame, SocketGuard};
 use rimz::config::LaunchPlacement;
-use rimz::feed::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, EventId};
 use rimz::ledger::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
 use rimz::message::{DeliveryGate, gate_open};

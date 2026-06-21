@@ -20,7 +20,7 @@
 //! addressing the room from a bare directory workspace still reaches every
 //! agent.
 
-use crate::feed::AgentState;
+use crate::agents::AgentState;
 use crate::ids::{AgentKind, PaneId};
 use crate::ledger::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::message::MessageSender;

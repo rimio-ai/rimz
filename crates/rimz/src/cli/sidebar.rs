@@ -441,8 +441,8 @@ fn emit_snapshot(snapshot: &rimz::SidebarSnapshot, json: bool) -> Result<()> {
             println!("{rendered}");
         }
     } else {
-        let waiting = status_tally(snapshot, rimz::feed::AgentStatus::Waiting);
-        let failed = status_tally(snapshot, rimz::feed::AgentStatus::Failed);
+        let waiting = status_tally(snapshot, rimz::agents::AgentStatus::Waiting);
+        let failed = status_tally(snapshot, rimz::agents::AgentStatus::Failed);
         let waiting_style = if waiting > 0 {
             render::palette::WARN
         } else {
@@ -472,7 +472,7 @@ fn emit_snapshot(snapshot: &rimz::SidebarSnapshot, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn status_tally(snapshot: &rimz::SidebarSnapshot, status: rimz::feed::AgentStatus) -> usize {
+fn status_tally(snapshot: &rimz::SidebarSnapshot, status: rimz::agents::AgentStatus) -> usize {
     snapshot
         .worktree_groups
         .iter()

@@ -443,7 +443,7 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
         .iter()
         .find(|agent| agent.agent_id.as_str() == "launch_missing")
         .expect("failed launch remains in roster");
-    assert_eq!(agent.status, rimz::feed::AgentStatus::Failed);
+    assert_eq!(agent.status, rimz::agents::AgentStatus::Failed);
     let run = rimz::run::load(ledger.paths(), &run_id).expect("load run");
     assert_eq!(run.status, rimz::run::RunStatus::Failed);
 }

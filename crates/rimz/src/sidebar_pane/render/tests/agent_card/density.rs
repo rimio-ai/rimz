@@ -309,7 +309,7 @@ fn density_agent(
     status: AgentStatus,
     task: Option<&str>,
     context_pct: u8,
-) -> crate::feed::AgentState {
+) -> crate::agents::AgentState {
     let mut agent = agent(id, kind, status, Some("/repo/main"), Some("main"), task);
     agent.model = Some("opus".to_owned());
     agent.effort = Some("high".to_owned());

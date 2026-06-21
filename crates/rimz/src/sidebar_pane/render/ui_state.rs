@@ -1,4 +1,4 @@
-use crate::feed::AgentStatus;
+use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::schema::diag::GateRule;
 use crate::sidebar_pane::pets::PetView;

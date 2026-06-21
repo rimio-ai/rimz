@@ -8,7 +8,8 @@ use clap::{Args, Subcommand};
 use super::send::{self, SendFlags, resolve_message};
 use super::{GlobalFlags, current_channel, open_ledger};
 use crate::cli::render;
-use rimz::feed::{AgentState, pending_ask_for};
+use rimz::agents::AgentState;
+use rimz::feed::pending_ask_for;
 use rimz::ids::{MessageId, PaneId};
 use rimz::message::{
     AutoCompact, DeliveryGate, MessageRecord, MessageStatus, gate_open, queue_head,

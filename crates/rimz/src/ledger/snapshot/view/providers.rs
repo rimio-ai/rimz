@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 
+use crate::agents::AgentState;
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally};
 use crate::config::{ProviderTabsMode, ThemeColor};
-use crate::feed::AgentState;
 
 use super::{SidebarProviderPanel, SidebarSnapshot};
 

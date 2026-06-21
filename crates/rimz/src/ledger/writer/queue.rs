@@ -264,7 +264,7 @@ mod tests {
     use super::*;
     use crate::agents::AgentLifecycleObservation;
     use crate::agents::lifecycle::LifecycleSignal;
-    use crate::feed::{AgentState, AgentStatus};
+    use crate::agents::{AgentState, AgentStatus};
     use crate::ids::WorkspaceId;
     use crate::message::{DeliveryGate, MessageSender};
     use crate::{RuntimePaths, StatePaths};

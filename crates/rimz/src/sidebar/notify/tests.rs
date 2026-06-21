@@ -3,8 +3,9 @@ use std::time::{Duration, Instant};
 use jiff::Timestamp;
 
 use super::*;
+use crate::agents::AgentState;
 use crate::agents::lifecycle::TurnPhase;
-use crate::feed::{AgentState, FeedItem, FeedKind, Surface};
+use crate::feed::{FeedItem, FeedKind, Surface};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 use crate::sidebar::unread::{OpenedUnread, opened_unread};

@@ -151,7 +151,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::feed::{AgentState, AgentStatus};
+    use crate::agents::{AgentState, AgentStatus};
     use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
     use crate::message::DeliveryGate;
 

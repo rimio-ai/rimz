@@ -7,10 +7,10 @@ use super::proctree::matches_agent_kind;
 use BindingRejectReason::*;
 use BindingSelectionMethod::{ClientFocus, SingleCandidate, TabFocus};
 use rimz::agents::AgentLifecycleObservation;
+use rimz::agents::AgentStatus;
 use rimz::agents::lifecycle::{
     LifecycleSignal, LifecycleState, Transition, TransitionKind, TurnPhase,
 };
-use rimz::feed::AgentStatus;
 use rimz::ids::AgentSessionId;
 use rimz::ids::{MuxName, PaneId};
 use rimz::pane::PaneRef;

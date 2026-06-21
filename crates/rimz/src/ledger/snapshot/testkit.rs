@@ -17,7 +17,8 @@ use crate::agents::{
     AgentContext, AgentLifecycleObservation, AgentRateLimits, AgentTurnError, RateLimitWindow,
     TurnErrorClass,
 };
-use crate::feed::{AgentState, AgentStatus, FeedItem};
+use crate::agents::{AgentState, AgentStatus};
+use crate::feed::FeedItem;
 use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 use crate::schema::event::EventEnvelope;

@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
+use crate::agents::AgentStatus;
 use crate::agents::spending::{
     HeadlineSpec, ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
     compute_scoped_tally, discover_spending_files, read_provider_spending_cache,
     read_spending_cache, read_workspace_spending_cache, unix_secs_now,
 };
-use crate::feed::AgentStatus;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::ledger::snapshot::{LazyAgentPairingDiagnostic, LazyAgentPairingResult};
 use crate::{
@@ -832,7 +832,7 @@ fn remote_control_toggle(kind: &str, config: &crate::config::RemoteControlConfig
 }
 
 /// Stamp [`SidebarRow::context_severity`] on every agent row from the
-/// `[theme.display.context_meter]` bands: [`crate::feed::ContextSeverity::classify`] over
+/// `[theme.display.context_meter]` bands: [`crate::agents::ContextSeverity::classify`] over
 /// the row's gauge inputs, the one verdict the renderer's color ramp and any
 /// future signal emitter read. Process rows carry no context and stay `None`.
 pub(crate) fn stamp_context_severity(
@@ -842,7 +842,7 @@ pub(crate) fn stamp_context_severity(
     for group in groups {
         for row in &mut group.rows {
             if row.is_agent() {
-                let severity = crate::feed::ContextSeverity::classify(
+                let severity = crate::agents::ContextSeverity::classify(
                     row.context_gauge_percent().unwrap_or(0),
                     row.context_used_tokens(),
                     bands,

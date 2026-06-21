@@ -15,7 +15,8 @@ use super::{
     ADAPTERS, AgentAdapter, AgentErr, AgentHookClass, ClassificationSample, ConcernCoverage,
     HookCoverage, IntegrationConcern, PriceBook, SpendFixture, SpendFixtureBody,
 };
-use crate::feed::{AgentStatus, FeedKind, Resolution, ResolutionMethod, Surface};
+use crate::agents::AgentStatus;
+use crate::feed::{FeedKind, Resolution, ResolutionMethod, Surface};
 use crate::ledger::snapshot::{AgentCard, RowCard, SidebarRow, fold_ask_onto_row};
 
 #[test]

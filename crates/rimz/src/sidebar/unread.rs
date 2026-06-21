@@ -11,7 +11,7 @@ use std::fs;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::feed::AgentStatus;
+use crate::agents::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::ledger::{RuntimePaths, atomic};
 use crate::sidebar::read_marks::ReadMarks;

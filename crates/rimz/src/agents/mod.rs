@@ -29,6 +29,7 @@ pub mod pi;
 pub mod pricing;
 pub mod registry;
 pub mod spending;
+pub mod state;
 #[cfg(test)]
 pub(crate) mod testkit;
 pub mod transcript;
@@ -65,6 +66,12 @@ pub use observation::AgentLifecycleObservation;
 pub use pricing::{PriceBook, Pricing};
 pub use registry::{ADAPTERS, adapter_by_kind, descriptor_by_kind, find_adapter, known_kinds};
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
+pub use state::{
+    ATTENTION_AGE_CEILING_SECS, AgentSignal, AgentState, AgentStatus, COMPACTING_WINDOW_SECS,
+    ContextSeverity, DEFAULT_INACTIVE_AFTER_SECS, DEFAULT_STALL_AFTER_SECS, is_stalled,
+    is_turn_complete, is_turn_dead,
+};
+pub(crate) use state::{ResumeArm, display_turn_error, rate_limit_window_kinds, resume_park};
 pub use transcript::{TimelineEntry, TranscriptMessage, TranscriptRole, Turn};
 
 pub use claude::ClaudeAdapter;

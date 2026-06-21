@@ -1,5 +1,5 @@
+use crate::agents::AgentStatus;
 use crate::config::ScrollbarMode;
-use crate::feed::AgentStatus;
 use crate::{SidebarSnapshot, SidebarWorktreeGroup, lead_unread_row};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};

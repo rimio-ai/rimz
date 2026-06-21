@@ -17,8 +17,8 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::agents::AgentState;
 use crate::agents::find_adapter;
-use crate::feed::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::mux::ResumeTab;
 
@@ -236,8 +236,8 @@ pub fn channel_label(worktree: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::AgentStatus;
     use crate::agents::TurnPhase;
-    use crate::feed::AgentStatus;
     use crate::ids::{MuxName, PaneId};
     use crate::pane::PaneRef;
     use jiff::Timestamp;

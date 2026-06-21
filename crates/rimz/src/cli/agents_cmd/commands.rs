@@ -296,7 +296,7 @@ pub(super) fn wait_agent(
             }
             std::process::exit(0);
         }
-        if agent.status == rimz::feed::AgentStatus::Failed {
+        if agent.status == rimz::agents::AgentStatus::Failed {
             if json {
                 supervised::output::print_json(agent)?;
             }

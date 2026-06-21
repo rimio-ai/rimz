@@ -9,7 +9,7 @@ use jiff::Timestamp;
 use super::Result;
 use super::fold::{RollupCursor, catch_up_rollup, write_rollup_cache};
 use super::view::SidebarSnapshot;
-use crate::feed::AgentState;
+use crate::agents::AgentState;
 use crate::ledger::atomic::{self};
 use crate::ledger::event_log::{self};
 use crate::ledger::feed_store::{self};

@@ -12,10 +12,10 @@ fn compacting_marker_lights_the_head_then_expires() {
         .compacting_ago(0);
     let inside = agent("claude", "compacting-inside", AgentStatus::Running, 1_050)
         .worktree("/repo/main")
-        .compacting_ago(crate::feed::COMPACTING_WINDOW_SECS - 1);
+        .compacting_ago(crate::agents::COMPACTING_WINDOW_SECS - 1);
     let stale = agent("claude", "compacted-long-ago", AgentStatus::Idle, 1_100)
         .worktree("/repo/main")
-        .compacting_ago(crate::feed::COMPACTING_WINDOW_SECS + 1);
+        .compacting_ago(crate::agents::COMPACTING_WINDOW_SECS + 1);
 
     let snapshot = room_with_agent_panes(Vec::new(), vec![fresh, inside, stale]);
     assert!(

@@ -1,5 +1,5 @@
 use super::*;
-use crate::feed::AgentStatus;
+use crate::agents::AgentStatus;
 use crate::schema::diag::{DiagEvent, GateRule};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar_pane::app::fixtures::{snapshot, workspace};
@@ -199,7 +199,7 @@ fn two_pane_snapshot(
 ) -> (SidebarSnapshot, PaneId, PaneId) {
     let first = PaneId::from_parts(crate::MuxName::Tmux, "%1");
     let second = PaneId::from_parts(crate::MuxName::Tmux, "%2");
-    let mut snap = row_snapshot(ws, crate::feed::AgentStatus::Running, false);
+    let mut snap = row_snapshot(ws, crate::agents::AgentStatus::Running, false);
     let mut second_row = snap.worktree_groups[0].rows[0].clone();
     second_row.id = "sess-2".to_owned();
     second_row.name = "codex".to_owned();

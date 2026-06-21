@@ -818,7 +818,7 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
     assert_eq!(
         config.agents.attention.stalled_after_secs.get(),
-        crate::feed::DEFAULT_STALL_AFTER_SECS,
+        crate::agents::DEFAULT_STALL_AFTER_SECS,
         "unset uses the shipped 30-minute stall window",
     );
 

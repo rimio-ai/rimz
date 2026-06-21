@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentContext, AgentTokenUsage};
-use crate::feed::{AgentStatus, ContextSeverity, Surface};
+use crate::agents::{AgentStatus, ContextSeverity};
+use crate::feed::Surface;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId};
 use crate::pane::PaneRef;
 
