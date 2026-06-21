@@ -1,19 +1,13 @@
-use super::*;
-use crate::agents::TurnPhase;
-use crate::feed::{AgentState, AgentStatus, FeedItem, FeedKind, Surface};
-use crate::ids::{MuxName, WorkspaceId};
-use crate::ledger::atomic;
-use std::io::Write;
+use std::path::Path;
 
-mod codex_refresh;
-mod consumer;
-mod git_freshness;
-mod link;
-mod presence;
-mod rate_limits;
-mod spending;
+use jiff::Timestamp;
 
-fn pane(id: &str, command: &str, cwd: &str) -> PaneRef {
+use crate::agents::{RateLimitWindow, TurnPhase};
+use crate::feed::{AgentState, AgentStatus, PaneRef};
+use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
+use crate::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
+
+pub(crate) fn pane(id: &str, command: &str, cwd: &str) -> PaneRef {
     PaneRef {
         pane_id: PaneId::from_parts(MuxName::Zellij, id),
         session_name: "rimz-test".to_owned(),
@@ -33,7 +27,7 @@ fn pane(id: &str, command: &str, cwd: &str) -> PaneRef {
     }
 }
 
-fn pane_in_tab(id: &str, view_id: &str) -> PaneRef {
+pub(crate) fn pane_in_tab(id: &str, view_id: &str) -> PaneRef {
     PaneRef {
         view_id: Some(view_id.to_owned()),
         ..pane(id, "zsh", "/tmp")
@@ -42,11 +36,15 @@ fn pane_in_tab(id: &str, view_id: &str) -> PaneRef {
 
 /// A 5-hour budget window for tests — a known `duration_mins` so the
 /// projection and per-duration reconciliation have something to key on.
-fn rl_window(used: u8, resets_at: Option<Timestamp>) -> RateLimitWindow {
+pub(crate) fn rl_window(used: u8, resets_at: Option<Timestamp>) -> RateLimitWindow {
     rl_window_mins(used, resets_at, 300)
 }
 
-fn rl_window_mins(used: u8, resets_at: Option<Timestamp>, duration_mins: u32) -> RateLimitWindow {
+pub(crate) fn rl_window_mins(
+    used: u8,
+    resets_at: Option<Timestamp>,
+    duration_mins: u32,
+) -> RateLimitWindow {
     RateLimitWindow {
         used_percentage: Some(used),
         resets_at,
@@ -55,7 +53,10 @@ fn rl_window_mins(used: u8, resets_at: Option<Timestamp>, duration_mins: u32) ->
     }
 }
 
-fn provider_panel(kind: &str, windows: Vec<RateLimitWindow>) -> crate::SidebarProviderPanel {
+pub(crate) fn provider_panel(
+    kind: &str,
+    windows: Vec<RateLimitWindow>,
+) -> crate::SidebarProviderPanel {
     crate::SidebarProviderPanel {
         kind: kind.to_owned(),
         product_name: kind.to_owned(),
@@ -73,7 +74,7 @@ fn provider_panel(kind: &str, windows: Vec<RateLimitWindow>) -> crate::SidebarPr
     }
 }
 
-fn snapshot_with_panels(
+pub(crate) fn snapshot_with_panels(
     workspace: WorkspaceId,
     panels: Vec<crate::SidebarProviderPanel>,
 ) -> SidebarSnapshot {
@@ -82,11 +83,11 @@ fn snapshot_with_panels(
     snapshot
 }
 
-fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
+pub(crate) fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
     let now = Timestamp::now();
     AgentState {
         agent_id: agent_id.into(),
-        kind: crate::ids::AgentKind::new_unchecked(kind),
+        kind: AgentKind::new_unchecked(kind),
         name: Some(test_agent_name(agent_id)),
         kind_ordinal: Some(test_agent_ordinal(agent_id)),
         profile: None,
@@ -129,7 +130,7 @@ fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
     }
 }
 
-fn test_agent_name(agent_id: &str) -> String {
+pub(crate) fn test_agent_name(agent_id: &str) -> String {
     let slug = agent_id
         .chars()
         .map(|ch| {
@@ -143,19 +144,19 @@ fn test_agent_name(agent_id: &str) -> String {
     format!("test-{slug}")
 }
 
-fn test_agent_ordinal(agent_id: &str) -> u32 {
+pub(crate) fn test_agent_ordinal(agent_id: &str) -> u32 {
     agent_id
         .bytes()
         .fold(1u32, |acc, byte| acc.wrapping_add(byte as u32))
 }
 
-fn child_agent(kind: &str, parent_id: &str, agent_id: &str) -> AgentState {
+pub(crate) fn child_agent(kind: &str, parent_id: &str, agent_id: &str) -> AgentState {
     let mut agent = root_agent(kind, agent_id, None);
     agent.parent_agent_id = Some(parent_id.into());
     agent
 }
 
-fn activity_row(
+pub(crate) fn activity_row(
     is_agent: bool,
     status: Option<AgentStatus>,
     last_activity: Timestamp,
@@ -182,11 +183,11 @@ fn activity_row(
     }
 }
 
-fn worktree_group(path: &Path, rows: Vec<crate::SidebarRow>) -> crate::SidebarWorktreeGroup {
-    crate::SidebarWorktreeGroup {
+pub(crate) fn worktree_group(path: &Path, rows: Vec<crate::SidebarRow>) -> SidebarWorktreeGroup {
+    SidebarWorktreeGroup {
         key: path.display().to_string(),
         label: "wt".to_owned(),
-        kind: crate::SidebarWorktreeKind::Worktree,
+        kind: SidebarWorktreeKind::Worktree,
         status_counts: Vec::new(),
         rows,
         hidden_count: 0,

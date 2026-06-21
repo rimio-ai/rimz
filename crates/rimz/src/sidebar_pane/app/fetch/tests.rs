@@ -159,8 +159,8 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     state.ensure_dirs().unwrap();
     runtime.ensure_dirs().unwrap();
 
-    let now_ms = crate::sidebar::snapshot::unix_now_ms();
-    let frame = crate::sidebar::snapshot::assemble_frame(
+    let now_ms = crate::sidebar::cache::unix_now_ms();
+    let frame = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_7", "tab_1", false)],
         now_ms,
         "rimz-test",
@@ -175,7 +175,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         now_ms,
         &crate::agents::spending::Spending::default(),
     );
-    let accounts = crate::sidebar::snapshot::AccountsCache {
+    let accounts = crate::sidebar::cache::AccountsCache {
         refreshed_at_ms: now_ms,
         accounts: Default::default(),
         ok: true,
@@ -419,9 +419,9 @@ impl ConsumerFixture {
     }
 
     fn write_pane_frame(&self) {
-        let frame = crate::sidebar::snapshot::assemble_frame(
+        let frame = crate::sidebar::frame::assemble_frame(
             vec![pane("terminal_7", "tab_1", false)],
-            crate::sidebar::snapshot::unix_now_ms(),
+            crate::sidebar::cache::unix_now_ms(),
             "rimz-test",
         );
         std::fs::write(

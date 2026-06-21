@@ -13,7 +13,7 @@
 
 #![allow(clippy::print_stderr)] // self-skip notices, like the sibling fixture
 
-use rimz::sidebar::snapshot::unix_now_ms;
+use rimz::sidebar::cache::unix_now_ms;
 
 use super::sidebar_diff_stats::Fixture;
 
@@ -165,7 +165,7 @@ fn idle_room_produce_runs_no_enrichment_io() {
     // Backdate the per-worktree git stamps into the tier gap: stale under
     // DIFF_STATS_TTL (5s), fresh under DIFF_STATS_IDLE_TTL (60s).
     let diff_stats_path = runtime_root.join("diff-stats.json");
-    let mut diff_stats = rimz::sidebar::snapshot::read_diff_stats_cache(&diff_stats_path);
+    let mut diff_stats = rimz::sidebar::cache::read_diff_stats_cache(&diff_stats_path);
     assert!(
         !diff_stats.entries.is_empty(),
         "the cold produce cached the worktree's git facts:\n{}",

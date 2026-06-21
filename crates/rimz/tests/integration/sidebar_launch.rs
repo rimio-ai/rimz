@@ -216,7 +216,7 @@ impl MuxBackend for FakeBackend {
                 elevated_agent: None,
                 first_seen_at_ms: None,
             }],
-            observed_at_ms: rimz::sidebar::snapshot::unix_now_ms(),
+            observed_at_ms: rimz::sidebar::cache::unix_now_ms(),
             source_active: std::collections::BTreeMap::new(),
             served_from_topology: false,
         })

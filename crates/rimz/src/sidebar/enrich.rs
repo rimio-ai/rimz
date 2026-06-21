@@ -28,8 +28,6 @@ use serde::Serialize;
 use super::cache::{DiffStatsCache, GIT_ACTIVITY_WINDOW, read_diff_stats_cache};
 use super::frame::{PaneFrame, PaneMetrics};
 use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
-#[cfg(test)]
-pub(crate) use crate::sidebar::timing::CODEX_RATE_LIMIT_REFRESH_INTERVAL;
 
 mod accounts;
 mod auto_continue;
@@ -37,14 +35,11 @@ mod codex_refresh;
 mod credits;
 mod live_spend;
 mod rate_limits;
+#[cfg(test)]
+mod tests;
 mod usage_refresh;
 
 pub use codex_refresh::refresh_codex_transcript_context;
-#[cfg(test)]
-pub(crate) use codex_refresh::{
-    CodexSessionRefresh, codex_session_probe_due, codex_session_probe_marker,
-    codex_session_refreshes,
-};
 pub(crate) use credits::apply_credits_cache;
 pub use credits::{
     CreditsCache, ProviderCreditsEntry, merge_provider_credits,
@@ -52,16 +47,9 @@ pub use credits::{
 };
 pub use live_spend::{apply_live_today_spend, live_row_costs};
 pub(crate) use rate_limits::apply_rate_limit_cache;
-#[cfg(test)]
-pub(crate) use rate_limits::{
-    LIVE_HORIZON_SECS, PendingRefill, REFILL_CONFIRM_SECS, fuse_window, project_idle_window,
-    read_rate_limits_cache, write_rate_limits_cache,
-};
 pub use rate_limits::{RateLimitsCache, merge_account_rate_limits, shortest_window_running};
 pub use usage_refresh::merge_oauth_usage_if_due;
 
-#[cfg(test)]
-pub(crate) use accounts::accounts_cache_version_refresh_due;
 use accounts::{cached_accounts_for_snapshot, produce_accounts, read_accounts_cache};
 use codex_refresh::refresh_codex_sessions;
 use live_spend::refresh_live_spend_baselines;

@@ -9,6 +9,9 @@ use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 use super::cache::read_snapshot_cache;
 use super::enrich::{EnrichMode, enrich};
 
+#[cfg(test)]
+mod tests;
+
 /// Re-exported for long-lived consumers (the sidebar fetch worker), which sit
 /// behind this module's read-only boundary and never import `crate::ledger`.
 pub use crate::ledger::snapshot::RollupCursor;

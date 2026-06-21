@@ -164,9 +164,9 @@ fn publish_pane_frame(env: &Env, panes: &[rimz::feed::PaneRef]) {
     runtime.ensure_dirs().expect("runtime dirs");
     let workspace =
         rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
-    let frame = rimz::sidebar::snapshot::assemble_frame(
+    let frame = rimz::sidebar::frame::assemble_frame(
         panes.to_vec(),
-        rimz::sidebar::snapshot::unix_now_ms(),
+        rimz::sidebar::cache::unix_now_ms(),
         workspace.session_name,
     );
     rimz::ledger::atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &frame)

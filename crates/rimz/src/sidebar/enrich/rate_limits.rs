@@ -10,6 +10,9 @@ use crate::agents::{AgentRateLimits, RateLimitWindow};
 use crate::sidebar::cache::unix_now_ms;
 use crate::{RuntimePaths, SidebarSnapshot};
 
+#[cfg(test)]
+mod tests;
+
 /// How long a best-effort drop — a candidate mid-window free reset with no
 /// authoritative reading and no reset-timer change to corroborate it — must
 /// persist before the bar follows it down. Shorter, a single lagging or garbled

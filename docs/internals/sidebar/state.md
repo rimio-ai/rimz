@@ -39,7 +39,7 @@ The **pane frame** is the topology everything else enriches: `PaneFrame` carries
 
 | Lane | Writer | Readers | Carries |
 | --- | --- | --- | --- |
-| `snapshot.json` | producer ([`produce::panes`](../../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's fold | the typed pane frame — panes, foreground/spawn command, cwd, metrics, focus flags, the observation stamp |
+| `snapshot.json` | producer ([`produce::panes`](../../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's fold | the typed pane frame:<br>- panes with foreground/spawn command and cwd repaired from `/proc` when the mux races<br>- metrics, carried panes, and focus-contention flags<br>- observation stamp plus producer `build` id; `observed_at_ms` is the supersession baseline, with legacy `produced_at_ms` fallback<br>- poll-mode freshness by default, presence-stamp event TTL while `presence.stamp` is fresh |
 | `pane-topology.json` | Zellij presence plugin via the host CLI | Zellij producer pull | a pre-producer Zellij roster hint — live panes, tab names, focus candidates, geometry |
 | `presence.stamp` | Zellij plugin, tmux control-mode watch | producer | an mtime liveness mark; while fresh, the pane lane runs on the shorter event-mode TTL |
 

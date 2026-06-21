@@ -15,7 +15,7 @@ struct ProduceFixture {
     _tempdir: TempDir,
     paths: rimz::StatePaths,
     runtime: rimz::RuntimePaths,
-    cursor: rimz::ledger::snapshot::RollupCursor,
+    cursor: rimz::sidebar::consumer::RollupCursor,
     ledger_bytes: u64,
 }
 
@@ -32,7 +32,7 @@ impl ProduceFixture {
             _tempdir: tempdir,
             paths,
             runtime,
-            cursor: rimz::ledger::snapshot::RollupCursor::new(),
+            cursor: rimz::sidebar::consumer::RollupCursor::new(),
             ledger_bytes,
         }
     }
@@ -42,7 +42,7 @@ impl ProduceFixture {
         rimz::testkit::fleet::seed_fleet_ledger(&paths, fleet, fleet * EVENTS_PER_AGENT)
             .expect("seed fleet");
         publish_fresh_produce_inputs(&runtime, fleet);
-        let mut cursor = rimz::ledger::snapshot::RollupCursor::new();
+        let mut cursor = rimz::sidebar::consumer::RollupCursor::new();
         rimz::sidebar::produce::produce_snapshot(&mut cursor, &paths, &runtime, &produce_options())
             .expect("cold produce");
 
@@ -83,8 +83,8 @@ fn workspace() -> (TempDir, rimz::StatePaths, rimz::RuntimePaths) {
 }
 
 fn publish_fresh_produce_inputs(runtime: &rimz::RuntimePaths, fleet: usize) {
-    let now_ms = rimz::sidebar::snapshot::unix_now_ms();
-    let frame = rimz::sidebar::snapshot::assemble_frame(
+    let now_ms = rimz::sidebar::cache::unix_now_ms();
+    let frame = rimz::sidebar::frame::assemble_frame(
         rimz::testkit::fleet::synthetic_panes(fleet),
         now_ms,
         rimz::testkit::fleet::SESSION_NAME,
@@ -99,7 +99,7 @@ fn publish_fresh_produce_inputs(runtime: &rimz::RuntimePaths, fleet: usize) {
         now_ms,
         &rimz::agents::spending::Spending::default(),
     );
-    let accounts = rimz::sidebar::snapshot::AccountsCache {
+    let accounts = rimz::sidebar::cache::AccountsCache {
         refreshed_at_ms: now_ms,
         accounts: Default::default(),
         ok: false,

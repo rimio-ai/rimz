@@ -64,18 +64,18 @@ struct EnrichFixture {
     _workspace: BenchWorkspace,
     runtime: rimz::RuntimePaths,
     snapshot: rimz::SidebarSnapshot,
-    frame: rimz::sidebar::snapshot::PaneFrame,
+    frame: rimz::sidebar::frame::PaneFrame,
 }
 
 struct FoldFixture {
     _workspace: BenchWorkspace,
     paths: rimz::StatePaths,
-    cursor: rimz::ledger::snapshot::RollupCursor,
+    cursor: rimz::sidebar::consumer::RollupCursor,
 }
 
 fn publish_fresh_produce_inputs(runtime: &rimz::RuntimePaths, fleet: usize) {
-    let now_ms = rimz::sidebar::snapshot::unix_now_ms();
-    let frame = rimz::sidebar::snapshot::assemble_frame(
+    let now_ms = rimz::sidebar::cache::unix_now_ms();
+    let frame = rimz::sidebar::frame::assemble_frame(
         rimz::testkit::fleet::synthetic_panes(fleet),
         now_ms,
         rimz::testkit::fleet::SESSION_NAME,
@@ -90,7 +90,7 @@ fn publish_fresh_produce_inputs(runtime: &rimz::RuntimePaths, fleet: usize) {
         now_ms,
         &rimz::agents::spending::Spending::default(),
     );
-    let accounts = rimz::sidebar::snapshot::AccountsCache {
+    let accounts = rimz::sidebar::cache::AccountsCache {
         refreshed_at_ms: now_ms,
         accounts: Default::default(),
         ok: false,
@@ -116,7 +116,7 @@ fn snapshot_fixture() -> SnapshotFixture {
     let workspace = BenchWorkspace::new();
     workspace.seed_fleet(FLEET, HISTORY_EVENTS);
     workspace.publish_inputs(FLEET);
-    let mut cursor = rimz::ledger::snapshot::RollupCursor::new();
+    let mut cursor = rimz::sidebar::consumer::RollupCursor::new();
     let snapshot = rimz::sidebar::produce::produce_snapshot(
         &mut cursor,
         &workspace.paths,
@@ -139,7 +139,7 @@ fn fuse_fixture() -> FuseFixture {
     let pane_id = rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_0");
     let now_ms = snapshot
         .panes_produced_at_ms
-        .unwrap_or_else(rimz::sidebar::snapshot::unix_now_ms)
+        .unwrap_or_else(rimz::sidebar::cache::unix_now_ms)
         .saturating_add(1);
     events.append(
         rimz::schema::sidebar_event::SidebarEvent::CommandChanged {
@@ -161,12 +161,12 @@ fn enrich_fixture() -> EnrichFixture {
     let workspace = BenchWorkspace::new();
     workspace.seed_fleet(FLEET, HISTORY_EVENTS);
     workspace.publish_inputs(FLEET);
-    let mut cursor = rimz::ledger::snapshot::RollupCursor::new();
+    let mut cursor = rimz::sidebar::consumer::RollupCursor::new();
     let snapshot =
-        rimz::sidebar::snapshot::rollup_snapshot(&workspace.paths, &mut cursor).expect("rollup");
-    let frame = rimz::sidebar::snapshot::assemble_frame(
+        rimz::sidebar::consumer::rollup_snapshot(&workspace.paths, &mut cursor).expect("rollup");
+    let frame = rimz::sidebar::frame::assemble_frame(
         rimz::testkit::fleet::synthetic_panes(FLEET),
-        rimz::sidebar::snapshot::unix_now_ms(),
+        rimz::sidebar::cache::unix_now_ms(),
         rimz::testkit::fleet::SESSION_NAME,
     );
     EnrichFixture {
@@ -180,7 +180,7 @@ fn enrich_fixture() -> EnrichFixture {
 fn fold_fixture() -> FoldFixture {
     let workspace = BenchWorkspace::new();
     workspace.seed_fleet(FLEET, HISTORY_EVENTS);
-    let mut cursor = rimz::ledger::snapshot::RollupCursor::new();
+    let mut cursor = rimz::sidebar::consumer::RollupCursor::new();
     cursor.fold(&workspace.paths).expect("cold fold");
     rimz::ledger::event_log::append(
         &workspace.paths.events_log,

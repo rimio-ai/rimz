@@ -12,7 +12,7 @@
 use std::time::{Duration, Instant};
 
 use rimz::ledger::event_log;
-use rimz::sidebar::snapshot::RollupCursor;
+use rimz::sidebar::consumer::RollupCursor;
 use rimz::testkit::fleet::{
     SESSION_NAME, registered_lifecycle, seed_fleet_ledger, synthetic_panes,
 };

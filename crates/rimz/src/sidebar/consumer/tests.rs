@@ -1,43 +1,13 @@
 use super::*;
-
-#[test]
-fn published_frame_age_is_session_scoped_and_saturating() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-
-    let produced_at_ms = 1_700_000_000_000;
-    let cache = assemble_frame(Vec::new(), produced_at_ms, "rimz-test");
-    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &cache).unwrap();
-
-    assert_eq!(
-        published_frame_age_ms(&runtime, "rimz-test", produced_at_ms + 1_500),
-        Some(1_500)
-    );
-    // A clock that ran backwards saturates to age 0 rather than wrapping huge
-    // and forcing a needless fork.
-    assert_eq!(
-        published_frame_age_ms(&runtime, "rimz-test", produced_at_ms - 1),
-        Some(0)
-    );
-    // A frame stamped for another session never matches: the fork gate reads
-    // `None` as "no usable frame", which is the election's job to fill.
-    assert_eq!(
-        published_frame_age_ms(&runtime, "other-session", produced_at_ms),
-        None
-    );
-
-    // No published frame at all → `None` (the cold start).
-    let empty = tempfile::tempdir().unwrap();
-    let empty_rt =
-        RuntimePaths::under(WorkspaceId::from_project_root(empty.path()), empty.path()).unwrap();
-    empty_rt.ensure_dirs().unwrap();
-    assert_eq!(
-        published_frame_age_ms(&empty_rt, "rimz-test", produced_at_ms),
-        None
-    );
-}
+use crate::feed::{FeedItem, FeedKind, Surface};
+use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::ledger::atomic;
+use crate::sidebar::cache::{DiffStatsCache, DiffStatsCacheEntry, unix_now_ms};
+use crate::sidebar::enrich::{EnrichMode, enrich};
+use crate::sidebar::frame::{CarriedPane, assemble_frame};
+use crate::sidebar::test_support::{child_agent, pane, pane_in_tab, root_agent};
+use crate::{RuntimePaths, SidebarSnapshot, SidebarWorktreeKind, StatePaths};
+use jiff::Timestamp;
 
 #[test]
 fn read_published_snapshot_folds_caches_without_forking() {
@@ -432,37 +402,5 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
     assert_eq!(
         second.display_name, "bravo-the-second-rollup",
         "the consumer folds the fresh rollup, not a cached one"
-    );
-}
-
-#[test]
-fn read_snapshot_cache_reflects_a_changed_file() {
-    // The thread-local parse cache must invalidate when the file changes, or
-    // a consumer would serve a stale base forever. Keyed on (mtime, len), so
-    // a differently-sized rewrite is caught even if the filesystem's mtime
-    // granularity is too coarse to register two fast writes.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("snapshot.json");
-
-    let first = assemble_frame(Vec::new(), unix_now_ms(), "rimz-one");
-    atomic::write_temp_then_rename_cache(&path, &first).unwrap();
-    // Populate this thread's parse cache.
-    assert_eq!(
-        read_snapshot_cache(&path, "rimz-one").map(|c| c.to_pane_refs().len()),
-        Some(0),
-    );
-
-    // Republish a longer, different-session frame in place.
-    let second = assemble_frame(
-        vec![pane("terminal_0", "zsh", "/tmp")],
-        unix_now_ms() + 1,
-        "rimz-two",
-    );
-    atomic::write_temp_then_rename_cache(&path, &second).unwrap();
-    // The stale (rimz-one) entry must not be served; the fresh frame wins.
-    assert!(read_snapshot_cache(&path, "rimz-one").is_none());
-    assert_eq!(
-        read_snapshot_cache(&path, "rimz-two").map(|c| c.to_pane_refs().len()),
-        Some(1),
     );
 }

@@ -360,19 +360,4 @@ pub fn unix_now_ms() -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pane_topology_cache_freshness_honors_requested_floor() {
-        let cache = PaneTopologyCache {
-            session_name: "rimz-test".to_owned(),
-            produced_at_ms: 100,
-            active_panes: BTreeMap::new(),
-            panes: Vec::new(),
-        };
-
-        assert!(pane_topology_cache_is_fresh(&cache, 101, Some(100)));
-        assert!(!pane_topology_cache_is_fresh(&cache, 101, Some(101)));
-    }
-}
+mod tests;

@@ -299,8 +299,13 @@ pub(super) fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::path::Path;
 
     use super::*;
+    use crate::SidebarSnapshot;
+    use crate::ids::WorkspaceId;
+    use crate::sidebar::test_support::root_agent;
+    use jiff::Timestamp;
 
     fn active_kinds(kinds: &[&str]) -> BTreeSet<String> {
         kinds.iter().map(|kind| (*kind).to_owned()).collect()
@@ -414,5 +419,66 @@ mod tests {
             None,
             "fresh-cache context merges stay local to the frame"
         );
+    }
+
+    #[test]
+    fn account_cache_missing_probeable_versions_refreshes_on_retry_cadence() {
+        for kind in ["claude", "codex", "pi", "opencode"] {
+            let workspace = WorkspaceId::from_project_root(Path::new("/tmp/provider-version"));
+            let snapshot = SidebarSnapshot::build_with_agents(
+                workspace.clone(),
+                Vec::new(),
+                vec![root_agent(kind, "active", None)],
+                Timestamp::now(),
+            );
+            let mut accounts = BTreeMap::new();
+            accounts.insert(
+                kind.to_owned(),
+                crate::agents::AgentAccount {
+                    plan: Some("Pro".to_owned()),
+                    metered: Some(true),
+                    version: None,
+                    sub_provider: None,
+                },
+            );
+            let now_ms = unix_now_ms();
+            let fresh_cache = AccountsCache {
+                refreshed_at_ms: now_ms,
+                accounts,
+                ok: true,
+            };
+            assert!(
+                !accounts_cache_version_refresh_due(&fresh_cache, &snapshot, now_ms),
+                "a just-refreshed successful {kind} cache missing a display version waits for the retry window"
+            );
+
+            let stale_cache = AccountsCache {
+                refreshed_at_ms: now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1),
+                ..fresh_cache
+            };
+            assert!(
+                accounts_cache_version_refresh_due(&stale_cache, &snapshot, now_ms),
+                "a successful {kind} account cache missing a display version re-probes after the retry window"
+            );
+
+            let empty_cache = AccountsCache {
+                refreshed_at_ms: now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1),
+                accounts: BTreeMap::new(),
+                ok: true,
+            };
+            assert!(
+                accounts_cache_version_refresh_due(&empty_cache, &snapshot, now_ms),
+                "an active {kind} session can still get a version-only cache entry"
+            );
+
+            let failed_cache = AccountsCache {
+                ok: false,
+                ..empty_cache
+            };
+            assert!(
+                !accounts_cache_version_refresh_due(&failed_cache, &snapshot, now_ms),
+                "a failed {kind} probe uses the failure TTL, not the missing-version bypass"
+            );
+        }
     }
 }

@@ -16,7 +16,7 @@
 //! `write_temp_then_rename_cache` — rebuilt from truth on the next read, never
 //! truth itself. `cargo xtask invariants` pins the boundary: no ledger-writer,
 //! feed-store, bridge, or broker imports under `crates/rimz/src/sidebar/`.
-//! The consumer-side read lives in [`super::snapshot`]; performance model in
+//! The consumer-side read lives in [`super::consumer`]; performance model in
 //! [docs/internals/health/performance.md](../../../../../docs/internals/health/performance.md).
 
 mod git;

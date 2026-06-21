@@ -1,7 +1,7 @@
 use super::*;
 use crate::ledger::atomic;
+use crate::sidebar::cache::SNAPSHOT_CACHE_TTL;
 use crate::sidebar::produce::test_support::pane;
-use crate::sidebar::snapshot::SNAPSHOT_CACHE_TTL;
 
 mod cache;
 mod fields;

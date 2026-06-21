@@ -21,7 +21,8 @@ pub mod notify;
 pub mod observe;
 pub mod produce;
 pub mod read_marks;
-pub mod snapshot;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod timing;
 pub mod unread;
 

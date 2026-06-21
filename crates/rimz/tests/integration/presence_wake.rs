@@ -29,10 +29,10 @@ use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::RuntimePaths;
 use rimz::schema::heartbeat::SidebarHeartbeat;
 use rimz::schema::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-use rimz::sidebar::cache::read_pane_topology_cache;
-use rimz::sidebar::snapshot::{
-    PresenceStamp, assemble_frame, presence_stamp_path, read_snapshot_cache, unix_now_ms,
+use rimz::sidebar::cache::{
+    PresenceStamp, presence_stamp_path, read_pane_topology_cache, read_snapshot_cache, unix_now_ms,
 };
+use rimz::sidebar::frame::assemble_frame;
 use tempfile::TempDir;
 
 use crate::common::ScrubSessionEnvExt;

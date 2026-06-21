@@ -1,65 +1,8 @@
 use super::*;
-
-#[test]
-fn account_cache_missing_probeable_versions_refreshes_on_retry_cadence() {
-    for kind in ["claude", "codex", "pi", "opencode"] {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/provider-version"));
-        let snapshot = SidebarSnapshot::build_with_agents(
-            workspace.clone(),
-            Vec::new(),
-            vec![root_agent(kind, "active", None)],
-            Timestamp::now(),
-        );
-        let mut accounts = BTreeMap::new();
-        accounts.insert(
-            kind.to_owned(),
-            crate::agents::AgentAccount {
-                plan: Some("Pro".to_owned()),
-                metered: Some(true),
-                version: None,
-                sub_provider: None,
-            },
-        );
-        let now_ms = unix_now_ms();
-        let fresh_cache = AccountsCache {
-            refreshed_at_ms: now_ms,
-            accounts,
-            ok: true,
-        };
-        assert!(
-            !accounts_cache_version_refresh_due(&fresh_cache, &snapshot, now_ms),
-            "a just-refreshed successful {kind} cache missing a display version waits for the retry window"
-        );
-
-        let stale_cache = AccountsCache {
-            refreshed_at_ms: now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1),
-            ..fresh_cache
-        };
-        assert!(
-            accounts_cache_version_refresh_due(&stale_cache, &snapshot, now_ms),
-            "a successful {kind} account cache missing a display version re-probes after the retry window"
-        );
-
-        let empty_cache = AccountsCache {
-            refreshed_at_ms: now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1),
-            accounts: BTreeMap::new(),
-            ok: true,
-        };
-        assert!(
-            accounts_cache_version_refresh_due(&empty_cache, &snapshot, now_ms),
-            "an active {kind} session can still get a version-only cache entry"
-        );
-
-        let failed_cache = AccountsCache {
-            ok: false,
-            ..empty_cache
-        };
-        assert!(
-            !accounts_cache_version_refresh_due(&failed_cache, &snapshot, now_ms),
-            "a failed {kind} probe uses the failure TTL, not the missing-version bypass"
-        );
-    }
-}
+use crate::ids::WorkspaceId;
+use crate::sidebar::test_support::{
+    provider_panel, rl_window, rl_window_mins, snapshot_with_panels,
+};
 
 #[test]
 fn idle_window_projection_ages_only_known_elapsed_windows() {
@@ -443,8 +386,6 @@ fn held_rate_limit_lock_makes_producer_read_only_instead_of_dropping_other_kinds
 // ── fuse_window: source- and time-aware refill trust ────────────────────────
 
 use crate::agents::context::WindowSource;
-use crate::sidebar::enrich::{LIVE_HORIZON_SECS, PendingRefill, REFILL_CONFIRM_SECS, fuse_window};
-
 fn fuse_now() -> Timestamp {
     Timestamp::from_second(2_000_000_000).unwrap()
 }
