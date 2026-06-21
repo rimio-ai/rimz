@@ -221,9 +221,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
 /// Rimz-launched in-place team member carries `RIMZ_TEAM`, so its calls scope
 /// to `<dir>/<team>`.
 pub(crate) fn current_channel(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
-    let team = std::env::var(rimz::run::ENV_TEAM)
-        .ok()
-        .filter(|value| !value.is_empty());
+    let team = std::env::var(rimz::run::ENV_TEAM).ok();
     current_channel_for_team(workspace, team.as_deref())
 }
 
