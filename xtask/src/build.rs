@@ -196,10 +196,50 @@ pub(crate) fn install(root: &Path) -> Result<()> {
     for artifact in INSTALL_ARTIFACTS {
         copy_atomically(&stage.join(artifact), &dest_dir.join(artifact))?;
     }
+    let installed = absolute_lexical_path(&dest_dir.join("rimz"))?;
+    report_install(&binary_build_version(&installed)?, &installed);
     Ok(())
 }
 
 const INSTALL_ARTIFACTS: [&str; 1] = ["rimz"];
+
+fn absolute_lexical_path(path: &Path) -> Result<PathBuf> {
+    Ok(if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .context("reading current directory")?
+            .join(path)
+    })
+}
+
+/// The build version embedded in `rimz`, read from the binary itself so the
+/// install summary matches what `rimz --version` reports.
+fn binary_build_version(bin: &Path) -> Result<String> {
+    let output = Command::new(bin)
+        .arg("--version")
+        .output()
+        .with_context(|| format!("running {} --version", bin.display()))?;
+    if !output.status.success() {
+        bail!("{} --version failed", bin.display());
+    }
+    let stdout = String::from_utf8(output.stdout).context("reading rimz --version output")?;
+    Ok(parse_version_line(&stdout))
+}
+
+/// `rimz --version` prints `rimz <version>`; keep just the version token.
+fn parse_version_line(line: &str) -> String {
+    let line = line.trim();
+    line.strip_prefix("rimz ").unwrap_or(line).trim().to_owned()
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "install summary is the command's stdout contract"
+)]
+fn report_install(version: &str, path: &Path) {
+    println!("Installed rimz {version} to {}", path.display());
+}
 
 pub(crate) fn stage_install(root: &Path) -> Result<PathBuf> {
     build_plugin(root)?;

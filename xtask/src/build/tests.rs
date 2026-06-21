@@ -1,5 +1,6 @@
 use std::env;
 use std::ffi::OsStr;
+use std::path::Path;
 
 use super::*;
 
@@ -9,6 +10,24 @@ fn rustup_target_list_match_is_exact() {
 
     assert!(target_list_contains(installed, "wasm32-wasip1"));
     assert!(!target_list_contains(installed, "wasm32-wasi"));
+}
+
+#[test]
+fn version_line_keeps_only_the_version_token() {
+    assert_eq!(
+        parse_version_line("rimz 0.0.0+gabc123def456\n"),
+        "0.0.0+gabc123def456"
+    );
+    assert_eq!(parse_version_line("rimz 1.2.3\n"), "1.2.3");
+    assert_eq!(parse_version_line("0.0.0\n"), "0.0.0");
+}
+
+#[test]
+fn relative_install_paths_report_as_absolute() {
+    let path = absolute_lexical_path(Path::new("target/xtask-install/bin/rimz")).unwrap();
+
+    assert!(path.is_absolute());
+    assert!(path.ends_with("target/xtask-install/bin/rimz"));
 }
 
 #[test]

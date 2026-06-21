@@ -59,7 +59,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"
 ```
 
-Clone and install Rimz. `cargo xtask install` builds the presence plugin and the `rimz` binary, then copies `rimz` into `~/.cargo/bin`.
+Clone and install Rimz. `cargo xtask install` builds the presence plugin and the `rimz` binary, copies `rimz` into `~/.cargo/bin`, and prints the installed version and path.
 
 ```sh
 git clone https://github.com/rimio/rimz.git
