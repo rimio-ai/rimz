@@ -158,6 +158,7 @@ fn pane_command_stamps_agent_role() {
         args: Vec::new(),
         mode: None,
         system_prompt_file: None,
+        append_system_prompt_file: None,
         profile: Some("claude-planner".to_owned()),
         role: Some("planner".to_owned()),
         model: Some("claude-sonnet".to_owned()),
@@ -202,6 +203,7 @@ fn in_place_pane_command_leaves_user_pane_open() {
         args: Vec::new(),
         mode: None,
         system_prompt_file: None,
+        append_system_prompt_file: None,
         profile: None,
         role: None,
         model: None,
@@ -734,6 +736,7 @@ fn explicit_interactive_mode_applies_even_when_profile_added_args() {
         args: vec!["--model".to_owned(), "gpt-5-codex".to_owned()],
         mode: None,
         system_prompt_file: None,
+        append_system_prompt_file: None,
         profile: None,
         role: None,
         model: None,
@@ -764,6 +767,7 @@ fn launch_override_preset_replaces_cell_model_and_effort_identity() {
         args: vec!["--model".to_owned(), "profile-model".to_owned()],
         mode: None,
         system_prompt_file: None,
+        append_system_prompt_file: None,
         profile: Some("codex-coder".to_owned()),
         role: Some("coder".to_owned()),
         model: Some("profile-model".to_owned()),
@@ -815,6 +819,7 @@ fn supervised_default_mode_skips_cells_with_virtual_or_profile_mode() {
         args: yolo_args.clone(),
         mode: Some(PermissionMode::Yolo),
         system_prompt_file: None,
+        append_system_prompt_file: None,
         profile: None,
         role: None,
         model: None,
@@ -846,6 +851,7 @@ fn explicit_mode_skips_cells_with_virtual_or_profile_mode() {
         args: auto_args.clone(),
         mode: Some(PermissionMode::Auto),
         system_prompt_file: None,
+        append_system_prompt_file: None,
         profile: None,
         role: None,
         model: None,
@@ -890,6 +896,7 @@ fn launch_identity_requests_carry_cell_profile_and_role() {
         args: Vec::new(),
         mode: None,
         system_prompt_file: None,
+        append_system_prompt_file: None,
         profile: Some("codex-coder".to_owned()),
         role: Some("coder".to_owned()),
         model: Some("gpt-5-codex".to_owned()),
@@ -1111,7 +1118,10 @@ async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
     assert_eq!(outcome, RunWakeOutcome::Completed(RunStatus::Failed));
 }
 
-fn agent_profile(prompt_file: Option<&std::path::Path>) -> rimz::config::ProfilesConfig {
+fn agent_profile(
+    system_prompt_file: Option<&std::path::Path>,
+    append_system_prompt_file: Option<&std::path::Path>,
+) -> rimz::config::ProfilesConfig {
     let mut profiles = rimz::config::ProfilesConfig::default();
     profiles.0.insert(
         "planner".to_owned(),
@@ -1120,7 +1130,8 @@ fn agent_profile(prompt_file: Option<&std::path::Path>) -> rimz::config::Profile
             mode: None,
             model: None,
             effort: None,
-            system_prompt_file: prompt_file.map(std::path::Path::to_path_buf),
+            system_prompt_file: system_prompt_file.map(std::path::Path::to_path_buf),
+            append_system_prompt_file: append_system_prompt_file.map(std::path::Path::to_path_buf),
             args: None,
         },
     );
@@ -1131,7 +1142,7 @@ fn agent_profile(prompt_file: Option<&std::path::Path>) -> rimz::config::Profile
 fn create_on_miss_launches_kinds_and_agent_profiles_but_not_commands() {
     // A kind and an agent profile carry a kind to staff a channel; a command
     // name and a pet name do not, so `--create` refuses them.
-    let profiles = agent_profile(None);
+    let profiles = agent_profile(None, None);
 
     assert!(is_launchable_type("codex", &profiles));
     assert!(is_launchable_type("planner", &profiles));
@@ -1144,8 +1155,10 @@ fn profile_launch_requires_its_system_prompt_file() {
     let dir = tempfile::tempdir().expect("temp dir");
     let present = dir.path().join("planner.md");
     std::fs::write(&present, "be terse").expect("write prompt");
+    let present_append = dir.path().join("append.md");
+    std::fs::write(&present_append, "follow house style").expect("write append prompt");
 
-    let profiles = agent_profile(Some(&present));
+    let profiles = agent_profile(Some(&present), Some(&present_append));
     let layout = rimz::agents_spec::resolve_spec(
         Some("planner"),
         &profiles,
@@ -1161,13 +1174,25 @@ fn profile_launch_requires_its_system_prompt_file() {
     let missing = dir.path().join("absent.md");
     let missing_layout = rimz::agents_spec::resolve_spec(
         Some("planner"),
-        &agent_profile(Some(&missing)),
+        &agent_profile(Some(&missing), None),
         &rimz::config::CommandsConfig::default(),
         &rimz::config::TeamsConfig::default(),
     )
     .expect("resolve missing planner profile");
     let err = ensure_profile_prompt_files(&missing_layout).expect_err("missing prompt fails");
     assert!(err.to_string().contains("system-prompt-file"));
+
+    let missing_append = dir.path().join("absent-append.md");
+    let missing_append_layout = rimz::agents_spec::resolve_spec(
+        Some("planner"),
+        &agent_profile(None, Some(&missing_append)),
+        &rimz::config::CommandsConfig::default(),
+        &rimz::config::TeamsConfig::default(),
+    )
+    .expect("resolve missing append planner profile");
+    let err =
+        ensure_profile_prompt_files(&missing_append_layout).expect_err("missing append fails");
+    assert!(err.to_string().contains("append-system-prompt-file"));
 }
 
 #[test]

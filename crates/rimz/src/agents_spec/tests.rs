@@ -10,6 +10,7 @@ fn profile(agent: &str) -> Profile {
         model: None,
         effort: None,
         system_prompt_file: None,
+        append_system_prompt_file: None,
         args: None,
     }
 }
@@ -40,6 +41,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
         model: None,
         effort: None,
         system_prompt_file: None,
+        append_system_prompt_file: None,
         args: None,
     }
 }
@@ -175,6 +177,7 @@ fn profile_mode_preset_and_extra_args_render_in_order_and_stamp_profile() {
             model: Some("gpt-5-codex".to_owned()),
             effort: Some("high".to_owned()),
             system_prompt_file: None,
+            append_system_prompt_file: None,
             args: Some("--profile reviewer".to_owned()),
         },
     )]);
@@ -244,6 +247,44 @@ fn profile_system_prompt_file_renders() {
 }
 
 #[test]
+fn profile_append_system_prompt_file_renders() {
+    let profiles = profiles([(
+        "planner",
+        Profile {
+            agent: "claude".to_owned(),
+            append_system_prompt_file: Some("/prompts/planner-extra.md".into()),
+            ..profile("claude")
+        },
+    )]);
+    let Cell::Agent {
+        args,
+        append_system_prompt_file,
+        profile,
+        ..
+    } = parse_layout_spec("planner", &profiles, &no_commands())
+        .expect("parse planner")
+        .columns[0]
+        .rows[0]
+        .clone()
+    else {
+        panic!("agent cell");
+    };
+
+    assert_eq!(profile.as_deref(), Some("planner"));
+    assert_eq!(
+        append_system_prompt_file.as_deref(),
+        Some(Path::new("/prompts/planner-extra.md"))
+    );
+    assert_eq!(
+        args,
+        vec![
+            "--append-system-prompt-file".to_owned(),
+            "/prompts/planner-extra.md".to_owned(),
+        ]
+    );
+}
+
+#[test]
 fn profile_inheritance_folds_child_wins_and_args_replace() {
     let profiles = profiles([
         (
@@ -285,6 +326,57 @@ fn profile_inheritance_folds_child_wins_and_args_replace() {
     assert_eq!(inherits_args.model.as_deref(), Some("child-model"));
     assert_eq!(inherits_args.effort.as_deref(), Some("medium"));
     assert_eq!(inherits_args.args.as_deref(), Some("--base"));
+}
+
+#[test]
+fn profile_append_system_prompt_file_inherits_from_base() {
+    let profiles = profiles([
+        (
+            "base",
+            Profile {
+                agent: "claude".to_owned(),
+                append_system_prompt_file: Some("/prompts/base-extra.md".into()),
+                ..profile("claude")
+            },
+        ),
+        (
+            "child",
+            Profile {
+                agent: "base".to_owned(),
+                ..profile("base")
+            },
+        ),
+    ]);
+
+    let child = resolve_profile("child", &profiles).expect("child resolves");
+    assert_eq!(
+        child.append_system_prompt_file.as_deref(),
+        Some(Path::new("/prompts/base-extra.md"))
+    );
+
+    let Cell::Agent {
+        args,
+        append_system_prompt_file,
+        ..
+    } = parse_layout_spec("child", &profiles, &no_commands())
+        .expect("parse child")
+        .columns[0]
+        .rows[0]
+        .clone()
+    else {
+        panic!("agent cell");
+    };
+    assert_eq!(
+        append_system_prompt_file.as_deref(),
+        Some(Path::new("/prompts/base-extra.md"))
+    );
+    assert_eq!(
+        args,
+        vec![
+            "--append-system-prompt-file".to_owned(),
+            "/prompts/base-extra.md".to_owned(),
+        ]
+    );
 }
 
 #[test]
@@ -332,6 +424,20 @@ fn profile_resolution_reports_unknown_base_cycles_depth_and_unsupported_fields()
         parse_layout_spec("pi-deep", &unsupported, &no_commands()),
         Err(LayoutErr::InvalidProfile { profile, reason })
             if profile == "pi-deep" && reason.contains("does not support profile field `system-prompt-file`")
+    ));
+
+    let unsupported_append = profiles([(
+        "codex-append",
+        Profile {
+            agent: "codex".to_owned(),
+            append_system_prompt_file: Some(PathBuf::from("/abs/append.md")),
+            ..profile("codex")
+        },
+    )]);
+    assert!(matches!(
+        parse_layout_spec("codex-append", &unsupported_append, &no_commands()),
+        Err(LayoutErr::InvalidProfile { profile, reason })
+            if profile == "codex-append" && reason.contains("does not support profile field `append-system-prompt-file`")
     ));
 }
 
@@ -498,6 +604,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
                 .permission_args(PermissionMode::Auto),
             mode: Some(PermissionMode::Auto),
             system_prompt_file: None,
+            append_system_prompt_file: None,
             profile: None,
             role: None,
             model: None,
@@ -513,6 +620,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
                 .permission_args(PermissionMode::Yolo),
             mode: Some(PermissionMode::Yolo),
             system_prompt_file: None,
+            append_system_prompt_file: None,
             profile: None,
             role: None,
             model: None,
@@ -526,6 +634,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             args: Vec::new(),
             mode: Some(PermissionMode::Ask),
             system_prompt_file: None,
+            append_system_prompt_file: None,
             profile: None,
             role: None,
             model: None,
@@ -543,6 +652,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             args: vec!["--effort".to_owned(), "low".to_owned(), "ping".to_owned()],
             mode: None,
             system_prompt_file: None,
+            append_system_prompt_file: None,
             profile: None,
             role: None,
             model: None,
@@ -685,6 +795,7 @@ fn named_teams_resolve_roles_to_one_column_each() {
             args: vec!["--permission-mode".to_owned(), "plan".to_owned()],
             mode: None,
             system_prompt_file: None,
+            append_system_prompt_file: None,
             profile: Some("claude-plan".to_owned()),
             role: Some("planner".to_owned()),
             model: None,
@@ -698,6 +809,7 @@ fn named_teams_resolve_roles_to_one_column_each() {
             args: Vec::new(),
             mode: None,
             system_prompt_file: None,
+            append_system_prompt_file: None,
             profile: Some("reviewer".to_owned()),
             role: Some("reviewer".to_owned()),
             model: None,
@@ -729,6 +841,7 @@ fn team_role_overrides_profile_fields_and_args_replace() {
             model: Some("role-model".to_owned()),
             effort: Some("high".to_owned()),
             system_prompt_file: Some("/prompts/coder.md".into()),
+            append_system_prompt_file: None,
             args: Some("--role".to_owned()),
         }]),
     )]));
@@ -767,6 +880,56 @@ fn team_role_overrides_profile_fields_and_args_replace() {
     );
     assert!(args.contains(&"--role".to_owned()), "{args:?}");
     assert!(!args.contains(&"--base".to_owned()), "{args:?}");
+}
+
+#[test]
+fn team_role_overrides_append_system_prompt_file() {
+    let profiles = profiles([(
+        "planner-base",
+        Profile {
+            agent: "claude".to_owned(),
+            append_system_prompt_file: Some("/prompts/base-extra.md".into()),
+            ..profile("claude")
+        },
+    )]);
+    let teams = TeamsConfig(BTreeMap::from([(
+        "review".to_owned(),
+        team(vec![RoleBinding {
+            role: "planner".to_owned(),
+            profile: "planner-base".to_owned(),
+            mode: None,
+            model: None,
+            effort: None,
+            system_prompt_file: None,
+            append_system_prompt_file: Some("/prompts/role-extra.md".into()),
+            args: None,
+        }]),
+    )]));
+
+    let Cell::Agent {
+        args,
+        append_system_prompt_file,
+        ..
+    } = resolve_spec(Some("review"), &profiles, &no_commands(), &teams)
+        .expect("team")
+        .columns[0]
+        .rows[0]
+        .clone()
+    else {
+        panic!("agent cell");
+    };
+
+    assert_eq!(
+        append_system_prompt_file.as_deref(),
+        Some(Path::new("/prompts/role-extra.md"))
+    );
+    assert_eq!(
+        args,
+        vec![
+            "--append-system-prompt-file".to_owned(),
+            "/prompts/role-extra.md".to_owned(),
+        ]
+    );
 }
 
 #[test]

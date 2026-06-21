@@ -11,6 +11,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         model: None,
         effort: None,
         system_prompt_file: None,
+        append_system_prompt_file: None,
         args: args.map(ToOwned::to_owned),
     }
 }
@@ -38,6 +39,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
         model: None,
         effort: None,
         system_prompt_file: None,
+        append_system_prompt_file: None,
         args: None,
     }
 }
@@ -200,7 +202,7 @@ fn repo_prompt_file_paths_resolve_against_rimz_dir() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[profiles.planner]\nagent = \"claude\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
+        "[profiles.planner]\nagent = \"claude\"\nsystem-prompt-file = \"prompts/planner.md\"\nappend-system-prompt-file = \"prompts/planner-extra.md\"\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
 
@@ -218,6 +220,13 @@ fn repo_prompt_file_paths_resolve_against_rimz_dir() {
             .and_then(|profile| profile.system_prompt_file.as_ref()),
         Some(&project.path().join(".rimz/prompts/planner.md"))
     );
+    assert_eq!(
+        effective
+            .0
+            .get("planner")
+            .and_then(|profile| profile.append_system_prompt_file.as_ref()),
+        Some(&project.path().join(".rimz/prompts/planner-extra.md"))
+    );
 }
 
 #[test]
@@ -226,7 +235,7 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[profiles.planner]\nagent = \"claude\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
+        "[profiles.planner]\nagent = \"claude\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\nsystem-prompt-file = \"prompts/planner.md\"\nappend-system-prompt-file = \"prompts/planner-extra.md\"\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
     let machine = TeamsConfig(BTreeMap::from([(
@@ -245,6 +254,10 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
     assert_eq!(
         role.system_prompt_file.as_ref(),
         Some(&project.path().join(".rimz/prompts/planner.md"))
+    );
+    assert_eq!(
+        role.append_system_prompt_file.as_ref(),
+        Some(&project.path().join(".rimz/prompts/planner-extra.md"))
     );
 }
 

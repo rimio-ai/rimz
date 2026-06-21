@@ -482,27 +482,36 @@ pub(super) fn resolve_launch_layout(
     }
 }
 
-/// Confirm every profile the resolved layout launches has its
-/// `system-prompt-file` present, so a missing prompt fails here — at the launch
-/// entry point, with the absolute path to fix — rather than reaching the agent.
-/// This mirrors the explicit `--system-prompt-file` check; the profile paths are
-/// already resolved against the config file at load, so unrelated config reads
-/// stay IO-free.
+/// Confirm every profile the resolved layout launches has its prompt files
+/// present, so a missing prompt fails here — at the launch entry point, with
+/// the absolute path to fix — rather than reaching the agent. This mirrors the
+/// explicit prompt-file checks; the profile paths are already resolved against
+/// the config file at load, so unrelated config reads stay IO-free.
 pub(super) fn ensure_profile_prompt_files(layout: &LayoutSpec) -> Result<()> {
     for cell in layout.columns.iter().flat_map(|column| &column.rows) {
         let Cell::Agent {
             profile,
             role,
             system_prompt_file,
+            append_system_prompt_file,
             ..
         } = cell
         else {
             continue;
         };
-        let Some(path) = system_prompt_file else {
-            continue;
-        };
-        if !path.is_file() {
+        for (field, path) in [
+            ("system-prompt-file", system_prompt_file.as_ref()),
+            (
+                "append-system-prompt-file",
+                append_system_prompt_file.as_ref(),
+            ),
+        ] {
+            let Some(path) = path else {
+                continue;
+            };
+            if path.is_file() {
+                continue;
+            }
             let source = match (role.as_deref(), profile.as_deref()) {
                 (Some(role), Some(profile)) => {
                     format!("role `{role}` profile `{profile}`")
@@ -512,7 +521,7 @@ pub(super) fn ensure_profile_prompt_files(layout: &LayoutSpec) -> Result<()> {
                 (None, None) => "agent cell".to_owned(),
             };
             bail!(
-                "{source} system-prompt-file `{}` not found; create it or fix the launch config",
+                "{source} {field} `{}` not found; create it or fix the launch config",
                 path.display()
             );
         }

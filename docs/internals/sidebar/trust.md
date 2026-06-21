@@ -22,8 +22,8 @@ Every field that can cause a process to run enters the hash. The current project
 - `[[layout.initial_panes]]` — `name`, `command`, `cwd`, `env`.
 - `[layout.tmux]` — `status_left`, `status_right`, `popup_command`.
 - `[[agents]]` — `name`, `launch_command`, `env`.
-- `[agents.teams.<name>]` — `layout` plus each role's `role`, `profile`, `mode`, `model`, `effort`, `system-prompt-file`, `args`.
-- `[profiles.<name>]` — `agent`, `mode`, `model`, `effort`, `system-prompt-file`, `args`.
+- `[agents.teams.<name>]` — `layout` plus each role's `role`, `profile`, `mode`, `model`, `effort`, `system-prompt-file`, `append-system-prompt-file`, `args`.
+- `[profiles.<name>]` — `agent`, `mode`, `model`, `effort`, `system-prompt-file`, `append-system-prompt-file`, `args`.
 - `[[hooks]]` — `event`, `command`.
 - `[env]` — every key/value (PATH-affecting overrides included).
 

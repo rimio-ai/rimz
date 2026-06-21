@@ -73,6 +73,10 @@ pub enum Cell {
         args: Vec<String>,
         mode: Option<PermissionMode>,
         system_prompt_file: Option<PathBuf>,
+        /// The profile or role prompt file whose contents append to the
+        /// adapter's base system prompt. Launch pre-flight checks it before
+        /// spawning the pane.
+        append_system_prompt_file: Option<PathBuf>,
         /// The `[agents.profiles]` name this cell launched as, when it came
         /// from a named profile (`planner`) or a kind-default override
         /// (`claude`, `claude-auto`, `claude-ping`). Stamped onto the launch
@@ -105,6 +109,7 @@ impl Cell {
             args: Vec::new(),
             mode: None,
             system_prompt_file: None,
+            append_system_prompt_file: None,
             profile: None,
             role: None,
             model: None,
@@ -125,6 +130,7 @@ pub struct ResolvedProfile {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub system_prompt_file: Option<PathBuf>,
+    pub append_system_prompt_file: Option<PathBuf>,
     pub args: Option<String>,
 }
 
@@ -136,6 +142,7 @@ impl ResolvedProfile {
             model: None,
             effort: None,
             system_prompt_file: None,
+            append_system_prompt_file: None,
             args: None,
         }
     }
@@ -236,6 +243,9 @@ pub fn resolve_profile_prompt_paths(profiles: &mut ProfilesConfig, config_dir: &
         if let Some(path) = profile.system_prompt_file.as_mut() {
             *path = resolve_prompt_path(path, config_dir);
         }
+        if let Some(path) = profile.append_system_prompt_file.as_mut() {
+            *path = resolve_prompt_path(path, config_dir);
+        }
     }
 }
 
@@ -243,6 +253,9 @@ pub fn resolve_team_prompt_paths(teams: &mut TeamsConfig, config_dir: &Path) {
     for team in teams.0.values_mut() {
         for binding in &mut team.roles {
             if let Some(path) = binding.system_prompt_file.as_mut() {
+                *path = resolve_prompt_path(path, config_dir);
+            }
+            if let Some(path) = binding.append_system_prompt_file.as_mut() {
                 *path = resolve_prompt_path(path, config_dir);
             }
         }
@@ -380,6 +393,7 @@ fn role_cell(team_name: &str, binding: &RoleBinding, profiles: &ProfilesConfig) 
         args: render_profile_args(&binding.profile, &resolved)?,
         mode: resolved.mode,
         system_prompt_file: resolved.system_prompt_file.clone(),
+        append_system_prompt_file: resolved.append_system_prompt_file.clone(),
         profile: Some(binding.profile.clone()),
         role: Some(binding.role.clone()),
         model: resolved.model.clone(),
@@ -469,6 +483,9 @@ fn apply_role_overrides(resolved: &mut ResolvedProfile, binding: &RoleBinding) {
     if let Some(path) = binding.system_prompt_file.as_ref() {
         resolved.system_prompt_file = Some(path.clone());
     }
+    if let Some(path) = binding.append_system_prompt_file.as_ref() {
+        resolved.append_system_prompt_file = Some(path.clone());
+    }
     if let Some(args) = binding.args.as_ref() {
         resolved.args = Some(args.clone());
     }
@@ -530,6 +547,9 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
         }
         if resolved.system_prompt_file.is_none() {
             resolved.system_prompt_file = layer.system_prompt_file.clone();
+        }
+        if resolved.append_system_prompt_file.is_none() {
+            resolved.append_system_prompt_file = layer.append_system_prompt_file.clone();
         }
         if resolved.args.is_none() {
             resolved.args = layer.args.clone();
@@ -641,6 +661,7 @@ fn cell_from_profile(name: &str, resolved: &ResolvedProfile) -> Result<Cell> {
         args: render_profile_args(name, resolved)?,
         mode: resolved.mode,
         system_prompt_file: resolved.system_prompt_file.clone(),
+        append_system_prompt_file: resolved.append_system_prompt_file.clone(),
         profile: Some(name.to_owned()),
         role: None,
         model: resolved.model.clone(),
@@ -679,7 +700,7 @@ fn profile_preset(resolved: &ResolvedProfile) -> crate::agents::LaunchPreset {
         model: resolved.model.clone(),
         effort: resolved.effort.clone(),
         system_prompt_file: resolved.system_prompt_file.clone(),
-        append_system_prompt_file: None,
+        append_system_prompt_file: resolved.append_system_prompt_file.clone(),
     }
 }
 
@@ -725,6 +746,7 @@ fn virtual_agent_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cel
         args,
         mode: Some(mode),
         system_prompt_file: resolved.system_prompt_file,
+        append_system_prompt_file: resolved.append_system_prompt_file,
         profile: profile_name,
         role: None,
         model: resolved.model,
@@ -762,6 +784,7 @@ fn virtual_ping_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cell
         args,
         mode: None,
         system_prompt_file: resolved.system_prompt_file,
+        append_system_prompt_file: resolved.append_system_prompt_file,
         profile: profile_name,
         role: None,
         model: resolved.model,

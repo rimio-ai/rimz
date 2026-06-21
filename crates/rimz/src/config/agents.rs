@@ -95,6 +95,15 @@ pub struct Profile {
         skip_serializing_if = "Option::is_none"
     )]
     pub system_prompt_file: Option<PathBuf>,
+    /// A file whose contents append to the agent's base system prompt,
+    /// preserving the native base rules while adding profile-local guidance.
+    /// Resolved and existence-checked like `system_prompt_file`.
+    #[serde(
+        default,
+        rename = "append-system-prompt-file",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub append_system_prompt_file: Option<PathBuf>,
     #[serde(default)]
     pub args: Option<String>,
 }
@@ -129,6 +138,12 @@ pub struct RoleBinding {
         skip_serializing_if = "Option::is_none"
     )]
     pub system_prompt_file: Option<PathBuf>,
+    #[serde(
+        default,
+        rename = "append-system-prompt-file",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub append_system_prompt_file: Option<PathBuf>,
     #[serde(default)]
     pub args: Option<String>,
 }

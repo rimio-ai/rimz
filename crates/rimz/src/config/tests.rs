@@ -144,6 +144,7 @@ fn agents_toml_entries_override_agents_home_fragments() {
             model: Some("opus".to_owned()),
             effort: None,
             system_prompt_file: None,
+            append_system_prompt_file: None,
             args: None,
         },
     );
@@ -190,6 +191,7 @@ fn malformed_agents_home_fragment_leaves_config_unchanged() {
             model: None,
             effort: None,
             system_prompt_file: None,
+            append_system_prompt_file: None,
             args: None,
         },
     );
@@ -328,6 +330,7 @@ fn agent_profiles_commands_and_teams_parse() {
              [agents.profiles.planner]\n\
              agent = \"claude\"\n\
              system-prompt-file = \"/prompts/planner.md\"\n\
+             append-system-prompt-file = \"/prompts/planner-extra.md\"\n\
              [agents.teams.stacked]\n\
              layout = \"planner+coder\"\n\
              [[agents.teams.stacked.roles]]\n\
@@ -350,6 +353,7 @@ fn agent_profiles_commands_and_teams_parse() {
             model: Some("gpt-5-codex".to_owned()),
             effort: Some("high".to_owned()),
             system_prompt_file: None,
+            append_system_prompt_file: None,
             args: Some("--model gpt-5-codex -c model_reasoning_effort=high".to_owned())
         })
     );
@@ -362,6 +366,7 @@ fn agent_profiles_commands_and_teams_parse() {
             model: None,
             effort: None,
             system_prompt_file: Some("/prompts/planner.md".into()),
+            append_system_prompt_file: Some("/prompts/planner-extra.md".into()),
             args: None,
         })
     );
