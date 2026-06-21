@@ -37,6 +37,51 @@ fn opencode_activity_filter_and_launch_commands_build() {
 }
 
 #[test]
+fn opencode_render_preset_maps_model_and_variant() {
+    use crate::agents::{LaunchPreset, PresetErr};
+
+    assert_eq!(
+        OpencodeAdapter.render_preset(&LaunchPreset {
+            model: Some("openai/gpt-5".to_owned()),
+            effort: Some("high".to_owned()),
+            ..Default::default()
+        }),
+        Ok(vec![
+            "--model".to_owned(),
+            "openai/gpt-5".to_owned(),
+            "--variant".to_owned(),
+            "high".to_owned(),
+        ])
+    );
+    assert_eq!(
+        OpencodeAdapter.render_preset(&LaunchPreset {
+            system_prompt_file: Some(Path::new("/abs/prompt.md").to_path_buf()),
+            ..Default::default()
+        }),
+        Err(PresetErr::UnsupportedField {
+            agent: "opencode",
+            field: "system-prompt-file",
+        })
+    );
+    assert_eq!(
+        OpencodeAdapter.render_preset(&LaunchPreset {
+            append_system_prompt_file: Some(Path::new("/abs/append.md").to_path_buf()),
+            ..Default::default()
+        }),
+        Err(PresetErr::UnsupportedField {
+            agent: "opencode",
+            field: "append-system-prompt-file",
+        })
+    );
+    assert!(
+        OpencodeAdapter
+            .render_preset(&LaunchPreset::default())
+            .expect("empty preset is valid")
+            .is_empty()
+    );
+}
+
+#[test]
 fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     let registered = OpencodeAdapter
         .observe_lifecycle(

@@ -418,7 +418,7 @@ fn append_system_prompt_file_resolves_a_file_and_rejects_bad_paths() {
 }
 
 #[test]
-fn preset_renders_effort_per_adapter_and_fails_fast_for_pi() {
+fn preset_renders_effort_per_adapter() {
     let preset = rimz::agents::LaunchPreset {
         effort: Some("high".to_owned()),
         ..Default::default()
@@ -434,14 +434,15 @@ fn preset_renders_effort_per_adapter_and_fails_fast_for_pi() {
     let (args, _) = only_agent(&layout);
     assert_eq!(args, &["-c", "model_reasoning_effort=high"]);
 
-    // Pi has no effort flag: the launch refuses at the unsupported cell.
     let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("pi")));
-    let err = apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[])
-        .expect_err("pi rejects effort");
-    assert!(
-        err.to_string().contains("pi does not support --effort"),
-        "{err:#}"
-    );
+    apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[]).expect("pi effort");
+    let (args, _) = only_agent(&layout);
+    assert_eq!(args, &["--thinking", "high"]);
+
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("opencode")));
+    apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[]).expect("opencode effort");
+    let (args, _) = only_agent(&layout);
+    assert_eq!(args, &["--variant", "high"]);
 }
 
 #[test]
@@ -484,13 +485,20 @@ fn preset_renders_model_and_append_prompt_per_adapter() {
         "{err:#}"
     );
 
+    let model_preset = rimz::agents::LaunchPreset {
+        model: Some("opus".to_owned()),
+        ..Default::default()
+    };
     let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("pi")));
-    let err = apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[])
-        .expect_err("pi rejects model first");
-    assert!(
-        err.to_string().contains("pi does not support --model"),
-        "{err:#}"
-    );
+    apply_launch_mode_and_passthrough(&mut layout, None, &model_preset, &[]).expect("pi model");
+    let (args, _) = only_agent(&layout);
+    assert_eq!(args, &["--model", "opus"]);
+
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("opencode")));
+    apply_launch_mode_and_passthrough(&mut layout, None, &model_preset, &[])
+        .expect("opencode model");
+    let (args, _) = only_agent(&layout);
+    assert_eq!(args, &["--model", "opus"]);
 
     let append_only = rimz::agents::LaunchPreset {
         append_system_prompt_file: Some(Path::new("/abs/append.md").to_path_buf()),

@@ -187,6 +187,9 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 | `pi --version` | version (`0.78.1` verified), written to **stderr** — the adapter probe captures both streams |
 | `pi -c` / `pi -r` | continue the most recent session / browse and pick |
 | `pi --session <path\|id>` | resume a specific session; accepts a partial UUID — the resume-on-rebirth seed |
+| `pi --model <provider/id\|model:level>` | select the model; the optional `:level` suffix selects thinking effort |
+| `pi --provider <name>` | select the provider for a model name that omits one |
+| `pi --thinking <off\|minimal\|low\|medium\|high\|xhigh>` | select reasoning effort |
 | `pi --fork <path\|id>`, `--no-session`, `--name <n>` | fork into a new file, ephemeral mode, display name |
 | `pi -e <source>`, `--no-extensions` | load an extension / disable discovery |
 | `-p`, `--mode json`, `--mode rpc` | headless modes (above) |

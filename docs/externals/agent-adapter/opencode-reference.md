@@ -230,6 +230,8 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 | `opencode [project]` | the TUI, embedding its private server (`--port` default 0 — random per launch; `--hostname` default `127.0.0.1`) |
 | `opencode -c` / `--continue`, `-s <id>` / `--session <id>`, `--fork` | resume the newest session / resume by id — the resume-on-rebirth seed / branch into a copy |
 | `opencode run [message…]` | headless one-shot |
+| `opencode run -m/--model <provider/model>` | select the provider model; the adapter passes the same flag on interactive launches |
+| `--variant <level>` | select provider-specific reasoning effort for the chosen model |
 | `opencode serve` / `web` / `attach <url>` | detached server / browser UI / point a TUI at a running server |
 | `opencode export [sessionID] [--sanitize]` / `import <file>` | session JSON out / in |
 | `opencode stats --days N --models --tools --project` | usage and cost totals over the store |

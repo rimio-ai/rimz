@@ -524,6 +524,32 @@ impl AgentAdapter for PiAdapter {
         Some("/compact")
     }
 
+    fn render_preset(
+        &self,
+        preset: &super::LaunchPreset,
+    ) -> std::result::Result<Vec<String>, super::PresetErr> {
+        let mut argv = Vec::new();
+        if let Some(model) = preset.model.as_deref().filter(|model| !model.is_empty()) {
+            argv.extend(["--model".to_owned(), model.to_owned()]);
+        }
+        if let Some(effort) = preset.effort.as_deref().filter(|effort| !effort.is_empty()) {
+            argv.extend(["--thinking".to_owned(), effort.to_owned()]);
+        }
+        if preset.system_prompt_file.is_some() {
+            return Err(super::PresetErr::UnsupportedField {
+                agent: self.descriptor().kind,
+                field: "system-prompt-file",
+            });
+        }
+        if preset.append_system_prompt_file.is_some() {
+            return Err(super::PresetErr::UnsupportedField {
+                agent: self.descriptor().kind,
+                field: "append-system-prompt-file",
+            });
+        }
+        Ok(argv)
+    }
+
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         let mut argv = vec!["pi".to_owned()];
         argv.extend(extra_args.iter().cloned());

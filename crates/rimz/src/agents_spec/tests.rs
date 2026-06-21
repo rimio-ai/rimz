@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::{RoleBinding, Team};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 fn profile(agent: &str) -> Profile {
     Profile {
@@ -323,14 +324,14 @@ fn profile_resolution_reports_unknown_base_cycles_depth_and_unsupported_fields()
         "pi-deep",
         Profile {
             agent: "pi".to_owned(),
-            model: Some("large".to_owned()),
+            system_prompt_file: Some(PathBuf::from("/abs/prompt.md")),
             ..profile("pi")
         },
     )]);
     assert!(matches!(
         parse_layout_spec("pi-deep", &unsupported, &no_commands()),
         Err(LayoutErr::InvalidProfile { profile, reason })
-            if profile == "pi-deep" && reason.contains("does not support profile field `model`")
+            if profile == "pi-deep" && reason.contains("does not support profile field `system-prompt-file`")
     ));
 }
 

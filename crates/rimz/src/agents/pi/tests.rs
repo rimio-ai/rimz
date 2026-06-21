@@ -46,18 +46,21 @@ fn pi_activity_filter_excludes_the_blocking_gate_and_launch_commands_build() {
 }
 
 #[test]
-fn pi_render_preset_rejects_unsupported_launch_fields() {
+fn pi_render_preset_maps_model_and_thinking() {
     use crate::agents::{LaunchPreset, PresetErr};
 
     assert_eq!(
         PiAdapter.render_preset(&LaunchPreset {
+            model: Some("openai/gpt-4o".to_owned()),
             effort: Some("high".to_owned()),
             ..Default::default()
         }),
-        Err(PresetErr::UnsupportedField {
-            agent: "pi",
-            field: "effort",
-        })
+        Ok(vec![
+            "--model".to_owned(),
+            "openai/gpt-4o".to_owned(),
+            "--thinking".to_owned(),
+            "high".to_owned(),
+        ])
     );
     assert_eq!(
         PiAdapter.render_preset(&LaunchPreset {
@@ -67,6 +70,16 @@ fn pi_render_preset_rejects_unsupported_launch_fields() {
         Err(PresetErr::UnsupportedField {
             agent: "pi",
             field: "system-prompt-file",
+        })
+    );
+    assert_eq!(
+        PiAdapter.render_preset(&LaunchPreset {
+            append_system_prompt_file: Some(Path::new("/abs/append.md").to_path_buf()),
+            ..Default::default()
+        }),
+        Err(PresetErr::UnsupportedField {
+            agent: "pi",
+            field: "append-system-prompt-file",
         })
     );
     assert!(
