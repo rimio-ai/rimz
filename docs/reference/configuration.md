@@ -110,7 +110,7 @@ mode = "plan"
 
 ### Profiles
 
-A profile is a named agent preset, addressable as `@<name>` once it is running. `agent` is its base — a built-in kind (`claude`, `codex`, …) or another profile that resolves to one — and the remaining fields layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `system-prompt-file`, `append-system-prompt-file`, and raw `args`.
+A profile is a named agent preset, addressable as `@<name>` once it is running. `agent` is its base — a built-in kind (`claude`, `codex`, …) or another profile that resolves to one — and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `system-prompt-file`, `append-system-prompt-file`, and raw `args`. These same override fields recur wherever you preset an agent — profiles, team roles, and loop tasks — so the template and `rimz config get` carry the current per-field defaults.
 
 Inheritance flattens at launch to one concrete adapter kind, and **the nearest set value wins for every field, including `args`** — a child that sets `args` replaces the base `args` rather than appending. `system-prompt-file` gives the profile its own voice; `append-system-prompt-file` keeps the adapter's base prompt and adds rules where the adapter supports it. A `~` expands to home and a relative path roots at the config file, so a prompt file points at the same file wherever the profile launches; each file must exist at launch, and a missing one fails with the path to fix. A field the resolved adapter has no flag for fails the launch and names the field to remove. Command-line `--model`, `--effort`, `--system-prompt-file`, and `--append-system-prompt-file` render after the profile and override it for that launch.
 
@@ -122,7 +122,7 @@ A profile may be named like a kind: `[agents.profiles.claude]` overrides the bas
 
 ### Teams
 
-A team is an ordered `roles` list that feeds `rimz agents <name>`; each role binds a role name to a profile and may override `mode`, `model`, `effort`, `system-prompt-file`, `append-system-prompt-file`, or `args` (replacing, like profiles). Each member answers to `@<role>` in that channel. By default the roles open left to right as one side-by-side column per role in one tab; an optional `layout` uses the inline shape grammar (comma = column, plus = row), resolving declared role names first and then falling back to roleless cells. The built-in `peer` team is the roleless `claude,codex`.
+A team is an ordered `roles` list that feeds `rimz agents <name>`; each role binds a role name to a profile and may set any of the same **override fields** (replacing, like profiles). Each member answers to `@<role>` in that channel. By default the roles open left to right as one side-by-side column per role in one tab; an optional `layout` uses the inline shape grammar (comma = column, plus = row), resolving declared role names first and then falling back to roleless cells. The built-in `peer` team is the roleless `claude,codex`.
 
 ### Inline specs and cell resolution
 

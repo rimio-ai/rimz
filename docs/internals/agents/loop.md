@@ -36,30 +36,8 @@ A task whose `spec` is a `<kind>-ping` virtual cell starts a provider's budget w
 
 The window is account-scoped, shared by every session of a provider kind ([provider.md](./provider.md)), so one ping per provider primes the whole account. Before spawning the turn, `loop run` reads the shared rate-limit cache and skips when the shortest window is already counting down. The read is best-effort: an unknown or cold cache falls through to the ping, since missing a window-start defeats the feature while an occasional extra token is cheap.
 
-## Config and commands
+## Config and code
 
-Loop tasks live in the per-machine config, outside the trust hash. Each entry runs the rimz-owned `loop run`, not arbitrary shell:
-
-```toml
-[agents.loop.tasks.morning]
-spec = "claude-ping"
-prompt = "ping"
-root = "/home/you/code/app"
-at = "07:00"
-days = "weekdays"
-
-[agents.loop.tasks.pr_watch]
-spec = "codex"
-prompt = "check CI on the release PR"
-root = "/home/you/code/app"
-every = "15m"
-mode = "auto"
-```
-
-- `rimz loop add <name> --spec <spec> --prompt <text> --at <HH:MM> [--days …] [--root .] [--worktree …]` writes an entry.
-- `rimz loop add morning --spec claude-ping --at 07:00 --days weekdays` writes a window primer and defaults the prompt to `ping`.
-- `rimz loop install [name]` previews the scheduler artifacts, takes consent, and installs them after hook/trust preflight.
-- `rimz loop uninstall [name]` reclaims the scheduler entry; `rimz loop remove <name>` also drops the config entry.
-- `rimz loop list` shows each task and whether it is installed; `rimz doctor` carries the same configured-task surface.
+Loop tasks live in per-machine `[agents.loop.tasks.*]`, outside the trust hash, and each entry runs the rimz-owned `loop run` rather than arbitrary shell. The config shape is in [configuration.md → Loop tasks](../../reference/configuration.md#loop-tasks); the `rimz loop add` / `install` / `uninstall` / `remove` / `list` commands are in [agents.md → Schedule turns with loop](../../reference/cli/agents.md#schedule-turns-with-loop).
 
 The pure schedule parsing, artifact rendering, and crontab reclaim live in `schedule.rs`; the CLI handler in `cli/loop_cmd.rs` owns config editing and OS scheduler glue.

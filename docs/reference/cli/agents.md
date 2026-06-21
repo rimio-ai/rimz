@@ -46,18 +46,7 @@ The `@` sigil is required for `steer` and `queue` (it also keeps a target from b
 
 ## Agents
 
-`rimz agents` is the card surface and the single launcher: list the room, launch a layout, run a supervised turn, then focus, wait on, or stop what you started.
-
-```sh
-rimz agents [--json]
-rimz agents list|ls [--json] [--all] [--worktree <WORKTREE>]
-rimz agents show <REF> [--json]
-rimz agents focus <REF>
-rimz agents wait <REF> [--timeout <DURATION>] [--stream [--from-start]] [--json]
-rimz agents stop <REF>
-rimz agents <SPEC> [PROMPT] [-w|--worktree[=<NAME>]] [--from-pr <PR>] [-n|--name <PETNAME>] [--new-pane|--new-tab] [--bg] [--ask|--yolo] [--model <MODEL>] [--description <TEXT>] [--system-prompt-file <PATH>] [--append-system-prompt-file <PATH>] [--effort <LEVEL>] [-- PASSTHROUGH...]
-rimz agents <SPEC> [PROMPT] -p|--print [--detach] [--keep] [--timeout <DURATION>] [--max-turns <N>] [--output-format <text|json|stream-json>] [--input-format <text|stream-json>] [shared launch flags]
-```
+`rimz agents` is the card surface and the single launcher: list the room, launch a layout, run a supervised turn, then focus, wait on, or stop what you started. The subsections below cover the forms worth knowing; run `rimz agents --help` (and `--help` on each subcommand) for the full flag list.
 
 ### Launch a layout
 
@@ -142,13 +131,9 @@ rimz steer @codex --smart-compact 70% -- "Continue the refactor."         # /com
 rimz steer @claude --file ./review-notes.md                               # send a file verbatim
 ```
 
-```sh
-rimz steer <TARGET> [--worktree <WORKTREE>] [--no-enter] [--force] [--all] [--create] [--smart-compact <PCT|TOKENS>] [--yes] [--file <PATH>] [--no-from] -- <TEXT...>
-```
-
 Address the target with the [agent-address grammar](#addressing-agents). Steer delivers to every reachable agent and prints which it reached and which it skipped, so one blocked agent never stops the rest. The audit event records metadata and text length, never the message content.
 
-The flags tune delivery:
+The flags worth knowing tune delivery (run `rimz steer --help` for the rest):
 
 - `--no-enter` pastes the text without submitting; otherwise the text rides as a bracketed paste and Enter lands as a discrete keystroke, so a `\n` in the text stays a soft composer newline and a multi-line prompt lands multi-line (write `\\` for a literal backslash).
 - `--file <PATH>` reads the prompt from a file and sends it byte-for-byte — real newlines stay soft breaks and backslashes stay literal, so code and regex paste unchanged. It conflicts with inline text.
@@ -172,13 +157,6 @@ rimz queue remove msg_01J…
 rimz queue clear @claude-2#cli-docs
 ```
 
-```sh
-rimz queue [add] <TARGET> [--on done|any] [steer flags] -- <TEXT...>
-rimz queue list [--json] [REF]
-rimz queue remove <MESSAGE_ID>
-rimz queue clear [--worktree <WORKTREE>] <REF>
-```
-
 The bare form and `queue add` do the same work. `--on done` (the default) delivers once the agent is `idle` or `success`; `--on any` also delivers after `failed`; `running`, `waiting`, and `paused` keep the message pending. Delivery is FIFO per agent, one message per unparked turn end; a failed send returns to pending and is abandoned after the retry cap. A queued message is durable and keyed on a session, so `queue` addresses bound agents — a freshly started pane with no session yet is refused with a pointer to `steer`, which reaches the pane directly.
 
 Queued delivery needs installed and trusted hooks, because turn-end hooks trigger the delivery helper. The record layout, gates, and delivery walk are in [harness.md → Talk and queue](../../internals/agents/harness.md#talk-and-queue).
@@ -195,10 +173,6 @@ rimz transcript @all#cli-docs --details
 rimz transcript --json
 ```
 
-```sh
-rimz transcript [TARGET] [-w|--worktree <WORKTREE>] [-n|--last <N>] [--details] [--json]
-```
-
 A single-agent target prints turns — the user prompt and that turn's final assistant message — while `--details` prints every normalized message and `--last <N>` keeps the last N turns. A pending ask prints at the bottom with its options, so you can resolve a blocker before typing over it. A channel target (`#worktree`, `@all`, or no target for the current channel) fuses every root agent's messages into one timestamp-ordered timeline labelled by handle: prompts render as `you→@handle:` and replies as `@handle:`. `--json` emits `{agent, turns, ask}` for one agent and `{channel, timeline, asks}` for a channel.
 
 ## Drive panes
@@ -212,15 +186,6 @@ rimz pane send zellij:terminal_4 --key ctrl-u --enter -- "cargo xtask test"   # 
 rimz pane focus tmux:%3
 rimz pane split
 rimz pane detach
-```
-
-```sh
-rimz pane list [--json] [--session-name <NAME>]
-rimz pane capture <PANE_ID> [--lines <N>] [--json] [--ansi]
-rimz pane send <PANE_ID> [--key <KEY>]... [--enter] [TEXT]
-rimz pane focus <PANE_ID> [--session-name <NAME>] [--pane-process-start <TIMESTAMP>]
-rimz pane split
-rimz pane detach [--session-name <NAME>]
 ```
 
 `list` is the room seen as panes: every pane grouped under its native tab, each row labelled with the agent that lives in it (`@kind#worktree`) or `process` for a plain pane, with status and working directory. Rimz's own sidebar pane is omitted, and a `●` marks the active pane in each tab.
@@ -249,14 +214,6 @@ rimz loop uninstall pr-watch
 rimz loop remove pr-watch
 ```
 
-```sh
-rimz loop add <NAME> --spec <SPEC> [--prompt <TEXT>|--prompt-file <PATH>] [--at <HH:MM> [--days <MASK>]|--every <DURATION>|--cron <EXPR>|--in <DURATION>] [--once] [--root <PATH>] [--worktree <NAME>] [--mode <auto|ask|yolo>] [--effort <LEVEL>] [--system-prompt-file <PATH>] [--timeout <DURATION>]
-rimz loop list
-rimz loop install [NAME] [--scheduler <auto|systemd|cron>] [-y|--yes]
-rimz loop uninstall [NAME] [--scheduler <auto|systemd|cron>] [-y|--yes]
-rimz loop remove <NAME>
-```
-
 Schedules come in four shapes: calendar (`--at` plus optional `--days`), interval (`--every 15m`), raw cron (`--cron`), and one-shot (`--once` or `--in 30m`). A `<kind>-ping` spec is the window-primer — `add` defaults its prompt to `ping`, and the run skips when the provider's window is already counting down. `loop add` records the intent; `loop install` applies it to the scheduler after a consent preview. The task model and config shape are in [loop.md](../../internals/agents/loop.md).
 
 ## Manage Rimz-owned worktrees
@@ -270,12 +227,6 @@ rimz worktree new --from-pr 42                           # branch pr-42 from the
 rimz worktree list --json
 rimz worktree remove cli-docs                            # refuses if dirty or not landed
 rimz worktree remove experiment --force                  # remove anyway
-```
-
-```sh
-rimz worktree new [NAME] [--base <head|fresh|REF>|--from-pr <PR>] [--branch <NAME>]
-rimz worktree list [--json]
-rimz worktree remove <NAME> [--force]
 ```
 
 `new` creates a marked worktree under the configured [`[agents.worktree] dir`](../configuration.md#worktrees). `--base head` branches from `HEAD`, `--base fresh` from the configured fresh base, and any other value is a git ref. `--from-pr <number|url>` fetches the pull request head through `origin` and creates a `pr-<N>` branch unless `--branch` names it (GitHub/Gitea/Forgejo use `refs/pull/<N>/head`, GitLab `refs/merge-requests/<N>/head`). `list` shows Rimz-owned worktrees as the channels they are — name, branch, the `@kind` handles working there, a dirty marker, the landed signal, and the path. `remove` refuses a dirty worktree or one whose content is not proven landed on its base; `--force` removes anyway.

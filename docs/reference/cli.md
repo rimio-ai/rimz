@@ -54,6 +54,8 @@ Full bootstrap, remote, list, setup, and doctor examples are in [Getting started
 
 These hold across the whole CLI, so each command page assumes them rather than repeating them.
 
+**`--help` is the flag reference.** Every command and subcommand prints its full flags and defaults with `--help`. These pages teach the model and the forms worth knowing; they leave the exhaustive switch list to `--help`, which never drifts from the binary.
+
 **Addressing agents.** `steer`, `queue`, `transcript`, and the `agents` management verbs all name agents the same way — `@<handle>` for who, `#<channel>` for which worktree or in-place team, or a raw pane id. The one canonical explanation is [Addressing agents](./cli/agents.md#addressing-agents).
 
 **Pick the backend with `--mux`.** When both Zellij and tmux are installed, `--mux zellij` or `--mux tmux` chooses the backend for that invocation. With one installed, Rimz uses it.

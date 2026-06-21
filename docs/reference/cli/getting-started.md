@@ -42,12 +42,9 @@ A few specifics:
 ## Remote rooms
 
 ```sh
-rimz remote add <NAME> <TARGET> [--no-reconnect] [--no-resume] [--mux <MUX>]
-rimz remote connect <ALIAS_OR_TARGET> [--reset] [--no-reconnect] [--attach|--no-attach|--print]
-rimz remote reset <ALIAS_OR_TARGET> [--no-reconnect] [--attach|--no-attach|--print]
-rimz remote del|rm <NAME>
-rimz remote rename <OLD> <NEW>
-rimz remote list|ls [--json]
+rimz remote add dev-box dev-box:query-engine     # save an alias
+rimz remote connect dev-box                       # attach the saved room over SSH
+rimz remote connect agent@prod-box:/srv/query-engine
 ```
 
 `rimz remote connect` builds a guarded `ssh -t` command locally and runs the remote host's own `rimz`, so your SSH config, keys, ports, and jump hosts all apply through normal `ssh` resolution.

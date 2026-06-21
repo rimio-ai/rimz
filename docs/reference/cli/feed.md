@@ -36,15 +36,7 @@ Every actionable feed item carries a `surface` that decides which action is mean
 | `bridge` | An agent hook when a fresh enrolled resolver is active. | `rimz feed resolve` delivers a decision to the waiting hook; `rimz feed abstain` advances the chain. |
 | `script` | `rimz feed ask`. | `rimz feed resolve` delivers JSON to the blocked script; `rimz feed abstain` lets the next resolver try. |
 
-```sh
-rimz feed ask --title <TEXT> [--options <a,b,c>] [--timeout <DURATION>] [--no-block]
-rimz feed push --kind <KIND> --title <TEXT> [--body <TEXT>]
-rimz feed list|ls [--json] [--audit]
-rimz feed show <REQUEST_ID> [--json]
-rimz feed resolve --decision <JSON> <REQUEST_ID> [--resolver-id <ID>] [--method <METHOD>] [--override-chain]
-rimz feed dismiss <REQUEST_ID> [--reason <TEXT>]
-rimz feed abstain --resolver-id <ID> <REQUEST_ID> [--reason <TEXT>]
-```
+The verbs (run `rimz feed --help` for their flags):
 
 - **`ask`** creates a `script` item, prints the request id, and (without `--no-block`) waits for the decision JSON and prints it. `--options` supplies button labels; `--timeout` bounds the wait.
 - **`push`** posts a non-blocking `native_ui` notice — an operator-visible item that needs no decision — and prints the request id.
@@ -56,10 +48,6 @@ The ledger owns the socket, nonce, compare-and-swap, late-answer, and audit rule
 
 ## Events
 
-```sh
-rimz event emit --kind <KIND> [--title <TEXT>] [--body <TEXT>] [--json <PAYLOAD>]
-```
-
 `event emit` appends a fire-and-forget workspace event and prints the event id. Unlike `feed push`, an event is a ledger record rather than a feed item — use it for structured progress that tooling reads, not for something a person needs to act on. `--kind` is a free-form tag (agent integrations prefer `<source>.<verb>`) and `--json` is stored as a structured payload.
 
 ```sh
@@ -70,13 +58,6 @@ rimz event emit --kind deploy.finished --title prod --body "Canary passed."
 ## Resolver chain
 
 Resolvers are trusted per machine: the allowlist decides which heartbeating resolver ids may engage the bridge, so a same-UID process writing heartbeat files is not enough on its own. The protocol and reference patterns are in [resolvers](../../internals/agents/resolvers.md), and the threat model in [security](../../guide/security.md).
-
-```sh
-rimz resolver add <ID> [--order <N>] [--budget <DURATION>] [--binary <PATH>] [--display-name <NAME>]
-rimz resolver remove <ID>
-rimz resolver list|ls [--json]
-rimz resolver reorder <ID> [--before <OTHER> | --after <OTHER>]
-```
 
 `add` enrols one resolver id. `--order` defaults to `10` (lower runs earlier), `--budget` defaults to `30s`, `--binary` pins the executable Rimz expects for that resolver's heartbeat, and `--display-name` is the label shown in UI and reports. `list` prints entries in chain order (`--json` emits `id`, `order`, `budget_seconds`, `binary`, `display_name`), and `reorder` moves an id before or after another.
 
