@@ -334,33 +334,34 @@
 ##  ▝▀▀▀▀▀▘
 ## """
 
-# Drop in any Alacritty theme: the [colors.*] tables below follow Alacritty's
-# schema, so you can paste a whole scheme file here verbatim to override the
-# palette. The shipped default is TokyoNight Night
+# Paste an Alacritty theme to override the scheme: uncomment the [colors.*]
+# tables below (or paste a whole scheme file here verbatim) and the inline
+# palette wins over `scheme`. The keys follow Alacritty's schema; the values
+# shown are the bundled TokyoNight Night default
 # (https://github.com/mbadolato/iTerm2-Color-Schemes/blob/master/alacritty/TokyoNight.toml).
-[colors.primary]
-background = "#1a1b26"
-foreground = "#c0caf5"
+## [colors.primary]
+## background = "#1a1b26"
+## foreground = "#c0caf5"
 
-[colors.normal]
-black = "#15161e"
-red = "#f7768e"
-green = "#9ece6a"
-yellow = "#e0af68"
-blue = "#7aa2f7"
-magenta = "#bb9af7"
-cyan = "#7dcfff"
-white = "#a9b1d6"
+## [colors.normal]
+## black = "#15161e"
+## red = "#f7768e"
+## green = "#9ece6a"
+## yellow = "#e0af68"
+## blue = "#7aa2f7"
+## magenta = "#bb9af7"
+## cyan = "#7dcfff"
+## white = "#a9b1d6"
 
-[colors.bright]
-black = "#414868"
-red = "#f7768e"
-green = "#9ece6a"
-yellow = "#e0af68"
-blue = "#7aa2f7"
-magenta = "#bb9af7"
-cyan = "#7dcfff"
-white = "#c0caf5"
+## [colors.bright]
+## black = "#414868"
+## red = "#f7768e"
+## green = "#9ece6a"
+## yellow = "#e0af68"
+## blue = "#7aa2f7"
+## magenta = "#bb9af7"
+## cyan = "#7dcfff"
+## white = "#c0caf5"
 
-[colors.selection]
-background = "#283457"
+## [colors.selection]
+## background = "#283457"

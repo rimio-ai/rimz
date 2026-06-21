@@ -45,11 +45,7 @@ fn template_defaults_deserialize_to_machine_defaults() {
     let parsed =
         MachineConfig::load_from(&dir.path().join("config.toml")).expect("template defaults parse");
 
-    // The template ships the pasteable palette as active defaults, so normalize
-    // it away before comparing the rest of the config.
-    let mut normalized = parsed.clone();
-    normalized.theme.colors = None;
-    assert_eq!(normalized, MachineConfig::default());
+    assert_eq!(parsed, MachineConfig::default());
 }
 
 #[test]

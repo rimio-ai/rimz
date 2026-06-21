@@ -55,7 +55,7 @@ fn config_init_prints_and_writes_the_template() {
     assert!(text.contains("# enabled = true"));
     let theme_text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
     assert!(theme_text.contains("[theme]"));
-    assert!(theme_text.contains("[colors.primary]"));
+    assert!(theme_text.contains("## [colors.primary]"));
     let agents_text =
         std::fs::read_to_string(agents_config_path(&env)).expect("read agents config");
     assert!(agents_text.contains("[agents.worktree]"));
