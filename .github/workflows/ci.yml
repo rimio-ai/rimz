@@ -191,4 +191,20 @@ jobs:
           "$mold_dir/bin/mold" --version
 
       - name: cargo xtask ci
-        run: mold -run cargo xtask ci
+        # The shared self-hosted runner executes several heavy jobs at once: a
+        # commit's push CI and its pull_request CI run in separate concurrency
+        # groups (different shas — PR head vs landed merge — so they cannot be
+        # collapsed), and a release build can trail the previous commit's CI.
+        # Two full instrumented suites on one box oversubscribe the cores and
+        # starve the latency-sensitive live-mux tests, whose `zellij`/`tmux` CLI
+        # round-trips then miss their deadlines. The per-run server cap in
+        # .config/nextest.toml bounds server *count*, not CPU, so it cannot fix
+        # this. Cap nextest to half the cores: two concurrent runs then sum to
+        # ~one box's worth of test threads instead of two, leaving the live-mux
+        # round-trips enough CPU to meet their deadlines while distinct commits
+        # still verify in parallel.
+        run: |
+          NEXTEST_TEST_THREADS="$(( ($(nproc) + 1) / 2 ))"
+          export NEXTEST_TEST_THREADS
+          echo "Capping nextest to $NEXTEST_TEST_THREADS of $(nproc) cores for live-mux headroom"
+          mold -run cargo xtask ci

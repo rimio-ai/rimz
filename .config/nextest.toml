@@ -26,6 +26,15 @@
 # aggregate inside the safe envelope no matter how the events overlap. `coverage`
 # in xtask selects it (`-P ci`); local `nextest`/`test` keep the cap-2 default.
 #
+# Server count is only half the load story. The live tests are latency-sensitive
+# — each spawns a `zellij`/`tmux` CLI client that must round-trip to its server
+# within a deadline — so they also starve when the box is CPU-oversubscribed,
+# which two full instrumented suites running at once on the shared runner cause
+# regardless of how few servers each holds. The CI workflow caps
+# `NEXTEST_TEST_THREADS` to half the runner's cores for exactly this reason: two
+# concurrent runs then sum to ~one box's worth of test threads, leaving the
+# round-trips enough CPU to meet their deadlines (see .github/workflows/ci.yml).
+#
 # Retries absorb the startup races that slip through under load (a different
 # test each time — momentary contention, not a real failure): a starved runner
 # can kill a live server mid-test ("There is no active session!"), and the whole
