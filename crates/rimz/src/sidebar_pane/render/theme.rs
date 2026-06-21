@@ -15,25 +15,26 @@
 //! `TokyoNight Night`; per-slot overrides then win over the selected scheme. The
 //! renderer resolves depth because terminal capability is a renderer-local fact.
 
-use crate::config::{
-    AnimationColor, ColorDepth, GlowMode, GlyphRole, ThemeColor, ThemeConfig, nearest_xterm_index,
-    xterm_rgb,
-};
+use crate::config::{ColorDepth, GlowMode, GlyphRole, ThemeConfig};
 use ratatui::style::{Color, Modifier, Style};
 
 use super::animation::{BreathSample, ResolvedAnimations};
 use super::oklab;
-use super::scheme;
 
 mod component;
 mod glyphs;
 mod identity;
+mod palette;
 mod raw;
 
 pub(crate) use component::Component;
 pub(crate) use glyphs::{GlyphSet, GlyphSetKind};
 pub(crate) use identity::Identity;
+pub(crate) use palette::Palette;
+pub(super) use palette::color_to_rgb;
 pub(crate) use raw::RawPalette;
+
+use palette::{HEAT_RAMP_WARM_START, ramp_tone, rgb_color};
 
 /// How far a calm card name's brand lightness dims below full brand, in OKLab L
 /// (`0.0` = full brand). Hue and saturation hold; only the lightness drops, so
@@ -97,247 +98,10 @@ const SHIMMER_BOLD_THRESHOLD: f32 = 0.04;
 /// identity-adjacent tone; drops to plain bold under `no_color` like every other.
 const VALUE_FLASH_INK: Color = Color::Indexed(150);
 
-/// Stops on the context **health** ramp, ordered calm → alarm:
-/// `[good, warn, caution, alarm]` — green → gold → orange → rose-red. Prepending
-/// the scheme's green to the warm trio widens the visible range so a filling
-/// context reads as a health sweep at a glance, while every stop stays
-/// scheme-tunable through its existing slot. [`Theme::heat_tone`] interpolates
-/// across these in OKLab.
-const HEAT_RAMP_STOPS: usize = 4;
-
-/// Where the warm tail (`warn`) sits on the full ramp: the second of four stops,
-/// i.e. one third of the way along. Scales whose "low" should read warm rather
-/// than healthy-green — idle age, where fifteen minutes is stale, not optimal —
-/// map their amount into `[HEAT_RAMP_WARM_START, 1.0]` via
-/// [`Theme::warm_heat_tone`], reproducing the legacy warn → caution → alarm
-/// sweep.
-const HEAT_RAMP_WARM_START: f32 = 1.0 / (HEAT_RAMP_STOPS as f32 - 1.0);
-
-/// The fresh-input "expense" tone is the reddest marker in the sidebar: it sits
-/// past the ramp's `alarm` stop, so the input read always reads redder than the
-/// context bar's scaled-to-red cache-read run — even at a near-full window, where
-/// that run reaches `alarm`. Take `alarm` (`heat_ramp[3]`, the ramp's reddest
-/// stop) directly, enrich its chroma toward the gamut edge, and deepen its
-/// lightness: a deep, hot red that holds alarm's hue but burns hotter than the
-/// lighter rose. The deepen step also carries the separation at indexed depth —
-/// without it a tone only a touch off the rose collapses into alarm's xterm cell.
-/// Levers: `CHROMA` enriches where a scheme leaves gamut room; `DEEPEN` makes it
-/// read hotter and lands its own indexed cell. Tuned against a rendered frame.
-const INPUT_EXPENSE_CHROMA: f32 = 1.30;
-const INPUT_EXPENSE_DEEPEN: f32 = -0.09;
-
 /// The scheme that ships as the default look, drawn from the bundled Alacritty
 /// catalog. `[theme] scheme` left unset resolves to this. The baked-in
 /// tones live in [`Semantic::DEFAULT`].
 pub(crate) const DEFAULT_SCHEME: &str = "TokyoNight Night";
-
-/// The active palette, one named slot per semantic tone.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Palette {
-    depth: ColorDepth,
-    raw: RawPalette,
-    heat_ramp: [(u8, u8, u8); HEAT_RAMP_STOPS],
-    good: Color,
-    warn: Color,
-    caution: Color,
-    alarm: Color,
-    /// The fresh-input cost tone — `alarm` deepened a step past the ramp's red
-    /// stop into the reddest marker on screen, so the costliest read always reads
-    /// hotter than the bar's scaled-to-red health run. Derived like `heat_ramp`,
-    /// not a tunable slot.
-    expense: Color,
-    accent: Color,
-    cool: Color,
-    meta: Color,
-    body: Color,
-    muted: Color,
-    faint: Color,
-    rule: Color,
-    selection: Color,
-    selection_bg: Color,
-}
-
-impl Palette {
-    pub(crate) fn resolve(theme: &ThemeConfig, depth: ColorDepth) -> Palette {
-        Self::resolve_with_raw(theme, depth, raw_palette_for_theme(theme))
-    }
-
-    fn resolve_with_raw(theme: &ThemeConfig, depth: ColorDepth, raw: RawPalette) -> Palette {
-        let tones = raw.derive_tones();
-        let slot = |override_color: Option<ThemeColor>, builtin| {
-            override_color
-                .map(|color| theme_color(color, depth, &raw))
-                .unwrap_or_else(|| rgb_color(builtin, depth))
-        };
-        let heat_ramp = [
-            derived_rgb_slot(theme.good, tones.good, &raw),
-            derived_rgb_slot(theme.warn, tones.warn, &raw),
-            derived_rgb_slot(theme.caution, tones.caution, &raw),
-            derived_rgb_slot(theme.alarm, tones.alarm, &raw),
-        ];
-        // `alarm` (stop 3) is the ramp's reddest tone; the input read must read
-        // redder still. Take it directly, enrich its chroma in place (a rotation
-        // of zero holds the hue), then deepen its lightness — a hotter red on the
-        // same hue that lands its own cell at any depth.
-        let expense = rgb_color(
-            oklab::lift_lightness(
-                oklab::warm_toward(heat_ramp[3], heat_ramp[3], 0.0, INPUT_EXPENSE_CHROMA),
-                INPUT_EXPENSE_DEEPEN,
-            ),
-            depth,
-        );
-        Palette {
-            depth,
-            raw,
-            heat_ramp,
-            good: slot(theme.good, tones.good),
-            warn: slot(theme.warn, tones.warn),
-            caution: slot(theme.caution, tones.caution),
-            alarm: slot(theme.alarm, tones.alarm),
-            expense,
-            accent: slot(theme.accent, tones.accent),
-            cool: slot(theme.cool, tones.cool),
-            meta: slot(theme.meta, tones.meta),
-            body: slot(theme.body, tones.body),
-            muted: slot(theme.muted, tones.muted),
-            faint: slot(theme.faint, tones.faint),
-            rule: slot(theme.rule, tones.rule),
-            selection: slot(theme.selection, tones.selection),
-            selection_bg: slot(theme.selection_bg, tones.selection_bg),
-        }
-    }
-
-    /// Resolve an external-identity tone at the palette's depth. The base hue is
-    /// fixed; only the truecolor-vs-indexed emission differs.
-    pub(crate) fn identity(&self, id: Identity) -> Color {
-        rgb_color(id.base_rgb(), self.depth)
-    }
-
-    pub(crate) fn animation_color(&self, color: AnimationColor) -> Color {
-        match color {
-            AnimationColor::Good => self.good,
-            AnimationColor::Warn => self.warn,
-            AnimationColor::Caution => self.caution,
-            AnimationColor::Alarm => self.alarm,
-            AnimationColor::Accent => self.accent,
-            AnimationColor::Cool => self.cool,
-            AnimationColor::Meta => self.meta,
-            AnimationColor::Body => self.body,
-            AnimationColor::Muted => self.muted,
-            AnimationColor::Faint => self.faint,
-            AnimationColor::Clay => self.identity(Identity::Claude),
-            AnimationColor::Indexed(index) => Color::Indexed(index),
-            AnimationColor::Rgb(red, green, blue) => rgb_color((red, green, blue), self.depth),
-            AnimationColor::Role(role) => rgb_color(self.raw.role_rgb(role), self.depth),
-        }
-    }
-}
-
-fn raw_palette_for_theme(theme: &ThemeConfig) -> RawPalette {
-    theme
-        .colors
-        .as_ref()
-        .and_then(|colors| scheme::inline_raw_palette(colors).ok())
-        .or_else(|| {
-            theme
-                .scheme
-                .as_deref()
-                .and_then(scheme::explicit_raw_palette)
-        })
-        .unwrap_or_else(scheme::default_raw_palette)
-}
-
-fn theme_color(color: ThemeColor, depth: ColorDepth, raw: &RawPalette) -> Color {
-    match color {
-        ThemeColor::Role(role) => rgb_color(raw.role_rgb(role), depth),
-        ThemeColor::Indexed(index) => Color::Indexed(index),
-        ThemeColor::Rgb(red, green, blue) => rgb_color((red, green, blue), depth),
-    }
-}
-
-fn derived_rgb_slot(
-    color: Option<ThemeColor>,
-    builtin: (u8, u8, u8),
-    raw: &RawPalette,
-) -> (u8, u8, u8) {
-    match color {
-        Some(ThemeColor::Role(role)) => raw.role_rgb(role),
-        Some(ThemeColor::Rgb(red, green, blue)) => (red, green, blue),
-        Some(ThemeColor::Indexed(index)) if index >= 16 => xterm_rgb(index),
-        Some(ThemeColor::Indexed(_)) | None => builtin,
-    }
-}
-
-fn rgb_color((red, green, blue): (u8, u8, u8), depth: ColorDepth) -> Color {
-    match depth {
-        ColorDepth::Truecolor => Color::Rgb(red, green, blue),
-        ColorDepth::Indexed => Color::Indexed(nearest_xterm_index(red, green, blue)),
-    }
-}
-
-/// Piecewise OKLab interpolation across an N-stop ramp: `amount` ∈ `[0, 1]` maps
-/// across the `N - 1` segments, blending within the active one. Endpoints clamp,
-/// so `0.0` is the first stop and `1.0` the last. One blend regardless of stop
-/// count — the ramp can grow or shrink without touching the math.
-fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
-    match ramp {
-        [] => (0, 0, 0),
-        [only] => *only,
-        _ => {
-            let segments = (ramp.len() - 1) as f32;
-            let scaled = amount.clamp(0.0, 1.0) * segments;
-            let lower = (scaled.floor() as usize).min(ramp.len() - 2);
-            oklab::blend(ramp[lower], ramp[lower + 1], scaled - lower as f32)
-        }
-    }
-}
-
-pub(super) fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
-    match color {
-        Color::Reset => None,
-        Color::Black => Some((0x00, 0x00, 0x00)),
-        Color::Red => Some((0x80, 0x00, 0x00)),
-        Color::Green => Some((0x00, 0x80, 0x00)),
-        Color::Yellow => Some((0x80, 0x80, 0x00)),
-        Color::Blue => Some((0x00, 0x00, 0x80)),
-        Color::Magenta => Some((0x80, 0x00, 0x80)),
-        Color::Cyan => Some((0x00, 0x80, 0x80)),
-        Color::Gray => Some((0xc0, 0xc0, 0xc0)),
-        Color::DarkGray => Some((0x80, 0x80, 0x80)),
-        Color::LightRed => Some((0xff, 0x00, 0x00)),
-        Color::LightGreen => Some((0x00, 0xff, 0x00)),
-        Color::LightYellow => Some((0xff, 0xff, 0x00)),
-        Color::LightBlue => Some((0x00, 0x00, 0xff)),
-        Color::LightMagenta => Some((0xff, 0x00, 0xff)),
-        Color::LightCyan => Some((0x00, 0xff, 0xff)),
-        Color::White => Some((0xff, 0xff, 0xff)),
-        Color::Indexed(index) if index < 16 => Some(ansi_index_rgb(index)),
-        Color::Indexed(index) => Some(xterm_rgb(index)),
-        Color::Rgb(red, green, blue) => Some((red, green, blue)),
-    }
-}
-
-fn ansi_index_rgb(index: u8) -> (u8, u8, u8) {
-    const ANSI: [(u8, u8, u8); 16] = [
-        (0x00, 0x00, 0x00),
-        (0x80, 0x00, 0x00),
-        (0x00, 0x80, 0x00),
-        (0x80, 0x80, 0x00),
-        (0x00, 0x00, 0x80),
-        (0x80, 0x00, 0x80),
-        (0x00, 0x80, 0x80),
-        (0xc0, 0xc0, 0xc0),
-        (0x80, 0x80, 0x80),
-        (0xff, 0x00, 0x00),
-        (0x00, 0xff, 0x00),
-        (0xff, 0xff, 0x00),
-        (0x00, 0x00, 0xff),
-        (0xff, 0x00, 0xff),
-        (0x00, 0xff, 0xff),
-        (0xff, 0xff, 0xff),
-    ];
-    ANSI[index as usize]
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Theme {
@@ -354,79 +118,51 @@ pub(crate) struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        let palette = Palette::resolve(&ThemeConfig::default(), ColorDepth::Indexed);
-        let glyphs = GlyphSet::default();
-        Self {
-            no_color: false,
-            truecolor: false,
-            depth: ColorDepth::Indexed,
-            glow: GlowMode::Auto,
-            animations: ResolvedAnimations::resolve(
-                &crate::config::ThemeAnimationsConfig::default(),
-                &glyphs,
-                &palette,
-            ),
-            glyphs,
-            palette,
-        }
+        Self::assemble(false, false, ColorDepth::Indexed, &ThemeConfig::default())
     }
 }
 
 impl Theme {
+    fn assemble(no_color: bool, truecolor: bool, depth: ColorDepth, theme: &ThemeConfig) -> Self {
+        let palette = Palette::resolve(theme, depth);
+        let glyphs = GlyphSet::resolve_with_set(theme.glyph_set_source().as_deref(), &theme.glyphs);
+        let animations = ResolvedAnimations::resolve(&theme.animations, &glyphs, &palette);
+        Self {
+            no_color,
+            truecolor,
+            depth,
+            glow: theme.display.glow,
+            animations,
+            glyphs,
+            palette,
+        }
+    }
+
     /// The active theme for a frame: cached terminal color-capability readings
     /// plus the palette, depth, and glow mode resolved from the snapshot's
     /// `[theme.display]` config.
     pub(crate) fn for_sidebar(theme: &ThemeConfig) -> Self {
         let truecolor = crate::tui::truecolor();
         let depth = theme.effective_theme_mode().depth(truecolor);
-        let palette = Palette::resolve(theme, depth);
-        let glyphs = GlyphSet::resolve_with_set(theme.glyph_set_source().as_deref(), &theme.glyphs);
-        Self {
-            no_color: crate::tui::no_color(),
-            truecolor,
-            depth,
-            glow: theme.display.glow,
-            animations: ResolvedAnimations::resolve(&theme.animations, &glyphs, &palette),
-            glyphs,
-            palette,
-        }
+        Self::assemble(crate::tui::no_color(), truecolor, depth, theme)
     }
 
     /// Build a deterministic test theme. Tests use the default indexed palette
     /// unless they explicitly pass a theme config to [`Self::fixed_for_theme`].
     #[cfg(test)]
     pub(crate) fn fixed(no_color: bool) -> Self {
-        let palette = Palette::resolve(&ThemeConfig::default(), ColorDepth::Indexed);
-        let glyphs = GlyphSet::default();
-        Self {
+        Self::assemble(
             no_color,
-            truecolor: false,
-            depth: ColorDepth::Indexed,
-            glow: GlowMode::Auto,
-            animations: ResolvedAnimations::resolve(
-                &crate::config::ThemeAnimationsConfig::default(),
-                &glyphs,
-                &palette,
-            ),
-            glyphs,
-            palette,
-        }
+            false,
+            ColorDepth::Indexed,
+            &ThemeConfig::default(),
+        )
     }
 
     #[cfg(test)]
     pub(crate) fn fixed_for_theme(no_color: bool, theme: &ThemeConfig) -> Self {
         let depth = theme.effective_theme_mode().depth(false);
-        let palette = Palette::resolve(theme, depth);
-        let glyphs = GlyphSet::resolve_with_set(theme.glyph_set_source().as_deref(), &theme.glyphs);
-        Self {
-            no_color,
-            truecolor: false,
-            depth,
-            glow: theme.display.glow,
-            animations: ResolvedAnimations::resolve(&theme.animations, &glyphs, &palette),
-            glyphs,
-            palette,
-        }
+        Self::assemble(no_color, false, depth, theme)
     }
 
     pub(crate) fn effects_enabled(&self) -> bool {
@@ -744,7 +480,7 @@ impl Theme {
 
     pub(crate) fn brand_tone(&self, panel: &crate::SidebarProviderPanel) -> Color {
         if let Some(role) = panel.color_role {
-            return rgb_color(self.palette.raw.role_rgb(role), self.depth);
+            return self.palette.role_tone(role);
         }
         match (self.depth, panel.color_rgb) {
             (ColorDepth::Truecolor, Some((red, green, blue))) => Color::Rgb(red, green, blue),

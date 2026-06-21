@@ -1,8 +1,9 @@
 //! Unit tests for [`super`]: palette resolution, the gray/brand tone
 //! ladder, depth-aware brand emission, and capability gating.
 
+use super::super::scheme;
 use super::*;
-use crate::config::{Semantic, ThemeAnimationsConfig, ThemeMode};
+use crate::config::{Semantic, ThemeAnimationsConfig, ThemeColor, ThemeMode, nearest_xterm_index};
 
 fn indices(palette: Palette) -> [Color; 13] {
     [
