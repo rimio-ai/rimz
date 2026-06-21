@@ -10,7 +10,7 @@ this doc ── folds ────►  AgentState                  (one per agen
 sidebar ── projects ──►  a sidebar row
 ```
 
-An adapter *produces* an [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) from each native event ([the adapter boundary](#the-adapter-boundary)); this doc *folds* those observations into one [`AgentState`](../../../crates/rimz/src/feed.rs) per agent; [sidebar.md](../sidebar/sidebar.md) *projects* that state into a row. The observation is agent-agnostic by construction, so everything below is too — a new agent that emits well-formed observations gets the state machine, ranking, liveness, and jump for free.
+An adapter *produces* an [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) from each native event ([the adapter boundary](#the-adapter-boundary)); this doc *folds* those observations into one [`AgentState`](../../../crates/rimz/src/agents/state.rs) per agent; [sidebar.md](../sidebar/sidebar.md) *projects* that state into a row. The observation is agent-agnostic by construction, so everything below is too — a new agent that emits well-formed observations gets the state machine, ranking, liveness, and jump for free.
 
 ## The model at a glance
 
@@ -19,7 +19,7 @@ Four nouns carry the model:
 - An **agent kind** is a wired integration (`claude`, `codex`, `pi`, `opencode`), described by an [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) whose `Capabilities` (`registers_lazily`, `subagents`, `background_tasks`, …) declare how that agent behaves. Every behavior below is capability-gated, so a new agent slots in by declaring what it does rather than by growing special cases.
 - An **agent instance** is presence: a live local pane running a known agent right now, read from the multiplexer every tick.
 - A **session** is identity: the id the agent's own hooks report, keyed `(kind, agent_id)`, where every durable fact attaches.
-- The **rollup entry** is the one [`AgentState`](../../../crates/rimz/src/feed.rs) per session that ledger replay derives — the durable record the sidebar enriches and renders.
+- The **rollup entry** is the one [`AgentState`](../../../crates/rimz/src/agents/state.rs) per session that ledger replay derives — the durable record the sidebar enriches and renders.
 
 Joining instances to sessions is [the instance lifecycle](#the-instance-lifecycle); the data flow between them is:
 
@@ -62,7 +62,7 @@ The glyph, animation, and color for each are the canonical table in [the interfa
 | **live-derived** | never stored in the ledger; computed at snapshot time from the live pane or git | `pane`, `worktree_path`, `worktree_branch` |
 | **transient heads** | opened and closed by signals, painted over the base status | the turn [phase](#turn-phase), the [compaction bracket](#the-compaction-bracket) (`compacting_since`; each close increments the durable `compaction_count`) |
 
-[`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) and [`AgentState`](../../../crates/rimz/src/feed.rs) are the field catalog; the lifetimes above are the rule those types do not state. Three rules earn a note:
+[`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) and [`AgentState`](../../../crates/rimz/src/agents/state.rs) are the field catalog; the lifetimes above are the rule those types do not state. Three rules earn a note:
 
 - A subagent's `task` is the one activity-lifetime exception: it holds the child's type (`Explore`, …) and carries forward as identity, so a finished child stays labeled when its `SubagentStop` omits the type.
 - The live-derived fields follow the pane, which knows its current cwd every tick, so `worktree_path` and `worktree_branch` track a `git checkout`. Pinning them at registration would be the branch-tracking bug ([Liveness and presence](#liveness-and-presence)).
@@ -258,7 +258,7 @@ Installing hooks edits the agent's own config, so it is a security surface, neve
 
 The ledger and explicit events decide routing, ranking, and state; enrichment paints the row. `task`, `context_pct`, `context_window`, `total_tokens`, and the todo counts are **enrichment**: display-only and redactable. A missing value means "the agent didn't report it," never zero — the sidebar projects it to a visible 0% baseline so every observed agent paints a context bar.
 
-`context_window` is the model's window in tokens, and uniformly across agents it is the model's max **input** tokens: the gauge numerator counts input-side occupancy only (`input + cache`, never output — see [`context_used_tokens`](../../../crates/rimz/src/feed.rs)), so a model that splits its window into separate input and output caps scales against the input cap. Each adapter resolves the window its own way (Claude from the payload model id, where `[1m]` widens it; Codex from the rollout's `model_context_window`; OpenCode from its model catalog), and the card's identity line renders it (`258k`, `1M`), preferring the fresher out-of-band reading from [`AgentContext`](#rich-context-agentcontext) when one exists.
+`context_window` is the model's window in tokens, and uniformly across agents it is the model's max **input** tokens: the gauge numerator counts input-side occupancy only (`input + cache`, never output — see [`context_used_tokens`](../../../crates/rimz/src/agents/state.rs)), so a model that splits its window into separate input and output caps scales against the input cap. Each adapter resolves the window its own way (Claude from the payload model id, where `[1m]` widens it; Codex from the rollout's `model_context_window`; OpenCode from its model catalog), and the card's identity line renders it (`258k`, `1M`), preferring the fresher out-of-band reading from [`AgentContext`](#rich-context-agentcontext) when one exists.
 
 Context budget is the one field no agent puts in its hook JSON — usage lives in the transcript or in a provider-owned in-process gauge (the [two sources](#two-sources) below). These are bare token counts; `payload_mode` gates the *content* of high-frequency payloads, never these gauges.
 
@@ -274,7 +274,7 @@ A provider whose hook wire Rimz authors has a third option: stamp the gauge **on
 
 ### Reading rules
 
-The tail reader is provider-agnostic ([`read_transcript_tail`](../../../crates/rimz/src/agents/mod.rs)) and every adapter parses on top of it under the same rules:
+The tail reader is provider-agnostic ([`read_transcript_tail`](../../../crates/rimz/src/agents/transcript_fs.rs)) and every adapter parses on top of it under the same rules:
 
 - **Bounded.** Read at most the trailing 64 KB, so a multi-megabyte log never stalls a hook.
 - **Newest-first.** Scan lines in reverse and take the most recent usage record; a truncated leading line from the seek simply fails to parse and is skipped.
