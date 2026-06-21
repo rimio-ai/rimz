@@ -244,9 +244,9 @@ fn launch_description_reduces_and_survives_provisional_adoption() {
 }
 
 #[test]
-fn launch_event_without_prompt_creates_idle_card() {
-    // Interactive launch (no prompt) must be Idle so the sidebar renders
-    // loading dots rather than the thinking glyph + em dash.
+fn launch_description_without_prompt_creates_idle_card() {
+    // Interactive launch (no prompt) must be Idle so a card-only description
+    // does not make the agent look busy.
     let agents = reduce_agent_states(&[EventEnvelope::agent_launched(
         workspace(),
         "session",
@@ -264,13 +264,14 @@ fn launch_event_without_prompt_creates_idle_card() {
             worktree_path: Some("/tmp/x".to_owned()),
             worktree_branch: Some("main".to_owned()),
             prompt: None,
-            description: None,
+            description: Some("port auth".to_owned()),
         },
     )]);
 
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].status, AgentStatus::Idle);
     assert_eq!(agents[0].phase, TurnPhase::Idle);
+    assert_eq!(agents[0].description.as_deref(), Some("port auth"));
 }
 
 #[test]
