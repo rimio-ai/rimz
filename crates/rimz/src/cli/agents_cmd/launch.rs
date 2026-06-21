@@ -859,6 +859,7 @@ pub(super) fn layout_panes_with_names(
     Ok(LayoutPanes { columns })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn pane_cmd_with_name(
     cell: &Cell,
     rimz_bin: &Path,
