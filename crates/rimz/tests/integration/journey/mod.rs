@@ -17,6 +17,7 @@ mod deep;
 mod lifecycle_replay;
 mod resize_redraw;
 mod sidebar_phases;
+mod stats_refresh_resize;
 mod teams;
 
 use std::collections::BTreeMap;

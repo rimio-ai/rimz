@@ -62,6 +62,9 @@ const SPINNER_CLEAR_COLS: usize = 120;
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
 const SPENDING_WAIT_STEPS: u32 = 15;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+/// How often `--refresh` re-checks terminal width between data reloads, so a
+/// pane resized after launch re-centres within one short tick.
+const RESIZE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The wordmark, spaced for a monospace terminal (the README carries a variant
 /// retuned for proportional HTML rendering).
@@ -107,9 +110,23 @@ fn run_refresh(dollars: bool) -> Result<()> {
     loop {
         let loaded = load_stats(true)?;
         let today_day = unix_secs_now() as i64 / DAY_SECS;
+        let mut cols = term_cols();
         clear_screen()?;
         render_panel(&loaded.stats, today_day, dollars, true)?;
-        thread::sleep(REFRESH_INTERVAL);
+        let reload_at = Instant::now() + REFRESH_INTERVAL;
+        loop {
+            let now = Instant::now();
+            if now >= reload_at {
+                break;
+            }
+            thread::sleep(RESIZE_POLL_INTERVAL.min(reload_at - now));
+            let current = term_cols();
+            if current != cols {
+                cols = current;
+                clear_screen()?;
+                render_panel(&loaded.stats, today_day, dollars, true)?;
+            }
+        }
     }
 }
 
