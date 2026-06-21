@@ -143,7 +143,7 @@ Schedule forms are calendar (`--at` plus optional `--days`), interval (`--every 
 
 ### Focus, wait, and stop
 
-`focus` jumps to an agent's pane. `wait` waits for a supervised run by run id or pet name, or for an interactive agent to reach an idle/success gate; `--stream` tails the transcript (`--from-start` replays from the top). `stop` cancels a supervised run when the ref names one, otherwise it closes the agent pane.
+`focus` jumps to an agent's pane. `wait` waits for a supervised run by run id or pet name, or for an interactive agent to reach an idle/success gate; `--stream` tails the transcript (`--from-start` replays from the top). `stop` tears down a run's pane, canceling supervision first while the run is live and reclaiming a completed `--keep` agent's lingering pane, or closes the agent pane when the ref names no run.
 
 `<REF>` accepts a pane id (`tmux:%1`, `zellij:terminal_3`) or an `@`-mention: `@swift-otter` (pet name), `@claude-2` (kind ordinal), `@claude` (a kind), `@planner` (a profile), or `@<session-prefix>`. Append `#<worktree>` to scope the lookup; it narrows by branch, generated worktree name, or directory basename, and defaults to the current worktree. These management commands resolve to one agent, so a fan-out mention (`@claude` matching several, or `@all`) is an ambiguity here — name one. They also accept a bare selector (`swift-otter`), and `wait`/`stop`/`show` accept a run id: the `@` sigil is optional here because a run id carries none. `steer` and `queue` require the `@` sigil and fan out instead — see below.
 

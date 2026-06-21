@@ -313,27 +313,21 @@ pub(super) fn stop_agent(reference: String, globals: &GlobalFlags) -> Result<()>
     )
     .ok();
     if let Some(run) = newest_run_by_ref(&ledger, &reference, live_agent)? {
-        if run.status.is_terminal()
-            && run.run_id.as_str() != reference
-            && let Some(agent) = live_agent.as_ref()
-        {
-            return close_agent_pane(&workspace, agent);
-        }
-        let (record, wrote) = rimz::run::cancel(ledger.paths(), &run.run_id)?;
-        if wrote {
-            rimz::ledger::wakeup::wake_run(ledger.runtime_paths(), &record)
-                .context("waking run waiter")?;
-            if let Ok(backend) =
-                supervised::pane::backend_for_workspace_session(&workspace, globals)
-            {
-                supervised::pane::close_stopped_run_pane_after_grace(
-                    backend.as_ref(),
-                    &ledger,
-                    &workspace.session_name,
-                    &record,
-                    supervised::pane::STOP_BACKSTOP_GRACE,
-                );
+        if run_stop_should_cancel(&run) {
+            let (record, wrote) = rimz::run::cancel(ledger.paths(), &run.run_id)?;
+            if wrote {
+                rimz::ledger::wakeup::wake_run(ledger.runtime_paths(), &record)
+                    .context("waking run waiter")?;
             }
+        }
+        if let Ok(backend) = supervised::pane::backend_for_workspace_session(&workspace, globals) {
+            supervised::pane::close_stopped_run_pane_after_grace(
+                backend.as_ref(),
+                &ledger,
+                &workspace.session_name,
+                &run,
+                supervised::pane::STOP_BACKSTOP_GRACE,
+            );
         }
         return Ok(());
     }
@@ -347,6 +341,13 @@ pub(super) fn stop_agent(reference: String, globals: &GlobalFlags) -> Result<()>
         )?,
     };
     close_agent_pane(&workspace, agent)
+}
+
+/// Whether `stop` must cancel a run's supervision before reclaiming its pane.
+/// Live runs are canceled so a blocking `-p` waiter wakes. Terminal runs, such
+/// as completed `--keep` agents, keep their record and only lose the pane.
+pub(super) fn run_stop_should_cancel(run: &RunRecord) -> bool {
+    !run.status.is_terminal()
 }
 
 fn close_agent_pane(workspace: &rimz::ResolvedWorkspace, agent: &AgentState) -> Result<()> {

@@ -1028,6 +1028,33 @@ fn exec_records_end_trace_for_interactive_wrapper_exits() {
     assert!(!should_record_end_trace(&args));
 }
 
+#[test]
+fn run_stop_should_cancel_only_live_runs() {
+    for status in [RunStatus::Pending, RunStatus::Running] {
+        assert!(run_stop_should_cancel(&run_record_with_status(status)));
+    }
+    for status in [
+        RunStatus::Completed,
+        RunStatus::Canceled,
+        RunStatus::Failed,
+        RunStatus::TimedOut,
+    ] {
+        assert!(!run_stop_should_cancel(&run_record_with_status(status)));
+    }
+}
+
+fn run_record_with_status(status: RunStatus) -> RunRecord {
+    let mut record = RunRecord::new(
+        WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "summarize".to_owned(),
+        Path::new("/tmp/rimz-run").to_path_buf(),
+    );
+    record.status = status;
+    record
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
     let state = tempfile::tempdir().expect("state dir");
