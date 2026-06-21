@@ -57,8 +57,6 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         sidebar_renderer: "built into rimz",
         terminal: runtime::collect_terminal(),
         hooks: agents::collect_hooks(),
-        coverage: agents::collect_coverage(),
-        hooks_matrix: agents::collect_hook_matrix(),
         loop_tasks: collect_loop(),
         remote_control: runtime::collect_remote_control(),
         rooms: runtime::collect_rooms(ws),

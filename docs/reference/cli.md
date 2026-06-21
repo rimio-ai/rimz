@@ -9,7 +9,7 @@ This page is the map. Detailed examples and full command notes live in the comma
 - [Getting started](./cli/getting-started.md) — `rimz`, `start`, `attach`, `remote`, `list`, `setup`, `doctor`.
 - [Agent control](./cli/agents.md) — `agents`, `transcript`, `steer`, `queue`, `pane`, `worktree`, `loop`.
 - [Feed, resolvers, hooks, and trust](./cli/feed.md) — `feed`, `event`, `resolver`, `hooks`, `trust`.
-- [Maintenance](./cli/maintenance.md) — `config`, `workspace`, `reload`, `reset`, `gc`, `ping`.
+- [Maintenance](./cli/maintenance.md) — `coverage`, `config`, `workspace`, `reload`, `reset`, `gc`, `ping`.
 
 ## Fast path
 
@@ -135,6 +135,7 @@ Full feed, resolver, hook, event, and trust examples live in [Feed, resolvers, h
 | `loop` | Schedule one supervised agent turn on this machine's OS scheduler. | [Loop tasks](../internals/agents/loop.md) |
 | `list` | Show known rooms and their live backend. | [Getting started](./cli/getting-started.md#list-rooms) |
 | `stats` | Token-activity heatmap, model/agent breakdowns, usage insights, and optional live refresh. | [The Lobby](../internals/reach/welcome.md#rimz-stats) |
+| `coverage` | Show static adapter concern and hook coverage matrices. | [Maintenance](./cli/maintenance.md#adapter-coverage) |
 | `list-themes` | Print the bundled sidebar theme names. | [Maintenance](./cli/maintenance.md#list-themes) |
 | `doctor` | Diagnose backend, hook, trust, resolver, and room-tree state. | [Getting started](./cli/getting-started.md#setup-and-doctor) |
 | `setup` | Print first-run environment state and write default config. | [Getting started](./cli/getting-started.md#setup-and-doctor) |

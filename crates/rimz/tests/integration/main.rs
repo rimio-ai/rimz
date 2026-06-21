@@ -13,6 +13,7 @@ mod backend;
 mod chain_advance;
 mod codex_broker;
 mod config;
+mod coverage;
 mod doctor;
 mod examples;
 mod feed_runtime;

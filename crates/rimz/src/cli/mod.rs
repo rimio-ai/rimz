@@ -6,6 +6,7 @@ mod agents_launch;
 mod attach_exec;
 mod codex;
 mod config;
+mod coverage;
 mod daemon_view;
 mod doctor;
 mod event;
@@ -99,6 +100,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
         Some(Subcmd::Codex(args)) => codex::run(args, &globals),
         Some(Subcmd::Config(args)) => config::run(args, &globals),
+        Some(Subcmd::Coverage(args)) => coverage::run(args, &globals),
         Some(Subcmd::Trust(args)) => trust::run(args, &globals),
         Some(Subcmd::Transcript(args)) => transcript::run(args, &globals),
         Some(Subcmd::Doctor(args)) => doctor::run(args, &globals),
@@ -199,6 +201,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
             (command, session, Some("codex"))
         }
         Some(Subcmd::Config(_)) => ("config", None, None),
+        Some(Subcmd::Coverage(_)) => ("coverage", None, None),
         Some(Subcmd::Trust(_)) => ("trust", None, None),
         Some(Subcmd::Transcript(_)) => ("transcript", None, None),
         Some(Subcmd::Doctor(_)) => ("doctor", None, None),
@@ -550,6 +553,8 @@ enum Subcmd {
     Codex(codex::CodexArgs),
     /// Inspect and edit the per-machine config.
     Config(config::ConfigArgs),
+    /// Adapter integration-concern and lifecycle-hook coverage matrices.
+    Coverage(coverage::CoverageArgs),
     /// Manage the project's executable-surface trust grant.
     Trust(trust::TrustArgs),
     /// Inspect agent or channel conversation transcripts.

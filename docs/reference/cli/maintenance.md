@@ -35,6 +35,17 @@ rimz config set <KEY> <VALUE>
 
 Dotted keys address nested TOML tables. Examples include `agents.worktree.base`, `theme.display.max_cols`, `notifications.enabled`, `notifications.triggers`, `agents.teams.review.layout`, `agents.teams.review.roles`, `agents.profiles.codex-yolo.mode`, `agents.commands.vim`, and `theme.providers.codex.color`.
 
+## Adapter coverage
+
+```sh
+rimz coverage
+rimz coverage --json
+```
+
+`rimz coverage` prints two static adapter matrices from the built-in adapter descriptors: integration-concern coverage and lifecycle-hook coverage. The grid uses `✓` for wired or native support, `◐` for partial or derived support, and `✗` for unsupported or absent surfaces. Each matrix includes a `GAPS` table with the concern or signal, agent, and detail for every non-OK cell, ordered the same way the grid reads.
+
+`--json` emits one document with `coverage` and `hooks_matrix`, each containing the agent columns and matrix rows for scripting.
+
 ## List themes
 
 ```sh

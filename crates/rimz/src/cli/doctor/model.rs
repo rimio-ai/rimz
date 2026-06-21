@@ -33,8 +33,6 @@ pub(super) struct DoctorReport {
     pub(super) sidebar_renderer: &'static str,
     pub(super) terminal: Terminal,
     pub(super) hooks: Vec<HookRow>,
-    pub(super) coverage: CoverageMatrix,
-    pub(super) hooks_matrix: CoverageMatrix,
     pub(super) loop_tasks: LoopTasks,
     pub(super) remote_control: RemoteControl,
     pub(super) rooms: Probe<Rooms>,
@@ -194,57 +192,6 @@ impl HookStatus {
             Self::InstalledUntrusted { .. } => "installed, untrusted",
             Self::NotInstalled { .. } => "not installed",
             Self::Unsupported { .. } => "unsupported",
-        }
-    }
-}
-
-/// A cross-adapter coverage grid: rows are concerns or lifecycle signals,
-/// columns are agents in registry order.
-#[derive(Debug, Serialize)]
-pub(super) struct CoverageMatrix {
-    pub(super) agents: Vec<String>,
-    pub(super) rows: Vec<MatrixRow>,
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct MatrixRow {
-    pub(super) label: String,
-    pub(super) cells: Vec<MatrixCell>,
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct MatrixCell {
-    pub(super) state: MatrixCellState,
-    pub(super) detail: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum MatrixCellState {
-    Ok,
-    Partial,
-    Absent,
-}
-
-impl MatrixCell {
-    pub(super) fn ok(detail: impl Into<String>) -> Self {
-        Self {
-            state: MatrixCellState::Ok,
-            detail: detail.into(),
-        }
-    }
-
-    pub(super) fn partial(detail: impl Into<String>) -> Self {
-        Self {
-            state: MatrixCellState::Partial,
-            detail: detail.into(),
-        }
-    }
-
-    pub(super) fn absent(detail: impl Into<String>) -> Self {
-        Self {
-            state: MatrixCellState::Absent,
-            detail: detail.into(),
         }
     }
 }

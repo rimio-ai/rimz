@@ -130,6 +130,6 @@ Run `rimz config init --force` for an explicit clean reset. The generated config
 rimz doctor [--audit] [--json] [--output PATH]
 ```
 
-`rimz doctor` reports the resolved workspace, backend and version, session health, duplicate live sidebar sessions for the workspace, sidebar pane, agent hook status and capability coverage, remote-control state, room tree, Rimz storage footprint, protocol versions, trust state, unauthorized resolver heartbeats, agent rollup, and recent sidebar diagnostics. The human report renders each area as a titled section with a status glyph carrying the verdict.
+`rimz doctor` reports the resolved workspace, backend and version, session health, duplicate live sidebar sessions for the workspace, sidebar pane, agent hook status, remote-control state, room tree, Rimz storage footprint, protocol versions, trust state, unauthorized resolver heartbeats, agent rollup, and recent sidebar diagnostics. The human report renders each area as a titled section with a status glyph carrying the verdict. `rimz coverage` reports static adapter coverage for integration concerns and lifecycle hooks.
 
 `--audit` expands the agent rollup with durable historical detail. `--json` emits the same report as one machine-readable document, with typed states and raw timestamps for diffing or tooling. `--output PATH` writes the report (human text, or JSON with `--json`) to a file atomically instead of stdout. Run doctor first when a room, hook, resolver, sidebar, or backend behaves unexpectedly; each failing check prints the next fix where Rimz knows one.
