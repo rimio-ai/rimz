@@ -109,6 +109,38 @@ fn gpt4o_book() -> PriceBook {
     )
 }
 
+fn cached_entry(ts_secs: u64, cost_usd: f64, thread_id: &str) -> CachedEntry {
+    CachedEntry {
+        ts_secs,
+        cost_usd,
+        input: 10,
+        output: 5,
+        cache_write: 0,
+        cache_read: 0,
+        message_id: None,
+        request_id: None,
+        thread_id: Some(thread_id.to_owned()),
+        is_sidechain: false,
+        model: None,
+        origin_path: None,
+    }
+}
+
+fn cached_file(path: &Path, entries: Vec<CachedEntry>) -> (String, FileCacheEntry) {
+    let (mtime_secs, len) = file_stat(path);
+    (
+        path.to_string_lossy().into_owned(),
+        FileCacheEntry {
+            mtime_secs,
+            len,
+            cursor: SpendCursor::default(),
+            origin_path: None,
+            entries,
+            unknown_models: BTreeMap::new(),
+        },
+    )
+}
+
 #[test]
 fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
     let dir = TempDir::new().unwrap();
@@ -121,12 +153,12 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
 
     let mut cache = SpendingDiskCache::default();
     let first = compute_total(std::slice::from_ref(&file), &mut cache);
-    assert_eq!(first.today.tokens, 15);
+    assert_eq!(first.headline.tokens, 15);
     assert!(cache.dirty);
 
     cache.dirty = false;
     let second = compute_total(&[file], &mut cache);
-    assert_eq!(second.today.usd, first.today.usd);
+    assert_eq!(second.headline.usd, first.headline.usd);
     assert!(!cache.dirty, "unchanged files should be served from cache");
 
     let path = dir.path().join("spending.json");
@@ -183,12 +215,12 @@ fn token_split_and_session_counts_populate_windows() {
     let mut cache = SpendingDiskCache::default();
     let total = compute_total(&[main, subfile], &mut cache);
 
-    assert_eq!(total.today.input, 25_000);
-    assert_eq!(total.today.output, 64_500);
-    assert_eq!(total.today.tokens, 89_500);
-    assert_eq!(total.today.cache_write, 12_000);
-    assert_eq!(total.today.cache_read, 70_000);
-    assert_eq!(total.today.sessions, 1);
+    assert_eq!(total.headline.input, 25_000);
+    assert_eq!(total.headline.output, 64_500);
+    assert_eq!(total.headline.tokens, 89_500);
+    assert_eq!(total.headline.cache_write, 12_000);
+    assert_eq!(total.headline.cache_read, 70_000);
+    assert_eq!(total.headline.sessions, 1);
     assert_eq!(total.year.sessions, 1);
 }
 
@@ -230,9 +262,9 @@ fn native_thread_ids_count_many_sessions_in_one_store() {
     let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(opencode_adapter(), file)];
 
     let deduped = dedup_cached_entries(&files, &cache);
-    let spending = aggregate_spending(&files, &cache, &deduped, NOW_SECS);
+    let spending = aggregate_spending(&files, &cache, &deduped, NOW_SECS, &HeadlineSpec::default());
 
-    assert_eq!(spending.total.today.sessions, 1);
+    assert_eq!(spending.total.headline.sessions, 1);
     assert_eq!(spending.total.week.sessions, 2);
     assert_eq!(spending.total.year.sessions, 2);
     assert_eq!(spending.by_provider["opencode"].week.sessions, 2);
@@ -303,13 +335,13 @@ fn scoped_tally_includes_project_and_linked_worktree_roots_only() {
     let global = compute_spending(&files, &mut cache, &PriceBook::default(), NOW_SECS);
     let scope = SpendScope::from_roots(Some(&project), std::slice::from_ref(&linked));
 
-    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS);
+    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS, &HeadlineSpec::default());
 
-    assert!((global.total.today.usd - 15.0).abs() < 1e-9);
-    assert!((scoped.today.usd - 3.0).abs() < 1e-9);
-    assert_eq!(scoped.today.tokens, 30);
-    assert_eq!(scoped.today.sessions, 2);
-    assert_eq!(scoped.week, scoped.today);
+    assert!((global.total.headline.usd - 15.0).abs() < 1e-9);
+    assert!((scoped.headline.usd - 3.0).abs() < 1e-9);
+    assert_eq!(scoped.headline.tokens, 30);
+    assert_eq!(scoped.headline.sessions, 2);
+    assert_eq!(scoped.week, scoped.headline);
 }
 
 #[test]
@@ -362,19 +394,28 @@ fn scoped_tally_counts_sessions_under_worktree_home_not_just_listed_roots() {
     // `worktree_roots` is empty — the removed worktree is gone from the live
     // list — yet the home prefix keeps its spend in scope.
     let scope = SpendScope::for_workspace(Some(&project), &[], Some(&home));
-    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS);
+    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS, &HeadlineSpec::default());
 
     assert!(
-        (scoped.today.usd - 3.0).abs() < 1e-9,
+        (scoped.headline.usd - 3.0).abs() < 1e-9,
         "a removed-worktree session under the home still counts"
     );
-    assert_eq!(scoped.today.sessions, 1, "the outside session is excluded");
+    assert_eq!(
+        scoped.headline.sessions, 1,
+        "the outside session is excluded"
+    );
 
     // Without the home prefix the removed worktree drops out — the bug.
     let live_only = SpendScope::from_roots(Some(&project), &[]);
-    let live_scoped = compute_scoped_tally(&files, &cache, &live_only, NOW_SECS);
+    let live_scoped = compute_scoped_tally(
+        &files,
+        &cache,
+        &live_only,
+        NOW_SECS,
+        &HeadlineSpec::default(),
+    );
     assert_eq!(
-        live_scoped.today.usd, 0.0,
+        live_scoped.headline.usd, 0.0,
         "the live worktree list alone misses the removed worktree"
     );
 }
@@ -399,14 +440,157 @@ fn trailing_windows_bucket_by_age() {
     let mut cache = SpendingDiskCache::default();
     let totals = compute_total(&[file], &mut cache);
 
-    assert_eq!(totals.today.tokens, 15);
-    assert!((totals.today.usd - 1.0).abs() < 1e-9);
+    assert_eq!(totals.headline.tokens, 15);
+    assert!((totals.headline.usd - 1.0).abs() < 1e-9);
     assert_eq!(totals.week.tokens, 30);
     assert!((totals.week.usd - 1.5).abs() < 1e-9);
     assert_eq!(totals.month.tokens, 45);
     assert!((totals.month.usd - 1.75).abs() < 1e-9);
     assert_eq!(totals.year.tokens, 60);
     assert!((totals.year.usd - 1.85).abs() < 1e-9);
+}
+
+#[test]
+fn today_headline_window_starts_at_configured_local_midnight() {
+    let file = PathBuf::from("/x/claude.jsonl");
+    let day_start = (NOW_SECS / 86_400) * 86_400;
+    let cache = SpendingDiskCache {
+        files: HashMap::from([(
+            file.to_string_lossy().into_owned(),
+            FileCacheEntry {
+                mtime_secs: 1,
+                len: 1,
+                cursor: SpendCursor::default(),
+                origin_path: None,
+                entries: vec![
+                    cached_entry(day_start - 1, 1.0, "before-midnight"),
+                    cached_entry(day_start + 60, 2.0, "after-midnight"),
+                ],
+                unknown_models: BTreeMap::new(),
+            },
+        )]),
+        ..Default::default()
+    };
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file)];
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Today,
+        timezone: Some("UTC".to_owned()),
+    };
+
+    let deduped = dedup_cached_entries(&files, &cache);
+    let spending = aggregate_spending(&files, &cache, &deduped, NOW_SECS, &spec);
+
+    assert!((spending.total.headline.usd - 2.0).abs() < 1e-9);
+    assert_eq!(spending.total.headline.tokens, 15);
+    assert_eq!(spending.total.headline.sessions, 1);
+    assert!((spending.total.week.usd - 3.0).abs() < 1e-9);
+    assert_eq!(spending.total.week.sessions, 2);
+}
+
+#[test]
+fn session_headline_window_uses_latest_activity_run_and_idles_to_zero() {
+    const HOUR: u64 = 3_600;
+    let file = PathBuf::from("/x/claude.jsonl");
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Session,
+        timezone: None,
+    };
+    let active_cache = SpendingDiskCache {
+        files: HashMap::from([(
+            file.to_string_lossy().into_owned(),
+            FileCacheEntry {
+                mtime_secs: 1,
+                len: 1,
+                cursor: SpendCursor::default(),
+                origin_path: None,
+                entries: vec![
+                    cached_entry(NOW_SECS - 10 * HOUR, 1.0, "old"),
+                    cached_entry(NOW_SECS - 9 * HOUR, 1.0, "old"),
+                    cached_entry(NOW_SECS - 4 * HOUR, 2.0, "current"),
+                    cached_entry(NOW_SECS - HOUR, 3.0, "current"),
+                ],
+                unknown_models: BTreeMap::new(),
+            },
+        )]),
+        ..Default::default()
+    };
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+
+    let deduped = dedup_cached_entries(&files, &active_cache);
+    let active = aggregate_spending(&files, &active_cache, &deduped, NOW_SECS, &spec);
+
+    assert!((active.total.headline.usd - 5.0).abs() < 1e-9);
+    assert_eq!(active.total.headline.tokens, 30);
+    assert_eq!(active.total.headline.sessions, 1);
+    assert!((active.total.week.usd - 7.0).abs() < 1e-9);
+
+    let idle_cache = SpendingDiskCache {
+        files: HashMap::from([(
+            file.to_string_lossy().into_owned(),
+            FileCacheEntry {
+                mtime_secs: 1,
+                len: 1,
+                cursor: SpendCursor::default(),
+                origin_path: None,
+                entries: vec![cached_entry(NOW_SECS - 5 * HOUR, 9.0, "idle")],
+                unknown_models: BTreeMap::new(),
+            },
+        )]),
+        ..Default::default()
+    };
+    let deduped = dedup_cached_entries(&files, &idle_cache);
+    let idle = aggregate_spending(&files, &idle_cache, &deduped, NOW_SECS, &spec);
+
+    assert_eq!(idle.total.headline.usd, 0.0);
+    assert_eq!(idle.total.headline.tokens, 0);
+    assert_eq!(idle.total.headline.sessions, 0);
+    assert!((idle.total.week.usd - 9.0).abs() < 1e-9);
+}
+
+#[test]
+fn provider_session_headline_cutoffs_are_provider_local() {
+    const HOUR: u64 = 3_600;
+    let dir = TempDir::new().unwrap();
+    let claude_file = write_jsonl(dir.path(), "claude.jsonl", &[]);
+    let codex_file = write_codex(dir.path(), &[]);
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+        (claude_adapter(), claude_file.clone()),
+        (codex_adapter(), codex_file.clone()),
+    ];
+    let mut cache = SpendingDiskCache {
+        files: HashMap::from([
+            cached_file(
+                &claude_file,
+                vec![
+                    cached_entry(NOW_SECS - 8 * HOUR, 3.0, "claude"),
+                    cached_entry(NOW_SECS, 1.0, "claude"),
+                ],
+            ),
+            cached_file(
+                &codex_file,
+                vec![cached_entry(NOW_SECS - 4 * HOUR, 2.0, "codex")],
+            ),
+        ]),
+        ..Default::default()
+    };
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Session,
+        timezone: None,
+    };
+
+    let (spending, _) = compute_spending_with_origins_and_scope(
+        &files,
+        &mut cache,
+        &PriceBook::default(),
+        NOW_SECS,
+        &HashMap::new(),
+        None,
+        &spec,
+    );
+
+    assert!((spending.total.headline.usd - 6.0).abs() < 1e-9);
+    assert!((spending.by_provider["claude"].headline.usd - 1.0).abs() < 1e-9);
+    assert!((spending.by_provider["codex"].headline.usd - 2.0).abs() < 1e-9);
 }
 
 #[test]
@@ -418,8 +602,8 @@ fn claude_dedup_keeps_one_exact_entry_and_suppresses_sidechain_replays() {
     let file2 = write_jsonl(dir.path(), "session2.jsonl", &[&line]);
     let mut cache = SpendingDiskCache::default();
     let exact = compute_total(&[file1, file2], &mut cache);
-    assert!((exact.today.usd - 1.0).abs() < 1e-9);
-    assert_eq!(exact.today.tokens, 15);
+    assert!((exact.headline.usd - 1.0).abs() < 1e-9);
+    assert_eq!(exact.headline.tokens, 15);
 
     let main = write_jsonl(
         dir.path(),
@@ -438,8 +622,8 @@ fn claude_dedup_keeps_one_exact_entry_and_suppresses_sidechain_replays() {
     );
     let mut cache = SpendingDiskCache::default();
     let deduped = compute_total(&[main, replay], &mut cache);
-    assert!((deduped.today.usd - 0.05).abs() < 1e-9);
-    assert_eq!(deduped.today.tokens, 15);
+    assert!((deduped.headline.usd - 0.05).abs() < 1e-9);
+    assert_eq!(deduped.headline.tokens, 15);
 
     let lone_sidechain = write_jsonl(
         dir.path(),
@@ -448,8 +632,8 @@ fn claude_dedup_keeps_one_exact_entry_and_suppresses_sidechain_replays() {
     );
     let mut cache = SpendingDiskCache::default();
     let kept = compute_total(&[lone_sidechain], &mut cache);
-    assert!((kept.today.usd - 0.20).abs() < 1e-9);
-    assert_eq!(kept.today.tokens, 50_005);
+    assert!((kept.headline.usd - 0.20).abs() < 1e-9);
+    assert_eq!(kept.headline.tokens, 50_005);
 }
 
 #[test]
@@ -469,7 +653,7 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
         &PriceBook::default(),
         NOW_SECS,
     );
-    assert!((first.total.today.usd - 1.0).abs() < 1e-9);
+    assert!((first.total.headline.usd - 1.0).abs() < 1e-9);
     let prefix_len = std::fs::metadata(&suffix_file).unwrap().len() as usize;
     {
         use std::io::{Seek as _, SeekFrom};
@@ -487,7 +671,7 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
         &PriceBook::default(),
         NOW_SECS,
     );
-    assert!((suffix.total.today.usd - 1.25).abs() < 1e-9);
+    assert!((suffix.total.headline.usd - 1.25).abs() < 1e-9);
 
     let line_a = claude_line(&today, 1.0, "msg-a", "req-a");
     let line_b = claude_line(&today, 0.5, "msg-b", "req-b");
@@ -506,7 +690,7 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
         &PriceBook::default(),
         NOW_SECS,
     );
-    assert!((truncated.total.today.usd - 1.0).abs() < 1e-9);
+    assert!((truncated.total.headline.usd - 1.0).abs() < 1e-9);
 
     let rewrite_file = write_jsonl(
         dir.path(),
@@ -537,7 +721,7 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
         &PriceBook::default(),
         NOW_SECS,
     );
-    assert!((rewritten.total.today.usd - 3.0).abs() < 1e-9);
+    assert!((rewritten.total.headline.usd - 3.0).abs() < 1e-9);
 }
 
 #[test]
@@ -558,8 +742,8 @@ fn codex_pricing_resume_state_and_provider_breakdown_stay_intact() {
         &gpt4o_book(),
         NOW_SECS,
     );
-    assert_eq!(first.total.today.input, 1000);
-    assert_eq!(first.total.today.output, 500);
+    assert_eq!(first.total.headline.input, 1000);
+    assert_eq!(first.total.headline.output, 500);
 
     append_line(&resumable, &codex_total_line(&today, 1600, 800));
     let second = compute_spending(
@@ -568,8 +752,8 @@ fn codex_pricing_resume_state_and_provider_breakdown_stay_intact() {
         &gpt4o_book(),
         NOW_SECS,
     );
-    assert_eq!(second.total.today.input, 1600);
-    assert_eq!(second.total.today.output, 800);
+    assert_eq!(second.total.headline.input, 1600);
+    assert_eq!(second.total.headline.output, 800);
 
     let claude_file = write_jsonl(
         dir.path(),
@@ -594,12 +778,12 @@ fn codex_pricing_resume_state_and_provider_breakdown_stay_intact() {
         NOW_SECS,
     );
     let codex = &spending.by_provider["codex"];
-    assert!((codex.today.usd - 0.00164).abs() < 1e-9);
-    assert_eq!(codex.today.input, 600);
-    assert_eq!(codex.today.output, 500);
-    assert_eq!(codex.today.cache_read, 400);
-    assert!((spending.by_provider["claude"].today.usd - 0.5).abs() < 1e-9);
-    assert!((spending.total.today.usd - 0.50164).abs() < 1e-9);
+    assert!((codex.headline.usd - 0.00164).abs() < 1e-9);
+    assert_eq!(codex.headline.input, 600);
+    assert_eq!(codex.headline.output, 500);
+    assert_eq!(codex.headline.cache_read, 400);
+    assert!((spending.by_provider["claude"].headline.usd - 0.5).abs() < 1e-9);
+    assert!((spending.total.headline.usd - 0.50164).abs() < 1e-9);
 }
 
 #[test]
@@ -621,7 +805,7 @@ fn codex_origin_overrides_scope_rollout_entries() {
     let _ =
         compute_spending_with_origins(&files, &mut cache, &gpt4o_book(), NOW_SECS, &HashMap::new());
     assert!(
-        compute_scoped_tally(&files, &cache, &scope, NOW_SECS).is_zero(),
+        compute_scoped_tally(&files, &cache, &scope, NOW_SECS, &HeadlineSpec::default()).is_zero(),
         "unknown-origin Codex rollout is omitted from cockpit scope"
     );
 
@@ -638,12 +822,12 @@ fn codex_origin_overrides_scope_rollout_entries() {
             .as_deref(),
         Some(project.as_path())
     );
-    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS);
-    assert!((scoped.today.usd - 0.00164).abs() < 1e-9);
-    assert_eq!(scoped.today.input, 600);
-    assert_eq!(scoped.today.output, 500);
-    assert_eq!(scoped.today.cache_read, 400);
-    assert_eq!(scoped.today.sessions, 1);
+    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS, &HeadlineSpec::default());
+    assert!((scoped.headline.usd - 0.00164).abs() < 1e-9);
+    assert_eq!(scoped.headline.input, 600);
+    assert_eq!(scoped.headline.output, 500);
+    assert_eq!(scoped.headline.cache_read, 400);
+    assert_eq!(scoped.headline.sessions, 1);
 }
 
 #[test]
@@ -670,12 +854,12 @@ fn codex_file_origin_survives_unknown_model_cold_reparse() {
         NOW_SECS,
         &HashMap::from([(codex_file.clone(), project.clone())]),
     );
-    assert_eq!(first.total.today.usd, 0.0);
-    assert_eq!(first.total.today.input, 600);
-    assert_eq!(first.total.today.output, 500);
-    assert_eq!(first.total.today.cache_read, 400);
-    assert_eq!(first.total.today.tokens, 1_100);
-    assert_eq!(first.total.today.sessions, 1);
+    assert_eq!(first.total.headline.usd, 0.0);
+    assert_eq!(first.total.headline.input, 600);
+    assert_eq!(first.total.headline.output, 500);
+    assert_eq!(first.total.headline.cache_read, 400);
+    assert_eq!(first.total.headline.tokens, 1_100);
+    assert_eq!(first.total.headline.sessions, 1);
     let cache_key = codex_file.to_string_lossy().into_owned();
     assert_eq!(
         cache.files[&cache_key].origin_path.as_deref(),
@@ -689,9 +873,9 @@ fn codex_file_origin_survives_unknown_model_cold_reparse() {
     ));
     let healed =
         compute_spending_with_origins(&files, &mut cache, &priced, NOW_SECS, &HashMap::new());
-    assert!((healed.total.today.usd - 0.00164).abs() < 1e-9);
-    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS);
-    assert!((scoped.today.usd - 0.00164).abs() < 1e-9);
+    assert!((healed.total.headline.usd - 0.00164).abs() < 1e-9);
+    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS, &HeadlineSpec::default());
+    assert!((scoped.headline.usd - 0.00164).abs() < 1e-9);
     assert_eq!(
         cache.files[&cache_key].entries[0].origin_path.as_deref(),
         Some(project.as_path())
@@ -783,9 +967,9 @@ fn unknown_model_chase_records_and_heals_active_files() {
         &PriceBook::from_litellm_json("{}"),
         NOW_SECS,
     );
-    assert_eq!(first.total.today.usd, 0.0);
-    assert_eq!(first.total.today.tokens, 150);
-    assert_eq!(first.total.today.sessions, 1);
+    assert_eq!(first.total.headline.usd, 0.0);
+    assert_eq!(first.total.headline.tokens, 150);
+    assert_eq!(first.total.headline.sessions, 1);
     assert_eq!(
         recorded_unknown_models(&[(claude_adapter(), file.clone())], &cache, NOW_SECS),
         BTreeSet::from([model.to_owned()])
@@ -802,7 +986,7 @@ fn unknown_model_chase_records_and_heals_active_files() {
         &priced,
         NOW_SECS,
     );
-    assert!((healed.total.today.usd - 0.0002).abs() < 1e-12);
+    assert!((healed.total.headline.usd - 0.0002).abs() < 1e-12);
     assert!(cache.files[&cache_key].unknown_models.is_empty());
     assert!(cache.dirty);
 
@@ -833,8 +1017,8 @@ fn unknown_model_chase_records_and_heals_active_files() {
 
 fn sample_spending() -> Spending {
     let mut spending = Spending::default();
-    spending.total.today.usd = 1.25;
-    spending.total.today.tokens = 4_200;
+    spending.total.headline.usd = 1.25;
+    spending.total.headline.tokens = 4_200;
     spending
         .by_provider
         .insert("claude".into(), spending.total.clone());
@@ -921,8 +1105,8 @@ fn workspace_spending_cache_is_scope_keyed_and_ttl_gated() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("workspace-spending.json");
     let mut tally = SpendTally::default();
-    tally.today.usd = 3.21;
-    tally.today.tokens = 1234;
+    tally.headline.usd = 3.21;
+    tally.headline.tokens = 1234;
 
     write_workspace_spending_cache(&path, 10_000, "scope-a", &tally);
     let cache = read_workspace_spending_cache(&path);

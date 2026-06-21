@@ -528,7 +528,7 @@ fn provider_stats_read_todays_jsonl_spend_and_tokens() {
     let theme = Theme::fixed(false);
     let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
     codex.spending = Some(crate::SpendTally {
-        today: crate::SpendWindow {
+        headline: crate::SpendWindow {
             usd: 4.20,
             tokens: 486_000,
             input: 422_000,

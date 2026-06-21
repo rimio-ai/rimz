@@ -45,7 +45,7 @@ Per-machine settings load leniently: a missing file is the default config, unkno
 | `[remote_control]` | per-agent remote-control auto-launch opt-ins |
 | `[accounts]` | display-only monthly ceilings |
 | `[notifications]` | best-effort desktop, bell, and command notifications |
-| `[sidebar]` | sidebar focus key and preferred worktree comparison trunk |
+| `[sidebar]` | sidebar focus key, spend headline window, and preferred worktree comparison trunk |
 | `[zellij]` | Rimz-owned Zellij room defaults |
 | `[tmux]` | Rimz-owned tmux room defaults |
 | `[resume]` | agent re-seeding on rebirth, and opt-in auto-continue on rate-limit reset |
@@ -310,6 +310,8 @@ card_density = "auto"
 [sidebar]
 trunk = "develop"
 focus_key = "Alt+p"
+spend_window = "24h"
+spend_timezone = "America/New_York"
 
 [agents.pets]
 enabled = false
@@ -322,6 +324,8 @@ voice = true
 `max_cols` caps the creation-time sidebar pane width so a percentage split does not swallow ultra-wide terminals. `refresh_ms` controls the renderer's animation grid, not the producer's data cadence. `scrollbar` controls only the right-margin overflow indicator.
 
 `focus_key` is the global multiplexer chord that focuses the sidebar from any pane, and toggles — press it again to return to your last working pane. It runs `rimz sidebar focus --toggle`, which resolves and focuses the room's sidebar pane. Both backends bind it automatically at session birth: tmux as a root-table `bind-key`, and Zellij through the presence plugin, which binds the chord at runtime once you grant it Reconfigure (the bind resets when the session ends and never touches your `config.kdl`) ([multiplexers.md → Focus key](../internals/sidebar/multiplexers.md#focus-key)). The default is `Alt+p` (`Alt` survives the terminal and Zellij's locked mode, and avoids tmux's `Ctrl+B` prefix); `Ctrl+<key>` is also accepted. Set it empty or `off` to register nothing and leave every key as it was. The sidebar's `?` overlay shows the active chord, and the in-sidebar keys (`n`/`N` to walk the inbox, `m`/`M` to mark read/unread, and the rest) are in [the interface reference](../interface/sidebar.md#jump--the-row-is-the-link).
+
+`spend_window` sets the cockpit and provider headline row: `"24h"` keeps the trailing-24-hour default, `"today"` starts at local calendar midnight, and `"session"` starts at the latest activity burst after a five-hour idle gap. `spend_timezone` is an optional IANA zone for `"today"`; unset uses the system local zone.
 
 `[theme]` picks the palette — built-in schemes, bundled Alacritty themes, color depth, and per-slot overrides — and `theme.display.glow` gates transition flashes over that base render. The full theming surface, including `[theme.animations]` status heads and `[theme.providers]` brand styling, lives in [theme.md](./theme.md).
 
@@ -346,7 +350,7 @@ provider_list = ["codex", "all"]
 max_provider_blocks = 3
 ```
 
-The dashboard shows one block per discovered provider. `provider_tabs = "auto"` stacks one or two providers and switches to tabs at three or more. `provider_list` chooses kinds and order; `"all"` expands to every remaining discovered provider at that position. Empty discovery uses today's spend to choose up to `max_provider_blocks`, then orders the retained providers stably by kind.
+The dashboard shows one block per discovered provider. `provider_tabs = "auto"` stacks one or two providers and switches to tabs at three or more. `provider_list` chooses kinds and order; `"all"` expands to every remaining discovered provider at that position. Empty discovery uses headline spend to choose up to `max_provider_blocks`, then orders the retained providers stably by kind.
 
 `[theme.providers.<kind>]` restyles a provider's display name, ASCII art, and brand color; the fields and formats live in [theme.md](./theme.md#provider-styling). Account and budget sourcing is in [internals/agents/provider.md](../internals/agents/provider.md).
 

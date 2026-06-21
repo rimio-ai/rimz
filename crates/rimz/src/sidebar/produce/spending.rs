@@ -37,6 +37,7 @@ const SPENDING_WAIT_STEPS: u32 = 15;
 pub(super) fn compute_fleet_spending(
     runtime: &RuntimePaths,
     snapshot: &SidebarSnapshot,
+    spec: &crate::agents::spending::HeadlineSpec,
 ) -> crate::agents::spending::SpendingCaches {
     use crate::agents::spending::{SpendScope, read_provider_spending_cache};
 
@@ -65,6 +66,7 @@ pub(super) fn compute_fleet_spending(
             &scope,
             scope_hash.as_deref(),
             &files,
+            spec,
             true,
         ) {
             return crate::agents::spending::SpendingCaches {
@@ -93,6 +95,7 @@ pub(super) fn compute_fleet_spending(
             &scope,
             scope_hash.as_deref(),
             &files,
+            spec,
             true,
         )
         .map(|workspace| crate::agents::spending::SpendingCaches {
@@ -108,10 +111,10 @@ pub(super) fn compute_fleet_spending(
     ) {
         crate::ledger::single_flight::Coalesced::Shared(cache) => cache,
         crate::ledger::single_flight::Coalesced::Produce(_guard) => {
-            walk_fleet_spending(runtime, snapshot, true)
+            walk_fleet_spending(runtime, snapshot, spec, true)
         }
         crate::ledger::single_flight::Coalesced::ProduceLocal => {
-            walk_fleet_spending(runtime, snapshot, false)
+            walk_fleet_spending(runtime, snapshot, spec, false)
         }
     }
 }
@@ -119,6 +122,7 @@ pub(super) fn compute_fleet_spending(
 fn walk_fleet_spending(
     runtime: &RuntimePaths,
     snapshot: &SidebarSnapshot,
+    spec: &crate::agents::spending::HeadlineSpec,
     publish: bool,
 ) -> crate::agents::spending::SpendingCaches {
     use crate::agents::pricing;
@@ -211,6 +215,7 @@ fn walk_fleet_spending(
         now_secs,
         &origin_overrides,
         Some(&scope),
+        spec,
     );
     let days = compute_daily_spend(&files, &cache);
     let models = compute_model_breakdown(&files, &cache);
@@ -259,6 +264,7 @@ fn workspace_cache_from_shared_entries(
     scope: &crate::agents::spending::SpendScope,
     scope_hash: Option<&str>,
     files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
+    spec: &crate::agents::spending::HeadlineSpec,
     publish: bool,
 ) -> Option<crate::agents::spending::WorkspaceSpendingCache> {
     use crate::agents::spending::{
@@ -277,7 +283,7 @@ fn workspace_cache_from_shared_entries(
     if !provider.spending.total.is_zero() && !has_discovered_cache {
         return None;
     }
-    let tally = compute_scoped_tally(files, &cache, scope, unix_secs_now());
+    let tally = compute_scoped_tally(files, &cache, scope, unix_secs_now(), spec);
     let workspace = WorkspaceSpendingCache {
         version: WORKSPACE_SPENDING_VERSION,
         refreshed_at_ms: provider.refreshed_at_ms,
@@ -391,11 +397,11 @@ mod tests {
     use crate::SidebarSnapshot;
     use crate::agents::TurnPhase;
     use crate::agents::spending::{
-        CachedEntry, FileCacheEntry, PROVIDER_SPENDING_VERSION, ProviderSpendingCache, SpendCursor,
-        SpendScope, Spending, override_discovered_spending_files_for_test,
-        read_provider_spending_cache, read_spending_cache, read_workspace_spending_cache,
-        unix_secs_now, write_provider_spending_cache, write_spending_cache,
-        write_workspace_spending_cache,
+        CachedEntry, FileCacheEntry, HeadlineSpec, PROVIDER_SPENDING_VERSION,
+        ProviderSpendingCache, SpendCursor, SpendScope, Spending,
+        override_discovered_spending_files_for_test, read_provider_spending_cache,
+        read_spending_cache, read_workspace_spending_cache, unix_secs_now,
+        write_provider_spending_cache, write_spending_cache, write_workspace_spending_cache,
     };
     use crate::feed::{AgentState, AgentStatus};
     use crate::ids::AgentKind;
@@ -426,7 +432,7 @@ mod tests {
         second.ensure_dirs().expect("runtime dirs");
         let published_at = unix_now_ms();
         let mut spending = Spending::default();
-        spending.total.today.usd = 1.23;
+        spending.total.headline.usd = 1.23;
         write_provider_spending_cache(
             &first.shared_provider_spending_path(),
             published_at,
@@ -439,7 +445,7 @@ mod tests {
             Timestamp::now(),
         );
 
-        let cache = compute_fleet_spending(&second, &snapshot);
+        let cache = compute_fleet_spending(&second, &snapshot, &HeadlineSpec::default());
 
         assert_eq!(cache.provider.refreshed_at_ms, published_at);
         assert_eq!(cache.provider.spending, spending);
@@ -464,7 +470,7 @@ mod tests {
 
         let published_at = unix_now_ms();
         let mut spending = Spending::default();
-        spending.total.today.usd = 4.56;
+        spending.total.headline.usd = 4.56;
         let polls = AtomicU32::new(0);
         let outcome = coalesce(&runtime.shared_spending_lock(), Duration::ZERO, 3, || {
             if polls.fetch_add(1, Ordering::SeqCst) == 1 {
@@ -530,7 +536,7 @@ mod tests {
         write_spending_cache(&runtime.shared_spending_cursor_path(), &raw);
 
         let mut spending = Spending::default();
-        spending.total.today.usd = 1.25;
+        spending.total.headline.usd = 1.25;
         spending.total.year.usd = 1.25;
         let provider = ProviderSpendingCache {
             version: PROVIDER_SPENDING_VERSION,
@@ -563,11 +569,12 @@ mod tests {
             &scope,
             Some(&scope_hash),
             &files,
+            &HeadlineSpec::default(),
             true,
         )
         .expect("workspace cache derives from the shared cursor cache");
 
-        assert!((workspace.tally.today.usd - 1.25).abs() < 1e-9);
+        assert!((workspace.tally.headline.usd - 1.25).abs() < 1e-9);
         assert_eq!(
             read_workspace_spending_cache(&runtime.workspace_spending_path(&scope_hash)).tally,
             workspace.tally
@@ -591,11 +598,11 @@ mod tests {
         let scope_hash = scope.hash();
 
         let mut spending = Spending::default();
-        spending.total.today.usd = 981.0;
+        spending.total.headline.usd = 981.0;
         spending.total.year.usd = 981.0;
         write_provider_spending_cache(&runtime.shared_provider_spending_path(), 1, &spending);
         let mut workspace_tally = crate::agents::SpendTally::default();
-        workspace_tally.today.usd = 42.0;
+        workspace_tally.headline.usd = 42.0;
         workspace_tally.year.usd = 42.0;
         write_workspace_spending_cache(
             &runtime.workspace_spending_path(&scope_hash),
@@ -605,14 +612,14 @@ mod tests {
         );
 
         let _discovered = override_discovered_spending_files_for_test(Vec::new());
-        let cache = compute_fleet_spending(&runtime, &snapshot);
+        let cache = compute_fleet_spending(&runtime, &snapshot, &HeadlineSpec::default());
 
         assert_eq!(
-            cache.provider.spending.total.today.usd, 981.0,
+            cache.provider.spending.total.headline.usd, 981.0,
             "a transient empty transcript discovery must not publish a fresh zero"
         );
         assert_eq!(
-            cache.workspace.tally.today.usd, 42.0,
+            cache.workspace.tally.headline.usd, 42.0,
             "the matching workspace cache is kept with the retained provider publish"
         );
         let published = read_provider_spending_cache(&runtime.shared_provider_spending_path());
@@ -620,7 +627,7 @@ mod tests {
             published.refreshed_at_ms, 1,
             "the stale non-zero provider cache is returned, not overwritten as fresh"
         );
-        assert_eq!(published.spending.total.today.usd, 981.0);
+        assert_eq!(published.spending.total.headline.usd, 981.0);
     }
 
     #[test]

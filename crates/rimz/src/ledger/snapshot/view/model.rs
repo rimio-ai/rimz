@@ -36,8 +36,8 @@ pub struct SidebarProviderPanel {
     pub metered: bool,
     /// Whether remote control is enabled for this provider (the `⇅ rc` flag).
     pub remote_control: bool,
-    /// JSONL-computed today / week / month / all-time spend and tokens for this
-    /// provider, summed across all of its sessions' transcript history.
+    /// JSONL-computed headline / week / month / trailing-year spend and tokens
+    /// for this provider, summed across all of its sessions' transcript history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spending: Option<SpendTally>,
     /// Paid usage beyond subscription windows: provider extra credits or
@@ -50,10 +50,10 @@ pub struct SidebarProviderPanel {
 }
 
 impl SidebarProviderPanel {
-    /// The figure the dashboard ranks panels by: today's JSONL spend, so the
-    /// provider you are spending on right now floats to the top.
+    /// The figure the dashboard ranks panels by: headline JSONL spend, so the
+    /// provider you are spending on in the configured window floats to the top.
     pub(super) fn rank_cost(&self) -> f64 {
-        self.spending.as_ref().map_or(0.0, |s| s.today.usd)
+        self.spending.as_ref().map_or(0.0, |s| s.headline.usd)
     }
 }
 

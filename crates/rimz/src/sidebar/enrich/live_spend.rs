@@ -6,21 +6,21 @@ use crate::agents::spending::{
 };
 use crate::{RuntimePaths, SidebarSnapshot};
 
-/// Stamp the cockpit's live today-spend onto the snapshot: the published
+/// Stamp the cockpit's live headline spend onto the snapshot: the published
 /// walk's exact figure plus each live row's overshoot over its publish-time
 /// baseline ([`today_spend_live_usd`]), so the headline tracks every
 /// context sidecar push instead of waiting out the walk's TTL. Shared by the
 /// producing CLI and the consumer fold, so every tab in a room paints the same
-/// figure; zero — an empty room on an unspent day — stays `None` and the
+/// figure; zero — an empty room in an unspent window — stays `None` and the
 /// cockpit keeps its bare `¤` line.
 pub fn apply_live_today_spend(
     snapshot: &mut SidebarSnapshot,
-    walked_today_usd: f64,
+    walked_headline_usd: f64,
     published_at_ms: u64,
     baselines: &BTreeMap<String, f64>,
 ) {
     let live = today_spend_live_usd(
-        walked_today_usd,
+        walked_headline_usd,
         live_row_costs(snapshot),
         baselines,
         published_at_ms,

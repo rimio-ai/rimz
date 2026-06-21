@@ -332,7 +332,7 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
         !header.contains("▐▛███▜▌"),
         "normal layout starts art one row below the header:\n{rendered}"
     );
-    let spend = stats.find("$3.50").expect("today spend");
+    let spend = stats.find("$3.50").expect("headline spend");
     let pet_col = stats.find('▀').expect("pet column");
     assert!(spend < pet_col, "$ stays left of the pet column: {stats}");
 }
@@ -400,7 +400,7 @@ fn render_provider_dashboard_without_pet_uses_main_stats_body() {
     let stats = rendered
         .lines()
         .find(|line| line.contains('◎') && line.contains("$3.50"))
-        .expect("today stats row");
+        .expect("headline stats row");
     assert!(stats.contains("◇ 498k"), "{stats}");
     assert!(stats.contains("$3.50"), "{stats}");
     assert!(

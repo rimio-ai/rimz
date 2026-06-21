@@ -376,7 +376,7 @@ fn spend_tally(usd: f64, tokens: u64, sessions: u32) -> rimz::SpendTally {
         }
     };
     rimz::SpendTally {
-        today: window(1.0),
+        headline: window(1.0),
         week: window(2.8),
         month: window(7.4),
         year: window(19.0),

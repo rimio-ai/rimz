@@ -500,7 +500,7 @@ fn provider_panel(
         metered,
         remote_control,
         spending: Some(crate::SpendTally {
-            today: crate::SpendWindow {
+            headline: crate::SpendWindow {
                 usd: 3.5,
                 tokens: 498_000,
                 input: 434_000,
@@ -617,7 +617,7 @@ fn two_provider_panels() -> Vec<crate::SidebarProviderPanel> {
             codex.plan = Some("ChatGPT Pro".to_owned());
             codex.version = Some("0.135.0".to_owned());
             codex.spending = Some(crate::SpendTally {
-                today: crate::SpendWindow {
+                headline: crate::SpendWindow {
                     usd: 1.2,
                     tokens: 88_000,
                     input: 76_000,

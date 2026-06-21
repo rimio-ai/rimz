@@ -284,7 +284,7 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
         .with_project_root(Some(project.clone()));
 
     let mut global = crate::agents::spending::Spending::default();
-    global.total.today.usd = 50.0;
+    global.total.headline.usd = 50.0;
     global.total.year.usd = 50.0;
     crate::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
@@ -293,8 +293,8 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
     );
 
     let mut scoped = crate::SpendTally::default();
-    scoped.today.usd = 1.25;
-    scoped.today.sessions = 3;
+    scoped.headline.usd = 1.25;
+    scoped.headline.sessions = 3;
     scoped.year.usd = 1.25;
     let hash = workspace_scope_hash(&project);
     // An ancient stamp (`refreshed_at_ms = 1`): age is ignored once the hash
@@ -310,7 +310,10 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
     snapshot = enrich(snapshot, None, &runtime, None, EnrichMode::Cached, None);
 
     assert_eq!(
-        snapshot.value_tally.as_ref().map(|tally| tally.today.usd),
+        snapshot
+            .value_tally
+            .as_ref()
+            .map(|tally| tally.headline.usd),
         Some(50.0),
         "global tally remains available for the ledger"
     );
@@ -318,7 +321,7 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
         snapshot
             .workspace_value_tally
             .as_ref()
-            .map(|tally| (tally.today.usd, tally.today.sessions)),
+            .map(|tally| (tally.headline.usd, tally.headline.sessions)),
         Some((1.25, 3)),
         "cockpit tally comes from the hash-matching workspace cache regardless of age"
     );
@@ -423,9 +426,9 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
 
     assert_eq!(
         snapshot.workspace_value_tally.as_ref().map(|tally| (
-            tally.today.usd,
-            tally.today.sessions,
-            tally.today.tokens
+            tally.headline.usd,
+            tally.headline.sessions,
+            tally.headline.tokens
         )),
         Some((3.75, 1, 27)),
         "consumer folds derive the cockpit tally from the shared cursor cache"

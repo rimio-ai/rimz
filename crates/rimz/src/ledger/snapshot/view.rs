@@ -172,7 +172,7 @@ pub struct SidebarSnapshot {
     /// The repo's durable worktree-home directory — the resolved `[agents.worktree]
     /// dir` template (default `…/<repo>-worktrees`). It widens the cockpit
     /// spend scope alone: a session recorded under a worktree that cleanup has
-    /// since removed still counts toward the room's today figure, because the
+    /// since removed still counts toward the room's headline figure, because the
     /// home is a stable path prefix while `worktree_roots` tracks only the live
     /// `git worktree list`. It never feeds pod grouping, which stays on
     /// `worktree_roots`. Like `project_root`, the `rimz sidebar snapshot`
@@ -210,8 +210,9 @@ pub struct SidebarSnapshot {
     /// snapshot leaves it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<SidebarProviderPanel>,
-    /// Account-global JSONL-computed spend and token tally — today / week /
-    /// month / trailing-year — summing every provider across every workspace.
+    /// Account-global JSONL-computed spend and token tally — configured
+    /// headline / week / month / trailing-year — summing every provider across
+    /// every workspace.
     /// Attached by the sidebar enrichment spine
     /// (`sidebar::enrich::enrich`) from the producer's fleet spending walk
     /// (`sidebar::produce`, via [`crate::agents::spending::compute_spending`]);
@@ -228,8 +229,8 @@ pub struct SidebarSnapshot {
     /// dashboard and fleet ledger stay account-global.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_value_tally: Option<SpendTally>,
-    /// The cockpit's live today-spend: the walked
-    /// `workspace_value_tally.today` figure plus each live session's overshoot
+    /// The cockpit's live headline spend: the walked
+    /// `workspace_value_tally.headline` figure plus each live session's overshoot
     /// over the baseline captured at the workspace cache publish
     /// ([`crate::agents::spending::today_spend_live_usd`]), so the headline
     /// climbs the instant a session's statusline cost moves while the global

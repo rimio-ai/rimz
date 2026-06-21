@@ -164,7 +164,7 @@ fn call_split_projects_only_with_known_input_sides() {
     assert_eq!(projected.context_used_tokens(), None);
 }
 
-/// The cockpit's live today-spend rides the published frame across every
+/// The cockpit's live headline spend rides the published frame across every
 /// snapshot wire — `rimz sidebar snapshot` stdout — so the
 /// field must survive a JSON round-trip, and a frame from a pre-overlay
 /// producer must read as `None` (version skew degrades to the walked tally,

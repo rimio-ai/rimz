@@ -53,7 +53,9 @@ pub mod worktree;
 pub(crate) mod worktree_include;
 pub(crate) mod worktree_link;
 
-pub use crate::agents::{AccountUsageSnapshot, ExtraCredits, SpendTally, SpendWindow};
+pub use crate::agents::{
+    AccountUsageSnapshot, ExtraCredits, HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode,
+};
 pub use crate::bridge::{BridgeErr, BridgeOutcome, ExpectedFrame};
 pub use crate::feed::{
     AbandonReason, ElevatedAgent, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod,

@@ -10,10 +10,10 @@
 //! [`PriceBook`](super::pricing) — either way every file yields
 //! [`CachedEntry`] values and buckets under its adapter's kind.
 //!
-//! [`compute_spending`] returns a [`Spending`]: one fleet-wide trailing
-//! 24h / 7d / 30d / 365d [`SpendTally`] plus a per-provider breakdown, so the
-//! fleet ledger and each dashboard panel read account-global piles. The cockpit
-//! reads a workspace-scoped [`SpendTally`] derived from the same cached entries.
+//! [`compute_spending`] returns a [`Spending`]: one fleet-wide headline / 7d /
+//! 30d / 365d [`SpendTally`] plus a per-provider breakdown, so the fleet ledger
+//! and each dashboard panel read account-global piles. The cockpit reads a
+//! workspace-scoped [`SpendTally`] derived from the same cached entries.
 
 #[cfg(test)]
 use std::cell::RefCell;
@@ -22,6 +22,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -77,14 +79,39 @@ impl SpendWindow {
 /// totals, sessions, or the unknown-model pricing chase.
 const WIDEST_SPEND_WINDOW_SECS: u64 = 365 * 86_400;
 
-/// Rolling spend and token tally over four trailing windows: the last 24 hours,
-/// 7 days, 30 days, and 365 days. The windows nest — `year` (365 days) is the
-/// widest and subsumes the rest — so a recent entry lands in all four. Spend
-/// older than a year falls out of every window.
+/// The headline spend window shown in the cockpit and provider dashboard.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SpendWindowMode {
+    /// Trailing 24 hours, matching Rimz's original "today" row behaviour.
+    #[default]
+    #[serde(rename = "24h")]
+    Trailing24h,
+    /// The local calendar day, using `[sidebar] spend_timezone` when set.
+    Today,
+    /// The current activity burst since the last five-hour idle gap.
+    Session,
+}
+
+/// Resolved headline spend-window settings threaded into aggregation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeadlineSpec {
+    pub mode: SpendWindowMode,
+    pub timezone: Option<String>,
+}
+
+const SESSION_GAP_SECS: u64 = 5 * 3_600;
+
+/// Rolling spend and token tally over the configured headline window plus three
+/// trailing ledger windows: 7 days, 30 days, and 365 days. The ledger windows
+/// nest — `year` (365 days) is the widest and subsumes the rest — while the
+/// headline window is independent.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpendTally {
-    /// Trailing 24 hours.
-    pub today: SpendWindow,
+    /// Configured headline window (`[sidebar] spend_window`): trailing 24 hours
+    /// by default, the local calendar day, or the current session.
+    #[serde(rename = "today")]
+    pub headline: SpendWindow,
     /// Trailing 7 days.
     pub week: SpendWindow,
     /// Trailing 30 days.
@@ -481,8 +508,8 @@ pub fn session_cost_usd(
     })
 }
 
-/// Compute the fleet and per-provider trailing 24h / 7d / 30d / 365d spend and
-/// token tally for the given adapter-tagged JSONL files, pricing token-only
+/// Compute the fleet and per-provider default headline / 7d / 30d / 365d spend
+/// and token tally for the given adapter-tagged JSONL files, pricing token-only
 /// providers (Codex) through `prices`.
 ///
 /// IO is O(delta), not O(history): an unchanged file (same mtime and length)
@@ -520,6 +547,7 @@ pub fn compute_spending_with_progress(
     now_secs: u64,
     progress: &mut dyn FnMut(SpendProgress),
 ) -> Spending {
+    let spec = HeadlineSpec::default();
     compute_spending_with_origins_and_scope_progress(
         files,
         cache,
@@ -527,6 +555,7 @@ pub fn compute_spending_with_progress(
         now_secs,
         &HashMap::new(),
         None,
+        &spec,
         Some(progress),
     )
     .0
@@ -543,8 +572,17 @@ pub fn compute_spending_with_origins(
     now_secs: u64,
     origin_overrides: &HashMap<PathBuf, PathBuf>,
 ) -> Spending {
-    compute_spending_with_origins_and_scope(files, cache, prices, now_secs, origin_overrides, None)
-        .0
+    let spec = HeadlineSpec::default();
+    compute_spending_with_origins_and_scope(
+        files,
+        cache,
+        prices,
+        now_secs,
+        origin_overrides,
+        None,
+        &spec,
+    )
+    .0
 }
 
 /// Compute account-global spending and, when `scope` is present, the cockpit's
@@ -556,6 +594,7 @@ pub fn compute_spending_with_origins_and_scope(
     now_secs: u64,
     origin_overrides: &HashMap<PathBuf, PathBuf>,
     scope: Option<&SpendScope>,
+    spec: &HeadlineSpec,
 ) -> (Spending, SpendTally) {
     compute_spending_with_origins_and_scope_progress(
         files,
@@ -564,6 +603,7 @@ pub fn compute_spending_with_origins_and_scope(
         now_secs,
         origin_overrides,
         scope,
+        spec,
         None,
     )
 }
@@ -575,6 +615,7 @@ fn compute_spending_with_origins_and_scope_progress(
     now_secs: u64,
     origin_overrides: &HashMap<PathBuf, PathBuf>,
     scope: Option<&SpendScope>,
+    spec: &HeadlineSpec,
     mut progress: Option<&mut dyn FnMut(SpendProgress)>,
 ) -> (Spending, SpendTally) {
     // First pass: refresh stale cache entries — pure hit, suffix parse, or
@@ -659,9 +700,9 @@ fn compute_spending_with_origins_and_scope_progress(
     // suppressed.  ID-free entries (Codex, Pi) carry their file's provider so
     // they bucket under the right kind.
     let deduped = dedup_cached_entries(files, cache);
-    let spending = aggregate_spending(files, cache, &deduped, now_secs);
+    let spending = aggregate_spending(files, cache, &deduped, now_secs, spec);
     let workspace = scope
-        .map(|scope| aggregate_scoped_tally(files, cache, &deduped, scope, now_secs))
+        .map(|scope| aggregate_scoped_tally(files, cache, &deduped, scope, now_secs, spec))
         .unwrap_or_default();
 
     (spending, workspace)
@@ -672,30 +713,48 @@ fn aggregate_spending(
     cache: &SpendingDiskCache,
     deduped: &DedupedCachedEntries,
     now_secs: u64,
+    spec: &HeadlineSpec,
 ) -> Spending {
     let mut spending = Spending::default();
-    let mut add = |provider: &str, entry: &CachedEntry| {
-        accum(&mut spending.total, entry, now_secs);
+    let counted = counted_entries(deduped);
+    let uniform = uniform_headline_cutoff(spec, now_secs);
+    let all_timestamps: Vec<u64> = counted.iter().map(|(_, entry)| entry.ts_secs).collect();
+    let total_cutoff =
+        uniform.unwrap_or_else(|| session_cutoff_secs(all_timestamps.as_slice(), now_secs));
+    let provider_cutoffs = if uniform.is_none() {
+        let mut timestamps: HashMap<&'static str, Vec<u64>> = HashMap::new();
+        for (provider, entry) in &counted {
+            timestamps.entry(*provider).or_default().push(entry.ts_secs);
+        }
+        timestamps
+            .into_iter()
+            .map(|(provider, timestamps)| {
+                (
+                    provider,
+                    session_cutoff_secs(timestamps.as_slice(), now_secs),
+                )
+            })
+            .collect::<HashMap<_, _>>()
+    } else {
+        HashMap::new()
+    };
+    let cutoff_for = |provider: &'static str| {
+        uniform
+            .or_else(|| provider_cutoffs.get(provider).copied())
+            .unwrap_or_else(|| session_cutoff_secs(&[], now_secs))
+    };
+
+    let mut add = |provider: &'static str, entry: &CachedEntry| {
+        accum(&mut spending.total, entry, now_secs, total_cutoff);
         accum(
             spending.by_provider.entry(provider.to_owned()).or_default(),
             entry,
             now_secs,
+            cutoff_for(provider),
         );
     };
 
-    // Message-ID entries bucket under the kind whose file they were kept from.
-    for ((msg_id, _), (kind, entry)) in &deduped.by_exact_key {
-        let is_sidechain_replay = entry.is_sidechain
-            && deduped
-                .msg_has_non_sidechain
-                .get(msg_id.as_str())
-                .copied()
-                .unwrap_or(false);
-        if !is_sidechain_replay {
-            add(kind, entry);
-        }
-    }
-    for (provider, entry) in &deduped.free_entries {
+    for (provider, entry) in counted {
         add(provider, entry);
     }
 
@@ -720,7 +779,7 @@ fn aggregate_spending(
         }
     }
     for (provider, youngest) in threads.values() {
-        bump_sessions(&mut spending.total, *youngest, now_secs);
+        bump_sessions(&mut spending.total, *youngest, now_secs, total_cutoff);
         bump_sessions(
             spending
                 .by_provider
@@ -728,6 +787,7 @@ fn aggregate_spending(
                 .or_default(),
             *youngest,
             now_secs,
+            cutoff_for(provider),
         );
     }
 
@@ -802,12 +862,13 @@ pub fn compute_scoped_tally(
     cache: &SpendingDiskCache,
     scope: &SpendScope,
     now_secs: u64,
+    spec: &HeadlineSpec,
 ) -> SpendTally {
     if scope.is_empty() {
         return SpendTally::default();
     }
     let deduped = dedup_cached_entries(files, cache);
-    aggregate_scoped_tally(files, cache, &deduped, scope, now_secs)
+    aggregate_scoped_tally(files, cache, &deduped, scope, now_secs, spec)
 }
 
 fn aggregate_scoped_tally(
@@ -816,24 +877,19 @@ fn aggregate_scoped_tally(
     deduped: &DedupedCachedEntries,
     scope: &SpendScope,
     now_secs: u64,
+    spec: &HeadlineSpec,
 ) -> SpendTally {
     let mut tally = SpendTally::default();
+    let counted = counted_entries(deduped)
+        .into_iter()
+        .filter(|(_, entry)| entry_in_scope(entry, scope))
+        .collect::<Vec<_>>();
+    let timestamps: Vec<u64> = counted.iter().map(|(_, entry)| entry.ts_secs).collect();
+    let headline_cutoff = uniform_headline_cutoff(spec, now_secs)
+        .unwrap_or_else(|| session_cutoff_secs(timestamps.as_slice(), now_secs));
 
-    for ((msg_id, _), (_, entry)) in &deduped.by_exact_key {
-        let is_sidechain_replay = entry.is_sidechain
-            && deduped
-                .msg_has_non_sidechain
-                .get(msg_id.as_str())
-                .copied()
-                .unwrap_or(false);
-        if !is_sidechain_replay && entry_in_scope(entry, scope) {
-            accum(&mut tally, entry, now_secs);
-        }
-    }
-    for (_, entry) in &deduped.free_entries {
-        if entry_in_scope(entry, scope) {
-            accum(&mut tally, entry, now_secs);
-        }
+    for (_, entry) in counted {
+        accum(&mut tally, entry, now_secs, headline_cutoff);
     }
 
     let mut threads: HashMap<String, u64> = HashMap::new();
@@ -854,7 +910,7 @@ fn aggregate_scoped_tally(
         }
     }
     for youngest in threads.values() {
-        bump_sessions(&mut tally, *youngest, now_secs);
+        bump_sessions(&mut tally, *youngest, now_secs, headline_cutoff);
     }
 
     tally
@@ -1053,11 +1109,83 @@ fn insert_dedup_entry(deduped: &mut DedupedCachedEntries, kind: &'static str, en
         .or_insert_with(|| (kind, entry.clone()));
 }
 
-fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64) {
+fn counted_entries(deduped: &DedupedCachedEntries) -> Vec<(&'static str, &CachedEntry)> {
+    let mut counted = Vec::new();
+    for ((msg_id, _), (kind, entry)) in &deduped.by_exact_key {
+        let is_sidechain_replay = entry.is_sidechain
+            && deduped
+                .msg_has_non_sidechain
+                .get(msg_id.as_str())
+                .copied()
+                .unwrap_or(false);
+        if !is_sidechain_replay {
+            counted.push((*kind, entry));
+        }
+    }
+    counted.extend(
+        deduped
+            .free_entries
+            .iter()
+            .map(|(provider, entry)| (*provider, entry)),
+    );
+    counted
+}
+
+fn uniform_headline_cutoff(spec: &HeadlineSpec, now_secs: u64) -> Option<u64> {
+    match spec.mode {
+        SpendWindowMode::Trailing24h => Some(trailing_window_cutoff(now_secs, 86_400)),
+        SpendWindowMode::Today => Some(
+            local_day_start_secs(now_secs, spec.timezone.as_deref())
+                .unwrap_or_else(|| trailing_window_cutoff(now_secs, 86_400)),
+        ),
+        SpendWindowMode::Session => None,
+    }
+}
+
+fn trailing_window_cutoff(now_secs: u64, span_secs: u64) -> u64 {
+    now_secs
+        .checked_sub(span_secs)
+        .map_or(0, |cutoff| cutoff.saturating_add(1))
+}
+
+fn local_day_start_secs(now_secs: u64, tz: Option<&str>) -> Option<u64> {
+    let now = Timestamp::from_second(i64::try_from(now_secs).ok()?).ok()?;
+    let zone = tz
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .and_then(|name| TimeZone::get(name).ok())
+        .unwrap_or_else(TimeZone::system);
+    let start = now.to_zoned(zone).start_of_day().ok()?.timestamp();
+    u64::try_from(start.as_second()).ok()
+}
+
+fn session_cutoff_secs(timestamps: &[u64], now_secs: u64) -> u64 {
+    let mut sorted = timestamps.to_vec();
+    sorted.sort_unstable();
+    let Some(&newest) = sorted.last() else {
+        return now_secs.saturating_add(1);
+    };
+    if now_secs.saturating_sub(newest) >= SESSION_GAP_SECS {
+        return now_secs.saturating_add(1);
+    }
+
+    let mut oldest = newest;
+    let mut newer = newest;
+    for &ts_secs in sorted[..sorted.len() - 1].iter().rev() {
+        if newer.saturating_sub(ts_secs) >= SESSION_GAP_SECS {
+            break;
+        }
+        oldest = ts_secs;
+        newer = ts_secs;
+    }
+    oldest
+}
+
+fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64, headline_cutoff: u64) {
     let usd = entry.cost_usd;
-    // Trailing-window bucketing: an entry counts toward each window whose span it
-    // still falls within. The windows nest (24h ⊂ 7d ⊂ 30d ⊂ 365d), so a recent
-    // entry lands in all four; one older than a year lands in none.
+    // Ledger-window bucketing: an entry counts toward each trailing window whose
+    // span it still falls within. The configured headline window is independent
+    // and may be calendar-day or session scoped.
     if !within_widest_window(entry.ts_secs, now_secs) {
         return;
     }
@@ -1069,16 +1197,14 @@ fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64) {
     if age < 7 * 86_400 {
         tally.week.add(usd, entry);
     }
-    if age < 86_400 {
-        tally.today.add(usd, entry);
+    if entry.ts_secs >= headline_cutoff {
+        tally.headline.add(usd, entry);
     }
 }
 
-/// Count one session (thread) toward each trailing window its youngest entry
-/// still falls within. The windows nest, so a thread young enough for `today` is
-/// counted in `week`/`month`/`year` too; one whose last activity is older than a
-/// year counts nowhere.
-fn bump_sessions(tally: &mut SpendTally, youngest_ts: u64, now_secs: u64) {
+/// Count one session (thread) toward each trailing ledger window its youngest
+/// entry still falls within, plus the configured headline window.
+fn bump_sessions(tally: &mut SpendTally, youngest_ts: u64, now_secs: u64, headline_cutoff: u64) {
     let age = now_secs.saturating_sub(youngest_ts);
     if age >= WIDEST_SPEND_WINDOW_SECS {
         return;
@@ -1090,8 +1216,8 @@ fn bump_sessions(tally: &mut SpendTally, youngest_ts: u64, now_secs: u64) {
     if age < 7 * 86_400 {
         tally.week.sessions += 1;
     }
-    if age < 86_400 {
-        tally.today.sessions += 1;
+    if youngest_ts >= headline_cutoff {
+        tally.headline.sessions += 1;
     }
 }
 
@@ -1325,18 +1451,18 @@ pub fn write_live_spend_baselines(path: &Path, baselines: &LiveSpendBaselines) {
     let _ = crate::ledger::atomic::write_temp_then_rename_cache(path, baselines);
 }
 
-/// Today's spend as the cockpit paints it: the walked tally's exact figure
-/// plus each live session's overshoot over the baseline captured when the
-/// walk published — so the headline climbs the instant a session's statusline
-/// cost moves, while the walk stays the truth it reconciles to on the next
-/// publish. Pure presentation over `(session id, cost now, registered-at ms)`
-/// triples: a baselined session adds `max(0, cost_now − baseline)` (a resumed
-/// or reset session clamps to zero rather than rolling the headline
-/// backwards); a session absent from the baselines adds its whole cost when
-/// it registered after the publish stamp — the walk never saw it — and
-/// nothing otherwise, the fail-safe undercount that heals on the next walk.
+/// Headline spend as the cockpit paints it: the walked tally's exact figure plus
+/// each live session's overshoot over the baseline captured when the walk
+/// published — so the headline climbs the instant a session's statusline cost
+/// moves, while the walk stays the truth it reconciles to on the next publish.
+/// Pure presentation over `(session id, cost now, registered-at ms)` triples: a
+/// baselined session adds `max(0, cost_now − baseline)` (a resumed or reset
+/// session clamps to zero rather than rolling the headline backwards); a session
+/// absent from the baselines adds its whole cost when it registered after the
+/// publish stamp — the walk never saw it — and nothing otherwise, the fail-safe
+/// undercount that heals on the next walk.
 pub fn today_spend_live_usd<'a>(
-    walked_today_usd: f64,
+    walked_headline_usd: f64,
     live_costs: impl Iterator<Item = (&'a str, f64, Option<u64>)>,
     baselines: &BTreeMap<String, f64>,
     published_at_ms: u64,
@@ -1348,7 +1474,7 @@ pub fn today_spend_live_usd<'a>(
             None => 0.0,
         })
         .sum();
-    walked_today_usd + overshoot
+    walked_headline_usd + overshoot
 }
 
 // ── Date utilities ────────────────────────────────────────────────────────────

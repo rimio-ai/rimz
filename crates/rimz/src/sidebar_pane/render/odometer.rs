@@ -1,4 +1,4 @@
-//! The money count-up animation — the cockpit today-spend headline and each
+//! The money count-up animation — the cockpit headline spend and each
 //! agent card's session cost.
 //!
 //! The animated figure is a [`Roll`]: it remembers where it is painted on
@@ -180,7 +180,7 @@ pub(crate) struct TallyAnim {
 }
 
 impl TallyAnim {
-    /// Fold the latest today-spend target into the roll — the snapshot's live
+    /// Fold the latest headline-spend target into the roll — the snapshot's live
     /// overlay figure when it carries one, else the walked tally's. Called on
     /// each data refresh that carries a figure; a refresh without one leaves
     /// the roll untouched, so a transient missing snapshot never snaps the

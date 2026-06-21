@@ -740,6 +740,29 @@ fn sidebar_trunk_parses_and_defaults_unset() {
 }
 
 #[test]
+fn sidebar_spend_headline_window_parses_and_defaults_24h() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[sidebar]\nspend_window = \"session\"\nspend_timezone = \"America/New_York\"\n",
+    ))
+    .expect("load");
+    assert_eq!(
+        config.sidebar.spend_window,
+        crate::agents::SpendWindowMode::Session
+    );
+    assert_eq!(
+        config.sidebar.spend_timezone.as_deref(),
+        Some("America/New_York")
+    );
+    assert_eq!(
+        MachineConfig::default().sidebar.spend_window,
+        crate::agents::SpendWindowMode::Trailing24h
+    );
+    assert_eq!(MachineConfig::default().sidebar.spend_timezone, None);
+}
+
+#[test]
 fn sidebar_scrollbar_parses_and_defaults_auto() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write_named(

@@ -15,8 +15,8 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
 ```
  ⌘ query-engine                    ~/code/query-engine    ← workspace identity
 
- ◎ 91                          ◇ 32M ↘ 28M ↗ 3M ◌ 472M    ← sessions today · today's tokens (right)
- ¤ 16 (2)                                      $420.00    ← live agents · unread count · today's fleet usd value
+ ◎ 91                          ◇ 32M ↘ 28M ↗ 3M ◌ 472M    ← headline sessions · headline tokens (right)
+ ¤ 16 (2)                                      $420.00    ← live agents · unread count · headline fleet usd value
  ─────────────────────────────────────────────────────
  ? 3   ! 0   ⏸ 0   ✓ 8                       ⢿ 3   ○ 2    ← make-up: attention/parked/done | working/free
  ↑ 2 need you                                            ← unread jump banner: pinned while agents await you; click/jump to the oldest
@@ -34,7 +34,7 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
  ─────────────────────────────────────────────────────
   Claude v2.1.169 · Claude Max                    ⇅ rc    ← provider · version · plan · remote-control flag
 
-  ▐▛███▜▌  ◎ 53  ◇ 16M ↘ 13M ↗ 2M ◌ 198M       $188.88    ← today stats: sessions · tokens · usd value
+  ▐▛███▜▌  ◎ 53  ◇ 16M ↘ 13M ↗ 2M ◌ 198M       $188.88    ← headline stats: sessions · tokens · usd value
  ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 1h47m    ← 5-hour budget left, until reset time
    ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 5d22h    ← 7-day budget left, until reset time
 
@@ -112,7 +112,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 |------|---------|
 | `⌘ name`        | the workspace, with the name in the green `good` tone |
 | `¤ N`           | the live agents in the room right now — the glyph in the agents' working clay |
-| `◎ N`           | sessions (threads) that have run today (cockpit) / in the window (ledger) — teal in both |
+| `◎ N`           | sessions (threads) that have run in the configured headline window (cockpit/provider) / in the ledger window — teal in both |
 | `⧉ N`           | the subagents an agent spawned this turn (expanded card) — the marker violet, the label soft |
 | `⋯ bg`          | an agent parked on background work — a faint secondary marker after the description, so the live status above stays honest |
 | `⑂ name`        | a group header with a git story — a worktree's live branch, or a directory room's child repo |
@@ -142,8 +142,8 @@ The top block. Fixed height, so the rows below it never jump as agents change st
 ```
 
 - **Identity.** The workspace name behind `⌘` renders in the green `good` tone, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name). A blank line sets it apart from the summary below.
-- **Summary — who's here and what today burned.** Two lines, each a colored glyph and soft-tier count on the left with today's numbers pinned right. Line 1 is the day at a glance: `◎` (teal) the sessions (threads) that have run today in this room, with the room's accumulated token breakdown — `◇` total · `↘` input, including cache creation · `↗` output · `◌` cache-read, each marker in its one color — pinned to the right edge in the coarse integer form (it drops when today recorded no tokens, leaving `◎ N` alone). Line 2: `¤` (the agents' working clay) the live agents in the room right now, followed by a steady unread count like `(2)` when unseen rows exist, with the room's spend pinned right. The counts read from the live room and the workspace-scoped JSONL tally's today window. An empty room reads `◎ 0` over `¤ 0`.
-- **Today's spend.** The room's workspace-scoped spend for today, pinned to the right of the live-agents line, **counting up** in an eased odometer roll the moment any in-scope agent's cost moves — every jump lands inside 1.2s of 200ms clicks, big first steps easing into a penny-sized landing on the exact figure, with a brief brighten as it settles. It joins the line once the room records spend.
+- **Summary — who's here and what the headline window burned.** Two lines, each a colored glyph and soft-tier count on the left with headline numbers pinned right. Line 1 is the configured spend window at a glance: `◎` (teal) the sessions (threads) that have run in this room, with the room's accumulated token breakdown — `◇` total · `↘` input, including cache creation · `↗` output · `◌` cache-read, each marker in its one color — pinned to the right edge in the coarse integer form (it drops when the headline recorded no tokens, leaving `◎ N` alone). Line 2: `¤` (the agents' working clay) the live agents in the room right now, followed by a steady unread count like `(2)` when unseen rows exist, with the room's spend pinned right. The counts read from the live room and the workspace-scoped JSONL tally's `[sidebar] spend_window`: `"24h"` (default), `"today"` with optional `spend_timezone`, or `"session"`. An empty room reads `◎ 0` over `¤ 0`.
+- **Headline spend.** The room's workspace-scoped spend for the configured headline window, pinned to the right of the live-agents line, **counting up** in an eased odometer roll the moment any in-scope agent's cost moves — every jump lands inside 1.2s of 200ms clicks, big first steps easing into a penny-sized landing on the exact figure, with a brief brighten as it settles. It joins the line once the room records spend.
 - **Scope paths.** The workspace scope is path-prefix based over the project root and grouped worktree roots; a checkout reached through a different symlink spelling than the transcript's `cwd` can read as outside the room until the paths agree.
 - **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed each wear their fixed tone — `?` yellow, `!` red — then `⏸` paused (blue) and `✓` done. A bucket echoes the continuous signal only when it owns the lead unread row — the one row that most needs you — so `?` or `!` shimmers on that row's age-paced cadence while every other unread bucket, `⏸` and `✓` included, holds the steady `bright` crest; with no unread match a bucket holds static at its semantic tone. The unread count holds steady on the `¤` summary line. The **right cluster** is the live-capacity tail: `⢿` working (every running agent — the thinking animation and the compaction pulse are per-row heads, not buckets), then a free `○` idle agent; either bucket holds the same steady unread emphasis while a visible recovered row is unread. Every bucket always shows; colored statuses wear their semantic tone, the idle glyph and count rest at the soft stat tier, and zero counts use the same soft tier beside their glyphs.
 - **The unread jump banner — the agent that needs you, one click away.** While any agent awaits an answer, a pinned `↑ N need you` line closes the cockpit, toned by the lead's status — yellow for a waiting lead, red for a failed one. It stays put regardless of scroll, so the oldest unanswered agent is always reachable: clicking it (or pressing the inbox key) jumps you straight to that row, like a worktree header. It is the steady companion to the viewport's snap — when an unread arrives the cards scroll to reveal it, and once you scroll or navigate past it this banner is how you get back. It clears the moment nothing is awaiting you.
@@ -345,7 +345,7 @@ With `[agents.pets] enabled = true`, the rail still shows provider tabs only. Th
  ⇄ remote 210ms              ? for help
 ```
 
-Each block's stats speaks the fleet ledger's vocabulary, scoped to the provider: today's `◎` session count, then the `◇ ↘ ↗ ◌` token breakdown, where `↘` input subsumes cache creation, with the spend pinned right. The stats row stays one row in every provider layout; normal and narrow hide the input/output split only when the width needs it. The `Total:` delimiter switches from provider-today facts to account-global fleet totals. Wide paints `W:` and `M:` as two full rows with USD pinned right; normal and narrow split each token row into a left `W:`/`M:` session cluster and right-aligned token stats, then put `W: $...` on the left and `M: $...` on the right of the third total row.
+Each block's stats speaks the fleet ledger's vocabulary, scoped to the provider: the configured headline `◎` session count, then the `◇ ↘ ↗ ◌` token breakdown, where `↘` input subsumes cache creation, with the spend pinned right. The stats row stays one row in every provider layout; normal and narrow hide the input/output split only when the width needs it. The `Total:` delimiter switches from provider-headline facts to account-global fleet totals. Wide paints `W:` and `M:` as two full rows with USD pinned right; normal and narrow split each token row into a left `W:`/`M:` session cluster and right-aligned token stats, then put `W: $...` on the left and `M: $...` on the right of the third total row.
 
 A **metered account** drains one "mana" bar per included budget window toward its reset. The bar fills with what's *left*, sliding continuously green → gold → amber → red as it empties over a dim empty track — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. Each window's label (`5h`/`7d`) wears its own bar's tone, while the `↻` reset countdown beside it wears the spend pace: soft when the current burn rate sustains to reset, then sliding gold → amber → red as it outruns the window, falling back to the quiet soft tier when pace is unknowable. A spent longer window gates the shorter ones: once the `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the longer window resets. When paid extra usage is available or unknown, the second row becomes `ex`; known usage reads `$used/$limit`, a known remaining balance reads dollars, and an unknown or uncapped value reads `∞` over a dim empty track.
 
@@ -388,7 +388,7 @@ The account-global running totals seal the bottom of the dashboard, above the fo
 ```
 
 - **The rows.** Each reads `◎ sessions  ◇ total ↘ input ↗ output ◌ cache-read  $spend`: the thread count, the precise one-decimal token figures (the exact record beside the cockpit's coarse live read) at the soft tier, and the spend pinned to the right edge in dollar green. A one-cell lead pad sets the `W:`/`M:` tags a hair off the chrome edge; the tags wear sky blue, and each marker its one shared color — the teal `◎`, the blue `◇`, the deep-red `↘`, the blue `↗`, and the green `◌`. Every numeric field is right-aligned into one shared grid, so the `W:` / `M:` labels stack and each column lines up. Cache creation is counted in the `↘` input figure, so the ledger keeps to the headline figures.
-- **No animation.** The ledger figures are static — the count-ups live above, today's headline in the cockpit and each card's `$cost`. The windows escalate `today → week → month`.
+- **No animation.** The ledger figures are static — the count-ups live above, the configured headline in the cockpit and each card's `$cost`. The windows escalate `headline → week → month`.
 
 Every figure is computed from the transcript JSONL — Codex's dollars priced from its token counts, every provider that logs usage counted, all of them account-global. The ledger is dropped until something has been recorded.
 

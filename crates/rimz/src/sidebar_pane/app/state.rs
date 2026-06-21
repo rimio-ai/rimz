@@ -235,7 +235,7 @@ pub(super) fn apply_fetch_outcome(
     let derived = focused_pane.filter(|pane| row_index_of_pane(current, None, pane).is_some());
     reconcile_selection(ui, current, derived);
     ui.animation_phase = wall_clock_phase(anim_start, current.theme.display.resolved_refresh_ms());
-    // Fold the fresh today-spend into the count-up: a higher figure starts a
+    // Fold the fresh headline spend into the count-up: a higher figure starts a
     // stepped roll that the next frames paint, a reset or first value snaps,
     // and an unchanged one is a no-op that leaves a climb in flight. The live
     // overlay is the preferred target — it moves with every statusline push —
@@ -246,7 +246,7 @@ pub(super) fn apply_fetch_outcome(
     let today_usd = current.today_spend_live_usd.or(current
         .workspace_value_tally
         .as_ref()
-        .map(|tally| tally.today.usd));
+        .map(|tally| tally.headline.usd));
     if let Some(usd) = today_usd {
         ui.tally.observe(usd, ui.animation_phase);
     }

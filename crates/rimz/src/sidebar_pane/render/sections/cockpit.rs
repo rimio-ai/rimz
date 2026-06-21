@@ -1,5 +1,5 @@
-//! The cockpit's two summary lines: today's sessions + token breakdown, and the
-//! live-agent count with the animated count-up spend.
+//! The cockpit's two summary lines: headline sessions + token breakdown, and
+//! the live-agent count with the animated count-up spend.
 
 use crate::SpendWindow;
 use ratatui::style::Modifier;
@@ -14,18 +14,18 @@ use crate::sidebar_pane::render::theme::{Component, Theme};
 use super::{metric_spans, pin_right};
 
 /// The cockpit's first summary line, directly beneath the repo identity:
-/// `◎ {sessions}` — the threads that have run today, the glyph in the teal it
-/// shares with the W/M ledger rows — on the left, with today's accumulated
-/// token breakdown `◇ ↘ ↗ ◌` (integer magnitudes, the live coarse form)
-/// pinned to the right edge: both halves read today's window, so the line is
-/// the day at a glance. The breakdown reads the workspace-scoped JSONL tally's
-/// today window and drops when today recorded no tokens, leaving `◎ {sessions}`
-/// alone. The live-agent count and the spend ride the second line
+/// `◎ {sessions}` — the threads that have run in the configured headline
+/// window, the glyph in the teal it shares with the W/M ledger rows — on the
+/// left, with the headline token breakdown `◇ ↘ ↗ ◌` (integer magnitudes, the
+/// live coarse form) pinned to the right edge. The breakdown reads the
+/// workspace-scoped JSONL tally's headline window and drops when it recorded no
+/// tokens, leaving `◎ {sessions}` alone. The live-agent count and the spend ride
+/// the second line
 /// ([`cockpit_spend_line`]).
 pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
     theme: &Theme,
     sessions: u32,
-    today: Option<&SpendWindow>,
+    headline: Option<&SpendWindow>,
     width: usize,
 ) -> Line<'static> {
     let left = metric_spans(
@@ -34,7 +34,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
         theme.component(Component::Sessions),
         &sessions.to_string(),
     );
-    let right = today
+    let right = headline
         .filter(|w| w.tokens > 0 || w.cache_read > 0)
         .map(|window| {
             token_breakdown_spans(
@@ -51,13 +51,13 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 }
 
 /// The cockpit's second summary line: `¤ {live}` — the agents in the room right
-/// now, the glyph in the agents' own working clay — on the left, with today's
+/// now, the glyph in the agents' own working clay — on the left, with headline
 /// fleet spend pinned to the right edge, counting up as a turn lands. The
-/// figure ticks toward the workspace tally's today total via the shared
+/// figure ticks toward the workspace tally's headline total via the shared
 /// [`TallyAnim`] roll — big decaying steps, then penny by penny onto the exact
 /// figure — and brightens for a beat the instant it settles (the W/M ledger
 /// rows below stay static). Always present — an empty room reads `¤ 0`; the
-/// bold dollar-green `$` joins the right edge once today records spend.
+/// bold dollar-green `$` joins the right edge once the headline records spend.
 pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     theme: &Theme,
     live_agents: usize,

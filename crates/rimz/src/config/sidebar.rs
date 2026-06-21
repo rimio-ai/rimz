@@ -4,6 +4,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SidebarConfig {
+    /// The cockpit and provider stats headline window: trailing 24 hours, the
+    /// local calendar day, or the current session burst.
+    #[serde(default)]
+    pub spend_window: crate::agents::spending::SpendWindowMode,
+    /// IANA time zone used for `spend_window = "today"`. Unset uses the system
+    /// local zone; an unknown name falls back to the system zone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spend_timezone: Option<String>,
     /// Preferred comparison target for the worktree header's git stats (the
     /// `+/-` diff, the `⇡`/`⇣` commit delta, and the `≡`/`✓` landed markers).
     /// Tried
@@ -25,6 +33,8 @@ pub struct SidebarConfig {
 impl Default for SidebarConfig {
     fn default() -> Self {
         Self {
+            spend_window: Default::default(),
+            spend_timezone: None,
             trunk: None,
             focus_key: default_focus_key(),
         }
@@ -40,6 +50,13 @@ impl SidebarConfig {
             None
         } else {
             Some(key)
+        }
+    }
+
+    pub fn headline_spec(&self) -> crate::agents::spending::HeadlineSpec {
+        crate::agents::spending::HeadlineSpec {
+            mode: self.spend_window,
+            timezone: self.spend_timezone.clone(),
         }
     }
 }

@@ -19,7 +19,7 @@ pub(in crate::sidebar_pane::render) fn token_total_glyph(theme: &Theme) -> Strin
 }
 
 /// The `◇ ↘ ↗ ◌` token breakdown as styled spans — the one shape every fleet
-/// token line shares (cockpit today line, provider today line, W/M ledger
+/// token line shares (cockpit headline line, provider headline line, W/M ledger
 /// rows). Each marker wears its one color everywhere: the `◇` total in blue,
 /// `↘` input in the expense vermilion, `↗` output in blue, and `◌` cache-read
 /// in green. The figures read at the soft tier

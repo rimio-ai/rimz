@@ -11,7 +11,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 use crate::agents::spending::{
-    ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
+    HeadlineSpec, ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
     compute_scoped_tally, discover_spending_files, read_provider_spending_cache,
     read_spending_cache, read_workspace_spending_cache, unix_secs_now,
 };
@@ -494,8 +494,8 @@ pub fn enrich(
             spending
         }
     };
-    // The fleet `value_tally` — the JSONL today / month / all-time pile read
-    // by the cockpit's today figure and the bottom value corner — attaches
+    // The fleet `value_tally` — the JSONL headline / month / trailing-year pile
+    // read by the cockpit's headline figure and the bottom value corner — attaches
     // once, after every fold; `None` when nothing has ever been recorded.
     snapshot.value_tally = (!spending_caches.provider.spending.total.is_zero())
         .then_some(spending_caches.provider.spending.total.clone());
@@ -513,7 +513,7 @@ pub fn enrich(
     );
     apply_live_today_spend(
         &mut snapshot,
-        spending_caches.workspace.tally.today.usd,
+        spending_caches.workspace.tally.headline.usd,
         spending_caches.workspace.refreshed_at_ms,
         &baselines.baselines,
     );
@@ -625,7 +625,7 @@ fn fold_machine_config_producing(
 /// The cheap config read stays local so each tab honours its own display
 /// preferences.
 /// Returns the published spending cache whole — tally and stamp — so the caller
-/// folds the value tally and the live today-spend overlay from one read.
+/// folds the value tally and the live headline-spend overlay from one read.
 fn fold_machine_config_cached(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
@@ -644,7 +644,8 @@ fn fold_machine_config_cached(
         &snapshot.worktree_roots,
         snapshot.worktree_home.as_deref(),
     );
-    let workspace = cached_workspace_spending(runtime, &scope, cache.refreshed_at_ms);
+    let spec = config.sidebar.headline_spec();
+    let workspace = cached_workspace_spending(runtime, &scope, cache.refreshed_at_ms, &spec);
     let mut snapshot =
         fold_machine_config_with(snapshot, config, accounts, &cache.spending.by_provider);
     // A consumer reads the producer's published windows to fill idle gaps, but
@@ -673,6 +674,7 @@ fn cached_workspace_spending(
     runtime: &RuntimePaths,
     scope: &SpendScope,
     source_refreshed_at_ms: u64,
+    spec: &HeadlineSpec,
 ) -> WorkspaceSpendingCache {
     if scope.is_empty() {
         return Default::default();
@@ -690,6 +692,7 @@ fn cached_workspace_spending(
         hash,
         source_refreshed_at_ms,
         &discover_spending_files(),
+        spec,
     )
 }
 
@@ -699,6 +702,7 @@ fn derive_workspace_spending(
     scope_hash: String,
     source_refreshed_at_ms: u64,
     files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
+    spec: &HeadlineSpec,
 ) -> WorkspaceSpendingCache {
     let cursor_path = runtime.shared_spending_cursor_path();
     let key = WorkspaceDeriveKey {
@@ -707,6 +711,7 @@ fn derive_workspace_spending(
         files_signature: discovered_files_signature(files),
         scope_hash: scope_hash.clone(),
         source_refreshed_at_ms,
+        headline: spec.clone(),
     };
     if let Ok(memo) = workspace_derive_memo().lock()
         && let Some(cached) = memo.as_ref()
@@ -720,7 +725,7 @@ fn derive_workspace_spending(
         version: crate::agents::spending::WORKSPACE_SPENDING_VERSION,
         refreshed_at_ms: source_refreshed_at_ms,
         scope_hash,
-        tally: compute_scoped_tally(files, &cursor, scope, unix_secs_now()),
+        tally: compute_scoped_tally(files, &cursor, scope, unix_secs_now(), spec),
     };
     if let Ok(mut memo) = workspace_derive_memo().lock() {
         *memo = Some(WorkspaceDeriveMemo {
@@ -744,6 +749,7 @@ struct WorkspaceDeriveKey {
     files_signature: u64,
     scope_hash: String,
     source_refreshed_at_ms: u64,
+    headline: HeadlineSpec,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

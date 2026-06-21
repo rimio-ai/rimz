@@ -91,7 +91,7 @@ enum TokenDetail {
 /// coarse live read — each marker in its one shared color (the sky-blue window
 /// tag, the teal `◎`, the blue `◇`/`↗`, the deep-red `↘`, and the green `◌`)
 /// and the `$` bold dollar green; the
-/// spend deliberately does **not** animate (only today's headline does). Both
+/// spend deliberately does **not** animate (only the headline does). Both
 /// rows share one set of right-aligned column widths so the labels stack and
 /// every number column lines up. Empty (dropped) until something is recorded.
 pub(in crate::sidebar_pane::render) fn fleet_ledger_lines(
@@ -1084,24 +1084,24 @@ fn provider_stats_rows(
     region: usize,
     layout: ProviderLayout,
 ) -> Vec<Vec<Span<'static>>> {
-    let today = panel
+    let headline = panel
         .spending
         .as_ref()
-        .map(|spending| spending.today)
+        .map(|spending| spending.headline)
         .unwrap_or_default();
-    let detail = provider_token_detail(theme, &today, layout, region);
-    vec![provider_stats_row(theme, &today, detail, region).spans]
+    let detail = provider_token_detail(theme, &headline, layout, region);
+    vec![provider_stats_row(theme, &headline, detail, region).spans]
 }
 
 fn provider_stats_row(
     theme: &Theme,
-    today: &SpendWindow,
+    headline: &SpendWindow,
     detail: TokenDetail,
     region: usize,
 ) -> Line<'static> {
-    let left = provider_stats_left_spans(theme, today, detail);
+    let left = provider_stats_left_spans(theme, headline, detail);
     let right = vec![Span::styled(
-        dollars2(today.usd),
+        dollars2(headline.usd),
         theme.money_style(Modifier::BOLD),
     )];
     pin_right(left, right, region)
@@ -1109,7 +1109,7 @@ fn provider_stats_row(
 
 fn provider_stats_left_spans(
     theme: &Theme,
-    today: &SpendWindow,
+    headline: &SpendWindow,
     detail: TokenDetail,
 ) -> Vec<Span<'static>> {
     let mut left = vec![
@@ -1117,15 +1117,15 @@ fn provider_stats_left_spans(
             theme.glyph(GlyphRole::CockpitSessions).to_owned(),
             theme.styled(Component::Sessions, Modifier::empty()),
         ),
-        Span::styled(format!(" {}", today.sessions), theme.body()),
+        Span::styled(format!(" {}", headline.sessions), theme.body()),
         Span::raw("  "),
     ];
     let token_breakdown = provider_token_breakdown_spans(
         theme,
-        today.tokens,
-        today.input,
-        today.output,
-        today.cache_read,
+        headline.tokens,
+        headline.input,
+        headline.output,
+        headline.cache_read,
         tokens_int,
         detail,
     );
@@ -1135,7 +1135,7 @@ fn provider_stats_left_spans(
 
 fn provider_token_detail(
     theme: &Theme,
-    today: &SpendWindow,
+    headline: &SpendWindow,
     layout: ProviderLayout,
     region: usize,
 ) -> TokenDetail {
@@ -1144,9 +1144,9 @@ fn provider_token_detail(
         ProviderLayout::Narrow => return TokenDetail::Summary,
         ProviderLayout::Normal => {}
     }
-    let left = provider_stats_left_spans(theme, today, TokenDetail::Full);
+    let left = provider_stats_left_spans(theme, headline, TokenDetail::Full);
     let right = vec![Span::styled(
-        dollars2(today.usd),
+        dollars2(headline.usd),
         theme.money_style(Modifier::BOLD),
     )];
     if provider_spans_width(&left) + provider_spans_width(&right) < region {

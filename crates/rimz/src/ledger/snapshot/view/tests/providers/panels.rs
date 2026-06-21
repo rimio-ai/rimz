@@ -15,15 +15,25 @@ fn provider_panel_spending_attaches_and_cap_keeps_top_spenders() {
         snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
 
     // The panels are the dashboard's tabs, so they hold a stable kind order —
-    // Codex's larger today spend (5.0) never reorders the row.
+    // Codex's larger headline spend (5.0) never reorders the row.
     assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex", "pi"]);
     // Each panel still carries its own spending tally.
     assert_eq!(
-        snapshot.providers[0].spending.as_ref().unwrap().today.usd,
+        snapshot.providers[0]
+            .spending
+            .as_ref()
+            .unwrap()
+            .headline
+            .usd,
         1.0
     );
     assert_eq!(
-        snapshot.providers[1].spending.as_ref().unwrap().today.usd,
+        snapshot.providers[1]
+            .spending
+            .as_ref()
+            .unwrap()
+            .headline
+            .usd,
         5.0
     );
 
@@ -178,7 +188,7 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
     by_provider.insert(
         "claude".to_owned(),
         SpendTally {
-            today: SpendWindow {
+            headline: SpendWindow {
                 usd: 2.0,
                 tokens: 100,
                 ..Default::default()
@@ -230,7 +240,7 @@ fn provider_spend(
             (
                 kind.to_owned(),
                 SpendTally {
-                    today: SpendWindow {
+                    headline: SpendWindow {
                         usd,
                         ..Default::default()
                     },

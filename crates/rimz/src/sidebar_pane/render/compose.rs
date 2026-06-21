@@ -449,18 +449,18 @@ pub(super) fn top_lines(
     let mut header = repo_header_lines(theme, snapshot, inner);
     // A blank line sets the repo identity apart from the cockpit summary below.
     header.push(Line::from(""));
-    // The cockpit summary, two lines: line 1 is `◎` sessions today on the left
-    // with today's accumulated token breakdown pinned right — both halves read
-    // today's window; line 2 is `¤` live agents on the left with today's spend
-    // pinned right. The counts read from the live fleet and the JSONL
-    // `workspace_value_tally`'s today window, so the cockpit reflects this
-    // room's sessions rather than account-global provider history.
-    let today = snapshot
+    // The cockpit summary, two lines: line 1 is `◎` sessions in the configured
+    // headline window on the left with its token breakdown pinned right; line 2
+    // is `¤` live agents on the left with headline spend pinned right. The
+    // counts read from the live fleet and the JSONL `workspace_value_tally`'s
+    // headline window, so the cockpit reflects this room's sessions rather than
+    // account-global provider history.
+    let headline = snapshot
         .workspace_value_tally
         .as_ref()
-        .map(|tally| &tally.today);
-    let sessions = today.map(|window| window.sessions).unwrap_or(0);
-    header.push(cockpit_summary_line(theme, sessions, today, inner));
+        .map(|tally| &tally.headline);
+    let sessions = headline.map(|window| window.sessions).unwrap_or(0);
+    header.push(cockpit_summary_line(theme, sessions, headline, inner));
     // Line 2 is always present — an empty room reads `¤ 0` — with the spend
     // joining the right edge and counting up as a turn lands. The roll targets
     // the live overlay when the snapshot carries one — the walked figure plus
@@ -470,7 +470,7 @@ pub(super) fn top_lines(
     let unread_agents = unread_total(&snapshot.worktree_groups);
     let today_usd = snapshot
         .today_spend_live_usd
-        .or(today.map(|window| window.usd))
+        .or(headline.map(|window| window.usd))
         .unwrap_or(0.0);
     header.push(cockpit_spend_line(
         theme,

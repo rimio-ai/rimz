@@ -26,7 +26,7 @@ fn render_fleet_ledger_pins_week_month_rows_under_the_dashboard() {
         Some((25, 40)),
     )];
     snapshot.value_tally = Some(crate::SpendTally {
-        today: crate::SpendWindow {
+        headline: crate::SpendWindow {
             usd: 40.23,
             tokens: 3_420_000,
             input: 420_000,
@@ -64,7 +64,7 @@ fn render_fleet_ledger_pins_week_month_rows_under_the_dashboard() {
         },
     });
     snapshot.workspace_value_tally = Some(crate::SpendTally {
-        today: crate::SpendWindow {
+        headline: crate::SpendWindow {
             usd: 8.25,
             tokens: 1_210_000,
             input: 210_000,

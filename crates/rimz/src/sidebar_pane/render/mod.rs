@@ -82,7 +82,7 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
 /// sidebar — quiet read idle/done rows, and every unread row past the lead
 /// resting at its static crest — keeps idling on the slow data tick. A stalled
 /// agent is projected to `failed` upstream, so it reads as a pulsing `!` here.
-/// The cockpit's today-spend count-up rides a separate gate (`UiState::tally`),
+/// The cockpit's headline-spend count-up rides a separate gate (`UiState::tally`),
 /// so a finished-turn climb keeps the tick alive even when every row is
 /// otherwise static.
 pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {

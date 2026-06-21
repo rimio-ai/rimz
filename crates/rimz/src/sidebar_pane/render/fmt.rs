@@ -123,7 +123,7 @@ pub(super) fn window_label(duration_mins: Option<u32>) -> String {
 
 /// Spend at full cent resolution with thousands grouped — `$0.00`, `$3.50`,
 /// `$124.05`, `$1,240.57`. Every spend in the sidebar reads as money at two
-/// decimals: the per-row cost, the cockpit's count-up today total, the provider
+/// decimals: the per-row cost, the cockpit's count-up headline total, the provider
 /// dashboard, and the fleet ledger all share this one shape, so a price never
 /// jitters between a cents and a whole-dollar form. Grouping keeps a large
 /// accumulating pile (`$12,480.13`) legible without changing that shape.
