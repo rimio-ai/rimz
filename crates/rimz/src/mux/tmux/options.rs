@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use crate::config::TmuxConfig;
-use crate::feed::PaneRef;
 use crate::mux::{SidebarPaneOptions, ViewSidebars};
+use crate::pane::PaneRef;
 
 /// Pane title the sidebar renderer sets through the terminal title escape. The
 /// host binary is now `rimz`, so tmux identifies chrome through this title
@@ -129,9 +129,9 @@ mod tests {
 
     use super::*;
     use crate::config::MultiplexerConfig;
-    use crate::feed::PaneRef;
     use crate::ids::{MuxName, PaneId, WorkspaceId};
     use crate::mux::{SidebarPaneOptions, SidebarWidth};
+    use crate::pane::PaneRef;
 
     fn sidebar_opts(refresh_ms: Option<u16>) -> SidebarPaneOptions {
         let width = SidebarWidth::default();

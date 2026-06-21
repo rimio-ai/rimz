@@ -159,7 +159,7 @@ command = '''printf '%s|%s|%s|%s\n' "$RIMZ_NOTIFY_KIND" "$RIMZ_NOTIFY_AGENT" "$R
     );
 }
 
-fn publish_pane_frame(env: &Env, panes: &[rimz::feed::PaneRef]) {
+fn publish_pane_frame(env: &Env, panes: &[rimz::pane::PaneRef]) {
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
     let workspace =

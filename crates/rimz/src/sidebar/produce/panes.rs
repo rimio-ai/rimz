@@ -423,7 +423,7 @@ fn process_command_probe(
 /// bind ladder cannot mistake the foreign user's agent for a local session.
 fn annotate_elevated_agents(
     frame: &mut PaneFrame,
-    elevated_agent: &dyn Fn(u32) -> Option<crate::feed::ElevatedAgent>,
+    elevated_agent: &dyn Fn(u32) -> Option<crate::pane::ElevatedAgent>,
 ) {
     for pane in frame.pane_states_mut() {
         pane.current.elevated_agent = None;
@@ -602,10 +602,10 @@ pub(super) fn cached_panes_or_produce(
 }
 
 fn filter_foreign_session_panes(
-    panes: Vec<crate::feed::PaneRef>,
+    panes: Vec<crate::pane::PaneRef>,
     session: &str,
     diag: Option<&crate::diag::DiagSink>,
-) -> Vec<crate::feed::PaneRef> {
+) -> Vec<crate::pane::PaneRef> {
     panes
         .into_iter()
         .filter_map(|pane| {

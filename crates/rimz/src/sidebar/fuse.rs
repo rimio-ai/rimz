@@ -116,8 +116,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use crate::feed::PaneRef;
     use crate::ids::{MuxName, PaneId, WorkspaceId};
+    use crate::pane::PaneRef;
 
     fn ws() -> WorkspaceId {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-fuse"))

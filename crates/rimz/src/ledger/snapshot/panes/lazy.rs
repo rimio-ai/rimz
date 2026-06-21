@@ -7,12 +7,13 @@ use serde::Serialize;
 use super::{agent_for_pane, pane_start_allows_bind};
 use crate::agents::AgentDescriptor;
 use crate::agents::lifecycle::TurnPhase;
-use crate::feed::{AgentState, AgentStatus, PaneRef};
+use crate::feed::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::ledger::snapshot::process::{
     pane_agent_kind, pane_command_is_known, pane_worktree_path, row_from_process,
 };
 use crate::ledger::snapshot::row::{AgentCard, RowCard, SidebarRow};
+use crate::pane::PaneRef;
 
 /// What a live pane running an agent command resolves to when no stamped agent
 /// claimed its pane id.

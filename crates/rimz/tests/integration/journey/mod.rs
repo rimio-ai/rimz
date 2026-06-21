@@ -28,8 +28,8 @@ use std::time::{Duration, Instant};
 
 use assert_cmd::cargo::cargo_bin;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
-use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, ViewKind};
+use rimz::pane::PaneRef;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

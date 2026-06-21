@@ -143,7 +143,7 @@ pub fn repaired_pane_frame_for_binding(
 /// mux. Resolved here, inside the produce entry, so the CLI and the in-process
 /// fetch worker honor it identically — one deterministic seam for the journey
 /// and integration suites.
-fn pane_list_fixture() -> Result<Option<Vec<crate::feed::PaneRef>>> {
+fn pane_list_fixture() -> Result<Option<Vec<crate::pane::PaneRef>>> {
     let Some(path) = std::env::var_os("RIMZ_TEST_PANE_LIST").filter(|value| !value.is_empty())
     else {
         return Ok(None);
@@ -214,8 +214,8 @@ fn enrich_producing(
 pub(crate) mod test_support {
     /// A pane with the given id, command, and cwd; other fields are irrelevant
     /// to the helpers under test.
-    pub(crate) fn pane(id: &str, command: Option<&str>, cwd: Option<&str>) -> crate::feed::PaneRef {
-        crate::feed::PaneRef {
+    pub(crate) fn pane(id: &str, command: Option<&str>, cwd: Option<&str>) -> crate::pane::PaneRef {
+        crate::pane::PaneRef {
             pane_id: crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, id),
             session_name: "s".to_owned(),
             view_id: None,

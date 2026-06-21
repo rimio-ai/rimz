@@ -19,8 +19,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId};
+use rimz::pane::PaneRef;
 use serde_json::Value;
 
 use crate::common::Env;

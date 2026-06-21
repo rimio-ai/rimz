@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 
-use crate::feed::{AgentState, FeedItem, PaneRef};
+use crate::feed::{AgentState, FeedItem};
 use crate::ledger::snapshot::panes::{agent_owner_pid, is_daemon_mode_codex};
 use crate::ledger::snapshot::process::command_is_sidebar_chrome;
+use crate::pane::PaneRef;
 use crate::remote_control;
 
 use super::SidebarSnapshot;

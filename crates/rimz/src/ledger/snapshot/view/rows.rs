@@ -1,10 +1,9 @@
 use jiff::Timestamp;
 
 use crate::agents::lifecycle::TurnPhase;
-use crate::feed::{
-    AgentState, AgentStatus, FeedItem, FeedStatus, PaneRef, ResolverStepState, Surface,
-};
+use crate::feed::{AgentState, AgentStatus, FeedItem, FeedStatus, ResolverStepState, Surface};
 use crate::ledger::snapshot::row::{AgentCard, RowCard, SidebarResolverState, SidebarRow};
+use crate::pane::PaneRef;
 
 pub(in crate::ledger::snapshot) fn row_from_agent(
     agent: &AgentState,

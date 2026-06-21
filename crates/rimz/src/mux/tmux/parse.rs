@@ -1,9 +1,9 @@
 //! tmux command-output parsers.
 
 use super::options::SIDEBAR_PANE_TITLE;
-use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::mux::{MuxErr, Result};
+use crate::pane::PaneRef;
 
 /// Parse one tab-separated `list-panes -F` row into a [`PaneRef`]. Returns
 /// `None` for a row missing the three load-bearing leading columns (session,

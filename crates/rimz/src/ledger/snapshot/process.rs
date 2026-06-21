@@ -4,7 +4,7 @@
 use jiff::Timestamp;
 
 use super::row::{ProcessCard, ProcessState, RowCard, SidebarRow};
-use crate::feed::PaneRef;
+use crate::pane::PaneRef;
 
 mod classify;
 
@@ -199,7 +199,7 @@ mod tests {
         );
 
         let spawn_only = row_from_process(
-            &crate::feed::PaneRef {
+            &crate::pane::PaneRef {
                 command: None,
                 spawn_command: Some("rimz agents exec codex --worktree-path /repo".to_owned()),
                 ..pane("%4", "zsh", "/repo")
@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn elevated_agent_marker_relabels_only_the_process_row() {
         let mut pane = pane("%4", "sudo su", "/repo");
-        pane.elevated_agent = Some(crate::feed::ElevatedAgent {
+        pane.elevated_agent = Some(crate::pane::ElevatedAgent {
             kind: crate::ids::AgentKind::new_unchecked("claude"),
             uid: 0,
         });

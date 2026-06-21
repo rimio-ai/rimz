@@ -34,8 +34,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewId, WorkspaceId};
+use crate::pane::PaneRef;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MuxErr {

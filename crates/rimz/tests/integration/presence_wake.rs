@@ -24,9 +24,9 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::RuntimePaths;
+use rimz::pane::PaneRef;
 use rimz::schema::heartbeat::SidebarHeartbeat;
 use rimz::schema::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 use rimz::sidebar::cache::{

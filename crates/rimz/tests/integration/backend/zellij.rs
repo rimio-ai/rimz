@@ -19,13 +19,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{
     ClientFocusOptions, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, SessionHealth,
     SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions,
     TabOptions, ZellijBackend, zellij,
 };
+use rimz::pane::PaneRef;
 use tempfile::TempDir;
 
 use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};

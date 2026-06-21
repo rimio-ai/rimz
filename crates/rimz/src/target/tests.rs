@@ -3,8 +3,9 @@
 use jiff::Timestamp;
 
 use super::*;
-use crate::feed::{AgentStatus, PaneRef};
+use crate::feed::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
+use crate::pane::PaneRef;
 
 #[test]
 fn resolve_prefers_name_ordinal_kind_then_session_prefix() {

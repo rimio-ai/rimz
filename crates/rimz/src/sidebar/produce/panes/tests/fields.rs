@@ -1,7 +1,7 @@
 use super::*;
 use std::collections::HashMap;
 
-fn tmux_pane(command: &str) -> crate::feed::PaneRef {
+fn tmux_pane(command: &str) -> crate::pane::PaneRef {
     let mut pane = pane("%1", Some(command), Some("/repo"));
     pane.pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1");
     pane
@@ -643,7 +643,7 @@ fn active_command_liveness_matrix_matches_backend_contracts() {
 
 fn assert_active_command_case(
     name: &str,
-    pane_ref: crate::feed::PaneRef,
+    pane_ref: crate::pane::PaneRef,
     cmdlines: Vec<(u32, &'static str)>,
     comms: Vec<(u32, &'static str)>,
     children: Vec<(u32, Vec<u32>)>,
@@ -723,7 +723,7 @@ fn annotate_elevated_agents_marks_only_wrapper_panes_with_a_pid() {
 
     annotate_elevated_agents(&mut frame, &|pid| {
         assert_eq!(pid, 100, "only the wrapper pane with a pid is scanned");
-        Some(crate::feed::ElevatedAgent {
+        Some(crate::pane::ElevatedAgent {
             kind: crate::ids::AgentKind::new_unchecked("claude"),
             uid: 0,
         })

@@ -378,7 +378,7 @@ fn other_live_pane_inside(path: &Path, globals: &GlobalFlags) -> bool {
 }
 
 fn other_live_user_pane_inside<'a>(
-    panes: impl IntoIterator<Item = &'a rimz::feed::PaneRef>,
+    panes: impl IntoIterator<Item = &'a rimz::pane::PaneRef>,
     own: &rimz::PaneId,
     path: &Path,
 ) -> bool {
@@ -544,11 +544,11 @@ mod tests {
         ));
     }
 
-    fn pane(raw: &str, command: Option<&str>, cwd: Option<&Path>) -> rimz::feed::PaneRef {
-        rimz::feed::PaneRef {
+    fn pane(raw: &str, command: Option<&str>, cwd: Option<&Path>) -> rimz::pane::PaneRef {
+        rimz::pane::PaneRef {
             command: command.map(ToOwned::to_owned),
             cwd: cwd.map(|path| path.display().to_string()),
-            ..rimz::feed::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))
+            ..rimz::pane::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))
         }
     }
 

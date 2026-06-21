@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use jiff::Timestamp;
 
 use crate::agents::lifecycle::TurnPhase;
-use crate::feed::{AgentState, AgentStatus, FeedItem, PaneRef, pending_ask_for};
+use crate::feed::{AgentState, AgentStatus, FeedItem, pending_ask_for};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::ledger::snapshot::panes::{
     AgentPaneRow, LazyAgentPairingResult, agent_for_pane, agent_pane_for_pane,
@@ -13,6 +13,7 @@ use crate::ledger::snapshot::process::{
     pane_command_is_known, pane_worktree_path, row_from_process,
 };
 use crate::ledger::snapshot::row::{PaneAgent, SidebarRow};
+use crate::pane::PaneRef;
 use crate::schema::diag::DiagEvent;
 
 use super::super::rows::{active_resolver_state, row_from_agent, row_from_standalone_item};

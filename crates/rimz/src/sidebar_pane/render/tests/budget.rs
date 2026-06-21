@@ -41,7 +41,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
     SidebarRow {
         id: id.clone(),
         name: "claude".to_owned(),
-        pane: Some(crate::feed::PaneRef {
+        pane: Some(crate::pane::PaneRef {
             pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{group}_{index}")),
             session_name: "rimz-perf".to_owned(),
             view_id: Some(format!("tab_{group}")),

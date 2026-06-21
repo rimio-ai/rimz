@@ -6,9 +6,10 @@
 //! layout/tabs/focus live in `backend/zellij.rs`; the actual mux-pane content
 //! smokes live in `journey/deep.rs`.
 
-use rimz::feed::{FeedItem, FeedKind, RuntimeOwnerKind, Surface};
+use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::MuxName;
 use rimz::ledger::runtime::current_process_owner;
+use rimz::pane::RuntimeOwnerKind;
 
 use super::{
     RoomHarness, SETTLE, permission_request, post_tool_use, process_pane, session_start,

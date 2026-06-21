@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::feed::FeedItem;
-use crate::feed::RuntimeOwnerKind;
+use crate::pane::RuntimeOwnerKind;
 use crate::schema::event::{AgentLaunchPayload, EventEnvelope};
 use crate::workspace::ResolvedWorkspace;
 

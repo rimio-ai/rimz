@@ -434,7 +434,7 @@ mod tests {
         pane: &str,
         cwd: Option<&str>,
     ) -> crate::SidebarSnapshot {
-        let mut pane_ref = crate::feed::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, pane));
+        let mut pane_ref = crate::pane::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, pane));
         pane_ref.cwd = cwd.map(ToOwned::to_owned);
         let row = crate::SidebarRow {
             id: pane.to_owned(),

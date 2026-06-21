@@ -5,9 +5,10 @@ use clap::{Args, Subcommand};
 
 use super::GlobalFlags;
 use crate::cli::render;
-use rimz::feed::{AgentState, PaneRef};
+use rimz::feed::AgentState;
 use rimz::ids::PaneId;
 use rimz::mux::{MuxBackend, NamedKey, PaneListOptions, SplitPaneOptions};
+use rimz::pane::PaneRef;
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
 #[derive(Debug, Args)]

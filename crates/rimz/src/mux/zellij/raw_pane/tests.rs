@@ -1,9 +1,9 @@
 use super::*;
 use std::collections::HashSet;
 
-use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewId, ViewKind};
 use crate::mux::SidebarWidth;
+use crate::pane::PaneRef;
 use crate::schema::pane_topology::PaneTopologyCache;
 
 #[test]

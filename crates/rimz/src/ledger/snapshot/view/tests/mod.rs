@@ -29,15 +29,13 @@ use super::{SidebarSnapshot, SidebarWorktreeKind, row_identity_violations};
 use crate::agent_activity::AgentActivity;
 use crate::agents::lifecycle::{LifecycleSignal, TurnPhase};
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally, SpendWindow};
-use crate::feed::{
-    AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, RuntimeOwner,
-    RuntimeOwnerKind, Surface,
-};
+use crate::feed::{AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, Surface};
 use crate::ids::AgentKind;
 use crate::ledger::snapshot::project::reduce_agent_states;
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::ledger::snapshot::testkit::*;
 use crate::ledger::subagent_context::SubagentContextRecord;
+use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::workspace::RootClass;
 
 /// A pending agent-hook ask naming `session_id`, homed at `/repo/main` like

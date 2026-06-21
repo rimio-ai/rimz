@@ -1024,8 +1024,8 @@ fn push_pending_agent_ask(env: &Env, session_id: &str) {
 /// A live `codex` pane at the workspace root with no bound session — the
 /// producer synthesizes its idle `○ codex` row, but it never enters the rollup.
 /// Its raw id is `TRACE_PANE` so the steer shim assertion matches.
-fn unbound_codex_pane(env: &Env) -> rimz::feed::PaneRef {
-    rimz::feed::PaneRef {
+fn unbound_codex_pane(env: &Env) -> rimz::pane::PaneRef {
+    rimz::pane::PaneRef {
         pane_id: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, TRACE_PANE),
         session_name: "rimz-test".to_owned(),
         view_id: Some("tab_1".to_owned()),

@@ -414,7 +414,7 @@ fn resolve_own_agent_end_trace(
         let projection = ledger
             .runtime_projection(rimz::RuntimeScope::Audit)
             .context("reading audit projection for agent exit tombstone")?;
-        let pane = rimz::feed::PaneRef::from_id(pane_id);
+        let pane = rimz::pane::PaneRef::from_id(pane_id);
         if let Some(agent) =
             rimz::ledger::snapshot::stamped_agent_for_pane(&pane, &projection.agents)
             && !agent.agent_id.is_empty()

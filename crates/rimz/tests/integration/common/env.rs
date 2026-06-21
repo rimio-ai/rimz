@@ -12,7 +12,7 @@ use assert_cmd::cargo::CommandCargoExt;
 use jiff::Timestamp;
 
 use super::command::ScrubSessionEnvExt;
-use rimz::feed::PaneRef;
+use rimz::pane::PaneRef;
 use rimz::schema::heartbeat::ResolverHeartbeat;
 use rimz::{EventEnvelope, Ledger, RuntimePaths, StatePaths, WorkspaceId, WorkspaceResolver};
 use serde_json::Value;

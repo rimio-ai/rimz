@@ -81,7 +81,7 @@ fn row_snapshot_at(
         rows: vec![crate::SidebarRow {
             id: "sess-1".to_owned(),
             name: "claude".to_owned(),
-            pane: Some(crate::feed::PaneRef::from_id(pane_id.clone())),
+            pane: Some(crate::pane::PaneRef::from_id(pane_id.clone())),
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
             unread: false,
@@ -203,7 +203,7 @@ fn two_pane_snapshot(
     let mut second_row = snap.worktree_groups[0].rows[0].clone();
     second_row.id = "sess-2".to_owned();
     second_row.name = "codex".to_owned();
-    second_row.pane = Some(crate::feed::PaneRef::from_id(second.clone()));
+    second_row.pane = Some(crate::pane::PaneRef::from_id(second.clone()));
     snap.worktree_groups[0].rows.push(second_row);
     snap.worktree_groups[0].status_counts[0].count = 2;
     snap.own_view = Some(crate::SidebarOwnView {

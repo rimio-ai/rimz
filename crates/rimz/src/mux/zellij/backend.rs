@@ -15,7 +15,6 @@ use super::raw_pane::{
     sidebar_geometry_off_spec, tabs_with_sidebars, views_with_sidebars,
 };
 use super::sidebar::DockOutcome;
-use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
@@ -24,6 +23,7 @@ use crate::mux::{
     SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions, TabOptions,
     ensure_pane_backend, memoized_version,
 };
+use crate::pane::PaneRef;
 
 /// Prefix `command` with an `env KEY=VALUE …` shim so a freshly split Zellij
 /// pane inherits the requested vars; Zellij's `new-pane` has no env flag of its

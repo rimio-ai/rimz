@@ -3,8 +3,9 @@ use crate::agents::{
     RateLimitWindow, TurnErrorClass,
 };
 use crate::config::{AnimationSpec, ScrollbarMode};
-use crate::feed::{AgentState, AgentStatus, FeedKind, PaneRef};
+use crate::feed::{AgentState, AgentStatus, FeedKind};
 use crate::ids::{MuxName, PaneId, ViewKind};
+use crate::pane::PaneRef;
 use crate::{EventEnvelope, FeedItem, FeedStatus, SidebarSnapshot, Surface, WorkspaceId};
 use jiff::Timestamp;
 use ratatui::buffer::Buffer;

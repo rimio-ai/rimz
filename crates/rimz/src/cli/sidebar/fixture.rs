@@ -255,8 +255,8 @@ fn agent_row(
     }
 }
 
-fn pane_ref(raw: &str, command: &str, cwd: &str, focused: bool) -> rimz::feed::PaneRef {
-    rimz::feed::PaneRef {
+fn pane_ref(raw: &str, command: &str, cwd: &str, focused: bool) -> rimz::pane::PaneRef {
+    rimz::pane::PaneRef {
         pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, raw),
         session_name: "rimz-fixture".to_owned(),
         view_id: Some("tab_0".to_owned()),

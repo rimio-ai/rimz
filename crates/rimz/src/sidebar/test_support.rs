@@ -3,8 +3,9 @@ use std::path::Path;
 use jiff::Timestamp;
 
 use crate::agents::{RateLimitWindow, TurnPhase};
-use crate::feed::{AgentState, AgentStatus, PaneRef};
+use crate::feed::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
+use crate::pane::PaneRef;
 use crate::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
 
 pub(crate) fn pane(id: &str, command: &str, cwd: &str) -> PaneRef {

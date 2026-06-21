@@ -3,12 +3,12 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::mux::{
     CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions,
     SessionOptions, SidebarPaneOptions, SidebarWidth, SplitPaneOptions,
 };
+use rimz::pane::PaneRef;
 use rimz::schema::SIDEBAR_PROTOCOL_VERSION;
 use rimz::schema::heartbeat::SidebarHeartbeat;
 use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed};

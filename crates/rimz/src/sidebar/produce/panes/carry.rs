@@ -311,7 +311,7 @@ mod tests {
         crate::sidebar::frame::assemble_frame(panes, produced_at_ms, "s")
     }
 
-    fn same_tab_pane(raw: &str, tab: Option<&str>) -> crate::feed::PaneRef {
+    fn same_tab_pane(raw: &str, tab: Option<&str>) -> crate::pane::PaneRef {
         let mut pane = pane(raw, Some("zsh"), Some("/repo"));
         pane.view_id = Some(tab.unwrap_or("tab_0").to_owned());
         pane.view_kind = Some(ViewKind::Tab);

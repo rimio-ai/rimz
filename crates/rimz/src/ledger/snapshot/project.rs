@@ -10,8 +10,9 @@ use tracing::debug;
 
 use crate::agents::AgentLifecycleObservation;
 use crate::agents::lifecycle::{self, Transition};
-use crate::feed::{AgentState, AgentStatus, PaneRef, RuntimeOwner, RuntimeOwnerKind};
+use crate::feed::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, EventKind};
 
 /// How many user prompts a session's rollup keeps (`AgentState::recent_prompts`,

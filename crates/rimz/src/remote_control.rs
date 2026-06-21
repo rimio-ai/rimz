@@ -37,8 +37,8 @@ use crate::agents::claude::remote_control as claude_rc;
 use crate::agents::codex::app_server::codex_home;
 use crate::agents::version::CliVersion;
 use crate::config::RemoteControlConfig;
-use crate::feed::{ElevatedAgent, PaneRef};
 use crate::ids::AgentKind;
+use crate::pane::{ElevatedAgent, PaneRef};
 
 /// View name for the managed daemon tab. Shared by the launcher (the idempotency
 /// key for the tmux window / Zellij tab) and the sidebar classifier

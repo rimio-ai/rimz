@@ -29,14 +29,15 @@ use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, Transiti
 use rimz::agents::{AgentAdapter, AgentHookClass, AgentLifecycleObservation, adapter_by_kind};
 use rimz::bridge::{self as bridge_api, BridgeOutcome, ExpectedFrame, SocketGuard};
 use rimz::feed::{
-    AbandonReason, AgentState, FeedItem, FeedKind, FeedStatus, PaneRef, ResolverStep,
-    ResolverStepState, RuntimeOwnerKind, Surface,
+    AbandonReason, AgentState, FeedItem, FeedKind, FeedStatus, ResolverStep, ResolverStepState,
+    Surface,
 };
 use rimz::ids::{MuxName, PaneId};
 use rimz::ledger::AskExpiry;
 use rimz::ledger::runtime::process_owner;
 use rimz::ledger::snapshot::pane_start_allows_bind;
 use rimz::mux::ClientFocusOptions;
+use rimz::pane::{PaneRef, RuntimeOwnerKind};
 use rimz::resolver::{Allowlist, AllowlistEntry, fresh_enrolled, is_resolver_fresh, restat};
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
 

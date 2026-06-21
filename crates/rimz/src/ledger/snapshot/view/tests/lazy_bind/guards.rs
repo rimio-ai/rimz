@@ -43,7 +43,7 @@ fn paneless_agent_process_start_guard_controls_cwd_recovery() {
 fn elevated_foreign_claude_marker_blocks_cwd_recovery() {
     let claude = agent("claude", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
     let mut pane = pane("term1", "sudo claude", "/repo/main");
-    pane.elevated_agent = Some(crate::feed::ElevatedAgent {
+    pane.elevated_agent = Some(crate::pane::ElevatedAgent {
         kind: crate::ids::AgentKind::new_unchecked("claude"),
         uid: 0,
     });

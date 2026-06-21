@@ -1,6 +1,6 @@
 //! Typed live pane topology published by the sidebar producer.
 //!
-//! The mux seam remains a flat [`PaneRef`](crate::feed::PaneRef) list because
+//! The mux seam remains a flat [`PaneRef`](crate::pane::PaneRef) list because
 //! non-sidebar callers route by pane. The sidebar producer lifts that list into
 //! tabs/windows, keeps process state as one record, and publishes the topology
 //! as cache-class `snapshot.json`. The frame admits every rendered sidebar
@@ -13,9 +13,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::feed::{ElevatedAgent, PaneRef};
 use crate::ids::{AgentSessionId, MuxName, PaneId, ViewId, ViewKind};
 use crate::ledger::snapshot::SidebarOwnView;
+use crate::pane::{ElevatedAgent, PaneRef};
 use crate::schema::diag::DiagEvent;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

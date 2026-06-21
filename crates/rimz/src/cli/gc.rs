@@ -172,7 +172,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
     sweep
 }
 
-fn live_user_cwds<'a>(panes: impl IntoIterator<Item = &'a rimz::feed::PaneRef>) -> Vec<PathBuf> {
+fn live_user_cwds<'a>(panes: impl IntoIterator<Item = &'a rimz::pane::PaneRef>) -> Vec<PathBuf> {
     panes
         .into_iter()
         .filter(|pane| !pane.is_rimz_sidebar())
@@ -436,11 +436,11 @@ mod tests {
         String::from_utf8(stream.into_inner()).expect("utf-8")
     }
 
-    fn pane(raw: &str, command: Option<&str>, cwd: Option<&str>) -> rimz::feed::PaneRef {
-        rimz::feed::PaneRef {
+    fn pane(raw: &str, command: Option<&str>, cwd: Option<&str>) -> rimz::pane::PaneRef {
+        rimz::pane::PaneRef {
             command: command.map(ToOwned::to_owned),
             cwd: cwd.map(ToOwned::to_owned),
-            ..rimz::feed::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))
+            ..rimz::pane::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))
         }
     }
 }

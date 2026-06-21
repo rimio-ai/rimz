@@ -567,7 +567,7 @@ impl RawPaneListing {
     pub(super) fn into_pane_listing(
         self,
         session_name: String,
-        project: impl FnMut(RawPane, &str) -> Option<crate::feed::PaneRef>,
+        project: impl FnMut(RawPane, &str) -> Option<crate::pane::PaneRef>,
     ) -> PaneListing {
         let mut project = project;
         PaneListing {

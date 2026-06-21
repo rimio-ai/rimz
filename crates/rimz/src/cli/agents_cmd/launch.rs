@@ -784,7 +784,7 @@ pub(super) fn append_launch_event(
 ) -> Result<()> {
     let runtime_owner = params.pane_id.as_ref().map(|_| {
         rimz::ledger::runtime::current_process_owner(
-            rimz::feed::RuntimeOwnerKind::Agent,
+            rimz::pane::RuntimeOwnerKind::Agent,
             identity.agent_id.as_str(),
         )
     });

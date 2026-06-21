@@ -237,8 +237,9 @@ pub fn channel_label(worktree: &Path) -> String {
 mod tests {
     use super::*;
     use crate::agents::TurnPhase;
-    use crate::feed::{AgentStatus, PaneRef};
+    use crate::feed::AgentStatus;
     use crate::ids::{MuxName, PaneId};
+    use crate::pane::PaneRef;
     use jiff::Timestamp;
 
     fn pane(raw: &str) -> PaneRef {

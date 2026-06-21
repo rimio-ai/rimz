@@ -1,11 +1,12 @@
 use std::collections::BTreeSet;
 
 use crate::agent_activity::AgentActivity;
-use crate::feed::{AgentState, PaneRef};
+use crate::feed::AgentState;
 use crate::ids::PaneId;
 use crate::ledger::snapshot::panes::{
     LazyAgentPairingResult, pane_admits_card, row_from_frame_pane, stamped_agent_for_pane,
 };
+use crate::pane::PaneRef;
 use crate::schema::diag::DiagEvent;
 
 use super::SidebarSnapshot;

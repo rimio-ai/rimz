@@ -11,9 +11,9 @@ use rimz::agents::lifecycle::{
     LifecycleSignal, LifecycleState, Transition, TransitionKind, TurnPhase,
 };
 use rimz::feed::AgentStatus;
-use rimz::feed::PaneRef;
 use rimz::ids::AgentSessionId;
 use rimz::ids::{MuxName, PaneId};
+use rimz::pane::PaneRef;
 
 struct Case {
     name: &'static str,

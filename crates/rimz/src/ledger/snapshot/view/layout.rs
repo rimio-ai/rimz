@@ -2,8 +2,9 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::feed::{AgentState, AgentStatus, PaneRef};
+use crate::feed::{AgentState, AgentStatus};
 use crate::ledger::snapshot::row::SidebarRow;
+use crate::pane::PaneRef;
 use crate::workspace::RootClass;
 
 use super::{SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};

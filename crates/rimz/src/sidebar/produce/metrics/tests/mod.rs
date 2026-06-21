@@ -38,7 +38,7 @@ fn server(pid: u32, session: &str) -> crate::proc::ProcInfo {
 
 const SESSION: &str = "rimz-query-engine";
 
-fn frame_from_panes(panes: Vec<crate::feed::PaneRef>) -> crate::sidebar::frame::PaneFrame {
+fn frame_from_panes(panes: Vec<crate::pane::PaneRef>) -> crate::sidebar::frame::PaneFrame {
     crate::sidebar::frame::assemble_frame(panes, 1, SESSION)
 }
 
@@ -58,10 +58,10 @@ fn state<'a>(
 }
 
 fn sync_panes_from_frame(
-    panes: &mut [crate::feed::PaneRef],
+    panes: &mut [crate::pane::PaneRef],
     frame: crate::sidebar::frame::PaneFrame,
 ) {
-    let mut projected: HashMap<crate::ids::PaneId, crate::feed::PaneRef> = frame
+    let mut projected: HashMap<crate::ids::PaneId, crate::pane::PaneRef> = frame
         .to_pane_refs()
         .into_iter()
         .map(|pane| (pane.pane_id.clone(), pane))
@@ -74,7 +74,7 @@ fn sync_panes_from_frame(
 }
 
 fn backfill(
-    panes: &mut [crate::feed::PaneRef],
+    panes: &mut [crate::pane::PaneRef],
     procs: &[crate::proc::ProcInfo],
     cwds: &[(u32, &str)],
 ) {

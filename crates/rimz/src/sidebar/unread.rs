@@ -363,7 +363,7 @@ struct UnreadEpisodesFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feed::PaneRef;
+    use crate::pane::PaneRef;
     use crate::{AgentCard, MuxName, RowCard, SidebarStatusCount, SidebarWorktreeGroup};
     use std::path::Path;
     use tempfile::TempDir;

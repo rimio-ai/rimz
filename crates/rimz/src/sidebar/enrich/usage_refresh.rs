@@ -207,8 +207,9 @@ mod tests {
 
     use crate::agents::lifecycle::TurnPhase;
     use crate::agents::{AgentRateLimits, RateLimitWindow};
-    use crate::feed::{AgentState, AgentStatus, PaneRef};
+    use crate::feed::{AgentState, AgentStatus};
     use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+    use crate::pane::PaneRef;
 
     use super::*;
 

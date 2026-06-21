@@ -1,7 +1,7 @@
 //! Shared snapshot/pane builders for the app submodules' unit tests.
 
-use crate::feed::PaneRef;
 use crate::ids::PaneId;
+use crate::pane::PaneRef;
 use crate::{MuxName, SidebarSnapshot, WorkspaceId};
 use jiff::Timestamp;
 

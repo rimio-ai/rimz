@@ -10,8 +10,8 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::feed::RuntimeOwner;
 use crate::ids::{AgentSessionId, PaneId};
+use crate::pane::RuntimeOwner;
 
 use super::optional_payload_string;
 use super::{AgentTurnError, lifecycle::LifecycleSignal};

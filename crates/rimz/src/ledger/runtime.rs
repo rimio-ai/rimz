@@ -4,7 +4,8 @@
 //! recorded owner process is still the same live process. Audit views bypass
 //! this filter and read durable history as written.
 
-use crate::feed::{AgentState, FeedItem, RuntimeOwner, RuntimeOwnerKind, Surface};
+use crate::feed::{AgentState, FeedItem, Surface};
+use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::schema::event::EventEnvelope;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

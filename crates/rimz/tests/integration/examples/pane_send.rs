@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use rimz::feed::RuntimeOwnerKind;
 use rimz::ledger::runtime::current_process_owner;
+use rimz::pane::RuntimeOwnerKind;
 
 use crate::common::{
     Env, ScrubSessionEnvExt, permission_payload, skip_preconditions, spawn_example_resolver,
@@ -151,7 +151,7 @@ fn stage_bridge_item_with_pane(
         "claude",
         "agent-hook",
     );
-    item.pane = Some(rimz::feed::PaneRef {
+    item.pane = Some(rimz::pane::PaneRef {
         pane_id: rimz::PaneId::from_parts(rimz::MuxName::Tmux, pane_raw),
         session_name: session.to_owned(),
         view_id: None,

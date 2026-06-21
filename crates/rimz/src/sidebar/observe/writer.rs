@@ -280,8 +280,8 @@ fn timestamp_diff_gt(left: Timestamp, right: Timestamp, tolerance: std::time::Du
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feed::PaneRef;
     use crate::ids::{MuxName, PaneId, ViewKind, WorkspaceId};
+    use crate::pane::PaneRef;
     use crate::schema::diag::DiagEnvelope;
     use crate::sidebar::frame::assemble_frame;
     use crate::sidebar::observe::RosterRowSig;

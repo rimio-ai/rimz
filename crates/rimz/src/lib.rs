@@ -27,6 +27,7 @@ pub mod mux;
 pub mod notify_log;
 pub mod observability;
 pub mod osc;
+pub mod pane;
 pub mod petname;
 pub mod proc;
 pub mod reload;
@@ -58,8 +59,8 @@ pub use crate::agents::{
 };
 pub use crate::bridge::{BridgeErr, BridgeOutcome, ExpectedFrame};
 pub use crate::feed::{
-    AbandonReason, ElevatedAgent, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod,
-    ResolverStep, ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
+    AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, ResolverStep,
+    ResolverStepState, Surface,
 };
 pub use crate::ids::{
     EventId, MessageId, MuxName, PaneId, RequestId, ResolverId, RunId, SidebarInstanceId, ViewKind,
@@ -72,6 +73,7 @@ pub use crate::ledger::{
     SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths, TruthNotice,
     WorkspaceRecord, lead_unread_row,
 };
+pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind};
 pub use crate::schema::event::EventEnvelope;
 pub use crate::target::TargetErr;
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

@@ -412,8 +412,8 @@ fn spine_rect(area: Rect, run: &Range<usize>) -> Rect {
 #[cfg(test)]
 mod tests {
     use crate::config::SidebarConfig;
-    use crate::feed::PaneRef;
     use crate::ids::{MuxName, ViewKind};
+    use crate::pane::PaneRef;
     use crate::{AgentCard, RowCard, SidebarWorktreeGroup, SidebarWorktreeKind, WorkspaceId};
     use jiff::Timestamp;
 

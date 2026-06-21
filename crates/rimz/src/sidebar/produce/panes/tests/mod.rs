@@ -6,7 +6,7 @@ use crate::sidebar::produce::test_support::pane;
 mod cache;
 mod fields;
 
-fn frame(panes: Vec<crate::feed::PaneRef>) -> crate::sidebar::frame::PaneFrame {
+fn frame(panes: Vec<crate::pane::PaneRef>) -> crate::sidebar::frame::PaneFrame {
     crate::sidebar::frame::assemble_frame(panes, 1, "s")
 }
 

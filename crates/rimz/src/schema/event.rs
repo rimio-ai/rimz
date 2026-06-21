@@ -7,11 +7,11 @@ use serde_json::{Value, json};
 
 use crate::agents::AgentLifecycleObservation;
 use crate::feed::FeedItem;
-use crate::feed::RuntimeOwner;
 use crate::ids::{
     AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, RunId, WorkspaceId,
 };
 use crate::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
+use crate::pane::RuntimeOwner;
 use crate::schema::EVENT_SCHEMA_VERSION;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -477,8 +477,8 @@ mod tests {
     use super::*;
 
     use crate::agents::lifecycle::LifecycleSignal;
-    use crate::feed::{RuntimeOwner, RuntimeOwnerKind};
     use crate::ids::{AgentSessionId, MuxName, PaneId};
+    use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 
     fn workspace() -> WorkspaceId {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-event-test"))

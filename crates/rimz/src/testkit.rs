@@ -11,9 +11,9 @@ pub use crate::proc::testkit::spawn_count;
 pub mod fleet {
     use crate::agents::AgentLifecycleObservation;
     use crate::agents::lifecycle::LifecycleSignal;
-    use crate::feed::PaneRef;
     use crate::ids::{AgentSessionId, MuxName, PaneId, ViewKind, WorkspaceId};
     use crate::ledger::{StatePaths, event_log};
+    use crate::pane::PaneRef;
     use crate::schema::event::EventEnvelope;
 
     pub const SESSION_NAME: &str = "rimz-perf";

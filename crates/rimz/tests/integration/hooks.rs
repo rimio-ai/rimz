@@ -386,7 +386,7 @@ fn codex_daemon_routed_lifecycle_hooks_recover_distinct_pane_stamps() {
 fn run_codex_daemon_lifecycle_with_panes(
     env: &Env,
     session_id: &str,
-    panes: &[rimz::feed::PaneRef],
+    panes: &[rimz::pane::PaneRef],
 ) -> Output {
     let pane_fixture = env.write_pane_fixture(panes);
     let payload = serde_json::to_string(&json!({

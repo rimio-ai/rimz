@@ -11,12 +11,12 @@ use super::{GlobalFlags, open_ledger};
 use crate::cli::render;
 use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, SocketGuard};
 use rimz::feed::{
-    AbandonReason, FeedItem, FeedKind, FeedStatus, PaneRef, Resolution, ResolutionMethod,
-    RuntimeOwnerKind, Surface,
+    AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, Surface,
 };
 use rimz::ids::{RequestId, ResolverId};
 use rimz::ledger::runtime::{RuntimeScope, current_process_owner};
 use rimz::ledger::{FeedStoreErr, LedgerErr};
+use rimz::pane::{PaneRef, RuntimeOwnerKind};
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, ResolvedWorkspace};
 

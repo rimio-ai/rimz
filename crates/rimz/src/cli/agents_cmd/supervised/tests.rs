@@ -1,8 +1,9 @@
 use super::*;
 use rimz::bridge::{ExpectedRunFrame, WakeupFrame};
-use rimz::feed::{AgentState, AgentStatus, PaneRef};
+use rimz::feed::{AgentState, AgentStatus};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::ledger::{RuntimePaths, StatePaths};
+use rimz::pane::PaneRef;
 use rimz::run::{PermissionMode, RunStatus};
 use std::path::PathBuf;
 use tokio::net::UnixDatagram;

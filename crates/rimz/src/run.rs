@@ -365,8 +365,9 @@ mod tests {
     use std::path::Path;
 
     use crate::agents::LifecycleSignal;
-    use crate::feed::{AgentState, FeedKind, PaneRef};
+    use crate::feed::{AgentState, FeedKind};
     use crate::ids::MuxName;
+    use crate::pane::PaneRef;
     use serde_json::json;
     use tempfile::tempdir;
 

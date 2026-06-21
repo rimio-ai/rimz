@@ -4,8 +4,9 @@ use jiff::Timestamp;
 
 use super::*;
 use crate::agents::lifecycle::TurnPhase;
-use crate::feed::{AgentState, FeedItem, FeedKind, PaneRef, Surface};
+use crate::feed::{AgentState, FeedItem, FeedKind, Surface};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::pane::PaneRef;
 use crate::sidebar::unread::{OpenedUnread, opened_unread};
 
 fn workspace() -> WorkspaceId {
