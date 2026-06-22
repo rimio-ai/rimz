@@ -279,8 +279,8 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
             closed = true;
             break;
         }
-        let sampled_at = Instant::now();
         let frame = capture_until(&socket, &sidebar_pane, |_| true, Duration::from_millis(0));
+        let sampled_at = Instant::now();
         let widest = max_line_width(&frame);
         if sampled_at < flash_guard_deadline {
             assert!(
