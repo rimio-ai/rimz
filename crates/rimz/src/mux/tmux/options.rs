@@ -35,16 +35,21 @@ pub(super) fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
 /// after birth. Shared by launch and reconcile so the template cannot drift.
 pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<String> {
     let serve = sidebar_serve_command(opts).join(" ");
-    let hook = format!(
+    let split = format!(
         "split-window -h -b -d -l {} '{serve}'",
         opts.birth_size.cols
     );
+    let mut hook_commands: Vec<String> = tmux_window_options(&opts.config.tmux)
+        .into_iter()
+        .map(|(key, value)| format!("set-window-option {key} '{}'", value))
+        .collect();
+    hook_commands.push(split);
     vec![
         "set-hook".to_owned(),
         "-t".to_owned(),
         opts.session_name.clone(),
         "after-new-window".to_owned(),
-        hook,
+        hook_commands.join(" ; "),
     ]
 }
 
@@ -224,7 +229,38 @@ mod tests {
                 "room".to_owned(),
                 "after-new-window".to_owned(),
                 format!(
-                    "split-window -h -b -d -l {} '{serve}'",
+                    "set-window-option allow-passthrough 'on' ; \
+                     set-window-option aggressive-resize 'on' ; \
+                     split-window -h -b -d -l {} '{serve}'",
+                    opts.birth_size.cols
+                ),
+            ],
+        );
+    }
+
+    #[test]
+    fn after_new_window_hook_replays_configured_window_options() {
+        let mut opts = sidebar_opts(None);
+        opts.config.tmux.pane_border_status = Some(crate::config::TmuxPaneBorderStatus::Top);
+        opts.config.tmux.pane_border_lines = Some(crate::config::TmuxPaneBorderLines::Heavy);
+        let command = after_new_window_hook_set_cmd(&opts);
+        let serve = sidebar_serve_command(&opts).join(" ");
+
+        assert_eq!(
+            command,
+            vec![
+                "set-hook".to_owned(),
+                "-t".to_owned(),
+                "room".to_owned(),
+                "after-new-window".to_owned(),
+                format!(
+                    "set-window-option allow-passthrough 'on' ; \
+                     set-window-option aggressive-resize 'on' ; \
+                     set-window-option pane-border-status 'top' ; \
+                     set-window-option pane-border-format '{}' ; \
+                     set-window-option pane-border-lines 'heavy' ; \
+                     split-window -h -b -d -l {} '{serve}'",
+                    sidebar_blanking_border_format(),
                     opts.birth_size.cols
                 ),
             ],
