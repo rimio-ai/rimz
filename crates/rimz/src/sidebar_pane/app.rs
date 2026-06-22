@@ -35,6 +35,7 @@ use tracing::{debug, warn};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::tui::{MouseCapture, TerminalModeGuard};
 
+mod cache_refresh;
 mod fetch;
 #[cfg(test)]
 mod fixtures;
@@ -190,6 +191,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         request_rx,
         result_tx,
     );
+    let _cache_refresh_handle = cache_refresh::spawn(config.clone(), runtime.clone(), diag.clone());
     let mut fetch = FetchDispatcher::new(request_tx);
 
     // tmux fast path: the elected producer streams control-mode topology

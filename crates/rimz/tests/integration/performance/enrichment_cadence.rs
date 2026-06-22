@@ -14,6 +14,7 @@
 #![allow(clippy::print_stderr)] // self-skip notices, like the sibling fixture
 
 use rimz::sidebar::cache::unix_now_ms;
+use rimz::sidebar::consumer::RollupCursor;
 
 use super::sidebar_diff_stats::Fixture;
 
@@ -105,6 +106,112 @@ fn fixture_produce_never_touches_the_shared_pane_cache() {
             .exists(),
         "a fixture-driven produce must not write the shared pane cache"
     );
+}
+
+#[test]
+fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let _ledger = fixture.env.ledger();
+    let session = fixture.publish_pane_frame();
+    let state = fixture.env.state_path_for(&fixture.env.project_root);
+    let runtime = fixture.env.runtime_paths();
+    let accounts = rimz::sidebar::cache::AccountsCache {
+        refreshed_at_ms: unix_now_ms(),
+        accounts: Default::default(),
+        ok: true,
+    };
+    std::fs::write(
+        runtime.shared_accounts_path(),
+        serde_json::to_vec(&accounts).expect("serialize accounts"),
+    )
+    .expect("seed accounts cache");
+    rimz::agents::spending::write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        unix_now_ms(),
+        &rimz::agents::spending::Spending::default(),
+    );
+
+    let mut cursor = RollupCursor::new();
+    rimz::sidebar::produce::refresh_producer_caches(&mut cursor, &state, &runtime, &session, None)
+        .expect("refresh producer caches");
+
+    let provider_path = runtime.shared_provider_spending_path();
+    let accounts_path = runtime.shared_accounts_path();
+    let diff_stats_path = runtime.root.join("diff-stats.json");
+    let diff_stats = rimz::sidebar::cache::read_diff_stats_cache(&diff_stats_path);
+    assert!(
+        !diff_stats.entries.is_empty(),
+        "refresher publishes diff stats for the live worktree"
+    );
+
+    let provider_bytes = std::fs::read(&provider_path).expect("provider cache");
+    let accounts_bytes = std::fs::read(&accounts_path).expect("accounts cache");
+    let diff_stats_bytes = std::fs::read(&diff_stats_path).expect("diff stats cache");
+    rimz::sidebar::produce::refresh_producer_caches(&mut cursor, &state, &runtime, &session, None)
+        .expect("second refresh");
+    assert_eq!(
+        std::fs::read(&provider_path).expect("provider cache"),
+        provider_bytes,
+        "provider spending TTL serves the second refresh without re-publishing"
+    );
+    assert_eq!(
+        std::fs::read(&accounts_path).expect("accounts cache"),
+        accounts_bytes,
+        "accounts TTL serves the second refresh without re-publishing"
+    );
+    assert_eq!(
+        std::fs::read(&diff_stats_path).expect("diff stats cache"),
+        diff_stats_bytes,
+        "diff-stats TTL serves the second refresh without re-publishing"
+    );
+
+    let project_opts = rimz::sidebar::produce::ProduceOptions {
+        mux: rimz::MuxName::Zellij,
+        session_name: session.clone(),
+        exclude: None,
+        min_pane_cache_ms: None,
+        diag: None,
+        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Project,
+    };
+    let refresh_opts = rimz::sidebar::produce::ProduceOptions {
+        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
+        ..project_opts.clone()
+    };
+    let project = rimz::sidebar::produce::produce_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        &project_opts,
+    )
+    .expect("project produce");
+    let refresh = rimz::sidebar::produce::produce_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        &refresh_opts,
+    )
+    .expect("refresh produce");
+
+    assert_eq!(project.value_tally, refresh.value_tally);
+    assert_eq!(project.workspace_value_tally, refresh.workspace_value_tally);
+    assert_eq!(project.providers, refresh.providers);
+    assert_eq!(project.worktree_groups.len(), refresh.worktree_groups.len());
+    for (project_group, refresh_group) in project
+        .worktree_groups
+        .iter()
+        .zip(refresh.worktree_groups.iter())
+    {
+        assert_eq!(project_group.key, refresh_group.key);
+        assert_eq!(project_group.diff_added, refresh_group.diff_added);
+        assert_eq!(project_group.diff_removed, refresh_group.diff_removed);
+        assert_eq!(project_group.commits_ahead, refresh_group.commits_ahead);
+        assert_eq!(project_group.commits_behind, refresh_group.commits_behind);
+        assert_eq!(project_group.trunk, refresh_group.trunk);
+        assert_eq!(project_group.clean, refresh_group.clean);
+        assert_eq!(project_group.landed, refresh_group.landed);
+    }
 }
 
 /// A directory room's group-root enumeration is one `read_dir`: the cold

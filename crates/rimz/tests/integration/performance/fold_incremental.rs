@@ -83,6 +83,7 @@ fn warm_produce_folds_o_new_bytes() {
         exclude: None,
         min_pane_cache_ms: None,
         diag: None,
+        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
     };
     let mut cursor = RollupCursor::new();
 

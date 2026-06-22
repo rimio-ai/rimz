@@ -127,6 +127,29 @@ impl Fixture {
             .expect("spawn rimz sidebar snapshot")
     }
 
+    pub(crate) fn publish_pane_frame(&self) -> String {
+        let panes: Vec<PaneRef> =
+            serde_json::from_slice(&std::fs::read(&self.panes_path).expect("read panes"))
+                .expect("decode panes");
+        let session = panes
+            .first()
+            .map(|pane| pane.session_name.clone())
+            .unwrap_or_else(|| SESSION.to_owned());
+        let runtime = self.env.runtime_paths();
+        runtime.ensure_dirs().expect("runtime dirs");
+        let frame = rimz::sidebar::frame::assemble_frame(
+            panes,
+            rimz::sidebar::cache::unix_now_ms(),
+            session.clone(),
+        );
+        std::fs::write(
+            runtime.root.join("snapshot.json"),
+            serde_json::to_vec(&frame).expect("serialize pane frame"),
+        )
+        .expect("publish pane frame");
+        session
+    }
+
     /// Make the room root itself a git repo, so a subsequent
     /// [`Env::record`](crate::common::Env::record) classifies the workspace as
     /// a repo room and the produce enumerates checkouts with `git worktree

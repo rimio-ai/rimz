@@ -1,8 +1,8 @@
 //! The off-thread fetch machinery: the two-speed fetch cycle (the in-process
 //! consumer fast lane plus the elder's in-process produce, sharing one warm
 //! [`RollupCursor`]), and its single-flight request coalescing. Everything
-//! here runs on a worker thread so the render/input loop never blocks on the
-//! produce's `list-panes`/git round-trips.
+//! here runs on a worker thread so the render/input loop never blocks on pane
+//! production; heavy git/spend/account refreshes run on the cache refresher.
 
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
@@ -82,9 +82,8 @@ pub(super) fn apply_refresh_override(config: &ServeConfig, snapshot: &mut Sideba
 
 /// One fetch cycle, posting one or two outcomes. Runs on the fetch worker
 /// thread, keeping the produce's `list-panes` + git round-trips off the
-/// render/input loop so animation never stalls on them. `state` is resolved
-/// per cycle by the worker loop, so a `workspace migrate` lands without a
-/// restart.
+/// render/input loop so animation never stalls on it. `state` is resolved per
+/// cycle by the worker loop, so a `workspace migrate` lands without a restart.
 ///
 /// **Fast lane (every cycle, producer and consumer alike):** fold the
 /// event-fresh ledger rollup over the published pane frame entirely in process
@@ -100,11 +99,14 @@ pub(super) fn apply_refresh_override(config: &ServeConfig, snapshot: &mut Sideba
 /// [`crate::sidebar::produce::produce_snapshot`] runs in process on this same
 /// worker — same thread, same warm cursor as the fast lane, so the rollup
 /// fold stays O(new log bytes) and promotion to producer is warm by
-/// construction. It refreshes pane truth, git, spending, and accounts, and
-/// publishes the shared caches every other tab reads. One producer per
+/// construction. It refreshes pane truth and roots, then publishes the shared
+/// frame every other tab reads. One producer per
 /// workspace — the eldest live instance — and on it the produce is gated to
 /// the data tick: a ledger-delta storm paints per delta but produces at most
-/// once per tick. Topology freshness is producer-only: consumers wait for the
+/// once per tick. Heavy git/spend/account lanes are refreshed by the elder's
+/// cache refresher and projected here, so this worker stays responsible for
+/// pane truth, roots, notifications, and publish order. Topology freshness is
+/// producer-only: consumers wait for the
 /// producer's `PaneFramePublished` event and fold the new cache without
 /// locally producing. Only a hard refresh (reload/manual recovery) lets a
 /// consumer produce. Stale-frame recovery belongs to the election, not the
@@ -236,6 +238,7 @@ fn run_fetch_cycle(
             exclude,
             min_pane_cache_ms: request.min_pane_cache_ms,
             diag: diag.cloned(),
+            heavy_lanes: crate::sidebar::produce::HeavyLaneMode::Project,
         };
         let produced = run_produce_guarded(cursor, |cursor| {
             crate::sidebar::produce::produce_snapshot(cursor, state, runtime, &opts)

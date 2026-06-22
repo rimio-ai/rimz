@@ -8,7 +8,7 @@ Every sidebar renderer is a **node**. A node paints from two in-memory stores �
 
 ```text
   ledger rollup (durable truth)          elected producer ── pulls ──▶ per-lane caches
-  read event-fresh in every node          (panes · git · /proc · spend · accounts)
+  read event-fresh in every node          (panes + roots on fetch · git/spend/accounts on refresher)
             │                                                    │
             └────────────────────┬───────────────────────────────┘
                                  ▼
@@ -29,7 +29,7 @@ The pane frame admits the cards; the ledger, sidecars, and events only enrich ad
 
 Durable truth feeds every node identically and bypasses the producer: each node reads the rollup in process (`latest.json` plus the unfolded log tail — [ledger.md](./ledger.md#runtime-projection)) and reads the per-session sidecars fresh from disk behind stat-gated parse caches.
 
-One **producer** — the eldest fresh heartbeat per workspace — owns every consistent-cadence external pull and publishes each lane as its own single-writer cache. Every other node consumes those caches in process and never pulls for freshness on its own; the producer consumes its own published fast lane before paying for a refresh. Realtime events never patch a published cache — pulled truth on disk is written only by producer pulls. A dead producer is a degradation like any other, handled by the heartbeat election ([Failure Modes](#failure-modes)).
+One **producer** — the eldest fresh heartbeat per workspace — owns every consistent-cadence external pull and publishes each lane as its own single-writer cache. Its fetch worker publishes pane truth and roots, then projects heavy caches; its elder-gated cache refresher publishes git diff-stats, spending, accounts, usage, credits, and auto-continue side effects on the same data cadence. Every other node consumes those caches in process and never pulls for freshness on its own; the producer consumes its own published fast lane before paying for a refresh. Realtime events never patch a published cache — pulled truth on disk is written only by producer pulls. A dead producer is a degradation like any other, handled by the heartbeat election ([Failure Modes](#failure-modes)).
 
 ## Published Caches
 
@@ -43,7 +43,7 @@ The **pane frame** is the topology everything else enriches: `PaneFrame` carries
 | `pane-topology.json` | Zellij presence plugin via the host CLI | Zellij producer pull | a pre-producer Zellij roster hint — live panes, tab names, focus candidates, geometry |
 | `presence.stamp` | Zellij plugin, tmux control-mode watch | producer | an mtime liveness mark; while fresh, the pane lane runs on the shorter event-mode TTL |
 
-Producer **enrichment lanes** fold onto the admitted cards. The git, `/proc`, and spending walks are the expensive ones the producer single-flights; the figures reach consumers through the cache (or, for metrics, restamped onto the pane frame).
+Producer **enrichment lanes** fold onto the admitted cards. The fetch worker handles `/proc` and group roots with pane production; the cache refresher handles git, spending, accounts, usage, credits, and auto-continue so the worker's fast lane projects their last published values instead of waiting behind them. The figures reach consumers through the cache (or, for metrics, restamped onto the pane frame).
 
 | Lane | Scope | Carries |
 | --- | --- | --- |
@@ -91,6 +91,7 @@ Each push channel exists so a change a writer already knows about reaches every 
 - **Ledger and sidecar writers** post a `LedgerDelta` after every durable write or context-sidecar merge, so status, tokens, and cost repaint within one wakeup.
 - **The Zellij presence plugin** pushes exact pane events, stamps `presence.stamp`, and publishes `pane-topology.json` through the host CLI; **the tmux control-mode watcher** pushes typed pane overlays from its `refresh-client -B` subscription, stamps `presence.stamp`, and falls back to `PanesChanged` for identity-free topology notices ([multiplexers.md](./multiplexers.md)).
 - **The elder's transcript watcher** ([`transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs)) watches each live Codex session's rollout JSONL and runs the stat-gated context refresh on write, covering the mid-turn gap where Codex hooks fire only at progress events. Only the elder watches; demotion drops the watch, and a watcher that never starts costs nothing because the producer-tick refresh stays unconditional.
+- **The elder's cache refresher** ([`cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs)) ticks on the data cadence, re-checks the heartbeat election each pass, and refreshes heavy caches from the last published pane frame. Demotion turns it into a sleeper; a panic resets its rollup cursor and the next tick retries from cache truth.
 
 ## Fusion Rules
 

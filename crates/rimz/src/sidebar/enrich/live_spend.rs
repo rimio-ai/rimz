@@ -98,7 +98,7 @@ mod tests {
     use crate::ids::WorkspaceId;
     use crate::ledger::atomic;
     use crate::sidebar::cache::{AccountsCache, unix_now_ms};
-    use crate::sidebar::enrich::{EnrichMode, enrich};
+    use crate::sidebar::enrich::{EnrichMode, HeavyLanes, enrich};
     use crate::sidebar::test_support::{activity_row, worktree_group};
 
     /// A cost-bearing agent row for the overlay glue: `id`, the statusline
@@ -241,9 +241,11 @@ mod tests {
             None,
             EnrichMode::Producing {
                 roots: None,
-                compute_spending: &compute_spending,
+                heavy: HeavyLanes::Refresh {
+                    compute_spending: &compute_spending,
+                    refresh_git: &refresh_git,
+                },
                 config: Box::new(crate::config::MachineConfig::default()),
-                refresh_git: &refresh_git,
             },
             None,
         );

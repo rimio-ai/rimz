@@ -505,6 +505,22 @@ fn retired_split_sections_are_ignored() {
 }
 
 #[test]
+fn load_memo_reuses_unchanged_inputs_and_busts_on_file_change() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    let config_path = write(&dir, "[sidebar]\nfocus_key = \"Alt+x\"\n");
+
+    let first = MachineConfig::load_with_memo(&config_path, agents_home.path()).expect("load");
+    let second = MachineConfig::load_with_memo(&config_path, agents_home.path()).expect("load");
+    assert_eq!(second, first);
+
+    std::fs::write(&config_path, "[sidebar]\nfocus_key = \"Alt+yy\"\n").expect("rewrite config");
+    let changed = MachineConfig::load_with_memo(&config_path, agents_home.path()).expect("reload");
+    assert_eq!(changed.sidebar.focus_key, "Alt+yy");
+    assert_ne!(changed, first);
+}
+
+#[test]
 fn lenient_load_falls_back_only_for_the_broken_file() {
     let dir = tempdir().expect("tempdir");
     let config_path = write(&dir, "not = = toml");

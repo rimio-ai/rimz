@@ -383,6 +383,7 @@ pub(crate) fn resolution_snapshot(
         exclude: None,
         min_pane_cache_ms: Some(unix_now_ms()),
         diag: None,
+        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
     };
     match produce_resolution_snapshot(&mut RollupCursor::new(), &state, &runtime, &opts) {
         Ok(snapshot) => Ok(snapshot),

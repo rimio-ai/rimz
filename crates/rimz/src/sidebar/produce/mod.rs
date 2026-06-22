@@ -4,10 +4,11 @@
 //! through the caller's [`RollupCursor`], plus the live pane frame shared
 //! through the single-flight pane cache) and folds the producer enrichments:
 //! group roots, context/activity sidecars, the Codex daemon reap, the pane
-//! overlay, the fleet spending walk, the account probe, and the per-worktree
-//! git facts. Two callers drive it: the elder renderer's fetch worker (in
-//! process, warm cursor) and the `rimz sidebar snapshot` CLI (one-shot, cold
-//! cursor) — one implementation, two entry points.
+//! overlay, and either inline heavy-lane refreshes or projection of the cache
+//! refresher's published spending/account/git facts. Two callers drive it: the
+//! elder renderer's fetch worker (in process, warm cursor, projected heavy
+//! lanes) and the `rimz sidebar snapshot` CLI (one-shot, cold cursor, inline
+//! refresh) — one implementation, two entry points.
 //!
 //! The module is read-only on ledger truth: the rollup arrives through the
 //! cursor fold, and every write is a cache-class runtime file
@@ -28,8 +29,10 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::ids::{MuxName, PaneId};
 use crate::sidebar::cache::unix_now_ms;
-use crate::sidebar::consumer::{RollupCursor, rollup_snapshot};
-use crate::sidebar::enrich::{EnrichMode, enrich, wired_lazy_default_models, wired_lazy_kinds};
+use crate::sidebar::consumer::{RollupCursor, read_published_snapshot, rollup_snapshot};
+use crate::sidebar::enrich::{
+    EnrichMode, HeavyLanes, enrich, wired_lazy_default_models, wired_lazy_kinds,
+};
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
@@ -53,10 +56,11 @@ pub enum ProduceErr {
 
 pub type Result<T> = std::result::Result<T, ProduceErr>;
 
-/// What one produce targets: the session whose panes are read and the caller's
-/// own-pane exclusion, plus the pane-freshness floor a lifecycle/resize signal
+/// What one produce targets: the session whose panes are read, the caller's
+/// own-pane exclusion, the pane-freshness floor a lifecycle/resize signal
 /// carries (`min_pane_cache_ms` rejects any pane cache or root enumeration
-/// older than the signal).
+/// older than the signal), and whether heavy lanes refresh inline or project
+/// the cache refresher's last publish.
 #[derive(Clone, Debug)]
 pub struct ProduceOptions {
     pub mux: MuxName,
@@ -64,13 +68,21 @@ pub struct ProduceOptions {
     pub exclude: Option<PaneId>,
     pub min_pane_cache_ms: Option<u64>,
     pub diag: Option<crate::diag::DiagSink>,
+    pub heavy_lanes: HeavyLaneMode,
 }
 
-/// Produce the full sidebar snapshot: rollup base + live pane frame + every
-/// producer enrichment, publishing the shared caches consumers read. `Err` on
-/// pane-discovery failure (or an unreadable ledger) — the caller owns the
-/// fallback: the serve loop degrades to its held frame, the CLI inspection
-/// call warns and emits [`produce_rollup_snapshot`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeavyLaneMode {
+    Refresh,
+    Project,
+}
+
+/// Produce the full sidebar snapshot: rollup base + live pane frame + producer
+/// enrichments. Inline `Refresh` publishes every shared cache consumers read;
+/// live `Project` publishes pane/root truth and projects the cache refresher's
+/// heavy lanes. `Err` on pane-discovery failure (or an unreadable ledger) —
+/// the caller owns the fallback: the serve loop degrades to its held frame, the
+/// CLI inspection call warns and emits [`produce_rollup_snapshot`].
 pub fn produce_snapshot(
     cursor: &mut RollupCursor,
     state: &StatePaths,
@@ -86,6 +98,7 @@ pub fn produce_snapshot(
         opts.exclude.as_ref(),
         opts.min_pane_cache_ms,
         opts.diag.as_ref(),
+        opts.heavy_lanes,
     ))
 }
 
@@ -129,7 +142,34 @@ pub fn produce_rollup_snapshot(
         exclude,
         min_pane_cache_ms,
         None,
+        HeavyLaneMode::Refresh,
     ))
+}
+
+/// Refresh the producer-owned heavy caches from the last published pane frame.
+/// The live fetch worker projects these caches; this entry owns their
+/// time-driven refresh without re-running the full pane/enrich spine.
+pub fn refresh_producer_caches(
+    cursor: &mut RollupCursor,
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+    session: &str,
+    exclude: Option<&PaneId>,
+) -> Result<()> {
+    let base = read_published_snapshot(cursor, state, runtime, session, exclude)?;
+    let config = crate::config::MachineConfig::load().unwrap_or_default();
+    let trunk = config.sidebar.trunk.clone();
+    let headline_spec = config.sidebar.headline_spec();
+    let spending = spending::compute_fleet_spending(runtime, &base, &headline_spec);
+    let _ = crate::sidebar::enrich::fold_machine_config_producing(
+        base.clone(),
+        runtime,
+        &spending.provider.spending.by_provider,
+        config,
+    );
+    let mut git_snapshot = base;
+    git::enrich_worktree_groups(&mut git_snapshot, runtime, trunk.as_deref());
+    Ok(())
 }
 
 /// Whether the deterministic pane fixture is active. The `--no-produce`
@@ -211,8 +251,10 @@ fn pane_list_fixture() -> Result<Option<Vec<crate::pane::PaneRef>>> {
 ///   depth-1 child repos — cached under `WORKTREE_ROOTS_TTL`, refused below
 ///   the session-boundary freshness floor (`min_pane_cache_ms`) so a new
 ///   checkout's first agent re-enumerates immediately.
-/// - The fleet spending walk runs before the config fold so the dashboard
-///   panels are built, ranked, and capped with each provider's spend known.
+/// - In `Refresh` mode, the fleet spending walk runs before the config fold so
+///   the dashboard panels are built, ranked, and capped with each provider's
+///   spend known; in `Project` mode, the published heavy caches are folded
+///   read-only.
 /// - The per-machine config loads once (best-effort — a read failure falls
 ///   back to defaults, so display preference is enrichment, never a
 ///   precondition): the spine's config fold consumes it, and the git refresh
@@ -224,32 +266,51 @@ fn enrich_producing(
     exclude: Option<&PaneId>,
     min_pane_cache_ms: Option<u64>,
     diag: Option<&crate::diag::DiagSink>,
+    heavy: HeavyLaneMode,
 ) -> SidebarSnapshot {
     let roots = snapshot.project_root.clone().map(|root| {
         git::project_group_roots(&root, snapshot.root_class, runtime, min_pane_cache_ms)
     });
     let config = crate::config::MachineConfig::load().unwrap_or_default();
-    let trunk = config.sidebar.trunk.clone();
-    let headline_spec = config.sidebar.headline_spec();
-    let compute_spending = |snapshot: &SidebarSnapshot| {
-        spending::compute_fleet_spending(runtime, snapshot, &headline_spec)
-    };
-    let refresh_git = |snapshot: &mut SidebarSnapshot| {
-        git::enrich_worktree_groups(snapshot, runtime, trunk.as_deref());
-    };
-    enrich(
-        snapshot,
-        frame,
-        runtime,
-        exclude,
-        EnrichMode::Producing {
-            roots,
-            compute_spending: &compute_spending,
-            config: Box::new(config),
-            refresh_git: &refresh_git,
-        },
-        diag,
-    )
+    match heavy {
+        HeavyLaneMode::Refresh => {
+            let trunk = config.sidebar.trunk.clone();
+            let headline_spec = config.sidebar.headline_spec();
+            let compute_spending = |snapshot: &SidebarSnapshot| {
+                spending::compute_fleet_spending(runtime, snapshot, &headline_spec)
+            };
+            let refresh_git = |snapshot: &mut SidebarSnapshot| {
+                git::enrich_worktree_groups(snapshot, runtime, trunk.as_deref());
+            };
+            enrich(
+                snapshot,
+                frame,
+                runtime,
+                exclude,
+                EnrichMode::Producing {
+                    roots,
+                    heavy: HeavyLanes::Refresh {
+                        compute_spending: &compute_spending,
+                        refresh_git: &refresh_git,
+                    },
+                    config: Box::new(config),
+                },
+                diag,
+            )
+        }
+        HeavyLaneMode::Project => enrich(
+            snapshot,
+            frame,
+            runtime,
+            exclude,
+            EnrichMode::Producing {
+                roots,
+                heavy: HeavyLanes::Project,
+                config: Box::new(config),
+            },
+            diag,
+        ),
+    }
 }
 
 /// Test fixtures shared by the produce submodules' unit suites.

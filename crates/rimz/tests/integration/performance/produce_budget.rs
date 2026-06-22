@@ -36,6 +36,7 @@ fn warm_produce_stays_inside_the_data_tick_at_fleet_scale() {
         exclude: None,
         min_pane_cache_ms: None,
         diag: None,
+        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
     };
     let mut cursor = RollupCursor::new();
 
@@ -72,5 +73,37 @@ fn warm_produce_stays_inside_the_data_tick_at_fleet_scale() {
         per_produce < Duration::from_millis(50),
         "one warm fleet-scale produce took {per_produce:?}; the 1s data tick \
          leaves no room for an envelope that slow beside the paint it feeds"
+    );
+}
+
+#[test]
+fn project_produce_over_stale_heavy_caches_forks_zero_subprocesses() {
+    let h = Harness::new();
+    let paths = h.ledger.paths();
+    seed_fleet_ledger(paths, FLEET, HISTORY_EVENTS).expect("seed event");
+    h.publish_fresh_produce_inputs(SESSION_NAME, synthetic_panes(FLEET));
+    let _ = std::fs::remove_file(h.runtime_paths.shared_provider_spending_path());
+    let _ = std::fs::remove_file(h.runtime_paths.shared_accounts_path());
+    let _ = std::fs::remove_file(h.runtime_paths.root.join("diff-stats.json"));
+
+    let opts = rimz::sidebar::produce::ProduceOptions {
+        mux: rimz::MuxName::Zellij,
+        session_name: SESSION_NAME.to_owned(),
+        exclude: None,
+        min_pane_cache_ms: None,
+        diag: None,
+        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Project,
+    };
+    let mut cursor = RollupCursor::new();
+
+    let spawns_before = spawn_count();
+    let snapshot =
+        rimz::sidebar::produce::produce_snapshot(&mut cursor, paths, &h.runtime_paths, &opts)
+            .expect("project produce");
+    assert_eq!(snapshot.agents.len(), FLEET);
+    assert_eq!(
+        spawn_count() - spawns_before,
+        0,
+        "Project mode projects missing/stale heavy caches and never refreshes them inline"
     );
 }

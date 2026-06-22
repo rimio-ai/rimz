@@ -276,18 +276,26 @@ pub enum EnrichMode<'a> {
         /// The room's freshly enumerated group roots; `None` when the
         /// snapshot carries no project root.
         roots: Option<Vec<PathBuf>>,
+        /// How the heavyweight producer caches enter this fold.
+        heavy: HeavyLanes<'a>,
+        /// The per-machine config, loaded once by the caller. Boxed to keep
+        /// the enum the size of its `Cached` common case.
+        config: Box<crate::config::MachineConfig>,
+    },
+}
+
+pub enum HeavyLanes<'a> {
+    /// Fork + publish the heavy caches inline.
+    Refresh {
         /// The fleet spending walk. The shared publish is account-global;
         /// per-workspace live-cost baselines are refreshed by the fold after
         /// the walk cache is available and rows hold their latest context.
         compute_spending: &'a dyn Fn(&SidebarSnapshot) -> SpendingCaches,
-        /// The per-machine config, loaded once by the caller — the config
-        /// fold consumes it here and the git refresh closure has already
-        /// taken the preferred trunk from it. Boxed to keep the enum the size
-        /// of its `Cached` common case.
-        config: Box<crate::config::MachineConfig>,
         /// The per-worktree git refresh over the snapshot's groups.
         refresh_git: &'a dyn Fn(&mut SidebarSnapshot),
     },
+    /// Project the last cache refresh without producing stale lanes inline.
+    Project,
 }
 
 #[derive(Debug, Serialize)]
@@ -308,9 +316,9 @@ struct ProducerBindingFallbackLog<'a> {
 /// `worktree_groups` empty while the rollup metadata remains available.
 ///
 /// [`EnrichMode::Cached`] reads only runtime caches and sidecars;
-/// [`EnrichMode::Producing`] carries the producer inputs in the mode and inserts
-/// the daemon reap, the account probe, and the git refresh at their named
-/// points.
+/// [`EnrichMode::Producing`] carries the producer inputs in the mode and
+/// inserts the daemon reap, pane/root producer work, and either heavy-lane
+/// refresh or heavy-lane projection at their named points.
 pub fn enrich(
     mut snapshot: SidebarSnapshot,
     frame: Option<PaneFrame>,
@@ -453,22 +461,29 @@ pub fn enrich(
     // environment, not ledger, so the rollup base carries neither. The
     // producer probes accounts out of band and publishes them alongside its
     // walked spending; a consumer reads both published caches back — never a
-    // per-tick fork or a ledger lock. Git rides the same split: the producer
-    // refreshes the per-worktree facts (single-flighted), a consumer projects
-    // the cached ones.
+    // per-tick fork or a ledger lock. Git rides the same split: the heavy-lane
+    // refresher refreshes the per-worktree facts (single-flighted), while
+    // consumers and the live fetch worker project the cached ones.
     let is_producer = matches!(&mode, EnrichMode::Producing { .. });
+    let project_heavy_caches = |snapshot: SidebarSnapshot, config: crate::config::MachineConfig| {
+        let (mut snapshot, caches) = fold_machine_config_cached(snapshot, runtime, config);
+        let diff_cache = read_diff_stats_cache(&runtime.root.join("diff-stats.json"));
+        project_diff_stats(&mut snapshot, &diff_cache);
+        (snapshot, caches)
+    };
     let spending_caches = match mode {
         EnrichMode::Cached => {
             let caches;
-            (snapshot, caches) = fold_machine_config_cached(snapshot, runtime, machine_config);
-            let diff_cache = read_diff_stats_cache(&runtime.root.join("diff-stats.json"));
-            project_diff_stats(&mut snapshot, &diff_cache);
+            (snapshot, caches) = project_heavy_caches(snapshot, machine_config);
             caches
         }
         EnrichMode::Producing {
-            compute_spending,
             config,
-            refresh_git,
+            heavy:
+                HeavyLanes::Refresh {
+                    compute_spending,
+                    refresh_git,
+                },
             ..
         } => {
             let spending = compute_spending(&snapshot);
@@ -480,6 +495,15 @@ pub fn enrich(
             );
             refresh_git(&mut snapshot);
             spending
+        }
+        EnrichMode::Producing {
+            config,
+            heavy: HeavyLanes::Project,
+            ..
+        } => {
+            let caches;
+            (snapshot, caches) = project_heavy_caches(snapshot, *config);
+            caches
         }
     };
     // The fleet `value_tally` — the JSONL headline / month / trailing-year pile
@@ -578,7 +602,7 @@ fn apply_pane_metrics(snapshot: &mut SidebarSnapshot, metrics: Vec<(PaneId, Pane
 /// read on every other tab. The caller loads the per-machine config once
 /// (best-effort, defaults on a read failure) and threads it here and to the git
 /// probe's trunk ladder; the probe is memoized so it stays off the hot path.
-fn fold_machine_config_producing(
+pub(crate) fn fold_machine_config_producing(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
     provider_spending: &BTreeMap<String, crate::agents::SpendTally>,

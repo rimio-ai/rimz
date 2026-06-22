@@ -403,6 +403,7 @@ fn emit_producer_snapshot(
         exclude: context.exclude.clone(),
         min_pane_cache_ms: context.min_pane_cache_ms,
         diag: None,
+        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
     };
     match produce_snapshot(
         &mut RollupCursor::new(),

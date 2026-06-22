@@ -18,6 +18,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +95,8 @@ const TEAM_FRAGMENT_FILE: &str = "team.toml";
 pub const MACHINE_CONFIG_TEMPLATE: &str = include_str!("config/templates/config.template.toml");
 pub const MACHINE_THEME_TEMPLATE: &str = include_str!("config/templates/theme.template.toml");
 pub const MACHINE_AGENTS_TEMPLATE: &str = include_str!("config/templates/agents.template.toml");
+
+static LOAD_MEMO: OnceLock<Mutex<Option<(ConfigStamp, MachineConfig)>>> = OnceLock::new();
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigErr {
@@ -176,13 +180,7 @@ impl MachineConfig {
     /// Load from the default per-machine paths. Missing files are defaults —
     /// never an error.
     pub fn load() -> Result<Self> {
-        let mut config = Self::load_from(&Self::config_path())?;
-        apply_agents_home(
-            &mut config.agents,
-            &paths::agents_home(),
-            &Self::agents_path(),
-        )?;
-        Ok(config)
+        Self::load_with_memo(&Self::config_path(), &paths::agents_home())
     }
 
     /// Load per-machine config for a runtime entry point. A file that fails to
@@ -282,6 +280,112 @@ impl MachineConfig {
             agents,
         }
     }
+
+    fn load_with_memo(config_path: &Path, agents_home: &Path) -> Result<Self> {
+        let stamp = ConfigStamp::from_inputs(config_path, agents_home)?;
+        if let Ok(memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
+            && let Some((cached_stamp, cached)) = memo.as_ref()
+            && cached_stamp == &stamp
+        {
+            return Ok(cached.clone());
+        }
+
+        let mut config = Self::load_from(config_path)?;
+        let agents_path = sibling_path(config_path, AGENTS_FILE);
+        apply_agents_home(&mut config.agents, agents_home, &agents_path)?;
+        if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
+            *memo = Some((stamp, config.clone()));
+        }
+        Ok(config)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConfigStamp {
+    core: StampedPath,
+    theme: StampedPath,
+    agents: StampedPath,
+    fragments: Vec<StampedPath>,
+}
+
+impl ConfigStamp {
+    fn from_inputs(config_path: &Path, agents_home: &Path) -> Result<Self> {
+        let mut fragments = Vec::new();
+        collect_agents_home_fragment_stamps(
+            agents_home,
+            AGENTS_HOME_AGENTS_SUBDIR,
+            AGENT_FRAGMENT_FILE,
+            &mut fragments,
+        )?;
+        collect_agents_home_fragment_stamps(
+            agents_home,
+            AGENTS_HOME_TEAMS_SUBDIR,
+            TEAM_FRAGMENT_FILE,
+            &mut fragments,
+        )?;
+        fragments.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(Self {
+            core: stamped_path(config_path),
+            theme: stamped_path(&sibling_path(config_path, THEME_FILE)),
+            agents: stamped_path(&sibling_path(config_path, AGENTS_FILE)),
+            fragments,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StampedPath {
+    path: PathBuf,
+    stamp: FileStamp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    modified_secs: u64,
+    modified_nanos: u32,
+}
+
+fn sibling_path(path: &Path, file: &str) -> PathBuf {
+    path.parent().unwrap_or_else(|| Path::new(".")).join(file)
+}
+
+fn stamped_path(path: &Path) -> StampedPath {
+    StampedPath {
+        path: path.to_path_buf(),
+        stamp: file_stamp(path),
+    }
+}
+
+fn file_stamp(path: &Path) -> FileStamp {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return FileStamp {
+            len: 0,
+            modified_secs: 0,
+            modified_nanos: 0,
+        };
+    };
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
+    FileStamp {
+        len: meta.len(),
+        modified_secs: modified.as_ref().map_or(0, |duration| duration.as_secs()),
+        modified_nanos: modified.map_or(0, |duration| duration.subsec_nanos()),
+    }
+}
+
+fn collect_agents_home_fragment_stamps(
+    root: &Path,
+    subdir: &str,
+    fragment_file: &str,
+    out: &mut Vec<StampedPath>,
+) -> Result<()> {
+    for dir in child_dirs(&root.join(subdir))? {
+        out.push(stamped_path(&dir.join(fragment_file)));
+    }
+    Ok(())
 }
 
 #[derive(Default, Deserialize)]

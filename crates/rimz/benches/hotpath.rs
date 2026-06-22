@@ -109,6 +109,7 @@ fn produce_options() -> rimz::sidebar::produce::ProduceOptions {
         exclude: None,
         min_pane_cache_ms: None,
         diag: None,
+        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
     }
 }
 
