@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::ZellijBackend;
 use super::layout::{TempLayoutFile, render_background_view_layout, render_tab_layout};
@@ -62,6 +62,43 @@ impl ZellijBackend {
             .find(|candidate| candidate.is_terminal() && candidate.id == raw_id)
             .map(|candidate| candidate.tab_id)?;
         Some(FocusRestoreTarget { pane, tab_id })
+    }
+
+    fn run_new_tab_confirmed(&self, session: &str, args: &[String], tab_name: &str) -> Result<()> {
+        let before = self.named_tab_count(session, tab_name)?;
+        for attempt in 0..super::NEW_TAB_ATTEMPTS {
+            if attempt > 0 && self.named_tab_count(session, tab_name)? > before {
+                return Ok(());
+            }
+            self.zellij_action(session)
+                .args(args.iter().cloned())
+                .run()?;
+            let deadline = Instant::now() + super::NEW_TAB_CONFIRM_WINDOW;
+            loop {
+                if self.named_tab_count(session, tab_name)? > before {
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(super::NEW_TAB_CONFIRM_STEP);
+            }
+        }
+        Err(MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!(
+                "new-tab '{tab_name}' did not appear after {} attempts",
+                super::NEW_TAB_ATTEMPTS
+            ),
+        })
+    }
+
+    fn named_tab_count(&self, session: &str, tab_name: &str) -> Result<usize> {
+        Ok(self
+            .tab_names(session)?
+            .iter()
+            .filter(|name| name.as_str() == tab_name)
+            .count())
     }
 }
 
@@ -473,19 +510,19 @@ impl MuxBackend for ZellijBackend {
         // tabs. Zellij can't move a tab to the front, so this appended tab does
         // *not* lead — leading is a birth-time property. `--layout` gives the tab
         // its `sidebar | stats | hosts…` shape directly (bypassing the tab
-        // template, so the sidebar is spelled out); `new-tab` is synchronous (it
-        // prints the tab id), so the temp layout can drop once it returns. Each
-        // pane carries its own `cwd`, so no tab-level `--cwd` is needed.
+        // template, so the sidebar is spelled out). Zellij can drop transient
+        // `new-tab` mutations under load, so keep the temp layout alive until
+        // the named tab is confirmed. Each pane carries its own `cwd`, so no
+        // tab-level `--cwd` is needed.
         let layout = TempLayoutFile::new(render_background_view_layout(opts)?)?;
-        self.zellij_action(session)
-            .args([
-                "new-tab".to_owned(),
-                "--layout".to_owned(),
-                layout.path().to_string_lossy().into_owned(),
-                "--name".to_owned(),
-                opts.view.name.clone(),
-            ])
-            .run()?;
+        let args = [
+            "new-tab".to_owned(),
+            "--layout".to_owned(),
+            layout.path().to_string_lossy().into_owned(),
+            "--name".to_owned(),
+            opts.view.name.clone(),
+        ];
+        self.run_new_tab_confirmed(session, &args, &opts.view.name)?;
         drop(layout);
         // `new-tab` focuses the tab it creates. Return focus to the leading tab so
         // the imminent `attach` lands on a working pane, not this freshly-added
@@ -514,15 +551,14 @@ impl MuxBackend for ZellijBackend {
             .ok()
             .flatten();
         let layout = TempLayoutFile::new(render_tab_layout(opts, template_sidebar_cols)?)?;
-        self.zellij_action(&opts.session_name)
-            .args([
-                "new-tab".to_owned(),
-                "--layout".to_owned(),
-                layout.path().to_string_lossy().into_owned(),
-                "--name".to_owned(),
-                opts.title.clone(),
-            ])
-            .run()?;
+        let args = [
+            "new-tab".to_owned(),
+            "--layout".to_owned(),
+            layout.path().to_string_lossy().into_owned(),
+            "--name".to_owned(),
+            opts.title.clone(),
+        ];
+        self.run_new_tab_confirmed(&opts.session_name, &args, &opts.title)?;
         drop(layout);
         if !opts.focus {
             let result = match &restore {

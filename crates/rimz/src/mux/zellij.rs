@@ -67,6 +67,13 @@ const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const TAB_NAMES_ATTEMPTS: u32 = 5;
 const TAB_NAMES_RETRY_DELAY: Duration = Duration::from_millis(50);
 
+/// Zellij can accept a transient action client and still drop a `new-tab`
+/// mutation under load. Confirm the tab name appears, then retry only while it
+/// remains absent.
+const NEW_TAB_ATTEMPTS: u32 = 3;
+const NEW_TAB_CONFIRM_WINDOW: Duration = Duration::from_millis(750);
+const NEW_TAB_CONFIRM_STEP: Duration = Duration::from_millis(50);
+
 /// Minimum Zellij that loads the presence plugin.
 pub const PRESENCE_PLUGIN_MIN_ZELLIJ: (u32, u32, u32) = (0, 44, 0);
 

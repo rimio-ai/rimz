@@ -32,6 +32,9 @@ use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
 
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
 const LIST_PANES_JSON_TIMEOUT: Duration = Duration::from_millis(1500);
+const ACTION_ATTEMPTS: u32 = 3;
+const ACTION_CONFIRM_WINDOW: Duration = Duration::from_millis(750);
+const ACTION_CONFIRM_STEP: Duration = Duration::from_millis(50);
 
 /// Skip the test (return) if the host has no `zellij` binary on PATH.
 macro_rules! require_zellij {
@@ -1628,17 +1631,64 @@ fn assert_session_has_bottom_bar(xdg: &Path, session: &str) {
     );
 }
 
+fn action_until(
+    xdg: &Path,
+    session: &str,
+    args: &[String],
+    label: &str,
+    mut confirm: impl FnMut() -> std::result::Result<(), String>,
+) {
+    let mut last_observation = "post-condition was not checked".to_owned();
+    for attempt in 0..ACTION_ATTEMPTS {
+        if attempt > 0 && confirm().is_ok() {
+            return;
+        }
+        let output = scoped_zellij(xdg)
+            .args(["--session", session])
+            .args(args.iter().map(String::as_str))
+            .bounded_output()
+            .unwrap_or_else(|err| panic!("{label} failed to run for {session}: {err}"));
+        assert!(
+            output.status.success(),
+            "{label} failed for {session}: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let deadline = Instant::now() + ACTION_CONFIRM_WINDOW;
+        loop {
+            match confirm() {
+                Ok(()) => return,
+                Err(observation) => last_observation = observation,
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(ACTION_CONFIRM_STEP);
+        }
+    }
+    panic!(
+        "{label} did not materialize after {ACTION_ATTEMPTS} attempts in {session}; \
+         last observation: {last_observation}"
+    );
+}
+
 /// Open a second tab the way a user would, from the default tab template.
 fn open_new_tab(xdg: &Path, session: &str) {
-    let output = scoped_zellij(xdg)
-        .args(["--session", session, "action", "new-tab"])
-        .bounded_output()
-        .expect("new-tab");
-    assert!(
-        output.status.success(),
-        "new-tab failed for {session}: {}",
-        String::from_utf8_lossy(&output.stderr),
-    );
+    let before: BTreeSet<u64> = tab_ids(xdg, session).into_iter().collect();
+    let args = ["action".to_owned(), "new-tab".to_owned()];
+    action_until(xdg, session, &args, "new-tab", || {
+        let panes = list_panes_json(xdg, session)?;
+        let after = tab_ids_from_panes(&panes);
+        let new_tabs: Vec<u64> = after
+            .iter()
+            .copied()
+            .filter(|id| !before.contains(id))
+            .collect();
+        if new_tabs.is_empty() {
+            Err(format!("tabs still {after:?}; before tabs were {before:?}"))
+        } else {
+            Ok(())
+        }
+    });
 }
 
 /// Parsed `list-panes -j -a` for `session`. Callers that poll keep the last
@@ -1882,17 +1932,27 @@ fn wait_for_named_work_pane_count(
 }
 
 fn spawn_sleep_pane(xdg: &Path, session: &str, cwd: &Path) {
-    let spawned = scoped_zellij(xdg)
-        .args(["--session", session, "action", "new-pane", "--cwd"])
-        .arg(cwd)
-        .args(["--", "sleep", "600"])
-        .bounded_output()
-        .expect("new-pane");
-    assert!(
-        spawned.status.success(),
-        "new-pane failed: {}",
-        String::from_utf8_lossy(&spawned.stderr),
-    );
+    let before = live_work_pane_count(&expect_list_panes_json(xdg, session));
+    let args = [
+        "action".to_owned(),
+        "new-pane".to_owned(),
+        "--cwd".to_owned(),
+        cwd.to_string_lossy().into_owned(),
+        "--".to_owned(),
+        "sleep".to_owned(),
+        "600".to_owned(),
+    ];
+    action_until(xdg, session, &args, "new-pane", || {
+        let panes = list_panes_json(xdg, session)?;
+        let after = live_work_pane_count(&panes);
+        if after > before {
+            Ok(())
+        } else {
+            Err(format!(
+                "live work panes still {after}; before was {before}"
+            ))
+        }
+    });
 }
 
 fn assert_work_panes_reopen_evenly_after_closing_first(
@@ -2067,6 +2127,25 @@ fn tab_ids_from_panes(panes: &serde_json::Value) -> Vec<u64> {
     ids.sort_unstable();
     ids.dedup();
     ids
+}
+
+fn live_work_pane_count(panes: &serde_json::Value) -> usize {
+    panes
+        .as_array()
+        .map(|panes| {
+            panes
+                .iter()
+                .filter(|pane| {
+                    pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
+                })
+                .filter(|pane| {
+                    pane.get("title").and_then(|value| value.as_str()) != Some("rimz-sidebar")
+                })
+                .filter(|pane| pane.get("is_held").and_then(|value| value.as_bool()) != Some(true))
+                .filter(|pane| pane.get("exited").and_then(|value| value.as_bool()) != Some(true))
+                .count()
+        })
+        .unwrap_or_default()
 }
 
 /// Titles of the non-plugin panes in `tab`.
