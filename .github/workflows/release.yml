@@ -50,51 +50,12 @@ jobs:
       - name: Install Rust toolchain (from rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Compute Cargo cache key
-        id: cargo-cache-key
-        shell: bash
-        run: |
-          set -euo pipefail
-          cache_key_input="${RUNNER_TEMP:-/tmp}/rimz-release-cargo-cache-key"
-          {
-            printf 'runner-os=%s\n' "${RUNNER_OS:-unknown}"
-            printf 'runner-arch=%s\n' "${RUNNER_ARCH:-unknown}"
-            printf 'cargo-target-dir=%s\n' "$CARGO_TARGET_DIR"
-            printf 'rustflags=%s\n' "${RUSTFLAGS:-}"
-            rustc -vV
-            cargo -vV
-            find . -type f \( \
-              -name Cargo.lock \
-              -o -name Cargo.toml \
-              -o -name rust-toolchain \
-              -o -name rust-toolchain.toml \
-              -o -path '*/.cargo/config.toml' \
-            \) -print | LC_ALL=C sort | while IFS= read -r file; do
-              sha256sum "$file"
-            done
-          } > "$cache_key_input"
-
-          runner_os="$(printf '%s' "${RUNNER_OS:-linux}" | tr '[:upper:]' '[:lower:]')"
-          runner_arch="$(printf '%s' "${RUNNER_ARCH:-x64}" | tr '[:upper:]' '[:lower:]')"
-          key_hash="$(sha256sum "$cache_key_input" | awk '{print $1}')"
-          prefix="cargo-release-${runner_os}-${runner_arch}-${key_hash}"
-          echo "key=$prefix" >> "$GITHUB_OUTPUT"
-          echo "fallback_prefix=cargo-release-${runner_os}-${runner_arch}-" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare Cargo cache directories
-        run: mkdir -p ~/.cargo/registry/index ~/.cargo/registry/cache ~/.cargo/git/db "$CARGO_TARGET_DIR"
-
       - name: Cargo cache
-        uses: actions/cache@v5
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target/release-ci
-          key: ${{ steps.cargo-cache-key.outputs.key }}
-          restore-keys: |
-            ${{ steps.cargo-cache-key.outputs.fallback_prefix }}
+          workspaces: ". -> target/release-ci"
+          prefix-key: "rimz-release"
+          cache-bin: false
 
       # The CI gate compiles and tests through `cargo xtask ci`, which needs the
       # full plugin set. The `workflow_run` path skips the gate (CI already
