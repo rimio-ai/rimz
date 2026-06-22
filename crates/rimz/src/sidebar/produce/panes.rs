@@ -677,13 +677,10 @@ fn confirm_and_carry(
         if !initial.carried.is_empty() {
             emit_pane_carry_refuted(
                 diag,
-                prior,
-                &initial_frame,
                 &initial,
                 prior_count,
                 pane_count(&initial_frame),
                 verified_count,
-                confirmed_at_ms,
             );
         }
         if verified_count == pane_count(&initial.frame)
@@ -755,16 +752,12 @@ fn emit_pane_carry_forward(
     });
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_pane_carry_refuted(
     diag: Option<&crate::diag::DiagSink>,
-    prior: Option<&PaneFrame>,
-    offending_frame: &PaneFrame,
     outcome: &CarryOutcome,
     prior_count: usize,
     fresh_count: usize,
     verified_count: usize,
-    at_ms: u64,
 ) {
     let Some(diag) = diag else {
         return;
@@ -781,16 +774,13 @@ fn emit_pane_carry_refuted(
         .collect::<Vec<_>>();
     pids.sort_unstable();
     pids.dedup();
-    let frames_ref = prior.and_then(|prior| {
-        diag.capture_frame_pair("pane_carry_refuted", prior, offending_frame, at_ms)
-    });
     diag.emit(DiagEvent::PaneCarryRefuted {
         carried,
         pids,
         prior: prior_count,
         fresh: fresh_count,
         verified: verified_count,
-        frames_ref,
+        frames_ref: None,
     });
 }
 

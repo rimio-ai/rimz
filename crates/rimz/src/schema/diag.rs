@@ -203,7 +203,6 @@ impl DiagEvent {
             Self::FrameRejected { .. }
             | Self::PaneCountDrop { .. }
             | Self::PaneCarryForward { .. }
-            | Self::PaneCarryRefuted { .. }
             | Self::CarryForwardExpired { .. }
             | Self::GateHold { .. }
             | Self::FetchFailure { .. }
@@ -223,6 +222,7 @@ impl DiagEvent {
             Self::RendererPanic { .. } => DiagSeverity::Error,
             Self::FrameRejectEscape { .. }
             | Self::FrameShrinkVerified { .. }
+            | Self::PaneCarryRefuted { .. }
             | Self::GateRelease { .. }
             | Self::ProducerElected { .. }
             | Self::ProducerDemoted { .. }
@@ -607,7 +607,7 @@ mod tests {
                 prior: 3,
                 fresh: 2,
                 verified: 3,
-                frames_ref: Some("frame.1.pane_carry_refuted.json".to_owned()),
+                frames_ref: None,
             },
             DiagEvent::CarryForwardExpired {
                 pane_id: pane("terminal_1"),
@@ -812,6 +812,22 @@ mod tests {
         assert_eq!(
             DiagEvent::NewbornQuarantined {
                 pane_id: pane("terminal_1")
+            }
+            .severity(),
+            DiagSeverity::Info
+        );
+    }
+
+    #[test]
+    fn pane_carry_refuted_is_informational() {
+        assert_eq!(
+            DiagEvent::PaneCarryRefuted {
+                carried: vec![pane("terminal_1")],
+                pids: vec![42],
+                prior: 2,
+                fresh: 1,
+                verified: 2,
+                frames_ref: None,
             }
             .severity(),
             DiagSeverity::Info

@@ -359,10 +359,17 @@ fn refuted_initial_carry_records_diagnostic() {
             prior: 2,
             fresh: 1,
             verified: 2,
-            frames_ref: Some(_),
+            frames_ref: None,
         }] if carried.len() == 1 && carried[0].raw() == "terminal_2"
             && pids == &vec![std::process::id()]
     ));
+    let frames_dir = crate::diag::frames_dir_under(&dir.path().join("state"));
+    assert!(
+        std::fs::read_dir(&frames_dir)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(true),
+        "refuted carry records without capturing diagnostic frames"
+    );
 }
 
 #[test]
