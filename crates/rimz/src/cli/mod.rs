@@ -347,11 +347,12 @@ pub(crate) fn resolve_pane_targets<'a>(
 }
 
 /// The snapshot the talk commands (`steer`, `queue`) resolve against. Unlike the
-/// rollup-only `snapshot_cached`, this folds a *fresh* live pane frame so a
-/// just-started agent pane with no session yet is present and addressable —
-/// `min_pane_cache_ms` floors the pull at now, bypassing the producer's pane
-/// cache (up to 10s old in Zellij event mode) that would otherwise miss it. One
-/// `list-panes` fork; falls back to the rollup when there is no mux to enumerate.
+/// rollup-only `snapshot_cached`, this folds a *fresh* live pane frame onto the
+/// rollup without the render spine, so a just-started sessionless pane is
+/// addressable without paying group-root, spending, account, dashboard, or git
+/// enrichment. `min_pane_cache_ms` floors the pane pull at now, bypassing the
+/// producer's pane cache (up to 10s old in Zellij event mode). One `list-panes`
+/// fork; falls back to the rollup when there is no mux to enumerate.
 pub(crate) fn resolution_snapshot(
     workspace: &rimz::ResolvedWorkspace,
     ledger: &Ledger,
@@ -359,7 +360,9 @@ pub(crate) fn resolution_snapshot(
 ) -> Result<rimz::SidebarSnapshot> {
     use rimz::sidebar::cache::unix_now_ms;
     use rimz::sidebar::consumer::RollupCursor;
-    use rimz::sidebar::produce::{ProduceOptions, pane_fixture_active, produce_snapshot};
+    use rimz::sidebar::produce::{
+        ProduceOptions, pane_fixture_active, produce_resolution_snapshot,
+    };
 
     let mux = globals
         .mux
@@ -381,7 +384,7 @@ pub(crate) fn resolution_snapshot(
         min_pane_cache_ms: Some(unix_now_ms()),
         diag: None,
     };
-    match produce_snapshot(&mut RollupCursor::new(), &state, &runtime, &opts) {
+    match produce_resolution_snapshot(&mut RollupCursor::new(), &state, &runtime, &opts) {
         Ok(snapshot) => Ok(snapshot),
         // No live session / pane discovery failed: fall back to the rollup's own
         // stamped panes so a bound agent still resolves, exactly as before.

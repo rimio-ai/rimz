@@ -24,12 +24,12 @@ mod metrics;
 mod panes;
 mod spending;
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::ids::{MuxName, PaneId};
 use crate::sidebar::cache::unix_now_ms;
 use crate::sidebar::consumer::{RollupCursor, rollup_snapshot};
-use crate::sidebar::enrich::{EnrichMode, enrich};
+use crate::sidebar::enrich::{EnrichMode, enrich, wired_lazy_default_models, wired_lazy_kinds};
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
@@ -77,19 +77,7 @@ pub fn produce_snapshot(
     runtime: &RuntimePaths,
     opts: &ProduceOptions,
 ) -> Result<SidebarSnapshot> {
-    let frame = match pane_list_fixture()? {
-        // A test fixture stands in for the mux; never touch the shared cache
-        // so deterministic tests can neither poison nor read it.
-        Some(fixture) => assemble_frame(fixture, unix_now_ms(), opts.session_name.clone()),
-        None => panes::cached_panes_or_produce(
-            runtime,
-            opts.mux,
-            &opts.session_name,
-            opts.min_pane_cache_ms,
-            opts.exclude.as_ref(),
-            opts.diag.as_ref(),
-        )?,
-    };
+    let frame = produce_pane_frame(runtime, opts)?;
     let snapshot = rollup_snapshot(state, cursor)?;
     Ok(enrich_producing(
         snapshot,
@@ -98,6 +86,27 @@ pub fn produce_snapshot(
         opts.exclude.as_ref(),
         opts.min_pane_cache_ms,
         opts.diag.as_ref(),
+    ))
+}
+
+/// Produce the resolution snapshot: event-fresh rollup plus the live pane frame,
+/// and no render spine. Talk/resolve commands need bound and lazy pane targets;
+/// they do not read group roots, spending, accounts, provider dashboards, or git
+/// facts, so this path pays one pane enumeration and stops there.
+pub fn produce_resolution_snapshot(
+    cursor: &mut RollupCursor,
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+    opts: &ProduceOptions,
+) -> Result<SidebarSnapshot> {
+    let frame = produce_pane_frame(runtime, opts)?;
+    let snapshot = rollup_snapshot(state, cursor)?;
+    Ok(fold_resolution_frame(
+        snapshot,
+        frame,
+        opts.exclude.as_ref(),
+        wired_lazy_kinds(),
+        wired_lazy_default_models(),
     ))
 }
 
@@ -137,6 +146,40 @@ pub fn repaired_pane_frame_for_binding(
     command_timeout: std::time::Duration,
 ) -> Result<PaneFrame> {
     panes::repaired_pane_frame_for_binding(runtime, mux, session, command_timeout)
+}
+
+fn produce_pane_frame(runtime: &RuntimePaths, opts: &ProduceOptions) -> Result<PaneFrame> {
+    match pane_list_fixture()? {
+        // A test fixture stands in for the mux; never touch the shared cache
+        // so deterministic tests can neither poison nor read it.
+        Some(fixture) => Ok(assemble_frame(
+            fixture,
+            unix_now_ms(),
+            opts.session_name.clone(),
+        )),
+        None => Ok(panes::cached_panes_or_produce(
+            runtime,
+            opts.mux,
+            &opts.session_name,
+            opts.min_pane_cache_ms,
+            opts.exclude.as_ref(),
+            opts.diag.as_ref(),
+        )?),
+    }
+}
+
+fn fold_resolution_frame(
+    mut snapshot: SidebarSnapshot,
+    frame: PaneFrame,
+    exclude: Option<&PaneId>,
+    lazy_kinds: Vec<String>,
+    lazy_default_models: BTreeMap<String, String>,
+) -> SidebarSnapshot {
+    snapshot.wired_lazy_kinds = lazy_kinds;
+    snapshot.lazy_agent_default_models = lazy_default_models;
+    snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
+    snapshot.panes_observed_at_ms = Some(frame.observed_or_produced_at_ms());
+    snapshot.with_live_panes(frame.to_pane_refs(), exclude)
 }
 
 /// The `RIMZ_TEST_PANE_LIST` fixture: a JSON pane list standing in for the
@@ -231,6 +274,108 @@ pub(crate) mod test_support {
             resumed_session_id: None,
             elevated_agent: None,
             first_seen_at_ms: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::lifecycle::TurnPhase;
+    use crate::agents::{AgentState, AgentStatus};
+    use crate::ids::{AgentKind, WorkspaceId};
+    use jiff::Timestamp;
+
+    #[test]
+    fn resolution_frame_folds_bound_and_lazy_panes_without_render_spine() {
+        let now = Timestamp::from_second(1_750_000_000).expect("fixed timestamp");
+        let bound_pane = test_support::pane("bound", Some("claude"), Some("/repo/main"));
+        let lazy_pane = test_support::pane("lazy", Some("codex"), Some("/repo/lazy"));
+        let mut bound_agent = agent("claude", "sess-bound", now);
+        bound_agent.pane = Some(bound_pane.clone());
+        bound_agent.worktree_path = Some("/repo/main".to_owned());
+        let snapshot = SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(std::path::Path::new("/repo/main")),
+            Vec::new(),
+            vec![bound_agent],
+            now,
+        );
+        let frame = assemble_frame(vec![bound_pane, lazy_pane], 123, "rimz-test".to_owned());
+
+        let snapshot = fold_resolution_frame(
+            snapshot,
+            frame,
+            None,
+            vec!["codex".to_owned()],
+            BTreeMap::new(),
+        );
+
+        let bound = snapshot
+            .agent_panes
+            .iter()
+            .find(|pane| pane.agent_id.as_deref() == Some("sess-bound"))
+            .expect("bound pane");
+        assert_eq!(bound.kind.as_str(), "claude");
+        assert_eq!(bound.pane_id.raw(), "bound");
+        let lazy = snapshot
+            .agent_panes
+            .iter()
+            .find(|pane| pane.agent_id.is_none())
+            .expect("lazy pane");
+        assert_eq!(lazy.kind.as_str(), "codex");
+        assert_eq!(lazy.pane_id.raw(), "lazy");
+        assert_eq!(snapshot.panes_produced_at_ms, Some(123));
+        assert_eq!(snapshot.panes_observed_at_ms, Some(123));
+        assert!(snapshot.providers.is_empty());
+        assert!(snapshot.value_tally.is_none());
+        assert!(snapshot.workspace_value_tally.is_none());
+        assert!(snapshot.today_spend_live_usd.is_none());
+        assert!(snapshot.worktree_roots.is_empty());
+    }
+
+    fn agent(kind: &str, id: &str, now: Timestamp) -> AgentState {
+        AgentState {
+            agent_id: id.into(),
+            kind: AgentKind::new_unchecked(kind),
+            name: None,
+            kind_ordinal: None,
+            profile: None,
+            role: None,
+            team: None,
+            status: AgentStatus::Running,
+            phase: TurnPhase::Idle,
+            pane: None,
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            description: None,
+            transcript_path: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_seen: now,
+            last_activity: now,
+            registered_at: Some(now),
         }
     }
 }

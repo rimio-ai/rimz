@@ -272,6 +272,59 @@ fn provisional_agent_for_pane<'a>(
         })
 }
 
+fn rollup_targets_all_park_without_live(
+    snapshot: &SidebarSnapshot,
+    raw: &str,
+    worktree: Option<&str>,
+    channel: Option<&str>,
+    pending: &[MessageRecord],
+    gate: DeliveryGate,
+    force: bool,
+) -> bool {
+    if rimz::target::is_broadcast(raw) {
+        return false;
+    }
+    let Ok(agents) = super::resolve_agent_many(snapshot, raw, worktree, channel) else {
+        return false;
+    };
+    agents
+        .iter()
+        .all(|agent| !agent_needs_live_queue_resolution(snapshot, pending, agent, gate, force))
+}
+
+fn agent_needs_live_queue_resolution(
+    snapshot: &SidebarSnapshot,
+    pending: &[MessageRecord],
+    agent: &AgentState,
+    gate: DeliveryGate,
+    force: bool,
+) -> bool {
+    agent.agent_id.is_provisional()
+        || agent_kind_registers_lazily(agent)
+        || (gate_open(gate, agent.status)
+            && (force
+                || pending_ask_for(
+                    agent,
+                    snapshot
+                        .needs_attention
+                        .iter()
+                        .chain(snapshot.resolver_working.iter()),
+                )
+                .is_none())
+            && queue_head(
+                pending.iter(),
+                &agent.kind,
+                &agent.agent_id,
+                agent.name.as_deref(),
+            )
+            .is_none())
+}
+
+fn agent_kind_registers_lazily(agent: &AgentState) -> bool {
+    rimz::agents::descriptor_by_kind(agent.kind.as_str())
+        .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
+}
+
 fn add_message(
     target: String,
     worktree: Option<String>,
@@ -283,38 +336,61 @@ fn add_message(
     rimz::target::require_mention(&target)?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
-    let mut snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
-    // Smart compaction reads context fill. Immediate queue sends share steer's
-    // live path, so fold the disposable context sidecars before any send-now
-    // decision that might compact first.
-    if spec.auto_compact.is_some()
-        && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-    {
-        snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
-    }
+    let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
     let channel = current_channel(&workspace);
     let sender = send::sender_from_env(channel.as_deref(), spec.no_from);
-    let agent_result =
-        super::resolve_agent_many(&snapshot, &target, worktree.as_deref(), channel.as_deref());
-    let pane_result =
-        super::resolve_pane_targets(&snapshot, &target, worktree.as_deref(), channel.as_deref());
-    let targets = match (agent_result, pane_result) {
-        (Ok(agents), Ok(panes)) => combine_queue_targets(&snapshot, agents, panes),
-        (Ok(agents), Err(_)) => combine_queue_targets(&snapshot, agents, Vec::new()),
-        (Err(_), Ok(panes)) => combine_queue_targets(&snapshot, Vec::new(), panes),
-        (Err(err), Err(_)) => {
-            // Create-on-miss launches a fresh agent with this text as its first
-            // prompt, so the launch carries the work and no queue entry is made.
-            if flags.create {
-                return super::agents_cmd::create_on_miss(
-                    &target,
-                    worktree.as_deref(),
-                    channel.as_deref(),
-                    &text,
-                    globals,
-                );
+    let mut pending = ledger.list_pending_messages()?;
+    let rollup_only = rollup_targets_all_park_without_live(
+        &snapshot,
+        &target,
+        worktree.as_deref(),
+        channel.as_deref(),
+        &pending,
+        spec.gate,
+        spec.force,
+    );
+    if !rollup_only {
+        snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+        // Smart compaction reads context fill. Immediate queue sends share steer's
+        // live path, so fold the disposable context sidecars before any send-now
+        // decision that might compact first.
+        if spec.auto_compact.is_some()
+            && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        {
+            snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+        }
+    }
+    let targets = if rollup_only {
+        let agents =
+            super::resolve_agent_many(&snapshot, &target, worktree.as_deref(), channel.as_deref())?;
+        combine_queue_targets(&snapshot, agents, Vec::new())
+    } else {
+        let agent_result =
+            super::resolve_agent_many(&snapshot, &target, worktree.as_deref(), channel.as_deref());
+        let pane_result = super::resolve_pane_targets(
+            &snapshot,
+            &target,
+            worktree.as_deref(),
+            channel.as_deref(),
+        );
+        match (agent_result, pane_result) {
+            (Ok(agents), Ok(panes)) => combine_queue_targets(&snapshot, agents, panes),
+            (Ok(agents), Err(_)) => combine_queue_targets(&snapshot, agents, Vec::new()),
+            (Err(_), Ok(panes)) => combine_queue_targets(&snapshot, Vec::new(), panes),
+            (Err(err), Err(_)) => {
+                // Create-on-miss launches a fresh agent with this text as its first
+                // prompt, so the launch carries the work and no queue entry is made.
+                if flags.create {
+                    return super::agents_cmd::create_on_miss(
+                        &target,
+                        worktree.as_deref(),
+                        channel.as_deref(),
+                        &text,
+                        globals,
+                    );
+                }
+                return Err(err);
             }
-            return Err(err);
         }
     };
     if targets.len() > 1 {
@@ -332,7 +408,6 @@ fn add_message(
         auto_compact: spec.auto_compact,
         sender: sender.clone(),
     };
-    let mut pending = ledger.list_pending_messages()?;
     let mut kinds_seen = std::collections::BTreeSet::new();
     let mut ids = Vec::new();
     for target in &targets {

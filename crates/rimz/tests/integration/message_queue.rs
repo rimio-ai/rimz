@@ -86,6 +86,32 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
     );
 }
 
+#[test]
+fn queue_add_for_bound_agent_does_not_enumerate_panes() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-rollup", "feature-rollup", &[]);
+
+    let trace_log = env.project_root.join("zellij-queue-rollup-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["--mux", "zellij", "queue", "@claude", "--", "cached path"])
+        .output()
+        .expect("queue add");
+    assert!(
+        out.status.success(),
+        "queue add failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let trace = trace_lines(&trace_log);
+    assert!(
+        trace.is_empty(),
+        "queue success path must not call zellij: {trace:?}"
+    );
+}
+
 /// Eligibility runs before the claim: an ineligible delivery pass (running
 /// agent at add time, eligible-but-paneless agent at turn end) leaves the
 /// message pending with no claim stamp, so the next real transition can
