@@ -1,6 +1,6 @@
 # Configure tmux
 
-Rimz runs inside the tmux you already use, and sets the room's behavior for you: on every session birth and reattach it applies the mouse, focus-event, passthrough, history, CSI-u key, and clipboard options agents need ([installation → configure your multiplexer](./installation.md#configure-your-multiplexer), [configuration → multiplexer room options](../reference/configuration.md#multiplexer-room-options)). Your `~/.tmux.conf` owns what Rimz leaves to you — true-color rendering, copy-mode, the status bar, and your keybindings — so those settings matter even inside the room, and they own your tmux sessions outside Rimz entirely.
+Rimz runs inside the tmux you already use, and sets the room's behavior for you: on every session birth and reattach it applies the mouse, focus-event, passthrough, history, CSI-u soft-newline key, and clipboard options agents need ([installation → configure your multiplexer](./installation.md#configure-your-multiplexer), [configuration → multiplexer room options](../reference/configuration.md#multiplexer-room-options)). Your `~/.tmux.conf` owns what Rimz leaves to you — true-color rendering, copy-mode, the status bar, and your keybindings — so those settings matter even inside the room, and they own your tmux sessions outside Rimz entirely.
 
 This guide is a baseline that makes tmux modern and pleasant everywhere. The file lives at `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`); reload it with `tmux source-file ~/.tmux.conf` or the `prefix` + `r` binding below. Every option here is catalogued in the [tmux upstream reference](../externals/mux-adapter/tmux-reference.md#options).
 
@@ -20,12 +20,13 @@ set -g  history-limit 100000     # long Claude/Codex output stays in scrollback
 set -sg escape-time 0            # no ESC lag in helix, nvim, fzf, agent TUIs
 set -g  focus-events on          # editors and agents see focus changes
 set -g  allow-passthrough on     # let desktop notifications pass through tmux
-set -s  extended-keys on         # distinguish Shift+Enter from Enter
-set -s  extended-keys-format csi-u   # forward Shift+Enter as CSI-u to composers
+set -s  extended-keys on             # distinguish modified Enter from Enter
+set -s  extended-keys-format csi-u   # forward Shift+Enter / Alt+Enter as CSI-u
+set -ga terminal-features "*:extkeys" # ask the outer terminal to send them
 set -g  set-clipboard on         # yank into the host clipboard over OSC52
 ```
 
-`escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. `extended-keys` with `csi-u` is what lets an agent's composer tell `Shift+Enter` (soft newline) apart from `Enter` (submit). `set-clipboard on` carries a yank out through OSC52, so you can copy agent output to your local clipboard even over SSH. `allow-passthrough on` lets the desktop-notification bytes Rimz emits reach your terminal ([notifications](../internals/sidebar/notifications.md)).
+`escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. `extended-keys`, `extended-keys-format csi-u`, and `terminal-features … extkeys` let an agent's composer receive Shift+Enter and Alt+Enter as CSI-u soft newlines while plain Enter still submits. Rimz applies the same `extkeys` feature inside its room. `set-clipboard on` carries a yank out through OSC52, so you can copy agent output to your local clipboard even over SSH. `allow-passthrough on` lets the desktop-notification bytes Rimz emits reach your terminal ([notifications](../internals/sidebar/notifications.md)).
 
 ## Recommended
 

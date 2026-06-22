@@ -381,11 +381,11 @@ fn show_session_environment(server: &TmuxServer, session: &str, name: &str) -> S
 }
 
 /// `ensure_session` applies the room options in one batched client invocation
-/// (`TmuxBackend::batch` joins the twelve option sets with standalone `;`
-/// tokens). Assert a representative option from each scope actually took on
-/// the live server — server (`escape-time 0`), session (`mouse on`), and
-/// window (`allow-passthrough on`) — proving the `;` tokenization reached
-/// tmux as a command sequence, not as arguments.
+/// (`TmuxBackend::batch` joins the option sets with standalone `;` tokens).
+/// Assert a representative option from each scope actually took on the live
+/// server — server (`escape-time 0`), session (`mouse on`), and window
+/// (`allow-passthrough on`) — proving the `;` tokenization reached tmux as a
+/// command sequence, not as arguments.
 #[test]
 fn ensure_session_applies_room_options_in_one_batch() {
     require_tmux!();
@@ -406,6 +406,12 @@ fn ensure_session_applies_room_options_in_one_batch() {
         .expect("ensure");
 
     assert_eq!(server.show_option(&["-s"], "escape-time"), "0");
+    assert!(
+        server
+            .show_option(&["-s"], "terminal-features")
+            .contains("extkeys"),
+        "extkeys terminal-feature lets Alt+Enter reach agents as CSI-u",
+    );
     assert_eq!(server.show_option(&["-t", "rimz-options"], "mouse"), "on");
     assert_eq!(
         server.show_option(&["-w", "-t", "rimz-options"], "allow-passthrough"),

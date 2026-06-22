@@ -21,7 +21,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use options::{tmux_server_options, tmux_session_options, tmux_window_options};
+use options::{
+    tmux_server_append_options, tmux_server_options, tmux_session_options, tmux_window_options,
+};
 
 use super::{CommandSpec, MuxBackend, Result};
 use crate::config::TmuxConfig;
@@ -131,6 +133,15 @@ impl TmuxBackend {
             commands.push(vec![
                 "set-option".to_owned(),
                 "-s".to_owned(),
+                key.to_owned(),
+                value,
+            ]);
+        }
+        // Re-appending `*:extkeys` is idempotent for tmux and preserves user entries.
+        for (key, value) in tmux_server_append_options(config) {
+            commands.push(vec![
+                "set-option".to_owned(),
+                "-as".to_owned(),
                 key.to_owned(),
                 value,
             ]);

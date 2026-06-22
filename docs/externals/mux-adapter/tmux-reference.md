@@ -202,6 +202,7 @@ Four scope tables — server, session, window, pane — each in a global and a l
 | `set-clipboard` | server | **on** \| external \| off | `on` both accepts OSC 52 from apps (into a tmux buffer) and forwards to the outer terminal (needs terminfo `Ms`); `external` forwards only, ignoring app sets |
 | `extended-keys` | server | **on** \| off \| always | modifyOtherKeys: `on` honours app requests for mode 1/2; `always` forces mode 1 onto non-requesters (3.2; revamped 3.5) |
 | `extended-keys-format` | server | **csi-u** \| xterm | `C-S-a` → `^[[65;6u` (csi-u) vs `^[[27;6;65~` (xterm); **3.5+** |
+| `terminal-features` (append `*:extkeys`) | server | **`*:extkeys`** | requests extended keys from the outer terminal so modified keys, including Shift+Enter and Alt+Enter, arrive as CSI-u; appended so the user's RGB and clipboard features survive |
 | `escape-time` | server | ms, **0** | ESC-disambiguation delay; upstream default 10 since 3.5 (500 before) |
 | `mouse` | session | **on** \| off | mouse events become bindable keys; click focuses panes |
 | `history-limit` | session | lines, **100000** | scrollback cap **for panes created after the set** — existing panes keep their birth limit |

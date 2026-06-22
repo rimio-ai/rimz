@@ -100,6 +100,16 @@ pub(super) fn tmux_server_options(config: &TmuxConfig) -> Vec<(&'static str, Str
     ]
 }
 
+/// Server options Rimz appends so the user's existing array entries survive.
+/// `*:extkeys` asks the outer terminal to send modified keys as CSI-u.
+pub(super) fn tmux_server_append_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
+    let mut opts = Vec::new();
+    if config.extended_keys {
+        opts.push(("terminal-features", "*:extkeys".to_owned()));
+    }
+    opts
+}
+
 pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
     vec![
         ("mouse", tmux_bool(config.mouse)),
@@ -264,6 +274,10 @@ mod tests {
             ],
         );
         assert_eq!(
+            tmux_server_append_options(&config),
+            vec![("terminal-features", "*:extkeys".to_owned())],
+        );
+        assert_eq!(
             tmux_session_options(&config),
             vec![
                 ("mouse", "on".to_owned()),
@@ -280,5 +294,11 @@ mod tests {
                 ("pane-border-lines", "simple".to_owned()),
             ],
         );
+
+        let config = TmuxConfig {
+            extended_keys: false,
+            ..TmuxConfig::default()
+        };
+        assert!(tmux_server_append_options(&config).is_empty());
     }
 }

@@ -129,7 +129,7 @@ rimz doctor
 
 ## Configure your multiplexer
 
-Rimz configures each room for you. On every session birth and reattach it sets the options agents need, so a freshly installed Zellij or tmux works without editing `~/.config/zellij/config.kdl` or `~/.tmux.conf`. A Zellij room opens in locked mode so your typing reaches the agent pane, with single-click sidebar jumps, 100k-line scrollback, the system clipboard, and resurrection off; a tmux room runs with the mouse on, focus events, OSC passthrough for desktop notifications, 100k-line history, and CSI-u keys. Rimz reasserts these on every attach.
+Rimz configures each room for you. On every session birth and reattach it sets the options agents need, so a freshly installed Zellij or tmux works without editing `~/.config/zellij/config.kdl` or `~/.tmux.conf`. A Zellij room opens in locked mode so your typing reaches the agent pane, with single-click sidebar jumps, 100k-line scrollback, the system clipboard, and resurrection off; a tmux room runs with the mouse on, focus events, OSC passthrough for desktop notifications, 100k-line history, and CSI-u extended keys, so Shift+Enter and Alt+Enter reach agents as soft newlines. Rimz reasserts these on every attach.
 
 Tune the room from Rimz's own config, `~/.config/rimz/config.toml`, under `[zellij]` and `[tmux]`. The setting most people reach for first is pane frames — borders that mark which pane holds focus.
 
