@@ -239,18 +239,6 @@ pub fn resolve_targets<'a>(
     resolve_mentions(raw, worktree_flag, current_channel, &candidates)
 }
 
-/// Whether `raw` matches at least one lazy (sessionless) agent pane in its
-/// channel.
-pub fn unbound_pane_in_channel(
-    snapshot: &SidebarSnapshot,
-    raw: &str,
-    worktree_flag: Option<&str>,
-    current_channel: Option<&str>,
-) -> bool {
-    resolve_targets(snapshot, raw, worktree_flag, current_channel)
-        .is_ok_and(|targets| targets.iter().any(|target| target.agent_id.is_none()))
-}
-
 fn root_agents(snapshot: &SidebarSnapshot) -> Vec<&AgentState> {
     snapshot
         .agents

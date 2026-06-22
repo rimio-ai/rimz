@@ -897,34 +897,6 @@ fn management_resolution_never_sees_agent_panes() {
 }
 
 #[test]
-fn unbound_pane_in_channel_flags_only_lazy_matches() {
-    // The signal queue reads: true for a lazy match, false for a bound one.
-    let mut snapshot = empty_snapshot();
-    snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
-    assert!(unbound_pane_in_channel(
-        &snapshot,
-        "@codex",
-        None,
-        Some("shimmer-effect")
-    ));
-
-    snapshot.agent_panes = vec![bound_pane(
-        "codex",
-        1,
-        "swift-otter",
-        "s1",
-        "shimmer-effect",
-        "terminal_5",
-    )];
-    assert!(!unbound_pane_in_channel(
-        &snapshot,
-        "@codex",
-        None,
-        Some("shimmer-effect")
-    ));
-}
-
-#[test]
 fn at_all_fans_to_in_channel_panes_only() {
     let mut snapshot = empty_snapshot();
     snapshot.agent_panes = vec![

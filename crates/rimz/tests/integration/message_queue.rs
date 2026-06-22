@@ -2,6 +2,7 @@ use serde_json::json;
 
 use std::path::{Path, PathBuf};
 
+use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::message::MessageStatus;
@@ -396,6 +397,163 @@ fn queue_delivery_presses_enter_as_discrete_key() {
         "an idle agent with a bound pane should receive queue text immediately"
     );
     assert_text_then_enter(&trace_log, "go");
+}
+
+#[test]
+fn queue_deliver_sends_deferred_message_and_marks_delivered() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-deferred-live", "feature-dl", pane_env);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+
+    let add = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["queue", "@claude", "--", "later"])
+        .output()
+        .expect("queue add");
+    assert!(
+        add.status.success(),
+        "queue add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let message_id = String::from_utf8_lossy(&add.stdout).trim().to_owned();
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1, "running agent should park the message");
+    assert_eq!(pending[0].status, MessageStatus::Pending);
+
+    append_lifecycle(
+        &env,
+        "claude",
+        "Stop",
+        "sess-deferred-live",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+        },
+        |observation| {
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            observation.worktree_branch = Some("feature-dl".to_owned());
+        },
+    );
+
+    let trace_log = env.project_root.join("zellij-deferred-deliver-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_QUEUE_SETTLE_MS", "0")
+        .args(["queue", "deliver", "--message-id", &message_id])
+        .output()
+        .expect("queue deliver");
+    assert!(
+        out.status.success(),
+        "queue deliver failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_text_then_enter(&trace_log, "later");
+    let messages = env.ledger().list_messages().expect("messages");
+    let message = messages
+        .iter()
+        .find(|message| message.message_id.as_str() == message_id)
+        .expect("delivered message");
+    assert_eq!(message.status, MessageStatus::Delivered);
+    let methods: Vec<String> = env
+        .read_events()
+        .into_iter()
+        .map(|event| event.method)
+        .collect();
+    assert!(
+        methods.iter().any(|method| method == "agent.steered"),
+        "delivery records the shared send event: {methods:?}"
+    );
+    assert!(
+        methods.iter().any(|method| method == "message.delivered"),
+        "delivery records the queue terminal event: {methods:?}"
+    );
+}
+
+#[test]
+fn queue_deliver_folds_provisional_message_to_registered_card_name() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    seed_running_provisional_codex_launch(
+        &env,
+        "launch_deferred_fold",
+        "swift-otter",
+        Some("coder"),
+        "terminal_8",
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
+
+    let add = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["queue", "@coder", "--", "read plan"])
+        .output()
+        .expect("queue add");
+    assert!(
+        add.status.success(),
+        "queue add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let message_id = String::from_utf8_lossy(&add.stdout).trim().to_owned();
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1, "running launch card should park");
+    assert_eq!(pending[0].agent_id.as_str(), "launch_deferred_fold");
+    assert_eq!(pending[0].agent_name.as_deref(), Some("swift-otter"));
+
+    append_lifecycle(
+        &env,
+        "codex",
+        "SessionStart",
+        "codex-real-session",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("swift-otter".to_owned());
+            observation.role = Some("coder".to_owned());
+            observation.kind_ordinal = Some(1);
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+        },
+    );
+
+    let trace_log = env
+        .project_root
+        .join("zellij-provisional-deliver-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_QUEUE_SETTLE_MS", "0")
+        .args(["queue", "deliver", "--message-id", &message_id])
+        .output()
+        .expect("queue deliver");
+    assert!(
+        out.status.success(),
+        "queue deliver failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_text_then_enter(&trace_log, "read plan");
+    let messages = env.ledger().list_messages().expect("messages");
+    let message = messages
+        .iter()
+        .find(|message| message.message_id.as_str() == message_id)
+        .expect("delivered message");
+    assert_eq!(message.status, MessageStatus::Delivered);
+    let agents = env.ledger().snapshot_cached().expect("snapshot").agents;
+    assert!(
+        agents.iter().any(|agent| {
+            agent.agent_id.as_str() == "codex-real-session"
+                && agent.name.as_deref() == Some("swift-otter")
+        }),
+        "registered card should consume the provisional name: {agents:?}"
+    );
 }
 
 #[test]
@@ -1023,6 +1181,52 @@ fn run_hook(env: &Env, payload: serde_json::Value, pane_env: &[(&str, &str)]) {
     );
 }
 
+fn append_lifecycle(
+    env: &Env,
+    kind: &str,
+    event_name: &str,
+    agent_id: &str,
+    signal: LifecycleSignal,
+    configure: impl FnOnce(&mut AgentLifecycleObservation),
+) {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let mut observation =
+        AgentLifecycleObservation::new(Some(AgentSessionId::from(agent_id)), signal);
+    observation.worktree_path = Some(env.project_root.display().to_string());
+    configure(&mut observation);
+    let event = EventEnvelope::agent_lifecycle(
+        workspace.workspace_id,
+        workspace.session_name,
+        kind,
+        event_name,
+        &observation,
+    );
+    env.ledger().append_event(&event).expect("append lifecycle");
+}
+
+fn trust_codex_hooks(env: &Env) {
+    let config = env.agent_config_path("codex");
+    let mut text = std::fs::read_to_string(&config).expect("read codex config");
+    for token in [
+        "session_start",
+        "user_prompt_submit",
+        "subagent_start",
+        "subagent_stop",
+        "stop",
+        "permission_request",
+        "pre_tool_use",
+        "post_tool_use",
+        "pre_compact",
+        "post_compact",
+    ] {
+        text.push_str(&format!(
+            "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
+            config.display(),
+        ));
+    }
+    std::fs::write(&config, text).expect("write trust state");
+}
+
 fn queue_add(env: &Env, target: &str, text: &str) -> String {
     let out = env
         .rimz()
@@ -1057,6 +1261,10 @@ fn push_pending_agent_ask(env: &Env, session_id: &str) {
 /// producer synthesizes its idle `○ codex` row, but it never enters the rollup.
 /// Its raw id is `TRACE_PANE` so the steer shim assertion matches.
 fn unbound_codex_pane(env: &Env) -> rimz::pane::PaneRef {
+    agent_pane(env, "codex")
+}
+
+fn agent_pane(env: &Env, command: &str) -> rimz::pane::PaneRef {
     rimz::pane::PaneRef {
         pane_id: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, TRACE_PANE),
         session_name: "rimz-test".to_owned(),
@@ -1065,7 +1273,7 @@ fn unbound_codex_pane(env: &Env) -> rimz::pane::PaneRef {
         view_name: Some("project".to_owned()),
         is_focused: false,
         is_floating: false,
-        command: Some("codex".to_owned()),
+        command: Some(command.to_owned()),
         spawn_command: None,
         cwd: Some(env.project_root.display().to_string()),
         pane_pid: None,
@@ -1082,6 +1290,34 @@ fn seed_provisional_codex_launch(
     agent_name: &str,
     role: Option<&str>,
     stale_pane: &str,
+) {
+    seed_provisional_codex_launch_with_prompt(env, launch_id, agent_name, role, stale_pane, None);
+}
+
+fn seed_running_provisional_codex_launch(
+    env: &Env,
+    launch_id: &str,
+    agent_name: &str,
+    role: Option<&str>,
+    stale_pane: &str,
+) {
+    seed_provisional_codex_launch_with_prompt(
+        env,
+        launch_id,
+        agent_name,
+        role,
+        stale_pane,
+        Some("work"),
+    );
+}
+
+fn seed_provisional_codex_launch_with_prompt(
+    env: &Env,
+    launch_id: &str,
+    agent_name: &str,
+    role: Option<&str>,
+    stale_pane: &str,
+    prompt: Option<&str>,
 ) {
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
     let kind = AgentKind::new_unchecked("codex");
@@ -1102,7 +1338,7 @@ fn seed_provisional_codex_launch(
             runtime_owner: None,
             worktree_path: Some(env.project_root.display().to_string()),
             worktree_branch: None,
-            prompt: None,
+            prompt: prompt.map(ToOwned::to_owned),
             description: None,
         },
     );
