@@ -47,19 +47,9 @@ fn run_produce_guarded(
             *cursor = RollupCursor::new();
             Err(format!(
                 "sidebar produce panicked: {}",
-                panic_payload_message(&payload)
+                super::panic_payload_message(payload.as_ref())
             ))
         }
-    }
-}
-
-fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_owned()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "unknown panic payload".to_owned()
     }
 }
 

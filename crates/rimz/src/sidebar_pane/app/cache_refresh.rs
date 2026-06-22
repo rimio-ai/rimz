@@ -13,11 +13,7 @@ use crate::{RuntimePaths, StatePaths};
 
 use super::{ServeConfig, tick_for};
 
-pub(super) fn spawn(
-    config: ServeConfig,
-    runtime: RuntimePaths,
-    _diag: Option<crate::diag::DiagSink>,
-) -> JoinHandle<()> {
+pub(super) fn spawn(config: ServeConfig, runtime: RuntimePaths) -> JoinHandle<()> {
     std::thread::spawn(move || refresh_loop(config, runtime))
 }
 
@@ -63,18 +59,8 @@ fn refresh_guarded(
             *cursor = RollupCursor::new();
             Err(format!(
                 "sidebar cache refresh panicked: {}",
-                panic_payload_message(&payload)
+                super::panic_payload_message(payload.as_ref())
             ))
         }
-    }
-}
-
-fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_owned()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "unknown panic payload".to_owned()
     }
 }

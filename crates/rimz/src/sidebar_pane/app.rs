@@ -191,7 +191,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         request_rx,
         result_tx,
     );
-    let _cache_refresh_handle = cache_refresh::spawn(config.clone(), runtime.clone(), diag.clone());
+    let _cache_refresh_handle = cache_refresh::spawn(config.clone(), runtime.clone());
     let mut fetch = FetchDispatcher::new(request_tx);
 
     // tmux fast path: the elected producer streams control-mode topology
@@ -335,6 +335,16 @@ fn panic_message(info: &std::panic::PanicHookInfo<'_>) -> String {
         message.clone()
     } else {
         "renderer panicked".to_owned()
+    }
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_owned()
     }
 }
 
