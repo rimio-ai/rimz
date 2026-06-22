@@ -6,9 +6,12 @@ on:
   push:
     branches: [main, master]
 
+# Workflow-level group supersedes stale work:
+# - PRs key on the PR ref, so a newer push cancels the in-flight run.
+# - Pushes (main) key on the commit, so every landed commit verifies in parallel.
+# A single commit's push and pull_request runs land in different groups here
+# (PR ref vs sha), so per-commit dedupe lives in the job-level `concurrency`.
 concurrency:
-  # PRs: one run per PR ref, so a newer push cancels the superseded run.
-  # Pushes (main): unique per commit, so every landed commit verifies in parallel.
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -24,6 +27,17 @@ jobs:
     name: cargo xtask ci
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
+    # Per-commit dedupe across events. A rebase-ff merge lands the PR head sha
+    # unchanged on main, so the merge fires both a push (main) and a
+    # pull_request (the rebased branch) run for the *same* commit. Gitea matches
+    # job-level concurrency groups repo-wide, so keying the job on the commit
+    # collapses that pair into one run. Cancel only when the push arrives: the
+    # push run gates the release (release.yml keys off a green CI run on main),
+    # so it must win — the push cancels the redundant pull_request job, never the
+    # reverse.
+    concurrency:
+      group: ci-commit-${{ github.sha }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -191,10 +205,10 @@ jobs:
           "$mold_dir/bin/mold" --version
 
       - name: cargo xtask ci
-        # The shared self-hosted runner executes several heavy jobs at once: a
-        # commit's push CI and its pull_request CI run in separate concurrency
-        # groups (different shas — PR head vs landed merge — so they cannot be
-        # collapsed), and a release build can trail the previous commit's CI.
+        # The shared self-hosted runner can still run several heavy jobs at
+        # once: distinct main commits verify in parallel, and a release build
+        # can trail the previous commit's CI. (A single commit's push and
+        # pull_request runs collapse via the job-level `concurrency` above.)
         # Two full instrumented suites on one box oversubscribe the cores and
         # starve the latency-sensitive live-mux tests, whose `zellij`/`tmux` CLI
         # round-trips then miss their deadlines. The per-run server cap in

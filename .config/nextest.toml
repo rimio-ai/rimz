@@ -48,7 +48,9 @@
 # Live tmux servers are far lighter (one `tmux` process per tempdir socket, no
 # wasm plugin host), so their cap is generous; the group exists to give tmux's
 # live tests the same retry tolerance for the occasional under-load startup race
-# the Zellij group already absorbs.
+# the Zellij group already absorbs. The deep journey tmux smoke joins the group
+# too, mirroring its Zellij twin, so an under-load blip retries instead of
+# failing the run outright.
 [test-groups]
 live-zellij = { max-threads = 2 }
 # The coverage-run cap: one live Zellij server per run, so overlapping CI jobs on
@@ -62,7 +64,7 @@ test-group = 'live-zellij'
 retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
 
 [[profile.default.overrides]]
-filter = 'package(rimz) & test(/^backend::tmux::/)'
+filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^journey::deep::tmux/))'
 test-group = 'live-tmux'
 retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
 
