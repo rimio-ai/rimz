@@ -174,7 +174,7 @@ Both helpers live next to the durability contract they enforce. No module hand-r
 
 ## Tests
 
-Local runner: `cargo xtask test` (wraps `cargo nextest run`). nextest is the only suite runner — install it with `cargo install cargo-nextest --locked`. Doctests, which nextest does not run, go through `cargo xtask doctest`.
+Local runner: `cargo xtask test` (wraps `cargo nextest run`; trailing args forward as nextest filters, for example `cargo xtask test auth`). nextest is the only suite runner — install it with `cargo install cargo-nextest --locked`. Doctests, which nextest does not run, go through `cargo xtask doctest`.
 
 Core test shapes keep their own discipline:
 
@@ -243,7 +243,7 @@ Every gate runs in CI with warnings treated as errors. Local equivalents are `ca
 
 - `cargo fmt --all -- --check` — formatting.
 - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` — lint.
-- `cargo nextest run --workspace --all-features --locked` — test runner (the `test` task; the standalone fast signal).
+- `cargo nextest run --workspace --all-features --locked` — test runner (the `test` task; the standalone fast signal); accepts nextest filters such as `cargo xtask test auth`.
 - `cargo xtask doctest` — doctests.
 - `cargo xtask docs-links` — every relative markdown link target and `#anchor` resolves in the working tree (offline and deterministic; external URLs are out of scope).
 - `cargo deny check` — licence, advisory, and ban check.

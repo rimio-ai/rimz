@@ -195,19 +195,16 @@ pub(crate) fn deps(root: &Path) -> Result<()> {
     ensure_success("cargo", &["machete"], status)
 }
 
-pub(crate) fn test(root: &Path) -> Result<()> {
-    run_with_env_removed(
-        root,
-        "cargo",
-        [
-            "nextest",
-            "run",
-            "--workspace",
-            "--all-features",
-            "--locked",
-        ],
-        &["NO_COLOR"],
-    )
+pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
+    let mut cargo_args = vec![
+        "nextest".to_owned(),
+        "run".to_owned(),
+        "--workspace".to_owned(),
+        "--all-features".to_owned(),
+        "--locked".to_owned(),
+    ];
+    cargo_args.extend(args.iter().cloned());
+    run_with_env_removed(root, "cargo", cargo_args, &["NO_COLOR"])
 }
 
 // Coverage is the *only* test run in `ci`: `llvm-cov nextest` runs the suite

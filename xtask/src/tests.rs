@@ -36,12 +36,25 @@ fn task_help_does_not_run_the_task() {
 
 #[test]
 fn unexpected_task_args_fail_instead_of_being_ignored() {
-    let err = parse_args(&args(&["test", "--package", "rimz"]))
+    let err = parse_args(&args(&["lint", "--package", "rimz"]))
         .unwrap_err()
         .to_string();
     assert!(
-        err.contains("xtask `test` takes no arguments"),
+        err.contains("xtask `lint` takes no arguments"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_forwards_filter_args() {
+    let argv = args(&["test", "auth"]);
+
+    assert_eq!(
+        parse_args(&argv).unwrap(),
+        Action::Run {
+            task: "test",
+            args: &argv[1..],
+        },
     );
 }
 

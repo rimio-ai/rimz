@@ -78,8 +78,8 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "test",
-        summary: "Run the workspace test suite through nextest.",
-        runs: "cargo nextest run --workspace --all-features --locked",
+        summary: "Run the workspace test suite through nextest; accepts nextest filters.",
+        runs: "cargo nextest run --workspace --all-features --locked [nextest filter]...",
     },
     TaskInfo {
         name: "doctest",
@@ -220,7 +220,7 @@ pub(crate) fn is_help_flag(arg: &str) -> bool {
 }
 
 fn task_accepts_args(task: &str) -> bool {
-    matches!(task, "perf" | "screenshot")
+    matches!(task, "test" | "perf" | "screenshot")
 }
 
 fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
@@ -234,7 +234,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "hooks" => hooks::install(root),
         "fmt" => gates::fmt(root),
         "lint" => gates::lint(root),
-        "test" => gates::test(root),
+        "test" => gates::test(root, args),
         "doctest" => gates::doctest(root),
         "deny" => gates::deny(root),
         "deps" => gates::deps(root),
