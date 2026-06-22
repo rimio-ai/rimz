@@ -503,7 +503,7 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
         .get("tab_id")
         .and_then(|value| value.as_u64())
         .expect("sidebar tab id");
-    let work_id = list_panes_json(xdg.path(), &name)
+    let work_id = expect_list_panes_json(xdg.path(), &name)
         .as_array()
         .expect("pane array")
         .iter()
@@ -1640,15 +1640,31 @@ fn open_new_tab(xdg: &Path, session: &str) {
     );
 }
 
-/// Parsed `list-panes -j -a` for `session`, or an empty array on any failure.
-fn list_panes_json(xdg: &Path, session: &str) -> serde_json::Value {
-    scoped_zellij(xdg)
+/// Parsed `list-panes -j -a` for `session`. Callers that poll keep the last
+/// error so deadline failures report the command failure instead of "no panes".
+fn list_panes_json(xdg: &Path, session: &str) -> std::result::Result<serde_json::Value, String> {
+    let output = scoped_zellij(xdg)
         .args(["--session", session, "action", "list-panes", "-j", "-a"])
         .bounded_output()
-        .ok()
-        .filter(|out| out.status.success())
-        .and_then(|out| serde_json::from_slice(&out.stdout).ok())
-        .unwrap_or_else(|| serde_json::Value::Array(Vec::new()))
+        .map_err(|err| format!("list-panes failed for {session}: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "list-panes failed for {session} with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        ));
+    }
+    serde_json::from_slice(&output.stdout).map_err(|err| {
+        format!(
+            "parsing list-panes JSON for {session}: {err}; stdout: {}; stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        )
+    })
+}
+
+fn expect_list_panes_json(xdg: &Path, session: &str) -> serde_json::Value {
+    list_panes_json(xdg, session).unwrap_or_else(|err| panic!("{err}"))
 }
 
 #[derive(Debug)]
@@ -1660,8 +1676,12 @@ struct PaneGeometry {
     rows: u64,
 }
 
-fn named_work_pane_geometry(xdg: &Path, session: &str, tab_name: &str) -> Vec<PaneGeometry> {
-    let panes = list_panes_json(xdg, session);
+fn named_work_pane_geometry(
+    xdg: &Path,
+    session: &str,
+    tab_name: &str,
+) -> std::result::Result<Vec<PaneGeometry>, String> {
+    let panes = list_panes_json(xdg, session)?;
     let mut work: Vec<PaneGeometry> = panes
         .as_array()
         .map(Vec::as_slice)
@@ -1683,12 +1703,16 @@ fn named_work_pane_geometry(xdg: &Path, session: &str, tab_name: &str) -> Vec<Pa
         })
         .collect();
     work.sort_by_key(|pane| pane.x);
-    work
+    Ok(work)
 }
 
-fn named_sidebar_pane_geometry(xdg: &Path, session: &str, tab_name: &str) -> Option<PaneGeometry> {
-    let panes = list_panes_json(xdg, session);
-    panes
+fn named_sidebar_pane_geometry(
+    xdg: &Path,
+    session: &str,
+    tab_name: &str,
+) -> std::result::Result<Option<PaneGeometry>, String> {
+    let panes = list_panes_json(xdg, session)?;
+    Ok(panes
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or_default()
@@ -1706,16 +1730,16 @@ fn named_sidebar_pane_geometry(xdg: &Path, session: &str, tab_name: &str) -> Opt
                 columns: pane.get("pane_columns")?.as_u64()?,
                 rows: pane.get("pane_rows")?.as_u64()?,
             })
-        })
+        }))
 }
 
 fn named_compact_bar_pane_geometry(
     xdg: &Path,
     session: &str,
     tab_name: &str,
-) -> Option<PaneGeometry> {
-    let panes = list_panes_json(xdg, session);
-    panes
+) -> std::result::Result<Option<PaneGeometry>, String> {
+    let panes = list_panes_json(xdg, session)?;
+    Ok(panes
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or_default()
@@ -1736,15 +1760,24 @@ fn named_compact_bar_pane_geometry(
                 columns: pane.get("pane_columns")?.as_u64()?,
                 rows: pane.get("pane_rows")?.as_u64()?,
             })
-        })
+        }))
 }
 
 fn wait_for_named_sidebar_pane(xdg: &Path, session: &str, tab_name: &str) -> Option<PaneGeometry> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let sidebar = named_sidebar_pane_geometry(xdg, session, tab_name);
-        if sidebar.is_some() || Instant::now() >= deadline {
-            return sidebar;
+        match named_sidebar_pane_geometry(xdg, session, tab_name) {
+            Ok(sidebar) if sidebar.is_some() => return sidebar,
+            Ok(sidebar) if Instant::now() >= deadline => return sidebar,
+            Ok(_) => {}
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    panic!(
+                        "timed out waiting for sidebar pane in {session}/{tab_name}; \
+                         last list-panes error: {err}",
+                    );
+                }
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -1757,9 +1790,18 @@ fn wait_for_named_compact_bar_pane(
 ) -> Option<PaneGeometry> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let bar = named_compact_bar_pane_geometry(xdg, session, tab_name);
-        if bar.is_some() || Instant::now() >= deadline {
-            return bar;
+        match named_compact_bar_pane_geometry(xdg, session, tab_name) {
+            Ok(bar) if bar.is_some() => return bar,
+            Ok(bar) if Instant::now() >= deadline => return bar,
+            Ok(_) => {}
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    panic!(
+                        "timed out waiting for compact bar pane in {session}/{tab_name}; \
+                         last list-panes error: {err}",
+                    );
+                }
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -1776,17 +1818,30 @@ where
     F: FnMut(&[PaneGeometry]) -> bool,
 {
     let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_work = Vec::new();
     loop {
-        let work = named_work_pane_geometry(xdg, session, tab_name);
-        if (work.len() == want && ready(&work)) || Instant::now() >= deadline {
-            return work;
+        match named_work_pane_geometry(xdg, session, tab_name) {
+            Ok(work) => {
+                if (work.len() == want && ready(&work)) || Instant::now() >= deadline {
+                    return work;
+                }
+                last_work = work;
+            }
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    panic!(
+                        "timed out waiting for {want} work panes in {session}/{tab_name}; \
+                         last panes: {last_work:?}; last list-panes error: {err}",
+                    );
+                }
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
 
 fn work_pane_geometry(xdg: &Path, session: &str) -> Vec<PaneGeometry> {
-    let panes = list_panes_json(xdg, session);
+    let panes = expect_list_panes_json(xdg, session);
     let mut work: Vec<PaneGeometry> = panes
         .as_array()
         .map(Vec::as_slice)
@@ -1945,7 +2000,7 @@ fn assert_work_panes_reopen_evenly_after_closing_first(
 }
 
 fn assert_sidebars_not_held(xdg: &Path, session: &str, context: &str) {
-    let panes = list_panes_json(xdg, session);
+    let panes = expect_list_panes_json(xdg, session);
     let sidebars: Vec<&serde_json::Value> = panes
         .as_array()
         .expect("pane array")
@@ -1988,7 +2043,10 @@ fn new_tab_template_dump(xdg: &Path, session: &str) -> String {
 
 /// Distinct tab ids that currently hold a non-plugin pane.
 fn tab_ids(xdg: &Path, session: &str) -> Vec<u64> {
-    let panes = list_panes_json(xdg, session);
+    tab_ids_from_panes(&expect_list_panes_json(xdg, session))
+}
+
+fn tab_ids_from_panes(panes: &serde_json::Value) -> Vec<u64> {
     let mut ids: Vec<u64> = panes
         .as_array()
         .map(|panes| {
@@ -2006,7 +2064,7 @@ fn tab_ids(xdg: &Path, session: &str) -> Vec<u64> {
 
 /// Titles of the non-plugin panes in `tab`.
 fn nonplugin_titles_in_tab(xdg: &Path, session: &str, tab: u64) -> Vec<String> {
-    let panes = list_panes_json(xdg, session);
+    let panes = expect_list_panes_json(xdg, session);
     panes
         .as_array()
         .map(|panes| {
@@ -2022,7 +2080,7 @@ fn nonplugin_titles_in_tab(xdg: &Path, session: &str, tab: u64) -> Vec<String> {
 
 /// Title of the focused non-plugin pane in `tab`, if any.
 fn focused_nonplugin_title_in_tab(xdg: &Path, session: &str, tab: u64) -> Option<String> {
-    let panes = list_panes_json(xdg, session);
+    let panes = expect_list_panes_json(xdg, session);
     panes.as_array()?.iter().find_map(|p| {
         (p.get("is_plugin").and_then(|v| v.as_bool()) == Some(false)
             && p.get("tab_id").and_then(|v| v.as_u64()) == Some(tab)
@@ -2038,17 +2096,27 @@ fn focused_nonplugin_title_in_tab(xdg: &Path, session: &str, tab: u64) -> Option
 
 /// Raw id of the focused non-plugin pane in `tab`, if any.
 fn focused_nonplugin_id_in_tab(xdg: &Path, session: &str, tab: u64) -> Option<u64> {
-    let panes = list_panes_json(xdg, session);
-    panes.as_array()?.iter().find_map(|p| {
-        if p.get("is_plugin").and_then(|v| v.as_bool()) == Some(false)
-            && p.get("tab_id").and_then(|v| v.as_u64()) == Some(tab)
-            && p.get("is_focused").and_then(|v| v.as_bool()) == Some(true)
-        {
-            p.get("id").and_then(|v| v.as_u64())
-        } else {
-            None
-        }
-    })
+    focused_nonplugin_id_in_tab_result(xdg, session, tab).unwrap_or_else(|err| panic!("{err}"))
+}
+
+fn focused_nonplugin_id_in_tab_result(
+    xdg: &Path,
+    session: &str,
+    tab: u64,
+) -> std::result::Result<Option<u64>, String> {
+    let panes = list_panes_json(xdg, session)?;
+    Ok(panes.as_array().and_then(|panes| {
+        panes.iter().find_map(|p| {
+            if p.get("is_plugin").and_then(|v| v.as_bool()) == Some(false)
+                && p.get("tab_id").and_then(|v| v.as_u64()) == Some(tab)
+                && p.get("is_focused").and_then(|v| v.as_bool()) == Some(true)
+            {
+                p.get("id").and_then(|v| v.as_u64())
+            } else {
+                None
+            }
+        })
+    }))
 }
 
 fn wait_for_focused_nonplugin_id_in_tab(
@@ -2059,9 +2127,20 @@ fn wait_for_focused_nonplugin_id_in_tab(
 ) -> Option<u64> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let focused = focused_nonplugin_id_in_tab(xdg, session, tab);
-        if focused == Some(want) || Instant::now() >= deadline {
-            return focused;
+        match focused_nonplugin_id_in_tab_result(xdg, session, tab) {
+            Ok(focused) => {
+                if focused == Some(want) || Instant::now() >= deadline {
+                    return focused;
+                }
+            }
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    panic!(
+                        "timed out waiting for focused pane {want} in {session}/tab {tab}; \
+                         last list-panes error: {err}",
+                    );
+                }
+            }
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -2090,39 +2169,80 @@ fn wait_for_focused_client_pane(
 /// Poll until at least `want` distinct tabs hold a non-plugin pane, or time out.
 fn wait_for_tab_count(xdg: &Path, session: &str, want: usize) -> Vec<u64> {
     let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_ids = Vec::new();
     loop {
-        let ids = tab_ids(xdg, session);
-        if ids.len() >= want || Instant::now() >= deadline {
-            return ids;
+        match list_panes_json(xdg, session) {
+            Ok(panes) => {
+                let ids = tab_ids_from_panes(&panes);
+                if ids.len() >= want || Instant::now() >= deadline {
+                    return ids;
+                }
+                last_ids = ids;
+            }
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    panic!(
+                        "timed out waiting for {want} tabs in {session}; last ids: {last_ids:?}; \
+                         last list-panes error: {err}",
+                    );
+                }
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
 
 /// Name of the first tab that appears after `before`, from the live pane list.
-fn wait_for_new_tab_name(xdg: &Path, session: &str, before: &[u64]) -> Option<String> {
+fn wait_for_new_tab_name(xdg: &Path, session: &str, before: &[u64]) -> String {
     let before: BTreeSet<u64> = before.iter().copied().collect();
     let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_new_tabs = BTreeSet::new();
+    let mut last_unnamed_nonplugin_tabs = BTreeSet::new();
     loop {
-        let panes = list_panes_json(xdg, session);
-        let name = panes.as_array().and_then(|panes| {
-            panes
-                .iter()
-                .filter(|pane| {
-                    pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
-                })
-                .find_map(|pane| {
-                    let tab_id = pane.get("tab_id")?.as_u64()?;
-                    if before.contains(&tab_id) {
-                        return None;
+        match list_panes_json(xdg, session) {
+            Ok(panes) => {
+                last_new_tabs.clear();
+                last_unnamed_nonplugin_tabs.clear();
+                if let Some(panes) = panes.as_array() {
+                    for pane in panes {
+                        let Some(tab_id) = pane.get("tab_id").and_then(|value| value.as_u64())
+                        else {
+                            continue;
+                        };
+                        if before.contains(&tab_id) {
+                            continue;
+                        }
+                        last_new_tabs.insert(tab_id);
+                        if pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false) {
+                            if let Some(name) =
+                                pane.get("tab_name").and_then(|value| value.as_str())
+                            {
+                                return name.to_owned();
+                            }
+                            last_unnamed_nonplugin_tabs.insert(tab_id);
+                        }
                     }
-                    pane.get("tab_name")
-                        .and_then(|value| value.as_str())
-                        .map(str::to_owned)
-                })
-        });
-        if name.is_some() || Instant::now() >= deadline {
-            return name;
+                }
+                if Instant::now() >= deadline {
+                    if !last_unnamed_nonplugin_tabs.is_empty() {
+                        panic!(
+                            "new tab(s) {last_unnamed_nonplugin_tabs:?} carried unnamed \
+                             non-plugin panes after 10s"
+                        );
+                    }
+                    if !last_new_tabs.is_empty() {
+                        panic!("new tab(s) {last_new_tabs:?} carried only plugin panes after 10s");
+                    }
+                    panic!("no new tab appeared after 10s; before tabs were {before:?}");
+                }
+            }
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    panic!(
+                        "timed out waiting for new tab in {session}; last list-panes error: {err}",
+                    );
+                }
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -2132,16 +2252,27 @@ fn wait_for_new_tab_name(xdg: &Path, session: &str, before: &[u64]) -> Option<St
 /// last observation either way so the caller can assert and print it.
 fn wait_for_pane_count(xdg: &Path, session: &str, want: usize) -> Vec<PaneRef> {
     let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_panes = Vec::new();
     loop {
-        let panes = ZellijBackend::with_runtime_dir(xdg)
-            .list_panes(PaneListOptions {
-                session_name: Some(session.to_owned()),
-                ..Default::default()
-            })
-            .unwrap_or_default()
-            .panes;
-        if panes.len() >= want || Instant::now() >= deadline {
-            return panes;
+        match ZellijBackend::with_runtime_dir(xdg).list_panes(PaneListOptions {
+            session_name: Some(session.to_owned()),
+            ..Default::default()
+        }) {
+            Ok(listing) => {
+                let panes = listing.panes;
+                if panes.len() >= want || Instant::now() >= deadline {
+                    return panes;
+                }
+                last_panes = panes;
+            }
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    panic!(
+                        "timed out waiting for {want} panes in {session}; last panes: \
+                         {last_panes:?}; last list-panes error: {err}",
+                    );
+                }
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -2474,8 +2605,7 @@ fn native_new_tab_reopens_work_panes_evenly_after_closing_to_one() {
 
     let before_tabs = tab_ids(xdg.path(), &name);
     open_new_tab(xdg.path(), &name);
-    let tab_name = wait_for_new_tab_name(xdg.path(), &name, &before_tabs)
-        .expect("native new-tab should report a tab name");
+    let tab_name = wait_for_new_tab_name(xdg.path(), &name, &before_tabs);
     wait_for_named_sidebar_pane(xdg.path(), &name, &tab_name)
         .expect("native tab should carry a sidebar");
 

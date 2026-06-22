@@ -1,11 +1,11 @@
 //! Zellij sidebar birth, in-place recovery, and geometry convergence.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::num::NonZeroU16;
 use std::time::{Duration, Instant};
 
 use super::layout::{TempLayoutFile, render_session_layout};
-use super::parse::{new_tab_template_sidebar_cols, parse_focused_client_panes, strip_ansi};
+use super::parse::{new_tab_template_sidebar_cols, parse_focused_terminal_client_ids, strip_ansi};
 use super::raw_pane::{
     SidebarDock, is_sidebar_pane, mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id,
     sidebar_dock_verdict, sidebar_width_off_spec, stackable_nested_work_pane_ids, tab_extent_cols,
@@ -22,6 +22,10 @@ use crate::mux::{DaemonView, MuxBackend, MuxErr, Result, SidebarPaneOptions, Sid
 const ADD_DOCK_ATTEMPTS: u32 = 2;
 const DOCK_VERIFY_SETTLE: Duration = Duration::from_millis(100);
 const CLIENT_PROBE_SETTLE: Duration = Duration::from_millis(100);
+// Confirmation must outlast Zellij's background-create bootstrap-client linger.
+// A false negative only defers one recoverable add pass; a false positive can
+// leak an unmounted sidebar serve pair.
+const CLIENT_CONFIRM_WINDOW: Duration = Duration::from_millis(750);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DockOutcome {
@@ -459,26 +463,33 @@ impl ZellijBackend {
         }
     }
 
-    /// Whether `session` has a stable attached terminal client. `list-clients`
-    /// can briefly include action/create-background clients, and plugin-focused
-    /// rows do not prove a terminal screen can mount an in-place pane. Require
-    /// a focused terminal pane across two probes; an unanswerable or ambiguous
-    /// probe reads detached because deferring one run is recoverable, a leaked
-    /// serve pair is not.
+    /// Whether `session` has a persistent attached terminal client. A real
+    /// attach holds one client id across the confirmation window. Zellij's
+    /// transient bootstrap/action clients churn or drain within it, so an
+    /// unstable or empty roster reads detached and the add defers.
     pub(super) fn session_has_attached_client(&self, session: &str) -> bool {
-        if !self.session_has_focused_terminal_client(session) {
+        let mut probes = vec![self.focused_terminal_client_ids(session)];
+        if !stable_client_present(&probes) {
             return false;
         }
-        std::thread::sleep(CLIENT_PROBE_SETTLE);
-        self.session_has_focused_terminal_client(session)
+        let deadline = Instant::now() + CLIENT_CONFIRM_WINDOW;
+        while Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            std::thread::sleep(remaining.min(CLIENT_PROBE_SETTLE));
+            probes.push(self.focused_terminal_client_ids(session));
+            if !stable_client_present(&probes) {
+                return false;
+            }
+        }
+        stable_client_present(&probes)
     }
 
-    fn session_has_focused_terminal_client(&self, session: &str) -> bool {
+    fn focused_terminal_client_ids(&self, session: &str) -> BTreeSet<u32> {
         self.zellij_action(session)
             .arg("list-clients")
             .run()
-            .map(|output| !parse_focused_client_panes(&output.stdout).is_empty())
-            .unwrap_or(false)
+            .map(|output| parse_focused_terminal_client_ids(&output.stdout))
+            .unwrap_or_default()
     }
 
     /// `new-pane` to the right of the tab's focus, titled and `close_on_exit` to
@@ -680,5 +691,58 @@ impl ZellijBackend {
         let output = self.zellij_action(session).arg("dump-layout").run()?;
         let layout = String::from_utf8_lossy(&output.stdout);
         Ok(new_tab_template_sidebar_cols(&layout))
+    }
+}
+
+fn stable_client_present(probes: &[BTreeSet<u32>]) -> bool {
+    let Some((first, rest)) = probes.split_first() else {
+        return false;
+    };
+    if first.is_empty() {
+        return false;
+    }
+    let common = rest.iter().fold(first.clone(), |common, ids| {
+        common.intersection(ids).copied().collect()
+    });
+    !common.is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::stable_client_present;
+
+    #[test]
+    fn stable_client_present_requires_one_id_across_every_probe() {
+        assert!(!stable_client_present(&[]), "no probes is detached");
+        assert!(
+            !stable_client_present(&[BTreeSet::new()]),
+            "empty first probe is detached"
+        );
+        assert!(
+            stable_client_present(&[BTreeSet::from([7])]),
+            "one non-empty probe seeds a candidate"
+        );
+        assert!(
+            stable_client_present(&[
+                BTreeSet::from([1, 7]),
+                BTreeSet::from([7, 8]),
+                BTreeSet::from([7]),
+            ]),
+            "shared client id survives churn"
+        );
+        assert!(
+            !stable_client_present(&[
+                BTreeSet::from([1]),
+                BTreeSet::from([2]),
+                BTreeSet::from([3]),
+            ]),
+            "churn without a stable id is detached"
+        );
+        assert!(
+            !stable_client_present(&[BTreeSet::from([1]), BTreeSet::new()]),
+            "drained roster is detached"
+        );
     }
 }

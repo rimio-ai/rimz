@@ -502,6 +502,15 @@ impl LoopState {
                 self.next_frame = dirty_deadline;
             }
         }
+        if !self.paint_hold.is_engaged()
+            && let Ok(size) = terminal.size()
+        {
+            // Close the engage-gap: a data/animation frame can reach this paint
+            // after the mux grew our pane but before the Resize wakeup arms the
+            // hold. Arm here too; on_resize still owns prev_width and the fresh
+            // pane fetch that resolves the sibling-count verdict.
+            self.arm_paint_hold_on_grow(size.width, now);
+        }
         let hold_was_engaged = self.paint_hold.is_engaged();
         let paint_blocked = self.paint_hold.blocks_paint(now);
         if hold_was_engaged && !paint_blocked {
@@ -550,6 +559,15 @@ impl LoopState {
             self.next_frame = now + animation_frame(&self.current);
         }
         Ok(())
+    }
+
+    fn arm_paint_hold_on_grow(&mut self, width: u16, now: Instant) -> bool {
+        if !self.paint_hold.is_engaged() && resize_grew(self.prev_width, width) {
+            self.paint_hold
+                .engage(now, crate::sidebar::cache::unix_now_ms());
+            return true;
+        }
+        false
     }
 
     fn fold_outcome(
@@ -822,6 +840,39 @@ mod tests {
         assert!(
             state.paint_hold.is_engaged(),
             "an old pane stamp is not proof the resize verdict landed"
+        );
+    }
+
+    #[test]
+    fn paint_path_arms_resize_hold_on_grow_without_advancing_prev_width() {
+        let ws = workspace();
+        let (_dir, mut state) = loop_state(&ws);
+        state.prev_width = Some(60);
+
+        assert!(state.arm_paint_hold_on_grow(120, Instant::now()));
+        assert!(state.paint_hold.is_engaged(), "grow arms the paint hold");
+        assert_eq!(
+            state.prev_width,
+            Some(60),
+            "resize wakeup still owns prev_width advancement"
+        );
+    }
+
+    #[test]
+    fn paint_path_does_not_arm_resize_hold_without_grow() {
+        let ws = workspace();
+        let (_dir, mut state) = loop_state(&ws);
+        state.prev_width = Some(120);
+
+        assert!(!state.arm_paint_hold_on_grow(120, Instant::now()));
+        assert!(
+            !state.paint_hold.is_engaged(),
+            "same-width paint does not arm the hold"
+        );
+        assert!(!state.arm_paint_hold_on_grow(60, Instant::now()));
+        assert!(
+            !state.paint_hold.is_engaged(),
+            "shrink paint does not arm the hold"
         );
     }
 

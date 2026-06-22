@@ -1,5 +1,6 @@
 //! Zellij command-output and layout parsing helpers.
 
+use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 
 use super::SIDEBAR_PANE_NAME;
@@ -340,6 +341,30 @@ pub(super) fn parse_focused_client_panes(stdout: &[u8]) -> Vec<PaneId> {
     panes
 }
 
+pub(super) fn parse_focused_terminal_client_ids(stdout: &[u8]) -> BTreeSet<u32> {
+    let mut clients = BTreeSet::new();
+    for line in String::from_utf8_lossy(stdout).lines() {
+        let clean = strip_ansi(line);
+        let mut cols = clean.split_whitespace();
+        let Some(first) = cols.next() else {
+            continue;
+        };
+        let Some(raw_pane) = cols.next() else {
+            continue;
+        };
+        if first == "CLIENT_ID" || raw_pane == "ZELLIJ_PANE_ID" {
+            continue;
+        }
+        if !raw_pane.starts_with("terminal_") {
+            continue;
+        }
+        if let Ok(client) = first.parse::<u32>() {
+            clients.insert(client);
+        }
+    }
+    clients
+}
+
 pub(super) fn trim_capture(raw_text: String, max_lines: Option<u16>) -> (String, Vec<String>) {
     let mut lines: Vec<String> = raw_text.lines().map(str::to_owned).collect();
     if let Some(max_lines) = max_lines {
@@ -384,6 +409,26 @@ mod tests {
 
         assert!(
             parse_focused_client_panes(b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID\n").is_empty()
+        );
+    }
+
+    #[test]
+    fn parse_focused_terminal_client_ids_reads_terminals_and_skips_noise() {
+        let output = b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\
+                       1         terminal_30    codex\n\
+                       2         terminal_30    codex\n\
+                       3         terminal_4     claude\n\
+                       4         plugin_2       rimz-presence-zellij\n\
+                       5         -              unknown\n\
+                       action    terminal_9     unknown\n";
+        assert_eq!(
+            parse_focused_terminal_client_ids(output),
+            BTreeSet::from([1, 2, 3])
+        );
+
+        assert!(
+            parse_focused_terminal_client_ids(b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID\n")
+                .is_empty()
         );
     }
 
