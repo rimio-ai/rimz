@@ -107,6 +107,8 @@ The sidebar runs as a managed pane: `open_sidebar` splits a left sidebar into th
 
 `ensure_session` applies the per-machine `[tmux]` room options in one batched client call. Session and window options stay scoped to the Rimz session; server-scoped options (clipboard, rich-key handling, focus events) are runtime-global because tmux has no per-session equivalent, and the batch appends `*:extkeys` to `terminal-features` so modified keys reach agents as CSI-u. The per-option semantics and Rimz's values are in the [reference → options](../../externals/mux-adapter/tmux-reference.md#options); the config model is in [configuration.md](../../reference/configuration.md#multiplexer-room-options).
 
+When Rimz owns `pane-border-status`, it also writes a `pane-border-format` that floods the `rimz-sidebar` pane's border row with spaces, so work panes carry titled frames while the sidebar reads frameless, the tmux analog of Zellij's borderless sidebar. tmux borders are inter-pane separators plus an optional top or bottom status row; tmux does not draw the outer window edge, so a closed four-edge pane frame remains Zellij-only.
+
 The pane is best-effort: a fresh sidebar heartbeat suppresses producer relaunch, while a missing, stale, unreadable, or protocol-mismatched heartbeat lets `rimz start` / `attach` open a new pane. tmux has no resurrection, so `ensure_clean_session` is a no-op and there is no docked-rail upgrade — the managed pane is tmux's only renderer. For supervised agent panes the producer derives the wrapper spawn command from `/proc`, paralleling its `pane_process_start` derivation, so lazy-registering agents bind and panes group by worktree as on Zellij.
 
 ### tmux presence fast path

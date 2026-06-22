@@ -118,6 +118,19 @@ pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, St
     ]
 }
 
+/// `pane-border-format` Rimz writes when it owns `pane-border-status`: titled
+/// frames on work panes, and a blank border line on the `rimz-sidebar` pane so
+/// it reads frameless. `#{p999: }` floods the sidebar's border row with spaces
+/// (truncated to pane width), overwriting the glyphs tmux would otherwise draw.
+fn sidebar_blanking_border_format() -> String {
+    [
+        "#{?#{==:#{pane_title},",
+        SIDEBAR_PANE_TITLE,
+        "},#{p999: }, #{pane_index} #{pane_current_command} }",
+    ]
+    .concat()
+}
+
 pub(super) fn tmux_window_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
     let mut opts = vec![
         ("allow-passthrough", tmux_bool(config.allow_passthrough)),
@@ -125,6 +138,9 @@ pub(super) fn tmux_window_options(config: &TmuxConfig) -> Vec<(&'static str, Str
     ];
     if let Some(status) = config.pane_border_status {
         opts.push(("pane-border-status", status.as_str().to_owned()));
+        if status != crate::config::TmuxPaneBorderStatus::Off {
+            opts.push(("pane-border-format", sidebar_blanking_border_format()));
+        }
     }
     if let Some(lines) = config.pane_border_lines {
         opts.push(("pane-border-lines", lines.as_str().to_owned()));
@@ -302,7 +318,21 @@ mod tests {
                 ("allow-passthrough", "on".to_owned()),
                 ("aggressive-resize", "on".to_owned()),
                 ("pane-border-status", "top".to_owned()),
+                ("pane-border-format", sidebar_blanking_border_format()),
                 ("pane-border-lines", "heavy".to_owned()),
+            ],
+        );
+
+        let config = TmuxConfig {
+            pane_border_status: Some(crate::config::TmuxPaneBorderStatus::Off),
+            ..TmuxConfig::default()
+        };
+        assert_eq!(
+            tmux_window_options(&config),
+            vec![
+                ("allow-passthrough", "on".to_owned()),
+                ("aggressive-resize", "on".to_owned()),
+                ("pane-border-status", "off".to_owned()),
             ],
         );
 
