@@ -79,9 +79,10 @@ enum Target {
 }
 
 /// The shared accessor surface over the two resolution sources: rollup sessions
-/// (`&AgentState`, used by the management and queue commands) and the live agent
-/// panes the producer bound (`&PaneAgent`, used by `steer`). One matcher set
-/// serves both; each command chooses the source it resolves over.
+/// (`&AgentState`, used by management and parked queue records) and the live
+/// agent panes the producer bound (`&PaneAgent`, used by `steer` and send-now
+/// `queue`). One matcher set serves both; each command chooses the source it
+/// resolves over.
 trait Candidate<'a>: Copy {
     fn kind(self) -> &'a str;
     fn kind_ordinal(self) -> Option<u32>;
@@ -144,7 +145,7 @@ impl<'a> Candidate<'a> for &'a AgentState {
         self.team.as_deref()
     }
     fn session_id(self) -> Option<&'a str> {
-        Some(self.agent_id.as_str())
+        (!self.agent_id.is_provisional()).then(|| self.agent_id.as_str())
     }
     fn worktree_branch(self) -> Option<&'a str> {
         self.worktree_branch.as_deref()
@@ -212,8 +213,8 @@ pub fn resolve_one<'a>(
 }
 
 /// Resolve a target to every matching rollup agent (fan-out). Empty is an error.
-/// Used by `queue add` and management fan-out reads; `steer` uses
-/// [`resolve_targets`].
+/// Used by management fan-out reads and the durable-identity side of `queue`;
+/// `steer` and send-now `queue` use [`resolve_targets`].
 pub fn resolve_many<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
@@ -239,8 +240,7 @@ pub fn resolve_targets<'a>(
 }
 
 /// Whether `raw` matches at least one lazy (sessionless) agent pane in its
-/// channel — the signal `queue` reads to point an unbound match at `steer`
-/// rather than report a generic miss.
+/// channel.
 pub fn unbound_pane_in_channel(
     snapshot: &SidebarSnapshot,
     raw: &str,

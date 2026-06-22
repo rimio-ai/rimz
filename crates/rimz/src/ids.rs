@@ -431,6 +431,12 @@ impl AgentSessionId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// A launch-time placeholder card, before a lazy agent publishes its real
+    /// session id.
+    pub fn is_provisional(&self) -> bool {
+        self.0.starts_with("launch_")
+    }
 }
 
 impl From<String> for AgentSessionId {

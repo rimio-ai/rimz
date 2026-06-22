@@ -16,7 +16,7 @@ Three words name the parts:
 - A **member** is an agent, named by a **handle**: `@claude` the kind, `@planner` the profile, `@swift-otter` the one running instance.
 - An **address** joins them — `@handle#channel` — and is how every command names who it is reaching.
 
-You reach a member in two tenses. **Steer** talks to a live pane now; **queue** leaves a task that delivers at the member's next open turn. Both name their target with the same address and ride the same pane-send primitive.
+You reach a member in two tenses. **Steer** talks to a live pane now; **queue** talks now when the member can receive, and parks a task only when the member needs a later turn boundary. Both name their target with the same address and ride the same pane-send primitive.
 
 ```text
 one room, grouped into channels — one per worktree
@@ -27,7 +27,7 @@ one room, grouped into channels — one per worktree
 
 reach a member by @handle#channel, then:
   steer @claude  →  talk to it now
-  queue @codex   →  leave a task for its next open turn
+  queue @codex   →  talk now if free, otherwise leave a task
 ```
 
 ## Read the room
@@ -80,11 +80,11 @@ An address resolves to zero, one, or many agents against a fresh snapshot, and a
 
 ## Talk and queue
 
-`steer` and `queue` both deliver text to a member, ride the same pane-send primitive humans and resolvers share, resolve the [address](#the-address) above against a fresh snapshot, and take their state decisions from the ledger and the hook lifecycle. They mirror each other on flags ([cli/agents.md](../../reference/cli/agents.md#steer-live-agents) is the surface) and diverge on one thing: timing. `queue` adds `--on`, the gate that picks the boundary to deliver at.
+`steer` and `queue` both deliver text to a member, ride the same pane-send primitive humans and resolvers share, resolve the [address](#the-address) above against a fresh snapshot, and take their state decisions from the ledger and the hook lifecycle. They mirror each other on flags ([cli/agents.md](../../reference/cli/agents.md#steer-live-agents) is the surface) and diverge on one thing: timing. `queue` sends through the steer path when the target can receive now; otherwise it parks a durable record, and `--on` picks the later boundary that opens that record.
 
 ### Targets
 
-The two commands address different layers because they deliver at different times. `steer` reaches **live panes**: a bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet — a lazy-registering agent (Codex) before its first turn ([agent.md → The instance lifecycle](./agent.md#the-instance-lifecycle)) — because the thing a paste needs is the *pane*, which the producer already detects. `queue` keys a durable record on a *session id*, so it addresses **bound sessions** only; an address that matches just an unbound pane has no key, so `queue` points it at `steer` to start the session first. A petname, kind ordinal, or session-id prefix names a bound session under either command. (Floating Zellij panes participate in `steer` live-pane addressing.)
+The two commands read both live panes and durable agent cards. `steer` reaches **live panes**: a bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet — a lazy-registering agent (Codex) before its first turn ([agent.md → The instance lifecycle](./agent.md#the-instance-lifecycle)) — because the thing a paste needs is the *pane*, which the producer already detects. `queue` uses that live pane when the target can receive now, including lazy panes with no session yet; when it must park work, it keys the durable record on the bound session or launch placeholder card so FIFO survives registration. A petname, kind ordinal, or real session-id prefix names a bound session under either command; launch placeholder ids stay internal. (Floating Zellij panes participate in live-pane addressing.)
 
 The `@` sigil is required — a bare selector fails with a `did you mean @…?` hint, so a stray word never broadcasts; a pane id is the one sigil-free exception.
 
@@ -100,28 +100,28 @@ Both commands wrap the text in bracketed-paste markers (`ESC[200~` … `ESC[201~
 
 `--smart-compact <PCT|TOKENS>` lands a message against a fresh window: when the agent's context fill has reached the threshold, Rimz submits the agent's `/compact` first, then the message, so the prompt runs after compaction instead of racing the agent's own auto-compaction mid-turn. The threshold is a percentage of the window or an occupied-token count, compared against the live fill (the folded statusline reading where present, else the per-call token split, else the carried gauge); an omitted flag falls back to the [`[harness] smart_compact`](../../reference/configuration.md#smart-compaction) default, and an unknown fill is not a full window, so it sends untouched.
 
-The compaction is the agent's own slash command, owned by the adapter (`AgentAdapter::compact_command`). It rides the raw type path, **not** the bracketed paste — a composer treats pasted text as literal content, so a pasted `/compact` would land as a prompt rather than run. `steer` reads the fill now, just before the immediate paste; `queue` resolves the threshold at enqueue and re-reads fill at the delivery boundary, typing `/compact` ahead of the message in the same delivery so a failed compaction fails the delivery through the same retry path as a failed send.
+The compaction is the agent's own slash command, owned by the adapter (`AgentAdapter::compact_command`). It rides the raw type path, **not** the bracketed paste — a composer treats pasted text as literal content, so a pasted `/compact` would land as a prompt rather than run. `steer` and send-now `queue` read the fill just before the immediate paste; parked queue records store the threshold and re-read fill at the delivery boundary, typing `/compact` ahead of the message in the same delivery so a failed compaction fails the delivery through the same retry path as a failed send.
 
 ### Queue: leave a task for later
 
-A queued message waits for the member to be free and delivers itself at the next open turn. Records live under the workspace state root:
+A queue command sends immediately like `steer` when the target has a live pane, the gate is open, no pending ask reserves input unless `--force`, and no older pending message owns that card's FIFO head. That send leaves no durable queue record and emits `agent.steered`, not `message.*` events. A target that is busy, gated, blocked by a pending ask, missing a live pane, or behind FIFO gets a parked message under the workspace state root:
 
 ```text
 queue/<msg_id>.json            pending
 queue/terminal/<msg_id>.json   claimed and final
 ```
 
-`msg_` ids are UUIDv7, so filename order is FIFO order; pending scans read only `queue/*.json`, and the directory is created lazily so an empty workspace costs the hook path one missing-dir stat. Each record stores the workspace, kind, session id, sender, text, Enter flag, gate, force flag, status (`pending` → `claimed` → `delivered`, or `removed` / `abandoned`), timestamps, and attempt bookkeeping. The full record is the field catalog; the lifecycle below is the contract.
+`msg_` ids are UUIDv7, so filename order is FIFO order; pending scans read only `queue/*.json`, and the directory is created lazily so an empty workspace costs the hook path one missing-dir stat. Each parked record stores the workspace, kind, session id or launch placeholder id, sender, text, Enter flag, gate, force flag, status (`pending` → `claimed` → `delivered`, or `removed` / `abandoned`), timestamps, and attempt bookkeeping. The full record is the field catalog; the lifecycle below is the contract.
 
 ### Gates
 
-`--on` picks the boundary to open at: `done` opens when the rollup status is `idle` or `success`, `any` also opens on `failed`, and `running` / `waiting` / `paused` keep delivery closed. A pending ask attached to the agent keeps delivery closed for every gate — the next input belongs to that ask — unless the message was queued with `--force`, mirroring `steer --force`. The queue requires installed and trusted hooks for the target, because hooks are the delivery signal: accepting an entry for an unwired agent would create durable work no transition could release.
+`--on` picks the boundary to open for parked records: `done` opens when the rollup status is `idle` or `success`, `any` also opens on `failed`, and `running` / `waiting` / `paused` keep delivery closed. A pending ask attached to the agent keeps delivery closed for every gate — the next input belongs to that ask — unless the message was queued with `--force`, mirroring `steer --force`. Installed and trusted hooks are required only for the park path, because hooks are the delivery signal: accepting a parked entry for an unwired agent would create durable work no transition could release.
 
 ### Delivery
 
-Only **unparked root turn ends** trigger delivery — `Registered`, subagent stops, compaction events, and parked background turn ends do not check the queue. The lifecycle hook records the event, then spawns a detached `rimz queue deliver` helper with nulled stdio for the FIFO head. The helper waits a short settle delay (`RIMZ_QUEUE_SETTLE_MS` overrides it for tests), reads the pending head, checks a fresh snapshot for the gate, the pending-ask predicate (skipped under `--force`), and the bound pane, computes the sender prefix against the target's current channel, then claims the head under the workspace lock immediately before sending.
+Only **unparked root turn ends** trigger parked delivery — `Registered`, subagent stops, compaction events, and parked background turn ends do not check the queue. The lifecycle hook records the event, then spawns a detached `rimz queue deliver` helper with nulled stdio for the FIFO head. The helper waits a short settle delay (`RIMZ_QUEUE_SETTLE_MS` overrides it for tests), reads the pending head, checks a fresh snapshot for the gate, the pending-ask predicate (skipped under `--force`), and the target's live pane, then claims the head under the workspace lock immediately before sending through the same steer path.
 
-The claim moves the record out of the pending scan and increments the attempt count. A successful send moves it to `delivered`; a send failure records `last_error` and returns it to `pending`, throttled by the claim timestamp, and after the retry cap the record becomes `abandoned`. A state miss simply leaves the message pending for a later transition. A crash after claim leaves a visible `claimed` record that `queue list` surfaces; it is not auto-redelivered. Delivery is FIFO per agent, one message per unparked root turn end. Queue writes append `message.queued` / `delivered` / `removed` / `abandoned` audit events (metadata only, never text), and `rimz gc` abandons open messages whose `(kind, agent_id)` no longer appears in the rollup.
+The claim moves the record out of the pending scan and increments the attempt count. A successful send moves it to `delivered`; a send failure records `last_error` and returns it to `pending`, throttled by the claim timestamp, and after the retry cap the record becomes `abandoned`. A state miss simply leaves the message pending for a later transition. A crash after claim leaves a visible `claimed` record that `queue list` surfaces; it is not auto-redelivered. Delivery is FIFO per agent, one message per unparked root turn end. Parked queue writes append `message.queued` / `delivered` / `removed` / `abandoned` audit events (metadata only, never text), and `rimz gc` abandons open messages whose `(kind, agent_id)` no longer appears in the rollup.
 
 ### Hazards
 

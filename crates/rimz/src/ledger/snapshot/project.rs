@@ -615,7 +615,7 @@ fn usable_name(name: &str) -> bool {
 }
 
 fn is_provisional_agent_id(agent_id: &AgentSessionId) -> bool {
-    agent_id.as_str().starts_with("launch_")
+    agent_id.is_provisional()
 }
 
 struct AgentStateInput<'a> {

@@ -316,7 +316,8 @@ pub(crate) fn resolve_agent_one<'a>(
     )
 }
 
-/// Resolve a ref to every matching rollup agent for a broadcast (`queue add`).
+/// Resolve a ref to every matching rollup agent for a broadcast or the durable
+/// identity side of `queue add`.
 pub(crate) fn resolve_agent_many<'a>(
     snapshot: &'a rimz::SidebarSnapshot,
     raw: &str,
@@ -329,9 +330,10 @@ pub(crate) fn resolve_agent_many<'a>(
     )
 }
 
-/// Resolve a ref to every matching live agent pane for `steer`: the producer's
-/// bound panes, so a target reaches exactly the agent panes the producer saw —
-/// bound sessions (at their live pane) and lazy panes with no session yet.
+/// Resolve a ref to every matching live agent pane for `steer` and send-now
+/// `queue`: the producer's bound panes, so a target reaches exactly the agent
+/// panes the producer saw — bound sessions (at their live pane) and lazy panes
+/// with no session yet.
 pub(crate) fn resolve_pane_targets<'a>(
     snapshot: &'a rimz::SidebarSnapshot,
     raw: &str,

@@ -139,10 +139,10 @@ A bare `@<kind>`, `@<profile>`, or `@all` also reaches an agent you just started
 
 ## Queue the next message
 
-`rimz queue` stores text and delivers it after each addressed agent reaches a safe turn boundary. It mirrors `steer` — same address grammar, same `--worktree`, `--no-enter`, `--force`, `--all`, `--create`, `--yes`, `--smart-compact`, `--file`, and `--no-from` — and adds `--on`, the delivery gate that is the whole difference between sending now and sending at a boundary.
+`rimz queue` sends text now when the addressed agent can receive it, and stores text only when the agent needs a later safe turn boundary. It mirrors `steer` — same address grammar, same `--worktree`, `--no-enter`, `--force`, `--all`, `--create`, `--yes`, `--smart-compact`, `--file`, and `--no-from` — and adds `--on`, the delivery gate for parked messages.
 
 ```sh
-rimz queue @swift-otter -- "After this turn, add focused tests for the parser."
+rimz queue @swift-otter -- "Add focused tests for the parser."
 rimz queue add @codex#cli-docs --on any -- "If the run failed, capture the error first."
 rimz queue @all --yes -- "When you reach a boundary, summarize what changed."
 rimz queue list --json
@@ -150,9 +150,9 @@ rimz queue remove msg_01J…
 rimz queue clear @claude-2#cli-docs
 ```
 
-The bare form and `queue add` do the same work. `--on done` (the default) delivers once the agent is `idle` or `success`; `--on any` also delivers after `failed`; `running`, `waiting`, and `paused` keep the message pending. Delivery is FIFO per agent, one message per unparked turn end; a failed send returns to pending and is abandoned after the retry cap. A queued message is durable and keyed on a session, so `queue` addresses bound agents — a freshly started pane with no session yet is refused with a pointer to `steer`, which reaches the pane directly.
+The bare form and `queue add` do the same work. A target with a live pane, an open gate, no pending ask unless `--force`, and an empty FIFO head receives the text immediately through the steer path; that leaves no `queue list` record and emits `agent.steered`. Otherwise `--on done` (the default) opens a parked record once the agent is `idle` or `success`; `--on any` also opens after `failed`; `running`, `waiting`, and `paused` keep the message pending. Parked delivery is FIFO per agent, one message per unparked turn end; a failed send returns to pending and is abandoned after the retry cap. A freshly started lazy pane with no session yet can receive a send-now queue message, while parked records key on a bound session or launch placeholder card.
 
-Queued delivery needs installed and trusted hooks, because turn-end hooks trigger the delivery helper. The record layout, gates, and delivery walk are in [harness.md → Talk and queue](../../internals/agents/harness.md#talk-and-queue).
+Parked delivery needs installed and trusted hooks, because turn-end hooks trigger the delivery helper. The record layout, gates, and delivery walk are in [harness.md → Talk and queue](../../internals/agents/harness.md#talk-and-queue).
 
 ## Inspect transcripts
 

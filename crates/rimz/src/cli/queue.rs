@@ -1,4 +1,4 @@
-//! `rimz queue` — durable per-agent text delivery.
+//! `rimz queue` — send-now or parked per-agent text delivery.
 
 use std::time::Duration;
 
@@ -10,12 +10,13 @@ use super::{GlobalFlags, current_channel, open_ledger};
 use crate::cli::render;
 use rimz::agents::AgentState;
 use rimz::feed::pending_ask_for;
-use rimz::ids::{MessageId, PaneId};
+use rimz::ids::MessageId;
 use rimz::message::{
     AutoCompact, DeliveryGate, MessageRecord, MessageStatus, gate_open, queue_head,
     settle_duration_from_env,
 };
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
+use rimz::{PaneAgent, SidebarSnapshot};
 
 #[derive(Debug, Args)]
 pub struct QueueArgs {
@@ -148,6 +149,129 @@ struct MessageSpec {
     no_from: bool,
 }
 
+/// One logical queue target. `pane` is present when the agent can be reached
+/// through the live pane fold now; `agent` is the durable rollup identity used
+/// for FIFO and parked records. Lazy panes may have a pane and no identity.
+#[derive(Clone, Copy)]
+struct QueueTarget<'a> {
+    pane: Option<&'a PaneAgent>,
+    agent: Option<&'a AgentState>,
+}
+
+impl QueueTarget<'_> {
+    fn label(&self) -> String {
+        self.agent
+            .map(super::agent_label)
+            .or_else(|| self.pane.map(PaneAgent::label))
+            .unwrap_or_else(|| "agent".to_owned())
+    }
+
+    fn bound<'a>(&self, snapshot: &'a SidebarSnapshot) -> Option<&'a AgentState> {
+        self.pane.and_then(|pane| send::bound_agent(snapshot, pane))
+    }
+
+    fn receivable_now(
+        &self,
+        snapshot: &SidebarSnapshot,
+        pending: &[MessageRecord],
+        gate: DeliveryGate,
+        force: bool,
+    ) -> bool {
+        if self.pane.is_none() {
+            return false;
+        }
+        let open = match self.bound(snapshot) {
+            None => true,
+            Some(agent) => {
+                gate_open(gate, agent.status)
+                    && (force
+                        || pending_ask_for(
+                            agent,
+                            snapshot
+                                .needs_attention
+                                .iter()
+                                .chain(snapshot.resolver_working.iter()),
+                        )
+                        .is_none())
+            }
+        };
+        if !open {
+            return false;
+        }
+        self.agent.is_none_or(|agent| {
+            queue_head(
+                pending.iter(),
+                &agent.kind,
+                &agent.agent_id,
+                agent.name.as_deref(),
+            )
+            .is_none()
+        })
+    }
+}
+
+fn combine_queue_targets<'a>(
+    snapshot: &'a SidebarSnapshot,
+    agents: Vec<&'a AgentState>,
+    panes: Vec<&'a PaneAgent>,
+) -> Vec<QueueTarget<'a>> {
+    let mut used_panes = vec![false; panes.len()];
+    let mut targets = Vec::new();
+    for agent in agents {
+        let pane_index = panes
+            .iter()
+            .enumerate()
+            .find(|(index, pane)| !used_panes[*index] && pane_matches_agent(pane, agent))
+            .map(|(index, _)| index);
+        let pane = pane_index.map(|index| {
+            used_panes[index] = true;
+            panes[index]
+        });
+        targets.push(QueueTarget {
+            pane,
+            agent: Some(agent),
+        });
+    }
+    for (index, pane) in panes.into_iter().enumerate() {
+        if used_panes[index] {
+            continue;
+        }
+        targets.push(QueueTarget {
+            pane: Some(pane),
+            agent: send::bound_agent(snapshot, pane)
+                .or_else(|| provisional_agent_for_pane(snapshot, pane)),
+        });
+    }
+    targets
+}
+
+fn pane_matches_agent(pane: &PaneAgent, agent: &AgentState) -> bool {
+    if pane.kind != agent.kind {
+        return false;
+    }
+    if pane.agent_id.as_ref() == Some(&agent.agent_id) {
+        return true;
+    }
+    pane.agent_id.is_none()
+        && agent.agent_id.is_provisional()
+        && pane.channel() == rimz::target::agent_channel(agent)
+}
+
+fn provisional_agent_for_pane<'a>(
+    snapshot: &'a SidebarSnapshot,
+    pane: &PaneAgent,
+) -> Option<&'a AgentState> {
+    snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_none())
+        .find(|agent| {
+            agent.kind == pane.kind
+                && agent.agent_id.is_provisional()
+                && rimz::target::agent_channel(agent) == pane.channel()
+        })
+}
+
 fn add_message(
     target: String,
     worktree: Option<String>,
@@ -159,30 +283,26 @@ fn add_message(
     rimz::target::require_mention(&target)?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
-    let snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+    let mut snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+    // Smart compaction reads context fill. Immediate queue sends share steer's
+    // live path, so fold the disposable context sidecars before any send-now
+    // decision that might compact first.
+    if spec.auto_compact.is_some()
+        && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+    {
+        snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+    }
     let channel = current_channel(&workspace);
     let sender = send::sender_from_env(channel.as_deref(), spec.no_from);
-    // queue records are durable and keyed on a session id, so they address bound
-    // agents. A match that is only a live, sessionless pane has no key — point it
-    // at steer, which reaches the pane directly.
-    let agents = match super::resolve_agent_many(
-        &snapshot,
-        &target,
-        worktree.as_deref(),
-        channel.as_deref(),
-    ) {
-        Ok(agents) => agents,
-        Err(err) => {
-            if rimz::target::unbound_pane_in_channel(
-                &snapshot,
-                &target,
-                worktree.as_deref(),
-                channel.as_deref(),
-            ) {
-                bail!(
-                    "`{target}` matched an agent pane with no session yet; `rimz steer {target}` to start it, then queue"
-                );
-            }
+    let agent_result =
+        super::resolve_agent_many(&snapshot, &target, worktree.as_deref(), channel.as_deref());
+    let pane_result =
+        super::resolve_pane_targets(&snapshot, &target, worktree.as_deref(), channel.as_deref());
+    let targets = match (agent_result, pane_result) {
+        (Ok(agents), Ok(panes)) => combine_queue_targets(&snapshot, agents, panes),
+        (Ok(agents), Err(_)) => combine_queue_targets(&snapshot, agents, Vec::new()),
+        (Err(_), Ok(panes)) => combine_queue_targets(&snapshot, Vec::new(), panes),
+        (Err(err), Err(_)) => {
             // Create-on-miss launches a fresh agent with this text as its first
             // prompt, so the launch carries the work and no queue entry is made.
             if flags.create {
@@ -197,11 +317,8 @@ fn add_message(
             return Err(err);
         }
     };
-    if agents.len() > 1 {
-        let labels: Vec<String> = agents
-            .iter()
-            .map(|agent| super::agent_label(agent))
-            .collect();
+    if targets.len() > 1 {
+        let labels: Vec<String> = targets.iter().map(QueueTarget::label).collect();
         if !flags.all && !rimz::target::is_broadcast(&target) {
             return Err(super::ambiguous_fanout("queue for", &target, &labels));
         }
@@ -209,16 +326,43 @@ fn add_message(
             super::confirm_fanout("Queue for", &target, &labels)?;
         }
     }
-    // Preflight hooks once per distinct kind, before queuing anything — the hard
-    // hooks precondition is all-or-nothing across the fan-out.
+    let live_send = send::LiveSend {
+        force: spec.force,
+        enter: spec.enter,
+        auto_compact: spec.auto_compact,
+        sender: sender.clone(),
+    };
+    let mut pending = ledger.list_pending_messages()?;
     let mut kinds_seen = std::collections::BTreeSet::new();
-    for &agent in &agents {
+    let mut ids = Vec::new();
+    for target in &targets {
+        let mut park = !target.receivable_now(&snapshot, &pending, spec.gate, spec.force);
+        if !park && let Some(pane) = target.pane {
+            match send::send_to_live_pane(
+                &workspace,
+                &ledger,
+                &snapshot,
+                pane,
+                target.bound(&snapshot),
+                &text,
+                &live_send,
+            )? {
+                send::Outcome::Sent { .. } => continue,
+                send::Outcome::SkippedPending { .. } => park = true,
+            }
+        }
+        if !park {
+            continue;
+        }
+        let Some(agent) = target.agent else {
+            bail!(
+                "`{}` cannot receive now and has no durable session to park",
+                target.label()
+            );
+        };
         if kinds_seen.insert(agent.kind.as_str().to_owned()) {
             preflight_queue_hooks(agent)?;
         }
-    }
-    let mut ids = Vec::with_capacity(agents.len());
-    for &agent in &agents {
         let message = MessageRecord::new(
             workspace.workspace_id.clone(),
             agent,
@@ -231,7 +375,7 @@ fn add_message(
         .with_auto_compact(spec.auto_compact);
         let message_id = message.message_id.clone();
         ledger.queue_message(&message, &workspace.session_name)?;
-        let _ = deliver_one(&workspace, &ledger, &message_id, Duration::ZERO);
+        pending.push(message);
         ids.push(message_id);
     }
     #[expect(clippy::print_stdout, reason = "command result is message id(s)")]
@@ -320,7 +464,13 @@ fn clear_messages(target: String, worktree: Option<String>, globals: &GlobalFlag
 fn deliver_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
-    deliver_one(&workspace, &ledger, &message_id, settle_duration_from_env())?;
+    deliver_one(
+        &workspace,
+        &ledger,
+        &message_id,
+        settle_duration_from_env(),
+        globals,
+    )?;
     Ok(())
 }
 
@@ -329,11 +479,12 @@ fn deliver_one(
     ledger: &rimz::Ledger,
     message_id: &MessageId,
     settle: Duration,
+    globals: &GlobalFlags,
 ) -> Result<bool> {
     if !settle.is_zero() {
         std::thread::sleep(settle);
     }
-    let Some(candidate) = delivery_candidate(ledger, message_id)? else {
+    let Some(candidate) = delivery_candidate(workspace, ledger, message_id, globals)? else {
         return Ok(false);
     };
     let Some(message) = ledger.claim_message_for_delivery(message_id, jiff::Timestamp::now())?
@@ -342,27 +493,22 @@ fn deliver_one(
     };
     debug_assert!(message.same_agent(&candidate.message.kind, &candidate.message.agent_id));
     debug_assert_eq!(message.message_id, candidate.message.message_id);
-    let backend = rimz::mux::backend_for(candidate.pane_id.mux());
-    // A `--smart-compact` message types `/compact` ahead of the text, so the
-    // prompt lands against a fresh window. A failed compaction fails the whole
-    // delivery through the same retry path as a failed message send.
-    let send = (|| {
-        if let Some(command) = candidate.compact {
-            super::pane::send_command(backend.as_ref(), &candidate.pane_id, command)?;
-        }
-        let payload = match candidate.sender_prefix.as_deref() {
-            Some(prefix) => format!("{prefix}{}", message.text),
-            None => message.text.clone(),
-        };
-        super::pane::submit_message(
-            backend.as_ref(),
-            &candidate.pane_id,
-            &payload,
-            message.enter,
-        )
-    })();
+    let send = send::send_to_live_pane(
+        workspace,
+        ledger,
+        &candidate.snapshot,
+        &candidate.target,
+        send::bound_agent(&candidate.snapshot, &candidate.target),
+        &message.text,
+        &send::LiveSend {
+            force: message.force,
+            enter: message.enter,
+            auto_compact: message.auto_compact,
+            sender: message.sender.clone(),
+        },
+    );
     match send {
-        Ok(()) => {
+        Ok(send::Outcome::Sent { .. }) => {
             ledger.settle_message(
                 &message.message_id,
                 MessageStatus::Delivered,
@@ -370,6 +516,14 @@ fn deliver_one(
                 None,
             )?;
             Ok(true)
+        }
+        Ok(send::Outcome::SkippedPending { request_id, .. }) => {
+            ledger.record_message_delivery_failure(
+                &message.message_id,
+                &format!("pending ask {request_id} reserves input"),
+                &workspace.session_name,
+            )?;
+            Ok(false)
         }
         Err(err) => {
             ledger.record_message_delivery_failure(
@@ -384,17 +538,15 @@ fn deliver_one(
 
 struct DeliveryCandidate {
     message: MessageRecord,
-    pane_id: PaneId,
-    /// The `/compact` to type ahead of the text, set when `--smart-compact`'s
-    /// threshold is met at this delivery boundary. `None` leaves delivery as a
-    /// plain message send.
-    compact: Option<&'static str>,
-    sender_prefix: Option<String>,
+    snapshot: SidebarSnapshot,
+    target: PaneAgent,
 }
 
 fn delivery_candidate(
+    workspace: &ResolvedWorkspace,
     ledger: &rimz::Ledger,
     message_id: &MessageId,
+    globals: &GlobalFlags,
 ) -> Result<Option<DeliveryCandidate>> {
     let pending = ledger.list_pending_messages()?;
     let Some(message) = pending
@@ -415,11 +567,10 @@ fn delivery_candidate(
     if head.message_id != *message_id {
         return Ok(None);
     }
-    let mut snapshot = ledger
-        .snapshot_cached()
+    let mut snapshot = super::resolution_snapshot(workspace, ledger, globals)
         .context("reading delivery snapshot")?;
-    // `--smart-compact` reads context fill, which the cached snapshot does not
-    // carry; fold the disposable context sidecars in for the freshest gauge.
+    // `--smart-compact` reads context fill, which the resolution snapshot does
+    // not carry; fold the disposable context sidecars in for the freshest gauge.
     if message.auto_compact.is_some()
         && let Ok(runtime) = rimz::RuntimePaths::for_workspace(message.workspace_id.clone())
     {
@@ -449,38 +600,19 @@ fn delivery_candidate(
     {
         return Ok(None);
     }
-    let Some(pane) = agent.pane.as_ref() else {
+    let Some(target) = snapshot
+        .agent_panes
+        .iter()
+        .find(|pane| pane_matches_agent(pane, agent))
+        .cloned()
+    else {
         return Ok(None);
     };
-    let peers: Vec<&AgentState> = snapshot
-        .agents
-        .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
-        .collect();
-    let sender_prefix = rimz::target::sender_prefix(
-        &message.sender,
-        &peers,
-        rimz::target::agent_channel(agent).as_deref(),
-    );
-    let compact = compact_command_if_full(&message, agent);
-    let pane_id = pane.pane_id.clone();
     Ok(Some(DeliveryCandidate {
         message,
-        pane_id,
-        compact,
-        sender_prefix,
+        snapshot,
+        target,
     }))
-}
-
-/// The agent's `/compact` when a `--smart-compact` message's threshold is met by
-/// the agent's current fill, else `None`. An agent kind with no compaction
-/// command can't compact, so it passes through as a plain send.
-fn compact_command_if_full(message: &MessageRecord, agent: &AgentState) -> Option<&'static str> {
-    let threshold = message.auto_compact?;
-    threshold
-        .triggered(agent)
-        .then(|| rimz::agents::find_adapter(message.kind.as_str())?.compact_command())
-        .flatten()
 }
 
 fn workspace_ledger_snapshot(
@@ -535,5 +667,200 @@ fn preview(text: &str) -> String {
         shortened
     } else {
         short
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use serde_json::json;
+
+    use rimz::agents::{AgentStatus, TurnPhase};
+    use rimz::feed::{FeedItem, FeedKind, Surface};
+    use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
+    use rimz::pane::PaneRef;
+
+    #[test]
+    fn receivable_now_decision_table() {
+        let idle = agent("sess-idle", AgentStatus::Idle);
+        let running = agent("sess-running", AgentStatus::Running);
+        let pane = bound_pane(&idle, "terminal_3");
+        let lazy = lazy_pane("codex", "terminal_4");
+        let idle_snapshot =
+            snapshot_with_panes(vec![idle.clone(), running.clone()], vec![pane.clone()]);
+
+        assert!(
+            QueueTarget {
+                pane: Some(&lazy),
+                agent: None,
+            }
+            .receivable_now(&idle_snapshot, &[], DeliveryGate::Done, false)
+        );
+
+        assert!(
+            QueueTarget {
+                pane: Some(&pane),
+                agent: Some(&idle),
+            }
+            .receivable_now(&idle_snapshot, &[], DeliveryGate::Done, false)
+        );
+
+        let running_pane = bound_pane(&running, "terminal_5");
+        let running_snapshot =
+            snapshot_with_panes(vec![running.clone()], vec![running_pane.clone()]);
+        assert!(
+            !QueueTarget {
+                pane: Some(&running_pane),
+                agent: Some(&running),
+            }
+            .receivable_now(&running_snapshot, &[], DeliveryGate::Done, false)
+        );
+
+        let ask_snapshot = snapshot_with_ask(idle.clone(), pane.clone());
+        assert!(
+            !QueueTarget {
+                pane: Some(&pane),
+                agent: Some(&idle),
+            }
+            .receivable_now(&ask_snapshot, &[], DeliveryGate::Done, false)
+        );
+        assert!(
+            QueueTarget {
+                pane: Some(&pane),
+                agent: Some(&idle),
+            }
+            .receivable_now(&ask_snapshot, &[], DeliveryGate::Done, true)
+        );
+
+        let older = MessageRecord::new(
+            workspace_id(),
+            &idle,
+            "older".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        assert!(
+            !QueueTarget {
+                pane: Some(&pane),
+                agent: Some(&idle),
+            }
+            .receivable_now(&idle_snapshot, &[older], DeliveryGate::Done, false)
+        );
+    }
+
+    fn workspace_id() -> WorkspaceId {
+        WorkspaceId::parse("ws_000000000000000000000000").unwrap()
+    }
+
+    fn snapshot_with_panes(agents: Vec<AgentState>, panes: Vec<PaneAgent>) -> SidebarSnapshot {
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(workspace_id(), Vec::new(), agents, now());
+        snapshot.agent_panes = panes;
+        snapshot
+    }
+
+    fn snapshot_with_ask(agent: AgentState, pane: PaneAgent) -> SidebarSnapshot {
+        let mut item = FeedItem::new(
+            workspace_id(),
+            Surface::NativeUi,
+            FeedKind::Permission,
+            "approve?",
+            agent.kind.as_str(),
+            "agent-hook",
+        );
+        item.payload = json!({ "session_id": agent.agent_id.as_str() });
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(workspace_id(), vec![item], vec![agent], now());
+        snapshot.agent_panes = vec![pane];
+        snapshot
+    }
+
+    fn agent(id: &str, status: AgentStatus) -> AgentState {
+        let timestamp = now();
+        let phase = match status {
+            AgentStatus::Running => TurnPhase::Reasoning,
+            _ => TurnPhase::Idle,
+        };
+        AgentState {
+            agent_id: AgentSessionId::from(id),
+            kind: AgentKind::new_unchecked("claude"),
+            name: Some(format!("{id}-name")),
+            kind_ordinal: Some(1),
+            profile: None,
+            role: None,
+            team: None,
+            status,
+            phase,
+            pane: Some(PaneRef::from_id(PaneId::from_parts(
+                MuxName::Zellij,
+                "terminal_3",
+            ))),
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: Some("/repo/project".to_owned()),
+            worktree_branch: Some("project".to_owned()),
+            task: None,
+            prompt: None,
+            description: None,
+            transcript_path: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_seen: timestamp,
+            last_activity: timestamp,
+            registered_at: Some(timestamp),
+        }
+    }
+
+    fn bound_pane(agent: &AgentState, raw: &str) -> PaneAgent {
+        PaneAgent {
+            kind: agent.kind.clone(),
+            kind_ordinal: agent.kind_ordinal,
+            name: agent.name.clone(),
+            profile: None,
+            role: None,
+            team: None,
+            agent_id: Some(agent.agent_id.clone()),
+            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+            worktree_path: agent.worktree_path.clone(),
+            worktree_branch: agent.worktree_branch.clone(),
+        }
+    }
+
+    fn lazy_pane(kind: &str, raw: &str) -> PaneAgent {
+        PaneAgent {
+            kind: AgentKind::new_unchecked(kind),
+            kind_ordinal: None,
+            name: None,
+            profile: None,
+            role: None,
+            team: None,
+            agent_id: None,
+            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+            worktree_path: Some("/repo/project".to_owned()),
+            worktree_branch: Some("project".to_owned()),
+        }
+    }
+
+    fn now() -> jiff::Timestamp {
+        jiff::Timestamp::UNIX_EPOCH
     }
 }

@@ -3,7 +3,9 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 
 use rimz::feed::{FeedItem, FeedKind, Surface};
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::message::MessageStatus;
+use rimz::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 
 use crate::common::Env;
 
@@ -354,10 +356,9 @@ fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
     assert_text_then_enter(&trace_log, "exact");
 }
 
-/// Queue delivery routes through the same send path: a message delivered at an
-/// open gate presses Enter as a discrete key, not a literal carriage return.
-/// Bringing the agent to an idle turn boundary with a bound pane lets the queue
-/// `add` deliver inline, so the assertion stays synchronous.
+/// Send-now queue routes through the same live path as steer: an open-gate
+/// target receives the text and Enter as a discrete key, not a literal carriage
+/// return.
 #[test]
 fn queue_delivery_presses_enter_as_discrete_key() {
     let env = Env::new();
@@ -392,13 +393,13 @@ fn queue_delivery_presses_enter_as_discrete_key() {
 
     assert!(
         env.ledger().list_pending_messages().unwrap().is_empty(),
-        "an idle agent with a bound pane should deliver the queued message inline"
+        "an idle agent with a bound pane should receive queue text immediately"
     );
     assert_text_then_enter(&trace_log, "go");
 }
 
 #[test]
-fn queue_agent_env_prefixes_delivery_lists_sender_and_no_from_suppresses_it() {
+fn queue_send_now_prefixes_sender_and_no_from_suppresses_it() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
@@ -430,21 +431,18 @@ fn queue_agent_env_prefixes_delivery_lists_sender_and_no_from_suppresses_it() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_text_then_enter(&trace_log, "from @swift-otter: later");
-
-    let listed = env
-        .rimz()
-        .args(["queue", "list", "--json"])
-        .output()
-        .expect("queue list");
     assert!(
-        listed.status.success(),
-        "queue list failed: {}",
-        String::from_utf8_lossy(&listed.stderr)
+        env.ledger().list_messages().unwrap().is_empty(),
+        "send-now queue leaves no durable message record"
     );
-    let messages: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
-    assert_eq!(messages[0]["sender"]["origin"], "agent");
-    assert_eq!(messages[0]["sender"]["kind"], "codex");
-    assert_eq!(messages[0]["sender"]["name"], "swift-otter");
+    let steered = env
+        .read_events()
+        .into_iter()
+        .find(|event| event.method == "agent.steered")
+        .expect("steered event");
+    assert_eq!(steered.params["sender"]["origin"], "agent");
+    assert_eq!(steered.params["sender"]["kind"], "codex");
+    assert_eq!(steered.params["sender"]["name"], "swift-otter");
 
     let trace_log = env.project_root.join("zellij-from-queue-no-from-trace.log");
     let out = env
@@ -463,6 +461,41 @@ fn queue_agent_env_prefixes_delivery_lists_sender_and_no_from_suppresses_it() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_text_then_enter(&trace_log, "exact");
+}
+
+#[test]
+fn queue_parked_message_lists_sender() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-from-queue-park", "feature-from-park", &[]);
+
+    let out = env
+        .rimz()
+        .env("RIMZ_AGENT_KIND", "codex")
+        .env("RIMZ_AGENT_NAME", "swift-otter")
+        .args(["queue", "@claude", "--", "later"])
+        .output()
+        .expect("queue add from agent");
+    assert!(
+        out.status.success(),
+        "queue add failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let listed = env
+        .rimz()
+        .args(["queue", "list", "--json"])
+        .output()
+        .expect("queue list");
+    assert!(
+        listed.status.success(),
+        "queue list failed: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let messages: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
+    assert_eq!(messages[0]["sender"]["origin"], "agent");
+    assert_eq!(messages[0]["sender"]["kind"], "codex");
+    assert_eq!(messages[0]["sender"]["name"], "swift-otter");
 }
 
 /// `steer --smart-compact 70%` against a window past the threshold types `/compact`
@@ -601,8 +634,8 @@ fn steer_auto_compact_leaves_a_window_below_threshold_alone() {
     assert_text_then_enter(&trace_log, "go");
 }
 
-/// Queue delivery honours `--smart-compact` at the turn boundary: an idle agent
-/// past the threshold gets `/compact` ahead of the queued text, in one delivery.
+/// Send-now queue honours `--smart-compact`: an idle agent past the threshold
+/// gets `/compact` ahead of the text.
 #[test]
 fn queue_auto_compact_runs_compact_before_delivering() {
     let env = Env::new();
@@ -638,14 +671,14 @@ fn queue_auto_compact_runs_compact_before_delivering() {
 
     assert!(
         env.ledger().list_pending_messages().unwrap().is_empty(),
-        "the queued message should deliver inline at the open gate"
+        "the message should send immediately at the open gate"
     );
     let lines = trace_lines(&trace_log);
     let compact_at = lines.iter().position(|line| is_compact_command(line));
     let paste_at = lines.iter().position(|line| is_paste(line, "go"));
     assert!(
         compact_at.is_some() && paste_at.is_some() && compact_at < paste_at,
-        "compaction must precede the queued message; trace: {lines:?}"
+        "compaction must precede the queue text; trace: {lines:?}"
     );
 }
 
@@ -697,9 +730,8 @@ fn queue_defers_delivery_under_a_pending_ask() {
     );
 }
 
-/// `--force` mirrors `steer --force`: a queued message delivers past a pending
-/// ask at the open gate instead of deferring, pasting inline like any other
-/// delivery.
+/// `--force` mirrors `steer --force`: queue sends past a pending ask at an open
+/// gate instead of parking.
 #[test]
 fn queue_force_delivers_past_a_pending_ask() {
     let env = Env::new();
@@ -1044,6 +1076,39 @@ fn unbound_codex_pane(env: &Env) -> rimz::pane::PaneRef {
     }
 }
 
+fn seed_provisional_codex_launch(
+    env: &Env,
+    launch_id: &str,
+    agent_name: &str,
+    role: Option<&str>,
+    stale_pane: &str,
+) {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let kind = AgentKind::new_unchecked("codex");
+    let event = EventEnvelope::agent_launched(
+        workspace.workspace_id,
+        workspace.session_name,
+        &kind,
+        AgentLaunchPayload {
+            agent_id: AgentSessionId::from(launch_id),
+            agent_name: agent_name.to_owned(),
+            profile: None,
+            role: role.map(ToOwned::to_owned),
+            team: None,
+            kind_ordinal: Some(1),
+            state: AgentLaunchState::Starting,
+            run_id: None,
+            pane_id: Some(PaneId::from_parts(MuxName::Zellij, stale_pane)),
+            runtime_owner: None,
+            worktree_path: Some(env.project_root.display().to_string()),
+            worktree_branch: None,
+            prompt: None,
+            description: None,
+        },
+    );
+    env.ledger().append_event(&event).expect("append launch");
+}
+
 /// `steer @codex` reaches a bare codex started in a pane before its first turn:
 /// the resolver folds the live pane frame, finds the synthesized idle row, and
 /// pastes into its pane — reproducing and fixing the `no agent matches @codex`
@@ -1072,27 +1137,92 @@ fn steer_reaches_unbound_codex_pane() {
     assert_text_then_enter(&trace_log, "continue");
 }
 
-/// `queue @codex` for the same unbound pane refuses with the steer hint: a
-/// durable queue record keys on a session id the pane does not have yet.
+/// `queue @codex` for the same unbound pane sends immediately like `steer`.
+/// There is no turn boundary to wait for yet, so no durable queue record is
+/// created and no message delivery audit is emitted.
 #[test]
-fn queue_refuses_unbound_codex_pane() {
+fn queue_sends_now_to_unbound_codex_pane() {
     let env = Env::new();
     env.install_agent_hooks("codex");
     let pane_fixture = env.write_pane_fixture(&[unbound_codex_pane(&env)]);
 
+    let trace_log = env.project_root.join("zellij-unbound-queue-trace.log");
     let out = env
         .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
         .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
         .args(["queue", "@codex", "--", "later"])
         .output()
         .expect("queue add");
     assert!(
-        !out.status.success(),
-        "queue to an unbound pane should refuse"
+        out.status.success(),
+        "queue to an unbound pane should send now: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_text_then_enter(&trace_log, "later");
     assert!(
-        stderr.contains("no session yet") && stderr.contains("rimz steer"),
-        "unexpected stderr: {stderr}"
+        env.ledger().list_messages().unwrap().is_empty(),
+        "send-now queue leaves no durable record"
+    );
+    let methods: Vec<String> = env
+        .read_events()
+        .into_iter()
+        .map(|event| event.method)
+        .collect();
+    assert!(
+        methods.iter().any(|method| method == "agent.steered"),
+        "send-now queue records agent.steered: {methods:?}"
+    );
+    assert!(
+        methods.iter().all(|method| !method.starts_with("message.")),
+        "send-now queue records no message events: {methods:?}"
+    );
+}
+
+#[test]
+fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    seed_provisional_codex_launch(
+        &env,
+        "launch_queue_bug",
+        "swift-otter",
+        Some("coder"),
+        "terminal_8",
+    );
+    let pane_fixture = env.write_pane_fixture(&[unbound_codex_pane(&env)]);
+
+    let trace_log = env.project_root.join("zellij-provisional-queue-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["queue", "@coder", "--", "read plan"])
+        .output()
+        .expect("queue add");
+    assert!(
+        out.status.success(),
+        "queue to a provisional codex should send now: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_text_then_enter(&trace_log, "read plan");
+    assert!(
+        env.ledger().list_messages().unwrap().is_empty(),
+        "send-now provisional queue leaves no durable record"
+    );
+    let methods: Vec<String> = env
+        .read_events()
+        .into_iter()
+        .map(|event| event.method)
+        .collect();
+    assert!(
+        methods.iter().any(|method| method == "agent.steered"),
+        "send-now queue records agent.steered: {methods:?}"
+    );
+    assert!(
+        methods.iter().all(|method| !method.starts_with("message.")),
+        "send-now queue records no message events: {methods:?}"
     );
 }

@@ -54,6 +54,27 @@ fn resolve_prefers_name_ordinal_kind_then_session_prefix() {
 }
 
 #[test]
+fn provisional_launch_id_is_not_a_session_prefix() {
+    let mut snapshot = empty_snapshot();
+    let mut launch = agent("codex", "launch_queued", Some("main"), "terminal_1");
+    launch.name = Some("swift-otter".to_owned());
+    launch.kind_ordinal = Some(1);
+    snapshot.agents = vec![launch];
+
+    assert!(matches!(
+        resolve_one(&snapshot, "@launch_queued", None, None),
+        Err(TargetErr::NoMatch { .. })
+    ));
+    assert_eq!(
+        resolve_one(&snapshot, "@swift-otter", None, None)
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "launch_queued"
+    );
+}
+
+#[test]
 fn require_mention_demands_the_sigil() {
     // steer/queue enforce `@`; pane ids are exempt.
     assert!(require_mention("claude").is_err());
