@@ -52,7 +52,13 @@ where
     S: AsRef<OsStr>,
 {
     let args: Vec<_> = args.into_iter().collect();
-    let mut command = Command::new(program);
+    let mut command = if crate::rtk::wrap_cargo(program, &args) {
+        let mut command = Command::new("rtk");
+        command.arg(program);
+        command
+    } else {
+        Command::new(program)
+    };
     command
         .args(args.iter().map(AsRef::as_ref))
         .current_dir(root)

@@ -86,6 +86,7 @@ aggressive_resize = true
 
 [harness]
 ## smart_compact = "70%"          # default compact-first threshold for steer/queue ("70%" or a token count); unset = off
+# rtk = "auto"                    # wrap agent cargo runs (build/check/test/nextest/clippy) through `rtk`; auto = when rtk is on PATH, on = force, off = never
 
 [sentry]
 # Off-box error reporting. With no DSN, Sentry stays off and Rimz makes no

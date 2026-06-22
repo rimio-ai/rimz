@@ -53,6 +53,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "resume.auto_continue",
         "resume.auto_continue_text",
         "harness.smart_compact",
+        "harness.rtk",
     ] {
         validate_set_key(&parse_key(key).unwrap()).unwrap_or_else(|err| panic!("{key}: {err}"));
     }
@@ -453,6 +454,15 @@ fn harness_smart_compact_values_are_parsed_as_strings() {
 }
 
 #[test]
+fn harness_rtk_values_are_parsed_as_strings() {
+    let key = parse_key("harness.rtk").expect("key");
+
+    assert_eq!(parse_set_value(&key, "auto").as_str(), Some("auto"));
+    assert_eq!(parse_set_value(&key, "on").as_str(), Some("on"));
+    assert_eq!(parse_set_value(&key, "off").as_str(), Some("off"));
+}
+
+#[test]
 fn harness_smart_compact_validation_rejects_bad_values() {
     let key = parse_key("harness.smart_compact").expect("key");
 
@@ -466,6 +476,20 @@ fn harness_smart_compact_validation_rejects_bad_values() {
         err.contains("invalid auto-compact threshold `abc`"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+fn harness_rtk_validation_rejects_bad_values() {
+    let key = parse_key("harness.rtk").expect("key");
+
+    for mode in ["auto", "on", "off"] {
+        validate_set_value(&key, &Value::from(mode)).expect("rtk mode");
+    }
+
+    let err = validate_set_value(&key, &Value::from("always"))
+        .expect_err("invalid rtk mode")
+        .to_string();
+    assert_eq!(err, "harness.rtk must be one of auto, on, or off");
 }
 
 #[test]

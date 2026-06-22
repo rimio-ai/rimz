@@ -233,6 +233,15 @@ smart_compact = "70%"
 
 `smart_compact` sets the default threshold for compact-first `steer` and `queue` sends — a percentage (`"70%"`) or an occupied-token count (`"120000"`). When an agent's context window has reached the threshold, Rimz submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [harness.md](../internals/agents/harness.md#compact-before-sending).
 
+### rtk output compression
+
+```toml
+[harness]
+rtk = "auto"
+```
+
+`rtk` controls output compression for Rimz-launched agents that run `cargo xtask`; direct human `cargo xtask` runs stay on plain cargo. `auto` wraps recognized cargo subcommands (`build`, `check`, `test`, `nextest`, `clippy`) through `rtk` when the binary is on the agent's `PATH`; `on` forces the wrapper and prints one warning before plain cargo when `rtk` is missing; `off` keeps cargo unwrapped. Install `rtk` on the machine for compression to take effect.
+
 ### Off-box error reporting
 
 ```toml

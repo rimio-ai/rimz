@@ -34,6 +34,10 @@ pub const ENV_AGENT_MODEL: &str = "RIMZ_AGENT_MODEL";
 /// The reasoning effort selected by launch flags or profile presets. Set by
 /// the launch wrapper; read into the lifecycle observation as card identity fallback.
 pub const ENV_AGENT_EFFORT: &str = "RIMZ_AGENT_EFFORT";
+/// The configured `[harness] rtk` mode (`auto`/`on`/`off`), exported to every
+/// agent launch so `cargo xtask` can route recognized cargo commands through
+/// `rtk`. Read by xtask, never by rimz itself.
+pub const ENV_RTK: &str = "RIMZ_RTK";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

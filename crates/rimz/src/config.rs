@@ -62,7 +62,7 @@ pub use display::{
     DisplayConfig, GlowMode, ProviderTabsMode, ScrollbarMode,
 };
 pub use glyphs::{GlyphGroup, GlyphNamespaces, GlyphRole, ThemeGlyphsConfig, is_named_glyph_set};
-pub use harness::HarnessConfig;
+pub use harness::{HarnessConfig, RtkMode};
 pub use loop_::{LoopConfig, TaskEntry, Tasks};
 pub use mux::{
     MultiplexerConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,

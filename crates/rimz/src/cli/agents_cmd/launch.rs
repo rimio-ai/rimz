@@ -328,6 +328,7 @@ pub(super) struct AgentLaunchEnvIdentity<'a> {
 pub(super) fn full_agent_launch_env(
     project_root: &Path,
     adapter: &dyn AgentAdapter,
+    rtk: rimz::config::RtkMode,
     identity: AgentLaunchEnvIdentity<'_>,
 ) -> Result<BTreeMap<String, String>> {
     let kind = adapter.descriptor().kind;
@@ -366,6 +367,7 @@ pub(super) fn full_agent_launch_env(
             agent_effort.to_owned(),
         );
     }
+    env.insert(rimz::run::ENV_RTK.to_owned(), rtk.as_str().to_owned());
     validate_agent_launch_env(kind, &env)?;
     Ok(env)
 }

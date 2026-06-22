@@ -30,6 +30,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     }
     let adapter = rimz::agents::find_adapter(&args.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
+    let rtk = crate::cli::machine_config().harness.rtk;
     let argv = match args.resume.as_deref() {
         Some(session_id) => {
             let cwd = std::env::current_dir().context("reading the resume pane cwd")?;
@@ -44,6 +45,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let rimz_env = full_agent_launch_env(
         &workspace.project_root,
         adapter,
+        rtk,
         AgentLaunchEnvIdentity {
             run_id: args.run_id.as_ref(),
             agent_name: args.agent_name.as_deref(),

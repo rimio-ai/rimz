@@ -698,6 +698,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "agents.worktree.base",
         "agents.placement",
         "harness.smart_compact",
+        "harness.rtk",
         "resume.on_rebirth",
         "resume.max",
         "resume.auto_continue",
@@ -825,6 +826,7 @@ fn parse_edit_value(raw: &str) -> Value {
 
 fn parse_set_value(path: &[String], raw: &str) -> Value {
     if is_harness_smart_compact_edit(path)
+        || is_harness_rtk_edit(path)
         || is_sidebar_theme_scheme_edit(path)
         || is_sidebar_glyph_string_edit(path)
     {
@@ -847,6 +849,14 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         };
         if let Err(err) = rimz::message::AutoCompact::parse(threshold) {
             bail!("{err}");
+        }
+    }
+    if is_harness_rtk_edit(path) {
+        let Some(mode) = value.as_str() else {
+            bail!("harness.rtk must be a string");
+        };
+        if !matches!(mode, "auto" | "on" | "off") {
+            bail!("harness.rtk must be one of auto, on, or off");
         }
     }
     if matches!(
@@ -894,6 +904,10 @@ fn is_sidebar_theme_scheme_edit(path: &[String]) -> bool {
 
 fn is_harness_smart_compact_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "smart_compact")
+}
+
+fn is_harness_rtk_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "harness" && child == "rtk")
 }
 
 fn is_sidebar_glyph_string_edit(path: &[String]) -> bool {

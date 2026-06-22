@@ -114,6 +114,7 @@ fn full_launch_env_marks_agent_kind() {
     let env = full_agent_launch_env(
         dir.path(),
         adapter,
+        rimz::config::RtkMode::On,
         AgentLaunchEnvIdentity {
             agent_name: Some("swift-otter"),
             agent_profile: Some("planner"),
@@ -154,6 +155,7 @@ fn full_launch_env_marks_agent_kind() {
         env.get(rimz::run::ENV_AGENT_EFFORT).map(String::as_str),
         Some("xhigh")
     );
+    assert_eq!(env.get(rimz::run::ENV_RTK).map(String::as_str), Some("on"));
 }
 
 #[test]
