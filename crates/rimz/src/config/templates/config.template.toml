@@ -69,8 +69,11 @@ extended_keys_format = "csi-u"        # "csi-u" or "xterm"
 escape_time_ms = 0
 renumber_windows = true
 aggressive_resize = true
-pane_border_status = "off"            # "off", "top", or "bottom"
-pane_border_lines = "simple"          # "simple", "single", "double", or "heavy"
+
+# Optional: uncomment to override your ~/.tmux.conf. Left unset, Rimz leaves
+# pane borders to your tmux config or tmux's defaults.
+## pane_border_status = "top"          # "off", "top", or "bottom"
+## pane_border_lines = "heavy"         # "simple", "single", "double", or "heavy"
 
 [resume]
 # on_rebirth = true                   # re-seed prior agents when a room is reborn

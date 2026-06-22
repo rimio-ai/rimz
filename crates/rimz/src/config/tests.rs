@@ -1088,8 +1088,8 @@ fn tmux_room_defaults_are_agent_friendly() {
     assert_eq!(config.tmux.escape_time_ms, 0);
     assert!(config.tmux.renumber_windows);
     assert!(config.tmux.aggressive_resize);
-    assert_eq!(config.tmux.pane_border_status, TmuxPaneBorderStatus::Off);
-    assert_eq!(config.tmux.pane_border_lines, TmuxPaneBorderLines::Simple);
+    assert_eq!(config.tmux.pane_border_status, None);
+    assert_eq!(config.tmux.pane_border_lines, None);
 }
 
 #[test]
@@ -1109,8 +1109,14 @@ fn tmux_room_options_parse() {
         config.tmux.extended_keys_format,
         TmuxExtendedKeysFormat::Xterm,
     );
-    assert_eq!(config.tmux.pane_border_status, TmuxPaneBorderStatus::Top);
-    assert_eq!(config.tmux.pane_border_lines, TmuxPaneBorderLines::Heavy);
+    assert_eq!(
+        config.tmux.pane_border_status,
+        Some(TmuxPaneBorderStatus::Top)
+    );
+    assert_eq!(
+        config.tmux.pane_border_lines,
+        Some(TmuxPaneBorderLines::Heavy)
+    );
 }
 
 #[test]

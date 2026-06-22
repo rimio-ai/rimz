@@ -20,8 +20,6 @@ const ACTIVE_TMUX_DEFAULTS: &[&str] = &[
     "escape_time_ms",
     "renumber_windows",
     "aggressive_resize",
-    "pane_border_status",
-    "pane_border_lines",
 ];
 
 #[test]

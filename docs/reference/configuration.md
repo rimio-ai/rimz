@@ -250,14 +250,14 @@ Rimz applies room-scoped multiplexer settings when it creates or reattaches a se
 The two backends differ in how a key takes effect:
 
 - **`[zellij]`** carries a few invariants Rimz always applies — locked mode, click-through, focus-follows-mouse, no session serialization (Rimz owns rebirth), and auto-layout — plus optional keys (`pane_frames`, `copy_clipboard`, …) that apply only when you set them and otherwise fall through to your `~/.config/zellij/config.kdl`. The sidebar pane is always borderless so its hit-testing stays stable regardless of `pane_frames`.
-- **`[tmux]`** has no fall-through: Rimz applies the whole table on every birth, each key carrying a Rimz default you can override. It spans session, window, and server scope, including clipboard and rich-key handling, because tmux has no per-session form for those.
+- **`[tmux]`** applies its room invariants on every birth, each key carrying a Rimz default you can override. The pane-border keys are optional overrides; unset, they fall through to your `~/.tmux.conf` or tmux defaults just like `pane_frames`. The table spans session, window, and server scope, including clipboard and rich-key handling, because tmux has no per-session form for those.
 
 ```toml
 [zellij]
 pane_frames = true          # an optional override; unset, your config.kdl wins
 
 [tmux]
-pane_border_status = "top"  # always applied, defaulting to "off"
+## pane_border_status = "top"  # optional override; unset, your ~/.tmux.conf wins
 ```
 
 To configure your *own* Zellij or tmux — the theme, true color, copy-mode, and keybindings Rimz leaves to you, and your sessions outside the room — see the [Zellij](../guide/zellij.md) and [tmux](../guide/tmux.md) setup guides.

@@ -119,18 +119,17 @@ pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, St
 }
 
 pub(super) fn tmux_window_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
-    vec![
+    let mut opts = vec![
         ("allow-passthrough", tmux_bool(config.allow_passthrough)),
         ("aggressive-resize", tmux_bool(config.aggressive_resize)),
-        (
-            "pane-border-status",
-            config.pane_border_status.as_str().to_owned(),
-        ),
-        (
-            "pane-border-lines",
-            config.pane_border_lines.as_str().to_owned(),
-        ),
-    ]
+    ];
+    if let Some(status) = config.pane_border_status {
+        opts.push(("pane-border-status", status.as_str().to_owned()));
+    }
+    if let Some(lines) = config.pane_border_lines {
+        opts.push(("pane-border-lines", lines.as_str().to_owned()));
+    }
+    opts
 }
 
 #[cfg(test)]
@@ -290,8 +289,20 @@ mod tests {
             vec![
                 ("allow-passthrough", "on".to_owned()),
                 ("aggressive-resize", "on".to_owned()),
-                ("pane-border-status", "off".to_owned()),
-                ("pane-border-lines", "simple".to_owned()),
+            ],
+        );
+        let config = TmuxConfig {
+            pane_border_status: Some(crate::config::TmuxPaneBorderStatus::Top),
+            pane_border_lines: Some(crate::config::TmuxPaneBorderLines::Heavy),
+            ..TmuxConfig::default()
+        };
+        assert_eq!(
+            tmux_window_options(&config),
+            vec![
+                ("allow-passthrough", "on".to_owned()),
+                ("aggressive-resize", "on".to_owned()),
+                ("pane-border-status", "top".to_owned()),
+                ("pane-border-lines", "heavy".to_owned()),
             ],
         );
 

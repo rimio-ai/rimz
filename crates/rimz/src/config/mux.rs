@@ -123,8 +123,10 @@ impl ZellijClipboard {
 }
 
 /// Rimz-owned tmux room defaults. Session/window options stay scoped to the
-/// Rimz session. tmux server options are runtime-global inside the tmux server;
-/// Rimz sets them because clipboard and rich-key support are server-scoped.
+/// Rimz session. Optional pane-border fields are passed only when the user sets
+/// them here, so the user's `~/.tmux.conf` remains authoritative otherwise.
+/// tmux server options are runtime-global inside the tmux server; Rimz sets
+/// them because clipboard and rich-key support are server-scoped.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct TmuxConfig {
@@ -138,8 +140,10 @@ pub struct TmuxConfig {
     pub escape_time_ms: u32,
     pub renumber_windows: bool,
     pub aggressive_resize: bool,
-    pub pane_border_status: TmuxPaneBorderStatus,
-    pub pane_border_lines: TmuxPaneBorderLines,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_border_status: Option<TmuxPaneBorderStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_border_lines: Option<TmuxPaneBorderLines>,
 }
 
 impl Default for TmuxConfig {
@@ -155,8 +159,8 @@ impl Default for TmuxConfig {
             escape_time_ms: 0,
             renumber_windows: true,
             aggressive_resize: true,
-            pane_border_status: TmuxPaneBorderStatus::Off,
-            pane_border_lines: TmuxPaneBorderLines::Simple,
+            pane_border_status: None,
+            pane_border_lines: None,
         }
     }
 }

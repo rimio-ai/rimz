@@ -57,7 +57,7 @@ bind - split-window -v -c "#{pane_current_path}"
 bind c new-window      -c "#{pane_current_path}"
 ```
 
-`pane-border-status top` labels each pane's border with its index and running command, so a grid of agents stays legible at a glance — the closest tmux gets to Zellij's titled frames. (Rimz can also turn this on inside its room through [`[tmux] pane_border_status`](../reference/configuration.md#multiplexer-room-options).)
+`pane-border-status top` labels each pane's border with its index and running command, so a grid of agents stays legible at a glance — the closest tmux gets to Zellij's titled frames. Rimz inherits this setting when its [`[tmux] pane_border_status`](../reference/configuration.md#multiplexer-room-options) override is unset.
 
 ## Match Zellij's no-prefix keys (optional)
 

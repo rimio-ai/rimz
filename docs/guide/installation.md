@@ -138,11 +138,11 @@ Tune the room from Rimz's own config, `~/.config/rimz/config.toml`, under `[zell
 pane_frames = true            # off by default; frame each pane
 
 [tmux]
-pane_border_status = "top"    # off by default; label each pane's border
-pane_border_lines = "single"  # "simple" by default
+pane_border_status = "top"    # optional override; unset, ~/.tmux.conf wins
+pane_border_lines = "single"  # optional override; unset, ~/.tmux.conf wins
 ```
 
-Set these in Rimz's config, the file it reads on attach — the same keys in your own Zellij or tmux config are overwritten when Rimz reasserts the room. `rimz config init --print` lists every room option with its default, and the full model lives in the [configuration reference](../reference/configuration.md#multiplexer-room-options).
+Set room overrides in Rimz's config, the file it reads on attach. Optional keys left unset fall through to your own Zellij or tmux config; keys you set here win when Rimz reasserts the room. `rimz config init --print` lists every room option with its default, and the full model lives in the [configuration reference](../reference/configuration.md#multiplexer-room-options).
 
 Your own Zellij and tmux config still owns everything Rimz leaves alone — the theme, true-color output, your default shell, copy-mode keybindings, and status-bar styling — and a baseline keeps the multiplexer pleasant in your sessions outside Rimz too. The [Zellij setup guide](./zellij.md) and the [tmux setup guide](./tmux.md) give the essential and recommended settings for each.
 

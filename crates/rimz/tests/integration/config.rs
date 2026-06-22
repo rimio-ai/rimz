@@ -389,7 +389,7 @@ fn setup_yes_preserves_template_comments_for_untouched_config() {
         "zellij inline comment should stay attached:\n{text}"
     );
     assert!(
-        text.contains("pane_border_status = \"off\"            # \"off\", \"top\", or \"bottom\""),
-        "tmux inline comment should stay attached:\n{text}"
+        text.contains("## pane_border_status = \"top\"          # \"off\", \"top\", or \"bottom\""),
+        "tmux optional override comment should stay attached:\n{text}"
     );
 }
