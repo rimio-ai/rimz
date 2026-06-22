@@ -92,8 +92,9 @@ pub(super) fn clip(value: &str, max_chars: usize) -> String {
 /// `{d}d{hh:02}h` at a day or more (`30d10h`, `6d23h`, `1d02h`), `{h}h{mm:02}m`
 /// under a day (`20h20m`, `5h00m`, `0h45m`). The provider panel right-aligns the
 /// result in a six-cell slot, so five- and six-cell countdowns share one right
-/// edge. A passed reset reads `0h00m` (the stable-window selection drops expired
-/// readings upstream, so a rendered window is live).
+/// edge. A passed reset reads `0h00m`; the enrich layer's reset-to-max
+/// projection rolls every displayed window forward the moment its reset passes,
+/// so a rendered countdown is live.
 pub(super) fn reset_countdown(deadline: Timestamp, now: Timestamp) -> String {
     reset_secs(deadline.duration_since(now).as_secs())
 }

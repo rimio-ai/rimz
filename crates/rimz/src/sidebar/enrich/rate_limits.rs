@@ -103,7 +103,7 @@ fn shortest_window_running_in(cache: &RateLimitsCache, kind: &str, now: Timestam
         .windows
         .iter()
         .min_by_key(|window| window.duration_mins.unwrap_or(u32::MAX))?;
-    let projected = project_idle_window(shortest.clone(), now);
+    let projected = project_window(shortest.clone(), now);
     // An unknown reading (no percentage) tells us nothing — leave it to the caller.
     projected.used_percentage?;
     if projected.not_started(now) {
@@ -158,14 +158,14 @@ pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: Ag
     write_rate_limits_cache(&path, &cache);
 }
 
-/// Project one idle provider's cached window for display when no live session
-/// reported it this frame. Before its reset instant the last-known (most-drained)
-/// reading stands unchanged; once `now` reaches that instant the window has
-/// refilled, so synthesize a full window (0% used) with its reset rolled its own
-/// `duration_mins` forward, so the countdown still reads sensibly until a live
-/// reading overwrites it. A window with no reset, or no known duration to roll by,
-/// shows as-is.
-pub(crate) fn project_idle_window(cached: RateLimitWindow, now: Timestamp) -> RateLimitWindow {
+/// Project a budget window's reset-to-max roll forward to `now`: the timestamp-
+/// aware refill the dashboard and the window-priming guard share. Before the
+/// reset the last-known (most-drained) reading stands unchanged; once `now`
+/// reaches the reset the window has refilled, so synthesize a full window (0%
+/// used) with its reset rolled its own `duration_mins` forward, so the countdown
+/// reads sensibly until a live reading overwrites it. A window with no reset, or
+/// no known duration to roll by, shows as-is.
+pub(crate) fn project_window(cached: RateLimitWindow, now: Timestamp) -> RateLimitWindow {
     match (cached.resets_at, cached.duration_mins) {
         (Some(resets_at), Some(mins)) if resets_at <= now => RateLimitWindow {
             used_percentage: Some(0),
@@ -210,7 +210,7 @@ fn unknown_idle_window(cached: RateLimitWindow) -> RateLimitWindow {
 
 /// Fold the persisted account-scoped windows onto the resolved provider panels:
 /// a kind with no live reading this frame paints its last-known bars (projected
-/// through [`project_idle_window`]'s reset-to-max rule) instead of an empty
+/// through [`project_window`]'s reset-to-max rule) instead of an empty
 /// dashboard. Once the longest cached window has reset with no live reading, the
 /// display switches all cached windows to unknown bars until a provider refresh
 /// succeeds. Reconciled per window duration, so each budget is carried forward
@@ -375,18 +375,18 @@ fn apply_rate_limit_cache_with(
             }
         }
 
-        // Display: the fused truth as-is where a live reading drove it; otherwise
-        // the carried truth, projected (reset-to-max) or shown unknown once the
-        // longest window has aged out. Sorted short→long for a stable paint order.
+        // Display: roll every fused window's reset-to-max projection forward to
+        // `now` — a no-op while its reset is future, a refill once it has passed,
+        // so a live reading carrying an expired longer window never freezes at
+        // `0h00m`. Once the longest window has aged out with no live reading, the
+        // cache shows unknown bars. Sorted short→long for a stable paint order.
         let mut display: Vec<RateLimitWindow> = truth
-            .into_iter()
-            .map(|(duration, window)| {
-                if live.contains_key(&duration) {
-                    window
-                } else if cache_unknown {
+            .into_values()
+            .map(|window| {
+                if cache_unknown {
                     unknown_idle_window(window)
                 } else {
-                    project_idle_window(window, now)
+                    project_window(window, now)
                 }
             })
             .collect();

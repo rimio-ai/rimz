@@ -9,11 +9,11 @@ fn idle_window_projection_ages_only_known_elapsed_windows() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let future = Timestamp::from_second(2_000_010_000).unwrap();
     let cached = rl_window(80, Some(future));
-    let projected = project_idle_window(cached.clone(), now);
+    let projected = project_window(cached.clone(), now);
     assert_eq!(projected, cached, "before reset the cached reading stands");
 
     let passed = Timestamp::from_second(1_999_990_000).unwrap();
-    let projected = project_idle_window(rl_window(95, Some(passed)), now);
+    let projected = project_window(rl_window(95, Some(passed)), now);
     assert_eq!(projected.used_percentage, Some(0), "a reset window is full");
     assert_eq!(
         projected.resets_at,
@@ -22,14 +22,14 @@ fn idle_window_projection_ages_only_known_elapsed_windows() {
     );
 
     let undated = rl_window(40, None);
-    assert_eq!(project_idle_window(undated.clone(), now), undated);
+    assert_eq!(project_window(undated.clone(), now), undated);
     let no_duration = RateLimitWindow {
         used_percentage: Some(90),
         resets_at: Some(passed),
         duration_mins: None,
         ..Default::default()
     };
-    assert_eq!(project_idle_window(no_duration.clone(), now), no_duration);
+    assert_eq!(project_window(no_duration.clone(), now), no_duration);
 }
 
 /// The producer persists a live reading as ground truth; once the session is
@@ -134,6 +134,62 @@ fn idle_short_window_past_reset_shows_full_without_persisting_the_synthetic_wind
         Some(90),
         "the cache retains ground truth, not the synthesized full window"
     );
+}
+
+/// A live reading can carry a longer window whose own reset has already passed.
+/// The shorter window is still future, so the reading survives upstream; display
+/// rolls the expired longer window forward instead of freezing its countdown at
+/// `0h00m`, while persisted truth stays raw.
+#[test]
+fn live_reading_with_expired_longer_window_rolls_forward() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let passed = Timestamp::from_second(1_000_000_000).unwrap(); // 2001 — always past
+    let future = Timestamp::from_second(4_000_000_000).unwrap(); // 2096 — always future
+
+    let mut frame = snapshot_with_panels(
+        workspace,
+        vec![provider_panel(
+            "claude",
+            vec![
+                rl_window_mins(40, Some(future), 300),
+                rl_window_mins(80, Some(passed), 7 * 24 * 60),
+            ],
+        )],
+    );
+    apply_rate_limit_cache(&mut frame, &runtime, true);
+
+    let shown = &frame.providers[0].windows;
+    assert_eq!(
+        shown[0].used_percentage,
+        Some(40),
+        "the live 5h window is unchanged"
+    );
+    assert_eq!(shown[0].resets_at, Some(future));
+    assert_eq!(
+        shown[1].used_percentage,
+        Some(0),
+        "the expired 7d window rolls to full"
+    );
+    assert!(
+        shown[1].resets_at.is_some_and(|reset| reset > frame.now),
+        "with a future, rolled-forward countdown — not a frozen 0h00m"
+    );
+
+    let persisted = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let persisted_7d = persisted.windows["claude"]
+        .windows
+        .iter()
+        .find(|window| window.duration_mins == Some(7 * 24 * 60))
+        .expect("the 7d window is persisted");
+    assert_eq!(
+        persisted_7d.used_percentage,
+        Some(80),
+        "ground truth stays raw"
+    );
+    assert_eq!(persisted_7d.resets_at, Some(passed));
 }
 
 /// Once the longest cached window has reset, every cached bar reads as unknown
