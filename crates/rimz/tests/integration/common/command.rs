@@ -59,6 +59,8 @@ const POLL_STEP: Duration = Duration::from_millis(10);
 pub trait CommandTimeoutExt {
     fn bounded_output(&mut self) -> io::Result<Output>;
 
+    fn bounded_output_within(&mut self, timeout: Duration) -> io::Result<Output>;
+
     fn bounded_status(&mut self) -> io::Result<ExitStatus>;
 
     fn assert_success_within_timeout(&mut self, label: &str) -> ExitStatus;
@@ -66,6 +68,10 @@ pub trait CommandTimeoutExt {
 
 impl CommandTimeoutExt for Command {
     fn bounded_output(&mut self) -> io::Result<Output> {
+        self.bounded_output_within(COMMAND_TIMEOUT)
+    }
+
+    fn bounded_output_within(&mut self, timeout: Duration) -> io::Result<Output> {
         let debug = format!("{self:?}");
         let mut child = self
             .stdin(Stdio::null())
@@ -75,7 +81,7 @@ impl CommandTimeoutExt for Command {
 
         let stdout = child.stdout.take().map(drain_pipe);
         let stderr = child.stderr.take().map(drain_pipe);
-        let deadline = Instant::now() + COMMAND_TIMEOUT;
+        let deadline = Instant::now() + timeout;
         loop {
             if let Some(status) = child.try_wait()? {
                 return Ok(Output {
@@ -89,7 +95,7 @@ impl CommandTimeoutExt for Command {
                 let _ = child.wait();
                 drop(stdout);
                 drop(stderr);
-                return Err(timeout_error(&debug));
+                return Err(timeout_error(&debug, timeout));
             }
             thread::sleep(POLL_STEP);
         }
@@ -110,7 +116,7 @@ impl CommandTimeoutExt for Command {
             if Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(timeout_error(&debug));
+                return Err(timeout_error(&debug, COMMAND_TIMEOUT));
             }
             thread::sleep(POLL_STEP);
         }
@@ -142,9 +148,9 @@ fn join_pipe(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
         .unwrap_or_default()
 }
 
-fn timeout_error(command: &str) -> io::Error {
+fn timeout_error(command: &str, timeout: Duration) -> io::Error {
     io::Error::new(
         io::ErrorKind::TimedOut,
-        format!("{command} did not finish within {COMMAND_TIMEOUT:?}; killed"),
+        format!("{command} did not finish within {timeout:?}; killed"),
     )
 }

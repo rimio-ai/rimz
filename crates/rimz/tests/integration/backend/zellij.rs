@@ -31,6 +31,7 @@ use tempfile::TempDir;
 use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
 
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
+const LIST_PANES_JSON_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// Skip the test (return) if the host has no `zellij` binary on PATH.
 macro_rules! require_zellij {
@@ -1645,7 +1646,7 @@ fn open_new_tab(xdg: &Path, session: &str) {
 fn list_panes_json(xdg: &Path, session: &str) -> std::result::Result<serde_json::Value, String> {
     let output = scoped_zellij(xdg)
         .args(["--session", session, "action", "list-panes", "-j", "-a"])
-        .bounded_output()
+        .bounded_output_within(LIST_PANES_JSON_TIMEOUT)
         .map_err(|err| format!("list-panes failed for {session}: {err}"))?;
     if !output.status.success() {
         return Err(format!(
@@ -1822,10 +1823,16 @@ where
     loop {
         match named_work_pane_geometry(xdg, session, tab_name) {
             Ok(work) => {
-                if (work.len() == want && ready(&work)) || Instant::now() >= deadline {
+                if work.len() == want && ready(&work) {
                     return work;
                 }
                 last_work = work;
+                if Instant::now() >= deadline {
+                    panic!(
+                        "timed out waiting for {want} work panes in {session}/{tab_name}; \
+                         last panes: {last_work:?}",
+                    );
+                }
             }
             Err(err) => {
                 if Instant::now() >= deadline {
@@ -2256,6 +2263,7 @@ fn wait_for_pane_count(xdg: &Path, session: &str, want: usize) -> Vec<PaneRef> {
     loop {
         match ZellijBackend::with_runtime_dir(xdg).list_panes(PaneListOptions {
             session_name: Some(session.to_owned()),
+            command_timeout: Some(LIST_PANES_JSON_TIMEOUT),
             ..Default::default()
         }) {
             Ok(listing) => {
