@@ -21,7 +21,7 @@ The full field model, dotted-key examples, and merge order are in [configuration
 rimz coverage [--json]
 ```
 
-`rimz coverage` prints two static matrices from the built-in adapter descriptors — integration-concern coverage and lifecycle-hook coverage — using `✓` for native support, `◐` for partial or derived, and `✗` for absent. Each matrix includes a `GAPS` table listing every non-OK cell with its concern, agent, and detail. `--json` emits one document with `coverage` and `hooks_matrix` for scripting.
+`rimz coverage` prints two static matrices from the built-in adapter descriptors — integration-concern coverage and lifecycle-hook coverage — with agents as rows and concern or signal labels as columns. The matrices use `✓` for native support, `◐` for partial or derived, and `✗` for absent, followed by a per-agent `DETAIL` breakdown that names the backing hook, event, or derivation next to each glyph for every cell. `--json` emits one document with `coverage` and `hooks_matrix` for scripting.
 
 ## List themes
 

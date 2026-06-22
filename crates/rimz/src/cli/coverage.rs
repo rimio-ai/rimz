@@ -201,36 +201,50 @@ fn section(w: &mut impl Write, title: &str) -> io::Result<()> {
 fn render_matrix(
     w: &mut impl Write,
     title: &str,
-    label_header: &str,
+    detail_label_header: &str,
     legend: [&str; 3],
     matrix: &CoverageMatrix,
 ) -> io::Result<()> {
     section(w, title)?;
-    let headers = std::iter::once(label_header.to_owned()).chain(matrix.agents.iter().cloned());
+    render_grid(w, matrix)?;
+    render_legend(w, legend)?;
+    render_detail(w, detail_label_header, matrix)
+}
+
+fn render_grid(w: &mut impl Write, matrix: &CoverageMatrix) -> io::Result<()> {
+    let headers =
+        std::iter::once("AGENT".to_owned()).chain(matrix.rows.iter().map(|row| row.label.clone()));
     let mut table = Table::new(headers);
-    for row in &matrix.rows {
-        let cells = std::iter::once(cell(row.label.as_str()).fg(palette::ACCENT))
-            .chain(row.cells.iter().map(|cell| matrix_cell(cell.state)));
+    for (agent_idx, agent) in matrix.agents.iter().enumerate() {
+        let cells = std::iter::once(cell(agent.as_str()).fg(palette::ACCENT)).chain(
+            matrix
+                .rows
+                .iter()
+                .map(|row| matrix_cell(row.cells[agent_idx].state)),
+        );
         table.row(cells);
     }
-    table.render(w)?;
-    render_legend(w, legend)?;
+    table.render(w)
+}
 
-    let gaps = gap_rows(matrix);
-    if gaps.is_empty() {
-        return Ok(());
-    }
-
+fn render_detail(
+    w: &mut impl Write,
+    label_header: &str,
+    matrix: &CoverageMatrix,
+) -> io::Result<()> {
     writeln!(w)?;
-    writeln!(w, "{}", paint(palette::ACCENT.bold(), "GAPS"))?;
-    let mut table = Table::new(["CONCERN", "AGENT", "DETAIL"]);
-    for gap in gaps {
-        let (glyph, style) = matrix_parts(gap.state);
-        table.row([
-            cell(format!("{glyph} {}", gap.concern)).fg(style),
-            cell(gap.agent).fg(palette::ACCENT),
-            cell(gap.detail),
-        ]);
+    writeln!(w, "{}", paint(palette::ACCENT.bold(), "DETAIL"))?;
+    let mut table = Table::new([label_header, "DETAIL"]);
+    for (agent_idx, agent) in matrix.agents.iter().enumerate() {
+        table.section(agent);
+        for row in &matrix.rows {
+            let entry = &row.cells[agent_idx];
+            let (glyph, style) = matrix_parts(entry.state);
+            table.row([
+                cell(row.label.as_str()).fg(palette::ACCENT),
+                cell(format!("{glyph} {}", entry.detail)).fg(style),
+            ]);
+        }
     }
     table.render(w)
 }
@@ -250,31 +264,6 @@ fn render_legend(w: &mut impl Write, legend: [&str; 3]) -> io::Result<()> {
         paint(absent_style, absent_glyph),
         paint(palette::FAINT, legend[2])
     )
-}
-
-struct GapRow<'a> {
-    state: MatrixCellState,
-    concern: &'a str,
-    agent: &'a str,
-    detail: &'a str,
-}
-
-fn gap_rows(matrix: &CoverageMatrix) -> Vec<GapRow<'_>> {
-    let mut gaps = Vec::new();
-    for row in &matrix.rows {
-        for (agent, cell) in matrix.agents.iter().zip(&row.cells) {
-            if cell.state == MatrixCellState::Ok {
-                continue;
-            }
-            gaps.push(GapRow {
-                state: cell.state,
-                concern: row.label.as_str(),
-                agent: agent.as_str(),
-                detail: cell.detail.as_str(),
-            });
-        }
-    }
-    gaps
 }
 
 fn matrix_cell(value: MatrixCellState) -> Cell {
@@ -441,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn human_report_renders_grid_legend_and_gaps() {
+    fn human_report_renders_grid_legend_and_detail() {
         let report = CoverageReport {
             coverage: CoverageMatrix {
                 agents: vec!["codex".to_owned(), "pi".to_owned()],
@@ -478,34 +467,32 @@ mod tests {
         let out = strip(|w| render_human(&report, w));
         assert!(out.contains("Rimz coverage"), "{out}");
         assert!(
-            out.contains("CONCERN") && out.contains("codex") && out.contains("pi"),
-            "grid header and agent columns:\n{out}"
+            out.contains("AGENT") && out.contains("codex") && out.contains("pi"),
+            "grid header and agent rows:\n{out}"
         );
         assert!(
             out.contains("legend ✓ wired   ◐ partial   ✗ unsupported"),
             "legend renders:\n{out}"
         );
-        assert!(out.contains("GAPS"), "gaps block title:\n{out}");
-
-        let gaps = out.split_once("GAPS").expect("gaps block").1;
-        let partial = gaps.find("◐ end").expect("partial row");
-        let codex_plan = gaps.find("✗ plan").expect("codex absent row");
-        let pi_plan = gaps[codex_plan + "✗ plan".len()..]
-            .find("✗ plan")
-            .map(|idx| codex_plan + "✗ plan".len() + idx)
-            .expect("pi absent row");
+        assert!(out.contains("DETAIL"), "detail block title:\n{out}");
+        assert!(out.contains("CONCERN"), "detail label header:\n{out}");
         assert!(
-            partial < codex_plan && codex_plan < pi_plan,
-            "gaps preserve concern then agent order:\n{out}"
+            out.contains("✓ SessionStart/UserPromptSubmit/Stop"),
+            "ok detail annotated:\n{out}"
         );
         assert!(
-            out.contains("pane liveness + reaper — no SessionEnd hook"),
+            out.contains("◐ pane liveness + reaper — no SessionEnd hook"),
             "partial detail kept:\n{out}"
         );
         assert!(
-            out.contains("no plan-approval gate"),
+            out.contains("✗ no plan-approval gate"),
             "absent detail kept:\n{out}"
         );
+
+        let detail = out.split_once("DETAIL").expect("detail block").1;
+        let codex = detail.find("codex").expect("codex section");
+        let pi = detail.find("pi").expect("pi section");
+        assert!(codex < pi, "detail preserves registry agent order:\n{out}");
     }
 
     #[test]

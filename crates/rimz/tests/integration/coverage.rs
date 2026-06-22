@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::common::Env;
 
 #[test]
-fn coverage_human_report_renders_both_matrices_and_gaps() {
+fn coverage_human_report_renders_both_matrices_and_detail() {
     let env = Env::new();
     let output = env.rimz().arg("coverage").output().expect("spawn coverage");
     assert!(
@@ -22,9 +22,10 @@ fn coverage_human_report_renders_both_matrices_and_gaps() {
         "CONCERN",
         "SIGNAL",
         "legend",
-        "GAPS",
+        "DETAIL",
         "plan",
         "no plan-approval gate",
+        "SessionStart/UserPromptSubmit/Stop",
     ] {
         assert!(stdout.contains(needle), "missing {needle}:\n{stdout}");
     }
