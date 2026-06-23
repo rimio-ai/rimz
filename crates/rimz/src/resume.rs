@@ -163,8 +163,9 @@ pub fn plan_resume(
         }
         // The pane runs the supervised exec wrapper, not the agent CLI
         // directly: every agent launch funnels through `rimz agents exec`,
-        // which applies trusted `[[agents]]` env and the adapter's launch
-        // pins before spawning the resume argv.
+        // which replays the durable launch identity, applies trusted
+        // `[[agents]]` env and the adapter's launch pins before spawning the
+        // resume argv.
         let command = resume_command(rimz_bin, agent);
         if let Some(tab) = plan.tabs.iter_mut().find(|tab| tab.cwd == cwd) {
             tab.panes.push(command);
@@ -194,6 +195,12 @@ fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
     }
     if let Some(profile) = agent.profile.as_deref() {
         command.extend(["--agent-profile".to_owned(), profile.to_owned()]);
+    }
+    if let Some(role) = agent.role.as_deref() {
+        command.extend(["--agent-role".to_owned(), role.to_owned()]);
+    }
+    if let Some(team) = agent.team.as_deref() {
+        command.extend(["--agent-team".to_owned(), team.to_owned()]);
     }
     command
 }
@@ -380,12 +387,14 @@ mod tests {
     }
 
     #[test]
-    fn resume_command_replays_name_and_profile() {
-        // A reborn agent re-stamps its durable name and its launch profile, so it
-        // answers to `@<profile>` again after a mux rebirth.
+    fn resume_command_replays_launch_identity() {
+        // A reborn agent re-stamps its durable launch identity, so it answers
+        // to `@<profile>` and `@<role>` again after a mux rebirth.
         let mut agent = agent("claude", "a1", "/code/qe", Some("main"), 1);
         agent.name = Some("swift-otter".to_owned());
-        agent.profile = Some("planner".to_owned());
+        agent.profile = Some("claude-planner".to_owned());
+        agent.role = Some("planner".to_owned());
+        agent.team = Some("pcr".to_owned());
         assert_eq!(
             resume_command(Path::new("/bin/rimz"), &agent),
             vec![
@@ -399,7 +408,11 @@ mod tests {
                 "--agent-name",
                 "swift-otter",
                 "--agent-profile",
+                "claude-planner",
+                "--agent-role",
                 "planner",
+                "--agent-team",
+                "pcr",
             ]
         );
     }

@@ -134,6 +134,52 @@ fn resumes_an_agent_stamped_in_the_real_rollup() {
 }
 
 #[test]
+fn resume_replays_role_and_team() {
+    let h = Harness::new();
+    let mut obs = registered(
+        "sess-claude",
+        "warm-drift",
+        "terminal_3",
+        "/repo/feature",
+        "feature",
+    );
+    obs.role = Some("planner".to_owned());
+    obs.team = Some("pcr".to_owned());
+    obs.profile = Some("claude-planner".to_owned());
+    h.ledger
+        .append_event(&lifecycle(&h, "claude", "SessionStart", &obs))
+        .expect("append");
+
+    let plan = plan_from_rollup(&h);
+    assert_eq!(plan.tabs.len(), 1);
+    assert_eq!(
+        plan.tabs[0].panes,
+        vec![
+            vec![
+                "/bin/rimz",
+                "agents",
+                "exec",
+                "claude",
+                "--resume",
+                "sess-claude",
+                "--close-pane-on-exit",
+                "--agent-name",
+                "warm-drift",
+                "--agent-profile",
+                "claude-planner",
+                "--agent-role",
+                "planner",
+                "--agent-team",
+                "pcr",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
+        ]
+    );
+}
+
+#[test]
 fn two_same_kind_agents_in_one_worktree_each_resume_their_own_pane() {
     // Two Claude sessions running side by side in one worktree, on distinct
     // panes. The fold keeps both stamped agents; resume keys on the pane, so
