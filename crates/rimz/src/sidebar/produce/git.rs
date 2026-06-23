@@ -16,15 +16,14 @@ use crate::sidebar::cache::{
     unix_now_ms,
 };
 use crate::sidebar::enrich::{
-    focused_worktree_paths, hot_worktree_paths, needed_worktree_paths, project_cached_pr_states,
-    project_diff_stats,
+    focused_worktree_paths, hot_worktree_paths, needed_worktree_paths, project_diff_stats,
 };
 use crate::worktree::{self, LandedVerdict};
 
 /// How a non-producing sidebar waits for the elected producer's diff-stats
 /// write before refreshing locally. ~300ms total (15 × 20ms) — wider than the
-/// snapshot's ~200ms because the git tail (up to four sequential forks per
-/// worktree) runs longer, yet still well under the ~2s backstop tick.
+/// snapshot's ~200ms because the per-worktree git chain runs longer, yet still
+/// well under the ~2s backstop tick.
 const DIFF_STATS_WAIT_STEP: Duration = Duration::from_millis(20);
 const DIFF_STATS_WAIT_STEPS: u32 = 15;
 
@@ -68,7 +67,6 @@ pub(super) fn enrich_worktree_groups(
         configured_trunk,
     );
     project_diff_stats(snapshot, &cache);
-    project_cached_pr_states(snapshot, runtime);
 }
 
 /// Refresh the diff stats for `needed` worktree paths and return the cache map
@@ -357,28 +355,41 @@ fn refresh_commit_facts(
 }
 
 fn merge_in_progress(worktree: &Path) -> Option<bool> {
+    let mut args = vec!["rev-parse"];
     for name in [
         "rebase-merge",
         "rebase-apply",
         "MERGE_HEAD",
         "CHERRY_PICK_HEAD",
     ] {
-        if git_path_exists(worktree, name)? {
+        args.push("--git-path");
+        args.push(name);
+    }
+    let output = git_output(worktree, &args)?;
+    if !output.status.success() {
+        return None;
+    }
+    for raw in String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+    {
+        if raw.is_empty() {
+            continue;
+        }
+        if git_path_from_rev_parse(worktree, raw).exists() {
             return Some(true);
         }
     }
     Some(false)
 }
 
-fn git_path_exists(worktree: &Path, name: &str) -> Option<bool> {
-    let raw = git_line(worktree, &["rev-parse", "--git-path", name])?;
-    let path = Path::new(&raw);
-    let path = if path.is_absolute() {
+fn git_path_from_rev_parse(worktree: &Path, raw: &str) -> std::path::PathBuf {
+    let path = Path::new(raw);
+    if path.is_absolute() {
         path.to_path_buf()
     } else {
         worktree.join(path)
-    };
-    Some(path.exists())
+    }
 }
 
 fn worktree_branch(worktree: &Path) -> Option<String> {

@@ -89,6 +89,34 @@ fn trunk_sync_classifier_uses_marker_and_local_git_state() {
     );
 }
 
+#[test]
+fn pr_state_projection_uses_the_given_map() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("feature");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let mut snapshot = SidebarSnapshot::build(
+        WorkspaceId::from_project_root(dir.path()),
+        Vec::new(),
+        Vec::new(),
+        Timestamp::now(),
+    );
+    snapshot.worktree_groups = vec![worktree_group(&worktree, Vec::new())];
+
+    let mut states = BTreeMap::new();
+    states.insert(
+        worktree.display().to_string(),
+        crate::WorktreePrState::Closed,
+    );
+    project_pr_state_map(&mut snapshot, &states);
+    assert_eq!(
+        snapshot.worktree_groups[0].pr_state,
+        Some(crate::WorktreePrState::Closed)
+    );
+
+    project_pr_state_map(&mut snapshot, &BTreeMap::new());
+    assert_eq!(snapshot.worktree_groups[0].pr_state, None);
+}
+
 fn stats(rtt_ms: Option<u32>, miss_pct: u16) -> LinkStats {
     LinkStats {
         rtt_ms,

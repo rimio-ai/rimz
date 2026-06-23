@@ -20,7 +20,7 @@ use crate::ids::{PaneId, WorkspaceId};
 use crate::ledger::snapshot::{LazyAgentPairingDiagnostic, LazyAgentPairingResult};
 use crate::{
     RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarSnapshot,
-    SidebarWorktreeGroup, SidebarWorktreeKind, WorktreeTrunkSync,
+    SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState, WorktreeTrunkSync,
 };
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
@@ -266,7 +266,10 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
     }
 }
 
-pub fn project_pr_states(snapshot: &mut SidebarSnapshot, cache: &PrStateCache) {
+pub fn project_pr_state_map(
+    snapshot: &mut SidebarSnapshot,
+    states: &BTreeMap<String, WorktreePrState>,
+) {
     for group in &mut snapshot.worktree_groups {
         if group.kind != SidebarWorktreeKind::Worktree {
             continue;
@@ -277,8 +280,12 @@ pub fn project_pr_states(snapshot: &mut SidebarSnapshot, cache: &PrStateCache) {
         if !Path::new(&path).is_dir() {
             continue;
         }
-        group.pr_state = cache.states.get(&path).copied();
+        group.pr_state = states.get(&path).copied();
     }
+}
+
+pub fn project_pr_states(snapshot: &mut SidebarSnapshot, cache: &PrStateCache) {
+    project_pr_state_map(snapshot, &cache.states);
 }
 
 pub(crate) fn project_cached_pr_states(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths) {
@@ -695,8 +702,9 @@ pub(crate) fn fold_machine_config_producing(
     let accounts_config = config.accounts.clone();
     let resume_config = config.resume.clone();
     let accounts = produce_accounts(&snapshot, runtime);
-    produce_pr_states(&snapshot, runtime);
+    let pr_states = produce_pr_states(&snapshot, runtime);
     let mut snapshot = fold_machine_config_with(snapshot, config, accounts, provider_spending);
+    project_pr_state_map(&mut snapshot, &pr_states);
     // The producer owns the account-scoped window cache: it writes live readings
     // back so the budgets survive a session ending or going idle.
     apply_rate_limit_cache(&mut snapshot, runtime, true);

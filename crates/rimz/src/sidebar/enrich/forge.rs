@@ -44,15 +44,13 @@ pub(super) fn produce_pr_states(
         crate::ledger::single_flight::Coalesced::Shared(cache) => cache.states,
         crate::ledger::single_flight::Coalesced::Produce(_guard) => {
             let (states, ok) = probe_pr_states(snapshot);
-            write_pr_state_cache(
-                &path,
-                &PrStateCache {
-                    refreshed_at_ms: unix_now_ms(),
-                    ok,
-                    states: states.clone(),
-                },
-            );
-            states
+            let cache = PrStateCache {
+                refreshed_at_ms: unix_now_ms(),
+                ok,
+                states,
+            };
+            write_pr_state_cache(&path, &cache);
+            cache.states
         }
         crate::ledger::single_flight::Coalesced::ProduceLocal => probe_pr_states(snapshot).0,
     }
