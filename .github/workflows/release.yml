@@ -172,7 +172,14 @@ jobs:
         if: ${{ github.event_name == 'push' }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p rimz
+        run: |
+          set -euo pipefail
+          version="$(cargo pkgid -p rimz | sed 's/.*#//')"
+          if curl -fsS -H 'User-Agent: rimz-release' "https://crates.io/api/v1/crates/rimz/${version}" >/dev/null; then
+            echo "rimz ${version} already published"
+          else
+            cargo publish -p rimz
+          fi
 
       - name: Resolve release identity
         shell: bash
