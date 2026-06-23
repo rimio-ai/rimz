@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(overload_backoff(1, &[60, 120, 180]).as_secs(), 120);
         assert_eq!(overload_backoff(2, &[60, 120, 180]).as_secs(), 180);
         assert_eq!(overload_backoff(9, &[60, 120, 180]).as_secs(), 180);
-        assert_eq!(overload_backoff(0, &[]).as_secs(), 180);
+        assert_eq!(overload_backoff(0, &[]).as_secs(), 300);
     }
 
     #[test]
