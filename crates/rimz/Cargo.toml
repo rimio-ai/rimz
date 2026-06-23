@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "The control room for your coding agents: a realtime tmux/Zellij dashboard for fleets of Claude Code, Codex, and Pi agents."
+homepage = "https://github.com/rimio/rimz"
+readme = "../../README.md"
+keywords = ["cli", "tui", "ai", "agents", "tmux"]
+categories = ["command-line-utilities", "development-tools"]
 # Integration tests live in one binary (`tests/integration/`), not flat
 # `tests/*.rs` targets — disable auto-discovery and declare it explicitly.
 autotests = false
@@ -25,7 +30,7 @@ path = "src/main.rs"
 [[bin]]
 name = "zellij-trace"
 path = "tests/fixtures/zellij-trace/main.rs"
-required-features = []
+required-features = ["testkit"]
 test = false
 bench = false
 
@@ -35,7 +40,7 @@ bench = false
 [[bin]]
 name = "codex-appserver-stub"
 path = "tests/fixtures/codex-appserver-stub/main.rs"
-required-features = []
+required-features = ["testkit"]
 test = false
 bench = false
 
@@ -45,7 +50,7 @@ bench = false
 [[bin]]
 name = "git-trace"
 path = "tests/fixtures/git-trace/main.rs"
-required-features = []
+required-features = ["testkit"]
 test = false
 bench = false
 
@@ -57,7 +62,7 @@ bench = false
 [[bin]]
 name = "ssh-trace"
 path = "tests/fixtures/ssh-trace/main.rs"
-required-features = []
+required-features = ["testkit"]
 test = false
 bench = false
 

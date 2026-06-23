@@ -87,7 +87,7 @@ mod tests {
             "loggedIn": true,
             "authMethod": "claude.ai",
             "apiProvider": "firstParty",
-            "email": "rimio.ai@gmail.com",
+            "email": "user@example.com",
             "subscriptionType": "max"
         }"#;
         let account = found(parse_claude_auth(json), "metered account");

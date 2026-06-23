@@ -5,8 +5,8 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/rimz/rimz"
-version = "0.0.0"
+repository = "https://github.com/rimio/rimz"
+version = "0.1.0"
 
 [workspace.lints.clippy]
 # Stdout is the protocol surface. Library code must use `tracing`; legal

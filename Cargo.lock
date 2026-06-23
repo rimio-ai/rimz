@@ -2937,7 +2937,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "rimz"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anstream",
  "anstyle",
@@ -2987,7 +2987,7 @@ dependencies = [
 
 [[package]]
 name = "rimz-presence-zellij"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4896,7 +4896,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",

@@ -110,7 +110,7 @@ Pi writes one session file per conversation:
 
 ```text
 ~/.pi/agent/sessions/--<cwd-with-/-as-->--/<timestamp>_<uuid>.jsonl
-e.g.   sessions/--home-marvin-workspace-project-rimz-rimz--/2026-06-04T06-45-56-308Z_019e9161-a5d0-791d-879e-39679acd4ded.jsonl
+e.g.   sessions/--home-user-workspace-project-rimz-rimz--/2026-06-04T06-45-56-308Z_019e9161-a5d0-791d-879e-39679acd4ded.jsonl
 ```
 
 The directory key is the working directory with `/` replaced by `-`; the filename stem is `<ISO timestamp, : and . as ->_<session uuid>`, so the session id is everything after the first `_`. Overrides: `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, settings `sessionDir`; `--no-session` skips persistence entirely. [`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) walks this tree fleet-wide for spending (its `PI_AGENT_DIR` env is a Rimz test override, not a pi variable).
@@ -118,7 +118,7 @@ The directory key is the working directory with `/` replaced by `-`; the filenam
 The first line is the header; every later line is a tree entry (`id` is 8-char hex, `parentId` links it, `timestamp` is ISO):
 
 ```jsonc
-{"type":"session","version":3,"id":"<session uuid>","timestamp":"2026-06-04T06:45:56.308Z","cwd":"/home/marvin/…","parentSession":"<path, fork/clone only>"}
+{"type":"session","version":3,"id":"<session uuid>","timestamp":"2026-06-04T06:45:56.308Z","cwd":"/home/user/…","parentSession":"<path, fork/clone only>"}
 ```
 
 Sessions are versioned (v1 linear → v2 tree → v3 renamed `hookMessage` → `custom`) and auto-migrate on load; parse around the `version` field.

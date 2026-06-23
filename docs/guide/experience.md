@@ -12,7 +12,7 @@ Discovery happens before the terminal. The reader reads the Hacker News post, cl
 
 ```sh
 # one of:
-brew tap rimz/rimz https://<host>/rimz/homebrew-rimz && brew install rimz/rimz/rimz
+brew tap rimio/rimz && brew install rimz
 cargo install rimz
 curl -fsSL https://rimz.sh/install | sh
 

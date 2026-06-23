@@ -2,7 +2,9 @@
 
 Rimz builds from source into one binary that runs inside the Zellij or tmux you already use. The build needs Git, a C linker, a terminal multiplexer, and the Rust toolchain — the steps below install each on Linux and macOS, then verify and tune the result.
 
-The install also builds a small Zellij plugin that ships embedded in the binary. The plugin compiles to WebAssembly, so the build needs Rust's `wasm32-wasip1` target — and the repo installs it for you: [rust-toolchain.toml](../../rust-toolchain.toml) pins the stable channel, the components, and that target, and `rustup` applies the file the first time you build in the repo. There is no manual target setup.
+The source install also builds a small Zellij plugin that ships embedded in the binary. The plugin compiles to WebAssembly, so the build needs Rust's `wasm32-wasip1` target — and the repo installs it for you: [rust-toolchain.toml](../../rust-toolchain.toml) pins the stable channel, the components, and that target, and `rustup` applies the file the first time you build in the repo. There is no manual target setup.
+
+`cargo install rimz` installs the binary-only crate from crates.io. Zellij rooms still work, but the presence plugin is absent unless `RIMZ_PRESENCE_PLUGIN` points at a wasm artifact, so Zellij uses the poll-mode freshness path; `cargo xtask install` from a source checkout builds and embeds the plugin.
 
 ## Prerequisites
 

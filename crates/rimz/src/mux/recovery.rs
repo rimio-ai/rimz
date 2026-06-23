@@ -315,7 +315,7 @@ mod tests {
         }
     }
 
-    const SESSION: &str = "rimz-home-marvin-workspace-project-rimz-rimz";
+    const SESSION: &str = "rimz-home-user-workspace-project-rimz-rimz";
     const WS: &str = "ws_f89e49906df0621ad2765112";
 
     #[test]

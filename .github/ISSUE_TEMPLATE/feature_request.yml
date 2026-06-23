@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a user-facing capability or workflow improvement.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What job are you trying to get done?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the behavior you want.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Existing commands, config, or workflows you tried.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Agent, tmux/Zellij, remote, worktree, or resolver details that shape the request.

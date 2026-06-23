@@ -10,7 +10,7 @@ fn expected_session(root: &Path, slug: &str) -> String {
 
 #[test]
 fn session_name_uses_bounded_basename_and_workspace_hash() {
-    let root = Path::new("/home/marvin/xxx");
+    let root = Path::new("/home/user/xxx");
     assert_eq!(session_name_for(root), expected_session(root, "xxx"));
     assert!(session_name_for(root).len() <= 20);
 }
@@ -33,7 +33,7 @@ fn session_name_distinguishes_roots_with_the_same_basename() {
 
 #[test]
 fn session_name_hash_matches_workspace_id_prefix() {
-    let root = Path::new("/home/marvin/rimio");
+    let root = Path::new("/home/user/rimio");
     let name = session_name_for(root);
 
     assert_eq!(name, format!("rimz-rimio-{}", hash6(root)));
@@ -49,7 +49,7 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
     let root = workspaces_dir_under(state_root);
 
     // Two workspaces with records, written through the canonical path.
-    for project in ["/home/marvin/alpha", "/home/marvin/beta"] {
+    for project in ["/home/user/alpha", "/home/user/beta"] {
         let project_root = std::path::PathBuf::from(project);
         let workspace_id = WorkspaceId::from_project_root(&project_root);
         let paths = StatePaths::under(workspace_id.clone(), state_root).expect("state paths");
@@ -78,7 +78,7 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
     sessions.sort();
     assert_eq!(
         sessions,
-        ["/home/marvin/alpha", "/home/marvin/beta"]
+        ["/home/user/alpha", "/home/user/beta"]
             .into_iter()
             .map(|project| session_name_for(Path::new(project)))
             .collect::<Vec<_>>(),

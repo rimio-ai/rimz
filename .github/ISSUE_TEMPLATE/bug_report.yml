@@ -1,0 +1,42 @@
+name: Bug report
+description: Report something that does not work as expected.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve Rimz. Include enough detail for someone else to reproduce the failure.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Commands, config, and steps that trigger the issue.
+      placeholder: |
+        1. Run `rimz ...`
+        2. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Rimz version, OS, shell, tmux/Zellij version, and agent versions.
+      placeholder: |
+        rimz --version:
+        rimz doctor:
+        tmux -V or zellij --version:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste relevant logs, terminal output, or screenshots. Redact secrets.
+      render: text

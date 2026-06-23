@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security report
+    url: https://github.com/rimio/rimz/security/advisories/new
+    about: Report vulnerabilities privately.
+  - name: Security model
+    url: https://github.com/rimio/rimz/blob/main/docs/guide/security.md
+    about: Read Rimz security boundaries and threat model.

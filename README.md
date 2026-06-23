@@ -10,7 +10,11 @@
 
 <p align="center"><strong>agents fleet · harness dashboard · programmable · local & remote · tmux & zellij · token insight</strong></p>
 
-<!-- badges: CI · coverage · crates.io · license - land here when published -->
+<p align="center">
+  <a href="https://github.com/rimio/rimz/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/rimio/rimz/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://crates.io/crates/rimz"><img alt="crates.io" src="https://img.shields.io/crates/v/rimz.svg"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/crates/l/rimz.svg"></a>
+</p>
 
 <p align="center">
   <a href="#get-started-60-seconds">Get started</a> ·
@@ -132,9 +136,9 @@ Adapters are thin layers over the same hook and transcript primitives ([agents i
 ```sh
 cargo install rimz
 
-# or via a Homebrew tap — tap once, then install (swap <host> for the tap host):
-brew tap rimz/rimz https://<host>/rimz/homebrew-rimz
-brew install rimz/rimz/rimz
+# or via a Homebrew tap — tap once, then install:
+brew tap rimio/rimz
+brew install rimz
 ```
 
 zellij or tmux runs the room. Building from source is `git clone … && cargo xtask install`; prerequisites, the pinned toolchain, and the wasm target live in [the installation guide](./docs/guide/installation.md). Rimz is pre-release: the Claude Code, Codex, and Pi adapters, both multiplexer backends, and the sidebar are implemented in-tree.
@@ -142,7 +146,7 @@ zellij or tmux runs the room. Building from source is `git clone … && cargo xt
 ## Contributing
 
 ```sh
-git clone https://github.com/rimz/rimz.git && cd rimz
+git clone https://github.com/rimio/rimz.git && cd rimz
 cargo xtask install     # build and install the binary + zellij presence plugin
 cargo xtask test        # the nextest suite
 cargo xtask ci          # the full gate stack

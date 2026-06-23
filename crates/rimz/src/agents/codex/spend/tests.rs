@@ -170,7 +170,7 @@ const TOKEN_COUNT_LINE: &str = r#"{"type":"event_msg","timestamp":"2026-01-01T10
 
 #[test]
 fn session_meta_cwd_stamps_origin_survives_resume_and_is_none_when_absent() {
-    let cwd = "/home/marvin/code/rimz-worktrees/budget-reset";
+    let cwd = "/home/user/code/rimz-worktrees/budget-reset";
     let meta = format!(r#"{{"type":"session_meta","payload":{{"id":"s","cwd":"{cwd}"}}}}"#);
 
     // The rollout's session_meta cwd stamps each entry's durable origin.

@@ -6,11 +6,8 @@ on:
   push:
     branches: [main, master]
 
-# Workflow-level group supersedes stale work:
-# - PRs key on the PR ref, so a newer push cancels the in-flight run.
-# - Pushes (main) key on the commit, so every landed commit verifies in parallel.
-# A single commit's push and pull_request runs land in different groups here
-# (PR ref vs sha), so per-commit dedupe lives in the job-level `concurrency`.
+# PRs key on the PR ref, so a newer push cancels stale work. Pushes key on the
+# commit, so every landed default-branch commit verifies.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -25,33 +22,13 @@ env:
 jobs:
   ci:
     name: cargo xtask ci
-    runs-on: [linux_amd64, debian-13]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Run inside a Debian 13 container so the workspace mounts at a fixed,
-    # isolated path. Host-mode act_runner hands each run a random
-    # $GITHUB_WORKSPACE (…/work/<random>/hostexecutor), and Swatinem/rust-cache
-    # caches `<workspace>/target/ci` while folding that absolute path into the
-    # @actions/cache version — a fresh path every run means restores never
-    # match, so the cache is dead weight. A job container restores GitHub's
-    # property: the same workspace path every run on a fresh filesystem, so the
-    # cache version is stable and concurrent jobs never share a target dir.
-    # Debian 13 keeps apt tmux at 3.5a (the live-mux floor, MIN_TMUX_VERSION =
-    # 3.5.0); the image ships Node because act_runner runs JS actions (checkout,
-    # rust-cache) inside the container, and dtolnay/rust-toolchain bootstraps
-    # rustup over curl from there.
+    # Debian trixie keeps apt tmux at 3.5a (the live-mux floor is
+    # MIN_TMUX_VERSION = 3.5.0). The node image also supplies Node for the JS
+    # actions that run inside the job container.
     container:
       image: node:24-trixie
-    # Per-commit dedupe across events. A rebase-ff merge lands the PR head sha
-    # unchanged on main, so the merge fires both a push (main) and a
-    # pull_request (the rebased branch) run for the *same* commit. Gitea matches
-    # job-level concurrency groups repo-wide, so keying the job on the commit
-    # collapses that pair into one run. Cancel only when the push arrives: the
-    # push run gates the release (release.yml keys off a green CI run on main),
-    # so it must win — the push cancels the redundant pull_request job, never the
-    # reverse.
-    concurrency:
-      group: ci-commit-${{ github.sha }}
-      cancel-in-progress: ${{ github.event_name == 'push' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -70,27 +47,12 @@ jobs:
           cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # Prebuilt binaries — avoids compiling six plugins from source on every
-      # cache miss. Gitea 1.25 lower-cases runner.os, so invoke install-action's
-      # script directly with GitHub-compatible runner env values.
+      # Prebuilt binaries — avoids compiling five plugins from source on every
+      # cache miss.
       - name: Install cargo plugins
-        env:
-          INPUT_TOOL: cargo-nextest,cargo-deny,cargo-machete,cargo-llvm-cov,cargo-semver-checks
-        run: |
-          install_action_dir="$(mktemp -d)"
-          trap 'rm -rf "$install_action_dir"' EXIT
-          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
-          env \
-            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
-            DEFAULT_GITHUB_TOKEN= \
-            GH_TOKEN= \
-            GITHUB_ACTION_PATH="$install_action_dir" \
-            GITHUB_TOKEN= \
-            INPUT_CHECKSUM=true \
-            INPUT_FALLBACK=cargo-binstall \
-            RUNNER_ARCH=X64 \
-            RUNNER_OS=Linux \
-            bash --noprofile --norc "$install_action_dir/main.sh"
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-deny,cargo-machete,cargo-llvm-cov,cargo-semver-checks
 
       # cargo-vet 0.10.1+ adds Trusted Publishing support, and the imported
       # audits now carry `trusted-publisher` entries that 0.10.0 cannot parse.
@@ -181,18 +143,10 @@ jobs:
           "$mold_dir/bin/mold" --version
 
       - name: cargo xtask ci
-        # The shared self-hosted runner can still run several heavy jobs at
-        # once: distinct main commits verify in parallel, and a release build
-        # can trail the previous commit's CI. (A single commit's push and
-        # pull_request runs collapse via the job-level `concurrency` above.)
-        # Two full instrumented suites on one box oversubscribe the cores and
-        # starve the latency-sensitive live-mux tests, whose `zellij`/`tmux` CLI
-        # round-trips then miss their deadlines. The per-run server cap in
-        # .config/nextest.toml bounds server *count*, not CPU, so it cannot fix
-        # this. Cap nextest to half the cores: two concurrent runs then sum to
-        # ~one box's worth of test threads instead of two, leaving the live-mux
-        # round-trips enough CPU to meet their deadlines while distinct commits
-        # still verify in parallel.
+        # Cap nextest to half the cores so overlapping GitHub jobs leave the
+        # latency-sensitive live-mux tests enough CPU for their CLI round-trips.
+        # The per-run server cap in .config/nextest.toml bounds server count,
+        # not CPU.
         run: |
           NEXTEST_TEST_THREADS="$(( ($(nproc) + 1) / 2 ))"
           export NEXTEST_TEST_THREADS

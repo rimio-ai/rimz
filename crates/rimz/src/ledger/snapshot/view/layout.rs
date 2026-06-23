@@ -177,7 +177,7 @@ fn path_basename(root: &Path) -> String {
 }
 
 /// True when `path` is `root` itself or nested under it, compared by path
-/// components so `/home/marvinX` is not treated as under `/home/marvin`. This
+/// components so `/home/userX` is not treated as under `/home/user`. This
 /// is a lexical test on the raw cwd the mux reported — no filesystem
 /// canonicalization — keeping the reducer pure. Used against both the project
 /// root and each enumerated worktree root to decide a cwd's pod.

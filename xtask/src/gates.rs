@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::thread;
@@ -52,7 +53,33 @@ pub(crate) fn semver(root: &Path) -> Result<()> {
     if workspace_version(root)? == "0.0.0" {
         return Ok(());
     }
-    run(root, "cargo", ["semver-checks"])
+    let output = Command::new("cargo")
+        .arg("semver-checks")
+        .current_dir(root)
+        .output()
+        .context("running `cargo`")?;
+    if output.status.success() {
+        return Ok(());
+    }
+    if semver_registry_baseline_missing(&output.stderr) {
+        report_semver_baseline_missing();
+        return Ok(());
+    }
+    let _ = std::io::stdout().write_all(&output.stdout);
+    let _ = std::io::stderr().write_all(&output.stderr);
+    ensure_success("cargo", &["semver-checks"], output.status)
+}
+
+fn semver_registry_baseline_missing(stderr: &[u8]) -> bool {
+    String::from_utf8_lossy(stderr).contains("rimz not found in registry (crates.io)")
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "xtask reports why semver checks are skipped before the first public publish"
+)]
+fn report_semver_baseline_missing() {
+    eprintln!("cargo semver-checks skipped: rimz has no crates.io baseline yet");
 }
 
 pub(crate) fn perf(root: &Path, args: &[String]) -> Result<()> {
@@ -229,4 +256,19 @@ pub(crate) fn coverage(root: &Path) -> Result<()> {
         ],
         &["NO_COLOR"],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semver_baseline_missing_matches_first_publish_error_only() {
+        assert!(semver_registry_baseline_missing(
+            b"error: failed to retrieve index\nCaused by:\n    rimz not found in registry (crates.io)"
+        ));
+        assert!(!semver_registry_baseline_missing(
+            b"error: failed to retrieve index\nCaused by:\n    registry request failed"
+        ));
+    }
 }

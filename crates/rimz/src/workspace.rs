@@ -116,7 +116,7 @@ pub struct KnownWorkspace {
 }
 
 /// True when `inner` is `outer` itself or nested under it, compared by path
-/// components so `/home/marvinX` is never read as under `/home/marvin`. A
+/// components so `/home/userX` is never read as under `/home/user`. A
 /// lexical test on recorded roots — no filesystem access — shared by the
 /// `rimz start` overlap notice and the doctor room tree.
 pub fn root_contains(outer: &Path, inner: &Path) -> bool {

@@ -1,10 +1,9 @@
 name: Release
 
-# Release is downstream of CI. The rolling `latest-main` build publishes only
-# after the CI workflow finishes successfully on the default branch, so a red
-# commit never reaches the release page. `workflow_run` (Gitea >= 1.25) lets the
-# release key off CI's result instead of re-running the gate, so CI runs once
-# per commit. Version tags cut their own gated release on demand.
+# Release is downstream of CI. The rolling `latest-main` build publishes after
+# the CI workflow finishes successfully on the default branch, so a red commit
+# never reaches the release page. Version tags cut their own gated release on
+# demand.
 on:
   workflow_dispatch:
   push:
@@ -15,8 +14,7 @@ on:
     branches: [main, master]
 
 permissions:
-  code: write
-  releases: write
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,15 +32,11 @@ env:
 jobs:
   release:
     name: build and publish dist archives
-    runs-on: [linux_amd64, debian-13]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Run inside a Debian 13 container for the same reason as CI: host-mode
-    # act_runner randomizes $GITHUB_WORKSPACE every run, which churns the
-    # rust-cache @actions/cache version (it caches `<workspace>/target/release-ci`
-    # and hashes the path) so restores never hit. A job container pins the
-    # workspace path and isolates the filesystem, exactly as on GitHub. Debian 13
-    # keeps apt tmux at 3.5a for the self-gate suite (MIN_TMUX_VERSION = 3.5.0),
-    # and the image ships Node for the JS actions.
+    # Debian trixie keeps apt tmux at 3.5a for the self-gate suite
+    # (MIN_TMUX_VERSION = 3.5.0). The node image also supplies Node for JS
+    # actions that run inside the job container.
     container:
       image: node:24-trixie
     # A `workflow_run` fires for every CI conclusion; gate on success so only a
@@ -56,15 +50,14 @@ jobs:
           # event's own ref.
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
-      # The publish steps shape JSON payloads with Python. The host runner
-      # carried it; the container image may not, so provision it for every path
-      # (rolling and tag) before publishing.
-      - name: Ensure Python (release publish)
+      # The GitHub release path uses `gh`; the container image may not ship it.
+      # Python stays available for helper scripts and shell probes.
+      - name: Install release publish tools
         run: |
           set -euo pipefail
-          if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+          if ! command -v python3 >/dev/null 2>&1 || ! command -v gh >/dev/null 2>&1; then
             apt-get update
-            apt-get install -y --no-install-recommends python3
+            apt-get install -y --no-install-recommends python3 gh
           fi
 
       - name: Install Rust toolchain (from rust-toolchain.toml)
@@ -82,24 +75,9 @@ jobs:
       # passed), so it skips these too — it only builds dist artifacts.
       - name: Install CI gate plugins
         if: ${{ github.event_name != 'workflow_run' }}
-        env:
-          INPUT_TOOL: cargo-nextest,cargo-deny,cargo-machete,cargo-llvm-cov,cargo-semver-checks
-        run: |
-          set -euo pipefail
-          install_action_dir="$(mktemp -d)"
-          trap 'rm -rf "$install_action_dir"' EXIT
-          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
-          env \
-            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
-            DEFAULT_GITHUB_TOKEN= \
-            GH_TOKEN= \
-            GITHUB_ACTION_PATH="$install_action_dir" \
-            GITHUB_TOKEN= \
-            INPUT_CHECKSUM=true \
-            INPUT_FALLBACK=cargo-binstall \
-            RUNNER_ARCH=X64 \
-            RUNNER_OS=Linux \
-            bash --noprofile --norc "$install_action_dir/main.sh"
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-deny,cargo-machete,cargo-llvm-cov,cargo-semver-checks
 
       # cargo-vet 0.10.1+ adds Trusted Publishing support, and the imported
       # audits now carry `trusted-publisher` entries that 0.10.0 cannot parse.
@@ -122,25 +100,13 @@ jobs:
           fi
 
       - name: Install release packaging tools
-        env:
-          INPUT_TOOL: cargo-zigbuild
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Install Zig and rcodesign
         run: |
           set -euo pipefail
-          install_action_dir="$(mktemp -d)"
-          trap 'rm -rf "$install_action_dir"' EXIT
-          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
-          env \
-            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
-            DEFAULT_GITHUB_TOKEN= \
-            GH_TOKEN= \
-            GITHUB_ACTION_PATH="$install_action_dir" \
-            GITHUB_TOKEN= \
-            INPUT_CHECKSUM=true \
-            INPUT_FALLBACK=cargo-binstall \
-            RUNNER_ARCH=X64 \
-            RUNNER_OS=Linux \
-            bash --noprofile --norc "$install_action_dir/main.sh"
-
           zig_archive="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
           zig_archive_path="${RUNNER_TEMP:-/tmp}/${zig_archive}"
           curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors "https://ziglang.org/download/${ZIG_VERSION}/${zig_archive}" -o "$zig_archive_path"
@@ -202,6 +168,12 @@ jobs:
       - name: Build distribution archives
         run: cargo xtask dist
 
+      - name: Publish crate
+        if: ${{ github.event_name == 'push' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p rimz
+
       - name: Resolve release identity
         shell: bash
         env:
@@ -211,6 +183,7 @@ jobs:
           owner="${GITHUB_REPOSITORY%/*}"
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             # The push trigger is tags-only, so this is a `v*` version tag.
+            tap="${owner}/${GITHUB_REPOSITORY#*/}"
             release_tag="${GITHUB_REF_NAME}"
             release_title="Rimz ${GITHUB_REF_NAME}"
             release_prerelease=false
@@ -220,8 +193,8 @@ jobs:
             # host is allowed to appear; it is built from ${GITHUB_SERVER_URL},
             # never hardcoded in tracked source. The 4-space indent renders the
             # commands as a code block in the release notes.
-            release_body="$(printf 'Release %s at %s.\n\nInstall with Homebrew:\n\n    brew tap %s/rimz %s/%s/homebrew-rimz\n    brew install %s/rimz/rimz\n' \
-              "${GITHUB_REF_NAME}" "${release_commit}" "${owner}" "${GITHUB_SERVER_URL}" "${owner}" "${owner}")"
+            release_body="$(printf 'Release %s at %s.\n\nInstall with Homebrew:\n\n    brew tap %s\n    brew install %s\n' \
+              "${GITHUB_REF_NAME}" "${release_commit}" "${tap}" "${GITHUB_REPOSITORY#*/}")"
           else
             # workflow_run (CI green on the default branch) or manual dispatch:
             # the rolling build published under a moving `latest-main` tag.
@@ -246,100 +219,54 @@ jobs:
 
       - name: Move rolling release tag
         if: ${{ env.RELEASE_ROLLING == 'true' }}
-        env:
-          TOKEN: ${{ secrets.GITEA_TOKEN }}
         run: |
           set -euo pipefail
-          git config user.name "gitea-actions"
-          git config user.email "gitea-actions@localhost"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -f "$RELEASE_TAG" "$RELEASE_COMMIT"
-          git -c "http.extraheader=Authorization: token ${TOKEN}" \
-            push origin "refs/tags/${RELEASE_TAG}" --force
+          git push origin "refs/tags/${RELEASE_TAG}" --force
 
-      - name: Publish Gitea release assets
+      - name: Publish GitHub release assets
         env:
-          TOKEN: ${{ secrets.GITEA_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          python_bin="$(command -v python3 || command -v python)"
           dist_dir="${CARGO_TARGET_DIR}/dist"
-          owner="${GITHUB_REPOSITORY%/*}"
-          repo="${GITHUB_REPOSITORY#*/}"
-          releases_url="${GITHUB_API_URL}/repos/${owner}/${repo}/releases"
-          auth_header="Authorization: token ${TOKEN}"
-
-          request_json() {
-            local method="$1"
-            local url="$2"
-            local body="${3:-}"
-            local response_file status
-            response_file="$(mktemp)"
-            if [ -n "$body" ]; then
-              status="$(curl -sS -o "$response_file" -w '%{http_code}' \
-                -X "$method" \
-                -H "$auth_header" \
-                -H 'Content-Type: application/json' \
-                --data "$body" \
-                "$url")"
-            else
-              status="$(curl -sS -o "$response_file" -w '%{http_code}' \
-                -X "$method" \
-                -H "$auth_header" \
-                "$url")"
-            fi
-            cat "$response_file"
-            rm -f "$response_file"
-            test "$status" -ge 200 -a "$status" -lt 300
-          }
-
-          release_body="$("$python_bin" <<'PY'
-          import json
-          import os
-
-          print(json.dumps({
-              "tag_name": os.environ["RELEASE_TAG"],
-              "target_commitish": os.environ["RELEASE_COMMIT"],
-              "name": os.environ["RELEASE_TITLE"],
-              "body": os.environ["RELEASE_BODY"],
-              "draft": False,
-              "prerelease": os.environ["RELEASE_PRERELEASE"] == "true",
-          }))
-          PY
-          )"
-
-          release_json=""
-          if release_json="$(request_json GET "${releases_url}/tags/${RELEASE_TAG}")"; then
-            release_id="$(printf '%s' "$release_json" | "$python_bin" -c 'import json, sys; print(json.load(sys.stdin)["id"])')"
-            request_json PATCH "${releases_url}/${release_id}" "$release_body" >/dev/null
-          else
-            release_json="$(request_json POST "$releases_url" "$release_body")"
-            release_id="$(printf '%s' "$release_json" | "$python_bin" -c 'import json, sys; print(json.load(sys.stdin)["id"])')"
-          fi
-
-          assets_json="$(request_json GET "${releases_url}/${release_id}/assets")"
-
-          upload_artifact() {
-            local artifact="$1"
-            local asset_name="$2"
-            local asset_id
-            asset_id="$(printf '%s' "$assets_json" | "$python_bin" -c 'import json, sys; name = sys.argv[1]; print(next((str(asset["id"]) for asset in json.load(sys.stdin) if asset.get("name") == name), ""))' "$asset_name")"
-            if [ -n "$asset_id" ]; then
-              curl -fsS -X DELETE \
-                -H "$auth_header" \
-                "${releases_url}/${release_id}/assets/${asset_id}" >/dev/null
-            fi
-            curl -fsS -X POST \
-              -H "$auth_header" \
-              -F "attachment=@${artifact}" \
-              "${releases_url}/${release_id}/assets?name=${asset_name}" >/dev/null
-            echo "uploaded ${asset_name}"
-          }
-
+          assets=("${dist_dir}/SHA256SUMS")
           while read -r _ asset_name; do
-            upload_artifact "${dist_dir}/${asset_name}" "$asset_name"
+            assets+=("${dist_dir}/${asset_name}")
           done < "${dist_dir}/SHA256SUMS"
-          upload_artifact "${dist_dir}/SHA256SUMS" SHA256SUMS
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            if [ "$RELEASE_PRERELEASE" = "true" ]; then
+              gh release edit "$RELEASE_TAG" \
+                --title "$RELEASE_TITLE" \
+                --notes "$RELEASE_BODY" \
+                --target "$RELEASE_COMMIT" \
+                --prerelease
+            else
+              gh release edit "$RELEASE_TAG" \
+                --title "$RELEASE_TITLE" \
+                --notes "$RELEASE_BODY" \
+                --target "$RELEASE_COMMIT" \
+                --prerelease=false
+            fi
+          else
+            if [ "$RELEASE_PRERELEASE" = "true" ]; then
+              gh release create "$RELEASE_TAG" \
+                --title "$RELEASE_TITLE" \
+                --notes "$RELEASE_BODY" \
+                --target "$RELEASE_COMMIT" \
+                --prerelease
+            else
+              gh release create "$RELEASE_TAG" \
+                --title "$RELEASE_TITLE" \
+                --notes "$RELEASE_BODY" \
+                --target "$RELEASE_COMMIT"
+            fi
+          fi
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
 
       # Tags only: the rolling `latest-main` prerelease never touches the tap.
       # The push trigger is tags-only in this workflow, so `event_name == push`
@@ -365,8 +292,8 @@ jobs:
           RIMZ_BREW_OUT="${tap_dir}/Formula/rimz.rb" \
             cargo xtask brew-formula
 
-          git -C "$tap_dir" config user.name "gitea-actions"
-          git -C "$tap_dir" config user.email "gitea-actions@localhost"
+          git -C "$tap_dir" config user.name "github-actions[bot]"
+          git -C "$tap_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git -C "$tap_dir" add Formula/rimz.rb
           if git -C "$tap_dir" diff --cached --quiet; then
             echo "formula already up to date"

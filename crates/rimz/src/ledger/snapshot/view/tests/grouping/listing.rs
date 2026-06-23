@@ -113,10 +113,10 @@ fn out_of_project_agent_tails_into_external_when_root_is_known() {
 #[test]
 fn out_of_project_cwd_stays_external_when_branch_flaps() {
     let with_branch = agent("claude", "out", AgentStatus::Failed, 20)
-        .worktree("/home/marvin/.agents/teams")
+        .worktree("/home/user/.agents/teams")
         .branch("main");
     let without_branch =
-        agent("claude", "out", AgentStatus::Failed, 20).worktree("/home/marvin/.agents/teams");
+        agent("claude", "out", AgentStatus::Failed, 20).worktree("/home/user/.agents/teams");
     let project_root = Some(std::path::PathBuf::from("/repo/main"));
 
     let grouped = |agent: AgentState| {
@@ -136,14 +136,11 @@ fn out_of_project_cwd_stays_external_when_branch_flaps() {
 #[test]
 fn sidebar_external_group_label_ignores_stray_branch() {
     let outside = agent("claude", "out", AgentStatus::Failed, 20)
-        .worktree("/home/marvin/.agents/teams")
+        .worktree("/home/user/.agents/teams")
         .branch("main");
     let snapshot = room(Vec::new(), vec![outside])
         .with_project_root(Some(std::path::PathBuf::from("/repo/main")))
-        .with_live_panes(
-            vec![pane("%1", "claude", "/home/marvin/.agents/teams")],
-            None,
-        );
+        .with_live_panes(vec![pane("%1", "claude", "/home/user/.agents/teams")], None);
 
     let group = snapshot.worktree_groups.first().expect("a group");
     assert_eq!(group.kind, SidebarWorktreeKind::External);
