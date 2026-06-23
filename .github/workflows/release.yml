@@ -36,6 +36,15 @@ jobs:
     name: build and publish dist archives
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
+    # Run inside a Debian 13 container for the same reason as CI: host-mode
+    # act_runner randomizes $GITHUB_WORKSPACE every run, which churns the
+    # rust-cache @actions/cache version (it caches `<workspace>/target/release-ci`
+    # and hashes the path) so restores never hit. A job container pins the
+    # workspace path and isolates the filesystem, exactly as on GitHub. Debian 13
+    # keeps apt tmux at 3.5a for the self-gate suite (MIN_TMUX_VERSION = 3.5.0),
+    # and the image ships Node for the JS actions.
+    container:
+      image: node:24-trixie
     # A `workflow_run` fires for every CI conclusion; gate on success so only a
     # green default-branch build publishes. Tag pushes and manual dispatches run
     # the gate themselves (the `cargo xtask ci` step below) before publishing.
@@ -46,6 +55,17 @@ jobs:
           # Build the exact commit CI validated; for tags/dispatch this is the
           # event's own ref.
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      # The publish steps shape JSON payloads with Python. The host runner
+      # carried it; the container image may not, so provision it for every path
+      # (rolling and tag) before publishing.
+      - name: Ensure Python (release publish)
+        run: |
+          set -euo pipefail
+          if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+            apt-get update
+            apt-get install -y --no-install-recommends python3
+          fi
 
       - name: Install Rust toolchain (from rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable
@@ -147,6 +167,31 @@ jobs:
           tar -xzf "$rcodesign_archive_path" -C "$rcodesign_dir" --strip-components=1
           echo "$rcodesign_dir" >> "$GITHUB_PATH"
           "$rcodesign_dir/rcodesign" --version
+
+      # The self-gate runs the live tmux/zellij suite. The host runner carried
+      # both binaries; the container provisions them. Debian 13's apt tmux is
+      # 3.5a (≥ MIN_TMUX_VERSION 3.5.0). Only the self-gate path (tags / manual
+      # dispatch) runs the suite — the workflow_run path already passed CI and
+      # only builds dist artifacts, so it skips these.
+      - name: Install tmux (CI gate)
+        if: ${{ github.event_name != 'workflow_run' }}
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends tmux
+          tmux -V
+
+      - name: Install Zellij (CI gate)
+        if: ${{ github.event_name != 'workflow_run' }}
+        env:
+          ZELLIJ_VERSION: 0.44.3
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fL --retry 5 --retry-delay 2 --retry-all-errors "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/zellij" --version
 
       # Self-gate: tag and manual-dispatch releases re-run the full gate on the
       # release commit. The `workflow_run` path already passed CI, so it skips.
