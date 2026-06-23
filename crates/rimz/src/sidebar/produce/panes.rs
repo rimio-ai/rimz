@@ -10,6 +10,7 @@ use super::Result;
 use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
+use crate::ledger::snapshot::SidebarPresence;
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing};
 use crate::schema::diag::{DiagEvent, FrameRejectReason};
 use crate::sidebar::cache::{
@@ -535,22 +536,34 @@ pub(super) fn cached_panes_or_produce(
                     prior: read_snapshot_cache(&cache_path, session).as_ref(),
                 });
             emit_frame_diagnostics(diag, diagnostics);
-            // Sample attached-client focus only on a live read. A topology-served
-            // frame forks no mux command (the topology cache's contract), so carry
-            // the prior publish's viewed panes forward as the freshest non-forking
-            // estimate rather than reach for `list-clients`.
-            frame.viewed_panes = if served_from_topology {
-                read_snapshot_cache(&cache_path, session)
-                    .map(|prior| prior.viewed_panes)
-                    .unwrap_or_default()
+            // Sample attached-client focus and presence only on a live read. A
+            // topology-served frame forks no mux command (the topology cache's
+            // contract), so carry the prior publish's client view forward as the
+            // freshest non-forking estimate rather than reach for `list-clients`.
+            if served_from_topology {
+                if let Some(prior) = read_snapshot_cache(&cache_path, session) {
+                    frame.viewed_panes = prior.viewed_panes;
+                    frame.presence = prior.presence;
+                }
             } else {
-                crate::mux::backend_for(mux)
-                    .focused_client_panes(ClientFocusOptions {
-                        session_name: Some(session.to_owned()),
-                        ..Default::default()
-                    })
-                    .unwrap_or_default()
-            };
+                match crate::mux::backend_for(mux).client_view(ClientFocusOptions {
+                    session_name: Some(session.to_owned()),
+                    ..Default::default()
+                }) {
+                    Ok(client_view) => {
+                        frame.viewed_panes = client_view.viewed_panes;
+                        frame.presence = Some(SidebarPresence::classify(
+                            unix_now_ms(),
+                            client_view.presence.human_clients,
+                            client_view.presence.last_input_ms,
+                        ));
+                    }
+                    Err(_) => {
+                        frame.viewed_panes = Vec::new();
+                        frame.presence = None;
+                    }
+                }
+            }
             repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
             Ok(frame)
         };

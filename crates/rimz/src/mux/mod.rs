@@ -205,6 +205,20 @@ pub struct ClientFocusOptions {
     pub command_timeout: Option<Duration>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ClientPresence {
+    pub human_clients: usize,
+    /// Freshest client input timestamp in Unix milliseconds. `None` means the
+    /// backend cannot report per-client input idle.
+    pub last_input_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ClientView {
+    pub viewed_panes: Vec<PaneId>,
+    pub presence: ClientPresence,
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionOptions {
     pub session_name: String,
@@ -464,9 +478,12 @@ pub trait MuxBackend: Send + Sync {
     fn kill_session(&self, name: &str) -> Result<()>;
     fn list_sessions(&self) -> Result<Vec<String>>;
     fn list_panes(&self, opts: PaneListOptions) -> Result<PaneListing>;
-    fn focused_client_panes(&self, opts: ClientFocusOptions) -> Result<Vec<PaneId>> {
+    fn client_view(&self, opts: ClientFocusOptions) -> Result<ClientView> {
         let _ = opts;
-        Ok(Vec::new())
+        Ok(ClientView::default())
+    }
+    fn focused_client_panes(&self, opts: ClientFocusOptions) -> Result<Vec<PaneId>> {
+        self.client_view(opts).map(|view| view.viewed_panes)
     }
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()>;
     /// Focus `pane`. Zellij pane ids are session-scoped, so callers outside a

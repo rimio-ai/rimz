@@ -30,8 +30,9 @@ mod reap;
 mod rows;
 
 pub use model::{
-    SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarStatusCount,
-    SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
+    AFK_IDLE_THRESHOLD_MS, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
+    SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
+    WorktreePrState, WorktreeTrunkSync, lead_unread_row,
 };
 use reap::{agent_hook_session_stale, is_agent_native_item};
 
@@ -92,6 +93,11 @@ pub struct SidebarSnapshot {
     /// tick; the pure reducer leaves it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub viewed_panes: Vec<PaneId>,
+    /// Whether the user is currently present in this mux session. The producer
+    /// fills it from the same per-client mux sample that populates
+    /// `viewed_panes`; the pure reducer leaves it `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence: Option<SidebarPresence>,
     /// The pane frame is painting from carried prior-pane truth because the
     /// latest mux pane source omitted panes whose processes are still alive.
     /// Display-only and renderer-local: the ledger state stays unchanged.
@@ -329,6 +335,7 @@ impl SidebarSnapshot {
             panes_observed_at_ms: None,
             focus_contested_panes: Vec::new(),
             viewed_panes: Vec::new(),
+            presence: None,
             truth_degraded: None,
             now,
             worktree_groups: Vec::new(),

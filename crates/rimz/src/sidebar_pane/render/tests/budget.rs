@@ -150,6 +150,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         panes_observed_at_ms: None,
         focus_contested_panes: Vec::new(),
         viewed_panes: Vec::new(),
+        presence: None,
         truth_degraded: None,
         now,
         worktree_groups: (0..groups)

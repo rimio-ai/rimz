@@ -14,7 +14,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{AgentSessionId, MuxName, PaneId, ViewId, ViewKind};
-use crate::ledger::snapshot::SidebarOwnView;
+use crate::ledger::snapshot::{SidebarOwnView, SidebarPresence};
 use crate::pane::{ElevatedAgent, PaneRef};
 use crate::schema::diag::DiagEvent;
 
@@ -41,6 +41,10 @@ pub struct PaneFrame {
     /// global-focus signal that the per-tab `active_pane` is not.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub viewed_panes: Vec<PaneId>,
+    /// Producer-sampled session presence. Absent on legacy frames and on
+    /// fallback paths that could not read the per-client mux state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence: Option<SidebarPresence>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -433,6 +437,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
             tabs: tabs.into_values().collect(),
             carried_panes: Vec::new(),
             viewed_panes: Vec::new(),
+            presence: None,
         },
         diagnostics,
     )

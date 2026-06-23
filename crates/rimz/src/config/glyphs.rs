@@ -82,6 +82,7 @@ pub enum GlyphRole {
     KeysDismiss,
     // chrome — framing, spines, tabs, and badges.
     ChromeAlert,
+    ChromePresenceAway,
     ChromeRemoteLink,
     ChromeRemoteControl,
     ChromeHairline,
@@ -162,6 +163,7 @@ impl GlyphRole {
         Self::KeysReload,
         Self::KeysDismiss,
         Self::ChromeAlert,
+        Self::ChromePresenceAway,
         Self::ChromeRemoteLink,
         Self::ChromeRemoteControl,
         Self::ChromeHairline,
@@ -236,6 +238,7 @@ impl GlyphRole {
             | Self::KeysReload
             | Self::KeysDismiss => "keys",
             Self::ChromeAlert
+            | Self::ChromePresenceAway
             | Self::ChromeRemoteLink
             | Self::ChromeRemoteControl
             | Self::ChromeHairline
@@ -317,6 +320,7 @@ impl GlyphRole {
             Self::KeysReload => "reload",
             Self::KeysDismiss => "dismiss",
             Self::ChromeAlert => "alert",
+            Self::ChromePresenceAway => "presence_away",
             Self::ChromeRemoteLink => "remote_link",
             Self::ChromeRemoteControl => "remote_control",
             Self::ChromeHairline => "hairline",

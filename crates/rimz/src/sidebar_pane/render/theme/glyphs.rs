@@ -152,6 +152,7 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::KeysReload => "⟳",
         GlyphRole::KeysDismiss => "✕",
         GlyphRole::ChromeAlert => "⚠",
+        GlyphRole::ChromePresenceAway => "zᶻ",
         GlyphRole::ChromeRemoteLink => "⇄",
         GlyphRole::ChromeRemoteControl => "⇅",
         GlyphRole::ChromeHairline => "─",
@@ -254,9 +255,10 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         GlyphRole::KeysAccounts => "\u{f07e}", // nf-fa-arrows_h
         GlyphRole::KeysReload => "\u{f021}",   // nf-fa-refresh
         GlyphRole::KeysDismiss => "\u{f00d}",  // nf-fa-times
-        // chrome: the network link and infinity badges iconify; framing stays drawn.
-        GlyphRole::ChromeRemoteLink => "\u{ede3}", // nf-fa-tower_broadcast
-        GlyphRole::ChromeInfinity => "\u{edfe}",   // nf-fa-infinity
+        // chrome: the presence, network link, and infinity badges iconify; framing stays drawn.
+        GlyphRole::ChromePresenceAway => "\u{f186}", // nf-fa-moon_o
+        GlyphRole::ChromeRemoteLink => "\u{ede3}",   // nf-fa-tower_broadcast
+        GlyphRole::ChromeInfinity => "\u{edfe}",     // nf-fa-infinity
         GlyphRole::ChromeAlert
         | GlyphRole::ChromeRemoteControl
         | GlyphRole::ChromeHairline
@@ -277,17 +279,21 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::validate_single_cell;
+    use crate::config::{validate_glyph_cells, validate_single_cell};
 
     #[test]
-    fn every_builtin_glyph_is_one_cell() {
+    fn every_builtin_glyph_fits_its_slot() {
         for &role in GlyphRole::ALL {
-            // Every shipped glyph — the Unicode base and the Nerd Font overlay alike
-            // — is a single cell. A face that draws an icon double-width is
-            // reconciled by a per-glyph override that pads a trailing space, never by
-            // the table.
-            validate_single_cell(unicode_glyph(role))
-                .unwrap_or_else(|err| panic!("unicode {}: {err}", role.namespaced_name()));
+            // Most shipped glyphs are one cell. The presence badge's Unicode
+            // sleep cue deliberately uses a two-cell "zᶻ" cluster in footer
+            // chrome, where the layout measures the whole badge span.
+            if role == GlyphRole::ChromePresenceAway {
+                validate_glyph_cells(unicode_glyph(role))
+                    .unwrap_or_else(|err| panic!("unicode {}: {err}", role.namespaced_name()));
+            } else {
+                validate_single_cell(unicode_glyph(role))
+                    .unwrap_or_else(|err| panic!("unicode {}: {err}", role.namespaced_name()));
+            }
             if let Some(nerd) = nerd_font_glyph(role) {
                 validate_single_cell(nerd)
                     .unwrap_or_else(|err| panic!("nerd-font {}: {err}", role.namespaced_name()));
@@ -367,6 +373,7 @@ mod tests {
             GlyphRole::WorktreeReconciling,
             GlyphRole::MeterReset,
             GlyphRole::KeysFocus,
+            GlyphRole::ChromePresenceAway,
             GlyphRole::ChromeInfinity,
         ] {
             let nerd = nerd_font_glyph(role).expect("curated icon");

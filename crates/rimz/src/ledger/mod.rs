@@ -67,10 +67,11 @@ pub use crate::ledger::feed_store::FeedStoreErr;
 pub use crate::ledger::paths::{RuntimePaths, StatePaths};
 pub use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
 pub use crate::ledger::snapshot::{
-    AgentCard, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarLinkFreshness,
-    SidebarLinkHealth, SidebarOwnView, SidebarProviderPanel, SidebarResolverState, SidebarRow,
-    SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
-    SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
+    AFK_IDLE_THRESHOLD_MS, AgentCard, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard,
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel,
+    SidebarResolverState, SidebarRow, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent,
+    SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync,
+    lead_unread_row,
 };
 pub use crate::ledger::workspace_record::WorkspaceRecord;
 

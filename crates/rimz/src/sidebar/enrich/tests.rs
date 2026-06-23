@@ -385,6 +385,7 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
         tabs: Vec::new(),
         carried_panes: Vec::new(),
         viewed_panes: vec![pane_id.clone()],
+        presence: None,
     };
 
     let snapshot = enrich(
@@ -397,6 +398,31 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
     );
 
     assert_eq!(snapshot.viewed_panes, vec![pane_id]);
+}
+
+#[test]
+fn frame_fold_carries_presence_onto_snapshot() {
+    let (_dir, runtime, snapshot) = runtime();
+    let mut frame = crate::sidebar::frame::assemble_frame(Vec::new(), 1_000, "rimz-test");
+    frame.presence = Some(crate::SidebarPresence::Idle {
+        idle_ms: 16 * 60_000,
+    });
+
+    let snapshot = enrich(
+        snapshot,
+        Some(frame),
+        &runtime,
+        None,
+        EnrichMode::Cached,
+        None,
+    );
+
+    assert_eq!(
+        snapshot.presence,
+        Some(crate::SidebarPresence::Idle {
+            idle_ms: 16 * 60_000
+        })
+    );
 }
 
 #[test]

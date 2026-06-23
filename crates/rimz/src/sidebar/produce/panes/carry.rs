@@ -576,6 +576,7 @@ mod tests {
             }],
             carried_panes: Vec::new(),
             viewed_panes: Vec::new(),
+            presence: None,
         };
         let fresh = frame(&["terminal_1"], 2);
         prior.tabs[0].panes[0].current.pid = Some(909);

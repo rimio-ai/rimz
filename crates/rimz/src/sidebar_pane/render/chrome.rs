@@ -1,12 +1,12 @@
 use crate::agents::AgentStatus;
 use crate::config::GlyphRole;
-use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot};
+use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarSnapshot};
 use jiff::Timestamp;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::fmt::age_short;
+use super::fmt::{age_label, age_short};
 use super::labels::{status_glyph, subagent_glyph, thinking_glyph};
 use super::theme::Theme;
 use super::{Alert, GateNotice};
@@ -167,52 +167,94 @@ pub(super) fn footer_lines(
     theme: &Theme,
     width: usize,
 ) -> Vec<Line<'static>> {
-    vec![footer_line(snapshot.link.as_ref(), theme, width)]
+    vec![footer_line(snapshot, theme, width)]
 }
 
-fn footer_line(link: Option<&SidebarLinkHealth>, theme: &Theme, width: usize) -> Line<'static> {
+fn footer_line(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Line<'static> {
     const HELP_TEXT: &str = "? for help";
 
-    let badge = link.map(|link| link_badge(link, theme, width));
+    let presence = presence_badge(snapshot.presence, theme, width);
+    let link = snapshot
+        .link
+        .as_ref()
+        .map(|link| link_badge(link, theme, width));
     let help_text: String = HELP_TEXT.chars().take(width).collect();
     let help = Span::styled(help_text, theme.faint());
     let help_start = right_start(width, span_width(&help)).unwrap_or(0);
+    let help_slot = Some((help_start, help.clone()));
 
-    if let Some(line) = positioned_footer_line(badge, Some((help_start, help.clone()))) {
+    if let Some(line) = positioned_footer_line(
+        footer_left_spans(presence.clone(), link.clone()),
+        help_slot.clone(),
+    ) {
         return line;
     }
-    positioned_footer_line(None, Some((help_start, help.clone())))
-        .unwrap_or_else(|| Line::from(vec![help]))
+    if presence.is_some()
+        && let Some(line) =
+            positioned_footer_line(footer_left_spans(presence, None), help_slot.clone())
+    {
+        return line;
+    }
+    if let Some(line) = positioned_footer_line(footer_left_spans(None, link), help_slot.clone()) {
+        return line;
+    }
+    positioned_footer_line(Vec::new(), help_slot).unwrap_or_else(|| Line::from(vec![help]))
 }
 
 fn positioned_footer_line(
-    badge: Option<Span<'static>>,
+    left: Vec<Span<'static>>,
     help: Option<(usize, Span<'static>)>,
 ) -> Option<Line<'static>> {
-    let mut placements = Vec::new();
-    if let Some(badge) = badge {
-        if span_width(&badge) == 0 {
-            return None;
-        }
-        placements.push((0, badge));
-    }
-    if let Some(help) = help {
-        placements.push(help);
-    }
-    placements.sort_by_key(|(start, _)| *start);
-
     let mut cursor = 0;
     let mut spans = Vec::new();
-    for (start, span) in placements {
+    for span in left {
+        if span_width(&span) == 0 {
+            return None;
+        }
+        cursor += span_width(&span);
+        spans.push(span);
+    }
+    if let Some((start, span)) = help {
         if start <= cursor && !spans.is_empty() {
             return None;
         }
         spans.push(Span::raw(" ".repeat(start.saturating_sub(cursor))));
-        cursor = start;
-        cursor += span_width(&span);
         spans.push(span);
     }
     Some(Line::from(spans))
+}
+
+fn footer_left_spans(
+    presence: Option<Span<'static>>,
+    link: Option<Span<'static>>,
+) -> Vec<Span<'static>> {
+    match (presence, link) {
+        (Some(presence), Some(link)) => vec![presence, Span::raw("  "), link],
+        (Some(presence), None) => vec![presence],
+        (None, Some(link)) => vec![link],
+        (None, None) => Vec::new(),
+    }
+}
+
+fn presence_badge(
+    presence: Option<SidebarPresence>,
+    theme: &Theme,
+    width: usize,
+) -> Option<Span<'static>> {
+    let presence = presence.filter(|presence| presence.shows_badge())?;
+    let glyph = theme.glyph(GlyphRole::ChromePresenceAway);
+    let mut text = match presence {
+        SidebarPresence::Active => return None,
+        SidebarPresence::Idle { idle_ms } => {
+            let seconds = (idle_ms / 1_000).min(i64::MAX as u64) as i64;
+            format!("{glyph} idle · {}", age_label(seconds))
+        }
+        SidebarPresence::Detached => format!("{glyph} away"),
+    };
+    if text.chars().count() > width {
+        text = text.chars().take(width).collect();
+    }
+    Some(Span::styled(text, theme.muted()))
 }
 
 fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'static> {

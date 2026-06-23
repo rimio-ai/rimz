@@ -515,6 +515,7 @@ pub fn enrich(
             .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
             .collect();
         snapshot.viewed_panes = frame.viewed_panes.clone();
+        snapshot.presence = frame.presence;
         snapshot.truth_degraded = truth_notice_for_frame(&frame);
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_frame(own, &frame);

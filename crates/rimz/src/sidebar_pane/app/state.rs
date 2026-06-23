@@ -64,6 +64,7 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         panes_observed_at_ms: None,
         focus_contested_panes: Vec::new(),
         viewed_panes: Vec::new(),
+        presence: None,
         truth_degraded: None,
         now,
         worktree_groups: Vec::new(),

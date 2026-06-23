@@ -333,6 +333,7 @@ fn legacy_frame_without_observed_time_or_focus_contested_parses() {
     assert_eq!(frame.observed_at_ms, None);
     assert!(frame.carried_panes.is_empty());
     assert!(frame.viewed_panes.is_empty());
+    assert_eq!(frame.presence, None);
     assert!(!frame.tabs[0].focus_contested);
     assert_eq!(
         frame.observed_or_produced_at_ms(),

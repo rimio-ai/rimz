@@ -39,7 +39,7 @@ The **pane frame** is the topology everything else enriches: `PaneFrame` carries
 
 | Lane | Writer | Readers | Carries |
 | --- | --- | --- | --- |
-| `snapshot.json` | producer ([`produce::panes`](../../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's fold | the typed pane frame:<br>- panes with foreground/spawn command and cwd repaired from `/proc` when the mux races<br>- metrics, carried panes, focus-contention flags, and `viewed_panes` global focus<br>- observation stamp plus producer `build` id; `observed_at_ms` is the supersession baseline, with legacy `produced_at_ms` fallback<br>- poll-mode freshness by default, presence-stamp event TTL while `presence.stamp` is fresh |
+| `snapshot.json` | producer ([`produce::panes`](../../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's fold | the typed pane frame:<br>- panes with foreground/spawn command and cwd repaired from `/proc` when the mux races<br>- metrics, carried panes, focus-contention flags, `viewed_panes` global focus, and client presence<br>- observation stamp plus producer `build` id; `observed_at_ms` is the supersession baseline, with legacy `produced_at_ms` fallback<br>- poll-mode freshness by default, presence-stamp event TTL while `presence.stamp` is fresh |
 | `pane-topology.json` | Zellij presence plugin via the host CLI | Zellij producer pull | a pre-producer Zellij roster hint — live panes, tab names, focus candidates, geometry |
 | `presence.stamp` | Zellij plugin, tmux control-mode watch | producer | an mtime liveness mark; while fresh, the pane lane runs on the shorter event-mode TTL |
 
@@ -95,6 +95,8 @@ Each push channel exists so a change a writer already knows about reaches every 
 - **The elder's cache refresher** ([`cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs)) ticks on the data cadence, re-checks the heartbeat election each pass, and refreshes heavy caches from the last published pane frame. Demotion turns it into a sleeper; a panic resets its rollup cursor and the next tick retries from cache truth.
 
 Focus drives a dynamic fast tick for the work the user is viewing. The producer folds `PaneFrame.viewed_panes` into `SidebarSnapshot::viewed_panes`; git edit-sensitive facts for the viewed worktree and `/proc` metrics for the viewed pane run on the focused tier, while commit-shaped git facts and every background worktree/pane stay on their cheaper cadences.
+
+Client presence rides the same producer sample as viewed panes. The mux `client_view` read returns attached human clients plus the panes they view; tmux also returns the freshest `client_activity` epoch, so `SidebarPresence::classify` marks `Idle` once input is quiet for `AFK_IDLE_THRESHOLD_MS` (15 minutes) and `Detached` when no human client remains. Zellij exposes attach state but no per-client input-idle timestamp, so an attached Zellij room stays `Active` until every terminal client detaches. A topology-cache hit carries the prior presence from `snapshot.json` with the prior viewed panes rather than forking `list-clients`.
 
 ## Fusion Rules
 

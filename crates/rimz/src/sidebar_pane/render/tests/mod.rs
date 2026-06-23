@@ -27,6 +27,7 @@ mod budget;
 mod fleet;
 mod fold;
 mod link;
+mod presence;
 mod process;
 mod provider;
 mod scroll;

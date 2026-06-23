@@ -40,6 +40,8 @@ Neither backend reports a per-pane process start, so Rimz derives `pane_process_
 
 This per-view value is the focus signal the sidebar uses for selection — each tab's sidebar derives its selection baseline from its own view's active working pane ([sidebar.md](./sidebar.md#how-the-highlight-stays-on-the-right-pane)). It is one deterministic value per tab however many clients attach: when the user is viewing the tab it coincides with their focus, otherwise it names the pane they would land on. **Per-client** focus exists on both backends and is read for the viewed-pane gate on unread receipts, but selection never uses it — a sidebar pane is shared content, one buffer for every viewer, so a per-client highlight is unrenderable.
 
+`client_view` is the per-client seam the producer reads once per pane-frame tick. It returns the focused pane per attached terminal client plus a presence summary: human-client count on both backends, and `last_input_ms` only on tmux. tmux gets that timestamp from `#{client_activity}` in the same `list-clients` fork and filters `ignore-size` clients so Rimz's read-only presence watch is not counted as a human attach. Zellij's `list-clients` exposes attached terminal clients but no idle clock, and global input interception would consume the user's keys, so Zellij presence is attach-only: attached reads active, no terminal clients reads detached.
+
 `focus_pane` is the one-way jump primitive, and it lands cross-view on both backends — Zellij switches to the containing tab directly, the tmux backend selects the window then the pane. Either way a jump is one client invocation with no follow-up state.
 
 ### Focus key

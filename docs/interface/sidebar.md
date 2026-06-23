@@ -123,9 +123,12 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `▐` / `▕`       | the cards' scrollbar — thumb / track, shown while the viewport moves and settling away ~1s after it stops (`[theme.display] scrollbar` pins or removes it) |
 | `┤ Tab ├`       | an active tab under `NO_COLOR` — the caps carry the pick by shape when the fill drops; make-up buckets keep their fixed cells and mark the pick with reverse video |
 | `⇅ rc`          | remote control is on for that provider |
+| `zᶻ idle · 17m` / `zᶻ away` | AFK presence in the footer — input has been idle for at least 15 minutes on tmux, or no terminal client is attached |
 | `⇄ remote 210ms` | remote SSH link badge in the footer — RTT EWMA; loss appears only above `10%`, and `⇄ remote ?` means the last stats are stale |
 
-Remote-link badge tones are color-only: a calm link stays soft gray, then latency and loss slide it continuously from gold through amber to red, bold at the critical end. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge when it fits, and `? for help` pins to the footer's right edge.
+The AFK badge is quiet chrome: it appears only while away, uses the muted tone, and takes the footer's left edge. The remote-link badge yields to it and appears after two spaces only when the line still fits before `? for help`.
+
+Remote-link badge tones are color-only: a calm link stays soft gray, then latency and loss slide it continuously from gold through amber to red, bold at the critical end. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge in the common active case, and `? for help` pins to the footer's right edge.
 
 ## Zone 1 — the cockpit
 
@@ -401,6 +404,12 @@ Pinned to the bottom edge, below all three zones. The body is truncated before t
 
 ```
                                                    ? for help
+```
+
+When the room is AFK, the footer adds a muted sleep badge at the left edge and keeps help on the right. tmux reports both detached and attached-but-idle, so it can show `zᶻ idle · 17m`; Zellij reports attached/detached only, so it shows `zᶻ away` once every terminal client detaches:
+
+```
+zᶻ idle · 17m                                      ? for help
 ```
 
 **Pane-source notice.** When the producer repairs a partial pane read by carrying live panes from the prior frame, a dim line appears above the footer while the room stays interactive:

@@ -6,13 +6,14 @@ use super::TmuxBackend;
 use super::options::{
     after_new_window_hook_set_cmd, sidebar_serve_command, tmux_views_with_sidebars,
 };
-use super::parse::{parse_focused_client_panes, parse_new_window_ids, parse_pane_line};
+use super::parse::{parse_client_view, parse_new_window_ids, parse_pane_line};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
-    ClientFocusOptions, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey, PaneCapture,
-    PaneListOptions, PaneListing, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
-    SidebarRecovery, SplitPaneOptions, TabOptions, ensure_pane_backend, memoized_version,
+    ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey,
+    PaneCapture, PaneListOptions, PaneListing, Result, SessionOptions, SidebarLiveness,
+    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions, ensure_pane_backend,
+    memoized_version,
 };
 
 impl MuxBackend for TmuxBackend {
@@ -175,16 +176,20 @@ impl MuxBackend for TmuxBackend {
         })
     }
 
-    fn focused_client_panes(&self, opts: ClientFocusOptions) -> Result<Vec<PaneId>> {
+    fn client_view(&self, opts: ClientFocusOptions) -> Result<ClientView> {
         let timeout = opts
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
-        let mut spec = self.cmd().args(["list-clients", "-F", "#{pane_id}"]);
+        let mut spec = self.cmd().args([
+            "list-clients",
+            "-F",
+            "#{pane_id}\t#{client_activity}\t#{client_flags}",
+        ]);
         if let Some(session) = opts.session_name {
             spec = spec.args(["-t".to_owned(), session]);
         }
         let output = spec.run_with_timeout(timeout)?;
-        Ok(parse_focused_client_panes(&output.stdout))
+        Ok(parse_client_view(&output.stdout))
     }
 
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {

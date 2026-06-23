@@ -197,6 +197,7 @@
 
 [theme.glyphs.unicode.chrome]
 ## alert = "⚠"
+## presence_away = "zᶻ"
 ## remote_link = "⇄"
 ## remote_control = "⇅"
 ## hairline = "─"
@@ -293,6 +294,7 @@
 
 [theme.glyphs.nerd_font.chrome]
 ## alert = "⚠"
+## presence_away = ""
 ## remote_link = ""
 ## remote_control = "⇅"
 ## hairline = "─"

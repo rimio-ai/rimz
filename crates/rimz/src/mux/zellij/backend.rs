@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use super::ZellijBackend;
 use super::layout::{TempLayoutFile, render_background_view_layout, render_tab_layout};
 use super::parse::{
-    SessionState, live_session_name_from_line, parse_focused_client_panes, trim_capture,
+    SessionState, live_session_name_from_line, parse_focused_client_panes,
+    parse_focused_terminal_client_ids, trim_capture,
 };
 use super::raw_pane::{
     RawPane, SessionCleanliness, SidebarDock, floating_panes_in_anchor_view, is_sidebar_pane,
@@ -18,10 +19,10 @@ use super::sidebar::DockOutcome;
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
-    ClientFocusOptions, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey, PaneCapture,
-    PaneListOptions, PaneListing, Result, SessionHealth, SessionOptions, SidebarLiveness,
-    SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions, TabOptions,
-    ensure_pane_backend, memoized_version,
+    ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr,
+    NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionHealth, SessionOptions,
+    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions,
+    TabOptions, ensure_pane_backend, memoized_version,
 };
 use crate::pane::PaneRef;
 
@@ -185,7 +186,7 @@ impl MuxBackend for ZellijBackend {
         }))
     }
 
-    fn focused_client_panes(&self, opts: ClientFocusOptions) -> Result<Vec<PaneId>> {
+    fn client_view(&self, opts: ClientFocusOptions) -> Result<ClientView> {
         let timeout = opts
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
@@ -196,7 +197,15 @@ impl MuxBackend for ZellijBackend {
         let output = spec
             .args(["action", "list-clients"])
             .run_with_timeout(timeout)?;
-        Ok(parse_focused_client_panes(&output.stdout))
+        let viewed_panes = parse_focused_client_panes(&output.stdout);
+        let human_clients = parse_focused_terminal_client_ids(&output.stdout).len();
+        Ok(ClientView {
+            viewed_panes,
+            presence: ClientPresence {
+                human_clients,
+                last_input_ms: None,
+            },
+        })
     }
 
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {

@@ -152,6 +152,41 @@ pub enum SidebarLinkFreshness {
     Stale,
 }
 
+pub const AFK_IDLE_THRESHOLD_MS: u64 = 15 * 60 * 1_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum SidebarPresence {
+    Active,
+    Idle { idle_ms: u64 },
+    Detached,
+}
+
+impl SidebarPresence {
+    /// Classify client presence from the producer's mux sample. `last_input_ms`
+    /// is `None` when the backend cannot report input idle, so an attached
+    /// client reads active until it detaches.
+    pub fn classify(now_ms: u64, human_clients: usize, last_input_ms: Option<u64>) -> Self {
+        if human_clients == 0 {
+            return Self::Detached;
+        }
+        match last_input_ms {
+            Some(last_input_ms)
+                if now_ms.saturating_sub(last_input_ms) >= AFK_IDLE_THRESHOLD_MS =>
+            {
+                Self::Idle {
+                    idle_ms: now_ms - last_input_ms,
+                }
+            }
+            _ => Self::Active,
+        }
+    }
+
+    pub fn shows_badge(self) -> bool {
+        matches!(self, Self::Idle { .. } | Self::Detached)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SidebarLinkHealth {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -160,4 +195,33 @@ pub struct SidebarLinkHealth {
     pub tier: LinkTier,
     pub freshness: SidebarLinkFreshness,
     pub sampled_at_ms: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presence_classifies_detached_active_idle_and_unknown_idle() {
+        let now = 1_700_000_000_000;
+
+        assert_eq!(
+            SidebarPresence::classify(now, 0, Some(now)),
+            SidebarPresence::Detached
+        );
+        assert_eq!(
+            SidebarPresence::classify(now, 1, Some(now - AFK_IDLE_THRESHOLD_MS + 1)),
+            SidebarPresence::Active,
+        );
+        assert_eq!(
+            SidebarPresence::classify(now, 1, Some(now - AFK_IDLE_THRESHOLD_MS)),
+            SidebarPresence::Idle {
+                idle_ms: AFK_IDLE_THRESHOLD_MS,
+            },
+        );
+        assert_eq!(
+            SidebarPresence::classify(now, 1, None),
+            SidebarPresence::Active,
+        );
+    }
 }

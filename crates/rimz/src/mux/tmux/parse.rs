@@ -2,7 +2,7 @@
 
 use super::options::SIDEBAR_PANE_TITLE;
 use crate::ids::{MuxName, PaneId, ViewKind};
-use crate::mux::{MuxErr, Result};
+use crate::mux::{ClientPresence, ClientView, MuxErr, Result};
 use crate::pane::PaneRef;
 
 /// Parse one tab-separated `list-panes -F` row into a [`PaneRef`]. Returns
@@ -57,18 +57,43 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
     })
 }
 
-pub(super) fn parse_focused_client_panes(stdout: &[u8]) -> Vec<PaneId> {
-    let mut panes = Vec::new();
-    for raw in String::from_utf8_lossy(stdout).lines().map(str::trim) {
-        if !raw.starts_with('%') {
+pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
+    let mut viewed_panes = Vec::new();
+    let mut human_clients = 0;
+    let mut last_input_ms: Option<u64> = None;
+    for line in String::from_utf8_lossy(stdout).lines() {
+        let mut cols = line.split('\t');
+        let Some(raw_pane) = cols.next().map(str::trim) else {
+            continue;
+        };
+        if !raw_pane.starts_with('%') {
             continue;
         }
-        let pane = PaneId::from_parts(MuxName::Tmux, raw);
-        if !panes.iter().any(|known| known == &pane) {
-            panes.push(pane);
+        let activity_s = cols.next().map(str::trim);
+        let flags = cols.next().unwrap_or_default();
+        if flags.split(',').any(|flag| flag.trim() == "ignore-size") {
+            continue;
+        }
+
+        human_clients += 1;
+        let pane = PaneId::from_parts(MuxName::Tmux, raw_pane);
+        if !viewed_panes.iter().any(|known| known == &pane) {
+            viewed_panes.push(pane);
+        }
+        if let Some(activity_ms) = activity_s
+            .and_then(|activity| activity.parse::<u64>().ok())
+            .map(|activity| activity.saturating_mul(1_000))
+        {
+            last_input_ms = Some(last_input_ms.map_or(activity_ms, |known| known.max(activity_ms)));
         }
     }
-    panes
+    ClientView {
+        viewed_panes,
+        presence: ClientPresence {
+            human_clients,
+            last_input_ms,
+        },
+    }
 }
 
 pub(super) fn parse_new_window_ids(stdout: &[u8]) -> Result<(String, String)> {
@@ -133,8 +158,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_focused_client_panes_dedupes_and_ignores_malformed_rows() {
-        let panes = parse_focused_client_panes(b"%10\n%10\n%11\n");
+    fn parse_client_view_dedupes_viewed_panes_and_ignores_malformed_rows() {
+        let panes = parse_client_view(b"%10\t100\t\n%10\t100\t\n%11\t100\t\n").viewed_panes;
         assert_eq!(
             panes,
             vec![
@@ -143,6 +168,40 @@ mod tests {
             ]
         );
 
-        assert!(parse_focused_client_panes(b"\nno-pane\n@1\n").is_empty());
+        assert!(
+            parse_client_view(b"\nno-pane\t100\t\n@1\t100\t\n")
+                .viewed_panes
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn parse_client_view_reads_panes_activity_and_filters_watch_clients() {
+        let view = parse_client_view(
+            b"%10\t1700000000\t\n\
+              %10\t1700000001\tattached\n\
+              %11\t1699999999\tread-only,ignore-size,no-output\n\
+              %12\tbad\tattached\n\
+              no-pane\t1700000002\tattached\n",
+        );
+
+        assert_eq!(
+            view.viewed_panes,
+            vec![
+                PaneId::from_parts(MuxName::Tmux, "%10"),
+                PaneId::from_parts(MuxName::Tmux, "%12"),
+            ]
+        );
+        assert_eq!(view.presence.human_clients, 3);
+        assert_eq!(view.presence.last_input_ms, Some(1_700_000_001_000));
+    }
+
+    #[test]
+    fn parse_client_view_empty_output_has_no_human_clients() {
+        let view = parse_client_view(b"\nno-pane\t1700000000\t\n");
+
+        assert!(view.viewed_panes.is_empty());
+        assert_eq!(view.presence.human_clients, 0);
+        assert_eq!(view.presence.last_input_ms, None);
     }
 }

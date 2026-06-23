@@ -50,12 +50,12 @@ pub use row::{
 };
 #[cfg(test)]
 pub(crate) use view::fold_ask_onto_row;
-pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use view::{
-    SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarSnapshot,
-    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice, WorktreePrState,
-    WorktreeTrunkSync, lead_unread_row,
+    AFK_IDLE_THRESHOLD_MS, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
+    SidebarProviderPanel, SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup,
+    SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
 };
+pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotErr {
