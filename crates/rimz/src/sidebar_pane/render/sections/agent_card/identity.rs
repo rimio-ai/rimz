@@ -134,13 +134,15 @@ pub(super) fn agent_lead_cell(
 /// name, then the dim capability tokens (`· model · effort · window`) with the
 /// bold `$cost` (dollar green) pinned right — counting up through the row's
 /// stepped [`CostRolls`] roll as a turn lands, with the shared settle brighten.
-/// The window token is the model's context window (`258k`, `1M`) — the
-/// context-sidecar reading first, the hook-derived fallback second,
-/// omitted when neither has named it. Capability tokens degrade by width tier:
-/// L2 carries model + effort + window, L1 drops effort, L0 keeps just the name
-/// — cost always pins right. A blocked `?`/`!`/`⏸` glyph holds its fixed status
-/// tone — yellow, red, blue — with the unread attention effect, not age, drawing
-/// the eye to an unanswered ask.
+/// The window token is the model's context window (`258k`, `1m`) — the
+/// context-sidecar reading first, the row's carried/default fallback second.
+/// The whole capability cluster rides behind a resolved model: with none named,
+/// effort and window tokens drop too (a bare `272k` names nothing). Capability
+/// tokens then degrade by width tier: L2 carries model + effort + window, L1
+/// drops effort, L0 — and any model-less row — keeps just the name; cost always
+/// pins right. A blocked `?`/`!`/`⏸` glyph holds its fixed status tone — yellow,
+/// red, blue — with the unread attention effect, not age, drawing the eye to an
+/// unanswered ask.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn agent_identity_line(
     theme: &Theme,
@@ -190,11 +192,15 @@ pub(super) fn agent_identity_line(
         &row.name,
         attention,
     ));
-    if tier != Tier::L0 {
-        if let Some(model) = display_model(row) {
-            left.push(Span::styled(" · ", theme.muted()));
-            left.push(Span::styled(model, theme.muted()));
-        }
+    // The capability cluster is the model and its properties: effort configures
+    // the model, and the window is the model's window. With no model resolved a
+    // bare `xhigh`/`272k` names nothing, so the whole cluster rides behind a
+    // known model — a model-less row reads like L0, just the handle.
+    if tier != Tier::L0
+        && let Some(model) = display_model(row)
+    {
+        left.push(Span::styled(" · ", theme.muted()));
+        left.push(Span::styled(model, theme.muted()));
         if tier == Tier::L2
             && let Some(effort) = display_effort(row)
         {
@@ -217,8 +223,8 @@ pub(super) fn agent_identity_line(
 }
 
 /// The model's context window for the identity line (`258k`, `1m`). Prefers the
-/// out-of-band runtime reading, falls back to the hook-derived scalar, and
-/// omits when neither source has named it.
+/// out-of-band runtime reading and falls back to the row's carried/default
+/// window.
 pub(super) fn display_context_window(row: &SidebarRow) -> Option<u64> {
     ctx(row)
         .and_then(|context| context.tokens.as_ref())

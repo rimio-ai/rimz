@@ -79,6 +79,41 @@ fn render_agent_capability_and_window() {
 }
 
 #[test]
+fn capability_cluster_requires_a_resolved_model() {
+    // The window is the model's window and effort configures that model, so with
+    // no model resolved yet (a Codex session before its app-server context
+    // refresh) the whole `· model · effort · window` cluster drops. The card
+    // shows just the handle.
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("add tests"),
+    );
+    assert!(codex.model.is_none());
+    codex.effort = Some("xhigh".to_owned());
+    codex.context_window = Some(272_000);
+    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+
+    let rendered = snapshot_to_screen(&snapshot, 44, 12);
+
+    assert!(
+        rendered.contains("codex"),
+        "the handle still renders:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("272k"),
+        "a model-less window token drops:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("xhigh"),
+        "a model-less effort token drops:\n{rendered}"
+    );
+}
+
+#[test]
 fn render_agent_handle_as_card_identity() {
     let mut claude = agent(
         "claude-1",
