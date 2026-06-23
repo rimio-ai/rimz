@@ -289,6 +289,20 @@ fn untrusted_repo_team_reference_is_blocked() {
             ..
         })
     ));
+    assert!(matches!(
+        block_untrusted_profile_reference(
+            Some("review.planner"),
+            &ProfilesConfig::default(),
+            &CommandsConfig::default(),
+            &TeamsConfig::default(),
+            project.path(),
+            config.path(),
+        ),
+        Err(EffectiveConfigErr::Blocked {
+            state: "untrusted",
+            ..
+        })
+    ));
 }
 
 #[test]

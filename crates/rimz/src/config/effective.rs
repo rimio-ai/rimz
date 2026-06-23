@@ -156,9 +156,10 @@ pub fn block_untrusted_profile_reference(
     };
     let repo_profiles = profile_names(&repo_value);
     let repo_teams = team_names(&repo_value);
+    let team_spec = spec.split_once('.').map_or(spec, |(team, _)| team);
     if (repo_profiles.is_empty()
         || !spec_references_repo_profile(spec, &repo_profiles, profiles, commands, teams))
-        && !repo_teams.contains(spec)
+        && !repo_teams.contains(team_spec)
     {
         return Ok(());
     }

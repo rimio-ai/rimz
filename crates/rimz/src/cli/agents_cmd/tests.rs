@@ -6,6 +6,7 @@ use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::config::LaunchPlacement;
 use rimz::ids::{AgentKind, WorkspaceId};
 use rimz::run::{PermissionMode, RunRecord, RunStatus};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Parser)]
 struct ExecHarness {
@@ -205,6 +206,78 @@ fn pane_command_stamps_agent_role_and_team() {
             "--agent-effort",
             "high",
         ]
+    );
+}
+
+#[test]
+fn team_role_spec_stamps_launch_identity_and_pane_command() {
+    let profiles = rimz::config::ProfilesConfig(BTreeMap::from([(
+        "planner-profile".to_owned(),
+        rimz::config::Profile {
+            agent: "codex".to_owned(),
+            mode: None,
+            model: Some("gpt-5-codex".to_owned()),
+            effort: Some("high".to_owned()),
+            system_prompt_file: None,
+            append_system_prompt_file: None,
+            args: None,
+        },
+    )]));
+    let teams = rimz::config::TeamsConfig(BTreeMap::from([(
+        "pcr".to_owned(),
+        rimz::config::Team {
+            roles: vec![rimz::config::RoleBinding {
+                role: "planner".to_owned(),
+                profile: "planner-profile".to_owned(),
+                mode: None,
+                model: None,
+                effort: None,
+                system_prompt_file: None,
+                append_system_prompt_file: None,
+                args: None,
+            }],
+            layout: None,
+        },
+    )]));
+    let layout = rimz::agents_spec::resolve_spec(
+        Some("pcr.planner"),
+        &profiles,
+        &rimz::config::CommandsConfig::default(),
+        &teams,
+    )
+    .expect("team role spec");
+    let team_name = rimz::agents_spec::spec_team("pcr.planner", &teams);
+
+    let requests = launch_identity_requests(&layout, None, None, team_name).unwrap();
+
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].kind.as_str(), "codex");
+    assert_eq!(requests[0].profile.as_deref(), Some("planner-profile"));
+    assert_eq!(requests[0].role.as_deref(), Some("planner"));
+    assert_eq!(requests[0].team.as_deref(), Some("pcr"));
+
+    let pane = pane_cmd_with_name(
+        &layout.columns[0].rows[0],
+        PaneCmdOptions {
+            rimz_bin: Path::new("/usr/bin/rimz"),
+            cwd: Path::new("/tmp/project"),
+            prompt: None,
+            cleanup_worktree: false,
+            in_place: false,
+            team: team_name,
+            launch: None,
+        },
+    )
+    .expect("pane command");
+    assert!(
+        pane.argv
+            .windows(2)
+            .any(|args| args[0] == "--agent-role" && args[1] == "planner")
+    );
+    assert!(
+        pane.argv
+            .windows(2)
+            .any(|args| args[0] == "--agent-team" && args[1] == "pcr")
     );
 }
 
@@ -678,19 +751,23 @@ fn run_placement_opens_tab_without_current_pane() {
 #[test]
 fn in_place_launch_downgrades_when_caller_pane_must_stay_available() {
     assert_eq!(
-        apply_in_place_downgrade(Placement::SamePane, true, true),
+        apply_in_place_downgrade(Placement::SamePane, true, true, false),
         Placement::NewPane
     );
     assert_eq!(
-        apply_in_place_downgrade(Placement::SamePane, false, false),
+        apply_in_place_downgrade(Placement::SamePane, false, false, false),
         Placement::NewPane
     );
     assert_eq!(
-        apply_in_place_downgrade(Placement::NewTab, false, false),
+        apply_in_place_downgrade(Placement::SamePane, false, true, true),
+        Placement::NewPane
+    );
+    assert_eq!(
+        apply_in_place_downgrade(Placement::NewTab, false, false, true),
         Placement::NewTab
     );
     assert_eq!(
-        apply_in_place_downgrade(Placement::NewPane, true, false),
+        apply_in_place_downgrade(Placement::NewPane, true, false, true),
         Placement::NewPane
     );
 }

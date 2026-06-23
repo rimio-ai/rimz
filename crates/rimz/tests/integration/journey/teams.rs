@@ -1,6 +1,6 @@
 use rimz::ids::MuxName;
 
-use super::{RoomHarness, SETTLE, session_start};
+use super::{RoomHarness, SETTLE, session_start, session_start_at};
 use crate::common::Env;
 
 #[test]
@@ -45,6 +45,47 @@ fn team_groups_roles_under_worktrees() {
     );
     assert_group_contains(&screen, "main", &["coder", "reviewer"]);
     assert_group_contains(&screen, "feature-x", &["planner"]);
+}
+
+#[test]
+fn standalone_team_role_uses_team_channel_and_role_handle() {
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let room = RoomHarness::launch(&env, MuxName::Tmux);
+    room.onboard(&["codex"]);
+
+    room.agent_hook_as_team(
+        "planner",
+        "pcr",
+        "codex",
+        &session_start_at(
+            "team-planner",
+            "GPT-5.5",
+            "low",
+            env.project_root.display().to_string(),
+            None,
+        ),
+    );
+
+    let screen = room.wait_for(|s| s.contains("¤ 1") && s.contains("planner"), SETTLE);
+    assert!(
+        screen.contains("planner"),
+        "team role handle renders:\n{screen}"
+    );
+
+    let snapshot = env.ledger().snapshot().expect("snapshot");
+    let planner = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.role.as_deref() == Some("planner"))
+        .expect("planner agent");
+    assert_eq!(planner.team.as_deref(), Some("pcr"));
+    assert_eq!(
+        rimz::target::agent_channel(planner).as_deref(),
+        Some("project/pcr")
+    );
 }
 
 fn assert_group_contains(screen: &str, header: &str, roles: &[&str]) {

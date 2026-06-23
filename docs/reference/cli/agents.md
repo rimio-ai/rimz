@@ -58,11 +58,12 @@ rimz agents claude,codex+term                       # Claude | Codex stacked ove
 rimz agents claude,codex --worktree=cli-docs "Review the CLI docs."
 rimz agents codex --from-pr 42 "Review this pull request."
 rimz agents 'vim,codex+term' "Review the CLI docs."  # a raw command cell beside an agent
+rimz agents pcr.planner                              # re-add one role of team pcr
 rimz agents claude --worktree "Take one approach."   # parallel attempts, each in its own fresh worktree
 rimz agents claude --worktree "Take another approach."
 ```
 
-The spec is a named [team](../configuration.md#agent-profiles-commands-and-teams) or an inline grammar: **commas split columns, plus signs stack rows,** and each cell is `term`, an agent kind, a virtual `<kind>-<mode>` cell, a configured profile, or a configured command. The built-in `peer` team is the roleless `claude,codex`. The full grammar and how cells compile to panes are in [harness.md → The layout IR](../../internals/agents/harness.md#the-layout-ir).
+The spec is a named [team](../configuration.md#agent-profiles-commands-and-teams), one declared role of a team as `<team>.<role>`, or an inline grammar: **commas split columns, plus signs stack rows,** and each cell is `term`, an agent kind, a virtual `<kind>-<mode>` cell, a configured profile, or a configured command. Use `rimz agents <team>.<role>` to re-add one role of a running or stopped team with the same role handle and team channel. The built-in `peer` team is the roleless `claude,codex`. The full grammar and how cells compile to panes are in [harness.md → The layout IR](../../internals/agents/harness.md#the-layout-ir).
 
 Permission-mode cells exist where the adapter supports them: `-auto`, `-ask`, `-plan`, and `-yolo` (so `claude-plan` passes plan mode while `codex-plan` has none and keeps the default posture), and `-ping` opens the agent at lowest effort with a `"ping"` prompt to keep the provider window warm. The built-in set is `claude-{auto,ask,plan,yolo,ping}`, `codex-{auto,ask,plan,yolo,ping}`, and `pi-{ask,plan}`. On the command line, `--ask` keeps native prompts and `--yolo` passes the adapter's bypass flags; with neither, each provider keeps its own prompting. A second positional that is itself a known cell is rejected with a `rimz agents a,b` hint, so the old space-separated fan-out never silently becomes a prompt.
 
@@ -74,7 +75,7 @@ These broadcast to every agent cell, and each adapter renders them into its own 
 
 `-w`/`--worktree` reuses or creates a named worktree (`--worktree=docs` or `--worktree docs`); bare `--worktree` creates a fresh generated one. `--from-pr <number|url>` creates the worktree from a pull request head and implies a worktree launch — pair it with `--worktree <NAME>` to name the local worktree, or accept `pr-<N>`. A worktree launch names its backend tab `#<NAME>`, matching the channel in agent addresses.
 
-Placement follows intent under the default `auto` policy: a worktree launch, a named team, or a multi-cell spec opens its own tab, while a single non-worktree agent takes over the current pane and returns to the shell when it exits. `--new-pane` forces a split (rejected for a multi-cell spec), `--new-tab` forces a tab, and `--bg` downgrades an in-place launch to a split so focus stays put. The per-machine [`[agents] placement`](../configuration.md#agent-profiles-commands-and-teams) default sets the policy when no flag is given. The split-versus-tab mechanics are in [harness.md → Backend shape and placement](../../internals/agents/harness.md#backend-shape-and-placement).
+Placement follows intent under the default `auto` policy: a worktree launch, a named team, or a multi-cell spec opens its own tab, a single team role splits beside the current pane, and a single non-worktree agent takes over the current pane and returns to the shell when it exits. `--new-pane` forces a split (rejected for a multi-cell spec), `--new-tab` forces a tab, and `--bg` downgrades an in-place launch to a split so focus stays put. The per-machine [`[agents] placement`](../configuration.md#agent-profiles-commands-and-teams) default sets the policy when no flag is given. The split-versus-tab mechanics are in [harness.md → Backend shape and placement](../../internals/agents/harness.md#backend-shape-and-placement).
 
 ### Supervised runs (`-p`)
 

@@ -238,6 +238,16 @@ impl<'a> RoomHarness<'a> {
         );
     }
 
+    /// Run an installed hook with one role's full team identity.
+    pub fn agent_hook_as_team(&self, role: &str, team: &str, source: &str, payload: &Value) {
+        self.agent_hook_with_identity(
+            source,
+            payload,
+            launch_team_identity(role, team, &format!("{source}-{role}")),
+            None,
+        );
+    }
+
     fn agent_hook_with_identity(
         &self,
         source: &str,
@@ -490,6 +500,12 @@ fn launch_identity(role: &str, profile: &str) -> Vec<(String, String)> {
         (rimz::run::ENV_AGENT_ROLE.to_owned(), role.to_owned()),
         (rimz::run::ENV_AGENT_PROFILE.to_owned(), profile.to_owned()),
     ]
+}
+
+fn launch_team_identity(role: &str, team: &str, profile: &str) -> Vec<(String, String)> {
+    let mut identity = launch_identity(role, profile);
+    identity.push((rimz::run::ENV_TEAM.to_owned(), team.to_owned()));
+    identity
 }
 
 fn starts_agent_process(event: &str) -> bool {

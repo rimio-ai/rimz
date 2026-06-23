@@ -166,6 +166,14 @@ pub enum LayoutErr {
         valid_teams: String,
         valid_cells: String,
     },
+    #[error("team `{team}` has no role `{role}`; declared roles: {valid_roles}")]
+    UnknownRoleInTeam {
+        team: String,
+        role: String,
+        valid_roles: String,
+    },
+    #[error("invalid team name `{name}`; team names cannot contain `.`")]
+    InvalidTeamName { name: String },
     #[error(
         "team name `{0}` is reserved for an inline profile/command cell; choose another [agents.teams] name"
     )]
@@ -290,6 +298,17 @@ pub fn validate_config(
     Ok(())
 }
 
+/// The team a launch spec names, for the whole-team form (`pcr`) and the
+/// single-role form (`pcr.planner`). `None` when the spec names no team.
+pub fn spec_team<'a>(spec: &'a str, teams: &TeamsConfig) -> Option<&'a str> {
+    let spec = spec.trim();
+    if teams.0.contains_key(spec) {
+        return Some(spec);
+    }
+    let (team, _) = spec.split_once('.')?;
+    teams.0.contains_key(team).then_some(team)
+}
+
 pub fn parse_layout_spec(
     raw: &str,
     profiles: &ProfilesConfig,
@@ -317,6 +336,12 @@ pub fn resolve_spec(
             return Err(LayoutErr::ReservedTeamName(raw.to_owned()));
         }
         return resolve_team(raw, teams, profiles, commands);
+    }
+    if let Some((team, role)) = raw
+        .split_once('.')
+        .filter(|(team, _)| teams.0.contains_key(*team))
+    {
+        return resolve_team_role(team, role, teams, profiles, commands);
     }
     if is_inline_spec(raw, profiles, commands) {
         return parse_layout_spec_validated(raw, profiles, commands);
@@ -359,6 +384,28 @@ pub fn resolve_team(
         })
         .collect();
     Ok(LayoutSpec { columns })
+}
+
+fn resolve_team_role(
+    team_name: &str,
+    role_name: &str,
+    teams: &TeamsConfig,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<LayoutSpec> {
+    validate_team(team_name, teams, profiles, commands)?;
+    let team = teams
+        .0
+        .get(team_name)
+        .expect("validated team name exists in teams config");
+    let Some(binding) = team.roles.iter().find(|binding| binding.role == role_name) else {
+        return Err(LayoutErr::UnknownRoleInTeam {
+            team: team_name.to_owned(),
+            role: role_name.to_owned(),
+            valid_roles: valid_team_roles(team),
+        });
+    };
+    Ok(LayoutSpec::single(role_cell(team_name, binding, profiles)?))
 }
 
 fn team_role_cells(
@@ -594,7 +641,9 @@ pub fn is_known_spec_token(
 ) -> bool {
     let raw = raw.trim();
     !raw.is_empty()
-        && (teams.0.contains_key(raw) || raw == "peer" || is_cell_word(raw, profiles, commands))
+        && (spec_team(raw, teams).is_some()
+            || raw == "peer"
+            || is_cell_word(raw, profiles, commands))
 }
 
 fn parse_layout_spec_validated(
@@ -909,6 +958,9 @@ fn is_kind_ordinal_shape(name: &str) -> bool {
 }
 
 fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
+    if let Some(name) = teams.0.keys().find(|name| name.contains('.')) {
+        return Err(LayoutErr::InvalidTeamName { name: name.clone() });
+    }
     if let Some(name) = teams
         .0
         .keys()
@@ -1011,6 +1063,19 @@ fn valid_teams(teams: &TeamsConfig) -> String {
     let mut values = BTreeSet::from(["peer".to_owned()]);
     values.extend(teams.0.keys().cloned());
     values.into_iter().collect::<Vec<_>>().join(", ")
+}
+
+fn valid_team_roles(team: &Team) -> String {
+    let values = team
+        .roles
+        .iter()
+        .map(|binding| binding.role.clone())
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        "none".to_owned()
+    } else {
+        values.join(", ")
+    }
 }
 
 #[cfg(test)]

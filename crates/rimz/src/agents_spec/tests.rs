@@ -933,6 +933,130 @@ fn team_role_overrides_append_system_prompt_file() {
 }
 
 #[test]
+fn team_role_spec_resolves_one_role_with_team_identity() {
+    let profiles = profiles([(
+        "planner-profile",
+        Profile {
+            agent: "codex".to_owned(),
+            model: Some("profile-model".to_owned()),
+            effort: Some("medium".to_owned()),
+            ..profile("codex")
+        },
+    )]);
+    let teams = TeamsConfig(BTreeMap::from([(
+        "pcr".to_owned(),
+        team(vec![
+            RoleBinding {
+                role: "planner".to_owned(),
+                profile: "planner-profile".to_owned(),
+                mode: Some(PermissionMode::Ask),
+                model: Some("role-model".to_owned()),
+                effort: Some("high".to_owned()),
+                system_prompt_file: None,
+                append_system_prompt_file: None,
+                args: None,
+            },
+            role("sub.planner", "planner-profile"),
+        ]),
+    )]));
+
+    let spec =
+        resolve_spec(Some("pcr.planner"), &profiles, &no_commands(), &teams).expect("team role");
+
+    assert_eq!(spec.columns.len(), 1);
+    let [
+        Cell::Agent {
+            kind,
+            mode,
+            profile,
+            role,
+            model,
+            effort,
+            ..
+        },
+    ] = spec.columns[0].rows.as_slice()
+    else {
+        panic!("single agent role cell");
+    };
+    assert_eq!(kind.as_str(), "codex");
+    assert_eq!(*mode, Some(PermissionMode::Ask));
+    assert_eq!(profile.as_deref(), Some("planner-profile"));
+    assert_eq!(role.as_deref(), Some("planner"));
+    assert_eq!(model.as_deref(), Some("role-model"));
+    assert_eq!(effort.as_deref(), Some("high"));
+
+    let dotted_role = resolve_spec(Some("pcr.sub.planner"), &profiles, &no_commands(), &teams)
+        .expect("dotted role");
+    assert!(matches!(
+        &dotted_role.columns[0].rows[0],
+        Cell::Agent { role, .. } if role.as_deref() == Some("sub.planner")
+    ));
+}
+
+#[test]
+fn team_role_spec_reports_unknown_role_and_preserves_non_team_dot_specs() {
+    let team_profiles = profiles([("planner-profile", profile("claude"))]);
+    let teams = TeamsConfig(BTreeMap::from([(
+        "pcr".to_owned(),
+        team(vec![
+            role("planner", "planner-profile"),
+            role("coder", "planner-profile"),
+        ]),
+    )]));
+
+    assert!(matches!(
+        resolve_spec(Some("pcr.bogus"), &team_profiles, &no_commands(), &teams),
+        Err(LayoutErr::UnknownRoleInTeam {
+            team,
+            role,
+            valid_roles
+        }) if team == "pcr" && role == "bogus" && valid_roles == "planner, coder"
+    ));
+    assert!(matches!(
+        resolve_spec(
+            Some("notateam.planner"),
+            &team_profiles,
+            &no_commands(),
+            &teams
+        ),
+        Err(LayoutErr::UnknownTeam { team, .. }) if team == "notateam.planner"
+    ));
+
+    let profile_spec = profiles([("notateam.planner", profile("claude"))]);
+    assert!(matches!(
+        resolve_spec(Some("notateam.planner"), &profile_spec, &no_commands(), &teams),
+        Ok(LayoutSpec { columns }) if matches!(
+            &columns[0].rows[0],
+            Cell::Agent { profile, .. } if profile.as_deref() == Some("notateam.planner")
+        )
+    ));
+}
+
+#[test]
+fn team_names_reject_dots_and_spec_team_handles_team_role_specs() {
+    let profiles = profiles([("planner-profile", profile("claude"))]);
+    let teams = TeamsConfig(BTreeMap::from([(
+        "pcr".to_owned(),
+        team(vec![role("planner", "planner-profile")]),
+    )]));
+
+    assert_eq!(spec_team("pcr", &teams), Some("pcr"));
+    assert_eq!(spec_team("pcr.planner", &teams), Some("pcr"));
+    assert_eq!(spec_team("notateam.planner", &teams), None);
+
+    let bad_teams = TeamsConfig(BTreeMap::from([(
+        "pc.r".to_owned(),
+        team(vec![role("planner", "planner-profile")]),
+    )]));
+    assert_eq!(
+        validate_config(&profiles, &no_commands(), &bad_teams),
+        Err(LayoutErr::InvalidTeamName {
+            name: "pc.r".to_owned()
+        })
+    );
+}
+
+#[test]
 fn team_layout_places_roles_first_and_allows_roleless_extras() {
     let profiles = profiles([
         ("planner-profile", profile("claude")),

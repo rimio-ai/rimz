@@ -58,7 +58,7 @@ struct LaunchEventParams<'a> {
 pub struct AgentsArgs {
     #[command(subcommand)]
     command: Option<AgentsSubcmd>,
-    /// Inline spec or named team (`claude,codex+term`).
+    /// Inline spec, named team, or team role (`claude,codex+term`, `pcr.planner`).
     #[arg(value_name = "SPEC")]
     spec: Option<String>,
     /// Prompt broadcast to every launched agent cell.

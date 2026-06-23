@@ -15,6 +15,7 @@ pub(super) fn launch_layout(
     let profiles = effective_launch_profiles(&machine_config, &workspace)?;
     let teams = effective_launch_teams(&machine_config, &workspace)?;
     let mut layout = resolve_launch_layout(spec, &profiles, &teams, &machine_config, &workspace)?;
+    let team_name = spec.and_then(|spec| rimz::agents_spec::spec_team(spec, &teams));
     reject_prompt_that_looks_like_spec(
         args.spec.as_deref(),
         args.prompt.as_deref(),
@@ -60,6 +61,7 @@ pub(super) fn launch_layout(
         )?,
         args.bg,
         allow_in_place,
+        team_name.is_some(),
     );
     let in_place = placement == Placement::SamePane;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
@@ -76,9 +78,6 @@ pub(super) fn launch_layout(
         args.worktree.as_deref(),
         args.from_pr.as_ref(),
     )?;
-    let team_name = spec
-        .map(str::trim)
-        .filter(|name| !name.is_empty() && teams.0.contains_key(*name));
     let ledger = open_ledger(&workspace)?;
     let launch_requests = launch_identity_requests(
         &layout,
@@ -228,10 +227,12 @@ pub(super) fn apply_in_place_downgrade(
     placement: Placement,
     bg: bool,
     allow_in_place: bool,
+    is_team_role: bool,
 ) -> Placement {
     // In-place takes over the launching pane: it cannot honor --bg, and
-    // create-on-miss must never replace the caller's pane. Downgrade to a split.
-    if placement == Placement::SamePane && (bg || !allow_in_place) {
+    // create-on-miss and team-role launches must never replace the caller's
+    // pane. Downgrade to a split.
+    if placement == Placement::SamePane && (bg || !allow_in_place || is_team_role) {
         Placement::NewPane
     } else {
         placement
