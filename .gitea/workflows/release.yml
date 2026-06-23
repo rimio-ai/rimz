@@ -1,0 +1,376 @@
+name: Release
+
+# Release is downstream of CI. The rolling `latest-main` build publishes only
+# after the CI workflow finishes successfully on the default branch, so a red
+# commit never reaches the release page. `workflow_run` (Gitea >= 1.25) lets the
+# release key off CI's result instead of re-running the gate, so CI runs once
+# per commit. Version tags cut their own gated release on demand.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main, master]
+
+permissions:
+  code: write
+  releases: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target/release-ci
+  RUSTFLAGS: -D warnings
+  RUST_BACKTRACE: 1
+  ZIG_VERSION: 0.16.0
+  ZIG_X86_64_LINUX_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+  # Keep these off the `RCODESIGN_` prefix: rcodesign maps every
+  # `RCODESIGN_*` env var onto a config setting, so `RCODESIGN_VERSION`
+  # would reach `rcodesign sign` as an unknown `version` key and abort.
+  APPLE_CODESIGN_VERSION: 0.29.0
+  APPLE_CODESIGN_X86_64_LINUX_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
+
+jobs:
+  release:
+    name: build and publish dist archives
+    runs-on: [linux_amd64, debian-13]
+    timeout-minutes: 30
+    # Run inside a Debian 13 container for the same reason as CI: host-mode
+    # act_runner randomizes $GITHUB_WORKSPACE every run, which churns the
+    # rust-cache @actions/cache version (it caches `<workspace>/target/release-ci`
+    # and hashes the path) so restores never hit. A job container pins the
+    # workspace path and isolates the filesystem, exactly as on GitHub. Debian 13
+    # keeps apt tmux at 3.5a for the self-gate suite (MIN_TMUX_VERSION = 3.5.0),
+    # and the image ships Node for the JS actions.
+    container:
+      image: node:24-trixie
+    # A `workflow_run` fires for every CI conclusion; gate on success so only a
+    # green default-branch build publishes. Tag pushes and manual dispatches run
+    # the gate themselves (the `cargo xtask ci` step below) before publishing.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Build the exact commit CI validated; for tags/dispatch this is the
+          # event's own ref.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      # The publish steps shape JSON payloads with Python. The host runner
+      # carried it; the container image may not, so provision it for every path
+      # (rolling and tag) before publishing.
+      - name: Ensure Python (release publish)
+        run: |
+          set -euo pipefail
+          if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+            apt-get update
+            apt-get install -y --no-install-recommends python3
+          fi
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target/release-ci"
+          prefix-key: "rimz-release"
+          cache-bin: false
+
+      # The CI gate compiles and tests through `cargo xtask ci`, which needs the
+      # full plugin set. The `workflow_run` path skips the gate (CI already
+      # passed), so it skips these too — it only builds dist artifacts.
+      - name: Install CI gate plugins
+        if: ${{ github.event_name != 'workflow_run' }}
+        env:
+          INPUT_TOOL: cargo-nextest,cargo-deny,cargo-machete,cargo-llvm-cov,cargo-semver-checks
+        run: |
+          set -euo pipefail
+          install_action_dir="$(mktemp -d)"
+          trap 'rm -rf "$install_action_dir"' EXIT
+          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
+          env \
+            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
+            DEFAULT_GITHUB_TOKEN= \
+            GH_TOKEN= \
+            GITHUB_ACTION_PATH="$install_action_dir" \
+            GITHUB_TOKEN= \
+            INPUT_CHECKSUM=true \
+            INPUT_FALLBACK=cargo-binstall \
+            RUNNER_ARCH=X64 \
+            RUNNER_OS=Linux \
+            bash --noprofile --norc "$install_action_dir/main.sh"
+
+      # cargo-vet 0.10.1+ adds Trusted Publishing support, and the imported
+      # audits now carry `trusted-publisher` entries that 0.10.0 cannot parse.
+      # Upstream ships no prebuilt binary past 0.10.0, so build the pinned
+      # crates.io release (cached) to keep CI and contributors on one version.
+      - name: Cache cargo-vet
+        if: ${{ github.event_name != 'workflow_run' }}
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-vet
+          key: cargo-vet-0.10.2-linux-amd64
+      - name: Install cargo-vet (pinned 0.10.2)
+        if: ${{ github.event_name != 'workflow_run' }}
+        run: |
+          set -euo pipefail
+          if cargo vet --version 2>/dev/null | grep -qx 'cargo-vet 0.10.2'; then
+            echo 'cargo-vet 0.10.2 already installed'
+          else
+            cargo install --locked cargo-vet@0.10.2
+          fi
+
+      - name: Install release packaging tools
+        env:
+          INPUT_TOOL: cargo-zigbuild
+        run: |
+          set -euo pipefail
+          install_action_dir="$(mktemp -d)"
+          trap 'rm -rf "$install_action_dir"' EXIT
+          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
+          env \
+            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
+            DEFAULT_GITHUB_TOKEN= \
+            GH_TOKEN= \
+            GITHUB_ACTION_PATH="$install_action_dir" \
+            GITHUB_TOKEN= \
+            INPUT_CHECKSUM=true \
+            INPUT_FALLBACK=cargo-binstall \
+            RUNNER_ARCH=X64 \
+            RUNNER_OS=Linux \
+            bash --noprofile --norc "$install_action_dir/main.sh"
+
+          zig_archive="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          zig_archive_path="${RUNNER_TEMP:-/tmp}/${zig_archive}"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors "https://ziglang.org/download/${ZIG_VERSION}/${zig_archive}" -o "$zig_archive_path"
+          printf '%s  %s\n' "$ZIG_X86_64_LINUX_SHA256" "$zig_archive_path" | sha256sum -c -
+          zig_dir="${RUNNER_TEMP:-/tmp}/zig-${ZIG_VERSION}"
+          rm -rf "$zig_dir"
+          mkdir -p "$zig_dir"
+          tar -xJf "$zig_archive_path" -C "$zig_dir" --strip-components=1
+          echo "$zig_dir" >> "$GITHUB_PATH"
+          "$zig_dir/zig" version
+          cargo zigbuild --help >/dev/null
+
+          # rcodesign ad-hoc signs the cross-built Apple Silicon binary so it
+          # will exec on arm64. apple-codesign ships no cargo-binstall metadata
+          # and tags releases as `apple-codesign/<ver>`, so a pinned checksummed
+          # release download is deterministic where binstall is not.
+          rcodesign_archive="apple-codesign-${APPLE_CODESIGN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          rcodesign_archive_path="${RUNNER_TEMP:-/tmp}/${rcodesign_archive}"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F${APPLE_CODESIGN_VERSION}/${rcodesign_archive}" -o "$rcodesign_archive_path"
+          printf '%s  %s\n' "$APPLE_CODESIGN_X86_64_LINUX_SHA256" "$rcodesign_archive_path" | sha256sum -c -
+          rcodesign_dir="${RUNNER_TEMP:-/tmp}/rcodesign-${APPLE_CODESIGN_VERSION}"
+          rm -rf "$rcodesign_dir"
+          mkdir -p "$rcodesign_dir"
+          tar -xzf "$rcodesign_archive_path" -C "$rcodesign_dir" --strip-components=1
+          echo "$rcodesign_dir" >> "$GITHUB_PATH"
+          "$rcodesign_dir/rcodesign" --version
+
+      # The self-gate runs the live tmux/zellij suite. The host runner carried
+      # both binaries; the container provisions them. Debian 13's apt tmux is
+      # 3.5a (≥ MIN_TMUX_VERSION 3.5.0). Only the self-gate path (tags / manual
+      # dispatch) runs the suite — the workflow_run path already passed CI and
+      # only builds dist artifacts, so it skips these.
+      - name: Install tmux (CI gate)
+        if: ${{ github.event_name != 'workflow_run' }}
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends tmux
+          tmux -V
+
+      - name: Install Zellij (CI gate)
+        if: ${{ github.event_name != 'workflow_run' }}
+        env:
+          ZELLIJ_VERSION: 0.44.3
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fL --retry 5 --retry-delay 2 --retry-all-errors "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/zellij" --version
+
+      # Self-gate: tag and manual-dispatch releases re-run the full gate on the
+      # release commit. The `workflow_run` path already passed CI, so it skips.
+      - name: Gate on CI
+        if: ${{ github.event_name != 'workflow_run' }}
+        run: cargo xtask ci
+
+      - name: Build distribution archives
+        run: cargo xtask dist
+
+      - name: Resolve release identity
+        shell: bash
+        env:
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY%/*}"
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            # The push trigger is tags-only, so this is a `v*` version tag.
+            release_tag="${GITHUB_REF_NAME}"
+            release_title="Rimz ${GITHUB_REF_NAME}"
+            release_prerelease=false
+            release_rolling=false
+            release_commit="${GITHUB_SHA}"
+            # The release body is the runtime-generated place the concrete tap
+            # host is allowed to appear; it is built from ${GITHUB_SERVER_URL},
+            # never hardcoded in tracked source. The 4-space indent renders the
+            # commands as a code block in the release notes.
+            release_body="$(printf 'Release %s at %s.\n\nInstall with Homebrew:\n\n    brew tap %s/rimz %s/%s/homebrew-rimz\n    brew install %s/rimz/rimz\n' \
+              "${GITHUB_REF_NAME}" "${release_commit}" "${owner}" "${GITHUB_SERVER_URL}" "${owner}" "${owner}")"
+          else
+            # workflow_run (CI green on the default branch) or manual dispatch:
+            # the rolling build published under a moving `latest-main` tag.
+            release_tag="latest-main"
+            release_title="Rimz (latest main)"
+            release_prerelease=true
+            release_rolling=true
+            release_commit="${WORKFLOW_RUN_HEAD_SHA:-$GITHUB_SHA}"
+            release_body="Rolling build from the default branch at ${release_commit}."
+          fi
+
+          {
+            echo "RELEASE_TAG=${release_tag}"
+            echo "RELEASE_TITLE=${release_title}"
+            echo "RELEASE_PRERELEASE=${release_prerelease}"
+            echo "RELEASE_ROLLING=${release_rolling}"
+            echo "RELEASE_COMMIT=${release_commit}"
+            echo "RELEASE_BODY<<RIMZ_RELEASE_BODY"
+            printf '%s\n' "${release_body}"
+            echo "RIMZ_RELEASE_BODY"
+          } >> "$GITHUB_ENV"
+
+      - name: Move rolling release tag
+        if: ${{ env.RELEASE_ROLLING == 'true' }}
+        env:
+          TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "gitea-actions"
+          git config user.email "gitea-actions@localhost"
+          git tag -f "$RELEASE_TAG" "$RELEASE_COMMIT"
+          git -c "http.extraheader=Authorization: token ${TOKEN}" \
+            push origin "refs/tags/${RELEASE_TAG}" --force
+
+      - name: Publish Gitea release assets
+        env:
+          TOKEN: ${{ secrets.GITEA_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python_bin="$(command -v python3 || command -v python)"
+          dist_dir="${CARGO_TARGET_DIR}/dist"
+          owner="${GITHUB_REPOSITORY%/*}"
+          repo="${GITHUB_REPOSITORY#*/}"
+          releases_url="${GITHUB_API_URL}/repos/${owner}/${repo}/releases"
+          auth_header="Authorization: token ${TOKEN}"
+
+          request_json() {
+            local method="$1"
+            local url="$2"
+            local body="${3:-}"
+            local response_file status
+            response_file="$(mktemp)"
+            if [ -n "$body" ]; then
+              status="$(curl -sS -o "$response_file" -w '%{http_code}' \
+                -X "$method" \
+                -H "$auth_header" \
+                -H 'Content-Type: application/json' \
+                --data "$body" \
+                "$url")"
+            else
+              status="$(curl -sS -o "$response_file" -w '%{http_code}' \
+                -X "$method" \
+                -H "$auth_header" \
+                "$url")"
+            fi
+            cat "$response_file"
+            rm -f "$response_file"
+            test "$status" -ge 200 -a "$status" -lt 300
+          }
+
+          release_body="$("$python_bin" <<'PY'
+          import json
+          import os
+
+          print(json.dumps({
+              "tag_name": os.environ["RELEASE_TAG"],
+              "target_commitish": os.environ["RELEASE_COMMIT"],
+              "name": os.environ["RELEASE_TITLE"],
+              "body": os.environ["RELEASE_BODY"],
+              "draft": False,
+              "prerelease": os.environ["RELEASE_PRERELEASE"] == "true",
+          }))
+          PY
+          )"
+
+          release_json=""
+          if release_json="$(request_json GET "${releases_url}/tags/${RELEASE_TAG}")"; then
+            release_id="$(printf '%s' "$release_json" | "$python_bin" -c 'import json, sys; print(json.load(sys.stdin)["id"])')"
+            request_json PATCH "${releases_url}/${release_id}" "$release_body" >/dev/null
+          else
+            release_json="$(request_json POST "$releases_url" "$release_body")"
+            release_id="$(printf '%s' "$release_json" | "$python_bin" -c 'import json, sys; print(json.load(sys.stdin)["id"])')"
+          fi
+
+          assets_json="$(request_json GET "${releases_url}/${release_id}/assets")"
+
+          upload_artifact() {
+            local artifact="$1"
+            local asset_name="$2"
+            local asset_id
+            asset_id="$(printf '%s' "$assets_json" | "$python_bin" -c 'import json, sys; name = sys.argv[1]; print(next((str(asset["id"]) for asset in json.load(sys.stdin) if asset.get("name") == name), ""))' "$asset_name")"
+            if [ -n "$asset_id" ]; then
+              curl -fsS -X DELETE \
+                -H "$auth_header" \
+                "${releases_url}/${release_id}/assets/${asset_id}" >/dev/null
+            fi
+            curl -fsS -X POST \
+              -H "$auth_header" \
+              -F "attachment=@${artifact}" \
+              "${releases_url}/${release_id}/assets?name=${asset_name}" >/dev/null
+            echo "uploaded ${asset_name}"
+          }
+
+          while read -r _ asset_name; do
+            upload_artifact "${dist_dir}/${asset_name}" "$asset_name"
+          done < "${dist_dir}/SHA256SUMS"
+          upload_artifact "${dist_dir}/SHA256SUMS" SHA256SUMS
+
+      # Tags only: the rolling `latest-main` prerelease never touches the tap.
+      # The push trigger is tags-only in this workflow, so `event_name == push`
+      # selects real `v*` releases.
+      - name: Publish Homebrew tap formula
+        if: ${{ github.event_name == 'push' }}
+        env:
+          TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY%/*}"
+          repo="${GITHUB_REPOSITORY#*/}"
+          tap_url="${GITHUB_SERVER_URL}/${owner}/homebrew-rimz.git"
+          tap_dir="$(mktemp -d)"
+          auth_header="Authorization: token ${TOKEN}"
+
+          git -c "http.extraheader=${auth_header}" clone --depth 1 "$tap_url" "$tap_dir"
+
+          RIMZ_BREW_VERSION="${GITHUB_REF_NAME}" \
+          RIMZ_BREW_BASE_URL="${GITHUB_SERVER_URL}/${owner}/${repo}/releases/download/${GITHUB_REF_NAME}" \
+          RIMZ_BREW_HOMEPAGE="${GITHUB_SERVER_URL}/${owner}/${repo}" \
+          RIMZ_BREW_OUT="${tap_dir}/Formula/rimz.rb" \
+            cargo xtask brew-formula
+
+          git -C "$tap_dir" config user.name "gitea-actions"
+          git -C "$tap_dir" config user.email "gitea-actions@localhost"
+          git -C "$tap_dir" add Formula/rimz.rb
+          if git -C "$tap_dir" diff --cached --quiet; then
+            echo "formula already up to date"
+          else
+            git -C "$tap_dir" commit -m "rimz ${GITHUB_REF_NAME}"
+            git -C "$tap_dir" -c "http.extraheader=${auth_header}" push origin HEAD
+          fi

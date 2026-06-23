@@ -1,0 +1,11 @@
+self-hosted-runner:
+  labels:
+    - linux_amd64
+    - debian-13
+
+config-variables: null
+
+paths:
+  .gitea/workflows/**/*.yml:
+    ignore:
+      - 'unknown permission scope "(code|releases)"'

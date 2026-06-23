@@ -1,0 +1,200 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main, master]
+
+# Workflow-level group supersedes stale work:
+# - PRs key on the PR ref, so a newer push cancels the in-flight run.
+# - Pushes (main) key on the commit, so every landed commit verifies in parallel.
+# A single commit's push and pull_request runs land in different groups here
+# (PR ref vs sha), so per-commit dedupe lives in the job-level `concurrency`.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target/ci
+  # `-D warnings` is the deny-warnings gate.
+  RUSTFLAGS: -D warnings
+  RUST_BACKTRACE: 1
+
+jobs:
+  ci:
+    name: cargo xtask ci
+    runs-on: [linux_amd64, debian-13]
+    timeout-minutes: 30
+    # Run inside a Debian 13 container so the workspace mounts at a fixed,
+    # isolated path. Host-mode act_runner hands each run a random
+    # $GITHUB_WORKSPACE (…/work/<random>/hostexecutor), and Swatinem/rust-cache
+    # caches `<workspace>/target/ci` while folding that absolute path into the
+    # @actions/cache version — a fresh path every run means restores never
+    # match, so the cache is dead weight. A job container restores GitHub's
+    # property: the same workspace path every run on a fresh filesystem, so the
+    # cache version is stable and concurrent jobs never share a target dir.
+    # Debian 13 keeps apt tmux at 3.5a (the live-mux floor, MIN_TMUX_VERSION =
+    # 3.5.0); the image ships Node because act_runner runs JS actions (checkout,
+    # rust-cache) inside the container, and dtolnay/rust-toolchain bootstraps
+    # rustup over curl from there.
+    container:
+      image: node:24-trixie
+    # Per-commit dedupe across events. A rebase-ff merge lands the PR head sha
+    # unchanged on main, so the merge fires both a push (main) and a
+    # pull_request (the rebased branch) run for the *same* commit. Gitea matches
+    # job-level concurrency groups repo-wide, so keying the job on the commit
+    # collapses that pair into one run. Cancel only when the push arrives: the
+    # push run gates the release (release.yml keys off a green CI run on main),
+    # so it must win — the push cancels the redundant pull_request job, never the
+    # reverse.
+    concurrency:
+      group: ci-commit-${{ github.sha }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # `rust-toolchain.toml` pins the channel + components; this action
+      # respects it.
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target/ci"
+          prefix-key: "rimz-ci"
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # Prebuilt binaries — avoids compiling six plugins from source on every
+      # cache miss. Gitea 1.25 lower-cases runner.os, so invoke install-action's
+      # script directly with GitHub-compatible runner env values.
+      - name: Install cargo plugins
+        env:
+          INPUT_TOOL: cargo-nextest,cargo-deny,cargo-machete,cargo-llvm-cov,cargo-semver-checks
+        run: |
+          install_action_dir="$(mktemp -d)"
+          trap 'rm -rf "$install_action_dir"' EXIT
+          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
+          env \
+            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
+            DEFAULT_GITHUB_TOKEN= \
+            GH_TOKEN= \
+            GITHUB_ACTION_PATH="$install_action_dir" \
+            GITHUB_TOKEN= \
+            INPUT_CHECKSUM=true \
+            INPUT_FALLBACK=cargo-binstall \
+            RUNNER_ARCH=X64 \
+            RUNNER_OS=Linux \
+            bash --noprofile --norc "$install_action_dir/main.sh"
+
+      # cargo-vet 0.10.1+ adds Trusted Publishing support, and the imported
+      # audits now carry `trusted-publisher` entries that 0.10.0 cannot parse.
+      # Upstream ships no prebuilt binary past 0.10.0, so build the pinned
+      # crates.io release (cached) to keep CI and contributors on one version.
+      - name: Cache cargo-vet
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-vet
+          key: cargo-vet-0.10.2-linux-amd64
+      - name: Install cargo-vet (pinned 0.10.2)
+        run: |
+          set -euo pipefail
+          if cargo vet --version 2>/dev/null | grep -qx 'cargo-vet 0.10.2'; then
+            echo 'cargo-vet 0.10.2 already installed'
+          else
+            cargo install --locked cargo-vet@0.10.2
+          fi
+
+      - name: Install tmux
+        run: |
+          if ! command -v tmux >/dev/null 2>&1; then
+            if ! command -v apt-get >/dev/null 2>&1 || ! command -v dpkg-deb >/dev/null 2>&1; then
+              echo "::error::tmux is missing and this runner cannot extract the Debian package fallback"
+              exit 1
+            fi
+            tmux_root="$RUNNER_TEMP/tmux-root"
+            tmux_apt="$RUNNER_TEMP/tmux-apt"
+            mkdir -p \
+              "$tmux_root" \
+              "$tmux_apt/state/lists/partial" \
+              "$tmux_apt/cache/archives/partial" \
+              "$tmux_apt/dpkg"
+            touch "$tmux_apt/dpkg/status"
+            apt-get \
+              -o Dir::State="$tmux_apt/state" \
+              -o Dir::Cache="$tmux_apt/cache" \
+              -o Dir::State::status="$tmux_apt/dpkg/status" \
+              update
+            apt-get \
+              --yes \
+              --download-only \
+              -o Dir::State="$tmux_apt/state" \
+              -o Dir::Cache="$tmux_apt/cache" \
+              -o Dir::State::status="$tmux_apt/dpkg/status" \
+              install tmux
+            for deb in "$tmux_apt"/cache/archives/*.deb; do
+              dpkg-deb -x "$deb" "$tmux_root"
+            done
+            loader="$(find "$tmux_root" -name ld-linux-x86-64.so.2 -print -quit)"
+            if [ -z "$loader" ] || [ ! -x "$tmux_root/usr/bin/tmux" ]; then
+              echo "::error::tmux package fallback did not produce an executable tmux"
+              exit 1
+            fi
+            lib_path="$tmux_root/usr/lib/x86_64-linux-gnu:$tmux_root/lib/x86_64-linux-gnu"
+            mkdir -p "$RUNNER_TEMP/bin"
+            {
+              printf '%s\n' '#!/bin/sh'
+              printf 'exec "%s" --library-path "%s" "%s" "$@"\n' "$loader" "$lib_path" "$tmux_root/usr/bin/tmux"
+            } > "$RUNNER_TEMP/bin/tmux"
+            chmod +x "$RUNNER_TEMP/bin/tmux"
+            export PATH="$RUNNER_TEMP/bin:$PATH"
+            echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          fi
+          # debian-13 ships tmux 3.5a (≥ MIN_TMUX_VERSION); fail loudly if a
+          # runner image is older so the live suite never silently degrades.
+          tmux -V
+
+      - name: Install Zellij
+        env:
+          ZELLIJ_VERSION: 0.44.3
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fL --retry 5 --retry-delay 2 --retry-all-errors "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/zellij" --version
+
+      - name: Install mold
+        env:
+          MOLD_VERSION: 2.41.0
+        run: |
+          mold_dir="$RUNNER_TEMP/mold"
+          mkdir -p "$mold_dir"
+          curl -fL --retry 5 --retry-delay 2 --retry-all-errors "https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz" \
+            | tar -xz -C "$mold_dir" --strip-components=1
+          echo "$mold_dir/bin" >> "$GITHUB_PATH"
+          "$mold_dir/bin/mold" --version
+
+      - name: cargo xtask ci
+        # The shared self-hosted runner can still run several heavy jobs at
+        # once: distinct main commits verify in parallel, and a release build
+        # can trail the previous commit's CI. (A single commit's push and
+        # pull_request runs collapse via the job-level `concurrency` above.)
+        # Two full instrumented suites on one box oversubscribe the cores and
+        # starve the latency-sensitive live-mux tests, whose `zellij`/`tmux` CLI
+        # round-trips then miss their deadlines. The per-run server cap in
+        # .config/nextest.toml bounds server *count*, not CPU, so it cannot fix
+        # this. Cap nextest to half the cores: two concurrent runs then sum to
+        # ~one box's worth of test threads instead of two, leaving the live-mux
+        # round-trips enough CPU to meet their deadlines while distinct commits
+        # still verify in parallel.
+        run: |
+          NEXTEST_TEST_THREADS="$(( ($(nproc) + 1) / 2 ))"
+          export NEXTEST_TEST_THREADS
+          echo "Capping nextest to $NEXTEST_TEST_THREADS of $(nproc) cores for live-mux headroom"
+          mold -run cargo xtask ci
