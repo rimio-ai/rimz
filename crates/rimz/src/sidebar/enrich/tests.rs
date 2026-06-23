@@ -215,6 +215,90 @@ fn hot_worktree_paths_treats_future_activity_as_hot() {
 }
 
 #[test]
+fn focused_worktree_paths_keys_on_viewed_row_panes() {
+    let dir = tempfile::tempdir().unwrap();
+    let wt = |name: &str| {
+        let path = dir.path().join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    };
+    let focused = wt("focused");
+    let background = wt("background");
+    let external_kind = wt("external-kind");
+    let dead = dir.path().join("dead-dir");
+    let now = Timestamp::from_second(1_750_000_000).unwrap();
+
+    let row = |raw: &str, path: &Path| {
+        let mut row = activity_row(false, None, now, path);
+        row.pane = Some(pane(raw, "zsh", &path.display().to_string()));
+        row
+    };
+    let focused_pane = row("terminal_1", &focused)
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    let dead_pane = pane("terminal_4", "zsh", &dead.display().to_string()).pane_id;
+    let mut snapshot = SidebarSnapshot::build(
+        WorkspaceId::from_project_root(dir.path()),
+        Vec::new(),
+        Vec::new(),
+        now,
+    );
+    snapshot.viewed_panes = vec![focused_pane, dead_pane];
+    snapshot.worktree_groups = vec![
+        worktree_group(&focused, vec![row("terminal_1", &focused)]),
+        worktree_group(&background, vec![row("terminal_2", &background)]),
+        {
+            let mut group = worktree_group(&external_kind, vec![row("terminal_3", &external_kind)]);
+            group.kind = crate::SidebarWorktreeKind::External;
+            group
+        },
+        worktree_group(&dead, vec![row("terminal_4", &dead)]),
+    ];
+
+    let focused_paths = focused_worktree_paths(&snapshot);
+    let needed: std::collections::BTreeSet<_> =
+        needed_worktree_paths(&snapshot).into_iter().collect();
+
+    assert_eq!(
+        focused_paths,
+        std::collections::BTreeSet::from([focused.display().to_string()])
+    );
+    assert!(
+        focused_paths.is_subset(&needed),
+        "focused paths stay inside live needed worktrees"
+    );
+}
+
+#[test]
+fn frame_fold_carries_viewed_panes_onto_snapshot() {
+    let (_dir, runtime, snapshot) = runtime();
+    let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
+    let frame = crate::sidebar::frame::PaneFrame {
+        produced_at_ms: 1_000,
+        observed_at_ms: Some(1_000),
+        build: None,
+        session_name: "rimz-test".to_owned(),
+        tabs: Vec::new(),
+        carried_panes: Vec::new(),
+        viewed_panes: vec![pane_id.clone()],
+    };
+
+    let snapshot = enrich(
+        snapshot,
+        Some(frame),
+        &runtime,
+        None,
+        EnrichMode::Cached,
+        None,
+    );
+
+    assert_eq!(snapshot.viewed_panes, vec![pane_id]);
+}
+
+#[test]
 fn root_pod_is_excluded_from_git_reads() {
     // The root pod of a non-repo room is a known non-repo: it never enters
     // the producer's git fan-out, while child-repo pods do.

@@ -16,8 +16,10 @@ use crate::ledger::parse_cache::ParseCache;
 use crate::schema::pane_topology::PaneTopologyCache;
 use crate::sidebar::frame::PaneFrame;
 pub use crate::sidebar::timing::{
-    ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL, DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL,
-    GIT_ACTIVITY_WINDOW, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, WORKTREE_ROOTS_TTL,
+    ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL, DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL,
+    DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL, GIT_ACTIVITY_WINDOW,
+    METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMPLE_TTL, PRESENCE_STAMP_FRESH,
+    SNAPSHOT_CACHE_TTL, WORKTREE_ROOTS_TTL,
 };
 
 /// The producer's published provider-account map: the out-of-band login facts
@@ -289,9 +291,15 @@ impl WorktreeRootsCache {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DiffStatsCacheEntry {
+    /// Local/edit-sensitive facts stamp: churn, dirty/untracked state, and live
+    /// branch label.
     pub refreshed_at_ms: u64,
+    /// Commit/PR-shaped facts stamp: ahead/behind counts and landed markers.
+    /// `None` means stale for entries written before the split.
+    #[serde(default)]
+    pub commit_refreshed_at_ms: Option<u64>,
     pub added: Option<u32>,
     pub removed: Option<u32>,
     /// Commits the worktree carries ahead of the trunk (`rev-list --count
@@ -326,11 +334,22 @@ pub struct DiffStatsCacheEntry {
 }
 
 impl DiffStatsCacheEntry {
-    /// Freshness under the caller's tier: [`DIFF_STATS_TTL`] for a hot
-    /// worktree, [`DIFF_STATS_IDLE_TTL`] for the rest. Saturating, so a clock
+    /// Local-fact freshness under the caller's tier. Saturating, so a clock
     /// that ran backwards reads fresh rather than re-forking every tick.
-    pub fn is_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
+    pub fn local_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
         now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
+    }
+
+    /// Commit-fact freshness under the caller's tier. Old entries with no
+    /// split stamp are commit-stale and get re-probed once.
+    pub fn commit_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
+        self.commit_refreshed_at_ms
+            .is_some_and(|stamp| now_ms.saturating_sub(stamp) <= ttl.as_millis() as u64)
+    }
+
+    /// Projection-side freshness convenience kept on the local-fact stamp.
+    pub fn is_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
+        self.local_fresh_for(now_ms, ttl)
     }
 
     pub fn is_fresh(&self, now_ms: u64) -> bool {

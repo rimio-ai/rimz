@@ -200,6 +200,7 @@ fn read_snapshot_cache_reflects_a_changed_file() {
 fn git_cache_freshness_boundaries_are_inclusive() {
     let entry = DiffStatsCacheEntry {
         refreshed_at_ms: 1_000,
+        commit_refreshed_at_ms: Some(1_000),
         added: None,
         removed: None,
         commits: None,
@@ -214,6 +215,8 @@ fn git_cache_freshness_boundaries_are_inclusive() {
 
     assert!(entry.is_fresh_for(1_000 + fast, DIFF_STATS_TTL));
     assert!(!entry.is_fresh_for(1_001 + fast, DIFF_STATS_TTL));
+    assert!(entry.commit_fresh_for(1_000 + fast, DIFF_STATS_TTL));
+    assert!(!entry.commit_fresh_for(1_001 + fast, DIFF_STATS_TTL));
     assert!(entry.is_fresh_for(1_000 + idle, DIFF_STATS_IDLE_TTL));
     assert!(!entry.is_fresh_for(1_001 + idle, DIFF_STATS_IDLE_TTL));
     // The tiering's whole point: a hot-stale entry is idle-fresh, so an idle
@@ -224,6 +227,7 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     // populated fields round-trip through the cache entry.
     let populated = DiffStatsCacheEntry {
         refreshed_at_ms: 1_000,
+        commit_refreshed_at_ms: Some(1_000),
         added: Some(2),
         removed: Some(1),
         commits: Some(4),
@@ -259,6 +263,10 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     assert_eq!(legacy.clean, None);
     assert_eq!(legacy.landed, None);
     assert_eq!(legacy.stats(), Some(DiffStats::default()));
+    assert!(
+        !legacy.commit_fresh_for(1_000, DIFF_STATS_TTL),
+        "pre-split entries refresh commit facts once"
+    );
 
     let cache = WorktreeRootsCache {
         refreshed_at_ms: 1_000,

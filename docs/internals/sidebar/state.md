@@ -39,7 +39,7 @@ The **pane frame** is the topology everything else enriches: `PaneFrame` carries
 
 | Lane | Writer | Readers | Carries |
 | --- | --- | --- | --- |
-| `snapshot.json` | producer ([`produce::panes`](../../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's fold | the typed pane frame:<br>- panes with foreground/spawn command and cwd repaired from `/proc` when the mux races<br>- metrics, carried panes, and focus-contention flags<br>- observation stamp plus producer `build` id; `observed_at_ms` is the supersession baseline, with legacy `produced_at_ms` fallback<br>- poll-mode freshness by default, presence-stamp event TTL while `presence.stamp` is fresh |
+| `snapshot.json` | producer ([`produce::panes`](../../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's fold | the typed pane frame:<br>- panes with foreground/spawn command and cwd repaired from `/proc` when the mux races<br>- metrics, carried panes, focus-contention flags, and `viewed_panes` global focus<br>- observation stamp plus producer `build` id; `observed_at_ms` is the supersession baseline, with legacy `produced_at_ms` fallback<br>- poll-mode freshness by default, presence-stamp event TTL while `presence.stamp` is fresh |
 | `pane-topology.json` | Zellij presence plugin via the host CLI | Zellij producer pull | a pre-producer Zellij roster hint — live panes, tab names, focus candidates, geometry |
 | `presence.stamp` | Zellij plugin, tmux control-mode watch | producer | an mtime liveness mark; while fresh, the pane lane runs on the shorter event-mode TTL |
 
@@ -47,7 +47,7 @@ Producer **enrichment lanes** fold onto the admitted cards. The fetch worker han
 
 | Lane | Scope | Carries |
 | --- | --- | --- |
-| `diff-stats.json` | room | per-worktree git ahead/behind/dirty stats and the group-root set |
+| `diff-stats.json` | room | per-worktree git facts split into edit-sensitive stats (`added`/`removed`, dirty/untracked state, branch) and commit/PR-shaped stats (ahead/behind counts, landed markers), each with its own stamp, plus the group-root set |
 | `metrics-sample.json` | room (producer-only) | per-pane resource samples and pane→root-pid bindings; figures publish on the pane frame |
 | `workspace-spending.<hash>.json` | room | the room's cockpit spend tally |
 | `live-spend-baselines.json` | room | per-row cost baselines for the room-local live count-up |
@@ -93,6 +93,8 @@ Each push channel exists so a change a writer already knows about reaches every 
 - **The elder's transcript watcher** ([`transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs)) watches each live Codex session's rollout JSONL and runs the stat-gated context refresh on write, covering the mid-turn gap where Codex hooks fire only at progress events. Only the elder watches; demotion drops the watch, and a watcher that never starts costs nothing because the producer-tick refresh stays unconditional.
 - **The elder's cache refresher** ([`cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs)) ticks on the data cadence, re-checks the heartbeat election each pass, and refreshes heavy caches from the last published pane frame. Demotion turns it into a sleeper; a panic resets its rollup cursor and the next tick retries from cache truth.
 
+Focus drives a dynamic fast tick for the work the user is viewing. The producer folds `PaneFrame.viewed_panes` into `SidebarSnapshot::viewed_panes`; git edit-sensitive facts for the viewed worktree and `/proc` metrics for the viewed pane run on the focused tier, while commit-shaped git facts and every background worktree/pane stay on their cheaper cadences.
+
 ## Fusion Rules
 
 Fusion is pure over pulled truth, the event store, and `now_ms`: no IO, no subprocess, no clock read past `now`.
@@ -112,9 +114,9 @@ The table names staleness-budget semantics; exact values and rationale live in [
 | Pane frame | `SNAPSHOT_CACHE_TTL` in poll mode; `EVENT_PANE_TTL` while the presence stamp is fresh | Pane open/close and cwd/command regrouping with no exact event |
 | Zellij topology cache | `PRESENCE_STAMP_FRESH` | Zellij pre-producer pane listing |
 | Presence stamp | `PRESENCE_STAMP_FRESH` | Switches the producer between poll and event-mode pane TTLs |
-| Git diff stats | `DIFF_STATS_TTL` hot; `DIFF_STATS_IDLE_TTL` idle | Worktree header churn, ahead/behind counts, landed markers |
+| Git diff stats | focused: `DIFF_STATS_FOCUSED_LOCAL_TTL` local/edit facts and `DIFF_STATS_FOCUSED_COMMIT_TTL` commit/PR facts; background: `DIFF_STATS_TTL` hot and `DIFF_STATS_IDLE_TTL` idle | Worktree header churn, ahead/behind counts, landed markers |
 | Worktree root enumeration | `WORKTREE_ROOTS_TTL` | Grouping for checkouts added without a session boundary |
-| `/proc` metrics | `METRICS_HOT_SAMPLE_TTL` active; `METRICS_SAMPLE_TTL` idle | Child pids plus per-row CPU, memory, IO, and process-state figures |
+| `/proc` metrics | `METRICS_FOCUSED_SAMPLE_TTL` viewed; `METRICS_BACKGROUND_SAMPLE_TTL` background | Child pids plus per-row CPU, memory, IO, and process-state figures |
 | Spending walk | `SPENDING_TTL` | Provider dashboard, fleet ledger, and the floor under the live cockpit spend |
 | Accounts | `ACCOUNTS_TTL` success; `ACCOUNTS_RETRY_TTL` failure | Provider dashboard login, plan, and account state |
 | Codex rate limits | `CODEX_RATE_LIMIT_REFRESH_INTERVAL` | Provider dashboard budget windows |

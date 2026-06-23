@@ -18,49 +18,64 @@ fn metric_entry_due_samples_missing_changed_and_legacy_entries_immediately() {
     let command = Some("zsh".to_owned());
     let entry = fresh_entry(42, 700, "zsh", 1_000);
 
-    assert!(metric_entry_due(None, &command, 1_000));
+    assert!(metric_entry_due(None, &command, 1_000, false));
     assert!(metric_entry_due(
         Some(&entry),
         &Some("cargo build".to_owned()),
-        1_001
+        1_001,
+        false,
     ));
     assert!(
-        !metric_entry_due(Some(&entry), &command, 500),
+        !metric_entry_due(Some(&entry), &command, 500, false),
         "a clock that ran backwards reads fresh rather than busy-looping"
     );
 
     let mut entry = fresh_entry(42, 700, "cargo build", 1_000);
     entry.sample_version = 1;
     assert!(
-        metric_entry_due(Some(&entry), &Some("cargo build".to_owned()), 1_001),
+        metric_entry_due(Some(&entry), &Some("cargo build".to_owned()), 1_001, false,),
         "single-process cache entries cannot seed pane-tree rates"
     );
 }
 
 #[test]
-fn metric_entry_due_uses_idle_or_hot_ttl() {
-    let idle = (
-        Some("zsh".to_owned()),
-        fresh_entry(42, 700, "zsh", 1_000),
-        METRICS_SAMPLE_TTL.as_millis() as u64,
-    );
+fn metric_entry_due_uses_viewed_or_background_ttl() {
+    let idle = (Some("zsh".to_owned()), fresh_entry(42, 700, "zsh", 1_000));
     let active = (
         Some("cargo build".to_owned()),
         fresh_entry(42, 700, "cargo build", 1_000),
-        METRICS_HOT_SAMPLE_TTL.as_millis() as u64,
     );
     let mut child_entry = fresh_entry(42, 700, "htop", 1_000);
     child_entry.tree_process_count = 2;
-    assert!(metrics_entry_hot(&child_entry));
-    let child = (
-        Some("htop".to_owned()),
-        child_entry,
-        METRICS_HOT_SAMPLE_TTL.as_millis() as u64,
-    );
+    let child = (Some("htop".to_owned()), child_entry);
 
-    for (command, entry, ttl_ms) in [idle, active, child] {
-        assert!(!metric_entry_due(Some(&entry), &command, 1_000 + ttl_ms));
-        assert!(metric_entry_due(Some(&entry), &command, 1_001 + ttl_ms));
+    let focused_ttl = METRICS_FOCUSED_SAMPLE_TTL.as_millis() as u64;
+    let background_ttl = METRICS_BACKGROUND_SAMPLE_TTL.as_millis() as u64;
+    for (command, entry) in [idle, active, child] {
+        assert!(!metric_entry_due(
+            Some(&entry),
+            &command,
+            1_000 + focused_ttl,
+            true,
+        ));
+        assert!(metric_entry_due(
+            Some(&entry),
+            &command,
+            1_001 + focused_ttl,
+            true,
+        ));
+        assert!(!metric_entry_due(
+            Some(&entry),
+            &command,
+            1_000 + background_ttl,
+            false,
+        ));
+        assert!(metric_entry_due(
+            Some(&entry),
+            &command,
+            1_001 + background_ttl,
+            false,
+        ));
     }
 }
 
@@ -232,7 +247,7 @@ fn metrics_within_ttl_warms_changed_or_uncached_panes() {
 fn metrics_due_path_resamples_and_restamps() {
     let (_dir, runtime) = metrics_runtime("/tmp/metrics-due");
 
-    let stale_ms = unix_now_ms() - METRICS_SAMPLE_TTL.as_millis() as u64 - 1_000;
+    let stale_ms = unix_now_ms() - METRICS_BACKGROUND_SAMPLE_TTL.as_millis() as u64 - 1_000;
     let cache = MetricsSampleCache {
         sampled_at_ms: stale_ms,
         entries: HashMap::new(),

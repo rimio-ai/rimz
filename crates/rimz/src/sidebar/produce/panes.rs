@@ -535,7 +535,6 @@ pub(super) fn cached_panes_or_produce(
                     prior: read_snapshot_cache(&cache_path, session).as_ref(),
                 });
             emit_frame_diagnostics(diag, diagnostics);
-            repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
             // Sample attached-client focus only on a live read. A topology-served
             // frame forks no mux command (the topology cache's contract), so carry
             // the prior publish's viewed panes forward as the freshest non-forking
@@ -552,6 +551,7 @@ pub(super) fn cached_panes_or_produce(
                     })
                     .unwrap_or_default()
             };
+            repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
             Ok(frame)
         };
     match single_flight::coalesce(

@@ -73,6 +73,18 @@ pub const PRESENCE_STAMP_FRESH: Duration = Duration::from_secs(150);
 /// plus the sidebar's backstop poll.
 pub const DIFF_STATS_TTL: Duration = Duration::from_secs(5);
 
+/// How long a focused worktree's edit-sensitive git facts stay cached:
+/// working-tree churn, dirty/untracked state, and live branch label. A viewed
+/// worktree gets a near-realtime edit tick while the rest of the fleet stays on
+/// the hot/idle tiers.
+pub const DIFF_STATS_FOCUSED_LOCAL_TTL: Duration = Duration::from_secs(3);
+
+/// How long a focused worktree's commit/PR-shaped git facts stay cached:
+/// ahead/behind counts and landed markers. No commit difference means no PR
+/// progress to report, and the landed verdict is the heaviest fork, so the
+/// focused path keeps it slower than edit-sensitive facts.
+pub const DIFF_STATS_FOCUSED_COMMIT_TTL: Duration = Duration::from_secs(10);
+
 /// How long an *idle* worktree's diff stats stay cached. A worktree with no
 /// running or recently-active agent decays to this slow cadence — almost all
 /// of a large fleet's git forks were measuring worktrees nothing had touched.
@@ -120,18 +132,17 @@ pub const CREDITS_TTL: Duration = Duration::from_secs(60);
 /// Retry cadence after a failed account-usage reading.
 pub const CREDITS_RETRY_TTL: Duration = ACCOUNTS_RETRY_TTL;
 
-/// How often the producer samples an active or recently re-tenanted pane. Hot
-/// panes refresh fast enough that a new foreground command gets its first
-/// complete CPU/M/IO line on the next producer tick after warmup, while idle
-/// shells stay on [`METRICS_SAMPLE_TTL`].
-pub const METRICS_HOT_SAMPLE_TTL: Duration = Duration::from_secs(1);
+/// How often the producer samples a pane attached clients are currently
+/// viewing. Focus, not process activity, buys the fast `/proc` lane so the
+/// pane under the user's eyes stays live.
+pub const METRICS_FOCUSED_SAMPLE_TTL: Duration = Duration::from_secs(1);
 
-/// How often the producer takes a fresh two-sample `/proc` reading for an idle
-/// pane. Rate sampling needs a steady clock of its own — never the pane-read
-/// cadence, which event-paced pane updates make a topology clock — and the
-/// carried display values bound `/proc` IO to once per window regardless of
-/// produce rate.
-pub const METRICS_SAMPLE_TTL: Duration = Duration::from_secs(5);
+/// How often the producer takes a fresh two-sample `/proc` reading for a
+/// non-viewed pane. Rate sampling needs a steady clock of its own — never the
+/// pane-read cadence, which event-paced pane updates make a topology clock —
+/// and the carried display values bound `/proc` IO to once per window
+/// regardless of produce rate.
+pub const METRICS_BACKGROUND_SAMPLE_TTL: Duration = Duration::from_secs(3);
 
 /// How long the producer trusts a published fleet-spending walk before
 /// re-walking every provider's transcript tree. Spend is display-only (the
@@ -314,6 +325,12 @@ pub const PULL_CADENCES: &[PullCadence] = &[
         retry_ttl: None,
     },
     PullCadence {
+        name: "git.diff_stats.focused",
+        ttl: DIFF_STATS_FOCUSED_LOCAL_TTL,
+        idle_ttl: Some(DIFF_STATS_FOCUSED_COMMIT_TTL),
+        retry_ttl: None,
+    },
+    PullCadence {
         name: "git.activity_window",
         ttl: GIT_ACTIVITY_WINDOW,
         idle_ttl: None,
@@ -333,8 +350,8 @@ pub const PULL_CADENCES: &[PullCadence] = &[
     },
     PullCadence {
         name: "metrics.sample",
-        ttl: METRICS_HOT_SAMPLE_TTL,
-        idle_ttl: Some(METRICS_SAMPLE_TTL),
+        ttl: METRICS_FOCUSED_SAMPLE_TTL,
+        idle_ttl: Some(METRICS_BACKGROUND_SAMPLE_TTL),
         retry_ttl: None,
     },
     PullCadence {

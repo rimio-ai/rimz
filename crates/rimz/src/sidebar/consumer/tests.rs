@@ -43,6 +43,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
         wt.clone(),
         DiffStatsCacheEntry {
             refreshed_at_ms: unix_now_ms(),
+            commit_refreshed_at_ms: Some(unix_now_ms()),
             added: Some(7),
             removed: Some(2),
             commits: Some(3),

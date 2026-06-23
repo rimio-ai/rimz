@@ -87,6 +87,11 @@ pub struct SidebarSnapshot {
     /// being authoritative for that view's focus.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub focus_contested_panes: Vec<PaneId>,
+    /// Panes attached clients are currently viewing (global focus, one per
+    /// client), folded from the pane frame. Drives the focused-worktree fast
+    /// tick; the pure reducer leaves it empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub viewed_panes: Vec<PaneId>,
     /// The pane frame is painting from carried prior-pane truth because the
     /// latest mux pane source omitted panes whose processes are still alive.
     /// Display-only and renderer-local: the ledger state stays unchanged.
@@ -323,6 +328,7 @@ impl SidebarSnapshot {
             panes_produced_at_ms: None,
             panes_observed_at_ms: None,
             focus_contested_panes: Vec::new(),
+            viewed_panes: Vec::new(),
             truth_degraded: None,
             now,
             worktree_groups: Vec::new(),

@@ -47,6 +47,15 @@ impl GitFixture {
     }
 }
 
+fn runtime_for(path: &Path) -> (tempfile::TempDir, crate::RuntimePaths) {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        crate::RuntimePaths::under(crate::ids::WorkspaceId::from_project_root(path), dir.path())
+            .unwrap();
+    runtime.ensure_dirs().unwrap();
+    (dir, runtime)
+}
+
 #[test]
 fn parse_numstat_sums_text_diff_and_ignores_binary_rows() {
     let stats = parse_numstat("12\t4\tsrc/lib.rs\n-\t-\tassets/logo.png\n3\t0\tREADME.md\n");
@@ -153,7 +162,10 @@ fn worktree_diff_stats_total_committed_staged_and_unstaged_over_trunk() {
     // `-b main` needs Git >= 2.28; an older git fails init and the helper
     // degrades to None, which is the documented fallback.
     if !repo.initialized {
-        assert_eq!(refresh_entry(repo.path_str(), 0, None).stats(), None);
+        assert_eq!(
+            refresh_entry(repo.path_str(), None, DueFacts::all(), None).stats(),
+            None
+        );
         return;
     }
 
@@ -179,7 +191,7 @@ fn worktree_diff_stats_total_committed_staged_and_unstaged_over_trunk() {
     // Unstaged: one more line appended to a tracked file.
     repo.write("base.txt", "a\nb\nc\nd\n");
 
-    let entry = refresh_entry(repo.path_str(), 0, None);
+    let entry = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
     assert_eq!(
         entry.stats(),
         Some(DiffStats {
@@ -210,7 +222,7 @@ fn worktree_diff_stats_total_committed_staged_and_unstaged_over_trunk() {
 
     // A non-repository path has nothing to diff, count, or status-read.
     let plain = tempfile::tempdir().unwrap();
-    let plain_entry = refresh_entry(plain.path().to_str().unwrap(), 0, None);
+    let plain_entry = refresh_entry(plain.path().to_str().unwrap(), None, DueFacts::all(), None);
     assert_eq!(plain_entry.stats(), None);
     assert_eq!(plain_entry.commits, None);
     assert_eq!(plain_entry.behind, None);
@@ -219,12 +231,158 @@ fn worktree_diff_stats_total_committed_staged_and_unstaged_over_trunk() {
 }
 
 #[test]
+fn focused_diff_stats_refreshes_local_facts_before_commit_facts() {
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    if !repo.initialized {
+        return;
+    }
+    repo.write("base.txt", "base\n");
+    let _ = repo.git(&["add", "base.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "base"]);
+    repo.write("base.txt", "base\nedit\n");
+
+    let (_runtime_dir, runtime) = runtime_for(repo.path());
+    let cache_path = runtime.root.join("diff-stats.json");
+    let path = repo.path_str().to_owned();
+    let mut cache = DiffStatsCache::default();
+    cache.entries.insert(
+        path.clone(),
+        DiffStatsCacheEntry {
+            refreshed_at_ms: 1_000,
+            commit_refreshed_at_ms: Some(1_000),
+            added: Some(0),
+            removed: Some(0),
+            commits: Some(9),
+            behind: Some(8),
+            trunk: Some("main".to_owned()),
+            branch: Some("main".to_owned()),
+            clean: Some(true),
+            landed: Some(false),
+        },
+    );
+    atomic::write_temp_then_rename_cache(&cache_path, &cache).unwrap();
+
+    let refreshed = refresh_diff_stats(
+        &cache_path,
+        &runtime,
+        std::slice::from_ref(&path),
+        &BTreeSet::from([path.clone()]),
+        &BTreeSet::new(),
+        1_000 + DIFF_STATS_FOCUSED_LOCAL_TTL.as_millis() as u64 + 1,
+        None,
+    );
+    let entry = refreshed.entries.get(&path).unwrap();
+
+    assert_eq!(
+        entry.stats(),
+        Some(DiffStats {
+            added: 1,
+            removed: 0
+        })
+    );
+    assert_eq!(entry.clean, Some(false));
+    assert_eq!(
+        entry.commits,
+        Some(9),
+        "commit facts stay cached on the 3s pass"
+    );
+    assert_eq!(entry.behind, Some(8));
+    assert_eq!(entry.landed, Some(false));
+    assert_eq!(entry.commit_refreshed_at_ms, Some(1_000));
+}
+
+#[test]
+fn non_focused_diff_stats_refreshes_local_and_commit_facts_together() {
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    if !repo.initialized {
+        return;
+    }
+    repo.write("base.txt", "base\n");
+    let _ = repo.git(&["add", "base.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "base"]);
+    repo.write("base.txt", "base\nedit\n");
+
+    let (_runtime_dir, runtime) = runtime_for(repo.path());
+    let cache_path = runtime.root.join("diff-stats.json");
+    let path = repo.path_str().to_owned();
+    let now_ms = 1_000 + DIFF_STATS_TTL.as_millis() as u64 + 1;
+    let mut cache = DiffStatsCache::default();
+    cache.entries.insert(
+        path.clone(),
+        DiffStatsCacheEntry {
+            refreshed_at_ms: 1_000,
+            commit_refreshed_at_ms: Some(now_ms),
+            added: Some(0),
+            removed: Some(0),
+            commits: Some(9),
+            behind: Some(8),
+            trunk: Some("main".to_owned()),
+            branch: Some("main".to_owned()),
+            clean: Some(true),
+            landed: Some(false),
+        },
+    );
+    atomic::write_temp_then_rename_cache(&cache_path, &cache).unwrap();
+
+    let refreshed = refresh_diff_stats(
+        &cache_path,
+        &runtime,
+        std::slice::from_ref(&path),
+        &BTreeSet::new(),
+        &BTreeSet::from([path.clone()]),
+        now_ms,
+        None,
+    );
+    let entry = refreshed.entries.get(&path).unwrap();
+
+    assert_eq!(
+        entry.stats(),
+        Some(DiffStats {
+            added: 1,
+            removed: 0
+        })
+    );
+    assert_eq!(
+        entry.commits,
+        Some(0),
+        "equal non-focused TTLs force commit refresh with local refresh"
+    );
+    assert_eq!(entry.behind, Some(0));
+    assert_eq!(entry.landed, Some(true));
+    assert!(
+        entry
+            .commit_refreshed_at_ms
+            .is_some_and(|stamp| stamp > now_ms),
+        "commit facts stamp at completion, not at stale-check time"
+    );
+}
+
+#[test]
+fn diff_stats_refresh_stamps_fact_groups_at_completion() {
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    if !repo.initialized {
+        return;
+    }
+    repo.write("base.txt", "base\n");
+    let _ = repo.git(&["add", "base.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "base"]);
+
+    let entry = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+
+    assert!(entry.refreshed_at_ms > 0);
+    assert!(entry.commit_refreshed_at_ms.is_some_and(|stamp| stamp > 0));
+}
+
+#[test]
 fn worktree_status_folds_untracked_into_churn_and_reads_clean() {
     let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
     // `-b main` needs Git >= 2.28; an older git fails init and the helper
     // degrades to None, which is the documented fallback.
     if !repo.initialized {
-        assert_eq!(refresh_entry(repo.path_str(), 0, None).clean, None);
+        assert_eq!(
+            refresh_entry(repo.path_str(), None, DueFacts::all(), None).clean,
+            None
+        );
         return;
     }
     repo.write("base.txt", "a\nb\n");
@@ -233,7 +391,7 @@ fn worktree_status_folds_untracked_into_churn_and_reads_clean() {
 
     // A pristine checkout at the trunk tip: proven clean, zero churn — the
     // exact reading the `≡` marker requires.
-    let entry = refresh_entry(repo.path_str(), 0, None);
+    let entry = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
     assert_eq!(entry.clean, Some(true));
     assert_eq!(entry.stats(), Some(DiffStats::default()));
 
@@ -242,7 +400,7 @@ fn worktree_status_folds_untracked_into_churn_and_reads_clean() {
     // the lines into `+` (`--untracked-files=all` reaches inside the dir).
     std::fs::create_dir_all(repo.path().join("sub")).unwrap();
     repo.write("sub/notes.txt", "n1\nn2\n");
-    let entry = refresh_entry(repo.path_str(), 0, None);
+    let entry = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
     assert_eq!(entry.clean, Some(false));
     assert_eq!(
         entry.stats(),
@@ -255,7 +413,7 @@ fn worktree_status_folds_untracked_into_churn_and_reads_clean() {
 
     // An untracked binary contributes no lines but still dirties the tree.
     std::fs::write(repo.path().join("blob.bin"), b"\x00\x01\x02").unwrap();
-    let entry = refresh_entry(repo.path_str(), 0, None);
+    let entry = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
     assert_eq!(entry.clean, Some(false));
     assert_eq!(
         entry.stats(),

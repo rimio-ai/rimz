@@ -11,10 +11,13 @@ use std::time::Duration;
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
 use crate::sidebar::cache::{
-    DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, DiffStats, DiffStatsCache, DiffStatsCacheEntry,
-    read_diff_stats_cache, unix_now_ms,
+    DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_IDLE_TTL,
+    DIFF_STATS_TTL, DiffStats, DiffStatsCache, DiffStatsCacheEntry, read_diff_stats_cache,
+    unix_now_ms,
 };
-use crate::sidebar::enrich::{hot_worktree_paths, needed_worktree_paths, project_diff_stats};
+use crate::sidebar::enrich::{
+    focused_worktree_paths, hot_worktree_paths, needed_worktree_paths, project_diff_stats,
+};
 use crate::worktree::{self, LandedVerdict};
 
 /// How a non-producing sidebar waits for the elected producer's diff-stats
@@ -48,15 +51,17 @@ pub(super) fn enrich_worktree_groups(
     // The producer refreshes the live worktrees' diff stats (single-flighted,
     // git forks parallel across worktrees), then the shared projection folds the
     // resulting cache onto the groups — the same projection a consumer applies.
-    // Activity tiers the refresh: a hot worktree (running or recently-active
-    // agent rows) rides the fast TTL, the rest decay to the idle TTL, so a
-    // mostly-idle fleet forks git only for the worktrees being worked.
+    // Focus tiers the edit-sensitive facts first; activity still keeps
+    // recently-worked background worktrees on the hot TTL while the rest decay
+    // to the idle TTL.
     let needed = needed_worktree_paths(snapshot);
+    let focused = focused_worktree_paths(snapshot);
     let hot = hot_worktree_paths(snapshot);
     let cache = refresh_diff_stats(
         &cache_path,
         runtime,
         &needed,
+        &focused,
         &hot,
         now_ms,
         configured_trunk,
@@ -75,29 +80,32 @@ fn refresh_diff_stats(
     cache_path: &Path,
     runtime: &crate::RuntimePaths,
     needed: &[String],
+    focused: &BTreeSet<String>,
     hot: &BTreeSet<String>,
     now_ms: u64,
     configured_trunk: Option<&str>,
 ) -> DiffStatsCache {
-    // One closure carries the activity tiering, and every freshness verdict —
+    // One closure carries the focus/activity tiering, and every freshness verdict —
     // the no-lock fast path, the single-flight loser's probe, and both produce
     // arms — goes through it, so the tiers cannot disagree and a loser never
     // spin-produces what the winner correctly skipped.
-    let stale = |cache: &DiffStatsCache| -> Vec<String> {
+    let stale = |cache: &DiffStatsCache| -> Vec<(String, DueFacts)> {
         needed
             .iter()
-            .filter(|path| {
-                let ttl = if hot.contains(path.as_str()) {
-                    DIFF_STATS_TTL
-                } else {
-                    DIFF_STATS_IDLE_TTL
+            .filter_map(|path| {
+                let (local_ttl, commit_ttl) = diff_stats_tier(path, focused, hot);
+                let Some(entry) = cache.entries.get(path.as_str()) else {
+                    return Some((path.clone(), DueFacts::all()));
                 };
-                !cache
-                    .entries
-                    .get(path.as_str())
-                    .is_some_and(|entry| entry.is_fresh_for(now_ms, ttl))
+                let mut due = DueFacts {
+                    local: !entry.local_fresh_for(now_ms, local_ttl),
+                    commit: !entry.commit_fresh_for(now_ms, commit_ttl),
+                };
+                if local_ttl == commit_ttl {
+                    due = DueFacts::same(due.local || due.commit);
+                }
+                due.any().then(|| (path.clone(), due))
             })
-            .cloned()
             .collect()
     };
 
@@ -126,7 +134,7 @@ fn refresh_diff_stats(
         // run in parallel across worktrees — and write once.
         Coalesced::Produce(_guard) => {
             let mut cache = read_diff_stats_cache(cache_path);
-            let refreshed = refresh_entries(&stale(&cache), now_ms, configured_trunk);
+            let refreshed = refresh_entries(&stale(&cache), &cache, configured_trunk);
             let changed = !refreshed.is_empty();
             for (path, entry) in refreshed {
                 cache.entries.insert(path, entry);
@@ -140,7 +148,7 @@ fn refresh_diff_stats(
         // write — the producer's map will be fresher.
         Coalesced::ProduceLocal => {
             let mut cache = cache;
-            for (path, entry) in refresh_entries(&stale(&cache), now_ms, configured_trunk) {
+            for (path, entry) in refresh_entries(&stale(&cache), &cache, configured_trunk) {
                 cache.entries.insert(path, entry);
             }
             cache
@@ -148,20 +156,69 @@ fn refresh_diff_stats(
     }
 }
 
+fn diff_stats_tier(
+    path: &str,
+    focused: &BTreeSet<String>,
+    hot: &BTreeSet<String>,
+) -> (Duration, Duration) {
+    if focused.contains(path) {
+        (DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_FOCUSED_COMMIT_TTL)
+    } else if hot.contains(path) {
+        (DIFF_STATS_TTL, DIFF_STATS_TTL)
+    } else {
+        (DIFF_STATS_IDLE_TTL, DIFF_STATS_IDLE_TTL)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DueFacts {
+    local: bool,
+    commit: bool,
+}
+
+impl DueFacts {
+    fn all() -> Self {
+        Self::same(true)
+    }
+
+    fn same(due: bool) -> Self {
+        Self {
+            local: due,
+            commit: due,
+        }
+    }
+
+    fn any(self) -> bool {
+        self.local || self.commit
+    }
+}
+
+struct LocalFacts {
+    stats: Option<DiffStats>,
+    branch: Option<String>,
+    clean: Option<bool>,
+}
+
+struct CommitFacts {
+    commits: Option<u32>,
+    behind: Option<u32>,
+    trunk: Option<String>,
+    landed: Option<bool>,
+}
+
 /// Most worktrees probed concurrently. Each worktree's own chain stays
 /// sequential (merge-base needs the trunk ref), but independent worktrees run in
 /// parallel; the cap keeps a many-worktree fleet from bursting a fork storm.
 const MAX_PARALLEL_GIT: usize = 8;
 
-/// Refresh several worktrees' diff-stats concurrently, returning each path's
-/// fresh entry. Independent worktrees run in parallel — bounded to
+/// Refresh several worktrees' due diff-stats facts concurrently, returning each
+/// path's merged entry. Independent worktrees run in parallel — bounded to
 /// [`MAX_PARALLEL_GIT`] live `git` chains at a time — while each path's own
-/// `trunk ref → merge-base → numstat + rev-list ×2 + status → landed verdict
-/// → branch` chain stays sequential. Runs on the diff-stats producer (the
-/// fetch worker), never the render thread.
+/// `trunk ref → merge-base → selected facts` chain stays sequential. Runs on
+/// the diff-stats producer (the fetch worker), never the render thread.
 fn refresh_entries(
-    paths: &[String],
-    now_ms: u64,
+    paths: &[(String, DueFacts)],
+    cache: &DiffStatsCache,
     configured_trunk: Option<&str>,
 ) -> Vec<(String, DiffStatsCacheEntry)> {
     let mut out = Vec::with_capacity(paths.len());
@@ -169,9 +226,13 @@ fn refresh_entries(
         std::thread::scope(|scope| {
             let handles: Vec<_> = chunk
                 .iter()
-                .map(|path| {
+                .map(|(path, due)| {
+                    let prior = cache.entries.get(path.as_str()).cloned();
                     scope.spawn(move || {
-                        (path.clone(), refresh_entry(path, now_ms, configured_trunk))
+                        (
+                            path.clone(),
+                            refresh_entry(path, prior.as_ref(), *due, configured_trunk),
+                        )
                     })
                 })
                 .collect();
@@ -185,41 +246,52 @@ fn refresh_entries(
     out
 }
 
-/// Produce a fresh diff-stats entry for one worktree path: the sequential `git`
-/// forks behind the columns (trunk ref → merge-base, then numstat and the two
-/// commit counts off that one base, then the status read and content-landed
-/// verdict) plus the live branch label. The trunk and merge-base are resolved
-/// once and shared by the diff and both commit counts, so each extra column
-/// costs one fork, not a full chain.
-fn refresh_entry(path: &str, now_ms: u64, configured_trunk: Option<&str>) -> DiffStatsCacheEntry {
+/// Produce a merged diff-stats entry for one worktree path. The trunk and
+/// merge-base are resolved once when either half is due; local and commit facts
+/// update only their own fields and completion stamps, so a focused worktree's
+/// edit tick does not pay for commit/landed facts.
+fn refresh_entry(
+    path: &str,
+    prior: Option<&DiffStatsCacheEntry>,
+    due: DueFacts,
+    configured_trunk: Option<&str>,
+) -> DiffStatsCacheEntry {
+    let mut entry = prior.cloned().unwrap_or_default();
     let worktree = Path::new(path);
     let trunk = trunk_ref(worktree, configured_trunk);
     let base = trunk
         .as_deref()
         .and_then(|trunk| diff_base(worktree, trunk));
-    let stats = base
-        .as_deref()
-        .and_then(|base| worktree_diff_stats(worktree, base));
-    let commits = base
-        .as_deref()
-        .and_then(|base| worktree_commits_ahead(worktree, base));
-    let behind = base
-        .as_deref()
-        .zip(trunk.as_deref())
-        .and_then(|(base, trunk)| worktree_commits_behind(worktree, base, trunk));
+
+    if due.local {
+        let local = refresh_local_facts(worktree, base.as_deref());
+        entry.added = local.stats.map(|stats| stats.added);
+        entry.removed = local.stats.map(|stats| stats.removed);
+        entry.branch = local.branch;
+        entry.clean = local.clean;
+    }
+    if due.commit {
+        let commit = refresh_commit_facts(worktree, base.as_deref(), trunk.as_deref(), entry.clean);
+        entry.commits = commit.commits;
+        entry.behind = commit.behind;
+        entry.trunk = commit.trunk;
+        entry.landed = commit.landed;
+    }
+
+    let completed_at_ms = unix_now_ms();
+    if due.local {
+        entry.refreshed_at_ms = completed_at_ms;
+    }
+    if due.commit {
+        entry.commit_refreshed_at_ms = Some(completed_at_ms);
+    }
+    entry
+}
+
+fn refresh_local_facts(worktree: &Path, base: Option<&str>) -> LocalFacts {
+    let stats = base.and_then(|base| worktree_diff_stats(worktree, base));
     let status = worktree_status(worktree);
     let clean = status.as_ref().map(|status| status.clean);
-    let landed = match (commits, clean, trunk.as_deref()) {
-        (Some(0), _, _) => Some(true),
-        (Some(_), Some(true), Some(trunk)) => {
-            match worktree::content_landed(worktree, trunk, "HEAD") {
-                LandedVerdict::Landed => Some(true),
-                LandedVerdict::Pending => Some(false),
-                LandedVerdict::Unknown => None,
-            }
-        }
-        _ => None,
-    };
     // Untracked content is change the diff is blind to: fold its line count
     // into the `+` churn so an untracked-only worktree reads as carrying work,
     // never as landed.
@@ -230,15 +302,38 @@ fn refresh_entry(path: &str, now_ms: u64, configured_trunk: Option<&str>) -> Dif
         }),
         (stats, _) => stats,
     };
-    DiffStatsCacheEntry {
-        refreshed_at_ms: now_ms,
-        added: stats.map(|stats| stats.added),
-        removed: stats.map(|stats| stats.removed),
-        commits,
-        behind,
-        trunk,
+    LocalFacts {
+        stats,
         branch: worktree_branch(worktree),
         clean,
+    }
+}
+
+fn refresh_commit_facts(
+    worktree: &Path,
+    base: Option<&str>,
+    trunk: Option<&str>,
+    clean: Option<bool>,
+) -> CommitFacts {
+    let commits = base.and_then(|base| worktree_commits_ahead(worktree, base));
+    let behind = base
+        .zip(trunk)
+        .and_then(|(base, trunk)| worktree_commits_behind(worktree, base, trunk));
+    let landed = match (commits, clean, trunk) {
+        (Some(0), _, _) => Some(true),
+        (Some(_), Some(true), Some(trunk)) => {
+            match worktree::content_landed(worktree, trunk, "HEAD") {
+                LandedVerdict::Landed => Some(true),
+                LandedVerdict::Pending => Some(false),
+                LandedVerdict::Unknown => None,
+            }
+        }
+        _ => None,
+    };
+    CommitFacts {
+        commits,
+        behind,
+        trunk: trunk.map(ToOwned::to_owned),
         landed,
     }
 }

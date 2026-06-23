@@ -4,7 +4,7 @@
 //! arrives through [`EnrichMode::Producing`]; consumer reads project published
 //! runtime caches and sidecars only.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -142,6 +142,35 @@ pub fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
         }
     }
     hot
+}
+
+/// The worktree paths whose edit-sensitive git facts refresh on the focused
+/// tier: a `Worktree`-kind group is focused when any rendered row is bound to a
+/// pane attached clients are currently viewing. Derived with the same path
+/// recovery and live-dir gate as [`needed_worktree_paths`], so focused is a
+/// subset of needed by construction.
+pub fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
+    let viewed: HashSet<&PaneId> = snapshot.viewed_panes.iter().collect();
+    let mut focused = BTreeSet::new();
+    for group in &snapshot.worktree_groups {
+        if group.kind != SidebarWorktreeKind::Worktree {
+            continue;
+        }
+        let Some(path) = worktree_group_path(group) else {
+            continue;
+        };
+        if !Path::new(path).is_dir() {
+            continue;
+        }
+        if group.rows.iter().any(|row| {
+            row.pane
+                .as_ref()
+                .is_some_and(|pane| viewed.contains(&pane.pane_id))
+        }) {
+            focused.insert(path.to_owned());
+        }
+    }
+    focused
 }
 
 /// Fold the remote-link stats sidecar onto the snapshot. Local rooms never have
@@ -425,6 +454,7 @@ pub fn enrich(
             .filter(|tab| tab.focus_contested)
             .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
             .collect();
+        snapshot.viewed_panes = frame.viewed_panes.clone();
         snapshot.truth_degraded = truth_notice_for_frame(&frame);
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_frame(own, &frame);

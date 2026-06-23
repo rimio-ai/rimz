@@ -10,7 +10,7 @@ use crate::ids::PaneId;
 use crate::ledger::atomic;
 use crate::sidebar::cache::unix_now_ms;
 use crate::sidebar::frame::{PaneFrame, PaneMetrics, PaneState};
-use crate::sidebar::timing::{METRICS_HOT_SAMPLE_TTL, METRICS_SAMPLE_TTL};
+use crate::sidebar::timing::{METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMPLE_TTL};
 
 mod zellij;
 
@@ -158,19 +158,22 @@ pub(super) fn pane_root_bindings(
 pub(super) fn pane_metrics_due(frame: &PaneFrame, runtime: &crate::RuntimePaths) -> bool {
     let prior = read_metrics_sample_cache(&runtime.root.join("metrics-sample.json"));
     let now_ms = unix_now_ms();
+    let viewed: HashSet<&PaneId> = frame.viewed_panes.iter().collect();
     frame.pane_states().any(|pane| {
         pane_sampleable(pane)
             && metric_entry_due(
                 prior.entries.get(&pane.pane_id.to_string()),
                 &pane.current.command,
                 now_ms,
+                viewed.contains(&pane.pane_id),
             )
     })
 }
 
 /// Enrich each pane with process-tree resource metrics from `/proc`, on the
-/// sampling cadence's own clock: active/recently-changed panes sample on
-/// [`METRICS_HOT_SAMPLE_TTL`], idle panes on [`METRICS_SAMPLE_TTL`]. Fresh
+/// sampling cadence's own clock: viewed panes sample on
+/// [`METRICS_FOCUSED_SAMPLE_TTL`], background panes on
+/// [`METRICS_BACKGROUND_SAMPLE_TTL`]. Fresh
 /// entries carry their stored display values — and the pane→root-pid binding
 /// the process-row name anchors on — forward with zero `/proc` IO. Due entries
 /// read `/proc` to compute two-sample rates (CPU%, IO bytes/s) and write a
@@ -193,6 +196,7 @@ pub(super) fn enrich_pane_metrics(
     let cache_path = runtime.root.join("metrics-sample.json");
     let prior = read_metrics_sample_cache(&cache_path);
     let now_ms = unix_now_ms();
+    let viewed: HashSet<PaneId> = frame.viewed_panes.iter().cloned().collect();
 
     let mut due = HashSet::new();
     for pane in frame.pane_states_mut() {
@@ -201,7 +205,12 @@ pub(super) fn enrich_pane_metrics(
         if !pane_sampleable(pane) {
             continue;
         }
-        if metric_entry_due(prior_entry, &pane.current.command, now_ms) {
+        if metric_entry_due(
+            prior_entry,
+            &pane.current.command,
+            now_ms,
+            viewed.contains(&pane.pane_id),
+        ) {
             due.insert(pane_key);
         } else if let Some(entry) = prior_entry {
             apply_cached_entry(pane, entry);
@@ -474,13 +483,14 @@ fn pane_sampleable(pane: &PaneState) -> bool {
 
 /// Whether a pane needs a fresh `/proc` sample this produce: immediately when
 /// it has no entry or its foreground command changed (the warmup sample for a
-/// new tenant), otherwise on the hot or idle cadence the entry's shape picks.
+/// new tenant), otherwise on the viewed or background cadence.
 /// Saturating, so a clock that ran backwards reads fresh rather than
 /// re-sampling every tick.
 fn metric_entry_due(
     entry: Option<&MetricsSampleEntry>,
     command: &Option<String>,
     now_ms: u64,
+    is_viewed: bool,
 ) -> bool {
     let Some(entry) = entry else {
         return true;
@@ -491,24 +501,12 @@ fn metric_entry_due(
     if entry.command != *command {
         return true;
     }
-    let ttl = if metrics_entry_hot(entry) {
-        METRICS_HOT_SAMPLE_TTL
+    let ttl = if is_viewed {
+        METRICS_FOCUSED_SAMPLE_TTL
     } else {
-        METRICS_SAMPLE_TTL
+        METRICS_BACKGROUND_SAMPLE_TTL
     };
     now_ms.saturating_sub(entry.sampled_at_ms) > ttl.as_millis() as u64
-}
-
-/// Whether an entry rides the hot cadence: its sample-time command reads as
-/// active work, or the pane root had live descendants. [`metric_entry_due`]
-/// consults this only behind its command guard, so the entry's command is also
-/// the pane's current one.
-fn metrics_entry_hot(entry: &MetricsSampleEntry) -> bool {
-    entry
-        .command
-        .as_deref()
-        .is_some_and(crate::ledger::snapshot::process_is_active)
-        || entry.tree_process_count > 1
 }
 
 /// The all-or-nothing display gate: CPU, memory, and IO reach the pane
