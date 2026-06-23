@@ -136,6 +136,7 @@ impl Env {
             .env("XDG_CONFIG_HOME", self.config_root())
             .env("HOME", &self.home_root)
             .env("SHELL", "/bin/sh")
+            .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
             .env_remove("ENV")
             .env_remove("BASH_ENV")
             .env_remove("ZDOTDIR")

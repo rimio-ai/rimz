@@ -6,6 +6,8 @@
 //! the one knob unique to parked messages, so it stays on `queue`.
 
 use std::path::{Path, PathBuf};
+use std::thread::sleep;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -112,6 +114,35 @@ pub(crate) struct LiveSend {
     pub(crate) sender: MessageSender,
 }
 
+struct Pacer {
+    interval: Duration,
+    started: bool,
+}
+
+impl Pacer {
+    fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            started: false,
+        }
+    }
+
+    /// Sleep before every pane write after the first, so discrete steer/queue
+    /// writes land paced rather than coalesced.
+    fn tick(&mut self) {
+        self.tick_with(sleep);
+    }
+
+    fn tick_with(&mut self, sleeper: impl FnOnce(Duration)) -> bool {
+        let should_sleep = self.started && !self.interval.is_zero();
+        if should_sleep {
+            sleeper(self.interval);
+        }
+        self.started = true;
+        should_sleep
+    }
+}
+
 /// Type into one live agent pane, recording the steer between the paste and the
 /// submit Enter. A pending ask skips the agent rather than aborting a broadcast;
 /// mux failures return errors.
@@ -142,7 +173,14 @@ pub(crate) fn send_to_live_pane(
     }
     let pane_id = &target.pane_id;
     let backend = rimz::mux::backend_for(pane_id.mux());
-    let compacted = compact_if_full(backend.as_ref(), bound, target, send.auto_compact)?;
+    let mut pacer = Pacer::new(rimz::message::message_interval_from_env());
+    let compacted = compact_if_full(
+        backend.as_ref(),
+        &mut pacer,
+        bound,
+        target,
+        send.auto_compact,
+    )?;
     let peers: Vec<&AgentState> = snapshot
         .agents
         .iter()
@@ -153,6 +191,7 @@ pub(crate) fn send_to_live_pane(
             Some(prefix) => format!("{prefix}{text}"),
             None => text.to_owned(),
         };
+    pacer.tick();
     super::pane::paste_text(backend.as_ref(), pane_id, &payload)?;
     // Record the steer once the text lands and before the submit keystroke, so a
     // submitted steer is always preceded by its audit event. A failed Enter then
@@ -172,6 +211,7 @@ pub(crate) fn send_to_live_pane(
     );
     ledger.append_event(&event)?;
     if send.enter {
+        pacer.tick();
         super::pane::send_enter(backend.as_ref(), pane_id)?;
     }
     Ok(Outcome::Sent { label, compacted })
@@ -180,8 +220,9 @@ pub(crate) fn send_to_live_pane(
 /// Submit the agent's `/compact` ahead of the send when smart compaction is set
 /// and a bound agent's context has reached the threshold. A lazy pane carries no
 /// context, and an agent kind with no compaction command passes through.
-pub(crate) fn compact_if_full(
+fn compact_if_full(
     backend: &dyn MuxBackend,
+    pacer: &mut Pacer,
     bound: Option<&AgentState>,
     target: &PaneAgent,
     auto_compact: Option<AutoCompact>,
@@ -200,7 +241,10 @@ pub(crate) fn compact_if_full(
     else {
         return Ok(false);
     };
-    super::pane::send_command(backend, &target.pane_id, command)?;
+    pacer.tick();
+    super::pane::send_text(backend, &target.pane_id, command)?;
+    pacer.tick();
+    super::pane::send_enter(backend, &target.pane_id)?;
     Ok(true)
 }
 
@@ -272,6 +316,30 @@ fn unescape(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn pacer_sleeps_after_first_tick() {
+        let mut pacer = Pacer::new(Duration::from_millis(40));
+
+        assert!(!pacer.tick_with(|_| panic!("first tick must not sleep")));
+
+        let second = Instant::now();
+        pacer.tick();
+        assert!(
+            second.elapsed() >= Duration::from_millis(40),
+            "second tick should sleep at least the configured interval"
+        );
+    }
+
+    #[test]
+    fn zero_interval_pacer_never_sleeps() {
+        let mut pacer = Pacer::new(Duration::ZERO);
+
+        for _ in 0..4 {
+            assert!(!pacer.tick_with(|_| panic!("zero interval must not sleep")));
+        }
+    }
 
     #[test]
     fn joins_argv_with_spaces() {

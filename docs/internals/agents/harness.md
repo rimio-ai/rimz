@@ -96,9 +96,13 @@ The `@` sigil is required — a bare selector fails with a `did you mean @…?` 
 
 Both commands wrap the text in bracketed-paste markers (`ESC[200~` … `ESC[201~`) through `MuxBackend::paste_text`, then press Enter as a separate `send_key`. This makes the boundary lexical: agent composers run paste-detection heuristics — text plus a trailing `\r` coalesced into one PTY read is taken as pasted content, with the `\r` a literal newline rather than a submit — so the composer leaves paste mode on `ESC[201~` and the following Enter is unambiguously a keystroke even when every byte arrives in one read. The generic `rimz pane send` stays on the raw type path, since a bare shell would render the markers literally.
 
+The discrete writes land one second apart after the first write: paste immediately, wait, submit. This gives a busy composer separate paste and submit events on the PTY.
+
 ### Compact before sending
 
 `--smart-compact <PCT|TOKENS>` lands a message against a fresh window: when the agent's context fill has reached the threshold, Rimz submits the agent's `/compact` first, then the message, so the prompt runs after compaction instead of racing the agent's own auto-compaction mid-turn. The threshold is a percentage of the window or an occupied-token count, compared against the live fill (the folded statusline reading where present, else the per-call token split, else the carried gauge); an omitted flag falls back to the [`[harness] smart_compact`](../../reference/configuration.md#smart-compaction) default, and an unknown fill is not a full window, so it sends untouched.
+
+The compact-first path paces `/compact`, its submit, the message, and its submit one second apart after the first write, so compaction settles before the message arrives.
 
 The compaction is the agent's own slash command, owned by the adapter (`AgentAdapter::compact_command`). It rides the raw type path, **not** the bracketed paste — a composer treats pasted text as literal content, so a pasted `/compact` would land as a prompt rather than run. `steer` and send-now `queue` read the fill just before the immediate paste; parked queue records store the threshold and re-read fill at the delivery boundary, typing `/compact` ahead of the message in the same delivery so a failed compaction fails the delivery through the same retry path as a failed send.
 

@@ -11,6 +11,9 @@ use crate::ids::{AgentKind, AgentSessionId, MessageId, WorkspaceId};
 
 pub const DEFAULT_SETTLE: Duration = Duration::from_millis(400);
 pub const SETTLE_ENV: &str = "RIMZ_QUEUE_SETTLE_MS";
+/// Default spacing between discrete steer/queue pane writes.
+pub const DEFAULT_MESSAGE_INTERVAL: Duration = Duration::from_secs(1);
+pub const MESSAGE_INTERVAL_ENV: &str = "RIMZ_MESSAGE_INTERVAL_MS";
 pub const MAX_DELIVERY_ATTEMPTS: u32 = 5;
 pub const CLAIM_TTL: Duration = Duration::from_secs(15);
 
@@ -350,6 +353,15 @@ pub fn settle_duration_from_env() -> Duration {
         .and_then(|raw| raw.parse::<u64>().ok())
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT_SETTLE)
+}
+
+/// Spacing between discrete steer/queue pane writes.
+pub fn message_interval_from_env() -> Duration {
+    std::env::var(MESSAGE_INTERVAL_ENV)
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_MESSAGE_INTERVAL)
 }
 
 pub fn claim_expired(last_attempt_at: Option<Timestamp>, now: Timestamp) -> bool {

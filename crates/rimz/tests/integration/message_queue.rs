@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::feed::{FeedItem, FeedKind, Surface};
@@ -724,6 +725,49 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
         String::from_utf8_lossy(&out.stdout).contains("compacted"),
         "a single steer reports the compaction it ran: {}",
         String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// Auto-compacted sends pace the four discrete pane writes: `/compact`, its
+/// submit Enter, the message paste, and the message submit Enter.
+#[test]
+fn steer_auto_compact_paces_each_pane_write() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-ac-paced",
+        "feature-ac-paced",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_context_fill(&env, "sess-ac-paced", 80);
+
+    let trace_log = env.project_root.join("zellij-ac-paced-trace.log");
+    let started = Instant::now();
+    let out = env
+        .rimz()
+        .env("RIMZ_MESSAGE_INTERVAL_MS", "200")
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["steer", "@claude", "--smart-compact", "70%", "--", "go"])
+        .output()
+        .expect("steer");
+    let elapsed = started.elapsed();
+    assert!(
+        out.status.success(),
+        "steer failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        elapsed >= Duration::from_millis(600),
+        "three 200ms gaps should pace the four writes; elapsed {elapsed:?}"
+    );
+
+    let lines = trace_lines(&trace_log);
+    let compact_at = lines.iter().position(|line| is_compact_command(line));
+    let paste_at = lines.iter().position(|line| is_paste(line, "go"));
+    assert!(
+        compact_at.is_some() && paste_at.is_some() && compact_at < paste_at,
+        "compaction must precede the message under pacing; trace: {lines:?}"
     );
 }
 
