@@ -351,8 +351,8 @@ fn worktree_branch(worktree: &Path) -> Option<String> {
 /// added on top of where it forked — never the trunk's own progress since the
 /// fork — and `git diff <commit>` reads the tree on disk, so staged and unstaged
 /// work land in the same number as committed work. Untracked files are
-/// invisible to `git diff`; [`refresh_entry`] folds their line count in from
-/// the status probe.
+/// invisible to `git diff`; [`refresh_local_facts`] folds their line count in
+/// from the status probe.
 fn worktree_diff_stats(worktree: &Path, base: &str) -> Option<DiffStats> {
     let output = git_output(
         worktree,

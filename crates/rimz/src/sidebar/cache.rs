@@ -347,15 +347,6 @@ impl DiffStatsCacheEntry {
             .is_some_and(|stamp| now_ms.saturating_sub(stamp) <= ttl.as_millis() as u64)
     }
 
-    /// Projection-side freshness convenience kept on the local-fact stamp.
-    pub fn is_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
-        self.local_fresh_for(now_ms, ttl)
-    }
-
-    pub fn is_fresh(&self, now_ms: u64) -> bool {
-        self.is_fresh_for(now_ms, DIFF_STATS_TTL)
-    }
-
     pub fn stats(&self) -> Option<DiffStats> {
         self.added
             .zip(self.removed)

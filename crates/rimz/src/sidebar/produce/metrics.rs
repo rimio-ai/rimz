@@ -48,9 +48,6 @@ struct MetricsSampleEntry {
     io_bytes_valid: bool,
     /// Unix milliseconds when this sample was taken.
     sampled_at_ms: u64,
-    /// Number of stat-readable processes included in the tree sample.
-    #[serde(default)]
-    tree_process_count: u32,
     /// The pane's root pid (tmux semantics: the direct child of the mux
     /// server), recorded so the next tick restores the binding instead of
     /// re-matching the pane against the whole process table.
@@ -319,7 +316,6 @@ fn sample_due_pane(
         io_bytes: sample.io_bytes.unwrap_or(0),
         io_bytes_valid: sample.io_bytes.is_some(),
         sampled_at_ms: now_ms,
-        tree_process_count: sample.process_count,
         pane_pid: Some(shell_pid),
         root_start_ticks: Some(sample.root_start_ticks),
         command: pane.current.command.clone(),

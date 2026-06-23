@@ -100,7 +100,6 @@ fn pane_tree_rates_on_stable_root_when_children_churn() {
     let mut prior = fresh_entry(10, 100, "cargo xtask install", 1_000);
     prior.cpu_ticks = 1_000;
     prior.io_bytes = 500;
-    prior.tree_process_count = 2;
     let sample = PaneTreeSample {
         direct_children: vec![21],
         process_count: 2,

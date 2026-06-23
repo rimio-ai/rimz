@@ -104,7 +104,6 @@ fn binding_entry(pane_pid: u32, start_ticks: u64, command: &str) -> MetricsSampl
         io_bytes: 0,
         io_bytes_valid: true,
         sampled_at_ms: 0,
-        tree_process_count: 1,
         pane_pid: Some(pane_pid),
         root_start_ticks: Some(start_ticks),
         command: Some(command.to_owned()),

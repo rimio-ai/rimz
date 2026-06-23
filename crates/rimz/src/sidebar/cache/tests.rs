@@ -213,18 +213,17 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     let fast = DIFF_STATS_TTL.as_millis() as u64;
     let idle = DIFF_STATS_IDLE_TTL.as_millis() as u64;
 
-    assert!(entry.is_fresh_for(1_000 + fast, DIFF_STATS_TTL));
-    assert!(!entry.is_fresh_for(1_001 + fast, DIFF_STATS_TTL));
+    assert!(entry.local_fresh_for(1_000 + fast, DIFF_STATS_TTL));
+    assert!(!entry.local_fresh_for(1_001 + fast, DIFF_STATS_TTL));
     assert!(entry.commit_fresh_for(1_000 + fast, DIFF_STATS_TTL));
     assert!(!entry.commit_fresh_for(1_001 + fast, DIFF_STATS_TTL));
-    assert!(entry.is_fresh_for(1_000 + idle, DIFF_STATS_IDLE_TTL));
-    assert!(!entry.is_fresh_for(1_001 + idle, DIFF_STATS_IDLE_TTL));
+    assert!(entry.local_fresh_for(1_000 + idle, DIFF_STATS_IDLE_TTL));
+    assert!(!entry.local_fresh_for(1_001 + idle, DIFF_STATS_IDLE_TTL));
     // The tiering's whole point: a hot-stale entry is idle-fresh, so an idle
     // worktree skips the forks a hot one pays.
-    assert!(entry.is_fresh_for(1_001 + fast, DIFF_STATS_IDLE_TTL));
+    assert!(entry.local_fresh_for(1_001 + fast, DIFF_STATS_IDLE_TTL));
 
-    // `is_fresh` is the hot-tier convenience over `is_fresh_for`, and the
-    // populated fields round-trip through the cache entry.
+    // The populated fields round-trip through the cache entry.
     let populated = DiffStatsCacheEntry {
         refreshed_at_ms: 1_000,
         commit_refreshed_at_ms: Some(1_000),
@@ -237,8 +236,6 @@ fn git_cache_freshness_boundaries_are_inclusive() {
         clean: Some(true),
         landed: Some(true),
     };
-    assert!(populated.is_fresh(1_000 + fast));
-    assert!(!populated.is_fresh(1_001 + fast));
     assert_eq!(
         populated.stats(),
         Some(DiffStats {

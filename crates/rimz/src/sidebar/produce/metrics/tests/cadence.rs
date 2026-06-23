@@ -45,9 +45,7 @@ fn metric_entry_due_uses_viewed_or_background_ttl() {
         Some("cargo build".to_owned()),
         fresh_entry(42, 700, "cargo build", 1_000),
     );
-    let mut child_entry = fresh_entry(42, 700, "htop", 1_000);
-    child_entry.tree_process_count = 2;
-    let child = (Some("htop".to_owned()), child_entry);
+    let child = (Some("htop".to_owned()), fresh_entry(42, 700, "htop", 1_000));
 
     let focused_ttl = METRICS_FOCUSED_SAMPLE_TTL.as_millis() as u64;
     let background_ttl = METRICS_BACKGROUND_SAMPLE_TTL.as_millis() as u64;
