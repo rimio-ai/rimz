@@ -8,7 +8,7 @@ The install also builds a small Zellij plugin that ships embedded in the binary.
 
 Rimz needs four things on your machine.
 
-- **A terminal multiplexer** — Zellij or tmux. Both are first-class; install one, or both and choose per project. Rimz refuses to start against a build too old to carry the room options it sets, so mind the floors: **tmux 3.5 or newer** and **Zellij 0.41 or newer** (0.44 and up add the sidebar's single-click jumps and the presence plugin). `rimz doctor` reports the installed version and whether it clears the floor.
+- **A terminal multiplexer** — Zellij or tmux. Both are first-class; install one, or both and choose per project. Rimz refuses to start against a build too old to carry the room options it sets, so mind the floors: **tmux 3.5 or newer** and **Zellij 0.41 or newer** (tmux 3.6 and up add CSI-u soft-newline keys while preserving paste; Zellij 0.44 and up add the sidebar's single-click jumps and the presence plugin). `rimz doctor` reports the installed version and whether it clears the floor.
 - **A C linker** — `cc` and `ld` link the final binary. The build pulls in no C libraries of its own; the linker is all the system toolchain provides.
 - **Git** — to clone the source.
 - **Rust, through `rustup`** — the compiler and Cargo. `rustup` reads the repo's pinned toolchain and installs the matching channel, components, and WebAssembly target on first build.
@@ -192,7 +192,7 @@ zellij --version
 rimz doctor
 ```
 
-On tmux, `extended-keys-format` (tmux 3.5) is the option an older server rejects. On Zellij, 0.44 is the floor for single-click sidebar jumps and the presence plugin, while 0.41 through 0.43 run without them.
+On tmux, `extended-keys-format` (tmux 3.5) is the option an older server rejects; Rimz enables `extended-keys` and `*:extkeys` only on tmux 3.6 and newer because 3.5.x corrupts pasted newlines while extended keys are active. On Zellij, 0.44 is the floor for single-click sidebar jumps and the presence plugin, while 0.41 through 0.43 run without them.
 
 ### `rustup` is missing
 

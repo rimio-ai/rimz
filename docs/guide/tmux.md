@@ -20,13 +20,13 @@ set -g  history-limit 100000     # long Claude/Codex output stays in scrollback
 set -sg escape-time 0            # no ESC lag in helix, nvim, fzf, agent TUIs
 set -g  focus-events on          # editors and agents see focus changes
 set -g  allow-passthrough on     # let desktop notifications pass through tmux
-set -s  extended-keys on             # distinguish modified Enter from Enter
+set -s  extended-keys on             # distinguish modified Enter from Enter (tmux 3.6+)
 set -s  extended-keys-format csi-u   # forward Shift+Enter / Alt+Enter as CSI-u
 set -ga terminal-features "*:extkeys" # ask the outer terminal to send them
 set -g  set-clipboard on         # yank into the host clipboard over OSC52
 ```
 
-`escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. `extended-keys`, `extended-keys-format csi-u`, and `terminal-features … extkeys` let an agent's composer receive Shift+Enter and Alt+Enter as CSI-u soft newlines while plain Enter still submits. Rimz applies the same `extkeys` feature inside its room. `set-clipboard on` carries a yank out through OSC52, so you can copy agent output to your local clipboard even over SSH. `allow-passthrough on` lets the desktop-notification bytes Rimz emits reach your terminal ([notifications](../internals/sidebar/notifications.md)).
+`escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. On tmux 3.6 and newer, `extended-keys`, `extended-keys-format csi-u`, and `terminal-features … extkeys` let an agent's composer receive Shift+Enter and Alt+Enter as CSI-u soft newlines while plain Enter still submits. tmux 3.5.x re-encodes pasted newlines while extended keys are active, so Rimz applies `extended-keys` and `*:extkeys` inside its room only on tmux 3.6 and newer. `set-clipboard on` carries a yank out through OSC52, so you can copy agent output to your local clipboard even over SSH. `allow-passthrough on` lets the desktop-notification bytes Rimz emits reach your terminal ([notifications](../internals/sidebar/notifications.md)).
 
 ## Recommended
 

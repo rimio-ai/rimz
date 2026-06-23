@@ -10,10 +10,34 @@ fn version_parser_and_floor_hold() {
 
     assert!((3, 5, 0) >= MIN_TMUX_VERSION);
     assert!((3, 6, 0) >= MIN_TMUX_VERSION);
-    // 3.4 lacks `extended-keys-format`, which the room options set
-    // unconditionally — below the floor.
+    // 3.4 lacks `extended-keys-format`, which the room options still set
+    // across all supported hosts — below the floor.
     assert!((3, 4, 0) < MIN_TMUX_VERSION);
     assert!((3, 2, 0) < MIN_TMUX_VERSION);
+}
+
+#[test]
+fn extended_keys_are_safe_only_after_tmux_paste_fix() {
+    assert!(!extended_keys_safe(None));
+    assert!(!extended_keys_safe(parse_version("tmux 3.5a")));
+    assert!(!extended_keys_safe(Some((3, 5, 0))));
+    assert!(extended_keys_safe(Some((3, 6, 0))));
+    assert!(extended_keys_safe(Some((3, 6, 1))));
+    assert!(extended_keys_safe(Some((4, 0, 0))));
+}
+
+#[test]
+fn effective_room_config_gates_extended_keys_only_when_requested() {
+    let mut config = crate::config::TmuxConfig {
+        extended_keys: true,
+        ..Default::default()
+    };
+
+    assert!(!effective_room_config(&config, Some((3, 5, 0))).extended_keys);
+    assert!(effective_room_config(&config, Some((3, 6, 0))).extended_keys);
+
+    config.extended_keys = false;
+    assert!(!effective_room_config(&config, Some((3, 6, 0))).extended_keys);
 }
 
 #[test]

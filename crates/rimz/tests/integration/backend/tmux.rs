@@ -392,6 +392,17 @@ fn ensure_session_applies_room_options_in_one_batch() {
 
     let server = TmuxServer::new();
     let cwd = TempDir::new().expect("cwd tempdir");
+    let extended_keys_safe = rimz::mux::tmux::extended_keys_safe(
+        rimz::mux::tmux::capabilities()
+            .ok()
+            .and_then(|c| c.parsed_version),
+    );
+    let baseline_terminal_features = if extended_keys_safe {
+        None
+    } else {
+        server.ensure_with_shell("rimz-options-baseline");
+        Some(server.show_option(&["-s"], "terminal-features"))
+    };
     server
         .backend
         .ensure_session(&SessionOptions {
@@ -406,12 +417,22 @@ fn ensure_session_applies_room_options_in_one_batch() {
         .expect("ensure");
 
     assert_eq!(server.show_option(&["-s"], "escape-time"), "0");
-    assert!(
-        server
-            .show_option(&["-s"], "terminal-features")
-            .contains("extkeys"),
-        "extkeys terminal-feature lets Alt+Enter reach agents as CSI-u",
-    );
+    let extended_keys = server.show_option(&["-s"], "extended-keys");
+    let terminal_features = server.show_option(&["-s"], "terminal-features");
+    if extended_keys_safe {
+        assert_eq!(extended_keys, "on");
+        assert!(
+            terminal_features.contains("extkeys"),
+            "extkeys terminal-feature lets Alt+Enter reach agents as CSI-u",
+        );
+    } else {
+        assert_eq!(extended_keys, "off");
+        assert_eq!(
+            terminal_features,
+            baseline_terminal_features.expect("unsafe path captures baseline terminal-features"),
+            "tmux before 3.6 leaves terminal-features unchanged while extended-keys is off",
+        );
+    }
     assert_eq!(server.show_option(&["-t", "rimz-options"], "mouse"), "on");
     assert_eq!(
         server.show_option(&["-w", "-t", "rimz-options"], "allow-passthrough"),
