@@ -122,3 +122,35 @@ fn gc_reaps_scaffold_but_keeps_unreadable_history() {
         "unreadable record with history should be kept"
     );
 }
+
+#[test]
+fn gc_reaps_dead_loop_delivery_schedule() {
+    let env = Env::new();
+    let config_dir = env.config_root().join("rimz");
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    let config_path = config_dir.join("agents.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[agents.loop.tasks.dead]\n\
+             to = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
+             prompt = \"wake up\"\n\
+             root = \"{}\"\n\
+             at = \"07:00\"\n",
+            env.project_root.display()
+        ),
+    )
+    .expect("write agents config");
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("schedules reaped: 1"));
+
+    let config = std::fs::read_to_string(config_path).expect("read agents config");
+    assert!(
+        !config.contains("[agents.loop.tasks.dead]"),
+        "dead schedule should be removed"
+    );
+}

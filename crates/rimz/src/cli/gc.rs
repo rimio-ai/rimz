@@ -59,6 +59,9 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
             },
             Err(_) => (0, 0, None),
         };
+    spinner.set("reaping dead schedules…");
+    let schedules_reaped =
+        super::loop_cmd::reap_dead_delivery_schedules().context("reaping dead loop schedules")?;
     spinner.set("pruning dead workspaces…");
     let prune = gc::prune_dead_workspaces().context("pruning dead workspaces")?;
     let worktrees = sweep_worktrees(globals, &spinner);
@@ -68,6 +71,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         repaired,
         feed_abandoned: abandoned,
         queue_abandoned: messages_abandoned,
+        schedules_reaped,
         prune,
         worktrees,
     };
@@ -84,6 +88,7 @@ struct GcOutcome {
     repaired: Option<RepairOutcome>,
     feed_abandoned: usize,
     queue_abandoned: usize,
+    schedules_reaped: usize,
     prune: gc::WorkspacePruneReport,
     worktrees: WorktreeSweep,
 }
@@ -190,6 +195,7 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         || runtime_items(&out.runtime) > 0
         || out.feed_abandoned > 0
         || out.queue_abandoned > 0
+        || out.schedules_reaped > 0
         || out.repaired.as_ref().is_some_and(RepairOutcome::truncated)
         || !out.prune.removed.is_empty()
         || !out.prune.retained_unreadable.is_empty()
@@ -256,6 +262,9 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     }
     if out.queue_abandoned > 0 {
         report_note(w, &format!("queue abandoned: {}", out.queue_abandoned))?;
+    }
+    if out.schedules_reaped > 0 {
+        report_note(w, &format!("schedules reaped: {}", out.schedules_reaped))?;
     }
     if let Some(repair) = out.repaired.filter(RepairOutcome::truncated) {
         report_note(
@@ -395,6 +404,7 @@ mod tests {
             repaired: None,
             feed_abandoned: 3,
             queue_abandoned: 0,
+            schedules_reaped: 0,
             prune: gc::WorkspacePruneReport {
                 removed: vec![gc::RemovedWorkspace {
                     workspace_id: rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),

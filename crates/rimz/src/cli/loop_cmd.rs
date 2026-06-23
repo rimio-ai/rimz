@@ -1,14 +1,15 @@
-//! `rimz loop` — schedule supervised agent turns on this machine's OS scheduler.
+//! `rimz loop` — schedule agent wake-ups on this machine's OS scheduler.
 //!
 //! Rimz keeps no daemon: the OS scheduler keeps time and fires
-//! `rimz loop run <name>`, which drives one configured prompt through the
-//! existing supervised `agents -p` seam. A `<kind>-ping` virtual cell is the
-//! window-priming special case and gets the budget-window skip optimization.
+//! `rimz loop run <name>`, which drives one configured prompt through either the
+//! supervised `agents -p` seam or the queue path to a pinned live session. A
+//! `<kind>-ping` virtual cell is the window-priming special case and gets the
+//! budget-window skip optimization.
 //!
 //! This handler parses, edits the per-machine config, and installs/uninstalls the
 //! OS scheduler entry with a consent preview. The pure schedule parsing and
-//! artifact rendering live in [`rimz::schedule`]; the supervised-run path is the
-//! shared `agents -p` seam.
+//! artifact rendering live in [`rimz::schedule`]; delivery mode reuses the
+//! shared queue seam.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -18,13 +19,14 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use jiff::{Timestamp, Zoned};
-use toml_edit::{DocumentMut, Item, Table, value};
+use toml_edit::{DocumentMut, InlineTable, Item, Table, Value, value};
 
 use rimz::agents::{find_adapter, hook_trust_fix};
 use rimz::agents_spec::{self, Cell, LayoutSpec};
-use rimz::config::{MachineConfig, TaskEntry};
+use rimz::config::{MachineConfig, TaskEntry, TaskTarget};
 use rimz::ledger::atomic::write_bytes_atomically;
 use rimz::ledger::paths::{RuntimePaths, config_home, runtime_home};
+use rimz::message::DeliveryGate;
 use rimz::schedule::{self, Schedule, Scheduler};
 use rimz::sidebar::enrich::shortest_window_running;
 use rimz::workspace::WorkspaceResolver;
@@ -60,8 +62,11 @@ struct AddArgs {
     /// Schedule name (letters, digits, `-`, `_`).
     name: String,
     /// Single agent cell to drive: a kind, profile, or virtual cell.
-    #[arg(long)]
-    spec: String,
+    #[arg(long, conflicts_with = "to")]
+    spec: Option<String>,
+    /// Live agent instance to wake through the queue path.
+    #[arg(long, value_name = "ADDRESS", conflicts_with = "spec")]
+    to: Option<String>,
     /// Inline prompt for the scheduled turn.
     #[arg(long, conflicts_with = "prompt_file")]
     prompt: Option<String>,
@@ -147,12 +152,32 @@ fn add(args: AddArgs) -> Result<()> {
     schedule::validate_name(&args.name)?;
     let workspace = WorkspaceResolver::resolve(&args.root, None)
         .with_context(|| format!("resolving project root at {}", args.root.display()))?;
-    let resolved = resolve_task_spec(&args.spec, &workspace)?;
-    let is_ping = agents_spec::virtual_ping_shape(&args.spec);
+    let target = match (&args.spec, &args.to) {
+        (Some(_), Some(_)) => bail!(
+            "loop task `{}` needs exactly one of --spec or --to",
+            args.name
+        ),
+        (None, None) => bail!("loop task `{}` needs --spec or --to", args.name),
+        (None, Some(address)) => Some(resolve_delivery_target(&workspace, &args, address)?),
+        (Some(_), None) => None,
+    };
+    let resolved = match args.spec.as_deref() {
+        Some(spec) => Some(resolve_task_spec(spec, &workspace)?),
+        None => None,
+    };
+    let is_ping = args
+        .spec
+        .as_deref()
+        .is_some_and(agents_spec::virtual_ping_shape);
     if is_ping {
-        ping_kind_supported(&resolved.kind)?;
+        ping_kind_supported(&resolved.as_ref().expect("ping has spec").kind)?;
     }
-    let mode = args.mode.as_deref().map(parse_mode).transpose()?;
+    let mode = if target.is_some() {
+        reject_delivery_spawn_flags(&args)?;
+        None
+    } else {
+        args.mode.as_deref().map(parse_mode).transpose()?
+    };
     if let Some(timeout) = args.timeout.as_deref() {
         parse_task_timeout(timeout).map_err(|err| anyhow::anyhow!("{err}"))?;
     }
@@ -170,14 +195,31 @@ fn add(args: AddArgs) -> Result<()> {
     }
     let entry = TaskEntry {
         spec: args.spec,
+        to: target,
         prompt,
         prompt_file: args.prompt_file,
         root: workspace.project_root,
-        worktree: args.worktree,
+        worktree: if resolved.is_some() {
+            args.worktree
+        } else {
+            None
+        },
         mode,
-        effort: args.effort,
-        system_prompt_file: args.system_prompt_file,
-        timeout: args.timeout,
+        effort: if resolved.is_some() {
+            args.effort
+        } else {
+            None
+        },
+        system_prompt_file: if resolved.is_some() {
+            args.system_prompt_file
+        } else {
+            None
+        },
+        timeout: if resolved.is_some() {
+            args.timeout
+        } else {
+            None
+        },
         at,
         days,
         every: args.every,
@@ -193,7 +235,7 @@ fn add(args: AddArgs) -> Result<()> {
         out,
         "added loop task `{}`: {} {} in {}",
         args.name,
-        entry.spec,
+        task_subject(&entry),
         parsed.describe(),
         entry.root.display()
     )?;
@@ -208,10 +250,7 @@ fn add(args: AddArgs) -> Result<()> {
 fn remove(name: &str) -> Result<()> {
     // Best-effort scheduler cleanup first, so removing the config never strands an
     // installed timer; missing schedulers are simply skipped.
-    if let Ok(scheduler) = detect_scheduler(SchedulerArg::Auto) {
-        let _ = uninstall_one(scheduler, name);
-    }
-    let removed = config_remove(name)?;
+    let removed = remove_loop_schedule(name)?;
     let mut out = ui::out();
     if removed {
         writeln!(out, "removed loop task `{name}`")?;
@@ -246,7 +285,7 @@ fn list() -> Result<()> {
         writeln!(
             out,
             "  {name:<16} {} {when:<24} [{state}] {}",
-            entry.spec,
+            task_subject(entry),
             entry.root.display()
         )?;
     }
@@ -284,7 +323,7 @@ fn install(args: SelectArgs) -> Result<()> {
     let mut plans = Vec::new();
     for name in &names {
         let entry = load_entry(name)?;
-        preflight_task(&entry)?;
+        preflight_entry(name, &entry)?;
         let parsed = schedule::parse_schedule(name, &entry)?;
         plans.push((
             name.clone(),
@@ -371,7 +410,7 @@ fn preview_plans(scheduler: Scheduler, plans: &[(String, TaskEntry, Plan)]) -> R
         writeln!(
             out,
             "\n  {name}: {} in {}",
-            entry.spec,
+            task_subject(entry),
             entry.root.display()
         )?;
         match plan {
@@ -476,8 +515,12 @@ fn uninstall_one(scheduler: Scheduler, name: &str) -> Result<()> {
 
 fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
     let entry = load_entry(name)?;
+    if let TaskMode::Deliver(target) = task_mode(name, &entry)? {
+        return run_delivery_task(name, &entry, target, globals);
+    }
     let resolved = preflight_task(&entry)?;
-    let is_ping = agents_spec::virtual_ping_shape(&entry.spec);
+    let spec = spawn_spec(name, &entry)?;
+    let is_ping = agents_spec::virtual_ping_shape(spec);
     // The ping exists only to *start* a sliding budget window, so a token spent on
     // one already counting down buys nothing — skip it. Best-effort: an unknown or
     // cold reading falls through to the ping.
@@ -508,17 +551,14 @@ fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
         // `run_blocking_task` exits with the supervised run status, so one-shot
         // cleanup happens before the terminal run. A one-shot removed pre-fire
         // that then fails to launch is not retried.
-        if let Ok(scheduler) = detect_scheduler(SchedulerArg::Auto) {
-            let _ = uninstall_one(scheduler, name);
-        }
-        let _ = config_remove(name)?;
+        let _ = remove_loop_schedule(name)?;
     }
     let effort = entry
         .effort
         .clone()
         .or_else(|| is_ping.then(|| "low".to_owned()));
     let args = super::agents_cmd::AgentsArgs::for_task(super::agents_cmd::TaskRunArgs {
-        spec: entry.spec,
+        spec: spec.to_owned(),
         prompt: Some(prompt),
         worktree: entry.worktree,
         ask,
@@ -530,6 +570,94 @@ fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
     // Drives the shared `agents -p` path; on success it exits with the run's
     // status code and never returns here.
     super::agents_cmd::run_blocking_task(args, &run_globals)
+}
+
+fn run_delivery_task(
+    name: &str,
+    entry: &TaskEntry,
+    target: &TaskTarget,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    if !delivery_target_alive(entry, target)? {
+        writeln!(
+            ui::out(),
+            "loop `{name}`: target {} not alive; removing schedule",
+            target.handle
+        )?;
+        let _ = remove_loop_schedule(name)?;
+        return Ok(());
+    }
+    let prompt = resolve_task_prompt(entry)?;
+    if entry.once {
+        let _ = remove_loop_schedule(name)?;
+    }
+    match super::queue::queue_to_session(
+        &entry.root,
+        &target.kind,
+        &target.session,
+        prompt,
+        DeliveryGate::Done,
+        globals,
+    ) {
+        Ok(()) => Ok(()),
+        Err(err) if queue_resolution_miss(&err) => {
+            writeln!(
+                ui::out(),
+                "loop `{name}`: target {} not alive; removing schedule",
+                target.handle
+            )?;
+            let _ = remove_loop_schedule(name)?;
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn delivery_target_alive(entry: &TaskEntry, target: &TaskTarget) -> Result<bool> {
+    let workspace = WorkspaceResolver::resolve(&entry.root, None)
+        .with_context(|| format!("resolving project root at {}", entry.root.display()))?;
+    let ledger = super::open_ledger(&workspace)?;
+    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    Ok(snapshot
+        .agents
+        .iter()
+        .any(|agent| agent.parent_agent_id.is_none() && agent.agent_id.as_str() == target.session))
+}
+
+fn queue_resolution_miss(err: &anyhow::Error) -> bool {
+    err.to_string().contains("no agent matches")
+}
+
+fn remove_loop_schedule(name: &str) -> Result<bool> {
+    if let Ok(scheduler) = detect_scheduler(SchedulerArg::Auto) {
+        let _ = uninstall_one(scheduler, name);
+    }
+    config_remove(name)
+}
+
+pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
+    let mut reaped = 0;
+    for (name, entry) in load_tasks() {
+        let target = match task_mode(&name, &entry) {
+            Ok(TaskMode::Deliver(target)) => target,
+            Ok(TaskMode::Spawn(_)) => continue,
+            Err(err) => {
+                tracing::debug!(task = %name, error = %err, "invalid loop task skipped by schedule gc");
+                continue;
+            }
+        };
+        match delivery_target_alive(&entry, target) {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = remove_loop_schedule(&name)?;
+                reaped += 1;
+            }
+            Err(err) => {
+                tracing::debug!(task = %name, error = %err, "loop schedule gc skipped task");
+            }
+        }
+    }
+    Ok(reaped)
 }
 
 /// Whether `entry`'s provider already has a budget window counting down, read
@@ -547,6 +675,107 @@ fn window_already_running(entry: &TaskEntry, kind: &str) -> Result<bool> {
 
 struct ResolvedTaskSpec {
     kind: String,
+}
+
+enum TaskMode<'a> {
+    Spawn(&'a str),
+    Deliver(&'a TaskTarget),
+}
+
+fn task_mode<'a>(name: &str, entry: &'a TaskEntry) -> Result<TaskMode<'a>> {
+    match (entry.spec.as_deref(), entry.to.as_ref()) {
+        (Some(spec), None) if !spec.trim().is_empty() => Ok(TaskMode::Spawn(spec)),
+        (None, Some(target)) => Ok(TaskMode::Deliver(target)),
+        (Some(_), Some(_)) => {
+            bail!("loop task `{name}` sets both `spec` and `to`; keep exactly one")
+        }
+        _ => bail!("loop task `{name}` needs `spec` or `to`"),
+    }
+}
+
+fn spawn_spec<'a>(name: &str, entry: &'a TaskEntry) -> Result<&'a str> {
+    match task_mode(name, entry)? {
+        TaskMode::Spawn(spec) => Ok(spec),
+        TaskMode::Deliver(_) => bail!("loop task `{name}` targets a live instance, not a spec"),
+    }
+}
+
+fn preflight_entry(name: &str, entry: &TaskEntry) -> Result<()> {
+    match task_mode(name, entry)? {
+        TaskMode::Spawn(_) => {
+            preflight_task(entry)?;
+        }
+        TaskMode::Deliver(target) => preflight_kind(&target.kind)?,
+    }
+    Ok(())
+}
+
+fn task_subject(entry: &TaskEntry) -> String {
+    entry
+        .spec
+        .clone()
+        .or_else(|| entry.to.as_ref().map(|target| target.handle.clone()))
+        .unwrap_or_else(|| "<invalid>".to_owned())
+}
+
+fn resolve_delivery_target(
+    workspace: &rimz::ResolvedWorkspace,
+    args: &AddArgs,
+    address: &str,
+) -> Result<TaskTarget> {
+    let ledger = super::open_ledger(workspace)?;
+    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    let channel = super::current_channel(workspace);
+    let agent = match super::resolve_agent_one(
+        &snapshot,
+        address,
+        args.worktree.as_deref(),
+        channel.as_deref(),
+    ) {
+        Ok(agent) => agent,
+        Err(_) => {
+            bail!("no live agent matches `{address}`; run /schedule from inside the agent pane")
+        }
+    };
+    if agent.agent_id.is_provisional() {
+        bail!(
+            "`{address}` has not registered a real session yet; run /schedule from inside the agent pane"
+        );
+    }
+    let peers: Vec<_> = snapshot
+        .agents
+        .iter()
+        .filter(|peer| peer.parent_agent_id.is_none())
+        .collect();
+    Ok(TaskTarget {
+        kind: agent.kind.as_str().to_owned(),
+        session: agent.agent_id.as_str().to_owned(),
+        handle: rimz::target::agent_handle(agent, &peers, true),
+    })
+}
+
+fn reject_delivery_spawn_flags(args: &AddArgs) -> Result<()> {
+    let mut flags = Vec::new();
+    if args.mode.is_some() {
+        flags.push("--mode");
+    }
+    if args.effort.is_some() {
+        flags.push("--effort");
+    }
+    if args.system_prompt_file.is_some() {
+        flags.push("--system-prompt-file");
+    }
+    if args.timeout.is_some() {
+        flags.push("--timeout");
+    }
+    if flags.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "`{}` uses --to, so {} only apply to --spec tasks",
+        args.name,
+        flags.join(", ")
+    )
 }
 
 fn resolve_task_spec(spec: &str, workspace: &rimz::ResolvedWorkspace) -> Result<ResolvedTaskSpec> {
@@ -615,8 +844,12 @@ fn ping_kind_supported(kind: &str) -> Result<()> {
 fn preflight_task(entry: &TaskEntry) -> Result<ResolvedTaskSpec> {
     let workspace = WorkspaceResolver::resolve(&entry.root, None)
         .with_context(|| format!("resolving project root at {}", entry.root.display()))?;
-    let resolved = resolve_task_spec(&entry.spec, &workspace)?;
-    if agents_spec::virtual_ping_shape(&entry.spec) {
+    let spec = entry
+        .spec
+        .as_deref()
+        .context("loop task is missing `spec`")?;
+    let resolved = resolve_task_spec(spec, &workspace)?;
+    if agents_spec::virtual_ping_shape(spec) {
         ping_kind_supported(&resolved.kind)?;
     }
     preflight_kind(&resolved.kind)?;
@@ -742,7 +975,7 @@ fn resolve_task_prompt(entry: &TaskEntry) -> Result<String> {
     let Some(path) = entry.prompt_file.as_deref() else {
         bail!(
             "loop task `{}` has no prompt; set `prompt` or `prompt-file`",
-            entry.spec
+            task_subject(entry)
         );
     };
     let path = resolve_config_path(path)?;
@@ -797,7 +1030,12 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
         .with_context(|| format!("parsing {}", path.display()))?;
 
     let mut table = Table::new();
-    table["spec"] = value(&entry.spec);
+    if let Some(spec) = &entry.spec {
+        table["spec"] = value(spec);
+    }
+    if let Some(target) = &entry.to {
+        table["to"] = Item::Value(Value::InlineTable(task_target_inline(target)));
+    }
     if let Some(prompt) = &entry.prompt {
         table["prompt"] = value(prompt);
     }
@@ -843,6 +1081,15 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
     write_bytes_atomically(&path, rendered.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
+}
+
+fn task_target_inline(target: &TaskTarget) -> InlineTable {
+    let mut table = InlineTable::new();
+    table.insert("kind", Value::from(target.kind.as_str()));
+    table.insert("session", Value::from(target.session.as_str()));
+    table.insert("handle", Value::from(target.handle.as_str()));
+    table.fmt();
+    table
 }
 
 fn tasks_table(doc: &mut DocumentMut) -> Result<&mut Table> {

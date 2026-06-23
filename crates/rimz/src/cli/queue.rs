@@ -1,5 +1,6 @@
 //! `rimz queue` — send-now or parked per-agent text delivery.
 
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -129,6 +130,37 @@ fn queue_add(
         },
         FanoutFlags { all, create, yes },
         globals,
+    )
+}
+
+pub(crate) fn queue_to_session(
+    root: &Path,
+    kind: &str,
+    session: &str,
+    text: String,
+    gate: DeliveryGate,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let mut globals = globals.clone();
+    globals.root = Some(root.to_path_buf());
+    tracing::debug!(kind, session, "queueing loop wake-up");
+    add_message(
+        format!("@{session}"),
+        None,
+        text,
+        MessageSpec {
+            enter: true,
+            gate,
+            force: false,
+            auto_compact: None,
+            no_from: false,
+        },
+        FanoutFlags {
+            all: false,
+            create: false,
+            yes: true,
+        },
+        &globals,
     )
 }
 

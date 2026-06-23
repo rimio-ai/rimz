@@ -196,18 +196,19 @@ Pane capture is untrusted terminal text — scripts and resolvers match bounded 
 
 ## Schedule turns with loop
 
-`rimz loop` schedules one supervised turn on this machine's OS scheduler. A task's `--spec` must resolve to a single agent cell — a kind, profile, or virtual cell — because the scheduled run owns one transient supervised pane; teams, multi-cell layouts, and command cells are rejected.
+`rimz loop` schedules one wake-up on this machine's OS scheduler. A task uses either `--spec` to spawn one supervised transient pane, or `--to` to deliver a prompt to one live agent session through the queue path.
 
 ```sh
 rimz loop add morning --spec claude-ping --at 07:00 --days weekdays
 rimz loop add pr-watch --spec codex --prompt "check CI on the release PR" --every 15m --mode auto --root .
+rimz loop add self-wake --to @planner --prompt "resume the review and fix the next blocking comment" --in 30m --root .
 rimz loop list
 rimz loop install pr-watch --scheduler cron
 rimz loop uninstall pr-watch
 rimz loop remove pr-watch
 ```
 
-Schedules come in four shapes: calendar (`--at` plus optional `--days`), interval (`--every 15m`), raw cron (`--cron`), and one-shot (`--once` or `--in 30m`). A `<kind>-ping` spec is the window-primer — `add` defaults its prompt to `ping`, and the run skips when the provider's window is already counting down. `loop add` records the intent; `loop install` applies it to the scheduler after a consent preview. The task model and config shape are in [loop.md](../../internals/agents/loop.md).
+Schedules come in four shapes: calendar (`--at` plus optional `--days`), interval (`--every 15m`), raw cron (`--cron`), and one-shot (`--once` or `--in 30m`). A `<kind>-ping` spec is the window-primer — `add` defaults its prompt to `ping`, and the run skips when the provider's window is already counting down. `--to @<handle>` resolves the address immediately and pins the exact session id; if that session is gone when the timer fires, Rimz skips delivery and removes the schedule. `loop add` records the intent; `loop install` applies it to the scheduler after a consent preview. The task model and config shape are in [loop.md](../../internals/agents/loop.md).
 
 ## Manage Rimz-owned worktrees
 

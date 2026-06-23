@@ -406,7 +406,7 @@ fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks) -> io::Result<()> {
     if loop_tasks.tasks.is_empty() {
         return writeln!(w, "  {}", paint(palette::FAINT, "none configured"));
     }
-    let mut table = Table::new(["", "NAME", "SPEC", "WHEN", "ROOT"]);
+    let mut table = Table::new(["", "NAME", "TARGET", "WHEN", "ROOT"]);
     for row in &loop_tasks.tasks {
         let health = if row.valid {
             Health::Info

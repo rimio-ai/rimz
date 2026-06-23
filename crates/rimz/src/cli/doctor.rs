@@ -85,7 +85,10 @@ fn collect_loop() -> model::LoopTasks {
             };
             model::LoopTaskRow {
                 name,
-                spec: entry.spec,
+                spec: entry
+                    .spec
+                    .or_else(|| entry.to.map(|target| target.handle))
+                    .unwrap_or_else(|| "<invalid>".to_owned()),
                 when,
                 root: entry.root.display().to_string(),
                 valid,

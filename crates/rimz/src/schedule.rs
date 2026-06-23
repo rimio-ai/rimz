@@ -1,9 +1,9 @@
 //! Scheduled loop task core.
 //!
 //! Rimz keeps no daemon: the OS scheduler keeps time and fires
-//! `rimz loop run <name>`, which drives one supervised agent turn through the
-//! existing agent harness. A `<kind>-ping` virtual cell is the window-priming
-//! special case; the schedule machinery stays generic.
+//! `rimz loop run <name>`, which drives one configured loop wake-up. A
+//! `<kind>-ping` virtual cell is the window-priming special case; the schedule
+//! machinery stays generic.
 //!
 //! This module is the pure core. It normalizes a [`crate::config::TaskEntry`]
 //! into a [`Schedule`], renders the cron line and systemd units, builds the
@@ -634,7 +634,8 @@ mod tests {
         once: bool,
     ) -> TaskEntry {
         TaskEntry {
-            spec: "claude".to_owned(),
+            spec: Some("claude".to_owned()),
+            to: None,
             prompt: Some("do it".to_owned()),
             prompt_file: None,
             root: PathBuf::from("/home/me/app"),

@@ -566,6 +566,21 @@ fn is_agents_key(path: &[String]) -> bool {
                             | "every"
                             | "cron"
                             | "once"
+                            | "to"
+                    )
+        )
+        || matches!(
+            path,
+            [root, loop_, tasks, _, target, leaf]
+                if root == "agents"
+                    && loop_ == "loop"
+                    && tasks == "tasks"
+                    && target == "to"
+                    && matches!(
+                        leaf.as_str(),
+                        "kind"
+                            | "session"
+                            | "handle"
                     )
         )
 }

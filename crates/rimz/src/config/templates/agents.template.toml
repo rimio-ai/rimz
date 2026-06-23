@@ -19,9 +19,10 @@
 # Project files .worktreeinclude and .worktreelink seed copied files and shared symlink dirs.
 
 [agents.loop]
-# Scheduled loop tasks. Each entry drives one supervised agent turn through
-# `rimz loop run <name>`, with the OS scheduler keeping time. Edit entries here
-# or with `rimz loop add`, then apply them with `rimz loop install`.
+# Scheduled loop tasks. Each entry drives one `rimz loop run <name>` wake-up,
+# with the OS scheduler keeping time. Use either `spec` to spawn a supervised
+# turn or `to` to wake one pinned live session. Edit entries here or with
+# `rimz loop add`, then apply them with `rimz loop install`.
 # [agents.loop.tasks]
 ## [agents.loop.tasks.morning]
 ## spec = "claude-ping"                # `<kind>-ping` primes the provider window
@@ -36,6 +37,12 @@
 ## root = "/home/you/code/app"
 ## every = "15m"                       # interval; `cron = "*/15 * * * *"` is cron-only
 ## mode = "auto"                       # auto, ask, or yolo
+##
+## [agents.loop.tasks.self_wake]
+## to = { kind = "claude", session = "sess-abc123", handle = "@planner" }
+## prompt = "resume the review and fix the next blocking comment"
+## root = "/home/you/code/app"
+## at = "09:30"
 
 [agents.attention]
 # stalled_after_secs = 1800            # silent running agent becomes actionable after this many seconds

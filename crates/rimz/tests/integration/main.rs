@@ -23,6 +23,7 @@ mod journey;
 mod ledger;
 mod list;
 mod list_themes;
+mod loop_schedule;
 mod message_queue;
 mod oauth_usage;
 mod performance;

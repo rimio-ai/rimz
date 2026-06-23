@@ -17,12 +17,16 @@ pub struct LoopConfig {
 #[serde(transparent)]
 pub struct Tasks(pub BTreeMap<String, TaskEntry>);
 
-/// One scheduled supervised run. The firing time is either a calendar time, an
-/// interval, or a raw cron escape hatch; the spec resolves to one agent cell.
+/// One scheduled loop wake-up. The firing time is either a calendar time, an
+/// interval, or a raw cron escape hatch; `spec` spawns a supervised turn and
+/// `to` delivers to a pinned session.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct TaskEntry {
-    pub spec: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec: Option<String>,
+    #[serde(rename = "to", skip_serializing_if = "Option::is_none")]
+    pub to: Option<TaskTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     #[serde(rename = "prompt-file", skip_serializing_if = "Option::is_none")]
@@ -48,4 +52,14 @@ pub struct TaskEntry {
     pub cron: Option<String>,
     #[serde(default, skip_serializing_if = "Not::not")]
     pub once: bool,
+}
+
+/// A loop delivery target pinned to the exact live agent session that scheduled
+/// it. The handle is display-only; `session` is the durable address.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TaskTarget {
+    pub kind: String,
+    pub session: String,
+    pub handle: String,
 }
