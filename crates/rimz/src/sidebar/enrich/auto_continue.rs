@@ -1,22 +1,21 @@
 //! Producer-side auto-continue: resume a parked agent by nudging its live pane
-//! after a rate-limit window resets or an overloaded retry backoff elapses.
+//! after a rate-limit window resets or a retry backoff elapses.
 //!
-//! Opt-in ([`ResumeConfig::auto_continue`] for rate limits,
-//! [`ResumeConfig::auto_continue_overloaded`] for overloads). The producer arms
-//! the resume while the park is fresh and fires it once the class-specific clock
-//! is due, recording everything it needs in between so the decision never depends
-//! on the ephemeral per-session context surviving the wait:
+//! Opt-in ([`ResumeConfig::auto_continue`]). The producer arms the resume while
+//! the park is fresh and fires it once the class-specific clock is due,
+//! recording everything it needs in between so the decision never depends on the
+//! ephemeral per-session context surviving the wait:
 //!
 //! - **Arm.** Each frame an agent is parked on a resumable certificate
 //!   ([`crate::agents::resume_park`]), the producer writes a durable [`ParkRecord`]
 //!   capturing the park class and the agent's frozen `last_activity`. A
 //!   rate-limit record also captures the latest spent-window reset deadline while
-//!   the reading is still spent; an overloaded record carries the turn-error
-//!   marker time and retry state.
-//! - **Fire.** Once the window reset deadline or overloaded retry backoff is due
-//!   and the agent is still idle (`last_activity` unchanged), the producer spawns
-//!   the detached `rimz agents auto-continue` helper that types the nudge and
-//!   writes the `agent.resumed` audit record.
+//!   the reading is still spent; a backoff record carries the turn-error marker
+//!   time and retry state.
+//! - **Fire.** Once the window reset deadline or retry backoff is due and the
+//!   agent is still idle (`last_activity` unchanged), the producer spawns the
+//!   detached `rimz agents auto-continue` helper that types the nudge and writes
+//!   the `agent.resumed` audit record.
 //! - **Clear.** Any activity since the park (the nudge took, or the agent woke on
 //!   its own) advances `last_activity`, and the stale record is removed.
 //!
@@ -32,7 +31,7 @@ use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
 use crate::agents::{AgentState, ResumeArm, resume_park};
-use crate::config::{DEFAULT_OVERLOAD_BACKOFF_SECS, ResumeConfig};
+use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::ledger::atomic::write_temp_then_rename_cache;
 use crate::ledger::snapshot::PaneAgent;
@@ -58,8 +57,7 @@ struct ParkRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_nudge_at: Option<Timestamp>,
     /// Auto-continue attempts for this park. Rate-limit records use it only for
-    /// durable accounting symmetry; overloaded records use it for backoff and the
-    /// cap.
+    /// durable accounting symmetry; backoff records use it for the retry cap.
     #[serde(default)]
     retries: u32,
 }
@@ -71,14 +69,15 @@ enum ParkKind {
         deadline: Timestamp,
     },
     Overloaded {
-        /// The overload turn-error marker timestamp. The first retry is measured
-        /// from this marker, so a late-observed park can fire immediately.
+        /// The non-clocked turn-error marker timestamp. The first retry is
+        /// measured from this marker, so a late-observed park can fire
+        /// immediately.
         overloaded_at: Timestamp,
     },
 }
 
-/// Arm or fire each park when the matching user opt-in is enabled. Best-effort:
-/// an empty nudge text or an agent with no live pane waits without consuming a
+/// Arm or fire each park when live auto-continue is enabled. Best-effort: an
+/// empty nudge text or an agent with no live pane waits without consuming a
 /// retry; a spawn failure consumes one attempt and backs off. Producer-only —
 /// one elected producer drives one room, and the records live in that room's
 /// runtime dir, so one due condition nudges its agent once per retry.
@@ -87,6 +86,9 @@ pub(super) fn resume_parked(
     runtime: &RuntimePaths,
     config: &ResumeConfig,
 ) {
+    if !config.auto_continue {
+        return;
+    }
     let text = config.auto_continue_text.trim();
     let now = snapshot.now;
     for agent in &snapshot.agents {
@@ -95,11 +97,11 @@ pub(super) fn resume_parked(
         }
         let path = park_record_path(runtime, &agent.kind, &agent.agent_id);
         match resume_park(agent, now) {
-            Some(ResumeArm::RateLimit { deadline }) if config.auto_continue => {
+            Some(ResumeArm::RateLimit { deadline }) => {
                 arm_park(&path, ParkKind::RateLimit { deadline }, agent.last_activity);
                 fire_if_due(snapshot, runtime, agent, &path, now, text, config);
             }
-            Some(ResumeArm::Overloaded { overloaded_at }) if config.auto_continue_overloaded => {
+            Some(ResumeArm::Overloaded { overloaded_at }) => {
                 arm_park(
                     &path,
                     ParkKind::Overloaded { overloaded_at },
@@ -163,20 +165,18 @@ fn fire_if_due(
         remove_park(path);
         return;
     }
-    let (enabled, reason) = match &record.kind {
-        ParkKind::RateLimit { .. } => (config.auto_continue, "rate_limit_window_reset"),
-        ParkKind::Overloaded { .. } => {
-            (config.auto_continue_overloaded, "overloaded_backoff_retry")
-        }
+    let reason = match &record.kind {
+        ParkKind::RateLimit { .. } => "rate_limit_window_reset",
+        ParkKind::Overloaded { .. } => "overloaded_backoff_retry",
     };
-    if !enabled || text.is_empty() {
+    if text.is_empty() {
         return;
     }
     if !nudge_due(
         &record,
         now,
-        &config.auto_continue_overloaded_backoff_secs,
-        config.auto_continue_overloaded_max_retries,
+        &config.auto_continue_backoff_secs,
+        config.auto_continue_max_retries,
     ) {
         return;
     }
@@ -209,19 +209,17 @@ fn nudged_record(mut record: ParkRecord, now: Timestamp) -> ParkRecord {
 
 fn overload_backoff(retries: u32, backoff_secs: &[u64]) -> Duration {
     let idx = (retries as usize).min(backoff_secs.len().saturating_sub(1));
-    let fallback = DEFAULT_OVERLOAD_BACKOFF_SECS.last().copied().unwrap_or(180);
+    let fallback = DEFAULT_AUTO_CONTINUE_BACKOFF_SECS
+        .last()
+        .copied()
+        .unwrap_or(180);
     Duration::from_secs(backoff_secs.get(idx).copied().unwrap_or(fallback))
 }
 
 /// Whether a nudge is due for this park class. Rate limits wait for the captured
-/// deadline and then throttle repeats; overloads wait from park time for the
-/// first try, then from the prior nudge for each retry step until the cap.
-fn nudge_due(
-    record: &ParkRecord,
-    now: Timestamp,
-    overloaded_backoff_secs: &[u64],
-    overloaded_max_retries: u32,
-) -> bool {
+/// deadline and then throttle repeats; backoff records wait from park time for
+/// the first try, then from the prior nudge for each retry step until the cap.
+fn nudge_due(record: &ParkRecord, now: Timestamp, backoff_secs: &[u64], max_retries: u32) -> bool {
     match &record.kind {
         ParkKind::RateLimit { deadline } => {
             now >= *deadline
@@ -231,12 +229,12 @@ fn nudge_due(
                 })
         }
         ParkKind::Overloaded { overloaded_at } => {
-            if record.retries >= overloaded_max_retries {
+            if record.retries >= max_retries {
                 return false;
             }
             let anchor = record.last_nudge_at.unwrap_or(*overloaded_at);
             now.as_second() - anchor.as_second()
-                >= overload_backoff(record.retries, overloaded_backoff_secs).as_secs() as i64
+                >= overload_backoff(record.retries, backoff_secs).as_secs() as i64
         }
     }
 }

@@ -54,10 +54,10 @@ fn child_activity_does_not_reclock_parent_attention_or_dead_turns() {
             "turn-dead parent keeps death certificate",
             agent("claude", "sess-root", AgentStatus::Running, 100)
                 .active_ago(120)
-                .turn_error(60, "API Error: Overloaded"),
+                .turn_error(60, "API Error: Bad Request"),
             AgentStatus::Success,
             AgentStatus::Failed,
-            Some("API Error: Overloaded"),
+            Some("API Error: Bad Request"),
         ),
     ] {
         let child = child_state("sess-root", "child-1", child_status, 5);

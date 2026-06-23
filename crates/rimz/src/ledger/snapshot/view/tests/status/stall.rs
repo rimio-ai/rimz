@@ -139,7 +139,7 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
             agent: agent("claude", "root", AgentStatus::Running, 0)
                 .worktree("/repo/main")
                 .active_ago(stalled_secs)
-                .turn_error(10, "API Error: Server Error"),
+                .turn_error(10, "API Error: Bad Request"),
             with_live_child: true,
             expect: AgentStatus::Running,
             expect_error_label: false,
@@ -149,7 +149,7 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
             agent: agent("claude", "root", AgentStatus::Running, 0)
                 .worktree("/repo/main")
                 .active_ago(stalled_secs)
-                .turn_error(10, "API Error: Server Error"),
+                .turn_error(10, "API Error: Bad Request"),
             with_live_child: false,
             expect: AgentStatus::Failed,
             expect_error_label: true,

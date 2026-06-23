@@ -249,7 +249,7 @@ fn render_api_error_dead_turn_card() {
     context.turn_error = Some(AgentTurnError {
         class: TurnErrorClass::Failed,
         at: fixed_now() - Duration::from_secs(10),
-        label: Some("API Error: Server Error".to_owned()),
+        label: Some("API Error: Bad Request".to_owned()),
     });
     claude.context = Some(context);
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
@@ -261,7 +261,7 @@ fn render_api_error_dead_turn_card() {
         "the dead turn escalates to the attention glyph:\n{rendered}"
     );
     assert!(
-        rendered.contains("API Error: Server Error"),
+        rendered.contains("API Error: Bad Request"),
         "line 2 quotes the upstream error text:\n{rendered}"
     );
     assert!(

@@ -109,7 +109,7 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
     assert_eq!(marker("rate_limit").class, TurnErrorClass::PausedRateLimit);
     assert_eq!(marker("overloaded").class, TurnErrorClass::PausedOverloaded);
 
-    let failed = ClaudeAdapter
+    let transient = ClaudeAdapter
         .observe_turn_error_from_hook(
             "StopFailure",
             &json!({
@@ -119,8 +119,21 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
             }),
         )
         .expect("marker");
+    assert_eq!(transient.class, TurnErrorClass::PausedOverloaded);
+    assert_eq!(transient.label.as_deref(), Some("API Error: Server Error"));
+
+    let failed = ClaudeAdapter
+        .observe_turn_error_from_hook(
+            "StopFailure",
+            &json!({
+                "session_id": "sess-1",
+                "error": "api_error",
+                "last_assistant_message": "API Error: Bad Request"
+            }),
+        )
+        .expect("marker");
     assert_eq!(failed.class, TurnErrorClass::Failed);
-    assert_eq!(failed.label.as_deref(), Some("API Error: Server Error"));
+    assert_eq!(failed.label.as_deref(), Some("API Error: Bad Request"));
 
     assert!(
         ClaudeAdapter

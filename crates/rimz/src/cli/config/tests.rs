@@ -51,6 +51,8 @@ fn validates_config_key_read_and_write_surfaces() {
         "theme.glyphs.unicode.chrome.box_vertical",
         "theme.glyphs.nerd_font.clock.over",
         "resume.auto_continue",
+        "resume.auto_continue_backoff_secs",
+        "resume.auto_continue_max_retries",
         "resume.auto_continue_text",
         "harness.smart_compact",
         "harness.rtk",

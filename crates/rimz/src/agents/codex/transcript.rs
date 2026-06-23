@@ -539,9 +539,8 @@ fn class_from_codex_error_info(info: &Value) -> Option<TurnErrorClass> {
 fn class_from_codex_error_kind(kind: &str) -> Option<TurnErrorClass> {
     match kind {
         "usageLimitExceeded" => Some(TurnErrorClass::PausedRateLimit),
-        "serverOverloaded" => Some(TurnErrorClass::PausedOverloaded),
+        "serverOverloaded" | "internalServerError" => Some(TurnErrorClass::PausedOverloaded),
         "contextWindowExceeded"
-        | "internalServerError"
         | "unauthorized"
         | "badRequest"
         | "sandboxError"
@@ -563,11 +562,21 @@ fn classify_turn_error_label(label: Option<&str>) -> TurnErrorClass {
         || lower.contains("too many requests")
     {
         TurnErrorClass::PausedRateLimit
-    } else if lower.contains("overloaded") || lower.contains("server is busy") {
+    } else if is_transient_server_error(&lower) {
         TurnErrorClass::PausedOverloaded
     } else {
         TurnErrorClass::Failed
     }
+}
+
+fn is_transient_server_error(lower: &str) -> bool {
+    lower.contains("overloaded")
+        || lower.contains("server is busy")
+        || lower.contains("internal server error")
+        || lower.contains("server error")
+        || lower.contains("service unavailable")
+        || lower.contains("bad gateway")
+        || lower.contains("gateway timeout")
 }
 
 struct LastUsage {

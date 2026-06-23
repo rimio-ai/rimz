@@ -60,7 +60,7 @@ fn turn_error_outranks_completion_marker() {
         .turn_started_ago(120)
         .active_ago(60)
         .turn_complete(10)
-        .turn_error(10, "API Error: Server Error");
+        .turn_error(10, "API Error: Bad Request");
 
     let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
     let row = row(&snapshot, "codex-review");
@@ -71,7 +71,7 @@ fn turn_error_outranks_completion_marker() {
     );
     assert_eq!(
         row.turn_error_label(),
-        Some("API Error: Server Error"),
+        Some("API Error: Bad Request"),
         "the failure keeps the upstream reason on the card"
     );
 }

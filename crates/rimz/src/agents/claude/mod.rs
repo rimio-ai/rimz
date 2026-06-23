@@ -748,18 +748,19 @@ impl AgentAdapter for ClaudeAdapter {
         if error.is_empty() {
             return None;
         }
+        let label = parsed
+            .last_assistant_message
+            .as_deref()
+            .and_then(statusline::cap_turn_error_label);
         let class = match error {
             "rate_limit" => TurnErrorClass::PausedRateLimit,
             "overloaded" => TurnErrorClass::PausedOverloaded,
-            _ => TurnErrorClass::Failed,
+            _ => statusline::classify_turn_error_label(label.as_deref()),
         };
         Some(AgentTurnError {
             class,
             at: Timestamp::now(),
-            label: parsed
-                .last_assistant_message
-                .as_deref()
-                .and_then(statusline::cap_turn_error_label),
+            label,
         })
     }
 

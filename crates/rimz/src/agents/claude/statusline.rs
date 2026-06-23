@@ -204,11 +204,21 @@ pub(crate) fn classify_turn_error_label(label: Option<&str>) -> TurnErrorClass {
     let lower = label.to_ascii_lowercase();
     if lower.contains("usage limit") || lower.contains("rate limit") {
         TurnErrorClass::PausedRateLimit
-    } else if lower.contains("overloaded") {
+    } else if is_transient_server_error(&lower) {
         TurnErrorClass::PausedOverloaded
     } else {
         TurnErrorClass::Failed
     }
+}
+
+fn is_transient_server_error(lower: &str) -> bool {
+    lower.contains("overloaded")
+        || lower.contains("server is busy")
+        || lower.contains("internal server error")
+        || lower.contains("server error")
+        || lower.contains("service unavailable")
+        || lower.contains("bad gateway")
+        || lower.contains("gateway timeout")
 }
 
 /// Detect a turn that died on a provider API error with no `Stop` hook to
@@ -655,6 +665,10 @@ mod tests {
                 r#"{{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-06-04T02:56:32.919Z","message":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#
             )
         };
+        let temporary_500 = concat!(
+            "API Error: 500 Internal server error. ",
+            "This is a server-side issue, usually temporary — try again in a moment."
+        );
 
         assert_eq!(
             detect_turn_error(&entry("You've hit your usage limit"))
@@ -670,6 +684,16 @@ mod tests {
         );
         assert_eq!(
             detect_turn_error(&entry("API Error: Server Error"))
+                .unwrap()
+                .class,
+            TurnErrorClass::PausedOverloaded
+        );
+        assert_eq!(
+            detect_turn_error(&entry(temporary_500)).unwrap().class,
+            TurnErrorClass::PausedOverloaded
+        );
+        assert_eq!(
+            detect_turn_error(&entry("API Error: Bad Request"))
                 .unwrap()
                 .class,
             TurnErrorClass::Failed

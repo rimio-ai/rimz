@@ -392,8 +392,9 @@ pub enum TurnErrorClass {
     /// while any known spent window remains unreset, then to failed once all
     /// known spent windows have reset if no newer hook event self-clears it.
     PausedRateLimit,
-    /// The provider was overloaded. There is no local reset window to wait for,
-    /// so the row stays paused until a newer hook event self-clears it.
+    /// The provider was overloaded or returned a transient server error. There
+    /// is no local reset window to wait for, so the row stays paused until a
+    /// newer hook event self-clears it.
     PausedOverloaded,
     /// Any other provider API error: actionable failure with the upstream text
     /// on the card.

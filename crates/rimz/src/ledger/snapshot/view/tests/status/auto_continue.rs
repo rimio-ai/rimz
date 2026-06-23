@@ -115,6 +115,24 @@ fn does_not_arm_a_failed_park() {
     let failed = agent("claude", "failed", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .active_ago(60)
-        .turn_error(10, "API Error: Server Error");
+        .turn_error(10, "API Error: Bad Request");
     assert_eq!(arm(&failed), None);
+}
+
+#[test]
+fn arms_a_server_error_park() {
+    let temporary_500 = concat!(
+        "API Error: 500 Internal server error. ",
+        "This is a server-side issue, usually temporary — try again in a moment."
+    );
+    let parked = agent("claude", "busy", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .active_ago(60)
+        .overloaded_turn_error(10, temporary_500);
+    assert_eq!(
+        arm(&parked),
+        Some(ResumeArm::Overloaded {
+            overloaded_at: ago(10)
+        })
+    );
 }

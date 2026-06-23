@@ -78,10 +78,9 @@ aggressive_resize = true
 [resume]
 # on_rebirth = true                   # re-seed prior agents when a room is reborn
 # max = 8                             # cap auto-resumed agents per rebirth
-# auto_continue = false               # resume a rate-limit-parked agent when its 5h/7d window resets
-# auto_continue_overloaded = false    # resume an overload-parked agent on the retry backoff below
-# auto_continue_overloaded_backoff_secs = [60, 120, 180] # retry ramp; the last value repeats
-# auto_continue_overloaded_max_retries = 10 # stop attempting after this many overload retries
+# auto_continue = false               # resume rate-limit, overload, and transient server-error parks
+# auto_continue_backoff_secs = [60, 120, 180] # retry ramp; the last value repeats
+# auto_continue_max_retries = 10      # stop attempting after this many backoff retries
 # auto_continue_text = "continue"     # the nudge typed into the parked pane on resume
 
 [harness]

@@ -328,9 +328,10 @@ pub(crate) enum ResumeArm {
     /// a fresh non-spent reading (Codex's app-server refresh rolls the window
     /// forward) can erase it.
     RateLimit { deadline: Timestamp },
-    /// An `overloaded` park: the provider was overloaded, so there is no local
-    /// reset window to wait on. The producer retries the resume on an expanding
-    /// backoff while the park stays active, rather than against a window clock.
+    /// A non-clocked park: the provider was overloaded or returned a transient
+    /// server error, so there is no local reset window to wait on. The producer
+    /// retries the resume on an expanding backoff while the park stays active,
+    /// rather than against a window clock.
     Overloaded {
         /// The overload turn-error marker timestamp. The first retry is measured
         /// from this marker, so a late-observed park can fire immediately.
@@ -341,9 +342,9 @@ pub(crate) enum ResumeArm {
 /// What kind of resume, if any, this root agent's parked turn is armed for. It
 /// stopped its last turn on a provider park certificate ([`display_turn_error`]):
 /// a `rate_limit` park arms for the latest reset of the windows still spent now
-/// (and stops arming once every spent window has reset), while an `overloaded`
-/// park arms while its marker stays active. Every other class — and a `rate_limit`
-/// park whose budget has already refilled — arms nothing.
+/// (and stops arming once every spent window has reset), while a non-clocked
+/// backoff park arms while its marker stays active. Every other class — and a
+/// `rate_limit` park whose budget has already refilled — arms nothing.
 pub(crate) fn resume_park(agent: &AgentState, now: Timestamp) -> Option<ResumeArm> {
     if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
         return None;

@@ -75,7 +75,7 @@ pub use notifications::{
 };
 pub use pets::{PetsConfig, PetsGlyphMode, PetsSize};
 pub use remote_control::RemoteControlConfig;
-pub use resume::{DEFAULT_OVERLOAD_BACKOFF_SECS, ResumeConfig};
+pub use resume::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 pub use sentry::SentryConfig;
 pub use sidebar::SidebarConfig;
 pub use theme::{

@@ -157,7 +157,7 @@ fn turn_error_detector_maps_known_error_shapes() {
         crate::agents::TurnErrorClass::PausedOverloaded
     );
 
-    let generic = json!({
+    let transient = json!({
         "timestamp": "2026-06-11T07:19:00.000Z",
         "type": "event_msg",
         "payload": {
@@ -169,9 +169,59 @@ fn turn_error_detector_maps_known_error_shapes() {
         }
     })
     .to_string();
-    let error = detect_turn_error(&generic).expect("generic error");
-    assert_eq!(error.class, crate::agents::TurnErrorClass::Failed);
+    let error = detect_turn_error(&transient).expect("transient error");
+    assert_eq!(error.class, crate::agents::TurnErrorClass::PausedOverloaded);
     assert_eq!(error.label.as_deref(), Some("API Error: Server Error"));
+    let class_from_kind = |kind: &str, message: &str| {
+        let tail = json!({
+            "timestamp": "2026-06-11T07:19:00.000Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "error": {
+                    "message": message,
+                    "codexErrorInfo": kind
+                }
+            }
+        })
+        .to_string();
+        detect_turn_error(&tail).expect("known error").class
+    };
+    assert_eq!(
+        class_from_kind("internalServerError", "API Error: Server Error"),
+        crate::agents::TurnErrorClass::PausedOverloaded
+    );
+    for kind in [
+        "contextWindowExceeded",
+        "unauthorized",
+        "badRequest",
+        "sandboxError",
+        "cyberPolicy",
+        "threadRollbackFailed",
+        "other",
+    ] {
+        assert_eq!(
+            class_from_kind(kind, "API Error: Bad Request"),
+            crate::agents::TurnErrorClass::Failed,
+            "{kind}"
+        );
+    }
+
+    let terminal = json!({
+        "timestamp": "2026-06-11T07:19:00.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "task_complete",
+            "error": {
+                "message": "API Error: Bad Request",
+                "codexErrorInfo": "badRequest"
+            }
+        }
+    })
+    .to_string();
+    let error = detect_turn_error(&terminal).expect("terminal error");
+    assert_eq!(error.class, crate::agents::TurnErrorClass::Failed);
+    assert_eq!(error.label.as_deref(), Some("API Error: Bad Request"));
 
     for empty_error in [json!(false), serde_json::Value::Null, json!(""), json!({})] {
         let benign = json!({

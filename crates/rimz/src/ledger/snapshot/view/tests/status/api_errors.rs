@@ -11,7 +11,7 @@ fn api_error_turn_escalates_running_to_attention() {
         .worktree("/repo/main")
         .in_pane("%1")
         .active_ago(60)
-        .turn_error(10, "API Error: Server Error");
+        .turn_error(10, "API Error: Bad Request");
 
     let snapshot = room(Vec::new(), vec![session])
         .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
@@ -24,7 +24,7 @@ fn api_error_turn_escalates_running_to_attention() {
     );
     assert_eq!(
         row.turn_error_label(),
-        Some("API Error: Server Error"),
+        Some("API Error: Bad Request"),
         "the row carries the upstream error text for the card's line 2"
     );
     assert!(
@@ -145,6 +145,29 @@ fn overloaded_turn_error_stays_paused_past_the_stall_window() {
         row.status(),
         Some(AgentStatus::Paused),
         "an overloaded park remains paused even when the generic stall backstop would fail a running row"
+    );
+}
+
+#[test]
+fn transient_server_error_stays_paused_past_the_stall_window() {
+    let temporary_500 = concat!(
+        "API Error: 500 Internal server error. ",
+        "This is a server-side issue, usually temporary — try again in a moment."
+    );
+    let session = agent("claude", "busy-claude", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(default_stall_secs() + 3_600)
+        .overloaded_turn_error(10, temporary_500);
+
+    let snapshot = room(Vec::new(), vec![session])
+        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+    let row = row(&snapshot, "busy-claude");
+    assert_eq!(
+        row.status(),
+        Some(AgentStatus::Paused),
+        "a transient server-error park remains paused even when the generic stall backstop would fail a running row"
     );
 }
 
