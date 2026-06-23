@@ -734,6 +734,70 @@ fn launch_placement_resolves_from_flags_policy_and_feasibility() {
 }
 
 #[test]
+fn one_role_whole_team_launch_splits_instead_of_replacing_caller_pane() {
+    let profiles = rimz::config::ProfilesConfig(BTreeMap::from([(
+        "planner-profile".to_owned(),
+        rimz::config::Profile {
+            agent: "codex".to_owned(),
+            mode: None,
+            model: None,
+            effort: None,
+            system_prompt_file: None,
+            append_system_prompt_file: None,
+            args: None,
+        },
+    )]));
+    let teams = rimz::config::TeamsConfig(BTreeMap::from([(
+        "solo".to_owned(),
+        rimz::config::Team {
+            roles: vec![rimz::config::RoleBinding {
+                role: "planner".to_owned(),
+                profile: "planner-profile".to_owned(),
+                mode: None,
+                model: None,
+                effort: None,
+                system_prompt_file: None,
+                append_system_prompt_file: None,
+                args: None,
+            }],
+            layout: None,
+        },
+    )]));
+    let layout = rimz::agents_spec::resolve_spec(
+        Some("solo"),
+        &profiles,
+        &rimz::config::CommandsConfig::default(),
+        &teams,
+    )
+    .expect("one-role team");
+    let single_cell = layout
+        .columns
+        .iter()
+        .map(|column| column.rows.len())
+        .sum::<usize>()
+        == 1;
+    let team_name = rimz::agents_spec::spec_team("solo", &teams);
+
+    let placement = apply_in_place_downgrade(
+        resolve_placement(
+            false,
+            false,
+            LaunchPlacement::Auto,
+            false,
+            single_cell,
+            true,
+        )
+        .unwrap(),
+        false,
+        true,
+        team_name.is_some(),
+    );
+
+    assert_eq!(team_name, Some("solo"));
+    assert_eq!(placement, Placement::NewPane);
+}
+
+#[test]
 fn run_placement_splits_when_current_pane_is_available() {
     assert_eq!(run_placement(false, true), RunPlacement::Split);
 }
