@@ -54,6 +54,7 @@ jobs:
           workspaces: ". -> target/ci"
           prefix-key: "rimz-ci"
           cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Prebuilt binaries — avoids compiling six plugins from source on every
       # cache miss. Gitea 1.25 lower-cases runner.os, so invoke install-action's
