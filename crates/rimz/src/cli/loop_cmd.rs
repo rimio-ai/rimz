@@ -62,11 +62,11 @@ struct AddArgs {
     /// Schedule name (letters, digits, `-`, `_`).
     name: String,
     /// Single agent cell to drive: a kind, profile, or virtual cell.
-    #[arg(long, conflicts_with = "to")]
+    #[arg(long, conflicts_with = "bind")]
     spec: Option<String>,
     /// Live agent instance to wake through the queue path.
     #[arg(long, value_name = "ADDRESS", conflicts_with = "spec")]
-    to: Option<String>,
+    bind: Option<String>,
     /// Inline prompt for the scheduled turn.
     #[arg(long, conflicts_with = "prompt_file")]
     prompt: Option<String>,
@@ -152,9 +152,9 @@ fn add(args: AddArgs) -> Result<()> {
     schedule::validate_name(&args.name)?;
     let workspace = WorkspaceResolver::resolve(&args.root, None)
         .with_context(|| format!("resolving project root at {}", args.root.display()))?;
-    let target = match args.to.as_deref() {
+    let target = match args.bind.as_deref() {
         Some(address) => Some(resolve_delivery_target(&workspace, &args, address)?),
-        None if args.spec.is_none() => bail!("loop task `{}` needs --spec or --to", args.name),
+        None if args.spec.is_none() => bail!("loop task `{}` needs --spec or --bind", args.name),
         None => None,
     };
     let resolved = match args.spec.as_deref() {
@@ -191,7 +191,7 @@ fn add(args: AddArgs) -> Result<()> {
     }
     let entry = TaskEntry {
         spec: args.spec,
-        to: target,
+        bind: target,
         prompt,
         prompt_file: args.prompt_file,
         root: workspace.project_root,
@@ -683,13 +683,13 @@ enum TaskMode<'a> {
 }
 
 fn task_mode<'a>(name: &str, entry: &'a TaskEntry) -> Result<TaskMode<'a>> {
-    match (entry.spec.as_deref(), entry.to.as_ref()) {
+    match (entry.spec.as_deref(), entry.bind.as_ref()) {
         (Some(spec), None) if !spec.trim().is_empty() => Ok(TaskMode::Spawn(spec)),
         (None, Some(target)) => Ok(TaskMode::Deliver(target)),
         (Some(_), Some(_)) => {
-            bail!("loop task `{name}` sets both `spec` and `to`; keep exactly one")
+            bail!("loop task `{name}` sets both `spec` and `bind`; keep exactly one")
         }
-        _ => bail!("loop task `{name}` needs `spec` or `to`"),
+        _ => bail!("loop task `{name}` needs `spec` or `bind`"),
     }
 }
 
@@ -714,7 +714,7 @@ fn task_subject(entry: &TaskEntry) -> String {
     entry
         .spec
         .clone()
-        .or_else(|| entry.to.as_ref().map(|target| target.handle.clone()))
+        .or_else(|| entry.bind.as_ref().map(|target| target.handle.clone()))
         .unwrap_or_else(|| "<invalid>".to_owned())
 }
 
@@ -772,7 +772,7 @@ fn reject_delivery_spawn_flags(args: &AddArgs) -> Result<()> {
         return Ok(());
     }
     bail!(
-        "`{}` uses --to, so {} only apply to --spec tasks",
+        "`{}` uses --bind, so {} only apply to --spec tasks",
         args.name,
         flags.join(", ")
     )
@@ -1033,8 +1033,8 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
     if let Some(spec) = &entry.spec {
         table["spec"] = value(spec);
     }
-    if let Some(target) = &entry.to {
-        table["to"] = Item::Value(Value::InlineTable(task_target_inline(target)));
+    if let Some(target) = &entry.bind {
+        table["bind"] = Item::Value(Value::InlineTable(task_target_inline(target)));
     }
     if let Some(prompt) = &entry.prompt {
         table["prompt"] = value(prompt);

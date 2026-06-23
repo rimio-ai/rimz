@@ -457,7 +457,7 @@ fn loop_tasks_parse_and_default_empty() {
         .get("morning")
         .expect("morning task");
     assert_eq!(entry.spec.as_deref(), Some("claude-ping"));
-    assert_eq!(entry.to, None);
+    assert_eq!(entry.bind, None);
     assert_eq!(entry.prompt.as_deref(), Some("ping"));
     assert_eq!(entry.root, std::path::Path::new("/home/me/app"));
     assert_eq!(entry.at.as_deref(), Some("07:00"));
@@ -488,13 +488,13 @@ fn loop_tasks_parse_and_default_empty() {
 }
 
 #[test]
-fn loop_task_to_mode_parses() {
+fn loop_task_bind_mode_parses() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write_named(
         &dir,
         "agents.toml",
         "[agents.loop.tasks.self_wake]\n\
-             to = { kind = \"claude\", session = \"sess-1\", handle = \"@planner\" }\n\
+             bind = { kind = \"claude\", session = \"sess-1\", handle = \"@planner\" }\n\
              prompt = \"pick up the review\"\n\
              root = \"/home/me/app\"\n\
              at = \"07:00\"\n",
@@ -506,9 +506,9 @@ fn loop_task_to_mode_parses() {
         .tasks
         .0
         .get("self_wake")
-        .expect("to task");
+        .expect("bind task");
     assert_eq!(entry.spec, None);
-    let target = entry.to.as_ref().expect("target");
+    let target = entry.bind.as_ref().expect("target");
     assert_eq!(target.kind, "claude");
     assert_eq!(target.session, "sess-1");
     assert_eq!(target.handle, "@planner");

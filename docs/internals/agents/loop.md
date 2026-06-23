@@ -2,7 +2,7 @@
 
 > See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. Loop tasks ride the supervised-run path in [harness.md](./harness.md#supervised-runs), the queue path in [harness.md](./harness.md#talk-and-queue), and the budget-window model in [provider.md](./provider.md).
 
-Loop tasks run one scheduled wake-up on this machine's OS scheduler. Rimz keeps no daemon; systemd user timers or cron keep time and fire `rimz loop run <name>`, which resolves the recorded project `root` and then uses exactly one configured mode: `spec` spawns one transient supervised pane, while `to` delivers a prompt to one living agent instance.
+Loop tasks run one scheduled wake-up on this machine's OS scheduler. Rimz keeps no daemon; systemd user timers or cron keep time and fire `rimz loop run <name>`, which resolves the recorded project `root` and then uses exactly one configured mode: `spec` spawns one transient supervised pane, while `bind` delivers a prompt to one living agent instance.
 
 In `spec` mode, each task names exactly one agent cell: a built-in kind, a profile, or an adapter-supported virtual cell such as `claude-auto`, `codex-yolo`, or `claude-ping`. Team specs, multi-cell layouts, and command cells are rejected at add time because a scheduled task owns one supervised pane.
 
@@ -19,11 +19,11 @@ One-shot tasks remove their scheduler artifact and config row immediately before
 
 ## Delivering to a living instance
 
-`to` mode pins a schedule to one exact agent session. `rimz loop add <name> --to @<handle> --prompt "<text>" ...` resolves the address against the live rollup immediately, records `to = { kind, session, handle }`, and rejects `spec` and supervised-run flags because delivery does not launch a new pane.
+Bind-mode pins a schedule to one exact agent session. `rimz loop add <name> --bind @<handle> --prompt "<text>" ...` resolves the address against the live rollup immediately, records `bind = { kind, session, handle }`, and rejects `spec` and supervised-run flags because delivery does not launch a new pane.
 
 On fire, `loop run` resolves the recorded `root`, checks that the root agent session still exists, and sends the prompt through the same queue path as `rimz queue`. An idle agent receives the text immediately; a running agent parks the message for the next `done` turn boundary; a missing session is skipped and the schedule is removed because that exact conversation cannot return.
 
-`rimz gc` repeats the same liveness check for `to` tasks and reaps schedules whose pinned session has left the rollup. This is a safety sweep for timers that did not get a successful fire after the agent exited.
+`rimz gc` repeats the same liveness check for bind-mode tasks and reaps schedules whose pinned session has left the rollup. This is a safety sweep for timers that did not get a successful fire after the agent exited.
 
 Self-paced loops use ordinary one-shots. The agent schedules its next wake with `--in <delay>` at the end of the current wake; the timer and config row are removed before delivery, and the agent creates the next one only when it still has work. This churns OS scheduler artifacts once per wake, which keeps the scheduler simple and the state visible in `rimz loop list`.
 

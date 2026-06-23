@@ -10,7 +10,7 @@ use rimz::message::MessageStatus;
 use crate::common::Env;
 
 #[test]
-fn loop_add_to_pins_live_session_and_run_queues_prompt() {
+fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-live", "feature-loop");
@@ -21,7 +21,7 @@ fn loop_add_to_pins_live_session_and_run_queues_prompt() {
             "loop",
             "add",
             "wake",
-            "--to",
+            "--bind",
             "@claude",
             "--every",
             "15m",
@@ -61,7 +61,7 @@ fn loop_add_to_pins_live_session_and_run_queues_prompt() {
 }
 
 #[test]
-fn loop_run_to_git_worktree_session_queues_prompt() {
+fn loop_run_bind_git_worktree_session_queues_prompt() {
     let env = Env::new();
     if !init_git_repo(&env.project_root) {
         return;
@@ -92,7 +92,7 @@ fn loop_run_to_git_worktree_session_queues_prompt() {
             "loop",
             "add",
             "wake-worktree",
-            "--to",
+            "--bind",
             "@claude",
             "--every",
             "15m",
@@ -125,13 +125,13 @@ fn loop_run_to_git_worktree_session_queues_prompt() {
 }
 
 #[test]
-fn loop_run_to_dead_session_reaps_schedule() {
+fn loop_run_bind_dead_session_reaps_schedule() {
     let env = Env::new();
     write_agents_config(
         &env,
         &format!(
             "[agents.loop.tasks.dead]\n\
-             to = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
+             bind = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n",
@@ -162,7 +162,7 @@ fn loop_run_to_dead_session_reaps_schedule() {
 }
 
 #[test]
-fn loop_add_to_validates_mode_selection() {
+fn loop_add_bind_validates_mode_selection() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-validate", "feature-loop");
@@ -174,7 +174,7 @@ fn loop_add_to_validates_mode_selection() {
         .expect("loop add missing mode");
     assert!(!missing.status.success(), "missing mode should fail");
     assert!(
-        String::from_utf8_lossy(&missing.stderr).contains("needs --spec or --to"),
+        String::from_utf8_lossy(&missing.stderr).contains("needs --spec or --bind"),
         "unexpected stderr: {}",
         String::from_utf8_lossy(&missing.stderr)
     );
@@ -182,7 +182,7 @@ fn loop_add_to_validates_mode_selection() {
     let both = env
         .rimz()
         .args([
-            "loop", "add", "bad", "--spec", "claude", "--to", "@claude", "--every", "15m",
+            "loop", "add", "bad", "--spec", "claude", "--bind", "@claude", "--every", "15m",
             "--prompt", "x",
         ])
         .output()
@@ -192,7 +192,7 @@ fn loop_add_to_validates_mode_selection() {
     let spawn_only = env
         .rimz()
         .args([
-            "loop", "add", "bad", "--to", "@claude", "--mode", "auto", "--every", "15m",
+            "loop", "add", "bad", "--bind", "@claude", "--mode", "auto", "--every", "15m",
             "--prompt", "x",
         ])
         .output()

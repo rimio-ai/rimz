@@ -635,7 +635,7 @@ mod tests {
     ) -> TaskEntry {
         TaskEntry {
             spec: Some("claude".to_owned()),
-            to: None,
+            bind: None,
             prompt: Some("do it".to_owned()),
             prompt_file: None,
             root: PathBuf::from("/home/me/app"),

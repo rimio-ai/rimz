@@ -87,7 +87,7 @@ fn collect_loop() -> model::LoopTasks {
                 name,
                 spec: entry
                     .spec
-                    .or_else(|| entry.to.map(|target| target.handle))
+                    .or_else(|| entry.bind.map(|target| target.handle))
                     .unwrap_or_else(|| "<invalid>".to_owned()),
                 when,
                 root: entry.root.display().to_string(),

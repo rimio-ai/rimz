@@ -134,7 +134,7 @@ fn gc_reaps_dead_loop_delivery_schedule() {
         &config_path,
         format!(
             "[agents.loop.tasks.dead]\n\
-             to = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
+             bind = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n",
@@ -174,7 +174,7 @@ fn gc_keeps_spawn_and_live_loop_schedules() {
              at = \"07:00\"\n\
              \n\
              [agents.loop.tasks.live]\n\
-             to = {{ kind = \"claude\", session = \"sess-live\", handle = \"@claude\" }}\n\
+             bind = {{ kind = \"claude\", session = \"sess-live\", handle = \"@claude\" }}\n\
              prompt = \"live wake\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n",

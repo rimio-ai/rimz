@@ -566,7 +566,7 @@ fn is_agents_key(path: &[String]) -> bool {
                             | "every"
                             | "cron"
                             | "once"
-                            | "to"
+                            | "bind"
                     )
         )
         || matches!(
@@ -575,7 +575,7 @@ fn is_agents_key(path: &[String]) -> bool {
                 if root == "agents"
                     && loop_ == "loop"
                     && tasks == "tasks"
-                    && target == "to"
+                    && target == "bind"
                     && matches!(
                         leaf.as_str(),
                         "kind"
