@@ -273,6 +273,7 @@ pub(crate) struct ClearedUnread {
 pub enum UnreadClearCause {
     Focus,
     MarkRead,
+    TabView,
     RowGone,
 }
 
@@ -281,6 +282,7 @@ impl UnreadClearCause {
         match self {
             Self::Focus => "focus",
             Self::MarkRead => "mark_read",
+            Self::TabView => "tab_view",
             Self::RowGone => "row_gone",
         }
     }

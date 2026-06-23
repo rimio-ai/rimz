@@ -208,18 +208,32 @@ pub(super) fn apply_fetch_outcome(
         .flat_map(|group| group.rows.iter())
         .map(|row| row.id.clone())
         .collect();
-    let mut focus_clear = read_receipt_for_row(
+    let mut clear = read_receipt_for_row(
         current,
         focused_row_id.as_deref(),
         UnreadClearCause::Focus,
         &marks,
         now,
     );
-    apply_manual_unread_guard(ui, focused_row_id.as_deref(), &mut focus_clear);
-    read_marks.observe_fold(focus_clear.ids.clone(), now.as_millisecond(), &live);
-    set_rows_unread(current, &focus_clear.ids, false);
+    if let Some(view) = current.own_view.as_ref() {
+        let now_viewing = view.active_pane_is_viewed;
+        let switched_in = ui.viewing_own_tab == Some(false) && now_viewing;
+        ui.viewing_own_tab = Some(now_viewing);
+        if switched_in {
+            clear.merge(read_receipts_for_tab(
+                current,
+                &view.working_pane_ids,
+                focused_row_id.as_deref(),
+                &marks,
+                now,
+            ));
+        }
+    }
+    apply_manual_unread_guard(ui, focused_row_id.as_deref(), &mut clear);
+    read_marks.observe_fold(clear.ids.clone(), now.as_millisecond(), &live);
+    set_rows_unread(current, &clear.ids, false);
     if let Some(diag) = diag {
-        emit_unread_cleared_trace(diag, &focus_clear.trace);
+        emit_unread_cleared_trace(diag, &clear.trace);
     }
     // Presentation sort only reorders the producer's already-capped visible set.
     current.sort_groups_for_presentation();
@@ -427,11 +441,21 @@ pub(super) struct ReadClear {
     pub(super) trace: Vec<ClearedUnread>,
 }
 
-/// The read receipt to write for a row that was just read — by focusing its
-/// pane (`cause = Focus`) or by the `m` key (`cause = MarkRead`). Returns the
-/// row id to clear and, when the row was unread, the clear trace. An empty
-/// result means the row is already read or never needed a look, so nothing is
-/// written.
+impl ReadClear {
+    fn merge(&mut self, other: Self) {
+        for id in other.ids {
+            if !self.ids.iter().any(|seen| seen == &id) {
+                self.ids.push(id);
+            }
+        }
+        self.trace.extend(other.trace);
+    }
+}
+
+/// The read receipt to write for a row that was just read by one of the
+/// renderer/CLI clear paths. Returns the row id to clear and, when the row was
+/// unread, the clear trace. An empty result means the row is already read or
+/// never needed a look, so nothing is written.
 pub(super) fn read_receipt_for_row(
     snapshot: &SidebarSnapshot,
     row_id: Option<&str>,
@@ -450,6 +474,15 @@ pub(super) fn read_receipt_for_row(
     else {
         return ReadClear::default();
     };
+    read_receipt_for_row_ref(row, cause, marks, now)
+}
+
+fn read_receipt_for_row_ref(
+    row: &crate::SidebarRow,
+    cause: UnreadClearCause,
+    marks: &crate::sidebar::read_marks::ReadMarks,
+    now: Timestamp,
+) -> ReadClear {
     let needs_look = row
         .status()
         .is_some_and(crate::agents::AgentStatus::needs_a_look);
@@ -465,6 +498,40 @@ pub(super) fn read_receipt_for_row(
         ids: vec![row.id.clone()],
         trace,
     }
+}
+
+/// Read receipts for unread rows whose pane shares the renderer's own tab,
+/// excluding the focused row because the focus path already handled it.
+fn read_receipts_for_tab(
+    snapshot: &SidebarSnapshot,
+    working_pane_ids: &[crate::ids::PaneId],
+    focused_row_id: Option<&str>,
+    marks: &crate::sidebar::read_marks::ReadMarks,
+    now: Timestamp,
+) -> ReadClear {
+    let mut clear = ReadClear::default();
+    for row in snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+    {
+        if Some(row.id.as_str()) == focused_row_id {
+            continue;
+        }
+        let in_tab = row
+            .pane
+            .as_ref()
+            .is_some_and(|pane| working_pane_ids.contains(&pane.pane_id));
+        if in_tab {
+            clear.merge(read_receipt_for_row_ref(
+                row,
+                UnreadClearCause::TabView,
+                marks,
+                now,
+            ));
+        }
+    }
+    clear
 }
 
 /// Set the `unread` bit on the named rows in place — the instant local feedback

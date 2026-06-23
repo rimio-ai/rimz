@@ -54,6 +54,11 @@ pub struct UiState {
     /// derivation and holds across a `None` (the sidebar itself is the view's
     /// active pane, or the active pane is not a row).
     pub(crate) baseline_pane: Option<PaneId>,
+    /// Whether this renderer's own tab was the on-screen tab on the last fold
+    /// that carried an own-view. `None` until the first own-view fold, so
+    /// attaching to an already-viewed tab seeds the latch without sweeping and
+    /// the tab-wide read sweep fires only on a real off-screen→on-screen switch.
+    pub(crate) viewing_own_tab: Option<bool>,
     /// The transient arrow-key browse pick riding above the baseline, or `None`
     /// when not browsing (see [`Browse`]).
     pub(crate) browse: Option<Browse>,

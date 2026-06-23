@@ -129,6 +129,34 @@ fn row_unread(snapshot: &SidebarSnapshot) -> bool {
     snapshot.worktree_groups[0].rows[0].unread
 }
 
+fn row_unread_by_id(snapshot: &SidebarSnapshot, row_id: &str) -> bool {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+        .find(|row| row.id == row_id)
+        .expect("row exists")
+        .unread
+}
+
+fn set_all_rows_unread(snapshot: &mut SidebarSnapshot) {
+    for row in snapshot
+        .worktree_groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+    {
+        row.unread = true;
+    }
+}
+
+fn set_viewed(snapshot: &mut SidebarSnapshot, active_pane_is_viewed: bool) {
+    snapshot
+        .own_view
+        .as_mut()
+        .expect("own view")
+        .active_pane_is_viewed = active_pane_is_viewed;
+}
+
 struct ApplyHarness {
     config: ServeConfig,
     last_snapshot: Option<SidebarSnapshot>,
@@ -423,6 +451,105 @@ fn background_active_pane_does_not_focus_clear_until_viewed() {
         "viewing the active pane writes the normal focus receipt"
     );
     assert!(!row_unread(&a.current));
+}
+
+#[test]
+fn tab_switch_in_sweeps_all_unread_in_tab() {
+    let ws = workspace();
+    let (_dir, runtime) = runtime_for(&ws);
+    let instance_a = SidebarInstanceId::new();
+    let mut a = ApplyHarness::for_runtime(&ws, runtime, instance_a);
+    let (mut background, first, _) =
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+    set_all_rows_unread(&mut background);
+    set_viewed(&mut background, false);
+
+    a.apply(background);
+
+    assert!(row_unread_by_id(&a.current, "sess-1"));
+    assert!(row_unread_by_id(&a.current, "sess-2"));
+    assert_eq!(a.ui.viewing_own_tab, Some(false));
+
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first, false);
+    set_all_rows_unread(&mut viewed);
+    a.apply(viewed);
+
+    assert!(!row_unread_by_id(&a.current, "sess-1"));
+    assert!(!row_unread_by_id(&a.current, "sess-2"));
+    let marks = a.read_marks.load_merged();
+    assert!(marks.cleared_at_ms("sess-1").is_some());
+    assert!(marks.cleared_at_ms("sess-2").is_some());
+}
+
+#[test]
+fn staying_on_tab_does_not_sweep_new_unread() {
+    let ws = workspace();
+    let (_dir, mut a) = ApplyHarness::new(&ws);
+    let (mut background, first, _) =
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+    set_all_rows_unread(&mut background);
+    set_viewed(&mut background, false);
+    a.apply(background);
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone(), false);
+    set_all_rows_unread(&mut viewed);
+    a.apply(viewed);
+
+    let (mut still_viewed, _, _) = two_pane_snapshot(&ws, first, false);
+    still_viewed.worktree_groups[0].rows[1].unread = true;
+    still_viewed.worktree_groups[0].rows[1].last_activity = fixed_time(1_700_000_200);
+    a.apply(still_viewed);
+
+    assert!(!row_unread_by_id(&a.current, "sess-1"));
+    assert!(row_unread_by_id(&a.current, "sess-2"));
+}
+
+#[test]
+fn attach_to_viewed_tab_keeps_unread_siblings() {
+    let ws = workspace();
+    let (_dir, mut a) = ApplyHarness::new(&ws);
+    let (mut viewed, _, _) =
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+    set_all_rows_unread(&mut viewed);
+
+    a.apply(viewed);
+
+    assert_eq!(a.ui.viewing_own_tab, Some(true));
+    assert!(!row_unread_by_id(&a.current, "sess-1"));
+    assert!(row_unread_by_id(&a.current, "sess-2"));
+    let marks = a.read_marks.load_merged();
+    assert!(marks.cleared_at_ms("sess-1").is_some());
+    assert!(marks.cleared_at_ms("sess-2").is_none());
+}
+
+#[test]
+fn frameless_fold_does_not_blip_switch_in() {
+    let ws = workspace();
+    let (_dir, mut a) = ApplyHarness::new(&ws);
+    let (mut background, first, _) =
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+    set_all_rows_unread(&mut background);
+    set_viewed(&mut background, false);
+    a.apply(background);
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone(), false);
+    set_all_rows_unread(&mut viewed);
+    a.apply(viewed);
+
+    let mut frameless = a.current.clone();
+    frameless.own_view = None;
+    a.apply_outcome(FetchOutcome {
+        snapshot: Ok(frameless),
+        final_for_request: false,
+        fresh_pane_frame: false,
+    });
+    assert_eq!(a.ui.viewing_own_tab, Some(true));
+
+    let (mut still_viewed, _, _) = two_pane_snapshot(&ws, first, false);
+    still_viewed.worktree_groups[0].rows[1].unread = true;
+    still_viewed.worktree_groups[0].rows[1].last_activity = fixed_time(1_700_000_200);
+    a.apply(still_viewed);
+
+    assert!(!row_unread_by_id(&a.current, "sess-1"));
+    assert!(row_unread_by_id(&a.current, "sess-2"));
 }
 
 #[test]
