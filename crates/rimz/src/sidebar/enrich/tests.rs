@@ -2,6 +2,7 @@ use super::*;
 use crate::agents::{AgentStatus, TurnPhase};
 use crate::ledger::atomic;
 use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
+use crate::sidebar::cache::DiffStatsCacheEntry;
 use crate::sidebar::cache::{AccountsCache, unix_now_ms};
 use crate::sidebar::test_support::{activity_row, pane, worktree_group};
 use jiff::SignedDuration;
@@ -15,6 +16,77 @@ fn runtime() -> (tempfile::TempDir, RuntimePaths, SidebarSnapshot) {
     runtime.ensure_dirs().unwrap();
     let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
     (dir, runtime, snapshot)
+}
+
+fn diff_entry(
+    clean: bool,
+    landed: bool,
+    did_work: Option<bool>,
+    ahead: u32,
+    behind: u32,
+) -> DiffStatsCacheEntry {
+    DiffStatsCacheEntry {
+        refreshed_at_ms: 0,
+        added: Some(0),
+        removed: Some(0),
+        commits: Some(ahead),
+        behind: Some(behind),
+        trunk: Some("main".to_owned()),
+        branch: Some("feature".to_owned()),
+        clean: Some(clean),
+        landed: Some(landed),
+        did_work,
+        merge_in_progress: Some(false),
+    }
+}
+
+#[test]
+fn trunk_sync_classifier_uses_marker_and_local_git_state() {
+    assert_eq!(
+        classify_trunk_sync(
+            &diff_entry(true, true, Some(false), 0, 0),
+            "feature",
+            "main"
+        ),
+        Some(WorktreeTrunkSync::Pristine)
+    );
+    assert_eq!(
+        classify_trunk_sync(
+            &diff_entry(false, true, Some(false), 0, 0),
+            "feature",
+            "main"
+        ),
+        Some(WorktreeTrunkSync::Diverged)
+    );
+    assert_eq!(
+        classify_trunk_sync(&diff_entry(true, true, Some(true), 2, 5), "feature", "main"),
+        Some(WorktreeTrunkSync::Merged)
+    );
+    let mut reconciling = diff_entry(true, true, Some(true), 0, 0);
+    reconciling.merge_in_progress = Some(true);
+    assert_eq!(
+        classify_trunk_sync(&reconciling, "feature", "main"),
+        Some(WorktreeTrunkSync::Reconciling)
+    );
+    assert_eq!(
+        classify_trunk_sync(&diff_entry(true, true, Some(true), 0, 0), "main", "main"),
+        None,
+        "trunk checkout is exempt"
+    );
+    assert_eq!(
+        classify_trunk_sync(&diff_entry(true, true, None, 0, 0), "feature", "main"),
+        Some(WorktreeTrunkSync::Diverged),
+        "unmarked worktrees stay conservative"
+    );
+    assert_eq!(
+        classify_trunk_sync(
+            &diff_entry(true, true, Some(false), 0, 1),
+            "feature",
+            "main"
+        ),
+        Some(WorktreeTrunkSync::Diverged),
+        "fresh fork behind trunk is not pristine"
+    );
 }
 
 fn stats(rtt_ms: Option<u32>, miss_pct: u16) -> LinkStats {
@@ -379,6 +451,8 @@ fn config_fold_stamps_agent_context_severity() {
         trunk: None,
         clean: None,
         landed: None,
+        trunk_sync: None,
+        pr_state: None,
     }];
 
     stamp_context_severity(&mut groups, &crate::config::ContextMeterConfig::default());

@@ -164,10 +164,15 @@
 
 [theme.glyphs.unicode.worktree]
 ## branch = "⑂"
+## merge = "⮌"
 ## ahead = "⇡"
 ## behind = "⇣"
 ## trunk_equal = "≡"
-## trunk_clear = "✓"
+## trunk_branch = "⑂"
+## trunk_merge = "✓"
+## pr_open = "⊙"
+## pr_closed = "✕"
+## reconciling = "⟳"
 ## dotted = "┄"
 
 [theme.glyphs.unicode.card]
@@ -254,11 +259,16 @@
 ## over = "◉"
 
 [theme.glyphs.nerd_font.worktree]
-## branch = ""
+## branch = ""
+## merge = ""
 ## ahead = "⇡"
 ## behind = "⇣"
 ## trunk_equal = "≡"
-## trunk_clear = "✓"
+## trunk_branch = ""
+## trunk_merge = ""
+## pr_open = ""
+## pr_closed = ""
+## reconciling = ""
 ## dotted = "┄"
 
 [theme.glyphs.nerd_font.card]

@@ -71,7 +71,7 @@ pub use crate::ledger::{
     RuntimeProjection, RuntimeScope, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView,
     SidebarProviderPanel, SidebarResolverState, SidebarRow, SidebarSnapshot, SidebarStatusCount,
     SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths, TruthNotice,
-    WorkspaceRecord, lead_unread_row,
+    WorkspaceRecord, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
 };
 pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind};
 pub use crate::schema::event::EventEnvelope;

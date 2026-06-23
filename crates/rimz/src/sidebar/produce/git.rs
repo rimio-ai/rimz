@@ -1,7 +1,7 @@
 //! The per-worktree git facts: the activity-tiered, single-flighted diff-stats
 //! refresh (trunk ref → merge-base → numstat + rev-list ×2 + status → landed
-//! verdict → branch), the group-root enumeration (worktree checkouts / child
-//! repos), and their parsers.
+//! verdict → marker/merge state → branch), the group-root enumeration
+//! (worktree checkouts / child repos), and their parsers.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -16,7 +16,8 @@ use crate::sidebar::cache::{
     unix_now_ms,
 };
 use crate::sidebar::enrich::{
-    focused_worktree_paths, hot_worktree_paths, needed_worktree_paths, project_diff_stats,
+    focused_worktree_paths, hot_worktree_paths, needed_worktree_paths, project_cached_pr_states,
+    project_diff_stats,
 };
 use crate::worktree::{self, LandedVerdict};
 
@@ -67,6 +68,7 @@ pub(super) fn enrich_worktree_groups(
         configured_trunk,
     );
     project_diff_stats(snapshot, &cache);
+    project_cached_pr_states(snapshot, runtime);
 }
 
 /// Refresh the diff stats for `needed` worktree paths and return the cache map
@@ -197,6 +199,7 @@ struct LocalFacts {
     stats: Option<DiffStats>,
     branch: Option<String>,
     clean: Option<bool>,
+    merge_in_progress: Option<bool>,
 }
 
 struct CommitFacts {
@@ -204,6 +207,7 @@ struct CommitFacts {
     behind: Option<u32>,
     trunk: Option<String>,
     landed: Option<bool>,
+    did_work: Option<bool>,
 }
 
 /// Most worktrees probed concurrently. Each worktree's own chain stays
@@ -269,6 +273,7 @@ fn refresh_entry(
         entry.removed = local.stats.map(|stats| stats.removed);
         entry.branch = local.branch;
         entry.clean = local.clean;
+        entry.merge_in_progress = local.merge_in_progress;
     }
     if due.commit {
         let commit = refresh_commit_facts(worktree, base.as_deref(), trunk.as_deref(), entry.clean);
@@ -276,6 +281,7 @@ fn refresh_entry(
         entry.behind = commit.behind;
         entry.trunk = commit.trunk;
         entry.landed = commit.landed;
+        entry.did_work = commit.did_work;
     }
 
     let completed_at_ms = unix_now_ms();
@@ -292,6 +298,7 @@ fn refresh_local_facts(worktree: &Path, base: Option<&str>) -> LocalFacts {
     let stats = base.and_then(|base| worktree_diff_stats(worktree, base));
     let status = worktree_status(worktree);
     let clean = status.as_ref().map(|status| status.clean);
+    let merge_in_progress = merge_in_progress(worktree);
     // Untracked content is change the diff is blind to: fold its line count
     // into the `+` churn so an untracked-only worktree reads as carrying work,
     // never as landed.
@@ -306,6 +313,7 @@ fn refresh_local_facts(worktree: &Path, base: Option<&str>) -> LocalFacts {
         stats,
         branch: worktree_branch(worktree),
         clean,
+        merge_in_progress,
     }
 }
 
@@ -330,12 +338,47 @@ fn refresh_commit_facts(
         }
         _ => None,
     };
+    let head_sha = git_line(worktree, &["rev-parse", "HEAD"]);
+    let did_work = worktree::read_marker_for_worktree(worktree)
+        .ok()
+        .flatten()
+        .and_then(|marker| {
+            head_sha
+                .as_deref()
+                .map(|head| head != marker.base_ref.as_str())
+        });
     CommitFacts {
         commits,
         behind,
         trunk: trunk.map(ToOwned::to_owned),
         landed,
+        did_work,
     }
+}
+
+fn merge_in_progress(worktree: &Path) -> Option<bool> {
+    for name in [
+        "rebase-merge",
+        "rebase-apply",
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+    ] {
+        if git_path_exists(worktree, name)? {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+fn git_path_exists(worktree: &Path, name: &str) -> Option<bool> {
+    let raw = git_line(worktree, &["rev-parse", "--git-path", name])?;
+    let path = Path::new(&raw);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        worktree.join(path)
+    };
+    Some(path.exists())
 }
 
 fn worktree_branch(worktree: &Path) -> Option<String> {

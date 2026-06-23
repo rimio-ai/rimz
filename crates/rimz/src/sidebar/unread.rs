@@ -429,6 +429,8 @@ mod tests {
             trunk: None,
             clean: None,
             landed: None,
+            trunk_sync: None,
+            pr_state: None,
         }];
         snapshot
     }

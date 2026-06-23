@@ -209,6 +209,8 @@ fn git_cache_freshness_boundaries_are_inclusive() {
         branch: None,
         clean: None,
         landed: None,
+        did_work: None,
+        merge_in_progress: None,
     };
     let fast = DIFF_STATS_TTL.as_millis() as u64;
     let idle = DIFF_STATS_IDLE_TTL.as_millis() as u64;
@@ -235,6 +237,8 @@ fn git_cache_freshness_boundaries_are_inclusive() {
         branch: Some("feature-migration".to_owned()),
         clean: Some(true),
         landed: Some(true),
+        did_work: Some(true),
+        merge_in_progress: Some(false),
     };
     assert_eq!(
         populated.stats(),
@@ -274,4 +278,25 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     assert!(!cache.is_fresh(1_001 + ttl));
     // A clock that ran backwards reads fresh (saturating).
     assert!(cache.is_fresh(500));
+}
+
+#[test]
+fn pr_state_cache_uses_success_and_retry_ttls() {
+    let ok = PrStateCache {
+        refreshed_at_ms: 1_000,
+        ok: true,
+        states: BTreeMap::new(),
+    };
+    let retry = PrStateCache {
+        refreshed_at_ms: 1_000,
+        ok: false,
+        states: BTreeMap::new(),
+    };
+    let ok_ttl = PR_STATE_TTL.as_millis() as u64;
+    let retry_ttl = PR_STATE_RETRY_TTL.as_millis() as u64;
+
+    assert!(ok.is_fresh(1_000 + ok_ttl));
+    assert!(!ok.is_fresh(1_001 + ok_ttl));
+    assert!(retry.is_fresh(1_000 + retry_ttl));
+    assert!(!retry.is_fresh(1_001 + retry_ttl));
 }

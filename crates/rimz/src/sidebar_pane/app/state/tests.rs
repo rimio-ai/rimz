@@ -101,6 +101,8 @@ fn row_snapshot_at(
         trunk: None,
         clean: None,
         landed: None,
+        trunk_sync: None,
+        pr_state: None,
     }];
     if focused {
         snap.own_view = Some(crate::SidebarOwnView {

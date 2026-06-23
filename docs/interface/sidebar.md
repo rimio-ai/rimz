@@ -21,7 +21,7 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
  ? 3   ! 0   ⏸ 0   ✓ 8                       ⢿ 3   ○ 2    ← make-up: attention/parked/done | working/free
  ↑ 2 need you                                            ← unread jump banner: pinned while agents await you; click/jump to the oldest
 
-▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ +127 -43    ← the worktree you're in · commits diff · lines diff
+▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3  +127 -43  ⊙ main    ← selected worktree · commits/diff · PR marker
 ▌⣾ claude · Opus 4.8 · xhigh · 1m                $1.27    ← line 1: identity · model · effort · context window · usd value
 ▌  ledger refactor                                        ← line 2: session description
 ▌  ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context window progress: how full the context window is
@@ -97,8 +97,9 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `C 11%` / `M 512M` / `⇅ 3M/s` | a working process row's CPU · resident memory (RSS) · combined VFS I/O rate — one fixed-width grid (`C` sky · `M` sage · `⇅` violet) that appears only once all three have values |
 | `+127 -43`        | lines added / removed against the trunk — committed, staged, unstaged, and untracked all counted |
 | `⇡3 ⇣1`           | commits ahead / behind the trunk (worktree header; zero components drop) |
-| `≡ main`          | landed and at the trunk tip — clean tree, zero behind; the trunk worktree itself never wears it |
-| `✓ main`          | landed and clean, but the trunk moved on or ancestry differs: done, safe to remove |
+| `≡ main`          | pristine worktree — clean, no worktree-owned commits, at the trunk tip |
+| `✓ main`          | merged worktree — its work is landed and nothing remains to offer; remove it |
+| `⑂ main` / `⊙ main` / `✕ main` / `⟳ main` | trunk state marker after diverged stats: plain branch, PR open, PR closed, or local rebase/merge/cherry-pick in progress |
 | `●●●○○ 3/5`       | todo progress |
 | `$1.27`           | spend — dollar green, two decimals; omitted while a session's cost rounds to zero |
 | `▰▱` / `▱▱` / `ex` / `api` | provider account bar: included-window budget (`5h`/`7d`/`30d`, fill = left), unknown budget as a dim empty track, paid extra usage as `ex`, API-key spend as `api`; `∞` means uncapped or not reported |
@@ -113,7 +114,7 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `◎ N`           | sessions (threads) that have run in the configured headline window (cockpit/provider) / in the ledger window — teal in both |
 | `⧉ N`           | the subagents an agent spawned this turn (expanded card) — the marker violet, the label soft |
 | `⋯ bg`          | an agent parked on background work — a faint secondary marker after the description, so the live status above stays honest |
-| `⑂ name`        | a group header with a git story — a worktree's live branch, or a directory room's child repo |
+| `⑂ name` / `⮌ name` | a group header with a git story — branch for pristine/diverged worktrees, merge for landed removable worktrees |
 | `name` (bold)   | a directory room's own pod — name-only, no git story |
 | `▎`             | the selection lane — the worktree you're in, a dim selection-tone bracket |
 | `▌`             | the selected card's bright spine, over a `selection_bg` band that fills and recesses the whole card so it reads as one panel |
@@ -257,12 +258,12 @@ The label is the program the pane runs, read past a `sudo` wrapper and through a
 
 Worktrees stack as bounded blocks under quiet neutral headings, so the names organize the column without competing with attention or the selection. The worktree **holding your selection** reads as one bracketed lane: a dim `▎` spine and dotted `┄` seal down its header and every row, then the selected card lit with the bright `▌` spine over the recessed `selection_bg` band — subagents included — so the selected block reads as one card. Every other worktree carries a blank gutter, so the lane and band are the only selection markers on screen and the pane you're in is unmistakable.
 
-The worktree header carries the worktree's git story on the right: the `⇡`/`⇣` commit delta against the trunk, then the worktree's total diff (`⇡3 ⇣1 +230 -23`, zero components dropped) — untracked file content counts into the `+`, so work `git diff` can't see still reads as work. A clean worktree whose committed content is proven landed on the trunk collapses the whole cluster to a landed marker: `≡ main` when it sits at the trunk tip, `✓ main` once the trunk has moved on or ancestry still differs — done, safe to remove; behind never blocks removability, it only picks the marker. The trunk worktree itself wears neither — "landed on itself" says nothing, so its header keeps the plain cluster. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#sidebar-rendering)).
+The worktree header carries the worktree's git story on the right: pristine worktrees collapse to `≡ main`, merged worktrees collapse to `✓ main`, and diverged worktrees show the `⇡`/`⇣` commit delta against the trunk, then the total diff, then a trunk marker. The marker ladder is local reconciling (`⟳`) over PR merged (`✓`), PR closed (`✕`), PR open (`⊙`), then plain branch (`⑂`). The `+/-` churn counts committed, staged, unstaged, and untracked file content, so work `git diff` cannot see still reads as work. The trunk worktree itself wears no pristine/merged verdict — "landed on itself" says nothing, so its header keeps the plain cluster. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#sidebar-rendering)).
 
 ```
-▎⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +230 -23    ← in flight: commits ahead/behind, then the diff
-▎⑂ feature-current ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← at the trunk tip: this checkout IS main
-▎⑂ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main    ← landed, trunk moved on: safe to remove
+▎⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +230 -23  ⊙ main    ← diverged with an open PR
+▎⑂ fresh-fork ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← pristine: no worktree-owned commits
+▎⮌ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main    ← merged: safe to remove
 ```
 
 ```

@@ -18,8 +18,8 @@ use crate::sidebar::frame::PaneFrame;
 pub use crate::sidebar::timing::{
     ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL, DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL,
     DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL, GIT_ACTIVITY_WINDOW,
-    METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMPLE_TTL, PRESENCE_STAMP_FRESH,
-    SNAPSHOT_CACHE_TTL, WORKTREE_ROOTS_TTL,
+    METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMPLE_TTL, PR_STATE_RETRY_TTL, PR_STATE_TTL,
+    PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, WORKTREE_ROOTS_TTL,
 };
 
 /// The producer's published provider-account map: the out-of-band login facts
@@ -331,6 +331,14 @@ pub struct DiffStatsCacheEntry {
     /// `None` means unknown or an old cache entry.
     #[serde(default)]
     pub landed: Option<bool>,
+    /// Whether the worktree HEAD differs from the Rimz worktree marker's
+    /// `base_ref`. `None` means the checkout is unmarked or unreadable.
+    #[serde(default)]
+    pub did_work: Option<bool>,
+    /// Whether git reports an in-progress rebase, merge, or cherry-pick in the
+    /// worktree. `None` means the probe could not inspect git paths.
+    #[serde(default)]
+    pub merge_in_progress: Option<bool>,
 }
 
 impl DiffStatsCacheEntry {
@@ -351,6 +359,33 @@ impl DiffStatsCacheEntry {
         self.added
             .zip(self.removed)
             .map(|(added, removed)| DiffStats { added, removed })
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct PrStateCache {
+    pub refreshed_at_ms: u64,
+    /// Whether the last PR-state probe completed without an infrastructure
+    /// failure. A logged-in repo with no PR is a success and keeps an empty map.
+    #[serde(default = "pr_state_probe_ok_default")]
+    pub ok: bool,
+    /// PR state by absolute worktree path.
+    #[serde(default)]
+    pub states: BTreeMap<String, crate::WorktreePrState>,
+}
+
+fn pr_state_probe_ok_default() -> bool {
+    true
+}
+
+impl PrStateCache {
+    pub(crate) fn is_fresh(&self, now_ms: u64) -> bool {
+        let ttl = if self.ok {
+            PR_STATE_TTL
+        } else {
+            PR_STATE_RETRY_TTL
+        };
+        now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
     }
 }
 

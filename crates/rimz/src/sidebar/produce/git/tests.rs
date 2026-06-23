@@ -426,6 +426,74 @@ fn worktree_status_folds_untracked_into_churn_and_reads_clean() {
 }
 
 #[test]
+fn did_work_reads_head_against_rimz_worktree_marker_base_ref() {
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    if !repo.initialized {
+        assert_eq!(refresh_entry(repo.path_str(), 0, None).did_work, None);
+        return;
+    }
+    repo.write("base.txt", "base\n");
+    let _ = repo.git(&["add", "base.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "base"]);
+    let base_ref = git_line(repo.path(), &["rev-parse", "HEAD"]).unwrap();
+    let marker = crate::worktree::WorktreeMarker {
+        version: 1,
+        name: "feature".to_owned(),
+        branch: "feature".to_owned(),
+        base_branch: Some("main".to_owned()),
+        base_ref,
+        repo_root: repo.path().to_path_buf(),
+        worktree_path: repo.path().to_path_buf(),
+        created_at: jiff::Timestamp::now(),
+    };
+    crate::ledger::atomic::write_temp_then_rename(
+        &crate::worktree::marker_path(repo.path()).unwrap(),
+        &marker,
+    )
+    .unwrap();
+
+    assert_eq!(
+        refresh_entry(repo.path_str(), 0, None).did_work,
+        Some(false),
+        "a fresh fork has not moved past its marker base_ref"
+    );
+
+    repo.write("feature.txt", "feature\n");
+    let _ = repo.git(&["add", "feature.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "feature"]);
+    assert_eq!(
+        refresh_entry(repo.path_str(), 0, None).did_work,
+        Some(true),
+        "a worktree commit is visible even when later ancestry collapses"
+    );
+}
+
+#[test]
+fn merge_in_progress_reads_git_state_paths() {
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    if !repo.initialized {
+        assert_eq!(merge_in_progress(repo.path()), None);
+        return;
+    }
+    repo.write("base.txt", "base\n");
+    let _ = repo.git(&["add", "base.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "base"]);
+
+    assert_eq!(merge_in_progress(repo.path()), Some(false));
+
+    let merge_head = git_line(repo.path(), &["rev-parse", "--git-path", "MERGE_HEAD"]).unwrap();
+    let merge_head = Path::new(&merge_head);
+    let merge_head = if merge_head.is_absolute() {
+        merge_head.to_path_buf()
+    } else {
+        repo.path().join(merge_head)
+    };
+    std::fs::write(merge_head, "deadbeef\n").unwrap();
+
+    assert_eq!(merge_in_progress(repo.path()), Some(true));
+}
+
+#[test]
 fn trunk_ladder_prefers_a_configured_branch_that_resolves() {
     let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
     if !repo.initialized {

@@ -119,6 +119,16 @@ pub const ACCOUNTS_TTL: Duration = Duration::from_secs(10 * 60);
 /// pinning an empty dashboard for the full success window.
 pub const ACCOUNTS_RETRY_TTL: Duration = Duration::from_secs(10);
 
+/// How long the producer trusts a successful worktree PR-state probe before it
+/// asks the forge CLI again. Pull-request state changes on human time and the
+/// probe may hit the network, so it rides a long producer-only TTL.
+pub const PR_STATE_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// Retry cadence after the PR-state probe cannot run (missing CLI, logged out,
+/// non-zero command, or malformed output). Short enough to recover after login,
+/// long enough to avoid a per-frame failing network fork.
+pub const PR_STATE_RETRY_TTL: Duration = Duration::from_secs(30);
+
 /// How long an extra-credits/account-usage reading stays displayable. Paid
 /// usage is a coarse monthly signal; after a day without a refresh, the
 /// dashboard drops the provider-supplied figures rather than showing stale

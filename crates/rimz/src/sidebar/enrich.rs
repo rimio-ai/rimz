@@ -20,12 +20,12 @@ use crate::ids::{PaneId, WorkspaceId};
 use crate::ledger::snapshot::{LazyAgentPairingDiagnostic, LazyAgentPairingResult};
 use crate::{
     RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarSnapshot,
-    SidebarWorktreeGroup, SidebarWorktreeKind,
+    SidebarWorktreeGroup, SidebarWorktreeKind, WorktreeTrunkSync,
 };
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 
-use super::cache::{DiffStatsCache, GIT_ACTIVITY_WINDOW, read_diff_stats_cache};
+use super::cache::{DiffStatsCache, GIT_ACTIVITY_WINDOW, PrStateCache, read_diff_stats_cache};
 use super::frame::{PaneFrame, PaneMetrics};
 use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 
@@ -33,6 +33,7 @@ mod accounts;
 mod auto_continue;
 mod codex_refresh;
 mod credits;
+mod forge;
 mod live_spend;
 mod rate_limits;
 #[cfg(test)]
@@ -52,6 +53,7 @@ pub use usage_refresh::merge_oauth_usage_if_due;
 
 use accounts::{cached_accounts_for_snapshot, produce_accounts, read_accounts_cache};
 use codex_refresh::refresh_codex_sessions;
+use forge::{produce_pr_states, read_pr_state_cache};
 use live_spend::refresh_live_spend_baselines;
 use usage_refresh::refresh_account_usage;
 
@@ -243,18 +245,69 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
         // A remote-default trunk resolves as `origin/<name>`; the header's
         // `≡`/`✓` markers name the branch, so the remote prefix is display
         // noise.
-        if let Some(trunk) = entry.trunk.filter(|trunk| !trunk.is_empty()) {
-            let display = trunk.strip_prefix("origin/").unwrap_or(&trunk).to_owned();
-            group.trunk = Some(display);
+        let display_trunk = entry
+            .trunk
+            .as_deref()
+            .filter(|trunk| !trunk.is_empty())
+            .map(|trunk| trunk.strip_prefix("origin/").unwrap_or(trunk).to_owned());
+        if let Some(display) = display_trunk.as_ref() {
+            group.trunk = Some(display.clone());
         }
-        if let Some(branch) = entry.branch.filter(|branch| !branch.is_empty()) {
-            group.label = branch;
+        if let Some(branch) = entry.branch.as_ref().filter(|branch| !branch.is_empty()) {
+            group.label = branch.clone();
         }
         if let Some(clean) = entry.clean {
             group.clean = Some(clean);
         }
         group.landed = entry.landed;
+        group.trunk_sync = display_trunk
+            .as_deref()
+            .and_then(|trunk| classify_trunk_sync(&entry, &group.label, trunk));
     }
+}
+
+pub fn project_pr_states(snapshot: &mut SidebarSnapshot, cache: &PrStateCache) {
+    for group in &mut snapshot.worktree_groups {
+        if group.kind != SidebarWorktreeKind::Worktree {
+            continue;
+        }
+        let Some(path) = worktree_group_path(group).map(ToOwned::to_owned) else {
+            continue;
+        };
+        if !Path::new(&path).is_dir() {
+            continue;
+        }
+        group.pr_state = cache.states.get(&path).copied();
+    }
+}
+
+pub(crate) fn project_cached_pr_states(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths) {
+    let cache = read_pr_state_cache(&runtime.root.join("pr-state.json"));
+    project_pr_states(snapshot, &cache);
+}
+
+pub(crate) fn classify_trunk_sync(
+    entry: &super::cache::DiffStatsCacheEntry,
+    label: &str,
+    trunk_display: &str,
+) -> Option<WorktreeTrunkSync> {
+    if label == trunk_display {
+        return None;
+    }
+    if entry.merge_in_progress == Some(true) {
+        return Some(WorktreeTrunkSync::Reconciling);
+    }
+    if entry.clean == Some(true) && entry.landed == Some(true) && entry.did_work == Some(true) {
+        return Some(WorktreeTrunkSync::Merged);
+    }
+    if entry.clean == Some(true)
+        && entry.did_work == Some(false)
+        && entry.commits == Some(0)
+        && entry.behind == Some(0)
+    {
+        return Some(WorktreeTrunkSync::Pristine);
+    }
+    Some(WorktreeTrunkSync::Diverged)
 }
 
 /// The lazy-registering agent kinds whose Rimz hooks are installed — the gate for
@@ -499,6 +552,7 @@ pub fn enrich(
         let (mut snapshot, caches) = fold_machine_config_cached(snapshot, runtime, config);
         let diff_cache = read_diff_stats_cache(&runtime.root.join("diff-stats.json"));
         project_diff_stats(&mut snapshot, &diff_cache);
+        project_cached_pr_states(&mut snapshot, runtime);
         (snapshot, caches)
     };
     let spending_caches = match mode {
@@ -641,6 +695,7 @@ pub(crate) fn fold_machine_config_producing(
     let accounts_config = config.accounts.clone();
     let resume_config = config.resume.clone();
     let accounts = produce_accounts(&snapshot, runtime);
+    produce_pr_states(&snapshot, runtime);
     let mut snapshot = fold_machine_config_with(snapshot, config, accounts, provider_spending);
     // The producer owns the account-scoped window cache: it writes live readings
     // back so the budgets survive a session ending or going idle.

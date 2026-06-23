@@ -266,6 +266,8 @@ fn inactive_groups_sink_below_process_groups() {
         trunk: None,
         clean: None,
         landed: None,
+        trunk_sync: None,
+        pr_state: None,
     });
     snapshot.sort_groups_for_presentation();
 

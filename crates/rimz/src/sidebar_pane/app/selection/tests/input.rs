@@ -494,6 +494,8 @@ fn the_unread_snap_overrides_selection_follow_to_the_top() {
         trunk: None,
         clean: None,
         landed: None,
+        trunk_sync: None,
+        pr_state: None,
     }];
 
     // Selecting the last row scrolls the short viewport down, off the lead.

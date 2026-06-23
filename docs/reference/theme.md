@@ -195,7 +195,7 @@ total = "◇"
 | `tokens` | the token-accounting markers |
 | `meter` | the drawn gauges and bars |
 | `clock` | the last-activity age faces |
-| `worktree` | the group header's git story |
+| `worktree` | the group header's git story: `branch`, `merge`, `ahead`, `behind`, `trunk_equal`, `trunk_branch`, `trunk_merge`, `pr_open`, `pr_closed`, `reconciling`, `dotted` |
 | `card` | the agent card body |
 | `process` | the CPU / mem / IO row |
 | `keys` | help-overlay action leads |

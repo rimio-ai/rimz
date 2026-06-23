@@ -120,6 +120,7 @@ fn render_worktree_equal_to_trunk() {
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(true);
     snapshot.worktree_groups[0].landed = Some(true);
+    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Pristine);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -151,6 +152,7 @@ fn render_worktree_clear_safe_to_remove() {
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(true);
     snapshot.worktree_groups[0].landed = Some(true);
+    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Merged);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -188,6 +190,7 @@ fn render_content_landed_worktree_uses_marker_over_ancestry_delta() {
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(true);
     snapshot.worktree_groups[0].landed = Some(true);
+    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Merged);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -221,6 +224,7 @@ fn render_worktree_dirty_tree_keeps_the_cluster() {
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(false);
     snapshot.worktree_groups[0].landed = Some(true);
+    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -253,6 +257,7 @@ fn render_trunk_worktree_skips_the_landed_marker() {
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(true);
     snapshot.worktree_groups[0].landed = Some(true);
+    snapshot.worktree_groups[0].trunk_sync = None;
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -261,6 +266,80 @@ fn render_trunk_worktree_skips_the_landed_marker() {
         "no landed marker on the trunk worktree:\n{rendered}"
     );
     assert!(rendered.contains("⑂ main"), "header:\n{rendered}");
+}
+
+#[test]
+fn render_merged_worktree_uses_merge_glyph_on_left() {
+    let codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/home/me/query-engine-wt/feature-migration"),
+        Some("feature-migration"),
+        None,
+    );
+    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Merged);
+
+    let rendered = snapshot_to_screen(&snapshot, 38, 14);
+
+    assert!(
+        rendered.contains("⮌ feature-migration"),
+        "header:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("⑂ feature-migration"),
+        "merged header swaps the branch glyph:\n{rendered}"
+    );
+}
+
+#[test]
+fn render_reconciling_worktree_keeps_stats_and_merge_queue_marker() {
+    let codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/home/me/query-engine-wt/feature-migration"),
+        Some("feature-migration"),
+        None,
+    );
+    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    snapshot.worktree_groups[0].diff_added = Some(3);
+    snapshot.worktree_groups[0].diff_removed = Some(1);
+    snapshot.worktree_groups[0].commits_ahead = Some(1);
+    snapshot.worktree_groups[0].commits_behind = Some(0);
+    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Reconciling);
+
+    let rendered = snapshot_to_screen(&snapshot, 48, 14);
+
+    assert!(rendered.contains("⇡1"), "header:\n{rendered}");
+    assert!(rendered.contains("+3 -1"), "header:\n{rendered}");
+    assert!(rendered.contains("⟳ main"), "header:\n{rendered}");
+}
+
+#[test]
+fn render_diverged_worktree_uses_pr_state_marker() {
+    let codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/home/me/query-engine-wt/feature-migration"),
+        Some("feature-migration"),
+        None,
+    );
+    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
+    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Open);
+
+    let rendered = snapshot_to_screen(&snapshot, 42, 14);
+    assert!(rendered.contains("⊙ main"), "header:\n{rendered}");
+
+    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
+    let rendered = snapshot_to_screen(&snapshot, 42, 14);
+    assert!(rendered.contains("✕ main"), "header:\n{rendered}");
 }
 /// The borderless repo header (dashboard L1): the workspace name behind `⌘`
 /// on the left, then the project path pinned to the right edge of the same

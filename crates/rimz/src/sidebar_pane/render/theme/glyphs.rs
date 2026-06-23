@@ -127,10 +127,15 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::ClockQ4 => "●",
         GlyphRole::ClockOver => "◉",
         GlyphRole::WorktreeBranch => "⑂",
+        GlyphRole::WorktreeMerge => "⮌",
         GlyphRole::WorktreeAhead => "⇡",
         GlyphRole::WorktreeBehind => "⇣",
         GlyphRole::WorktreeTrunkEqual => "≡",
-        GlyphRole::WorktreeTrunkClear => "✓",
+        GlyphRole::WorktreeTrunkBranch => "⑂",
+        GlyphRole::WorktreeTrunkMerge => "✓",
+        GlyphRole::WorktreePrOpen => "⊙",
+        GlyphRole::WorktreePrClosed => "✕",
+        GlyphRole::WorktreeReconciling => "⟳",
         GlyphRole::WorktreeDotted => "┄",
         GlyphRole::CardSubagents => "⧉",
         GlyphRole::CardTodoDone => "●",
@@ -220,12 +225,17 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         | GlyphRole::ClockQ3
         | GlyphRole::ClockQ4
         | GlyphRole::ClockOver => return None,
-        // worktree header: only the branch glyph iconifies.
-        GlyphRole::WorktreeBranch => "\u{e725}", // nf-dev-git_branch
+        // worktree header: branch/merge and trunk state markers iconify.
+        GlyphRole::WorktreeBranch => "\u{f126}", // nf-fa-code_branch
+        GlyphRole::WorktreeMerge => "\u{f17f}",  // nf-fa-code_merge
+        GlyphRole::WorktreeTrunkBranch => "\u{f418}", // nf-oct-git_branch
+        GlyphRole::WorktreeTrunkMerge => "\u{f419}", // nf-oct-git_merge
+        GlyphRole::WorktreePrOpen => "\u{f407}", // nf-oct-git_pull_request
+        GlyphRole::WorktreePrClosed => "\u{f4dc}", // nf-oct-git_pull_request_closed
+        GlyphRole::WorktreeReconciling => "\u{f4db}", // nf-oct-git_merge_queue
         GlyphRole::WorktreeAhead
         | GlyphRole::WorktreeBehind
         | GlyphRole::WorktreeTrunkEqual
-        | GlyphRole::WorktreeTrunkClear
         | GlyphRole::WorktreeDotted => return None,
         // agent card.
         GlyphRole::CardSubagents => "\u{ed50}", // nf-fa-gitter
@@ -314,7 +324,6 @@ mod tests {
             GlyphRole::WorktreeAhead,
             GlyphRole::WorktreeBehind,
             GlyphRole::WorktreeTrunkEqual,
-            GlyphRole::WorktreeTrunkClear,
             GlyphRole::WorktreeDotted,
             GlyphRole::CardTodoDone,
             GlyphRole::CardTodoPending,
@@ -350,6 +359,12 @@ mod tests {
             GlyphRole::TokensTotal,
             GlyphRole::StatusIdle,
             GlyphRole::WorktreeBranch,
+            GlyphRole::WorktreeMerge,
+            GlyphRole::WorktreeTrunkBranch,
+            GlyphRole::WorktreeTrunkMerge,
+            GlyphRole::WorktreePrOpen,
+            GlyphRole::WorktreePrClosed,
+            GlyphRole::WorktreeReconciling,
             GlyphRole::MeterReset,
             GlyphRole::KeysFocus,
             GlyphRole::ChromeInfinity,

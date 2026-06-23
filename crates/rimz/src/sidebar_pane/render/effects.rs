@@ -509,6 +509,8 @@ mod tests {
                 trunk: None,
                 clean: None,
                 landed: None,
+                trunk_sync: None,
+                pr_state: None,
             }],
             needs_attention: Vec::new(),
             resolver_working: Vec::new(),

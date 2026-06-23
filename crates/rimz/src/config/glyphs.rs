@@ -53,10 +53,15 @@ pub enum GlyphRole {
     ClockOver,
     // worktree — the group header's git story.
     WorktreeBranch,
+    WorktreeMerge,
     WorktreeAhead,
     WorktreeBehind,
     WorktreeTrunkEqual,
-    WorktreeTrunkClear,
+    WorktreeTrunkBranch,
+    WorktreeTrunkMerge,
+    WorktreePrOpen,
+    WorktreePrClosed,
+    WorktreeReconciling,
     WorktreeDotted,
     // card — the agent card body.
     CardSubagents,
@@ -132,10 +137,15 @@ impl GlyphRole {
         Self::ClockQ4,
         Self::ClockOver,
         Self::WorktreeBranch,
+        Self::WorktreeMerge,
         Self::WorktreeAhead,
         Self::WorktreeBehind,
         Self::WorktreeTrunkEqual,
-        Self::WorktreeTrunkClear,
+        Self::WorktreeTrunkBranch,
+        Self::WorktreeTrunkMerge,
+        Self::WorktreePrOpen,
+        Self::WorktreePrClosed,
+        Self::WorktreeReconciling,
         Self::WorktreeDotted,
         Self::CardSubagents,
         Self::CardTodoDone,
@@ -203,10 +213,15 @@ impl GlyphRole {
                 "clock"
             }
             Self::WorktreeBranch
+            | Self::WorktreeMerge
             | Self::WorktreeAhead
             | Self::WorktreeBehind
             | Self::WorktreeTrunkEqual
-            | Self::WorktreeTrunkClear
+            | Self::WorktreeTrunkBranch
+            | Self::WorktreeTrunkMerge
+            | Self::WorktreePrOpen
+            | Self::WorktreePrClosed
+            | Self::WorktreeReconciling
             | Self::WorktreeDotted => "worktree",
             Self::CardSubagents
             | Self::CardTodoDone
@@ -277,10 +292,15 @@ impl GlyphRole {
             Self::ClockQ4 => "q4",
             Self::ClockOver => "over",
             Self::WorktreeBranch => "branch",
+            Self::WorktreeMerge => "merge",
             Self::WorktreeAhead => "ahead",
             Self::WorktreeBehind => "behind",
             Self::WorktreeTrunkEqual => "trunk_equal",
-            Self::WorktreeTrunkClear => "trunk_clear",
+            Self::WorktreeTrunkBranch => "trunk_branch",
+            Self::WorktreeTrunkMerge => "trunk_merge",
+            Self::WorktreePrOpen => "pr_open",
+            Self::WorktreePrClosed => "pr_closed",
+            Self::WorktreeReconciling => "reconciling",
             Self::WorktreeDotted => "dotted",
             Self::CardSubagents => "subagents",
             Self::CardTodoDone => "todo_done",

@@ -534,14 +534,15 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
                 Sessions | Output | WindowHuge => p.accent,
                 LaneSpine | FlashSelectionLanded => p.selection,
                 WorktreeHeader | BranchDelta => p.body,
-                LedgerLabel | TokenTotal | ProcCpu | WindowLarge => p.cool,
+                WorktreePristine | WindowSmall | CardRecede => p.faint,
+                WorktreeMerged | ProcMem | CacheRead | FlashResolved | FlashLifted
+                | FlashCompleted => p.good,
+                WorktreeReconciling | Compaction | FlashWaiting => p.warn,
+                WorktreePrOpen | LedgerLabel | TokenTotal | ProcCpu | WindowLarge => p.cool,
                 SubagentHeader | RemoteControl | ProcIo | CacheWrite => p.meta,
-                ProcMem | CacheRead | FlashResolved | FlashLifted | FlashCompleted => p.good,
-                Compaction | FlashWaiting => p.warn,
                 Input => p.expense,
                 FlashFailed => p.alarm,
-                WindowMedium | UnknownBrand => p.muted,
-                WindowSmall | CardRecede => p.faint,
+                WorktreePrClosed | WindowMedium | UnknownBrand => p.muted,
             };
             let got = theme.component(component);
             assert_eq!(got, expected, "{component:?} resolves to its named slot");

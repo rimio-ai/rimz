@@ -70,6 +70,23 @@ pub enum SidebarWorktreeKind {
     External,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeTrunkSync {
+    Pristine,
+    Diverged,
+    Merged,
+    Reconciling,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreePrState {
+    Open,
+    Closed,
+    Merged,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarWorktreeGroup {
     pub key: String,
@@ -98,6 +115,12 @@ pub struct SidebarWorktreeGroup {
     /// Whether committed content is proven landed on the resolved trunk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landed: Option<bool>,
+    /// The semantic trunk state rendered by the group header's git cluster.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trunk_sync: Option<WorktreeTrunkSync>,
+    /// Best-effort pull-request state for this worktree's branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_state: Option<WorktreePrState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

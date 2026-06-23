@@ -3,7 +3,10 @@
 //! hit-test map entries.
 
 use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
-use crate::{SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
+use crate::{
+    SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
+    WorktreePrState, WorktreeTrunkSync,
+};
 use jiff::Timestamp;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -12,7 +15,7 @@ use crate::sidebar_pane::render::BodyFilter;
 use crate::sidebar_pane::render::CostRolls;
 use crate::sidebar_pane::render::fmt::clip;
 use crate::sidebar_pane::render::labels::{
-    branch_delta_spans, diff_spans, status_glyph, trunk_clear_spans, trunk_equal_spans,
+    branch_delta_spans, diff_spans, status_glyph, trunk_equal_spans, trunk_glyph_spans,
 };
 use crate::sidebar_pane::render::row_passes_filter;
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -134,14 +137,15 @@ fn group_header(
     // here as a bold neutral heading — no inline `▌`, the spine carries the lane.
     // The header builds to the content width left after the gutter cell.
     let cw = content_width(width);
-    // The worktree's git story pins right: a content-landed marker when a
-    // non-trunk branch is proven safe to remove (`≡ <trunk>` at the tip,
-    // `✓ <trunk>` once the trunk moved on), else the `⇡/⇣` commit delta ahead
-    // of the `+/-` churn, zero components omitted. The per-worktree status
-    // tally is gone: the cockpit owns the fleet make-up and each row carries
-    // its own status glyph, so repeating it here was noise. The label clips to
-    // whatever's left after the stats claim their width, always leaving a
-    // cell so the header never shrinks to zero on extreme narrowness.
+    // The worktree's git story pins right: pristine collapses to `≡ <trunk>`,
+    // merged collapses to `<merge> <trunk>`, and diverged/reconciling shows
+    // the `⇡/⇣` commit delta, `+/-` churn, then the highest-priority trunk
+    // glyph (local reconciling > merged PR > closed PR > open PR > branch).
+    // The per-worktree status tally is gone: the cockpit owns the fleet
+    // make-up and each row carries its own status glyph, so repeating it here
+    // was noise. The label clips to whatever's left after the stats claim
+    // their width, always leaving a cell so the header never shrinks to zero on
+    // extreme narrowness.
     //
     // A non-repo room's root pod is name-only: a plain directory has no fork
     // and no git story, so it drops the `⑂` prefix and pins nothing right.
@@ -153,7 +157,14 @@ fn group_header(
     let label_width = cw.saturating_sub(right_width + 1).max(1);
     let label_with_prefix = match group.kind {
         SidebarWorktreeKind::Root => group.label.clone(),
-        _ => format!("{} {}", theme.glyph(GlyphRole::WorktreeBranch), group.label),
+        _ => {
+            let role = if group.trunk_sync == Some(WorktreeTrunkSync::Merged) {
+                GlyphRole::WorktreeMerge
+            } else {
+                GlyphRole::WorktreeBranch
+            };
+            format!("{} {}", theme.glyph(role), group.label)
+        }
     };
     let left = clip(&label_with_prefix, label_width);
     // The dotted `┄` seal caps only the *selected* worktree's header, so the lane
@@ -195,29 +206,38 @@ fn group_header(
     Line::from(spans)
 }
 
-/// The header's right-pinned git cluster. A clean worktree whose committed
-/// content is proven landed on the trunk collapses the cluster to a landed
-/// marker: `≡ <trunk>` when it sits exactly at the trunk tip (zero behind),
-/// `✓ <trunk>` once the trunk has moved on — done, safe to remove. The trunk
-/// worktree itself (live branch == trunk) is exempt — it is trivially "landed
-/// on itself," so the marker would be noise there, and it keeps the plain
-/// delta/churn cluster instead. Otherwise the `⇡/⇣` commit delta leads the
-/// `+/-` churn (untracked line counts folded in by the producer), zero
-/// components omitted. Empty when no git read reached this group.
+/// The header's right-pinned git cluster. Pristine (`≡`) is quiet, merged
+/// (`<merge>`) is bright and removable, and diverged/reconciling keeps the
+/// numeric work stats before a trunk glyph chosen by the priority ladder:
+/// reconciling > PR merged > PR closed > PR open > branch. Empty when no git
+/// read reached this group.
 fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
-    let landed = group.clean == Some(true) && group.landed == Some(true);
-    if landed
-        && let Some(trunk) = group.trunk.as_deref()
-        && group.label != trunk
-    {
-        match group.commits_behind {
-            Some(0) => return trunk_equal_spans(theme, trunk),
-            Some(_) => return trunk_clear_spans(theme, trunk),
-            // A degraded behind read can't pick a marker; fall through to the
-            // plain cluster rather than claim equality.
-            None => {}
+    let Some(trunk) = group.trunk.as_deref() else {
+        return plain_git_spans(theme, group);
+    };
+    match group.trunk_sync {
+        Some(WorktreeTrunkSync::Pristine) => return trunk_equal_spans(theme, trunk),
+        Some(WorktreeTrunkSync::Merged) => {
+            return trunk_glyph_spans(
+                theme,
+                GlyphRole::WorktreeTrunkMerge,
+                trunk,
+                Component::WorktreeMerged,
+            );
         }
+        Some(WorktreeTrunkSync::Diverged | WorktreeTrunkSync::Reconciling) => {}
+        None => return plain_git_spans(theme, group),
     }
+    let mut spans = plain_git_spans(theme, group);
+    let (role, component) = trunk_ladder_marker(group);
+    if !spans.is_empty() {
+        spans.push(Span::raw("  "));
+    }
+    spans.extend(trunk_glyph_spans(theme, role, trunk, component));
+    spans
+}
+
+fn plain_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
     let mut spans = branch_delta_spans(
         theme,
         group.commits_ahead.unwrap_or(0),
@@ -234,6 +254,21 @@ fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'sta
         spans.extend(diff_spans(theme, added, removed));
     }
     spans
+}
+
+fn trunk_ladder_marker(group: &SidebarWorktreeGroup) -> (GlyphRole, Component) {
+    if group.trunk_sync == Some(WorktreeTrunkSync::Reconciling) {
+        return (
+            GlyphRole::WorktreeReconciling,
+            Component::WorktreeReconciling,
+        );
+    }
+    match group.pr_state {
+        Some(WorktreePrState::Merged) => (GlyphRole::WorktreeTrunkMerge, Component::WorktreeMerged),
+        Some(WorktreePrState::Closed) => (GlyphRole::WorktreePrClosed, Component::WorktreePrClosed),
+        Some(WorktreePrState::Open) => (GlyphRole::WorktreePrOpen, Component::WorktreePrOpen),
+        None => (GlyphRole::WorktreeTrunkBranch, Component::BranchDelta),
+    }
 }
 
 /// The `external` catch-all (untethered scripts/CI and out-of-project shells)

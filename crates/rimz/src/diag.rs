@@ -461,6 +461,8 @@ mod tests {
             trunk: None,
             clean: None,
             landed: None,
+            trunk_sync: None,
+            pr_state: None,
         };
         let mut snapshot = crate::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/repo")),

@@ -37,6 +37,16 @@ pub(crate) enum Component {
     /// The `⇡/⇣` commit-delta cluster on a worktree header — the branch facts
     /// rhyme with the worktree name's neutral heading tone.
     BranchDelta,
+    /// A pristine worktree at the trunk tip — faint baseline chrome.
+    WorktreePristine,
+    /// A landed worktree ready to remove — bright positive action tone.
+    WorktreeMerged,
+    /// A local rebase/merge/cherry-pick in progress — warning tone.
+    WorktreeReconciling,
+    /// An open pull request for the worktree branch — cool link tone.
+    WorktreePrOpen,
+    /// A closed pull request for the worktree branch — muted historical tone.
+    WorktreePrClosed,
     /// The `◌` cache-read token marker.
     CacheRead,
     /// The `W:`/`M:` timeframe label on a ledger row.
@@ -105,6 +115,11 @@ impl Component {
         Component::LaneSpine,
         Component::WorktreeHeader,
         Component::BranchDelta,
+        Component::WorktreePristine,
+        Component::WorktreeMerged,
+        Component::WorktreeReconciling,
+        Component::WorktreePrOpen,
+        Component::WorktreePrClosed,
         Component::CacheRead,
         Component::LedgerLabel,
         Component::TokenTotal,
@@ -140,14 +155,16 @@ impl Component {
             Sessions | Output | WindowHuge => palette.accent,
             LaneSpine | FlashSelectionLanded => palette.selection,
             WorktreeHeader | BranchDelta => palette.body,
-            LedgerLabel | TokenTotal | ProcCpu | WindowLarge => palette.cool,
+            WorktreePristine | WindowSmall | CardRecede => palette.faint,
+            WorktreeMerged | ProcMem | CacheRead | FlashResolved | FlashLifted | FlashCompleted => {
+                palette.good
+            }
+            WorktreeReconciling | Compaction | FlashWaiting => palette.warn,
+            WorktreePrOpen | LedgerLabel | TokenTotal | ProcCpu | WindowLarge => palette.cool,
             SubagentHeader | RemoteControl | ProcIo | CacheWrite => palette.meta,
-            ProcMem | CacheRead | FlashResolved | FlashLifted | FlashCompleted => palette.good,
-            Compaction | FlashWaiting => palette.warn,
             Input => palette.expense,
             FlashFailed => palette.alarm,
-            WindowMedium | UnknownBrand => palette.muted,
-            WindowSmall | CardRecede => palette.faint,
+            WorktreePrClosed | WindowMedium | UnknownBrand => palette.muted,
         }
     }
 }

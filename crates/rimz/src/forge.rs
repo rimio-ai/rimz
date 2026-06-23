@@ -1,7 +1,13 @@
-//! Forge pull-request ref parsing.
+//! Forge pull-request ref and status parsing.
 //!
-//! Rimz talks to forges through Git refs only. This module identifies the PR
-//! number and the forge ref shape without depending on a forge CLI or API.
+//! Rimz keeps forge command execution outside this module. The pure helpers
+//! here identify PR numbers, ref shapes, host families, and status JSON emitted
+//! by forge CLIs.
+
+use serde::Deserialize;
+use serde_json::Value;
+
+use crate::ledger::snapshot::WorktreePrState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Forge {
@@ -10,9 +16,21 @@ pub enum Forge {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForgeCli {
+    Gh,
+    Tea,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrTarget {
     pub number: u64,
     pub forge: Option<Forge>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TeaPrCandidate {
+    pub number: u64,
+    pub state: WorktreePrState,
 }
 
 pub fn parse(raw: &str) -> Result<PrTarget, String> {
@@ -61,6 +79,17 @@ pub fn forge_for_remote(remote_url: &str) -> Forge {
     }
 }
 
+pub fn forge_cli_for_remote(remote_url: &str) -> Option<ForgeCli> {
+    let host = remote_host(remote_url).to_ascii_lowercase();
+    if host == "github.com" {
+        Some(ForgeCli::Gh)
+    } else if host.contains("gitea") || host.contains("forgejo") || host.contains("codeberg") {
+        Some(ForgeCli::Tea)
+    } else {
+        None
+    }
+}
+
 impl Forge {
     pub fn pr_refspec(self, number: u64) -> String {
         match self {
@@ -100,6 +129,152 @@ fn remote_host(remote_url: &str) -> &str {
         .next()
         .unwrap_or(authority)
         .trim()
+}
+
+pub fn parse_gh_pr_state_json(raw: &str) -> Result<Option<WorktreePrState>, String> {
+    #[derive(Deserialize)]
+    struct Pull {
+        state: String,
+    }
+
+    let pulls: Vec<Pull> = serde_json::from_str(raw).map_err(|err| err.to_string())?;
+    Ok(pulls
+        .into_iter()
+        .filter_map(|pull| parse_pr_state(&pull.state))
+        .fold(None, prefer_pr_state))
+}
+
+pub fn parse_tea_pr_list_json(raw: &str, branch: &str) -> Result<Option<TeaPrCandidate>, String> {
+    let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
+    let pulls = value
+        .as_array()
+        .ok_or_else(|| "tea PR list output must be a JSON array".to_owned())?;
+    Ok(pulls
+        .iter()
+        .filter(|pull| pr_head_matches(pull, branch))
+        .filter_map(|pull| {
+            Some(TeaPrCandidate {
+                number: pr_number(pull)?,
+                state: pr_state_from_value(pull)?,
+            })
+        })
+        .fold(None, prefer_tea_candidate))
+}
+
+pub fn parse_tea_pr_detail_json(raw: &str) -> Result<Option<WorktreePrState>, String> {
+    let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
+    Ok(pr_state_from_value(&value))
+}
+
+fn pr_state_from_value(value: &Value) -> Option<WorktreePrState> {
+    if value
+        .get("merged")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || value
+            .get("merged_at")
+            .is_some_and(|merged| !merged.is_null())
+    {
+        return Some(WorktreePrState::Merged);
+    }
+    ["state", "status"].iter().find_map(|field| {
+        value
+            .get(field)
+            .and_then(Value::as_str)
+            .and_then(parse_pr_state)
+    })
+}
+
+fn parse_pr_state(raw: &str) -> Option<WorktreePrState> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "open" => Some(WorktreePrState::Open),
+        "closed" => Some(WorktreePrState::Closed),
+        "merged" => Some(WorktreePrState::Merged),
+        _ => None,
+    }
+}
+
+fn prefer_pr_state(
+    current: Option<WorktreePrState>,
+    next: WorktreePrState,
+) -> Option<WorktreePrState> {
+    match (current, next) {
+        (Some(WorktreePrState::Merged), _) | (_, WorktreePrState::Merged) => {
+            Some(WorktreePrState::Merged)
+        }
+        (Some(WorktreePrState::Open), _) | (_, WorktreePrState::Open) => {
+            Some(WorktreePrState::Open)
+        }
+        (Some(WorktreePrState::Closed), _) | (None, WorktreePrState::Closed) => {
+            Some(WorktreePrState::Closed)
+        }
+    }
+}
+
+fn prefer_tea_candidate(
+    current: Option<TeaPrCandidate>,
+    next: TeaPrCandidate,
+) -> Option<TeaPrCandidate> {
+    let Some(current) = current else {
+        return Some(next);
+    };
+    if pr_state_rank(next.state) > pr_state_rank(current.state) {
+        Some(next)
+    } else {
+        Some(current)
+    }
+}
+
+fn pr_state_rank(state: WorktreePrState) -> u8 {
+    match state {
+        WorktreePrState::Closed => 0,
+        WorktreePrState::Open => 1,
+        WorktreePrState::Merged => 2,
+    }
+}
+
+fn pr_number(value: &Value) -> Option<u64> {
+    ["number", "index", "id"].iter().find_map(|field| {
+        let value = value.get(field)?;
+        value
+            .as_u64()
+            .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
+    })
+}
+
+fn pr_head_matches(value: &Value, branch: &str) -> bool {
+    [
+        "head",
+        "head_branch",
+        "headRefName",
+        "source_branch",
+        "sourceBranch",
+    ]
+    .iter()
+    .any(|field| head_value_matches(value.get(field), branch))
+}
+
+fn head_value_matches(value: Option<&Value>, branch: &str) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    if let Some(raw) = value.as_str() {
+        return ref_name_matches(raw, branch);
+    }
+    if let Some(object) = value.as_object() {
+        return ["ref", "name", "branch", "label"].iter().any(|field| {
+            object
+                .get(*field)
+                .and_then(Value::as_str)
+                .is_some_and(|raw| ref_name_matches(raw, branch))
+        });
+    }
+    false
+}
+
+fn ref_name_matches(raw: &str, branch: &str) -> bool {
+    let raw = raw.trim();
+    raw == branch || raw.rsplit_once(':').is_some_and(|(_, name)| name == branch)
 }
 
 #[cfg(test)]
@@ -164,6 +339,75 @@ mod tests {
         ] {
             assert_eq!(forge_for_remote(remote), Forge::GitLab, "{remote}");
         }
+    }
+
+    #[test]
+    fn maps_remote_hosts_to_forge_cli() {
+        for remote in [
+            "https://github.com/org/repo.git",
+            "git@github.com:org/repo.git",
+        ] {
+            assert_eq!(forge_cli_for_remote(remote), Some(ForgeCli::Gh), "{remote}");
+        }
+        for remote in [
+            "https://gitea.example.test/org/repo.git",
+            "git@forgejo.example.test:org/repo.git",
+            "https://codeberg.org/org/repo.git",
+        ] {
+            assert_eq!(
+                forge_cli_for_remote(remote),
+                Some(ForgeCli::Tea),
+                "{remote}"
+            );
+        }
+        for remote in [
+            "https://gitlab.com/org/repo.git",
+            "https://example.test/org/repo.git",
+        ] {
+            assert_eq!(forge_cli_for_remote(remote), None, "{remote}");
+        }
+    }
+
+    #[test]
+    fn parses_gh_pr_state_json_with_priority() {
+        assert_eq!(
+            parse_gh_pr_state_json(
+                r#"[{"number":1,"state":"CLOSED"},{"number":2,"state":"OPEN"}]"#
+            )
+            .unwrap(),
+            Some(WorktreePrState::Open)
+        );
+        assert_eq!(
+            parse_gh_pr_state_json(
+                r#"[{"number":1,"state":"OPEN"},{"number":2,"state":"MERGED"}]"#
+            )
+            .unwrap(),
+            Some(WorktreePrState::Merged)
+        );
+        assert_eq!(parse_gh_pr_state_json("[]").unwrap(), None);
+        assert!(parse_gh_pr_state_json("{").is_err());
+    }
+
+    #[test]
+    fn parses_tea_pr_list_and_detail_json() {
+        let list = r#"[
+            {"index": 7, "head": {"label": "me:feature"}, "state": "closed"},
+            {"index": 8, "head": "other", "state": "open"}
+        ]"#;
+        assert_eq!(
+            parse_tea_pr_list_json(list, "feature").unwrap(),
+            Some(TeaPrCandidate {
+                number: 7,
+                state: WorktreePrState::Closed,
+            })
+        );
+        assert_eq!(
+            parse_tea_pr_detail_json(r#"{"state":"closed","merged_at":"2026-06-01T00:00:00Z"}"#)
+                .unwrap(),
+            Some(WorktreePrState::Merged)
+        );
+        assert_eq!(parse_tea_pr_list_json("[]", "feature").unwrap(), None);
+        assert!(parse_tea_pr_list_json("{}", "feature").is_err());
     }
 
     #[test]

@@ -675,35 +675,32 @@ pub(in crate::sidebar_pane::render) fn branch_delta_spans(
     spans
 }
 
-/// `≡ main` — the worktree's content is landed and it sits at the trunk tip
-/// with a clean working tree (untracked included). Dim green, the calm-positive
-/// tone an idle/done agent wears — quiet enough to stay chrome yet scannable
-/// when hunting removable worktrees; the `≡` shape carries the verdict under
-/// `NO_COLOR`. The trunk worktree itself never wears it — the caller gates on
-/// the group's live branch.
+/// `≡ main` — the worktree is clean, has done no work of its own, and sits at
+/// the trunk tip. Faint baseline chrome: a quiet "nothing to remove" marker,
+/// distinct from the bright merged action tone.
 pub(in crate::sidebar_pane::render) fn trunk_equal_spans(
     theme: &Theme,
     trunk: &str,
 ) -> Vec<Span<'static>> {
-    vec![Span::styled(
-        format!("{} {trunk}", theme.glyph(GlyphRole::WorktreeTrunkEqual)),
-        theme.good(Modifier::DIM),
-    )]
+    trunk_glyph_spans(
+        theme,
+        GlyphRole::WorktreeTrunkEqual,
+        trunk,
+        Component::WorktreePristine,
+    )
 }
 
-/// `✓ main` — the worktree's content is landed with a clean tree (untracked
-/// included) but the trunk has moved on or ancestry still differs, so it is
-/// done and safe to remove. The same dim green as the `≡` equal marker — one
-/// calm-positive family, told apart by shape under `NO_COLOR`: `≡` "this is
-/// the trunk", `✓` "finished, removable". The trunk worktree itself never wears
-/// it — the caller gates on the group's live branch.
-pub(in crate::sidebar_pane::render) fn trunk_clear_spans(
+/// Render a trunk marker as `<glyph> <trunk>` in the component tone named by
+/// the caller. Used by the trunk-state ladder after branch/diff stats.
+pub(in crate::sidebar_pane::render) fn trunk_glyph_spans(
     theme: &Theme,
+    role: GlyphRole,
     trunk: &str,
+    component: Component,
 ) -> Vec<Span<'static>> {
     vec![Span::styled(
-        format!("{} {trunk}", theme.glyph(GlyphRole::WorktreeTrunkClear)),
-        theme.good(Modifier::DIM),
+        format!("{} {trunk}", theme.glyph(role)),
+        theme.styled(component, Modifier::empty()),
     )]
 }
 

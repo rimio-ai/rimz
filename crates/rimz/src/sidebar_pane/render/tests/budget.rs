@@ -172,6 +172,8 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 trunk: Some("main".to_owned()),
                 clean: None,
                 landed: None,
+                trunk_sync: None,
+                pr_state: None,
             })
             .collect(),
         needs_attention: Vec::new(),

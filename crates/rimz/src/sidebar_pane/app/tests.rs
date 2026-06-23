@@ -74,6 +74,8 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         trunk: None,
         clean: None,
         landed: None,
+        trunk_sync: None,
+        pr_state: None,
     }];
 
     assert_eq!(
@@ -347,6 +349,8 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             trunk: None,
             clean: None,
             landed: None,
+            trunk_sync: None,
+            pr_state: None,
         }];
         snap
     };

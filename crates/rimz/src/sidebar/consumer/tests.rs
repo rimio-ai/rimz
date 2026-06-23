@@ -2,12 +2,13 @@ use super::*;
 use crate::feed::{FeedItem, FeedKind, Surface};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::ledger::atomic;
-use crate::sidebar::cache::{DiffStatsCache, DiffStatsCacheEntry, unix_now_ms};
+use crate::sidebar::cache::{DiffStatsCache, DiffStatsCacheEntry, PrStateCache, unix_now_ms};
 use crate::sidebar::enrich::{EnrichMode, enrich};
 use crate::sidebar::frame::{CarriedPane, assemble_frame};
 use crate::sidebar::test_support::{child_agent, pane, pane_in_tab, root_agent};
 use crate::{RuntimePaths, SidebarSnapshot, SidebarWorktreeKind, StatePaths};
 use jiff::Timestamp;
+use std::collections::BTreeMap;
 
 #[test]
 fn read_published_snapshot_folds_caches_without_forking() {
@@ -52,9 +53,18 @@ fn read_published_snapshot_folds_caches_without_forking() {
             branch: Some("feat".to_owned()),
             clean: Some(false),
             landed: Some(false),
+            did_work: Some(true),
+            merge_in_progress: Some(false),
         },
     );
     atomic::write_temp_then_rename_cache(&runtime.root.join("diff-stats.json"), &diff).unwrap();
+    let mut pr = PrStateCache {
+        refreshed_at_ms: unix_now_ms(),
+        ok: true,
+        states: BTreeMap::new(),
+    };
+    pr.states.insert(wt.clone(), crate::WorktreePrState::Open);
+    atomic::write_temp_then_rename_cache(&runtime.root.join("pr-state.json"), &pr).unwrap();
 
     let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
     let snapshot = read_published_snapshot(
@@ -85,6 +95,16 @@ fn read_published_snapshot_folds_caches_without_forking() {
     assert_eq!(group.label, "feat");
     assert_eq!(group.clean, Some(false), "the status verdict projects too");
     assert_eq!(group.landed, Some(false), "the landed verdict projects too");
+    assert_eq!(
+        group.trunk_sync,
+        Some(crate::WorktreeTrunkSync::Diverged),
+        "the trunk-sync classifier projects from cached git facts"
+    );
+    assert_eq!(
+        group.pr_state,
+        Some(crate::WorktreePrState::Open),
+        "the PR state projects from cache with no forge CLI fork"
+    );
     // The own (sidebar) pane is excluded; the sibling renders as a row.
     assert!(
         snapshot

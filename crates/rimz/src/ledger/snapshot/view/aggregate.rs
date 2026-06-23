@@ -108,6 +108,8 @@ pub(super) fn build_worktree_groups_from_rows(
                 trunk: None,
                 clean: None,
                 landed: None,
+                trunk_sync: None,
+                pr_state: None,
             }
         })
         .collect::<Vec<_>>();
