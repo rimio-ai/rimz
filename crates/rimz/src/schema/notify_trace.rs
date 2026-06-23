@@ -98,7 +98,8 @@ pub enum NotifyTraceEvent {
         episode_ms: i64,
     },
     /// A pending look was cleared. Under sticky semantics the only causes are a
-    /// human look (`focus` / `mark_read`) or the row disappearing (`row_gone`).
+    /// human look (`focus` / `tab_view` / `mark_read`) or the row disappearing
+    /// (`row_gone`).
     UnreadCleared {
         row_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,7 +112,7 @@ pub enum NotifyTraceEvent {
         worktree: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pane_id: Option<PaneId>,
-        /// `focus` | `mark_read` | `row_gone`.
+        /// `focus` | `tab_view` | `mark_read` | `row_gone`.
         cause: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cleared_at_ms: Option<i64>,
@@ -144,13 +145,13 @@ mod tests {
             agent_id: Some(AgentSessionId::from("claude-1")),
             worktree: Some("main".to_owned()),
             pane_id: Some(PaneId::from_parts(crate::ids::MuxName::Tmux, "%1")),
-            cause: "focus".to_owned(),
+            cause: "tab_view".to_owned(),
             cleared_at_ms: Some(42),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert_eq!(
             json,
-            r#"{"kind":"unread_cleared","row_id":"claude-1","label":"api","agent_kind":"claude","agent_id":"claude-1","worktree":"main","pane_id":"tmux:%1","cause":"focus","cleared_at_ms":42}"#
+            r#"{"kind":"unread_cleared","row_id":"claude-1","label":"api","agent_kind":"claude","agent_id":"claude-1","worktree":"main","pane_id":"tmux:%1","cause":"tab_view","cleared_at_ms":42}"#
         );
         let back: NotifyTraceEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(back, event);
