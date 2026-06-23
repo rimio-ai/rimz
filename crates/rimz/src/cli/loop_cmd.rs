@@ -152,14 +152,10 @@ fn add(args: AddArgs) -> Result<()> {
     schedule::validate_name(&args.name)?;
     let workspace = WorkspaceResolver::resolve(&args.root, None)
         .with_context(|| format!("resolving project root at {}", args.root.display()))?;
-    let target = match (&args.spec, &args.to) {
-        (Some(_), Some(_)) => bail!(
-            "loop task `{}` needs exactly one of --spec or --to",
-            args.name
-        ),
-        (None, None) => bail!("loop task `{}` needs --spec or --to", args.name),
-        (None, Some(address)) => Some(resolve_delivery_target(&workspace, &args, address)?),
-        (Some(_), None) => None,
+    let target = match args.to.as_deref() {
+        Some(address) => Some(resolve_delivery_target(&workspace, &args, address)?),
+        None if args.spec.is_none() => bail!("loop task `{}` needs --spec or --to", args.name),
+        None => None,
     };
     let resolved = match args.spec.as_deref() {
         Some(spec) => Some(resolve_task_spec(spec, &workspace)?),
@@ -618,14 +614,18 @@ fn delivery_target_alive(entry: &TaskEntry, target: &TaskTarget) -> Result<bool>
         .with_context(|| format!("resolving project root at {}", entry.root.display()))?;
     let ledger = super::open_ledger(&workspace)?;
     let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    Ok(snapshot
-        .agents
-        .iter()
-        .any(|agent| agent.parent_agent_id.is_none() && agent.agent_id.as_str() == target.session))
+    Ok(snapshot.agents.iter().any(|agent| {
+        agent.parent_agent_id.is_none()
+            && agent.kind.as_str() == target.kind.as_str()
+            && agent.agent_id.as_str() == target.session
+    }))
 }
 
 fn queue_resolution_miss(err: &anyhow::Error) -> bool {
-    err.to_string().contains("no agent matches")
+    matches!(
+        err.downcast_ref::<rimz::TargetErr>(),
+        Some(rimz::TargetErr::NoMatch { .. } | rimz::TargetErr::NoMatchInChannel { .. })
+    )
 }
 
 fn remove_loop_schedule(name: &str) -> Result<bool> {

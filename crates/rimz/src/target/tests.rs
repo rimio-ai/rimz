@@ -183,6 +183,22 @@ fn current_channel_default_applies() {
 }
 
 #[test]
+fn exact_session_id_bypasses_current_channel() {
+    let mut snapshot = empty_snapshot();
+    let feat = agent("claude", "session-feat", Some("feat"), "terminal_1");
+    let main = agent("claude", "session-main", Some("main"), "terminal_2");
+    snapshot.agents = vec![feat, main];
+
+    assert_eq!(
+        resolve_one(&snapshot, "@session-feat", None, Some("main"))
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "session-feat"
+    );
+}
+
+#[test]
 fn none_current_channel_means_all_channels() {
     let mut snapshot = empty_snapshot();
     let feat = agent("claude", "session-feat", Some("feat"), "terminal_1");

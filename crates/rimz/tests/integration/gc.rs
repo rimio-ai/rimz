@@ -6,6 +6,7 @@ use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use rimz::schema::heartbeat::ResolverHeartbeat;
 use rimz::{ResolverId, RuntimePaths, SidebarInstanceId, WorkspaceId};
+use serde_json::json;
 
 use crate::common::Env;
 
@@ -152,5 +153,79 @@ fn gc_reaps_dead_loop_delivery_schedule() {
     assert!(
         !config.contains("[agents.loop.tasks.dead]"),
         "dead schedule should be removed"
+    );
+}
+
+#[test]
+fn gc_keeps_spawn_and_live_loop_schedules() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-live", "feature-live");
+    let config_dir = env.config_root().join("rimz");
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    let config_path = config_dir.join("agents.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[agents.loop.tasks.spawn]\n\
+             spec = \"claude\"\n\
+             prompt = \"spawn wake\"\n\
+             root = \"{}\"\n\
+             at = \"07:00\"\n\
+             \n\
+             [agents.loop.tasks.live]\n\
+             to = {{ kind = \"claude\", session = \"sess-live\", handle = \"@claude\" }}\n\
+             prompt = \"live wake\"\n\
+             root = \"{}\"\n\
+             at = \"07:00\"\n",
+            env.project_root.display(),
+            env.project_root.display()
+        ),
+    )
+    .expect("write agents config");
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success();
+
+    let config = std::fs::read_to_string(config_path).expect("read agents config");
+    assert!(
+        config.contains("[agents.loop.tasks.spawn]"),
+        "spawn schedule should be kept: {config}"
+    );
+    assert!(
+        config.contains("[agents.loop.tasks.live]"),
+        "live delivery schedule should be kept: {config}"
+    );
+}
+
+fn register_running_agent(env: &Env, session_id: &str, branch: &str) {
+    run_hook(
+        env,
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": session_id,
+            "worktree_branch": branch,
+        }),
+    );
+    run_hook(
+        env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": session_id,
+            "prompt": "work",
+            "worktree_branch": branch,
+        }),
+    );
+}
+
+fn run_hook(env: &Env, payload: serde_json::Value) {
+    let payload = serde_json::to_string(&payload).expect("payload");
+    let output = env.run_installed_hook_in_pane("claude", &payload, &[]);
+    assert!(
+        output.status.success(),
+        "hook failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

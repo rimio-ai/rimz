@@ -261,6 +261,20 @@ fn resolve_mentions<'a, C: Candidate<'a>>(
         Target::Mention { selector, channel } => {
             let channel =
                 effective_channel(raw, channel.as_deref(), worktree_flag, current_channel)?;
+            // A full session id is a pinned instance address, so it resolves
+            // across channels like a pane id. Short prefixes still use the
+            // channel-scoped selector path below.
+            let exact_session = exact_session_match(&selector, candidates);
+            match exact_session.as_slice() {
+                [one] => return Ok(vec![*one]),
+                [] => {}
+                many => {
+                    return Err(TargetErr::Ambiguous {
+                        target: raw.to_owned(),
+                        candidates: render_candidates(many),
+                    });
+                }
+            }
             let in_channel: Vec<C> = candidates
                 .iter()
                 .copied()
@@ -441,6 +455,17 @@ fn select<'a, C: Candidate<'a>>(selector: &AgentSelector, candidates: &[C]) -> V
             prefer_exact_session(selector, by_prefix)
         }
     }
+}
+
+fn exact_session_match<'a, C: Candidate<'a>>(selector: &AgentSelector, candidates: &[C]) -> Vec<C> {
+    let AgentSelector::NameOrSession(selector) = selector else {
+        return Vec::new();
+    };
+    candidates
+        .iter()
+        .copied()
+        .filter(|candidate| candidate.session_id() == Some(selector.as_str()))
+        .collect()
 }
 
 fn resolve_by_pane<'a, C: Candidate<'a>>(

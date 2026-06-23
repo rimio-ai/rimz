@@ -1,5 +1,8 @@
 //! Integration coverage for `rimz loop` instance-bound delivery.
 
+use std::path::Path;
+use std::process::{Command, Stdio};
+
 use serde_json::json;
 
 use rimz::message::MessageStatus;
@@ -55,6 +58,70 @@ fn loop_add_to_pins_live_session_and_run_queues_prompt() {
     assert_eq!(messages[0].kind.as_str(), "claude");
     assert_eq!(messages[0].agent_id.as_str(), "sess-loop-live");
     assert_eq!(messages[0].status, MessageStatus::Pending);
+}
+
+#[test]
+fn loop_run_to_git_worktree_session_queues_prompt() {
+    let env = Env::new();
+    if !init_git_repo(&env.project_root) {
+        return;
+    }
+    let worktree = env.home_root.join("project-worktrees").join("feature-loop");
+    std::fs::create_dir_all(worktree.parent().expect("worktree parent")).expect("mkdir worktrees");
+    assert!(
+        git_ok(
+            &env.project_root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feature-loop",
+                worktree.to_str().expect("utf8 worktree"),
+            ],
+        ),
+        "git worktree add failed"
+    );
+    env.install_agent_hooks("claude");
+    register_running_agent_at(&env, "sess-loop-worktree", "feature-loop", &worktree);
+
+    let add = env
+        .rimz()
+        .current_dir(&worktree)
+        .args([
+            "loop",
+            "add",
+            "wake-worktree",
+            "--to",
+            "@claude",
+            "--every",
+            "15m",
+            "--prompt",
+            "worktree next step",
+        ])
+        .output()
+        .expect("loop add");
+    assert!(
+        add.status.success(),
+        "loop add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let run = env
+        .rimz()
+        .args(["loop", "run", "wake-worktree"])
+        .output()
+        .expect("loop run");
+    assert!(
+        run.status.success(),
+        "loop run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let messages = env.ledger().list_pending_messages().expect("messages");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].text, "worktree next step");
+    assert_eq!(messages[0].agent_id.as_str(), "sess-loop-worktree");
 }
 
 #[test]
@@ -139,6 +206,10 @@ fn loop_add_to_validates_mode_selection() {
 }
 
 fn register_running_agent(env: &Env, session_id: &str, branch: &str) {
+    register_running_agent_at(env, session_id, branch, &env.project_root);
+}
+
+fn register_running_agent_at(env: &Env, session_id: &str, branch: &str, cwd: &Path) {
     run_hook(
         env,
         json!({
@@ -146,6 +217,7 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str) {
             "session_id": session_id,
             "worktree_branch": branch,
         }),
+        cwd,
     );
     run_hook(
         env,
@@ -155,12 +227,23 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str) {
             "prompt": "work",
             "worktree_branch": branch,
         }),
+        cwd,
     );
 }
 
-fn run_hook(env: &Env, payload: serde_json::Value) {
+fn run_hook(env: &Env, payload: serde_json::Value, cwd: &Path) {
     let payload = serde_json::to_string(&payload).expect("payload");
-    let output = env.run_installed_hook_in_pane("claude", &payload, &[]);
+    let mut cmd = env.rimz();
+    cmd.current_dir(cwd)
+        .args(["hooks", "feed", "--source", "claude"])
+        .env("RIMZ_AGENT_PID", std::process::id().to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = env
+        .spawn_payload(cmd, &payload)
+        .wait_with_output()
+        .expect("wait hook");
     assert!(
         output.status.success(),
         "hook failed: {}",
@@ -176,4 +259,23 @@ fn write_agents_config(env: &Env, text: &str) {
 
 fn agents_config_path(env: &Env) -> std::path::PathBuf {
     env.config_root().join("rimz").join("agents.toml")
+}
+
+fn init_git_repo(root: &Path) -> bool {
+    if !git_ok(root, &["init", "-q", "-b", "main"]) {
+        return false;
+    }
+    let _ = git_ok(root, &["config", "user.email", "test@example.com"]);
+    let _ = git_ok(root, &["config", "user.name", "Test User"]);
+    std::fs::write(root.join("README.md"), "base\n").expect("write README");
+    git_ok(root, &["add", "README.md"]) && git_ok(root, &["commit", "-q", "-m", "base"])
+}
+
+fn git_ok(cwd: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .status()
+        .is_ok_and(|status| status.success())
 }
