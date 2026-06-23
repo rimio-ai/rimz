@@ -178,6 +178,7 @@ fn footer_line(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Line<
         .link
         .as_ref()
         .map(|link| link_badge(link, theme, width));
+    let has_presence = presence.is_some();
     let help_text: String = HELP_TEXT.chars().take(width).collect();
     let help = Span::styled(help_text, theme.faint());
     let help_start = right_start(width, span_width(&help)).unwrap_or(0);
@@ -189,13 +190,15 @@ fn footer_line(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Line<
     ) {
         return line;
     }
-    if presence.is_some()
+    if has_presence
         && let Some(line) =
             positioned_footer_line(footer_left_spans(presence, None), help_slot.clone())
     {
         return line;
     }
-    if let Some(line) = positioned_footer_line(footer_left_spans(None, link), help_slot.clone()) {
+    if !has_presence
+        && let Some(line) = positioned_footer_line(footer_left_spans(None, link), help_slot.clone())
+    {
         return line;
     }
     positioned_footer_line(Vec::new(), help_slot).unwrap_or_else(|| Line::from(vec![help]))

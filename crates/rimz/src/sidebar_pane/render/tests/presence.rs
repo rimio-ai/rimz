@@ -101,3 +101,22 @@ fn presence_badge_drops_remote_link_when_footer_is_narrow() {
     assert!(!text.contains("remote"));
     assert!(text.ends_with("? for help"));
 }
+
+#[test]
+fn link_badge_does_not_replace_presence_when_only_link_fits() {
+    let mut snapshot = with_presence(Some(crate::SidebarPresence::Idle {
+        idle_ms: 17 * 60_000,
+    }));
+    snapshot.link = Some(crate::SidebarLinkHealth {
+        rtt_ms: None,
+        miss_pct: 0,
+        tier: LinkTier::Good,
+        freshness: crate::SidebarLinkFreshness::Stale,
+        sampled_at_ms: 1_700_000_000_000,
+    });
+
+    let text = footer_text(&snapshot, 22);
+
+    assert_eq!(text, "            ? for help");
+    assert!(!text.contains("remote"));
+}
