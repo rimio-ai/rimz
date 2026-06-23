@@ -61,7 +61,7 @@ fn render_agent_capability_and_window() {
     );
     claude.model = Some("Opus".to_owned());
     claude.effort = Some("xhigh".to_owned());
-    // The hook-derived window renders as the identity line's `1M` token.
+    // The hook-derived window renders as the identity line's `1m` token.
     claude.context_window = Some(1_000_000);
     claude.last_activity = fixed_now() - Duration::from_secs(4 * 60);
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
