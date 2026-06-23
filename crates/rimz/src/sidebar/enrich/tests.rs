@@ -27,6 +27,7 @@ fn diff_entry(
 ) -> DiffStatsCacheEntry {
     DiffStatsCacheEntry {
         refreshed_at_ms: 0,
+        commit_refreshed_at_ms: Some(0),
         added: Some(0),
         removed: Some(0),
         commits: Some(ahead),

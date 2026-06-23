@@ -258,6 +258,8 @@ fn focused_diff_stats_refreshes_local_facts_before_commit_facts() {
             branch: Some("main".to_owned()),
             clean: Some(true),
             landed: Some(false),
+            did_work: Some(false),
+            merge_in_progress: Some(false),
         },
     );
     atomic::write_temp_then_rename_cache(&cache_path, &cache).unwrap();
@@ -320,6 +322,8 @@ fn non_focused_diff_stats_refreshes_local_and_commit_facts_together() {
             branch: Some("main".to_owned()),
             clean: Some(true),
             landed: Some(false),
+            did_work: Some(false),
+            merge_in_progress: Some(false),
         },
     );
     atomic::write_temp_then_rename_cache(&cache_path, &cache).unwrap();
@@ -429,7 +433,10 @@ fn worktree_status_folds_untracked_into_churn_and_reads_clean() {
 fn did_work_reads_head_against_rimz_worktree_marker_base_ref() {
     let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
     if !repo.initialized {
-        assert_eq!(refresh_entry(repo.path_str(), 0, None).did_work, None);
+        assert_eq!(
+            refresh_entry(repo.path_str(), None, DueFacts::all(), None).did_work,
+            None
+        );
         return;
     }
     repo.write("base.txt", "base\n");
@@ -453,7 +460,7 @@ fn did_work_reads_head_against_rimz_worktree_marker_base_ref() {
     .unwrap();
 
     assert_eq!(
-        refresh_entry(repo.path_str(), 0, None).did_work,
+        refresh_entry(repo.path_str(), None, DueFacts::all(), None).did_work,
         Some(false),
         "a fresh fork has not moved past its marker base_ref"
     );
@@ -462,7 +469,7 @@ fn did_work_reads_head_against_rimz_worktree_marker_base_ref() {
     let _ = repo.git(&["add", "feature.txt"]);
     let _ = repo.git(&["commit", "-q", "-m", "feature"]);
     assert_eq!(
-        refresh_entry(repo.path_str(), 0, None).did_work,
+        refresh_entry(repo.path_str(), None, DueFacts::all(), None).did_work,
         Some(true),
         "a worktree commit is visible even when later ancestry collapses"
     );
