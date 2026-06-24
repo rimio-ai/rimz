@@ -3,19 +3,22 @@
 //! The policy is pure over newly opened unread episodes and caller-owned
 //! memory: durable unread owns dedupe, while this layer applies user push
 //! preferences and returns notifications for the caller to deliver. Side effects
-//! stay at the edge (`spawn_notify_command` and sidebar event broadcast), so
+//! stay at the edge (`spawn_notify_handlers` and sidebar event broadcast), so
 //! duplicate policy decisions stay tied to the producer election.
 
 use std::collections::BTreeMap;
-use std::io;
 use std::process::{Command, Stdio};
 
 use crate::agents::AgentStatus;
-use crate::config::NotificationsPrefs;
+use crate::config::{
+    NotificationsPrefs, NotifyConditionAgent, RenderMode, TemplateVars, render_template,
+};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::remote::link::LinkTier;
 use crate::sidebar::unread::OpenedUnread;
 use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot, child_process};
+
+pub use crate::config::NotificationKind;
 
 const LINK_DEGRADED_HOLD_MS: u64 = 10_000;
 const LINK_RECOVERY_HOLD_MS: u64 = 30_000;
@@ -48,37 +51,13 @@ pub struct NotificationAgent {
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
     pub label: String,
+    pub handle: String,
+    pub worktree: Option<String>,
+    pub task: Option<String>,
     pub pane_id: Option<PaneId>,
     /// The status reached by an agent notification; `None` for link/reminder
     /// notifications that name no agent.
     pub new_status: Option<AgentStatus>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NotificationKind {
-    Waiting,
-    Failed,
-    Paused,
-    Success,
-    Coalesced,
-    LinkLost,
-    LinkRestored,
-    Reminder,
-}
-
-impl NotificationKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Waiting => "waiting",
-            Self::Failed => "failed",
-            Self::Paused => "paused",
-            Self::Success => "success",
-            Self::Coalesced => "coalesced",
-            Self::LinkLost => "link_lost",
-            Self::LinkRestored => "link_restored",
-            Self::Reminder => "reminder",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -349,7 +328,7 @@ impl NotificationState {
                 .pending_since_ms
                 .is_some_and(|since| now_ms.saturating_sub(since) >= prefs.coalesce_ms);
         if ready {
-            self.flush_pending(now_ms)
+            self.flush_pending(now_ms, prefs)
         } else {
             Vec::new()
         }
@@ -363,7 +342,7 @@ impl NotificationState {
         }
     }
 
-    fn flush_pending(&mut self, now_ms: u64) -> Vec<Notification> {
+    fn flush_pending(&mut self, now_ms: u64, prefs: &NotificationsPrefs) -> Vec<Notification> {
         if self.pending.is_empty() {
             self.pending_since_ms = None;
             return Vec::new();
@@ -373,7 +352,7 @@ impl NotificationState {
         for item in &pending {
             self.last_notified_at_ms.insert(item.key.clone(), now_ms);
         }
-        vec![if pending.len() == 1 {
+        let notification = if pending.len() == 1 {
             let mut pending = pending;
             let item = pending.remove(0);
             Notification {
@@ -385,11 +364,43 @@ impl NotificationState {
             }
         } else {
             coalesced_notification(pending)
-        }]
+        };
+        vec![render_notification_text(notification, prefs)]
     }
 }
 
-pub fn spawn_notify_command(command: &str, notification: &Notification) -> io::Result<u32> {
+pub fn spawn_notify_handlers(prefs: &NotificationsPrefs, notification: &Notification) -> usize {
+    let vars = notification_template_vars(notification);
+    let mut spawned = 0;
+    for handler in prefs.effective_handlers() {
+        if !handler.when.matches(
+            notification.notification_kind,
+            notification
+                .agents
+                .iter()
+                .map(|agent| NotifyConditionAgent {
+                    handle: &agent.handle,
+                    worktree: agent.worktree.as_deref(),
+                }),
+        ) {
+            continue;
+        }
+        let command = match render_template(&handler.command, &vars, RenderMode::Shell) {
+            Ok(command) => command,
+            Err(err) => {
+                tracing::debug!(error = %err, "notify-command template render failed");
+                continue;
+            }
+        };
+        match spawn_notify_command(&command, notification) {
+            Ok(_) => spawned += 1,
+            Err(err) => tracing::debug!(error = %err, "notify-command spawn failed"),
+        }
+    }
+    spawned
+}
+
+fn spawn_notify_command(command: &str, notification: &Notification) -> std::io::Result<u32> {
     let mut cmd = Command::new("sh");
     cmd.args(["-c", command])
         .stdin(Stdio::null())
@@ -403,6 +414,65 @@ pub fn spawn_notify_command(command: &str, notification: &Notification) -> io::R
         cmd.env("RIMZ_NOTIFY_UNREAD", unread_count.to_string());
     }
     child_process::spawn_detached_reaped(&mut cmd, "notify-command")
+}
+
+fn notification_template_vars(notification: &Notification) -> TemplateVars {
+    let mut vars = TemplateVars::new();
+    vars.insert("kind", notification.kind_env());
+    vars.insert("agent", notification.agent_env());
+    vars.insert("count", notification.agents.len().to_string());
+    vars.insert(
+        "unread",
+        notification
+            .unread_count
+            .map(|count| count.to_string())
+            .unwrap_or_default(),
+    );
+    if let [agent] = notification.agents.as_slice() {
+        vars.insert(
+            "status",
+            agent
+                .new_status
+                .map(AgentStatus::as_str)
+                .unwrap_or_default(),
+        );
+        vars.insert("worktree", agent.worktree.clone().unwrap_or_default());
+        vars.insert("task", agent.task.clone().unwrap_or_default());
+    }
+    vars.insert("title", notification.title.clone());
+    vars.insert("body", notification.body.clone());
+    vars
+}
+
+fn render_notification_text(
+    mut notification: Notification,
+    prefs: &NotificationsPrefs,
+) -> Notification {
+    if !matches!(
+        notification.notification_kind,
+        NotificationKind::Waiting
+            | NotificationKind::Failed
+            | NotificationKind::Paused
+            | NotificationKind::Success
+            | NotificationKind::Coalesced
+    ) {
+        return notification;
+    }
+    let vars = notification_template_vars(&notification);
+    if let Some(title) = &prefs.title {
+        match render_template(title, &vars, RenderMode::Plain) {
+            Ok(title) => notification.title = title,
+            Err(err) => tracing::debug!(error = %err, "notification title template render failed"),
+        }
+    }
+    let vars = notification_template_vars(&notification);
+    if let Some(body) = &prefs.body {
+        match render_template(body, &vars, RenderMode::Plain) {
+            Ok(body) => notification.body = body,
+            Err(err) => tracing::debug!(error = %err, "notification body template render failed"),
+        }
+    }
+    notification
 }
 
 fn notification_keys(snapshot: &SidebarSnapshot) -> BTreeMap<AgentKey, ()> {
@@ -444,6 +514,9 @@ fn pending_notification(
         kind: opened.agent_kind.clone(),
         agent_id: opened.agent_id.clone(),
         label,
+        handle: opened.handle.clone(),
+        worktree: opened.worktree.clone(),
+        task: opened.task.clone(),
         pane_id: opened.pane_id.clone(),
         new_status: Some(opened.status),
     };

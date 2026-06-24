@@ -73,7 +73,9 @@ pub use mux::{
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,
 };
 pub use notifications::{
-    DesktopNotificationMode, NotificationSoundMode, NotificationTrigger, NotificationsPrefs,
+    DesktopNotificationMode, NotificationKind, NotificationSoundMode, NotificationTrigger,
+    NotificationsConfigErr, NotificationsPrefs, NotifyCondition, NotifyConditionAgent,
+    NotifyHandler, RenderMode, TemplateVars, render_template,
 };
 pub use pets::{PetsConfig, PetsGlyphMode, PetsSize};
 pub use remote_control::RemoteControlConfig;
@@ -119,6 +121,12 @@ pub enum ConfigErr {
         path: PathBuf,
         #[source]
         source: crate::agents_spec::LayoutErr,
+    },
+    #[error("invalid per-machine notifications config at {path}: {source}")]
+    Notifications {
+        path: PathBuf,
+        #[source]
+        source: NotificationsConfigErr,
     },
     #[error(
         "removed config table in {path}: {detail} (run `rimz config init --print` for the current shape)"
@@ -217,6 +225,7 @@ impl MachineConfig {
         let agents = load_optional(&agents_path, parse_agents_text)?.unwrap_or_default();
 
         let mut config = Self::assemble(core, theme, agents);
+        validate_notifications_config(&config.notifications, config_path)?;
         validate_agents_config(&mut config.agents, &agents_path)?;
         Ok(config)
     }
@@ -231,6 +240,13 @@ impl MachineConfig {
         let agents = recover(load_optional(&agents_path, parse_agents_text)).unwrap_or_default();
 
         let mut config = Self::assemble(core, theme, agents);
+        if let Err(err) = validate_notifications_config(&config.notifications, config_path) {
+            tracing::warn!(
+                error = %err,
+                "per-machine notifications config invalid; using built-in defaults",
+            );
+            config.notifications = NotificationsPrefs::default();
+        }
         if let Err(err) = validate_agents_config(&mut config.agents, &agents_path) {
             tracing::warn!(
                 error = %err,
@@ -259,6 +275,7 @@ impl MachineConfig {
             }
             _ => {
                 let core = parse_core_text(path, text)?;
+                validate_notifications_config(&core.notifications, path)?;
                 Ok(Self::assemble(
                     core,
                     ThemeConfig::default(),
@@ -619,6 +636,15 @@ fn validate_agents_config(agents: &mut AgentsConfig, path: &Path) -> Result<()> 
             source,
         },
     )
+}
+
+fn validate_notifications_config(notifications: &NotificationsPrefs, path: &Path) -> Result<()> {
+    notifications
+        .validate()
+        .map_err(|source| ConfigErr::Notifications {
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
 #[cfg(test)]

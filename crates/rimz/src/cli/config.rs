@@ -496,6 +496,12 @@ fn parse_key(key: &str) -> Result<Vec<String>> {
 
 fn validate_set_key(path: &[String]) -> Result<()> {
     let joined = path.join(".");
+    if matches!(path, [root, child, ..] if root == "notifications" && child == "handler") {
+        bail!(
+            "config key `{joined}` is an array of tables; edit {}",
+            MachineConfig::config_path().display()
+        );
+    }
     if is_exact_or_dynamic_set_key(path) {
         return Ok(());
     }
@@ -730,6 +736,8 @@ fn exact_set_keys() -> BTreeSet<String> {
         "notifications.debounce_ms",
         "notifications.coalesce_ms",
         "notifications.remind_secs",
+        "notifications.title",
+        "notifications.body",
         "notifications.command",
         "theme.style",
         "theme.display.refresh_ms",

@@ -192,10 +192,21 @@ triggers = ["waiting", "failed"]
 desktop = "auto"
 sound = "bell"
 remind_secs = 60
+title = "Rimz: {{agent}} {{kind}}"
+body = "{{task}}"
 command = "ntfy publish rimz"
+
+[[notifications.handler]]
+name = "waiting-ntfy"
+command = "ntfy publish --title {{title}} rimz {{body}}"
+when = { kind = ["waiting"], worktree = ["feat/*"], handle = ["@planner"] }
 ```
 
-Notifications are best-effort attention delivery over the sidebar inbox. `waiting`, `failed`, `paused`, and `success` rows become unread until read; `triggers` filters which newly-unread kinds raise a banner or command, while `running` and `idle` stay quiet. `desktop = "auto"` emits terminal OSC notifications under tmux and skips them under Zellij (which drops notification OSCs today); `sound = "bell"` writes a BEL byte and your terminal decides whether it is audible. `command` runs locally through `sh -c` with `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND` in the environment (reminders also get `RIMZ_NOTIFY_UNREAD`) — wire it to ntfy, Slack, Pushover, or an OS notifier. The full debounce/coalesce/remind model is in [notifications.md](../internals/sidebar/notifications.md).
+Notifications are best-effort attention delivery over the sidebar inbox. `waiting`, `failed`, `paused`, and `success` rows become unread until read; `triggers` filters which newly-unread kinds raise a banner or handler command, while `running` and `idle` stay quiet. `desktop = "auto"` emits terminal OSC notifications under tmux and skips them under Zellij (which drops notification OSCs today); `sound = "bell"` writes a BEL byte and your terminal decides whether it is audible.
+
+`title` and `body` are optional templates for agent-status and coalesced desktop/banner text. Templates substitute `{{kind}}`, `{{agent}}`, `{{status}}`, `{{worktree}}`, `{{task}}`, `{{count}}`, and `{{unread}}`; values unavailable for a notification kind render empty. Reminder and remote-link notifications keep their built-in text.
+
+Each `[[notifications.handler]]` runs locally through `sh -c` when all present `when` clauses match. `kind` names notification kinds (`waiting`, `failed`, `paused`, `success`, `coalesced`, `reminder`, `link_lost`, `link_restored`), `worktree` glob-matches an agent branch/path, and `handle` glob-matches the agent handle or role. `command` templates may also use `{{title}}` and `{{body}}`, which are the rendered banner strings. Each substituted command value is shell-quoted as one token, so write `ntfy publish --title {{title}} rimz {{body}}`, not `--title "{{title}}"`. The legacy `command = "..."` key is shorthand for one unconditional handler, and every handler still receives `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND` in the environment; reminders also get `RIMZ_NOTIFY_UNREAD`. The full debounce/coalesce/remind model is in [notifications.md](../internals/sidebar/notifications.md).
 
 ### Remote control
 

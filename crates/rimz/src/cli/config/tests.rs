@@ -54,6 +54,8 @@ fn validates_config_key_read_and_write_surfaces() {
         "resume.auto_continue_backoff_secs",
         "resume.auto_continue_max_retries",
         "resume.auto_continue_text",
+        "notifications.title",
+        "notifications.body",
         "harness.smart_compact",
         "harness.rtk",
     ] {
@@ -69,6 +71,8 @@ fn validates_config_key_read_and_write_surfaces() {
         "agents.profiles.codex-slim.flags",
         "agents.commands.vim.command",
         "agents.pets.enabled",
+        "notifications.handler",
+        "notifications.handler.command",
         "theme.providers.claude.nope",
         "theme.animations",
         "theme.animations.nope.frames",

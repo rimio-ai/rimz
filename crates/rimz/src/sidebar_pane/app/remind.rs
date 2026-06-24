@@ -9,7 +9,7 @@ use crate::SidebarSnapshot;
 use crate::agents::AgentStatus;
 use crate::config::NotificationsPrefs;
 use crate::ids::PaneId;
-use crate::sidebar::notify::{Notification, NotificationKind, spawn_notify_command};
+use crate::sidebar::notify::{Notification, NotificationKind, spawn_notify_handlers};
 
 use super::ServeConfig;
 use super::notify::{BellNotice, emit_terminal_notification};
@@ -74,10 +74,8 @@ impl RemindState {
         ) {
             debug!(error = %err, "terminal unread reminder emit failed");
         }
-        if let Some(command) = config.notification_prefs.command()
-            && let Err(err) = spawn_notify_command(command, &notification)
-        {
-            debug!(error = %err, "unread reminder command spawn failed");
+        if config.notification_prefs.has_handlers() {
+            spawn_notify_handlers(&config.notification_prefs, &notification);
         }
         self.last_reminded_at_ms = Some(now_ms);
     }

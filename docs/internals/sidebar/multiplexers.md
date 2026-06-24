@@ -123,7 +123,7 @@ While a backend's presence stamp is fresh, the producer stretches its pane-cache
 
 ### Notification passthrough
 
-Desktop notifications are terminal-local: the sidebar renderer writes OSC 777 and BEL bytes into its pane, SSH carries them to the local terminal, and the terminal decides whether to show a banner or play a sound. tmux forwards the OSC path when `allow-passthrough` is on (Rimz's default, wrapped as DCS passthrough). Zellij currently drops notification OSCs, so `[notifications].desktop = "auto"` disables OSC there and `[notifications].command` stays the portable channel. The full contract is in [notifications.md](./notifications.md).
+Desktop notifications are terminal-local: the sidebar renderer writes OSC 777 and BEL bytes into its pane, SSH carries them to the local terminal, and the terminal decides whether to show a banner or play a sound. tmux forwards the OSC path when `allow-passthrough` is on (Rimz's default, wrapped as DCS passthrough). Zellij currently drops notification OSCs, so `[notifications].desktop = "auto"` disables OSC there and notification handlers stay the portable channel. The full contract is in [notifications.md](./notifications.md).
 
 ### tmux backend caveats
 

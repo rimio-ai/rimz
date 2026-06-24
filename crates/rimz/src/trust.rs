@@ -686,6 +686,21 @@ mod tests {
     }
 
     #[test]
+    fn project_notifications_do_not_enter_trust_hash() {
+        let base = project_with("[[layout.initial_panes]]\ncommand = \"$SHELL\"\n");
+        let extra = project_with(
+            "[[layout.initial_panes]]\ncommand = \"$SHELL\"\n\n[notifications]\ntitle = \"{{task}}\"\n[[notifications.handler]]\ncommand = \"ntfy publish rimz {{body}}\"\n",
+        );
+        let a = read_project_config(&base.path().join(CONFIG_REL))
+            .expect("read base")
+            .expect("config present");
+        let b = read_project_config(&extra.path().join(CONFIG_REL))
+            .expect("read extra")
+            .expect("config present");
+        assert_eq!(executable_surface_hash(&a), executable_surface_hash(&b));
+    }
+
+    #[test]
     fn revoke_drops_record_and_returns_untrusted() {
         let dir = project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks\"\n");
         let config = tempdir().expect("config root");

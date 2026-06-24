@@ -323,6 +323,9 @@ fn notification_agent(id: &str, pane_id: Option<PaneId>) -> NotificationAgent {
         kind: AgentKind::new_unchecked("claude"),
         agent_id: AgentSessionId::from(id),
         label: format!("claude {id}"),
+        handle: format!("claude {id}"),
+        worktree: None,
+        task: None,
         pane_id,
         new_status: None,
     }

@@ -888,6 +888,12 @@ fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> 
             kind: AgentKind::new_unchecked(row.name.clone()),
             agent_id: AgentSessionId::from(row.id.clone()),
             label: rimz::sidebar::unread::row_label(row),
+            handle: row.display_name().to_owned(),
+            worktree: row
+                .worktree_branch
+                .clone()
+                .or_else(|| row.worktree_path.clone()),
+            task: row.task().map(str::to_owned),
             pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
             new_status: row.status(),
         })
@@ -899,14 +905,11 @@ fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> 
         body,
         unread_count: None,
     };
-    if !command.no_command
-        && let Some(command) = rimz::config::MachineConfig::load()
+    if !command.no_command {
+        let prefs = rimz::config::MachineConfig::load()
             .unwrap_or_default()
-            .notifications
-            .command()
-        && let Err(err) = rimz::sidebar::notify::spawn_notify_command(command, &notification)
-    {
-        tracing::debug!(error = %err, "notify-test command spawn failed");
+            .notifications;
+        rimz::sidebar::notify::spawn_notify_handlers(&prefs, &notification);
     }
     let panes = resolved
         .rows

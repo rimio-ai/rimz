@@ -230,6 +230,6 @@ When recovery is accepted, the backend seeds those tabs at birth and stays ignor
 
 ## Notifications
 
-Notifications are best-effort polish over the same attention model this document describes; the ledger remains authoritative. The elected producer opens durable unread episodes, applies `[notifications].triggers`, debounce, focus suppression, and burst coalescing to newly opened episodes, then spawns the optional notify command and broadcasts `SidebarEvent::Notify`. A renderer that has relayed an initial terminal notification re-rings local unread `waiting`/`failed` rows at the configured reminder cadence until they clear.
+Notifications are best-effort polish over the same attention model this document describes; the ledger remains authoritative. The elected producer opens durable unread episodes, applies `[notifications].triggers`, debounce, focus suppression, and burst coalescing to newly opened episodes, then spawns matching notification handlers and broadcasts `SidebarEvent::Notify`. A renderer that has relayed an initial terminal notification re-rings local unread `waiting`/`failed` rows at the configured reminder cadence until they clear.
 
-The renderer writes terminal-local OSC/BEL bytes outside the draw cycle. tmux can forward desktop banners through SSH with passthrough enabled; Zellij currently uses the command path for portable delivery. The full contract lives in [notifications.md](./notifications.md).
+The renderer writes terminal-local OSC/BEL bytes outside the draw cycle. tmux can forward desktop banners through SSH with passthrough enabled; Zellij currently uses notification handlers for portable delivery. The full contract lives in [notifications.md](./notifications.md).

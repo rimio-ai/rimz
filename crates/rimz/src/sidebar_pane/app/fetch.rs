@@ -336,10 +336,8 @@ fn deliver_notifications(
 ) {
     for delivery in deliveries {
         let notification = delivery.notification;
-        if let Some(command) = prefs.command()
-            && let Err(err) = crate::sidebar::notify::spawn_notify_command(command, &notification)
-        {
-            tracing::debug!(error = %err, "notify-command spawn failed");
+        if prefs.has_handlers() {
+            crate::sidebar::notify::spawn_notify_handlers(prefs, &notification);
         }
         if let Some(diag) = diag {
             diag.trace_notify(notification_emitted_trace(&notification, &delivery.panes));

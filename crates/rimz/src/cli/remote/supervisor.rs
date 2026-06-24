@@ -272,12 +272,7 @@ fn emit_local_link_notification(
     else {
         return;
     };
-    let Some(command) = prefs.command() else {
-        return;
-    };
-    if let Err(err) = rimz::sidebar::notify::spawn_notify_command(command, &notification) {
-        tracing::debug!(error = %err, "link notify-command spawn failed");
-    }
+    rimz::sidebar::notify::spawn_notify_handlers(&prefs, &notification);
 }
 
 fn local_link_terminal_notification_bytes(
@@ -300,7 +295,7 @@ fn local_link_command_notification(
     delivery: LocalLinkNotificationDelivery,
     prefs: &rimz::config::NotificationsPrefs,
 ) -> Option<rimz::sidebar::notify::Notification> {
-    if !prefs.enabled || !delivery.allows_command() || prefs.command().is_none() {
+    if !prefs.enabled || !delivery.allows_command() || !prefs.has_handlers() {
         return None;
     }
     Some(rimz::sidebar::notify::Notification {

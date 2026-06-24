@@ -694,7 +694,10 @@ fn notification_defaults_cover_attention_transitions() {
     assert_eq!(config.notifications.debounce_ms, 5_000);
     assert_eq!(config.notifications.coalesce_ms, 1_000);
     assert_eq!(config.notifications.remind_secs, 60);
+    assert_eq!(config.notifications.title, None);
+    assert_eq!(config.notifications.body, None);
     assert!(config.notifications.command().is_none());
+    assert!(config.notifications.handler.is_empty());
 }
 
 #[test]
@@ -711,6 +714,8 @@ fn notifications_parse_per_machine_preferences() {
              debounce_ms = 2500\n\
              coalesce_ms = 0\n\
              remind_secs = 15\n\
+             title = \"Rimz: {{agent}} {{kind}}\"\n\
+             body = \"{{task}}\"\n\
              command = \"ntfy publish rimz\"\n",
     ))
     .expect("load");
@@ -725,7 +730,50 @@ fn notifications_parse_per_machine_preferences() {
     assert_eq!(config.notifications.debounce_ms, 2_500);
     assert_eq!(config.notifications.coalesce_ms, 0);
     assert_eq!(config.notifications.remind_secs, 15);
+    assert_eq!(
+        config.notifications.title.as_deref(),
+        Some("Rimz: {{agent}} {{kind}}")
+    );
+    assert_eq!(config.notifications.body.as_deref(), Some("{{task}}"));
     assert_eq!(config.notifications.command(), Some("ntfy publish rimz"));
+}
+
+#[test]
+fn notifications_parse_handlers_and_validate_templates() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[notifications]\n\
+             [[notifications.handler]]\n\
+             name = \"urgent\"\n\
+             command = \"ntfy publish --title {{title}} rimz {{body}}\"\n\
+             when = { kind = [\"waiting\"], worktree = [\"feat/*\"], handle = [\"@planner\"] }\n",
+    ))
+    .expect("load");
+
+    assert_eq!(config.notifications.handler.len(), 1);
+    assert_eq!(
+        config.notifications.handler[0].when.kind,
+        vec![NotificationKind::Waiting]
+    );
+    assert_eq!(
+        config.notifications.handler[0].when.worktree,
+        vec!["feat/*".to_owned()]
+    );
+    assert_eq!(
+        config.notifications.handler[0].when.handle,
+        vec!["@planner".to_owned()]
+    );
+
+    let err = MachineConfig::load_from(&write(
+        &dir,
+        "[notifications]\n\
+             [[notifications.handler]]\n\
+             name = \"bad\"\n\
+             command = \"notify {{nope}}\"\n",
+    ))
+    .expect_err("unknown var rejects");
+    assert!(matches!(err, ConfigErr::Notifications { .. }));
 }
 
 #[test]

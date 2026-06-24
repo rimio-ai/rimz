@@ -180,6 +180,21 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
     }
 }
 
+fn agent_with_context(
+    id: &str,
+    status: AgentStatus,
+    role: &str,
+    worktree_branch: &str,
+    task: &str,
+) -> AgentState {
+    AgentState {
+        role: Some(role.to_owned()),
+        worktree_branch: Some(worktree_branch.to_owned()),
+        task: Some(task.to_owned()),
+        ..agent(id, status, false)
+    }
+}
+
 fn agent_ask(source: &str, session_id: &str) -> FeedItem {
     let mut item = FeedItem::new(
         workspace(),
@@ -355,6 +370,54 @@ fn focused_agent_is_suppressed() {
         100,
     );
     assert!(out.is_empty());
+}
+
+#[test]
+fn global_title_body_templates_reskin_agent_notifications() {
+    let mut state = NotificationState::default();
+    let prefs = NotificationsPrefs {
+        title: Some("Rimz: {{status}} in {{worktree}}".to_owned()),
+        body: Some("{{task}} ({{count}})".to_owned()),
+        ..prefs()
+    };
+
+    let out = evaluate_opened(
+        &mut state,
+        snapshot(vec![agent_with_context(
+            "a1",
+            AgentStatus::Waiting,
+            "@planner",
+            "feat/ntfy",
+            "wire ntfy",
+        )]),
+        &["a1"],
+        &prefs,
+        100,
+    );
+
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].title, "Rimz: waiting in feat/ntfy");
+    assert_eq!(out[0].body, "wire ntfy (1)");
+    assert_eq!(out[0].agents[0].worktree.as_deref(), Some("feat/ntfy"));
+    assert_eq!(out[0].agents[0].task.as_deref(), Some("wire ntfy"));
+    assert_eq!(out[0].agents[0].handle, "@planner");
+}
+
+#[test]
+fn default_title_body_stay_when_templates_are_unset() {
+    let mut state = NotificationState::default();
+
+    let out = evaluate_opened(
+        &mut state,
+        snapshot(vec![agent("a1", AgentStatus::Failed, false)]),
+        &["a1"],
+        &prefs(),
+        100,
+    );
+
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].title, "Rimz: claude a1 failed");
+    assert_eq!(out[0].body, "claude a1 needs a look.");
 }
 
 #[test]
@@ -663,6 +726,9 @@ fn command_spawn_receives_notification_env() {
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from("sess-1"),
             label: "claude sess-1".to_owned(),
+            handle: "claude sess-1".to_owned(),
+            worktree: None,
+            task: None,
             pane_id: None,
             new_status: Some(AgentStatus::Waiting),
         }],
@@ -672,8 +738,11 @@ fn command_spawn_receives_notification_env() {
         unread_count: None,
     };
 
-    let pid = spawn_notify_command(&command, &notification).expect("spawn command");
-    assert!(pid > 0);
+    let prefs = NotificationsPrefs {
+        command: Some(command),
+        ..NotificationsPrefs::default()
+    };
+    assert_eq!(spawn_notify_handlers(&prefs, &notification), 1);
 
     let expected = "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\nunset\n";
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -694,6 +763,55 @@ fn command_spawn_receives_notification_env() {
 }
 
 #[test]
+fn handlers_spawn_only_matching_conditions_and_shell_quote_templates() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("matched.txt");
+    let miss = dir.path().join("miss.txt");
+    let prefs = NotificationsPrefs {
+        handler: vec![
+            crate::config::NotifyHandler {
+                command: format!("printf nope > {}", sh_quote(&miss)),
+                when: crate::config::NotifyCondition {
+                    kind: vec![NotificationKind::Failed],
+                    ..crate::config::NotifyCondition::default()
+                },
+                ..crate::config::NotifyHandler::default()
+            },
+            crate::config::NotifyHandler {
+                command: format!("printf '%s\\n' {{{{task}}}} > {}", sh_quote(&out)),
+                when: crate::config::NotifyCondition {
+                    kind: vec![NotificationKind::Waiting],
+                    worktree: vec!["feat/*".to_owned()],
+                    handle: vec!["@planner".to_owned()],
+                },
+                ..crate::config::NotifyHandler::default()
+            },
+        ],
+        ..NotificationsPrefs::default()
+    };
+    let notification = Notification {
+        agents: vec![NotificationAgent {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from("sess-1"),
+            label: "danger task".to_owned(),
+            handle: "@planner".to_owned(),
+            worktree: Some("feat/ntfy".to_owned()),
+            task: Some("\"; rm -rf /".to_owned()),
+            pane_id: None,
+            new_status: Some(AgentStatus::Waiting),
+        }],
+        notification_kind: NotificationKind::Waiting,
+        title: "Rimz: danger".to_owned(),
+        body: "body".to_owned(),
+        unread_count: None,
+    };
+
+    assert_eq!(spawn_notify_handlers(&prefs, &notification), 1);
+    assert_eq!(wait_for_text(&out), "\"; rm -rf /\n");
+    assert!(!miss.exists());
+}
+
+#[test]
 fn command_spawn_receives_unread_env_for_reminders() {
     let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path().join("env.txt");
@@ -709,8 +827,11 @@ fn command_spawn_receives_unread_env_for_reminders() {
         unread_count: Some(2),
     };
 
-    let pid = spawn_notify_command(&command, &notification).expect("spawn command");
-    assert!(pid > 0);
+    let prefs = NotificationsPrefs {
+        command: Some(command),
+        ..NotificationsPrefs::default()
+    };
+    assert_eq!(spawn_notify_handlers(&prefs, &notification), 1);
 
     let expected = "Rimz: 2 unread need you\n2 unread rows still need you.\n\nreminder\n2\n";
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -733,4 +854,17 @@ fn command_spawn_receives_unread_env_for_reminders() {
 fn sh_quote(path: &std::path::Path) -> String {
     let raw = path.to_string_lossy();
     format!("'{}'", raw.replace('\'', "'\\''"))
+}
+
+fn wait_for_text(path: &std::path::Path) -> String {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if let Ok(text) = std::fs::read_to_string(path)
+            && !text.is_empty()
+        {
+            return text;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::fs::read_to_string(path).expect("command wrote file")
 }

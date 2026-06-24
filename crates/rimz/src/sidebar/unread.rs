@@ -247,9 +247,11 @@ pub(crate) struct ReconcileOutcome {
 pub struct OpenedUnread {
     pub row_id: String,
     pub label: String,
+    pub handle: String,
     pub agent_kind: AgentKind,
     pub agent_id: AgentSessionId,
     pub worktree: Option<String>,
+    pub task: Option<String>,
     pub pane_id: Option<PaneId>,
     pub status: AgentStatus,
     pub episode_ms: i64,
@@ -295,9 +297,11 @@ pub(crate) fn opened_unread(row: &SidebarRow, episode_ms: i64, silent: bool) -> 
     OpenedUnread {
         row_id: row.id.clone(),
         label: row_label(row),
+        handle: row.display_name().to_owned(),
         agent_kind: AgentKind::new_unchecked(row.name.clone()),
         agent_id: AgentSessionId::from(row.id.clone()),
         worktree: row_worktree(row),
+        task: row.task().map(str::to_owned),
         pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
         status,
         episode_ms,
