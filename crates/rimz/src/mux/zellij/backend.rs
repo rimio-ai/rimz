@@ -518,7 +518,7 @@ impl MuxBackend for ZellijBackend {
         // became available after first start) and now carries one or more working
         // tabs. Zellij can't move a tab to the front, so this appended tab does
         // *not* lead — leading is a birth-time property. `--layout` gives the tab
-        // its `sidebar | stats | hosts…` shape directly (bypassing the tab
+        // its `sidebar | content | hosts…` shape directly (bypassing the tab
         // template, so the sidebar is spelled out). Zellij can drop transient
         // `new-tab` mutations under load, so keep the temp layout alive until
         // the named tab is confirmed. Each pane carries its own `cwd`, so no

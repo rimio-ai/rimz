@@ -456,12 +456,19 @@ impl MuxBackend for TmuxBackend {
             return Ok(BackgroundViewLaunch::AlreadyRunning);
         }
         // `-d` opens the window without pulling the user's focus to it; `-P -F`
-        // prints the window and stats pane ids so daemon hosts split beside
-        // stats, never the sidebar. The session's `after-new-window` hook
-        // (installed by `open_sidebar`) docks the global sidebar on its left, so
-        // the window is born `sidebar | stats`. Daemon hosts, when present, split
-        // into a right column sized with the same width verdict as the sidebar.
+        // prints the window and first content pane ids so daemon hosts split
+        // beside content, never the sidebar. The session's `after-new-window`
+        // hook (installed by `open_sidebar`) docks the global sidebar on its
+        // left, so the window is born `sidebar | content`. Daemon hosts, when
+        // present, split into a right column sized with the same width verdict
+        // as the sidebar. Extra content panes stack inside the middle column.
         // Each process exits with its pane, so no `remain-on-exit`.
+        let Some((first_content, rest_content)) = opts.view.content.split_first() else {
+            return Err(MuxErr::Output {
+                program: "tmux".to_owned(),
+                reason: "daemon view has no content panes".to_owned(),
+            });
+        };
         let output = self
             .cmd()
             .args([
@@ -475,11 +482,12 @@ impl MuxBackend for TmuxBackend {
                 "-n".to_owned(),
                 opts.view.name.clone(),
                 "-c".to_owned(),
-                opts.view.stats.cwd.to_string_lossy().into_owned(),
+                first_content.cwd.to_string_lossy().into_owned(),
             ])
-            .args(opts.view.stats.argv.clone())
+            .args(first_content.argv.clone())
             .run()?;
-        let (window_id, stats_pane) = parse_new_window_ids(&output.stdout)?;
+        let (window_id, first_content) = parse_new_window_ids(&output.stdout)?;
+        let mut first_daemon_pane = None;
         if let Some((first, rest)) = opts.view.hosts.split_first() {
             let mut split = vec![
                 "split-window".to_owned(),
@@ -489,7 +497,7 @@ impl MuxBackend for TmuxBackend {
                 "-F".to_owned(),
                 "#{pane_id}".to_owned(),
                 "-t".to_owned(),
-                stats_pane,
+                first_content.clone(),
             ];
             if let Some(total) = self.window_width(&window_id) {
                 split.extend([
@@ -532,6 +540,35 @@ impl MuxBackend for TmuxBackend {
                     });
                 }
             }
+            first_daemon_pane = Some(first_daemon);
+        }
+        let mut previous_content = first_content.clone();
+        for content in rest_content {
+            let output = self
+                .cmd()
+                .args([
+                    "split-window".to_owned(),
+                    "-d".to_owned(),
+                    "-v".to_owned(),
+                    "-P".to_owned(),
+                    "-F".to_owned(),
+                    "#{pane_id}".to_owned(),
+                    "-t".to_owned(),
+                    previous_content,
+                    "-c".to_owned(),
+                    content.cwd.to_string_lossy().into_owned(),
+                ])
+                .args(content.argv.clone())
+                .run()?;
+            previous_content = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if previous_content.is_empty() {
+                return Err(MuxErr::Output {
+                    program: "tmux".to_owned(),
+                    reason: "split-window did not print a content pane id".to_owned(),
+                });
+            }
+        }
+        if let Some(first_daemon) = first_daemon_pane {
             if let Err(err) = self
                 .cmd()
                 .args(["select-pane".to_owned(), "-t".to_owned(), first_daemon])
@@ -545,6 +582,19 @@ impl MuxBackend for TmuxBackend {
                     "could not focus the first daemon pane",
                 );
             }
+        } else if !rest_content.is_empty()
+            && let Err(err) = self
+                .cmd()
+                .args(["select-pane".to_owned(), "-t".to_owned(), first_content])
+                .run()
+        {
+            tracing::warn!(
+                session = %session,
+                view = %opts.view.name,
+                tags.operation = "tmux.daemon_view.focus",
+                error = &err as &dyn std::error::Error,
+                "could not focus the first content pane",
+            );
         }
         self.lead_window(session, &opts.view.name);
         Ok(BackgroundViewLaunch::Launched)

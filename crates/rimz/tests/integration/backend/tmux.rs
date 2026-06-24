@@ -839,11 +839,11 @@ fn list_panes_with_session_returns_terminals() {
     );
 }
 
-/// `open_background_view` opens a dedicated, named window for stats and the hosts; the
-/// session's `after-new-window` hook (installed by `open_sidebar`, as `rimz
-/// start` does) docks the global sidebar on its left, so the window is born
-/// `sidebar | stats | stacked hosts`. Idempotent on the window name: a second call
-/// launches nothing.
+/// `open_background_view` opens a dedicated, named window for content and the
+/// hosts; the session's `after-new-window` hook (installed by `open_sidebar`,
+/// as `rimz start` does) docks the global sidebar on its left, so the window is
+/// born `sidebar | content | stacked hosts`. Idempotent on the window name: a
+/// second call launches nothing.
 #[test]
 fn open_background_view_creates_named_window_idempotently() {
     require_tmux!();
@@ -875,10 +875,10 @@ fn open_background_view_creates_named_window_idempotently() {
     let opts = rimz::mux::BackgroundViewOptions {
         view: rimz::mux::DaemonView {
             name: "rimzd".to_owned(),
-            stats: rimz::mux::HostPane {
+            content: vec![rimz::mux::HostPane {
                 argv: vec!["sleep".to_owned(), "120".to_owned()],
                 cwd: std::env::temp_dir(),
-            },
+            }],
             hosts: vec![
                 rimz::mux::HostPane {
                     argv: vec!["sleep".to_owned(), "120".to_owned()],
@@ -926,8 +926,8 @@ fn open_background_view_creates_named_window_idempotently() {
         "rimzd",
         "launch must not focus the daemon window",
     );
-    // Born `sidebar | stats | stacked hosts`: the hook-docked sidebar beside
-    // stats and the daemon host column.
+    // Born `sidebar | content | stacked hosts`: the hook-docked sidebar beside
+    // content and the daemon host column.
     let rc_panes = server
         .backend
         .list_panes(PaneListOptions {
@@ -941,7 +941,7 @@ fn open_background_view_creates_named_window_idempotently() {
         .count();
     assert_eq!(
         rc_panes, 4,
-        "rimzd window should be born sidebar | stats | stacked hosts"
+        "rimzd window should be born sidebar | content | stacked hosts"
     );
     let panes = server.wait_for_panes("rimz-bgview:rimzd", 4);
     assert_eq!(panes.len(), 4, "expected four rimzd panes, got {panes:?}");
@@ -952,7 +952,7 @@ fn open_background_view_creates_named_window_idempotently() {
     assert_eq!(
         by_left.len(),
         3,
-        "rimzd should have three columns: sidebar | stats | hosts, got {panes:?}",
+        "rimzd should have three columns: sidebar | content | hosts, got {panes:?}",
     );
     let right_column = by_left
         .iter()
@@ -984,11 +984,11 @@ fn open_background_view_creates_named_window_idempotently() {
     );
 }
 
-/// `open_background_view` creates a stats-only `rimzd` window when no daemon
-/// hosts apply: the sidebar hook docks render on the left and stats fills the
+/// `open_background_view` creates a content-only `rimzd` window when no daemon
+/// hosts apply: the sidebar hook docks render on the left and content fills the
 /// remaining work area.
 #[test]
-fn open_background_view_creates_stats_only_window() {
+fn open_background_view_creates_content_only_window() {
     require_tmux!();
 
     let server = TmuxServer::new();
@@ -1015,10 +1015,10 @@ fn open_background_view_creates_stats_only_window() {
     let opts = rimz::mux::BackgroundViewOptions {
         view: rimz::mux::DaemonView {
             name: "rimzd".to_owned(),
-            stats: rimz::mux::HostPane {
+            content: vec![rimz::mux::HostPane {
                 argv: vec!["sleep".to_owned(), "120".to_owned()],
                 cwd: std::env::temp_dir(),
-            },
+            }],
             hosts: Vec::new(),
         },
         sidebar,
@@ -1035,7 +1035,7 @@ fn open_background_view_creates_stats_only_window() {
             .first()
             .map(String::as_str),
         Some("rimzd"),
-        "stats-only daemon window must lead the session, got {:?}",
+        "content-only daemon window must lead the session, got {:?}",
         server.window_names("rimz-bgstats"),
     );
     let rc_panes = server
@@ -1051,7 +1051,103 @@ fn open_background_view_creates_stats_only_window() {
         .count();
     assert_eq!(
         rc_panes, 2,
-        "rimzd window should be born sidebar | stats without daemon hosts"
+        "rimzd window should be born sidebar | content without daemon hosts"
+    );
+}
+
+/// `open_background_view` stacks multiple content panes in the middle column
+/// while leaving the sidebar as its own full-height left column.
+#[test]
+fn open_background_view_stacks_multiple_content_panes() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("rimz-bgcontent");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = SidebarPaneOptions {
+        session_name: "rimz-bgcontent".to_owned(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgcontent")),
+        project_root: std::env::temp_dir(),
+        cwd: std::env::temp_dir(),
+        width: SidebarWidth::default(),
+        birth_size: SidebarWidth::default().birth_size(Some(80)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    server
+        .backend
+        .open_sidebar(&sidebar, None)
+        .expect("open_sidebar");
+
+    let opts = rimz::mux::BackgroundViewOptions {
+        view: rimz::mux::DaemonView {
+            name: "rimzd".to_owned(),
+            content: vec![
+                rimz::mux::HostPane {
+                    argv: vec!["sleep".to_owned(), "120".to_owned()],
+                    cwd: std::env::temp_dir(),
+                },
+                rimz::mux::HostPane {
+                    argv: vec!["sleep".to_owned(), "120".to_owned()],
+                    cwd: std::env::temp_dir(),
+                },
+            ],
+            hosts: Vec::new(),
+        },
+        sidebar,
+    };
+
+    let first = server
+        .backend
+        .open_background_view(&opts)
+        .expect("first launch");
+    assert_eq!(first, rimz::mux::BackgroundViewLaunch::Launched);
+    let rc_panes = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-bgcontent".to_owned()),
+            ..Default::default()
+        })
+        .expect("list panes")
+        .panes
+        .into_iter()
+        .filter(|pane| pane.view_name.as_deref() == Some("rimzd"))
+        .count();
+    assert_eq!(
+        rc_panes, 3,
+        "rimzd window should be born sidebar | stacked content without daemon hosts"
+    );
+    let panes = server.wait_for_panes("rimz-bgcontent:rimzd", 3);
+    assert_eq!(panes.len(), 3, "expected three rimzd panes, got {panes:?}");
+    let mut by_left: BTreeMap<u64, Vec<&PaneGeom>> = BTreeMap::new();
+    for pane in &panes {
+        by_left.entry(pane.left).or_default().push(pane);
+    }
+    assert_eq!(
+        by_left.len(),
+        2,
+        "rimzd should have two columns: sidebar | content, got {panes:?}",
+    );
+    let content_column = by_left
+        .iter()
+        .next_back()
+        .map(|(_, panes)| panes)
+        .expect("content column");
+    assert_eq!(
+        content_column.len(),
+        2,
+        "content panes should share the middle column, got {panes:?}",
+    );
+    let mut content_tops: Vec<u64> = content_column.iter().map(|pane| pane.top).collect();
+    content_tops.sort_unstable();
+    content_tops.dedup();
+    assert_eq!(
+        content_tops.len(),
+        2,
+        "content panes should be vertically stacked, got {panes:?}",
     );
 }
 

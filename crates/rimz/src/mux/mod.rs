@@ -372,9 +372,9 @@ pub struct PresencePluginOptions {
 }
 
 /// One long-lived process hosted by the daemon view. The view is born as three
-/// columns: live render on the left, live stats in the middle, and managed
-/// daemon hosts stacked on the right.
-#[derive(Clone, Debug)]
+/// columns: live render on the left, content in the middle (live stats by
+/// default), and managed daemon hosts stacked on the right.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostPane {
     /// Host argv, program first.
     pub argv: Vec<String>,
@@ -419,19 +419,21 @@ pub struct DaemonView {
     /// View name. Doubles as the idempotency key: a live view by this name
     /// suppresses a relaunch.
     pub name: String,
-    /// The always-present live stats pane in the middle column.
-    pub stats: HostPane,
+    /// Middle-column panes, stacked top to bottom. At least one pane is present;
+    /// the default is the live stats pane.
+    pub content: Vec<HostPane>,
     /// Managed daemon hosts stacked in the right column. May be empty; the first
-    /// host takes focus within the view when present, otherwise stats takes it.
+    /// host takes focus within the view when present, otherwise the first
+    /// content pane takes it.
     pub hosts: Vec<HostPane>,
 }
 
 /// Options for launching the daemon dashboard into a single dedicated, named
 /// *view* of a session — a tmux window or a Zellij tab — forced to the first
-/// position and out of the user's focus. The view is born `sidebar | stats |
-/// hosts…`: render on the left, live stats in the middle, and managed daemon
-/// hosts stacked on the right. Stats is always present; the daemon host column is
-/// conditional.
+/// position and out of the user's focus. The view is born `sidebar | content |
+/// hosts…`: render on the left, configurable content in the middle (live stats
+/// by default), and managed daemon hosts stacked on the right. Content is always
+/// present; the daemon host column is conditional.
 #[derive(Clone, Debug)]
 pub struct BackgroundViewOptions {
     /// View spec shared with `open_sidebar`'s birth-lead daemon view.
@@ -515,8 +517,8 @@ pub trait MuxBackend: Send + Sync {
     /// the trailing `\r` lands outside the paste.
     fn paste_text(&self, pane: &PaneId, text: &str) -> Result<()>;
     /// Birth (or heal) the session's working view with its sidebar. When `daemon`
-    /// is `Some`, the session is born with that `sidebar | stats | hosts…` view
-    /// leading and the working view focused second — on Zellij the lead order is
+    /// is `Some`, the session is born with that `sidebar | content | hosts…`
+    /// view leading and the working view focused second — on Zellij the lead order is
     /// fixed here, at birth, since tabs can't be reordered afterwards. tmux
     /// ignores `daemon` (it leads its window via [`Self::open_background_view`]).
     /// Only `rimz start` passes a `daemon`; other launches pass `None` and birth
@@ -571,7 +573,7 @@ pub trait MuxBackend: Send + Sync {
         live: &SidebarLiveness,
     ) -> Result<SidebarRecovery>;
     /// Launch the daemon dashboard in one dedicated, named background view (tmux
-    /// window / Zellij tab) of an existing session, born `sidebar | stats |
+    /// window / Zellij tab) of an existing session, born `sidebar | content |
     /// hosts…`, forced to the first position, and out of the user's focus.
     /// Idempotent: a second call while a view of that name is present launches
     /// nothing, but still re-asserts its first position and returns focus to the

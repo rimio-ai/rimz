@@ -9,6 +9,16 @@
 # claude = false                       # auto-launch `claude remote-control` in the managed daemon tab
 # codex = false                        # ensure the per-user Codex remote-control daemon on start
 
+[daemon]
+# The rimzd dashboard's middle column (beside the sidebar and managed hosts).
+# Unset keeps one live-stats pane. List panes to replace or extend it; the
+# reserved command "stats" is the live-stats pane. cwd defaults to the worktree.
+## [[daemon.pane]]
+## command = "stats"
+## [[daemon.pane]]
+## command = "btop"
+## cwd = "/var/log"
+
 [accounts]
 [accounts.usage_limit_usd]
 # Display-only monthly USD ceilings for the extra/API usage bar. These are not

@@ -732,12 +732,18 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         detected_size,
         refresh_ms: args.refresh_ms,
     };
-    // The daemon view (`rimzd`) is computed once: stats is always present, and
-    // its daemon hosts depend on config and which agents are on PATH. When
-    // present, it leads the session — on Zellij that order is fixed at birth
-    // (`open_sidebar` renders the daemon tab first), since Zellij can't reorder
-    // tabs afterwards.
-    let daemon_view = build_daemon_view(remote_control, &workspace, &mux_config, &room);
+    // The daemon view (`rimzd`) is computed once: its middle column is
+    // configurable (default stats), and its daemon hosts depend on config and
+    // which agents are on PATH. When present, it leads the session — on Zellij
+    // that order is fixed at birth (`open_sidebar` renders the daemon tab
+    // first), since Zellij can't reorder tabs afterwards.
+    let daemon_view = build_daemon_view(
+        remote_control,
+        &machine_config.daemon,
+        &workspace,
+        &mux_config,
+        &room,
+    );
     let daemon = daemon_view.as_ref().map(|view| &view.view);
     birth_room(&RoomBirth {
         backend: backend.as_ref(),

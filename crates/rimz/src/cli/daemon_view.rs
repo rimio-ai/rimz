@@ -1,7 +1,11 @@
 use super::*;
+use rimz::config::{DaemonConfig, DaemonPane};
+
+const STATS_TOKEN: &str = "stats";
 
 pub(super) fn build_daemon_view(
-    config: &rimz::config::RemoteControlConfig,
+    remote_control: &rimz::config::RemoteControlConfig,
+    daemon: &DaemonConfig,
     workspace: &rimz::ResolvedWorkspace,
     mux_config: &rimz::config::MultiplexerConfig,
     room: &RoomTarget<'_>,
@@ -18,7 +22,8 @@ pub(super) fn build_daemon_view(
         }
     };
     Some(build_daemon_view_options(
-        config,
+        remote_control,
+        daemon,
         workspace,
         mux_config,
         room,
@@ -29,7 +34,8 @@ pub(super) fn build_daemon_view(
 }
 
 fn build_daemon_view_options(
-    config: &rimz::config::RemoteControlConfig,
+    remote_control: &rimz::config::RemoteControlConfig,
+    daemon: &DaemonConfig,
     workspace: &rimz::ResolvedWorkspace,
     mux_config: &rimz::config::MultiplexerConfig,
     room: &RoomTarget<'_>,
@@ -37,9 +43,9 @@ fn build_daemon_view_options(
     claude_present: bool,
     codex_present: bool,
 ) -> BackgroundViewOptions {
-    let stats = stats_pane(&rimz_bin, &workspace.worktree_root);
+    let content = content_panes(daemon, &rimz_bin, &workspace.worktree_root);
     let hosts = daemon_hosts(
-        config,
+        remote_control,
         claude_present,
         codex_present,
         &rimz_bin,
@@ -48,13 +54,14 @@ fn build_daemon_view_options(
         &workspace.project_root,
         &workspace.worktree_root,
     );
-    // The daemon view is born `sidebar | stats | hosts…`, so it carries the same
-    // global sidebar the working view runs (same session, workspace, and `rimz`
-    // bin). Stats keeps the view useful even with no daemon host.
+    // The daemon view is born `sidebar | content | hosts…`, so it carries the
+    // same global sidebar the working view runs (same session, workspace, and
+    // `rimz` bin). The content column defaults to stats and keeps the view
+    // useful even with no daemon host.
     BackgroundViewOptions {
         view: DaemonView {
             name: rimz::remote_control::VIEW_NAME.to_owned(),
-            stats,
+            content,
             hosts,
         },
         sidebar: SidebarPaneOptions {
@@ -79,8 +86,8 @@ fn build_daemon_view_options(
 /// daemon view, best-effort. On Zellij the view already leads from session birth
 /// ([`MuxBackend::open_sidebar`] renders it first), so this is the idempotent
 /// `AlreadyRunning` no-op there; on tmux it opens the window and leads it via
-/// `swap-window`. The view always carries the live stats pane; daemon hosts are
-/// conditional.
+/// `swap-window`. The view always carries a content column (live stats by
+/// default); daemon hosts are conditional.
 pub(super) fn maybe_launch_remote_control(
     backend: &dyn MuxBackend,
     workspace: &rimz::ResolvedWorkspace,
@@ -115,7 +122,7 @@ pub(super) fn maybe_launch_remote_control(
 /// remote-control host leads when its toggle is on *and* `claude` is on PATH (the
 /// interactive host); the local Codex app-server broker follows whenever `codex`
 /// is on PATH (ungated — it links no account, only reads). Live stats is a
-/// separate always-present pane, not a daemon host.
+/// separate content pane by default, not a daemon host.
 #[allow(clippy::too_many_arguments)]
 fn daemon_hosts(
     config: &rimz::config::RemoteControlConfig,
@@ -154,12 +161,55 @@ fn daemon_hosts(
 
 fn stats_pane(rimz_bin: &Path, worktree_root: &Path) -> HostPane {
     HostPane {
-        argv: vec![
-            rimz_bin.to_string_lossy().into_owned(),
-            "stats".to_owned(),
-            "--refresh".to_owned(),
-        ],
+        argv: stats_argv(rimz_bin),
         cwd: worktree_root.to_path_buf(),
+    }
+}
+
+fn stats_argv(rimz_bin: &Path) -> Vec<String> {
+    vec![
+        rimz_bin.to_string_lossy().into_owned(),
+        "stats".to_owned(),
+        "--refresh".to_owned(),
+    ]
+}
+
+/// Resolve the configured middle-column panes. Unset/empty, or every pane
+/// resolving away, keeps the built-in live-stats pane.
+fn content_panes(daemon: &DaemonConfig, rimz_bin: &Path, worktree_root: &Path) -> Vec<HostPane> {
+    let resolved: Vec<HostPane> = daemon
+        .pane
+        .iter()
+        .filter_map(|pane| resolve_pane(pane, rimz_bin, worktree_root))
+        .collect();
+    if resolved.is_empty() {
+        vec![stats_pane(rimz_bin, worktree_root)]
+    } else {
+        resolved
+    }
+}
+
+fn resolve_pane(pane: &DaemonPane, rimz_bin: &Path, worktree_root: &Path) -> Option<HostPane> {
+    let cwd = match &pane.cwd {
+        Some(cwd) if cwd.is_absolute() => cwd.clone(),
+        Some(cwd) => worktree_root.join(cwd),
+        None => worktree_root.to_path_buf(),
+    };
+    if pane.command == STATS_TOKEN {
+        return Some(HostPane {
+            argv: stats_argv(rimz_bin),
+            cwd,
+        });
+    }
+    match shlex::split(&pane.command) {
+        Some(argv) if !argv.is_empty() => Some(HostPane { argv, cwd }),
+        _ => {
+            tracing::warn!(
+                command = %pane.command,
+                "skipping daemon pane: unparseable or empty command",
+            );
+            None
+        }
     }
 }
 
@@ -240,8 +290,101 @@ mod tests {
     }
 
     #[test]
+    fn content_panes_default_to_live_stats() {
+        let rimz_bin = Path::new("/usr/bin/rimz");
+        let worktree = Path::new("/proj/wt");
+        assert_eq!(
+            content_panes(&DaemonConfig::default(), rimz_bin, worktree),
+            vec![stats_pane(rimz_bin, worktree)]
+        );
+    }
+
+    #[test]
+    fn content_panes_expand_stats_token() {
+        let rimz_bin = Path::new("/usr/bin/rimz");
+        let worktree = Path::new("/proj/wt");
+        let daemon = DaemonConfig {
+            pane: vec![DaemonPane {
+                command: "stats".to_owned(),
+                cwd: Some(PathBuf::from("reports")),
+            }],
+        };
+
+        assert_eq!(
+            content_panes(&daemon, rimz_bin, worktree),
+            vec![HostPane {
+                argv: vec![
+                    "/usr/bin/rimz".to_owned(),
+                    "stats".to_owned(),
+                    "--refresh".to_owned(),
+                ],
+                cwd: PathBuf::from("/proj/wt/reports"),
+            }]
+        );
+    }
+
+    #[test]
+    fn content_panes_split_shell_commands_and_resolve_cwd() {
+        let rimz_bin = Path::new("/usr/bin/rimz");
+        let worktree = Path::new("/proj/wt");
+        let daemon = DaemonConfig {
+            pane: vec![
+                DaemonPane {
+                    command: r#"btop --config "two words""#.to_owned(),
+                    cwd: None,
+                },
+                DaemonPane {
+                    command: "tail -f app.log".to_owned(),
+                    cwd: Some(PathBuf::from("/var/log")),
+                },
+            ],
+        };
+
+        assert_eq!(
+            content_panes(&daemon, rimz_bin, worktree),
+            vec![
+                HostPane {
+                    argv: vec![
+                        "btop".to_owned(),
+                        "--config".to_owned(),
+                        "two words".to_owned(),
+                    ],
+                    cwd: PathBuf::from("/proj/wt"),
+                },
+                HostPane {
+                    argv: vec!["tail".to_owned(), "-f".to_owned(), "app.log".to_owned()],
+                    cwd: PathBuf::from("/var/log"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn content_panes_skip_unparseable_commands_and_fallback_to_stats() {
+        let rimz_bin = Path::new("/usr/bin/rimz");
+        let worktree = Path::new("/proj/wt");
+        let daemon = DaemonConfig {
+            pane: vec![
+                DaemonPane {
+                    command: "   ".to_owned(),
+                    cwd: None,
+                },
+                DaemonPane {
+                    command: r#""unterminated"#.to_owned(),
+                    cwd: None,
+                },
+            ],
+        };
+
+        assert_eq!(
+            content_panes(&daemon, rimz_bin, worktree),
+            vec![stats_pane(rimz_bin, worktree)]
+        );
+    }
+
+    #[test]
     fn daemon_view_options_keep_stats_when_hosts_are_empty() {
-        use rimz::config::{MultiplexerConfig, RemoteControlConfig};
+        use rimz::config::{DaemonConfig, MultiplexerConfig, RemoteControlConfig};
         use rimz::ids::WorkspaceId;
         use rimz::mux::SidebarWidth;
         use rimz::workspace::RootClass;
@@ -270,6 +413,7 @@ mod tests {
         };
         let opts = build_daemon_view_options(
             &RemoteControlConfig::default(),
+            &DaemonConfig::default(),
             &workspace,
             &mux_config,
             &room,
@@ -280,14 +424,16 @@ mod tests {
         assert_eq!(opts.view.name, rimz::remote_control::VIEW_NAME);
         assert!(opts.view.hosts.is_empty());
         assert_eq!(
-            opts.view.stats.argv,
-            vec![
-                "/usr/bin/rimz".to_owned(),
-                "stats".to_owned(),
-                "--refresh".to_owned(),
-            ]
+            opts.view.content,
+            vec![HostPane {
+                argv: vec![
+                    "/usr/bin/rimz".to_owned(),
+                    "stats".to_owned(),
+                    "--refresh".to_owned(),
+                ],
+                cwd: PathBuf::from("/proj/wt"),
+            }]
         );
-        assert_eq!(opts.view.stats.cwd, PathBuf::from("/proj/wt"));
         assert_eq!(opts.sidebar.birth_size, width.birth_size(Some(120)));
     }
 }

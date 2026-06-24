@@ -94,9 +94,9 @@ pub(crate) struct ReconcilePlan {
 ///   heartbeat simply hasn't landed, and the next pass settles it either way.
 ///   A young extra beside a claimed keeper still closes: that is a botched-add
 ///   duplicate, not a starting renderer. The daemon view (`rimzd`) is born with
-///   a sidebar and live stats beside its managed hosts and earns the same
-///   convergence — but never the collapse below, since its hosts are managed,
-///   not work.
+///   a sidebar and middle-column content beside its managed hosts and earns the
+///   same convergence — but never the collapse below, since its hosts are
+///   managed, not work.
 /// - **Orphan sidebar-only view** — no working pane and no daemon host, so its
 ///   working siblings all closed but the sidebar never self-closed (a wedged
 ///   renderer that stopped ticking). Close every sidebar pane and let the view

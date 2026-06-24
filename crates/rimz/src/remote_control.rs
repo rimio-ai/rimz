@@ -42,9 +42,10 @@ use crate::pane::{ElevatedAgent, PaneRef};
 
 /// View name for the managed daemon tab. Shared by the launcher (the idempotency
 /// key for the tmux window / Zellij tab) and the sidebar classifier
-/// ([`pane_is_host`]), so both speak the same name. The tab hosts live stats in
-/// the middle and stacks the Claude remote-control host and per-session Codex
-/// app-server broker on the right when they apply.
+/// ([`pane_is_host`]), so both speak the same name. The tab hosts configurable
+/// content in the middle (live stats by default) and stacks the Claude
+/// remote-control host and per-session Codex app-server broker on the right
+/// when they apply.
 pub const VIEW_NAME: &str = "rimzd";
 
 /// Substring marking the Claude remote-control host in a pane's command line —
@@ -405,7 +406,7 @@ pub fn command_is_host(command: &str) -> bool {
 
 /// Whether `pane` belongs to the daemon dashboard. Command markers catch daemon
 /// hosts wherever they are reported; the `rimzd` view name catches the full
-/// dashboard, including the stats pane on backends that report only a foreground
+/// dashboard, including content panes on backends that report only a foreground
 /// binary basename.
 pub fn pane_is_host(pane: &PaneRef) -> bool {
     pane.spawn_command.as_deref().is_some_and(command_is_host)

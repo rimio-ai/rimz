@@ -30,6 +30,7 @@ mod agents;
 mod animation;
 mod attention;
 mod color;
+mod daemon;
 mod display;
 pub mod effective;
 mod glyphs;
@@ -59,6 +60,7 @@ pub(crate) use color::xterm_rgb;
 pub use color::{
     ColorDepth, PaletteRole, Semantic, ThemeColor, ThemeMode, nearest_xterm_index, parse_hex,
 };
+pub use daemon::{DaemonConfig, DaemonPane};
 pub use display::{
     BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, ContextMeterConfig,
     DisplayConfig, GlowMode, ProviderTabsMode, ScrollbarMode,
@@ -134,6 +136,7 @@ pub type Result<T> = std::result::Result<T, ConfigErr>;
 pub struct MachineConfig {
     pub accounts: AccountsConfig,
     pub remote_control: RemoteControlConfig,
+    pub daemon: DaemonConfig,
     pub notifications: NotificationsPrefs,
     pub sidebar: SidebarConfig,
     pub zellij: ZellijConfig,
@@ -269,6 +272,7 @@ impl MachineConfig {
         Self {
             accounts: core.accounts,
             remote_control: core.remote_control,
+            daemon: core.daemon,
             notifications: core.notifications,
             sidebar: core.sidebar,
             zellij: core.zellij,
@@ -393,6 +397,7 @@ fn collect_agents_home_fragment_stamps(
 struct CoreConfig {
     accounts: AccountsConfig,
     remote_control: RemoteControlConfig,
+    daemon: DaemonConfig,
     notifications: NotificationsPrefs,
     sidebar: SidebarConfig,
     zellij: ZellijConfig,

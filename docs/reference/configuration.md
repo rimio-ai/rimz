@@ -207,6 +207,20 @@ codex = false
 
 These opt this machine into background remote-control infrastructure shown in the `rimzd` daemon view. `claude = true` adds `claude remote-control` to the daemon column when `claude` is on PATH; `codex = true` ensures the managed standalone Codex daemon before the room opens (a `codex` CLI on PATH already adds the per-session app-server broker). An enabled host is a fail-fast precondition for `rimz start`: Claude refuses on an incompatible version or settings, Codex refuses when the managed install is missing, and `rimz doctor` prints the same refusal and fix. The mechanics are in [provider.md](../internals/agents/provider.md) and the security boundary in [security.md](../guide/security.md).
 
+### Daemon view
+
+```toml
+[daemon]
+[[daemon.pane]]
+command = "stats"
+
+[[daemon.pane]]
+command = "btop"
+cwd = "/var/log"
+```
+
+`[daemon]` configures the `rimzd` daemon view's middle column, beside the sidebar and any managed hosts. Unset or empty keeps the built-in live stats pane (`rimz stats --refresh`). Listing `[[daemon.pane]]` entries replaces that default, so include `command = "stats"` when you want live stats plus extra panes. The reserved command token `"stats"` expands to the built-in stats argv; any other `command` is split into argv and run directly without a shell. `cwd` is optional: absent runs from the worktree root, absolute paths are used as-is, and relative paths are joined onto the worktree root. A pane with an empty or unparseable command is skipped; if every configured pane is skipped, Rimz falls back to the built-in stats pane.
+
 ### Accounts
 
 ```toml
