@@ -55,15 +55,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # Gitea's containerized runner has constrained outbound egress. Cache
-      # rustup plus its cargo-bin proxies by the pinned toolchain file so a hot
-      # run does not have to reach static.rust-lang.org just to bootstrap Rust.
+      # Gitea's containerized runner has constrained outbound egress. Cache the
+      # runner-provided rustup home plus cargo-bin proxies by the pinned
+      # toolchain file so a hot run does not have to reach static.rust-lang.org
+      # just to bootstrap Rust.
       - name: Rust toolchain cache
         uses: actions/cache@v5
         with:
           path: |
-            ~/.rustup
-            ~/.cargo/bin
+            ${CARGO_HOME}/bin
+            ${RUSTUP_HOME}
           key: gitea-rust-toolchain-${{ hashFiles('rust-toolchain.toml') }}
 
       # `rust-toolchain.toml` pins this channel, components, and targets. Keep
@@ -73,8 +74,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="$HOME/.cargo/bin:$PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
+          cargo_bin="${cargo_home}/bin"
+          export CARGO_HOME="$cargo_home"
+          export RUSTUP_HOME="$rustup_home"
+          export PATH="$cargo_bin:$PATH"
+          echo "$cargo_bin" >> "$GITHUB_PATH"
 
           retry() {
             local description="$1"
