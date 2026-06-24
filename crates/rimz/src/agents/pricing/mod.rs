@@ -123,7 +123,7 @@ impl PriceBook {
 /// failed or skipped fetch falls back to the cache, then to the embedded
 /// snapshot — the returned book is always usable.
 ///
-/// `cache_path` is the producer's shared runtime `pricing-cache.json`.
+/// `cache_path` is the producer's persistent shared `pricing-cache.json`.
 pub fn load_for_spending(cache_path: &Path, unknown_models: &BTreeSet<String>) -> PriceBook {
     let mut cache = read_cache(cache_path);
     let mut book = PriceBook::assembled(&cache);
@@ -165,8 +165,8 @@ pub fn load_for_spending(cache_path: &Path, unknown_models: &BTreeSet<String>) -
     book
 }
 
-/// Load the spending price book from the embedded snapshot plus the shared
-/// runtime pricing cache, without refreshing or writing. Used by local fallback
+/// Load the spending price book from the embedded snapshot plus the persistent
+/// shared pricing cache, without refreshing or writing. Used by local fallback
 /// spending reads that could not win the shared spending election but still need
 /// the same cached prices the producer normally uses.
 pub fn load_cached_for_spending(cache_path: &Path) -> PriceBook {
@@ -183,8 +183,8 @@ const RETRY_BACKOFF_SECS: u64 = 60 * 60;
 /// daily refresh cap while the same unknown set persists.
 const UNKNOWN_REFRESH_TTL_SECS: u64 = 30 * 60;
 
-/// On-disk pricing cache at the shared runtime `pricing-cache.json`. Sorted maps keep
-/// the file diff-stable.
+/// On-disk pricing cache at persistent shared `pricing-cache.json`. Sorted maps
+/// keep the file diff-stable.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct PricingCache {
     #[serde(default)]

@@ -93,7 +93,8 @@ enum TokenDetail {
 /// and the `$` bold dollar green; the
 /// spend deliberately does **not** animate (only the headline does). Both
 /// rows share one set of right-aligned column widths so the labels stack and
-/// every number column lines up. Empty (dropped) until something is recorded.
+/// every number column lines up. Always present once the ledger is rendered;
+/// empty history reads `$0.00`.
 pub(in crate::sidebar_pane::render) fn fleet_ledger_lines(
     theme: &Theme,
     tally: Option<&SpendTally>,
@@ -118,9 +119,6 @@ fn total_spend_lines(
     layout: ProviderLayout,
 ) -> Vec<Line<'static>> {
     let rows = total_ledger_rows(theme, tally, width, layout);
-    if rows.is_empty() {
-        return Vec::new();
-    }
     let has_spacer = matches!(layout, ProviderLayout::Wide | ProviderLayout::Normal);
     let mut lines = Vec::with_capacity(rows.len() + 1 + usize::from(has_spacer));
     if has_spacer {
@@ -137,9 +135,8 @@ fn total_ledger_rows(
     width: usize,
     layout: ProviderLayout,
 ) -> Vec<Line<'static>> {
-    let Some(tally) = tally.filter(|t| !t.is_zero()) else {
-        return Vec::new();
-    };
+    let zero = SpendTally::default();
+    let tally = tally.unwrap_or(&zero);
     let token_format: fn(u64) -> String = tokens_short;
     let cols = WmColumns::measure([(&tally.week, token_format), (&tally.month, token_format)]);
     match layout {
@@ -690,10 +687,9 @@ fn active_provider_block_lines(
 
 pub(in crate::sidebar_pane::render) fn provider_dashboard_block_rows(
     panel: &SidebarProviderPanel,
-    fleet_tally: Option<&SpendTally>,
 ) -> usize {
     let layout = ProviderLayout::Normal;
-    1 + provider_body_row_count(panel, layout) + total_spend_row_count(fleet_tally, layout)
+    1 + provider_body_row_count(panel, layout) + total_spend_row_count(layout)
 }
 
 fn provider_body_row_count(panel: &SidebarProviderPanel, layout: ProviderLayout) -> usize {
@@ -708,10 +704,7 @@ fn provider_stats_row_count(layout: ProviderLayout) -> usize {
     }
 }
 
-fn total_spend_row_count(fleet_tally: Option<&SpendTally>, layout: ProviderLayout) -> usize {
-    if fleet_tally.is_none_or(|tally| tally.is_zero()) {
-        return 0;
-    }
+fn total_spend_row_count(layout: ProviderLayout) -> usize {
     usize::from(matches!(
         layout,
         ProviderLayout::Wide | ProviderLayout::Normal

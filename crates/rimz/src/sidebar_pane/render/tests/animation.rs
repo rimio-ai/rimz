@@ -471,8 +471,8 @@ fn render_stalled_agent_reads_as_static_attention() {
     claude.last_activity =
         fixed_now() - Duration::from_secs(u64::from(crate::agents::DEFAULT_STALL_AFTER_SECS) + 60);
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
-    let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 10);
-    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 40, 10);
+    let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 16);
+    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 40, 16);
 
     assert_eq!(first, second, "a stalled agent's cell must not spin");
     assert!(
@@ -496,8 +496,8 @@ fn render_live_heads_follow_phase_and_turn_phase() {
     );
     claude.phase = crate::agents::TurnPhase::Reasoning;
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
-    let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 10);
-    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 10);
+    let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 16);
+    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 16);
 
     assert!(
         first.contains("⠁ claude"),
@@ -581,7 +581,7 @@ fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
     claude.phase = crate::agents::TurnPhase::Reasoning;
     let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
     snapshot.theme = theme_config;
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 10);
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 16);
     assert!(
         screen.contains("B claude"),
         "custom frame reaches the row:\n{screen}"
@@ -654,8 +654,8 @@ fn paused_agent_reads_as_a_static_pause() {
         ..claude_context(now)
     });
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
-    let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 44, 10);
-    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 44, 10);
+    let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 44, 16);
+    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 44, 16);
     assert_eq!(first, second, "a parked agent's head must not animate");
     assert!(
         first.contains('⏸'),
@@ -678,8 +678,8 @@ fn transient_live_heads_replace_the_working_spinner() {
     );
     claude.compacting_since = Some(fixed_now());
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
-    let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 44, 10);
-    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 44, 10);
+    let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 44, 16);
+    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 44, 16);
     assert_ne!(first, second, "the compacting head animates");
     // The pulse bar (`▁` at phase 0) leads the row — unique to the compacting
     // head, so its presence proves the overlay replaced the working spinner.
@@ -709,8 +709,8 @@ fn transient_live_heads_replace_the_working_spinner() {
     let snapshot = snapshot_with(Vec::new(), vec![parent, kid]);
     // Phase 2 of the wave is a distinctive braille edge, unique to the
     // delegated-wait head (the cockpit's working bucket still shows `⢿`).
-    let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 44, 10);
-    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(4), 44, 10);
+    let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 44, 16);
+    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(4), 44, 16);
     assert_ne!(first, second, "the delegated-wait head animates");
     assert!(
         first.contains('⢁'),

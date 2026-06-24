@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
-assertion_line: 108
 expression: screen
 ---
  ⌘ query-engine
@@ -15,5 +14,8 @@ expression: screen
 ▌  API Error: Bad Request                            ▐
 ▌  ▣ ━━━━━━━━━━━━━━╸━────────────────────────── 38.2%▐
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                      ▐
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
 
                                            ? for help

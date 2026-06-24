@@ -334,7 +334,7 @@ pub(crate) fn active_dashboard_block_rows(snapshot: &SidebarSnapshot, ui: &UiSta
         .providers
         .iter()
         .find(|panel| panel.kind == active_kind)
-        .map(|panel| sections::provider_dashboard_block_rows(panel, snapshot.value_tally.as_ref()))
+        .map(sections::provider_dashboard_block_rows)
         .and_then(|rows| u16::try_from(rows).ok())
 }
 

@@ -571,7 +571,7 @@ impl Env {
         let workspace_id = WorkspaceId::from_project_root(&canonical(project_root));
         let state =
             StatePaths::under(workspace_id.clone(), &self.state_root()).expect("state paths");
-        let runtime = RuntimePaths::under(workspace_id, &self.runtime_root).expect("runtime paths");
+        let runtime = self.runtime_paths_for(workspace_id);
         Ledger::open(state, runtime).expect("open ledger")
     }
 
@@ -582,7 +582,14 @@ impl Env {
 
     /// Runtime paths (heartbeat/sock dirs) for the harness workspace.
     pub fn runtime_paths(&self) -> RuntimePaths {
-        RuntimePaths::under(self.workspace_id.clone(), &self.runtime_root).expect("runtime paths")
+        self.runtime_paths_for(self.workspace_id.clone())
+    }
+
+    fn runtime_paths_for(&self, workspace_id: WorkspaceId) -> RuntimePaths {
+        let mut paths =
+            RuntimePaths::under(workspace_id, &self.runtime_root).expect("runtime paths");
+        paths.persistent_shared_root = self.state_root().join("rimz").join("shared");
+        paths
     }
 
     /// Resolve and record a workspace so `rimz list`/`workspace` see it.

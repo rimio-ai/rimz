@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
-assertion_line: 105
 expression: screen
 ---
  ⌘ query-engine
@@ -25,15 +24,15 @@ expression: screen
 
 
 
-
-
-
-
  ─── Claude ──── Codex ──────────────────────────────
 
            ChatGPT Pro · v0.135.0
   ▐▛███▜▌  ◎ 3  ◇ 88k ↘ 76k ↗ 12k ◌ 8k          $1.20
  ▝▜█████▛▘ api ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ ∞
    ▘▘ ▝▝
+
+  ── Total: ─────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
 
                                            ? for help

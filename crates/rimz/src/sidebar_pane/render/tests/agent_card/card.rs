@@ -66,7 +66,7 @@ fn render_agent_capability_and_window() {
     claude.last_activity = fixed_now() - Duration::from_secs(4 * 60);
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
 
-    let rendered = snapshot_to_screen(&snapshot, 34, 12);
+    let rendered = snapshot_to_screen(&snapshot, 34, 15);
 
     assert!(
         rendered.contains("! claude"),
@@ -97,7 +97,7 @@ fn capability_cluster_requires_a_resolved_model() {
     codex.context_window = Some(272_000);
     let snapshot = snapshot_with(Vec::new(), vec![codex]);
 
-    let rendered = snapshot_to_screen(&snapshot, 44, 12);
+    let rendered = snapshot_to_screen(&snapshot, 44, 15);
 
     assert!(
         rendered.contains("codex"),
@@ -127,7 +127,7 @@ fn render_agent_handle_as_card_identity() {
     claude.model = Some("Opus".to_owned());
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
 
-    let rendered = snapshot_to_screen(&snapshot, 34, 12);
+    let rendered = snapshot_to_screen(&snapshot, 34, 15);
 
     assert!(
         rendered.contains("○ planner"),
@@ -180,7 +180,7 @@ fn render_enriched_selected_agent_card() {
             ..Default::default()
         },
         54,
-        14,
+        17,
     );
 
     // The worktree's git story sits on the group header: the ⇡/⇣ commit
@@ -224,7 +224,11 @@ fn render_enriched_selected_agent_card() {
         rendered.contains("▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k"),
         "context line:\n{rendered}"
     );
-    assert!(!rendered.contains('◇'), "no fleet total on the card");
+    let context_line = rendered
+        .lines()
+        .find(|line| line.contains("▤ 76k"))
+        .unwrap_or_else(|| panic!("context line rendered:\n{rendered}"));
+    assert!(!context_line.contains('◇'), "no fleet total on the card");
     assert!(
         !rendered.contains("ctx"),
         "window size left the token line:\n{rendered}"
@@ -254,7 +258,7 @@ fn render_api_error_dead_turn_card() {
     claude.context = Some(context);
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
 
-    let rendered = snapshot_to_screen(&snapshot, 54, 14);
+    let rendered = snapshot_to_screen(&snapshot, 54, 17);
 
     assert!(
         rendered.contains("! claude"),

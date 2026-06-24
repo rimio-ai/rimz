@@ -19,7 +19,7 @@ fn agent_context_line_renders_compaction_markers() {
         claude.context = Some(claude_context(fixed_now()));
         claude.compaction_count = count;
         let snapshot = snapshot_with(Vec::new(), vec![claude]);
-        let rendered = snapshot_to_screen(&snapshot, 56, 14);
+        let rendered = snapshot_to_screen(&snapshot, 56, 17);
 
         if let Some(expected) = expected {
             assert!(
@@ -56,7 +56,7 @@ fn render_agent_card_context_line_pins_age_not_resource_stats() {
     let row = &snapshot.worktree_groups[0].rows[0];
     assert!(row.as_process().is_none());
 
-    let rendered = snapshot_to_screen(&snapshot, 56, 14);
+    let rendered = snapshot_to_screen(&snapshot, 56, 17);
 
     assert!(
         rendered.contains("▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k"),
@@ -91,7 +91,7 @@ fn codex_line_two_walks_the_descriptor_precedence_ladder() {
         context.session_preview = session_preview.map(str::to_owned);
         codex.context = Some(context);
         let snapshot = snapshot_with(Vec::new(), vec![codex]);
-        snapshot_to_screen(&snapshot, 44, 12)
+        snapshot_to_screen(&snapshot, 44, 15)
     };
 
     // Preview present: it wins over the thread name and the task.
@@ -134,19 +134,22 @@ fn selected_agent_without_context_keeps_bare_token_total() {
             ..Default::default()
         },
         44,
-        14,
+        17,
     );
 
-    assert!(rendered.contains("▤ 5k"));
+    let token_line = rendered
+        .lines()
+        .find(|line| line.contains("▤ 5k"))
+        .unwrap_or_else(|| panic!("bare token total rendered:\n{rendered}"));
     // No split fields, so no composition columns trail the bare total.
     for marker in ['◌', '◍', '↘', '↗'] {
         assert!(
-            !rendered.contains(marker),
+            !token_line.contains(marker),
             "a splitless row keeps the bare total alone:\n{rendered}"
         );
     }
-    assert!(!rendered.contains('↻'));
-    assert!(!rendered.contains('$'));
+    assert!(!token_line.contains('↻'));
+    assert!(!token_line.contains('$'));
 }
 #[test]
 fn codex_card_renders_the_per_call_composition() {
@@ -184,7 +187,7 @@ fn codex_card_renders_the_per_call_composition() {
             ..Default::default()
         },
         44,
-        14,
+        17,
     );
 
     assert!(
@@ -238,7 +241,7 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
             ..Default::default()
         },
         44,
-        14,
+        17,
     );
 
     let meter = rendered
@@ -284,7 +287,7 @@ fn pi_card_renders_cache_write_in_the_per_call_composition() {
             ..Default::default()
         },
         48,
-        14,
+        17,
     );
 
     assert!(
@@ -505,7 +508,7 @@ fn codex_app_server_context_links_to_rich_card() {
             ..Default::default()
         },
         54,
-        14,
+        17,
     );
 
     // The app-server display name supersedes the raw catalog id (its hyphen
@@ -522,7 +525,10 @@ fn codex_app_server_context_links_to_rich_card() {
     // No read-only token usage or cost: the bare rollout total (`▤ 48k`,
     // integer form) stands in for the context line, and no cost pins to the
     // row.
-    assert!(rendered.contains("▤ 48k"));
-    assert!(!rendered.contains('↗'));
-    assert!(!rendered.contains('$'));
+    let token_line = rendered
+        .lines()
+        .find(|line| line.contains("▤ 48k"))
+        .unwrap_or_else(|| panic!("bare token total rendered:\n{rendered}"));
+    assert!(!token_line.contains('↗'));
+    assert!(!token_line.contains('$'));
 }

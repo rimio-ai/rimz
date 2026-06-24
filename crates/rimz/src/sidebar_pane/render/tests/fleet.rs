@@ -11,7 +11,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     // summary, row 3 the `¤` summary, row 4 the hairline rule. An empty room
     // reads `◎ 0` on row 2 with no make-up beneath, so the body never moves.
     let empty = snapshot_with(Vec::new(), Vec::new());
-    let empty_screen = snapshot_to_screen(&empty, 40, 12);
+    let empty_screen = snapshot_to_screen(&empty, 40, 15);
     assert!(
         empty_screen.lines().nth(2).unwrap().contains("◎ 0"),
         "{empty_screen}"
@@ -41,7 +41,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     // pre-edit turn still tallies as working.
     reasoning.phase = crate::agents::TurnPhase::Reasoning;
     let snapshot = snapshot_with(Vec::new(), vec![working, reasoning]);
-    let screen = snapshot_to_screen(&snapshot, 40, 12);
+    let screen = snapshot_to_screen(&snapshot, 40, 15);
     // Row 2 is the `◎` summary, row 3 the `¤` summary; row 5 is the bucket
     // make-up (row 1 is the blank line, row 4 the hairline rule).
     assert!(screen.lines().nth(3).unwrap().contains("¤ 2"), "{screen}");

@@ -16,7 +16,8 @@ use serde_json::json;
 use std::time::Duration;
 
 use super::sections::{
-    dashboard_panel_lines, fleet_header_lines, provider_panel_lines, worktree_group_lines,
+    dashboard_panel_lines, fleet_header_lines, fleet_ledger_lines, provider_dashboard_block_rows,
+    provider_panel_lines, worktree_group_lines,
 };
 
 mod agent_card;

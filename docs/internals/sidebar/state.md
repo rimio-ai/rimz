@@ -33,7 +33,7 @@ One **producer** — the eldest fresh heartbeat per workspace — owns every con
 
 ## Published Caches
 
-One file per lane, one writer per lane, each written temp-file-plus-rename. Exact freshness values live in [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs); per-file mechanics (locks, single-flighting, repair) live in the module that writes the lane. Account-global lanes live under `rimz/shared/`; the rest are room-local under the workspace runtime directory.
+One file per lane, one writer per lane, each written temp-file-plus-rename. Exact freshness values live in [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs); per-file mechanics (locks, single-flighting, repair) live in the module that writes the lane. Account-global data lanes live under `$XDG_STATE_HOME/rimz/shared/` so relaunches open warm; their `*.lock` election files live under `$XDG_RUNTIME_DIR/rimz/shared/`. The rest are room-local under the workspace runtime directory.
 
 The **pane frame** is the topology everything else enriches: `PaneFrame` carries tabs and panes, each pane holding its current (and rotated-out previous) process record, child pids, sampled resource metrics, and focus-contention flags. `observed_at_ms` records when the pane source saw the topology and is the fusion supersession baseline (legacy frames fall back to `produced_at_ms`). The frame is both the card-admission boundary and the producer/consumer cache shape that preserves view structure and process rotation; the read-side repair and carry-forward guards that keep a momentary mux glitch off-screen live in [sidebar.md](./sidebar.md#honest-reads-across-a-mux-hiccup).
 

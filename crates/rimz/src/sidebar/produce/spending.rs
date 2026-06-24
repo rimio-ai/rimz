@@ -15,20 +15,21 @@ const SPENDING_WAIT_STEPS: u32 = 15;
 
 /// Walk every provider's transcript history into a fleet-wide and per-provider
 /// [`Spending`](crate::agents::spending::Spending), publishing the stamped
-/// result to the shared `provider-spending.json` — the cache consumer tabs read
-/// instead of walking, and the producer's own global gate: a stamp younger than
-/// [`SPENDING_TTL`](crate::agents::spending::SPENDING_TTL) serves the published
-/// provider totals without a global transcript walk or price-book load.
+/// result to the persistent shared `provider-spending.json` — the cache consumer
+/// tabs read instead of walking, and the producer's own global gate: a stamp
+/// younger than [`SPENDING_TTL`](crate::agents::spending::SPENDING_TTL) serves
+/// the published provider totals without a global transcript walk or price-book
+/// load.
 ///
 /// The stale walk is single-flighted across every workspace for this user. The
-/// elected producer reads the shared `spending.json` cache, refreshes only files
-/// whose mtime changed, writes it back if anything was updated, and loads the
-/// shared price book (a TTL-gated remote refresh) so Codex's token counts become
-/// dollars. When only this room's workspace tally is missing or stale, the
-/// producer derives it read-only from the shared `spending.json` entry cache
-/// instead of joining the global walk election. A timeout fallback computes an
-/// uncached in-memory result for its own frame and leaves the shared files to
-/// the elected producer.
+/// elected producer reads the persistent shared `spending.json` cache, refreshes
+/// only files whose mtime changed, writes it back if anything was updated, and
+/// loads the shared price book (a TTL-gated remote refresh) so Codex's token
+/// counts become dollars. When only this room's workspace tally is missing or
+/// stale, the producer derives it read-only from the persistent shared
+/// `spending.json` entry cache instead of joining the global walk election. A
+/// timeout fallback computes an uncached in-memory result for its own frame and
+/// leaves the shared files to the elected producer.
 ///
 /// Every registered adapter is discovered fleet-wide
 /// ([`transcript_files`](crate::agents::AgentAdapter::transcript_files)) so each

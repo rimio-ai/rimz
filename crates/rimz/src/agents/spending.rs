@@ -292,7 +292,7 @@ pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 6;
 /// can force a cheap re-aggregate without re-reading transcripts.
 pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 1;
 
-/// On-disk cache persisted at the shared runtime `spending.json`.
+/// On-disk cache persisted at shared state `spending.json`.
 ///
 /// Keyed by canonical file path string.  `dirty` is excluded from
 /// serialization — callers set it and flush when true. `version` gates the

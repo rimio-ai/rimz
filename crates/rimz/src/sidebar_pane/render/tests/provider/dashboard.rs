@@ -503,7 +503,7 @@ fn render_scroll_keeps_gap_above_provider_dashboard() {
             ..Default::default()
         },
         54,
-        20,
+        23,
     );
     let lines = line_texts(&frame.lines);
     let rendered = lines.join("\n");

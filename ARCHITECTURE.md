@@ -70,11 +70,15 @@ per-workspace runtime   $XDG_RUNTIME_DIR/rimz/<id>/   (or /tmp/rimz-<uid>/… )
   heartbeat/ · read-marks/ · unread.json             liveness and attention
   *.json caches · agent_context/ · agent-activity/   disposable enrichment
 
-shared runtime   $XDG_RUNTIME_DIR/rimz/shared/
-  accounts · rate_limits · credits · spending · pricing-cache (+ .lock siblings)
+shared persistent   ~/.local/state/rimz/shared/
+  accounts.json · rate_limits.json · credits.json
+  provider-spending.json · spending.json · pricing-cache.json
+
+shared runtime      $XDG_RUNTIME_DIR/rimz/shared/
+  accounts.lock · rate_limits.lock · credits.lock · spending.lock
 ```
 
-The ledger tier is durable truth, written with temp-file-plus-rename and a framed event log (the durability contract is [ledger.md](./docs/internals/sidebar/ledger.md)). The runtime tiers are disposable: best-effort caches and sidecars that speed the next read and die with the session.
+The ledger tier is durable truth, written with temp-file-plus-rename and a framed event log (the durability contract is [ledger.md](./docs/internals/sidebar/ledger.md)). Shared persistent caches survive reboot so the dashboard and pace views open warm, while runtime tiers are disposable: locks, sockets, sidecars, and per-room best-effort caches that speed the next read and die with the session.
 
 ## Repository layout
 

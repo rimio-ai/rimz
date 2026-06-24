@@ -55,7 +55,7 @@ fn render_scroll_overflow_shows_bar() {
             ..Default::default()
         },
         38,
-        18,
+        21,
     );
     let lines: Vec<&str> = rendered.lines().collect();
     assert!(
@@ -116,7 +116,7 @@ fn render_scroll_offset_follows_selection_to_bottom() {
         selected_index: 5,
         ..Default::default()
     };
-    let rendered = snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &ui, 38, 18);
+    let rendered = snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &ui, 38, 21);
     assert!(
         rendered.contains("task-5"),
         "the selected last card is in view:\n{rendered}"
@@ -127,7 +127,7 @@ fn render_scroll_offset_follows_selection_to_bottom() {
     );
     let mut no_bar = overflowing_fleet();
     no_bar.theme.display.scrollbar = ScrollbarMode::Never;
-    let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &ui, 38, 18);
+    let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &ui, 38, 21);
     assert_eq!(
         rendered, expected,
         "a settled viewport carries no scrollbar overlay"
@@ -168,7 +168,7 @@ fn render_scroll_pins_tall_expanded_card_top() {
     let snapshot = snapshot_with(Vec::new(), agents);
 
     let rendered =
-        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 54, 13);
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 54, 22);
     // The viewport opens below the pinned cockpit separator, so the card
     // block's first line holds one row lower while the subagent list fills down.
     let lines: Vec<&str> = rendered.lines().collect();
@@ -199,7 +199,7 @@ fn render_scroll_manual_offset_holds() {
             ..Default::default()
         },
         38,
-        18,
+        24,
     );
     assert!(
         !rendered.contains("task-0"),
@@ -215,10 +215,10 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
         ..Default::default()
     };
     let settled =
-        snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &settled_ui, 38, 18);
+        snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &settled_ui, 38, 21);
     let mut no_bar = overflowing_fleet();
     no_bar.theme.display.scrollbar = ScrollbarMode::Never;
-    let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &settled_ui, 38, 18);
+    let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &settled_ui, 38, 21);
     assert_eq!(
         settled, expected,
         "the settle window has passed — no scrollbar overlay"
@@ -226,7 +226,7 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
 
     let mut snapshot = overflowing_fleet();
     snapshot.theme.display.scrollbar = ScrollbarMode::Always;
-    let always = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 38, 18);
+    let always = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 38, 21);
     assert!(
         line_containing(&always, "⑂ alpha").ends_with('▐'),
         "always mode pins the bar with no activity:\n{always}"
@@ -253,7 +253,7 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
         "never mode leaves a non-selected rail blank even mid-scroll:\n{never}"
     );
     assert!(
-        never.contains("task-3") && !never.contains("task-0"),
+        never.contains("task-2") && !never.contains("task-0"),
         "the pinned window still renders its cards:\n{never}"
     );
 }

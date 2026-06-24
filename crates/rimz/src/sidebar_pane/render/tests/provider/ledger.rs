@@ -129,6 +129,62 @@ fn render_fleet_ledger_pins_week_month_rows_under_the_dashboard() {
 }
 
 #[test]
+fn render_fleet_ledger_keeps_zero_rows_for_missing_or_zero_tally() {
+    let theme = Theme::fixed(true);
+    let missing = line_texts(&fleet_ledger_lines(&theme, None, 60)).join("\n");
+
+    assert!(missing.contains("W:"), "missing tally week row:\n{missing}");
+    assert!(
+        missing.contains("M:"),
+        "missing tally month row:\n{missing}"
+    );
+    assert_eq!(
+        missing.matches("$0.00").count(),
+        2,
+        "missing tally renders zero USD:\n{missing}"
+    );
+
+    let zero = crate::SpendTally::default();
+    let zero_rendered = line_texts(&fleet_ledger_lines(&theme, Some(&zero), 60)).join("\n");
+
+    assert!(
+        zero_rendered.contains("W:") && zero_rendered.contains("M:"),
+        "zero tally keeps both rows:\n{zero_rendered}"
+    );
+    assert_eq!(
+        zero_rendered.matches("$0.00").count(),
+        2,
+        "zero tally renders zero USD:\n{zero_rendered}"
+    );
+
+    let panel = provider_panel("claude", "Claude", 173, true, true, Some((25, 40)));
+    let active = panel.kind.clone();
+    let (lines, _) = dashboard_panel_lines(
+        &theme,
+        std::slice::from_ref(&panel),
+        Some(&active),
+        true,
+        None,
+        None,
+        true,
+        40,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let rendered = line_texts(&lines).join("\n");
+
+    assert_eq!(
+        provider_dashboard_block_rows(&panel),
+        lines.len() - 2,
+        "row-count helper matches painted active block:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("W: $0.00") && rendered.contains("M: $0.00"),
+        "normal total USD row renders zero:\n{rendered}"
+    );
+}
+
+#[test]
 fn pets_provider_dashboard_owns_total_rows() {
     let mut claude = agent(
         "claude-1",
@@ -307,8 +363,9 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
         "folded footer is the bottom row:\n{rendered}"
     );
     assert!(
-        lines[footer_index.saturating_sub(1)].contains('▀'),
-        "the spare pet row sits above the footer:\n{rendered}"
+        lines[footer_index.saturating_sub(1)].contains("W: $0.00")
+            && lines[footer_index.saturating_sub(1)].contains("M: $0.00"),
+        "the zero total row sits above the footer:\n{rendered}"
     );
     assert_eq!(
         lines

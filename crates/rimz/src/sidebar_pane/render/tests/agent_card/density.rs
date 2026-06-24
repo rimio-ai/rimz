@@ -66,7 +66,7 @@ fn compact_density_trims_resting_cards_by_status() {
             ..Default::default()
         },
         54,
-        28,
+        31,
     );
 
     assert!(
@@ -135,7 +135,7 @@ fn compact_density_running_waiting_without_context_use_baseline_gauge() {
             ..Default::default()
         },
         54,
-        18,
+        21,
     );
 
     assert!(
@@ -190,7 +190,7 @@ fn compact_density_standalone_waiting_without_context_omits_gauge() {
             ..Default::default()
         },
         54,
-        14,
+        17,
     );
 
     assert!(
@@ -236,7 +236,7 @@ fn compact_density_selected_card_opens_to_full_form() {
             ..Default::default()
         },
         54,
-        18,
+        21,
     );
 
     assert!(
@@ -289,7 +289,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
             ..Default::default()
         },
         54,
-        18,
+        21,
     );
 
     let subagent_line = rendered

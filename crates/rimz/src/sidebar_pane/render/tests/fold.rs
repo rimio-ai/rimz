@@ -152,7 +152,7 @@ fn render_l0_density_keeps_identity_when_narrow() {
     let snapshot = snapshot_with(Vec::new(), vec![codex]);
     // Tall enough that the card clears the bottom-pinned footer after the
     // cockpit's pinned separator (the agent row is what we measure).
-    let rendered = snapshot_to_screen(&snapshot, 24, 12);
+    let rendered = snapshot_to_screen(&snapshot, 24, 15);
 
     assert!(
         // phase 0 of the working spinner is the first frame `⣾`.
@@ -347,16 +347,31 @@ fn bottom_chrome_ledger_only_opens_with_a_hairline() {
     assert!(hits.is_empty());
 }
 #[test]
-fn bottom_chrome_empty_room_is_footer_only() {
+fn bottom_chrome_empty_room_keeps_zero_ledger() {
     let snapshot = snapshot_with(Vec::new(), Vec::new());
 
     let (lines, hits) = bottom_chrome_texts(&snapshot, None);
 
-    assert_eq!(lines.len(), 1);
-    assert!(lines[0].contains("? for help"), "{}", lines.join("\n"));
     assert!(
-        !lines[0].trim().is_empty() && !is_hairline(&lines[0]),
-        "the empty-room footer does not float under a separator"
+        is_hairline(&lines[0]),
+        "the zero ledger opens with a separator:\n{}",
+        lines.join("\n")
+    );
+    assert!(
+        lines[1].contains("W:") && lines[1].contains("$0.00"),
+        "week row:\n{}",
+        lines.join("\n")
+    );
+    assert!(
+        lines[2].contains("M:") && lines[2].contains("$0.00"),
+        "month row:\n{}",
+        lines.join("\n")
+    );
+    assert_eq!(lines[3], "", "footer breathes below the zero ledger");
+    assert!(
+        lines[4].contains("? for help"),
+        "footer follows the blank:\n{}",
+        lines.join("\n")
     );
     assert!(hits.is_empty());
 }

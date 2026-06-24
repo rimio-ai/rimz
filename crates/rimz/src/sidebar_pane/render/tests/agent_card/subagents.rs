@@ -65,7 +65,7 @@ fn render_selected_card_collapses_finished_subagent_and_keeps_running_metadata()
             ..Default::default()
         },
         54,
-        20,
+        23,
     );
 
     assert!(
@@ -104,9 +104,15 @@ fn render_selected_card_collapses_finished_subagent_and_keeps_running_metadata()
         "the finished child's metadata row is dropped:\n{rendered}"
     );
     // Exactly one subagent metadata row renders — the running child's.
+    let subagent_metadata_rows = rendered
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            line.contains("◇") && !trimmed.starts_with("W:") && !trimmed.starts_with("M:")
+        })
+        .count();
     assert_eq!(
-        rendered.matches('◇').count(),
-        1,
+        subagent_metadata_rows, 1,
         "only the running child carries a `◇` metadata row:\n{rendered}"
     );
     assert_snapshot("subagent_two_line_entry", rendered);
@@ -164,7 +170,7 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
             ..Default::default()
         },
         54,
-        20,
+        23,
     );
 
     // Anchor each lookup to the child's own metadata line — the parent's

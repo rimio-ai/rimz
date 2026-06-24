@@ -1,8 +1,10 @@
-//! Disk and runtime path resolution.
+//! Disk, runtime, and shared-cache path resolution.
 //!
 //! State paths live under `$XDG_STATE_HOME/rimz/workspaces/<id>/`.
 //! Runtime paths live under `$XDG_RUNTIME_DIR/rimz/<id>/`, falling back to
 //! `/tmp/rimz-<uid>/rimz/<id>/` at mode `0700` per `docs/internals/sidebar/ledger.md`.
+//! Shared data caches live under `$XDG_STATE_HOME/rimz/shared/`; shared
+//! election locks live under `$XDG_RUNTIME_DIR/rimz/shared/`.
 
 use std::env;
 use std::fs;
@@ -125,7 +127,12 @@ pub fn workspaces_dir_under(state_root: &Path) -> PathBuf {
 pub struct RuntimePaths {
     pub workspace_id: WorkspaceId,
     pub root: PathBuf,
+    /// User-scoped election locks. Data caches use [`Self::persistent_shared_root`].
     pub shared_root: PathBuf,
+    /// User-scoped shared data caches. Production constructors root this under
+    /// [`state_home`], while [`Self::under`] roots it under the supplied runtime
+    /// root for test isolation and byte-identical cross-workspace cache paths.
+    pub persistent_shared_root: PathBuf,
     pub sock_dir: PathBuf,
     pub heartbeat_dir: PathBuf,
     /// Per-renderer read receipts for unread sidebar rows. Disposable runtime
@@ -149,7 +156,11 @@ pub struct RuntimePaths {
 
 impl RuntimePaths {
     pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
-        Self::validated_under(workspace_id, &runtime_home())
+        Self::for_workspace_with_shared_root(
+            workspace_id,
+            &runtime_home(),
+            persistent_shared_home(),
+        )
     }
 
     /// Account-global runtime paths with no bound room, for readers that run
@@ -160,18 +171,23 @@ impl RuntimePaths {
     pub fn shared() -> Self {
         let sentinel = WorkspaceId::parse("ws_000000000000000000000000")
             .expect("reserved all-zero workspace id is well-formed");
-        Self::under(sentinel, &runtime_home())
-            .expect("under() builds paths without IO and cannot fail")
+        let mut paths = Self::under(sentinel, &runtime_home())
+            .expect("under() builds paths without IO and cannot fail");
+        paths.persistent_shared_root = persistent_shared_home();
+        paths
     }
 
     /// Build runtime paths rooted at `runtime_root`. Tests prefer this so they
     /// don't need to set `XDG_RUNTIME_DIR`. This raw constructor deliberately
-    /// skips the socket budget; production callers use [`Self::for_workspace`] or
-    /// [`Self::validated_under`] so a long ambient runtime root fails before any
-    /// session side effect.
+    /// skips the socket budget; ambient production callers use
+    /// [`Self::for_workspace`] so a long runtime root fails before any session
+    /// side effect. Shared data and lock paths both root under `runtime_root`
+    /// here so tests stay isolated; [`Self::for_workspace`] and [`Self::shared`]
+    /// move shared data to [`persistent_shared_home`].
     pub fn under(workspace_id: WorkspaceId, runtime_root: &Path) -> Result<Self> {
         let root = runtime_root.join("rimz").join(workspace_id.as_str());
         let shared_root = runtime_root.join("rimz").join("shared");
+        let persistent_shared_root = shared_root.clone();
         let sock_dir = root.join("sock");
         let heartbeat_dir = root.join("heartbeat");
         let read_marks_dir = root.join("read-marks");
@@ -182,6 +198,7 @@ impl RuntimePaths {
             workspace_id,
             root,
             shared_root,
+            persistent_shared_root,
             sock_dir,
             heartbeat_dir,
             read_marks_dir,
@@ -195,6 +212,16 @@ impl RuntimePaths {
         let paths = Self::under(workspace_id, runtime_root)?;
         let budget = SockBudget::for_sock_dir(&paths.sock_dir);
         budget.validate()?;
+        Ok(paths)
+    }
+
+    fn for_workspace_with_shared_root(
+        workspace_id: WorkspaceId,
+        runtime_root: &Path,
+        persistent_shared_root: PathBuf,
+    ) -> Result<Self> {
+        let mut paths = Self::validated_under(workspace_id, runtime_root)?;
+        paths.persistent_shared_root = persistent_shared_root;
         Ok(paths)
     }
 
@@ -245,7 +272,7 @@ impl RuntimePaths {
     }
 
     pub fn shared_accounts_path(&self) -> PathBuf {
-        self.shared_root.join("accounts.json")
+        self.persistent_shared_root.join("accounts.json")
     }
 
     pub fn shared_accounts_lock(&self) -> PathBuf {
@@ -253,7 +280,7 @@ impl RuntimePaths {
     }
 
     pub fn shared_rate_limits_path(&self) -> PathBuf {
-        self.shared_root.join("rate_limits.json")
+        self.persistent_shared_root.join("rate_limits.json")
     }
 
     pub fn shared_rate_limits_lock(&self) -> PathBuf {
@@ -261,7 +288,7 @@ impl RuntimePaths {
     }
 
     pub fn shared_credits_path(&self) -> PathBuf {
-        self.shared_root.join("credits.json")
+        self.persistent_shared_root.join("credits.json")
     }
 
     pub fn shared_credits_lock(&self) -> PathBuf {
@@ -269,7 +296,7 @@ impl RuntimePaths {
     }
 
     pub fn shared_provider_spending_path(&self) -> PathBuf {
-        self.shared_root.join("provider-spending.json")
+        self.persistent_shared_root.join("provider-spending.json")
     }
 
     pub fn shared_spending_lock(&self) -> PathBuf {
@@ -277,11 +304,11 @@ impl RuntimePaths {
     }
 
     pub fn shared_spending_cursor_path(&self) -> PathBuf {
-        self.shared_root.join("spending.json")
+        self.persistent_shared_root.join("spending.json")
     }
 
     pub fn shared_pricing_cache_path(&self) -> PathBuf {
-        self.shared_root.join("pricing-cache.json")
+        self.persistent_shared_root.join("pricing-cache.json")
     }
 
     pub fn live_spend_baselines_path(&self) -> PathBuf {
@@ -309,6 +336,7 @@ impl RuntimePaths {
         ensure_private_runtime_dir(rimz_root)?;
         ensure_private_runtime_dir(&self.root)?;
         ensure_private_runtime_dir(&self.shared_root)?;
+        mkdir_p(&self.persistent_shared_root)?;
         mkdir_p(&self.sock_dir)?;
         mkdir_p(&self.heartbeat_dir)?;
         mkdir_p(&self.read_marks_dir)?;
@@ -415,6 +443,10 @@ pub fn runtime_home() -> PathBuf {
     // /tmp/rimz-<uid> namespace per the docs; RuntimePaths::ensure_dirs verifies
     // and hardens the fallback root, rimz root, workspace root, and shared root.
     runtime_fallback_home()
+}
+
+pub fn persistent_shared_home() -> PathBuf {
+    state_home().join("rimz").join("shared")
 }
 
 #[cfg(unix)]
@@ -549,6 +581,52 @@ mod tests {
             first_paths.shared_pricing_cache_path(),
             second_paths.shared_pricing_cache_path()
         );
+    }
+
+    #[test]
+    fn production_runtime_paths_persist_shared_data_and_keep_locks_runtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_root = temp.path().join("state");
+        let runtime_root = temp.path().join("runtime");
+        let persistent_shared_root = state_root.join("rimz").join("shared");
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+
+        let paths = RuntimePaths::for_workspace_with_shared_root(
+            workspace_id,
+            &runtime_root,
+            persistent_shared_root.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(paths.shared_root, runtime_root.join("rimz").join("shared"));
+        assert_eq!(paths.persistent_shared_root, persistent_shared_root);
+        assert_eq!(
+            paths.shared_provider_spending_path(),
+            state_root
+                .join("rimz")
+                .join("shared")
+                .join("provider-spending.json")
+        );
+        assert_eq!(
+            paths.shared_accounts_path(),
+            state_root.join("rimz").join("shared").join("accounts.json")
+        );
+        assert_eq!(
+            paths.shared_spending_cursor_path(),
+            state_root.join("rimz").join("shared").join("spending.json")
+        );
+        assert_eq!(
+            paths.shared_spending_lock(),
+            runtime_root
+                .join("rimz")
+                .join("shared")
+                .join("spending.lock")
+        );
+
+        paths.ensure_dirs().unwrap();
+
+        assert!(paths.persistent_shared_root.is_dir());
+        assert!(paths.shared_root.is_dir());
     }
 
     #[test]

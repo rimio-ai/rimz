@@ -14,4 +14,13 @@ expression: screen
 ▌  db migrate                                        ▐
 ▌  ▢ ──────────────────────────────────────────    0%▐
 ▌  ⧉ subagents (4)                                   ▐
+▌    ⣾ Explore — survey area 0                       ▐
+▌      ◇ 1k                                     ◔  4m▐
+▌    ⣾ Explore — survey area 1                       ▐
+▌      ◇ 2k                                     ◔  3m▐
+▌    ⣾ Explore — survey area 2                       ▐
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+
                                            ? for help
