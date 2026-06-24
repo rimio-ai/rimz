@@ -288,14 +288,14 @@ fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'st
         SidebarLinkFreshness::Stale => theme.muted(),
         SidebarLinkFreshness::Fresh => {
             link_badge_heat(link.rtt_ms, link.miss_pct).map_or(theme.body(), |amount| {
-                // A critical link (top of the warm tail) keeps its bold weight so
+                // A critical link (red end of the ramp) keeps its bold weight so
                 // it stays loud where color is off.
                 let modifier = if amount >= 1.0 {
                     Modifier::BOLD
                 } else {
                     Modifier::empty()
                 };
-                theme.style(theme.warm_heat_tone(amount), modifier)
+                theme.style(theme.heat_tone(amount), modifier)
             })
         }
     };

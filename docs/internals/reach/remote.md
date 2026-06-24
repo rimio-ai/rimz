@@ -32,7 +32,7 @@ The schema is versioned as `rimz.link.v1`. The remote ingest writes `<runtime>/<
 
 The footer shows a link badge when fresh or stale stats exist: `⇄ remote 210ms` for fresh stats, `⇄ remote …` while the RTT warms, and `⇄ remote ?` for stale stats. Clean links omit loss; the badge appends `{n}%` only when loss is above `10%`.
 
-The badge display is separate from alerting. It renders the worse of latency and loss along the health ramp's warm tail: calm soft gray at RTT `<=150ms` and loss `<=10%`, then a continuous slide from gold (just past those thresholds) through amber (RTT `300ms` / loss `20%`) to bold red (RTT `>=500ms` / loss `>=30%`). Alerting keeps the stricter `LinkTier` thresholds, so low nonzero loss can notify while the badge stays visually calm.
+The badge display is separate from alerting. It renders the worse of latency and loss along the full health ramp: green at RTT `<=100ms` and loss `0%`, through yellow (RTT `200ms` / loss `10%`) and amber (RTT `300ms` / loss `20%`) to bold red (RTT `>=400ms` / loss `>=30%`); a warming badge with no RTT sample stays neutral. Alerting keeps the stepped `LinkTier` thresholds, so low nonzero loss can notify while the continuous badge reads only a touch off green.
 
 The local supervisor emits terminal-local OSC/BEL and `[notifications].command` alerts for confirmed link lost and restored edges. Probe blackout emits terminal-local OSC/BEL only, because it is a local stall signal and the configured command is reserved for confirmed link drops and recoveries. These alerts are local because a dead link cannot rely on the remote-rendered sidebar to reach the user.
 

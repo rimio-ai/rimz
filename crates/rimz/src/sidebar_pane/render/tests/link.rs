@@ -1,6 +1,6 @@
 use super::*;
 use crate::remote::link::LinkTier;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 
 fn footer_text(snapshot: &SidebarSnapshot, width: usize) -> String {
     crate::sidebar_pane::render::chrome::footer_lines(
@@ -95,6 +95,37 @@ fn warming_link_badge_uses_remote_ellipsis() {
     let snapshot = with_link(LinkTier::Good, crate::SidebarLinkFreshness::Fresh, None, 0);
 
     assert!(footer_text(&snapshot, 40).starts_with("⇄ remote …"));
+}
+
+#[test]
+fn fresh_link_badge_uses_full_health_ramp() {
+    let theme = Theme::fixed(false);
+
+    let healthy = with_link(
+        LinkTier::Good,
+        crate::SidebarLinkFreshness::Fresh,
+        Some(80),
+        0,
+    );
+    let healthy_badge = footer_spans(&healthy, 40)
+        .into_iter()
+        .find(|span| span.content.contains("remote"))
+        .unwrap();
+    assert_eq!(healthy_badge.style.fg, Some(theme.heat_tone(0.0)));
+    assert!(!healthy_badge.style.add_modifier.contains(Modifier::BOLD));
+
+    let bad = with_link(
+        LinkTier::Bad,
+        crate::SidebarLinkFreshness::Fresh,
+        Some(450),
+        0,
+    );
+    let bad_badge = footer_spans(&bad, 40)
+        .into_iter()
+        .find(|span| span.content.contains("remote"))
+        .unwrap();
+    assert_eq!(bad_badge.style.fg, Some(theme.heat_tone(1.0)));
+    assert!(bad_badge.style.add_modifier.contains(Modifier::BOLD));
 }
 
 #[test]

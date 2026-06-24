@@ -135,33 +135,26 @@ pub fn link_tier(rtt_ms: Option<u32>, miss_pct: u16) -> LinkTier {
 
 /// Footer-badge heat, computed as the worse of the latency and probe-loss axes.
 ///
-/// Alerting uses [`LinkTier`]; the badge keeps a calmer ladder so a healthy link
-/// recedes. `None` while calm (`rtt ≤ 150ms` **and** `loss ≤ 10%`) — the badge
-/// then paints its neutral resting tone. Otherwise the worse axis maps onto the
-/// warm tail: `0.0` just past the calm threshold (gold), `0.5` at the middle
-/// stop (amber), `1.0` at the top stop and beyond (red), so latency and loss
-/// still slide visibly. The renderer turns this into a tone through
-/// `Theme::warm_heat_tone`, keeping this module theme-free.
+/// Alerting uses [`LinkTier`]; the badge is a continuous ramp the renderer turns
+/// into a tone through `Theme::heat_tone` (green → gold → amber → red), keeping
+/// this module theme-free. Both axes are linear — latency over `100..=400ms`,
+/// loss over `0..=30%` — so a healthy fresh link reads green (`0.0`) and a bad
+/// one red (`1.0`). `None` only while the RTT is still warming (no sample yet),
+/// where the renderer paints its neutral resting tone.
 pub fn link_badge_heat(rtt_ms: Option<u32>, miss_pct: u16) -> Option<f32> {
-    let rtt = rtt_ms.and_then(|ms| axis_badge_heat(ms, 150, 300, 500));
-    let loss = axis_badge_heat(u32::from(miss_pct), 10, 20, 30);
-    match (rtt, loss) {
-        (Some(a), Some(b)) => Some(a.max(b)),
-        (a, b) => a.or(b),
-    }
+    let rtt = rtt_ms?;
+    let latency = axis_badge_heat(rtt, 100, 400);
+    let loss = axis_badge_heat(u32::from(miss_pct), 0, 30);
+    Some(latency.max(loss))
 }
 
-/// One badge axis along the warm tail: `None` at or below `calm`, then `0.0`
-/// just past it, `0.5` at `mid`, and `1.0` at `alarm` and beyond.
-fn axis_badge_heat(value: u32, calm: u32, mid: u32, alarm: u32) -> Option<f32> {
-    if value > alarm {
-        Some(1.0)
-    } else if value > mid {
-        Some(0.5 + 0.5 * (value - mid) as f32 / (alarm - mid) as f32)
-    } else if value > calm {
-        Some(0.5 * (value - calm) as f32 / (mid - calm) as f32)
+/// One badge axis on the full ramp: `0.0` at or below `calm`, climbing linearly
+/// to `1.0` at `alarm` and beyond.
+fn axis_badge_heat(value: u32, calm: u32, alarm: u32) -> f32 {
+    if value <= calm {
+        0.0
     } else {
-        None
+        ((value - calm) as f32 / (alarm - calm) as f32).min(1.0)
     }
 }
 
@@ -498,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn badge_heat_recedes_when_calm_then_climbs_each_axis() {
+    fn badge_heat_greens_when_healthy_then_climbs_each_axis() {
         let approx = |actual: Option<f32>, expected: f32| {
             let got = actual.expect("heat");
             assert!(
@@ -506,24 +499,25 @@ mod tests {
                 "expected {expected}, got {got}"
             );
         };
-        // Calm recedes: no rtt sample, or rtt and loss inside the calm band.
+        // Warming has no RTT sample; sampled healthy links stay on green.
         assert_eq!(link_badge_heat(None, 0), None);
-        assert_eq!(link_badge_heat(Some(150), 0), None);
-        assert_eq!(link_badge_heat(Some(10), 10), None);
-        // Latency climbs the warm tail: gold just past 150ms, amber at 300ms, red at 500ms.
-        assert!(link_badge_heat(Some(151), 0).is_some_and(|a| a > 0.0 && a < 0.05));
-        approx(link_badge_heat(Some(300), 0), 0.5);
+        approx(link_badge_heat(Some(100), 0), 0.0);
+        approx(link_badge_heat(Some(50), 0), 0.0);
+        // Latency climbs the full ramp: green at 100ms, yellow at 200ms,
+        // amber at 300ms, red at 400ms and beyond.
+        approx(link_badge_heat(Some(200), 0), 1.0 / 3.0);
+        approx(link_badge_heat(Some(300), 0), 2.0 / 3.0);
+        approx(link_badge_heat(Some(400), 0), 1.0);
         approx(link_badge_heat(Some(500), 0), 1.0);
-        approx(link_badge_heat(Some(501), 0), 1.0);
-        // Loss climbs the same tail independently: amber at 20%, red at 30%.
-        assert!(link_badge_heat(Some(10), 11).is_some_and(|a| a > 0.0 && a < 0.1));
-        approx(link_badge_heat(Some(10), 20), 0.5);
-        approx(link_badge_heat(Some(10), 30), 1.0);
-        approx(link_badge_heat(Some(10), 31), 1.0);
-        // The worse axis wins: heavy loss reds the badge despite calm latency,
-        // and a mid-amber latency yields to worse loss.
-        approx(link_badge_heat(Some(180), 31), 1.0);
-        approx(link_badge_heat(Some(301), 25), 0.75);
+        // Loss climbs the same ramp independently: yellow at 10%, amber at 20%,
+        // red at 30% and beyond.
+        approx(link_badge_heat(Some(100), 10), 1.0 / 3.0);
+        approx(link_badge_heat(Some(100), 20), 2.0 / 3.0);
+        approx(link_badge_heat(Some(100), 30), 1.0);
+        approx(link_badge_heat(Some(100), 31), 1.0);
+        // The worse axis wins.
+        approx(link_badge_heat(Some(120), 30), 1.0);
+        approx(link_badge_heat(Some(300), 10), 2.0 / 3.0);
     }
 
     #[test]

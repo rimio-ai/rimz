@@ -128,7 +128,7 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 
 The AFK badge is quiet chrome: it appears only while away, uses the muted tone, and takes the footer's left edge. The remote-link badge yields to it and appears after two spaces only when the line still fits before `? for help`.
 
-Remote-link badge tones are color-only: a calm link stays soft gray, then latency and loss slide it continuously from gold through amber to red, bold at the critical end. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge in the common active case, and `? for help` pins to the footer's right edge.
+Remote-link badge tones are color-only: a healthy link reads green, then latency and loss slide it continuously through yellow and amber to red, bold at the critical end; a warming link stays neutral until it has an RTT sample. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge in the common active case, and `? for help` pins to the footer's right edge.
 
 ## Zone 1 — the cockpit
 
