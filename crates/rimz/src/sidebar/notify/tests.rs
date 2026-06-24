@@ -376,8 +376,8 @@ fn focused_agent_is_suppressed() {
 fn global_title_body_templates_reskin_agent_notifications() {
     let mut state = NotificationState::default();
     let prefs = NotificationsPrefs {
-        title: Some("Rimz: {{status}} in {{worktree}}".to_owned()),
-        body: Some("{{task}} ({{count}})".to_owned()),
+        title: Some("Rimz: {{agent}} {{status}} in {{worktree}}".to_owned()),
+        body: Some("{{handle}}: {{task}} ({{count}})".to_owned()),
         ..prefs()
     };
 
@@ -386,7 +386,7 @@ fn global_title_body_templates_reskin_agent_notifications() {
         snapshot(vec![agent_with_context(
             "a1",
             AgentStatus::Waiting,
-            "@planner",
+            "planner",
             "feat/ntfy",
             "wire ntfy",
         )]),
@@ -396,11 +396,11 @@ fn global_title_body_templates_reskin_agent_notifications() {
     );
 
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0].title, "Rimz: waiting in feat/ntfy");
-    assert_eq!(out[0].body, "wire ntfy (1)");
+    assert_eq!(out[0].title, "Rimz: planner waiting in feat/ntfy");
+    assert_eq!(out[0].body, "planner: wire ntfy (1)");
     assert_eq!(out[0].agents[0].worktree.as_deref(), Some("feat/ntfy"));
     assert_eq!(out[0].agents[0].task.as_deref(), Some("wire ntfy"));
-    assert_eq!(out[0].agents[0].handle, "@planner");
+    assert_eq!(out[0].agents[0].handle, "planner");
 }
 
 #[test]
@@ -778,7 +778,10 @@ fn handlers_spawn_only_matching_conditions_and_shell_quote_templates() {
                 ..crate::config::NotifyHandler::default()
             },
             crate::config::NotifyHandler {
-                command: format!("printf '%s\\n' {{{{task}}}} > {}", sh_quote(&out)),
+                command: format!(
+                    "printf '%s\\n%s\\n%s\\n' {{{{agent}}}} {{{{handle}}}} {{{{task}}}} > {}",
+                    sh_quote(&out)
+                ),
                 when: crate::config::NotifyCondition {
                     kind: vec![NotificationKind::Waiting],
                     worktree: vec!["feat/*".to_owned()],
@@ -794,7 +797,7 @@ fn handlers_spawn_only_matching_conditions_and_shell_quote_templates() {
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from("sess-1"),
             label: "danger task".to_owned(),
-            handle: "@planner".to_owned(),
+            handle: "planner".to_owned(),
             worktree: Some("feat/ntfy".to_owned()),
             task: Some("\"; rm -rf /".to_owned()),
             pane_id: None,
@@ -807,7 +810,7 @@ fn handlers_spawn_only_matching_conditions_and_shell_quote_templates() {
     };
 
     assert_eq!(spawn_notify_handlers(&prefs, &notification), 1);
-    assert_eq!(wait_for_text(&out), "\"; rm -rf /\n");
+    assert_eq!(wait_for_text(&out), "planner\nplanner\n\"; rm -rf /\n");
     assert!(!miss.exists());
 }
 

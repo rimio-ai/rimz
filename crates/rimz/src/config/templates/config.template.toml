@@ -37,7 +37,7 @@
 # coalesce_ms = 1000
 # remind_secs = 60                   # seconds between local unread reminders; 0 disables reminders
 ## title = "Rimz: {{agent}} {{kind}}"  # optional banner title for agent/coalesced notifications
-## body = "{{task}}"                   # optional banner body; vars: kind, agent, status, worktree, task, count, unread
+## body = "{{task}}"                   # optional banner body; vars: kind, agent, handle, status, worktree, task, count, unread
 ## command = "ntfy publish rimz"       # shorthand for one unconditional handler; receives RIMZ_NOTIFY_* environment variables
 ## [[notifications.handler]]
 ## name = "waiting-ntfy"

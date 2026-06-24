@@ -41,6 +41,14 @@ impl Notification {
             .join(", ")
     }
 
+    fn handle_env(&self) -> String {
+        self.agents
+            .iter()
+            .map(|agent| agent.handle.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     pub fn kind_env(&self) -> &'static str {
         self.notification_kind.as_str()
     }
@@ -419,7 +427,8 @@ fn spawn_notify_command(command: &str, notification: &Notification) -> std::io::
 fn notification_template_vars(notification: &Notification) -> TemplateVars {
     let mut vars = TemplateVars::new();
     vars.insert("kind", notification.kind_env());
-    vars.insert("agent", notification.agent_env());
+    vars.insert("agent", notification.handle_env());
+    vars.insert("handle", notification.handle_env());
     vars.insert("count", notification.agents.len().to_string());
     vars.insert(
         "unread",
@@ -465,7 +474,6 @@ fn render_notification_text(
             Err(err) => tracing::debug!(error = %err, "notification title template render failed"),
         }
     }
-    let vars = notification_template_vars(&notification);
     if let Some(body) = &prefs.body {
         match render_template(body, &vars, RenderMode::Plain) {
             Ok(body) => notification.body = body,

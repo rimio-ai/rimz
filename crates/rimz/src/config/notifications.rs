@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use crate::agents::AgentStatus;
 
 pub const KNOWN_TEMPLATE_VARS: &[&str] = &[
-    "kind", "agent", "status", "worktree", "task", "count", "unread", "title", "body",
+    "kind", "agent", "handle", "status", "worktree", "task", "count", "unread", "title", "body",
 ];
 const KNOWN_TEMPLATE_VARS_LIST: &str =
-    "kind, agent, status, worktree, task, count, unread, title, body";
+    "kind, agent, handle, status, worktree, task, count, unread, title, body";
 
 /// Best-effort attention delivery preferences. These are per-machine because
 /// they describe how this terminal or host should reach this user; a clone never
@@ -148,13 +148,13 @@ impl NotifyCondition {
         let handle_matches = self.handle.is_empty()
             || agents
                 .iter()
-                .any(|agent| any_pattern_matches(&self.handle, agent.handle));
+                .any(|agent| any_handle_pattern_matches(&self.handle, agent.handle));
         worktree_matches && handle_matches
     }
 
     fn validate(&self, label: &str) -> Result<(), NotificationsConfigErr> {
         validate_patterns(format!("{label}.when.worktree"), &self.worktree)?;
-        validate_patterns(format!("{label}.when.handle"), &self.handle)
+        validate_handle_patterns(format!("{label}.when.handle"), &self.handle)
     }
 }
 
@@ -253,16 +253,6 @@ impl NotificationKind {
             Self::LinkLost => "link_lost",
             Self::LinkRestored => "link_restored",
             Self::Reminder => "reminder",
-        }
-    }
-
-    pub const fn from_status(status: AgentStatus) -> Option<Self> {
-        match status {
-            AgentStatus::Waiting => Some(Self::Waiting),
-            AgentStatus::Failed => Some(Self::Failed),
-            AgentStatus::Paused => Some(Self::Paused),
-            AgentStatus::Success => Some(Self::Success),
-            AgentStatus::Running | AgentStatus::Idle => None,
         }
     }
 }
@@ -379,12 +369,39 @@ fn validate_patterns(field: String, patterns: &[String]) -> Result<(), Notificat
     Ok(())
 }
 
+fn validate_handle_patterns(
+    field: String,
+    patterns: &[String],
+) -> Result<(), NotificationsConfigErr> {
+    for pattern in patterns {
+        let normalized = normalize_handle_pattern(pattern);
+        Pattern::new(normalized).map_err(|source| NotificationsConfigErr::InvalidGlob {
+            field: field.clone(),
+            pattern: pattern.clone(),
+            error: source.to_string(),
+        })?;
+    }
+    Ok(())
+}
+
 fn any_pattern_matches(patterns: &[String], value: &str) -> bool {
     patterns.iter().any(|pattern| {
         Pattern::new(pattern)
             .map(|pattern| pattern.matches(value))
             .unwrap_or(false)
     })
+}
+
+fn any_handle_pattern_matches(patterns: &[String], value: &str) -> bool {
+    patterns.iter().any(|pattern| {
+        Pattern::new(normalize_handle_pattern(pattern))
+            .map(|pattern| pattern.matches(value))
+            .unwrap_or(false)
+    })
+}
+
+fn normalize_handle_pattern(pattern: &str) -> &str {
+    pattern.strip_prefix('@').unwrap_or(pattern)
 }
 
 fn handler_label(index: usize, name: Option<&str>) -> String {
@@ -478,7 +495,7 @@ mod tests {
                     worktree: Some("main"),
                 },
                 NotifyConditionAgent {
-                    handle: "@planner",
+                    handle: "planner",
                     worktree: Some("feat/ntfy"),
                 },
             ]
