@@ -187,6 +187,7 @@ pub(crate) fn message_for_target(
         last_error: None,
         delivered_at: None,
         auto_compact: draft.auto_compact,
+        compacted_context_tokens: None,
     }
 }
 
@@ -201,15 +202,7 @@ pub(crate) fn send_prompt_to_live_pane(
 ) -> Result<SentPrompt> {
     let mut compacted = None;
     if prompt.body == MessageBody::Prompt
-        && let Some(command) = compact_message_for_target(
-            prompt.workspace_id.clone(),
-            target,
-            bound,
-            prompt.gate,
-            prompt.sender.clone(),
-            prompt.force,
-            prompt.auto_compact,
-        )
+        && let Some(command) = compact_message_for_target(ledger, target, bound, prompt)
     {
         match send_to_live_pane(workspace, ledger, snapshot, target, bound, &command, send) {
             Ok(Outcome::Sent { message_id, .. }) => {
@@ -332,34 +325,61 @@ pub(crate) fn send_to_live_pane(
 }
 
 pub(crate) fn compact_message_for_target(
-    workspace_id: WorkspaceId,
+    ledger: &rimz::Ledger,
     target: &PaneAgent,
     bound: Option<&AgentState>,
-    gate: DeliveryGate,
-    sender: MessageSender,
-    force: bool,
-    auto_compact: Option<AutoCompact>,
+    prompt: &MessageRecord,
 ) -> Option<MessageRecord> {
-    let threshold = auto_compact?;
+    let threshold = prompt.auto_compact?;
     let agent = bound?;
     if !threshold.triggered(agent) {
         return None;
     }
+    if agent.compacting_since.is_some() {
+        return None;
+    }
     let command = rimz::agents::find_adapter(target.kind.as_str())?.compact_command()?;
-    Some(message_for_target(
-        workspace_id,
+    let occupied = agent.occupied_context_tokens();
+    if let Some(used) = occupied
+        && already_compacted_at(ledger, agent, command, used)
+    {
+        return None;
+    }
+    let mut record = message_for_target(
+        prompt.workspace_id.clone(),
         target,
         bound,
         MessageDraft {
             text: command.to_owned(),
             body: MessageBody::Command,
             enter: true,
-            gate,
-            sender,
-            force,
+            gate: prompt.gate,
+            sender: prompt.sender.clone(),
+            force: prompt.force,
             auto_compact: None,
         },
-    ))
+    );
+    record.compacted_context_tokens = occupied;
+    Some(record)
+}
+
+fn already_compacted_at(
+    ledger: &rimz::Ledger,
+    agent: &AgentState,
+    command: &str,
+    used: u64,
+) -> bool {
+    ledger
+        .list_messages()
+        .map(|messages| {
+            messages.iter().any(|message| {
+                message.body == MessageBody::Command
+                    && message.text == command
+                    && message.compacted_context_tokens == Some(used)
+                    && message.same_agent_card(agent)
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// The rollup session behind a bound pane target. A lazy pane carries no session,

@@ -697,6 +697,7 @@ mod tests {
             last_error: None,
             delivered_at: None,
             auto_compact: None,
+            compacted_context_tokens: None,
         };
         let typed =
             EventEnvelope::message_event(&message, "session", MessageEventMethod::Queued, None);

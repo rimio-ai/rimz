@@ -886,6 +886,143 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
     );
 }
 
+/// A stale carried-forward token gauge suppresses duplicate `/compact` for the
+/// same full-window reading.
+#[test]
+fn steer_auto_compact_suppresses_a_second_compaction_on_an_unchanged_window() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-ac-dupe",
+        "feature-ac-dupe",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_context_tokens(&env, "sess-ac-dupe", 150_000, 200_000);
+
+    let first_trace = env.project_root.join("zellij-ac-dupe-first-trace.log");
+    let first = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &first_trace)
+        .args(["steer", "@claude", "--smart-compact", "70%", "--", "go1"])
+        .output()
+        .expect("first steer");
+    assert!(
+        first.status.success(),
+        "first steer failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    let first_lines = trace_lines(&first_trace);
+    let compact_at = first_lines.iter().position(|line| is_compact_command(line));
+    let paste_at = first_lines.iter().position(|line| is_paste(line, "go1"));
+    assert!(
+        compact_at.is_some() && paste_at.is_some() && compact_at < paste_at,
+        "first send should compact before prompt; trace: {first_lines:?}"
+    );
+
+    let second_trace = env.project_root.join("zellij-ac-dupe-second-trace.log");
+    let second = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &second_trace)
+        .args(["steer", "@claude", "--smart-compact", "70%", "--", "go2"])
+        .output()
+        .expect("second steer");
+    assert!(
+        second.status.success(),
+        "second steer failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+
+    let second_lines = trace_lines(&second_trace);
+    assert!(
+        second_lines.iter().any(|line| is_paste(line, "go2")),
+        "second send should still paste the prompt; trace: {second_lines:?}"
+    );
+    assert!(
+        !second_lines.iter().any(|line| is_compact_command(line)),
+        "unchanged token reading must not compact again; trace: {second_lines:?}"
+    );
+
+    let messages = env.ledger().list_messages().expect("messages");
+    let commands: Vec<_> = messages
+        .iter()
+        .filter(|message| message.body == MessageBody::Command && message.text == "/compact")
+        .collect();
+    assert_eq!(commands.len(), 1, "command records: {commands:?}");
+    assert_eq!(commands[0].compacted_context_tokens, Some(150_000));
+}
+
+/// A changed occupied-token reading means the agent filled the window again, so
+/// the duplicate guard releases and smart-compact can run a new `/compact`.
+#[test]
+fn steer_auto_compact_recompacts_after_a_fresh_reading() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-ac-refill",
+        "feature-ac-refill",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_context_tokens(&env, "sess-ac-refill", 150_000, 200_000);
+
+    let first_trace = env.project_root.join("zellij-ac-refill-first-trace.log");
+    let first = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &first_trace)
+        .args(["steer", "@claude", "--smart-compact", "70%", "--", "go1"])
+        .output()
+        .expect("first steer");
+    assert!(
+        first.status.success(),
+        "first steer failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        trace_lines(&first_trace)
+            .iter()
+            .any(|line| is_compact_command(line)),
+        "first send should compact"
+    );
+
+    seed_context_tokens(&env, "sess-ac-refill", 160_000, 200_000);
+
+    let second_trace = env.project_root.join("zellij-ac-refill-second-trace.log");
+    let second = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &second_trace)
+        .args(["steer", "@claude", "--smart-compact", "70%", "--", "go2"])
+        .output()
+        .expect("second steer");
+    assert!(
+        second.status.success(),
+        "second steer failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_lines = trace_lines(&second_trace);
+    assert!(
+        second_lines.iter().any(|line| is_compact_command(line))
+            && second_lines.iter().any(|line| is_paste(line, "go2")),
+        "fresh token reading should compact again before prompt; trace: {second_lines:?}"
+    );
+
+    let messages = env.ledger().list_messages().expect("messages");
+    let commands: Vec<_> = messages
+        .iter()
+        .filter(|message| message.body == MessageBody::Command && message.text == "/compact")
+        .collect();
+    assert_eq!(commands.len(), 2, "command records: {commands:?}");
+    let mut baselines: Vec<_> = commands
+        .iter()
+        .filter_map(|message| message.compacted_context_tokens)
+        .collect();
+    baselines.sort_unstable();
+    assert_eq!(baselines, vec![150_000, 160_000]);
+}
+
 /// Auto-compacted sends are two messages. The pacer sleeps between the tracked
 /// `/compact` command and the prompt.
 #[test]
@@ -1435,6 +1572,23 @@ fn seed_context_fill(env: &Env, agent_id: &str, used_pct: u8) {
     let mut context = rimz::ledger::agent_context::empty_context("claude", jiff::Timestamp::now());
     context.tokens = Some(rimz::agents::AgentTokenUsage {
         used_percentage: Some(used_pct),
+        ..Default::default()
+    });
+    let record = rimz::ledger::agent_context::new_record("claude", agent_id, context);
+    rimz::ledger::agent_context::write_record(&env.runtime_paths(), &record)
+        .expect("seed context sidecar");
+}
+
+/// Seed a context sidecar with token composition so `occupied_context_tokens`
+/// has the deterministic baseline smart-compact uses to suppress duplicates.
+fn seed_context_tokens(env: &Env, agent_id: &str, used: u64, window: u64) {
+    let mut context = rimz::ledger::agent_context::empty_context("claude", jiff::Timestamp::now());
+    context.tokens = Some(rimz::agents::AgentTokenUsage {
+        context_window_size: Some(window),
+        current_usage: Some(rimz::agents::AgentCurrentUsage {
+            input_tokens: Some(used),
+            ..Default::default()
+        }),
         ..Default::default()
     });
     let record = rimz::ledger::agent_context::new_record("claude", agent_id, context);

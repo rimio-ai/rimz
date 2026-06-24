@@ -266,6 +266,12 @@ pub struct MessageRecord {
     /// against a fresh window instead of racing the agent's own auto-compaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact: Option<AutoCompact>,
+    /// For a smart-compact command, the occupied-context-token reading the
+    /// trigger fired on. While a carried-forward stale gauge still equals this
+    /// baseline, the send path suppresses duplicate `/compact` commands; a new
+    /// reading re-enables compaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted_context_tokens: Option<u64>,
 }
 
 impl MessageRecord {
@@ -298,6 +304,7 @@ impl MessageRecord {
             last_error: None,
             delivered_at: None,
             auto_compact: None,
+            compacted_context_tokens: None,
         }
     }
 
