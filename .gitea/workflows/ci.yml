@@ -59,12 +59,25 @@ jobs:
       # runner-provided rustup home plus cargo-bin proxies by the pinned
       # toolchain file so a hot run does not have to reach static.rust-lang.org
       # just to bootstrap Rust.
+      - name: Resolve Rust cache paths
+        id: rust_paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
+          {
+            printf 'cargo_home=%s\n' "$cargo_home"
+            printf 'cargo_bin=%s/bin\n' "$cargo_home"
+            printf 'rustup_home=%s\n' "$rustup_home"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Rust toolchain cache
         uses: actions/cache@v5
         with:
           path: |
-            ${CARGO_HOME}/bin
-            ${RUSTUP_HOME}
+            ${{ steps.rust_paths.outputs.cargo_bin }}
+            ${{ steps.rust_paths.outputs.rustup_home }}
           key: gitea-rust-toolchain-${{ hashFiles('rust-toolchain.toml') }}
 
       # `rust-toolchain.toml` pins this channel, components, and targets. Keep
@@ -72,11 +85,15 @@ jobs:
       # CDN timeouts; cached runs skip the network install entirely.
       - name: Install Rust toolchain (from rust-toolchain.toml)
         shell: bash
+        env:
+          CARGO_HOME: ${{ steps.rust_paths.outputs.cargo_home }}
+          RUSTUP_HOME: ${{ steps.rust_paths.outputs.rustup_home }}
+          CARGO_BIN: ${{ steps.rust_paths.outputs.cargo_bin }}
         run: |
           set -euo pipefail
-          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-          rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
-          cargo_bin="${cargo_home}/bin"
+          cargo_home="$CARGO_HOME"
+          rustup_home="$RUSTUP_HOME"
+          cargo_bin="$CARGO_BIN"
           export CARGO_HOME="$cargo_home"
           export RUSTUP_HOME="$rustup_home"
           export PATH="$cargo_bin:$PATH"
