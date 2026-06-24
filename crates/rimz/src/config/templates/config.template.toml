@@ -96,11 +96,3 @@ aggressive_resize = true
 [harness]
 ## smart_compact = "70%"          # default compact-first threshold for steer/queue ("70%" or a token count); unset = off
 # rtk = "auto"                    # wrap agent cargo runs (build/check/test/nextest/clippy) through `rtk`; auto = when rtk is on PATH, on = force, off = never
-
-[sentry]
-# Off-box error reporting. With no DSN, Sentry stays off and Rimz makes no
-# network calls. When set, Rimz warn/error events and observed agent
-# rate-limit/overload conditions report to this project (machine name and PII
-# withheld). RIMZ_SENTRY_DSN / RIMZ_SENTRY_ENVIRONMENT override these.
-## dsn = "https://examplePublicKey@o0.ingest.sentry.io/0"
-## environment = "production"         # deployment tag attached to every event

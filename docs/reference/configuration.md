@@ -10,7 +10,7 @@ Configuration comes in two tiers. **Per-machine** config under `~/.config/rimz/`
 
 | File | Tier | What it holds |
 | --- | --- | --- |
-| `~/.config/rimz/config.toml` | per-machine | room behavior: accounts, notifications, remote-control launch, multiplexer defaults, resume, smart-compact, Sentry |
+| `~/.config/rimz/config.toml` | per-machine | room behavior: accounts, notifications, remote-control launch, multiplexer defaults, resume, smart-compact, optional Sentry |
 | `~/.config/rimz/theme.toml` | per-machine | sidebar appearance: palette, slots, glyphs, animations, provider styling, pets ([theme.md](./theme.md)) |
 | `~/.config/rimz/agents.toml` | per-machine | agent profiles, command cells, teams, worktree defaults, loop tasks, attention timing |
 | `~/.agents/agents/<name>/agent.toml`, `~/.agents/teams/<name>/team.toml` | per-machine | drop-in profile and team fragments merged under `agents.toml` |
@@ -271,7 +271,7 @@ dsn         = "https://examplePublicKey@o0.ingest.sentry.io/0"
 environment = "production"
 ```
 
-Set a `dsn` to report Rimz `warn!`/`error!` events and observed agent rate-limit/overload conditions to a Sentry project. With no `dsn`, reporting stays off and Rimz makes no network calls. `RIMZ_SENTRY_DSN` and `RIMZ_SENTRY_ENVIRONMENT` override the config for one invocation, and `environment` defaults by build profile (an installed release reports as `production`, a dev or CI build as `development`). The DSN lives per-machine — never in committed project config — so a clone never inherits it; events carry low-cardinality tags (workspace, command, build, fault class, and agent/session when known) with the hostname and personal data withheld. The full telemetry surface is in [security.md](../guide/security.md#off-box-error-reporting) and the mechanics in [observability.md](../internals/health/observability.md).
+This section applies only to Rimz builds compiled with the non-default `sentry` feature, and it is intentionally omitted from the generated per-machine config template. Set a `dsn` to report Rimz `warn!`/`error!` events and observed agent rate-limit/overload conditions to a Sentry project. With no `dsn`, reporting stays off and Rimz makes no network calls; without the feature, the block is inert. `RIMZ_SENTRY_DSN` and `RIMZ_SENTRY_ENVIRONMENT` override the config for one invocation, and `environment` defaults by build profile (an installed release reports as `production`, a dev or CI build as `development`). The DSN lives per-machine — never in committed project config — so a clone never inherits it; events carry low-cardinality tags (workspace, command, build, fault class, and agent/session when known) with the hostname and personal data withheld. The full telemetry surface is in [security.md](../guide/security.md#off-box-error-reporting) and the mechanics in [observability.md](../internals/health/observability.md).
 
 ## Multiplexer room options
 

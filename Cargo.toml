@@ -89,16 +89,19 @@ ureq = "3"
 
 # Off-box error/event reporting. Rimz `warn!`/`error!` and observed agent
 # rate-limit/overload conditions surface in a Sentry project an operator can
-# watch. `sentry` rides its `ureq` transport so it reuses the same small,
-# synchronous, rustls-backed HTTP client Rimz already pins — no second TLS
-# stack, no async-runtime drag — and the init guard flushes on drop, which fits
-# the short-lived hook subprocesses. `panic` and `backtrace` capture process
-# panics with stacks; `contexts` is deliberately omitted so the Apple `objc2`
-# UIKit binding tree never links into the shipped binary. Off by default: no
-# DSN means no client and no network. `sentry-tracing` bridges the existing
-# `tracing` subscriber so every diagnostic event becomes a Sentry event without
-# a parallel API. Its transitive tree (sentry-*, `url`/`idna`/`icu`, `rand`) is
-# covered by the imported cargo-vet audit sets in `supply-chain/config.toml`.
+# watch. The rimz crate marks these deps optional behind its non-default
+# `sentry` feature, so shipped binaries exclude the reporting code and this
+# transitive tree entirely. `sentry` rides its `ureq` transport so it reuses the
+# same small, synchronous, rustls-backed HTTP client Rimz already pins — no
+# second TLS stack, no async-runtime drag — and the init guard flushes on drop,
+# which fits the short-lived hook subprocesses. `panic` and `backtrace` capture
+# process panics with stacks; `contexts` is deliberately omitted so the Apple
+# `objc2` UIKit binding tree never links into the shipped binary. With the
+# feature compiled in, no DSN means no client and no network. `sentry-tracing`
+# bridges the existing `tracing` subscriber so every diagnostic event becomes a
+# Sentry event without a parallel API. Its transitive tree (sentry-*,
+# `url`/`idna`/`icu`, `rand`) is covered by the imported cargo-vet audit sets in
+# `supply-chain/config.toml`.
 sentry = { version = "0.48", default-features = false, features = [
     "backtrace",
     "panic",
