@@ -571,7 +571,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
                 && pet_w + PET_COLUMN_GAP < width
             {
                 let block_w = width.saturating_sub(pet_w + PET_COLUMN_GAP);
-                lines.push(provider_pet_caption_line(theme, pet, block_w, pet_w, width));
+                lines.push(provider_pet_caption_line(theme, pet, width));
                 let block = active_provider_block_lines(
                     theme,
                     active,
@@ -774,37 +774,25 @@ fn pet_column_width(theme: &Theme, pet: Option<&PetView>) -> Option<usize> {
         .filter(|width| *width > 0)
 }
 
-fn provider_pet_caption_line(
-    theme: &Theme,
-    pet: Option<&PetView>,
-    block_w: usize,
-    pet_w: usize,
-    width: usize,
-) -> Line<'static> {
-    let mut line = pad_line_to(Line::from(""), block_w);
-    line.spans.push(Span::raw(" ".repeat(PET_COLUMN_GAP)));
-    let pet_line = super::pets::dashboard_pet_caption(pet)
-        .map(|caption| {
-            let caption_w = pet_w.saturating_sub(PET_CAPTION_RIGHT_PAD);
-            let clipped = caption.chars().take(caption_w).collect::<String>();
-            let lead = caption_w.saturating_sub(clipped.chars().count());
-            let mut spans = Vec::new();
-            if lead > 0 {
-                spans.push(Span::raw(" ".repeat(lead)));
-            }
-            if !clipped.is_empty() {
-                spans.push(Span::styled(clipped, theme.muted()));
-            }
-            let trail = pet_w.saturating_sub(caption_w);
-            if trail > 0 {
-                spans.push(Span::raw(" ".repeat(trail)));
-            }
-            Line::from(spans)
-        })
-        .unwrap_or_else(|| Line::from(""));
-    line.spans.extend(pad_line_to(pet_line, pet_w).spans);
-    line.spans = trim_spans_to_width(line.spans, width);
-    line
+fn provider_pet_caption_line(theme: &Theme, pet: Option<&PetView>, width: usize) -> Line<'static> {
+    let Some(caption) = super::pets::dashboard_pet_caption(pet) else {
+        return Line::from("");
+    };
+    let caption_w = width.saturating_sub(PET_CAPTION_RIGHT_PAD);
+    let clipped = caption.chars().take(caption_w).collect::<String>();
+    let lead = caption_w.saturating_sub(clipped.chars().count());
+    let mut spans = Vec::new();
+    if lead > 0 {
+        spans.push(Span::raw(" ".repeat(lead)));
+    }
+    if !clipped.is_empty() {
+        spans.push(Span::styled(clipped, theme.muted()));
+    }
+    let trail = width.saturating_sub(caption_w);
+    if trail > 0 {
+        spans.push(Span::raw(" ".repeat(trail)));
+    }
+    Line::from(spans)
 }
 
 fn zip_provider_pet_lines(

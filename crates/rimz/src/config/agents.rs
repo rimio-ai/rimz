@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::{AttentionConfig, LoopConfig, PetsConfig, WorktreeConfig};
+use super::{AttentionConfig, LoopConfig, WorktreeConfig};
 use crate::run::PermissionMode;
 
 /// Agent-launch preferences. Team entries bind role names to profiles; inline
@@ -20,7 +20,6 @@ pub struct AgentsConfig {
     pub worktree: WorktreeConfig,
     pub r#loop: LoopConfig,
     pub attention: AttentionConfig,
-    pub pets: PetsConfig,
     #[serde(default)]
     pub profiles: ProfilesConfig,
     #[serde(default)]
@@ -36,7 +35,6 @@ impl Default for AgentsConfig {
             worktree: WorktreeConfig::default(),
             r#loop: LoopConfig::default(),
             attention: AttentionConfig::default(),
-            pets: PetsConfig::default(),
             profiles: ProfilesConfig::default(),
             commands: CommandsConfig::default(),
             teams: default_machine_teams(),

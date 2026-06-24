@@ -97,7 +97,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
 fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
     let ws = workspace();
     let mut snapshot = snapshot(&ws);
-    snapshot.pets.enabled = true;
+    snapshot.theme.pets.enabled = true;
     let ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
             grid: Some(vec![vec![crate::sidebar_pane::pets::PetCell {
@@ -151,7 +151,7 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
 fn active_alert_suppresses_hidden_pet_animation_cadence() {
     let ws = workspace();
     let mut snapshot = snapshot(&ws);
-    snapshot.pets.enabled = true;
+    snapshot.theme.pets.enabled = true;
     let ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
             grid: Some(vec![vec![crate::sidebar_pane::pets::PetCell {
@@ -189,7 +189,7 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
 fn refresh_pet_view_skips_body_when_terminal_is_too_short() {
     let ws = workspace();
     let mut snapshot = snapshot(&ws);
-    snapshot.pets.enabled = true;
+    snapshot.theme.pets.enabled = true;
     let mut ui = UiState::default();
     let mut assets = PetAssets::default();
 

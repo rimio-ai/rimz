@@ -98,7 +98,7 @@ max_payload_bytes  = 8192
 
 ## Optional asset fetches
 
-Enabling `[agents.pets]` lets the sidebar fetch a WebP sprite sheet over HTTPS and cache it under the per-machine cache root. A built-in `pet` reaches the public Codex pets CDN; an `https://` URL reaches the host you name (plaintext `http://` is rejected); a petdex pet (`~/.codex/pets/<name>/`) or a local-path `pet` fetches nothing and reads straight off disk. `RIMZ_PETS_OFFLINE=1` makes the process tree cache-only. The fetch sends the asset URL request; prompts, transcripts, pane text, workspace paths, and provider credentials stay local. Pets execute no commands, so the setting stays outside the project trust hash.
+Enabling `[theme.pets]` lets the sidebar fetch a WebP sprite sheet over HTTPS and cache it under the per-machine cache root. A built-in `pet` reaches the public Codex pets CDN; an `https://` URL reaches the host you name (plaintext `http://` is rejected); a petdex pet (`~/.codex/pets/<name>/`) or a local-path `pet` fetches nothing and reads straight off disk. `RIMZ_PETS_OFFLINE=1` makes the process tree cache-only. The fetch sends the asset URL request; prompts, transcripts, pane text, workspace paths, and provider credentials stay local. Pets execute no commands, so the setting stays outside the project trust hash.
 
 ## Off-box error reporting
 

@@ -208,9 +208,6 @@ pub struct SidebarSnapshot {
     /// animations. Filled beside [`Self::sidebar`] from `MachineConfig`.
     #[serde(default)]
     pub theme: crate::config::ThemeConfig,
-    /// Per-machine pet display preferences.
-    #[serde(default)]
-    pub pets: crate::config::PetsConfig,
     /// Per-machine attention timing preferences.
     #[serde(default)]
     pub attention: crate::config::AttentionConfig,
@@ -353,7 +350,6 @@ impl SidebarSnapshot {
             root_class: default_root_class(),
             sidebar: crate::config::SidebarConfig::default(),
             theme: crate::config::ThemeConfig::default(),
-            pets: crate::config::PetsConfig::default(),
             attention: crate::config::AttentionConfig::default(),
             providers: Vec::new(),
             value_tally: None,

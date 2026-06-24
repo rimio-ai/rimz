@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{DisplayConfig, ThemeAnimationsConfig, ThemeColor, ThemeGlyphsConfig, ThemeMode};
+use super::{
+    DisplayConfig, PetsConfig, ThemeAnimationsConfig, ThemeColor, ThemeGlyphsConfig, ThemeMode,
+};
 
 /// `[theme] style`: a headline preset bundling color depth and glyph set so one
 /// switch picks the whole look. `modern` forces truecolor and the Nerd Font
@@ -18,7 +20,7 @@ pub enum ThemeStyle {
 
 /// `[theme]`: per-machine appearance. It owns palette depth, scheme selection,
 /// semantic slot overrides, sidebar render preferences, glyphs, provider
-/// styling, and status-head animations. Display-only — it tunes what the
+/// styling, status-head animations, and pets. Display-only — it tunes what the
 /// renderer paints, never ledger correctness.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
@@ -74,6 +76,8 @@ pub struct ThemeConfig {
     pub providers: BTreeMap<String, ThemeProviderStyle>,
     #[serde(skip_serializing_if = "ThemeAnimationsConfig::is_unset")]
     pub animations: ThemeAnimationsConfig,
+    #[serde(default, skip_serializing_if = "PetsConfig::is_default")]
+    pub pets: PetsConfig,
 }
 
 impl ThemeConfig {

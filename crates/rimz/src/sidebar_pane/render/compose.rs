@@ -196,8 +196,10 @@ pub(super) fn build_bottom_chrome(
     let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
     let dashboard_present = dashboard_present(snapshot, active);
     let tabbed = dashboard_present && dashboard_tabbed(snapshot);
-    let dashboard_owns_ledger =
-        dashboard_present && tabbed && !snapshot.providers.is_empty() && snapshot.pets.enabled;
+    let dashboard_owns_ledger = dashboard_present
+        && tabbed
+        && !snapshot.providers.is_empty()
+        && snapshot.theme.pets.enabled;
     let fold_footer_into_dashboard = dashboard_owns_ledger
         && !active
         && snapshot.truth_degraded.is_none()
@@ -221,7 +223,7 @@ pub(super) fn build_bottom_chrome(
             tabbed,
             snapshot.value_tally.as_ref(),
             ui.pet.as_ref(),
-            snapshot.pets.enabled,
+            snapshot.theme.pets.enabled,
             folded_footer.clone(),
             inner,
             &snapshot.theme.display.budget_bar,

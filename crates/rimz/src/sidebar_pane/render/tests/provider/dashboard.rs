@@ -377,6 +377,49 @@ fn render_provider_dashboard_pet_caption_leaves_inner_gap() {
 }
 
 #[test]
+fn render_provider_dashboard_pet_caption_uses_full_width() {
+    let theme = Theme::fixed(false);
+    let providers = two_provider_panels();
+    let cell = crate::sidebar_pane::pets::PetCell {
+        ch: '▀',
+        fg: Color::Rgb(200, 20, 20),
+        bg: Color::Rgb(20, 20, 200),
+    };
+    let pet = crate::sidebar_pane::pets::PetView {
+        grid: Some((0..3).map(|_| vec![cell.clone(); 12]).collect()),
+        caption: Some("rough patch - take a look".to_owned()),
+        loading: false,
+        action: crate::sidebar_pane::pets::PetAction::Failed,
+        active_track: "failed",
+    };
+    let active = "claude".to_owned();
+
+    let (lines, _) = dashboard_panel_lines(
+        &theme,
+        &providers,
+        Some(&active),
+        true,
+        None,
+        Some(&pet),
+        true,
+        66,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let texts = line_texts(&lines);
+    let caption = texts.get(1).expect("caption line");
+
+    assert!(
+        caption.contains("rough patch - take a look"),
+        "caption uses the full dashboard row:\n{caption:?}"
+    );
+    assert!(
+        caption.ends_with("take a look   "),
+        "caption stays right-aligned with three trailing cells:\n{caption:?}"
+    );
+}
+
+#[test]
 fn render_provider_dashboard_without_pet_uses_main_stats_body() {
     let theme = Theme::fixed(false);
     let mut providers = two_provider_panels();

@@ -347,7 +347,7 @@ fn dashboard_has_tab(snapshot: &SidebarSnapshot, kind: &str) -> bool {
 /// the pet overlay rides one provider block at a time; without pets, a single
 /// provider keeps the historical bare block.
 pub(crate) fn dashboard_tabbed(snapshot: &SidebarSnapshot) -> bool {
-    if snapshot.pets.enabled {
+    if snapshot.theme.pets.enabled {
         return true;
     }
     snapshot
@@ -358,7 +358,7 @@ pub(crate) fn dashboard_tabbed(snapshot: &SidebarSnapshot) -> bool {
 }
 
 pub(crate) fn dashboard_present(snapshot: &SidebarSnapshot, alert_active: bool) -> bool {
-    !alert_active && (!snapshot.providers.is_empty() || snapshot.pets.enabled)
+    !alert_active && (!snapshot.providers.is_empty() || snapshot.theme.pets.enabled)
 }
 
 pub(crate) fn pet_body_enabled(snapshot: &SidebarSnapshot) -> bool {

@@ -425,7 +425,6 @@ pub fn enrich(
     // fold builds provider panels and stamps context severity.
     snapshot.sidebar = machine_config.sidebar.clone();
     snapshot.theme = machine_config.theme.clone();
-    snapshot.pets = machine_config.agents.pets.clone();
     snapshot.attention = machine_config.agents.attention;
     fold_link_stats(&mut snapshot, runtime, crate::sidebar::cache::unix_now_ms());
 

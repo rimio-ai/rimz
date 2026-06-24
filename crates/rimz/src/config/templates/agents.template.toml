@@ -48,13 +48,6 @@
 # stalled_after_secs = 1800            # silent running agent becomes actionable after this many seconds
 # inactive_after_secs = 3600           # a card idle this many seconds sinks below live work (the prompt-cache window)
 
-[agents.pets]
-# enabled = false                      # opt-in animated companion tab in the provider dashboard
-# pet = "codex"                        # built-in id, an https:// URL, a petdex pet name, or a path to your own .webp sheet
-# size = "medium"                      # "medium" keeps the original pet footprint; "small" fits the active provider block
-# glyphs = "auto"                      # "auto", "half", "sextant", or "octant"
-# voice = true                         # canned captions on fleet-status changes
-
 [agents.profiles]
 # Profiles are named main agents addressed as `@<profile>`. `agent` names a
 # built-in kind or another profile; the nearest profile wins for every field,

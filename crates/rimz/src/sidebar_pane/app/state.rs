@@ -82,7 +82,6 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         root_class: crate::workspace::RootClass::Repo,
         sidebar: crate::config::SidebarConfig::default(),
         theme: crate::config::ThemeConfig::default(),
-        pets: crate::config::PetsConfig::default(),
         attention: crate::config::AttentionConfig::default(),
         providers: Vec::new(),
         value_tally: None,

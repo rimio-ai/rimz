@@ -1,6 +1,6 @@
 # Pets
 
-> Status: implemented. `[agents.pets] enabled = true` adds a pet overlay to the provider dashboard.
+> Status: implemented. `[theme.pets] enabled = true` adds a pet overlay to the provider dashboard.
 
 Pets are renderer-local attention art. The dashboard shows one animated companion for the selected agent or process card. The pet lives in the dashboard rather than the cards, so row layout stays stable while the bottom panel mirrors the card under the highlight.
 
@@ -30,13 +30,13 @@ Any pet-action change plays `jumping` once before switching to the new steady tr
 
 The built-in catalog follows the petdex/Codex sheet rows: row 0 `idle` (6 frames), row 1 `run-right` (8), row 2 `run-left` (8), row 3 `waving` (4), row 4 `jumping` (5), row 5 `failed` (8), row 6 `waiting` (6), row 7 `running` (6), and row 8 `review` (6). The default mapping uses `idle`, `thinking`, `running`, `waiting`, `review`, `ask`, `jumping`, and `failed`; `moving`, `run-right`, `run-left`, and `waving` remain defined catalog tracks for compatibility and composed tracks. Movement, waving, jumping, failed, waiting, running, and review tracks run at a calmer cadence, roughly half the Codex default speed.
 
-Captions are canned strings in the renderer. They read action transitions only; they do not read transcripts, prompts, terminal scrollback, or provider conversations. `[agents.pets] voice = false` disables those captions.
+Captions are canned strings in the renderer. They read action transitions only; they do not read transcripts, prompts, terminal scrollback, or provider conversations. `[theme.pets] voice = false` disables those captions.
 
 ## Cell Art
 
 The pet renders as ordinary terminal cells through ratatui. Each WebP frame is downsampled into a small grid of `char + fg + bg` cells, then copied into the buffer like every other dashboard line. That keeps output pane-local across tmux, Zellij, detached sessions, and plain terminals.
 
-`[agents.pets] glyphs = "auto"` uses sextants as the default quality tier. `half`, `sextant`, and `octant` pin the block-glyph tier explicitly. The converter averages source pixels in linear light and chooses the best split for each cell's foreground/background pair.
+`[theme.pets] glyphs = "auto"` uses sextants as the default quality tier. `half`, `sextant`, and `octant` pin the block-glyph tier explicitly. The converter averages source pixels in linear light and chooses the best split for each cell's foreground/background pair.
 
 The render module receives only `PetView` data: a cell grid, an optional caption, loading state, current action, and active animation track. Network fetch, disk cache, WebP decode, frame slicing, animation selection, and memoized cell-art conversion stay in `src/sidebar_pane/pets/`.
 
@@ -63,7 +63,7 @@ The `pet` selector resolves to one of four sources, tried in order: a built-in c
 ## Configuration
 
 ```toml
-[agents.pets]
+[theme.pets]
 enabled = false
 pet = "codex"
 size = "medium"

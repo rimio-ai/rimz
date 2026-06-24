@@ -1212,24 +1212,24 @@ fn sidebar_pets_defaults_parse_and_round_trip() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write_named(
         &dir,
-        "agents.toml",
-        "[agents.pets]\nenabled = true\npet = \"dewey\"\nsize = \"small\"\nglyphs = \"octant\"\nvoice = false\n",
+        "theme.toml",
+        "[theme.pets]\nenabled = true\npet = \"dewey\"\nsize = \"small\"\nglyphs = \"octant\"\nvoice = false\n",
     ))
     .expect("load");
-    assert!(config.agents.pets.enabled);
-    assert_eq!(config.agents.pets.pet, "dewey");
-    assert_eq!(config.agents.pets.size, PetsSize::Small);
-    assert_eq!(config.agents.pets.glyphs, PetsGlyphMode::Octant);
-    assert!(!config.agents.pets.voice);
+    assert!(config.theme.pets.enabled);
+    assert_eq!(config.theme.pets.pet, "dewey");
+    assert_eq!(config.theme.pets.size, PetsSize::Small);
+    assert_eq!(config.theme.pets.glyphs, PetsGlyphMode::Octant);
+    assert!(!config.theme.pets.voice);
 
     let defaults_dir = tempdir().expect("tempdir");
     let defaults = MachineConfig::load_from(&write(&defaults_dir, "")).expect("load");
-    assert_eq!(defaults.agents.pets, PetsConfig::default());
-    assert_eq!(defaults.agents.pets.size, PetsSize::Medium);
+    assert_eq!(defaults.theme.pets, PetsConfig::default());
+    assert_eq!(defaults.theme.pets.size, PetsSize::Medium);
 
-    let encoded = toml::to_string(&config.agents.pets).expect("serialize pets");
+    let encoded = toml::to_string(&config.theme.pets).expect("serialize pets");
     let round_tripped: PetsConfig = toml::from_str(&encoded).expect("parse pets");
-    assert_eq!(round_tripped, config.agents.pets);
+    assert_eq!(round_tripped, config.theme.pets);
 }
 
 #[test]

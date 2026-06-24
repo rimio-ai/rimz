@@ -511,7 +511,7 @@ fn is_known_get_key(path: &[String]) -> bool {
     exact_set_keys().iter().any(|key| key.starts_with(&prefix))
         || matches!(path, [root] if root == "agents")
         || matches!(path, [root] if root == "accounts")
-        || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "commands" | "teams" | "worktree" | "loop" | "attention" | "pets"))
+        || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "commands" | "teams" | "worktree" | "loop" | "attention"))
         || is_account_usage_limit_get_key(path)
         || is_sidebar_animation_get_key(path)
         || is_sidebar_glyph_get_key(path)
@@ -755,11 +755,11 @@ fn exact_set_keys() -> BTreeSet<String> {
         "sidebar.spend_timezone",
         "agents.attention.stalled_after_secs",
         "agents.attention.inactive_after_secs",
-        "agents.pets.enabled",
-        "agents.pets.pet",
-        "agents.pets.size",
-        "agents.pets.glyphs",
-        "agents.pets.voice",
+        "theme.pets.enabled",
+        "theme.pets.pet",
+        "theme.pets.size",
+        "theme.pets.glyphs",
+        "theme.pets.voice",
         "agents.loop.tasks",
         "theme.animations.unread",
         "theme.glyphs.set",

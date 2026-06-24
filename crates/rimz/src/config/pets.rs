@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// `[agents.pets] glyphs`: which Unicode block tier the pet renderer uses.
+/// `[theme.pets] glyphs`: which Unicode block tier the pet renderer uses.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum PetsGlyphMode {
@@ -15,7 +15,7 @@ pub enum PetsGlyphMode {
     Octant,
 }
 
-/// `[agents.pets] size`: how much space the provider-dashboard pet occupies.
+/// `[theme.pets] size`: how much space the provider-dashboard pet occupies.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum PetsSize {
@@ -26,7 +26,7 @@ pub enum PetsSize {
     Small,
 }
 
-/// `[agents.pets]`: opt-in animated companion in the provider dashboard.
+/// `[theme.pets]`: opt-in animated companion in the provider dashboard.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct PetsConfig {
@@ -55,5 +55,11 @@ impl Default for PetsConfig {
             glyphs: PetsGlyphMode::default(),
             voice: true,
         }
+    }
+}
+
+impl PetsConfig {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
     }
 }

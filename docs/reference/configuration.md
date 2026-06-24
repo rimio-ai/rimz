@@ -11,8 +11,8 @@ Configuration comes in two tiers. **Per-machine** config under `~/.config/rimz/`
 | File | Tier | What it holds |
 | --- | --- | --- |
 | `~/.config/rimz/config.toml` | per-machine | room behavior: accounts, notifications, remote-control launch, multiplexer defaults, resume, smart-compact, Sentry |
-| `~/.config/rimz/theme.toml` | per-machine | sidebar appearance: palette, slots, glyphs, animations, provider styling ([theme.md](./theme.md)) |
-| `~/.config/rimz/agents.toml` | per-machine | agent profiles, command cells, teams, worktree defaults, loop tasks, attention timing, pets |
+| `~/.config/rimz/theme.toml` | per-machine | sidebar appearance: palette, slots, glyphs, animations, provider styling, pets ([theme.md](./theme.md)) |
+| `~/.config/rimz/agents.toml` | per-machine | agent profiles, command cells, teams, worktree defaults, loop tasks, attention timing |
 | `~/.agents/agents/<name>/agent.toml`, `~/.agents/teams/<name>/team.toml` | per-machine | drop-in profile and team fragments merged under `agents.toml` |
 | `~/.config/rimz/resolvers.toml` | per-machine | resolver allowlist and chain order (`rimz resolver`) |
 | `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases (`rimz remote`) |
@@ -280,7 +280,7 @@ To configure your *own* Zellij or tmux — the theme, true color, copy-mode, and
 
 ## Appearance and the sidebar
 
-The sidebar's palette, glyphs, animations, color depth, and color stops are theme settings in `theme.toml`, documented in full in [theme.md](./theme.md). The settings below are the sidebar's *behavior* knobs — they live in `config.toml` and `agents.toml`.
+The sidebar's palette, glyphs, animations, color depth, color stops, and pets are theme settings in `theme.toml`, documented in full in [theme.md](./theme.md). The settings below cover sidebar behavior plus the pet display selector.
 
 ### Sidebar Rendering
 
@@ -303,7 +303,7 @@ inactive_after_secs = 3600
 ### Pets
 
 ```toml
-[agents.pets]
+[theme.pets]
 enabled = false
 pet = "codex"
 size = "medium"

@@ -6,9 +6,9 @@ use rimz::config::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
     BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, ContextMeterConfig,
     DisplayConfig, GlowMode, GlyphGroup, GlyphNamespaces, InlineAnsiColors, InlinePalette,
-    InlinePrimaryColors, InlineSelectionColors, PaletteRole, ProviderTabsMode, ScrollbarMode,
-    ThemeAnimationsConfig, ThemeColor, ThemeConfig, ThemeGlyphsConfig, ThemeMode,
-    ThemeProviderStyle, ThemeStyle, UnreadEffect,
+    InlinePrimaryColors, InlineSelectionColors, PaletteRole, PetsConfig, PetsGlyphMode, PetsSize,
+    ProviderTabsMode, ScrollbarMode, ThemeAnimationsConfig, ThemeColor, ThemeConfig,
+    ThemeGlyphsConfig, ThemeMode, ThemeProviderStyle, ThemeStyle, UnreadEffect,
 };
 
 #[test]
@@ -28,11 +28,11 @@ fn validates_config_key_read_and_write_surfaces() {
         "agents.profiles.codex-slim.system-prompt-file",
         "zellij.auto_layout",
         "theme.providers.claude.color",
-        "agents.pets.enabled",
-        "agents.pets.pet",
-        "agents.pets.size",
-        "agents.pets.glyphs",
-        "agents.pets.voice",
+        "theme.pets.enabled",
+        "theme.pets.pet",
+        "theme.pets.size",
+        "theme.pets.glyphs",
+        "theme.pets.voice",
         "theme.mode",
         "theme.scheme",
         "theme.caution",
@@ -68,6 +68,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "agents.teams.peer.shape",
         "agents.profiles.codex-slim.flags",
         "agents.commands.vim.command",
+        "agents.pets.enabled",
         "theme.providers.claude.nope",
         "theme.animations",
         "theme.animations.nope.frames",
@@ -86,6 +87,8 @@ fn validates_config_key_read_and_write_surfaces() {
         ("theme.animations.thinking.frames", true),
         ("theme.animations.unread", true),
         ("theme.animations.nope", false),
+        ("theme.pets", true),
+        ("theme.pets.enabled", true),
         ("theme.glyphs", true),
         ("theme.glyphs.unicode.tokens", true),
         ("theme.glyphs.unicode.keys", true),
@@ -95,6 +98,7 @@ fn validates_config_key_read_and_write_surfaces() {
         ("accounts", true),
         ("accounts.usage_limit_usd", true),
         ("accounts.usage_limit_usd.codex", true),
+        ("agents.pets", false),
     ] {
         assert_eq!(is_known_get_key(&parse_key(key).unwrap()), known, "{key}");
     }
@@ -301,6 +305,13 @@ fn fully_populated_theme() -> ThemeConfig {
                 AnimationEffect::Static,
                 AnimationSpeed::Fast,
             ),
+        },
+        pets: PetsConfig {
+            enabled: true,
+            pet: "dewey".to_owned(),
+            size: PetsSize::Small,
+            glyphs: PetsGlyphMode::Octant,
+            voice: false,
         },
     }
 }

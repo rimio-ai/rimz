@@ -140,6 +140,16 @@ amber = 25
 red = 10
 ```
 
+## Pets
+
+`[theme.pets]` toggles and selects the provider-dashboard companion: `enabled`, `pet`, `size`, `glyphs`, and `voice` live with the rest of the display layer. Asset sources, cache behavior, and geometry are in [pets.md](../internals/sidebar/pets.md).
+
+```toml
+[theme.pets]
+enabled = true
+pet = "codex"
+```
+
 ## Animations
 
 `[theme.animations]` themes the status heads the sidebar paints (what each head means is in [the glyph legend](../interface/sidebar.md#reading-the-glyphs)). The roles are `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `waiting`, and `failed`. Each role takes four optional fields — `frames`, `color`, `effect`, `speed` — and an omitted field keeps the built-in, so a one-line override leaves the rest alone. The template lists every built-in head.

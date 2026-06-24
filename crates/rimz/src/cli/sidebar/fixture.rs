@@ -31,7 +31,6 @@ pub(super) fn sidebar_fixture_snapshot(
         root_class: rimz::workspace::RootClass::Repo,
         sidebar: rimz::config::SidebarConfig::default(),
         theme: rimz::config::ThemeConfig::default(),
-        pets: rimz::config::PetsConfig::default(),
         attention: rimz::config::AttentionConfig::default(),
         providers: Vec::new(),
         value_tally: None,

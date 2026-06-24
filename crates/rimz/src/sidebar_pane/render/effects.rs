@@ -527,7 +527,6 @@ mod tests {
             root_class: crate::workspace::RootClass::Repo,
             sidebar: SidebarConfig::default(),
             theme: crate::config::ThemeConfig::default(),
-            pets: crate::config::PetsConfig::default(),
             attention: crate::config::AttentionConfig::default(),
             providers: Vec::new(),
             value_tally: None,

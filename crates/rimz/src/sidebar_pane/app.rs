@@ -450,12 +450,12 @@ fn refresh_pet_view(
 ) {
     let (width, height) = terminal_size.unwrap_or(PET_FALLBACK_TERMINAL_SIZE);
     let action = render::selected_pet_action(snapshot, ui);
-    let size = if snapshot.pets.enabled
+    let size = if snapshot.theme.pets.enabled
         && render::dashboard_present(snapshot, alert_active)
         && render::pet_body_enabled(snapshot)
     {
         let inner = width.saturating_sub(2);
-        match snapshot.pets.size {
+        match snapshot.theme.pets.size {
             PetsSize::Medium => PetGridSize::for_dashboard_column(inner, height),
             PetsSize::Small => match render::active_dashboard_block_rows(snapshot, ui) {
                 Some(rows) => PetGridSize::for_dashboard_block(rows, inner, height),
@@ -465,13 +465,13 @@ fn refresh_pet_view(
     } else {
         None
     };
-    let unread_triggered = if snapshot.pets.enabled {
+    let unread_triggered = if snapshot.theme.pets.enabled {
         pet_assets.observe_unread_rows(render::unread_pet_row_ids(snapshot))
     } else {
         false
     };
     ui.pet = pet_assets.view(
-        &snapshot.pets,
+        &snapshot.theme.pets,
         PetViewFrame {
             action,
             phase: ui.animation_phase,
