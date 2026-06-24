@@ -46,7 +46,7 @@ pub(crate) fn deny(root: &Path) -> Result<()> {
 }
 
 pub(crate) fn vet(root: &Path) -> Result<()> {
-    run(root, "cargo", ["vet"])
+    run(root, "cargo", ["vet", "--locked"])
 }
 
 pub(crate) fn semver(root: &Path) -> Result<()> {
