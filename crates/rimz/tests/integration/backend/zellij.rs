@@ -1156,24 +1156,20 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
         MuxName::Zellij,
         format!("terminal_{sidebar_id}"),
     ));
-    let report = ZellijBackend::with_runtime_dir(&xdg)
-        .reconcile_sidebars(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-redock")),
-                project_root: std::env::temp_dir(),
-                cwd: std::env::temp_dir(),
-                width: SidebarWidth::default(),
-                birth_size: SidebarWidth::default().birth_size(Some(240)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_tabs: Vec::new(),
-                refresh_ms: None,
-            },
-            &liveness,
-        )
-        .expect("reconcile_sidebars");
+    let opts = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-redock")),
+        project_root: std::env::temp_dir(),
+        cwd: std::env::temp_dir(),
+        width: SidebarWidth::default(),
+        birth_size: SidebarWidth::default().birth_size(Some(240)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    let report = reconcile_until_observed(&xdg, &opts, &liveness);
 
     assert_eq!(report.redocked, 1, "the off-spec claimed sidebar converges");
     assert_eq!(report.closed, 0, "the renderer's pane is never closed");
@@ -1331,24 +1327,20 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
         MuxName::Zellij,
         format!("terminal_{sidebar_id}"),
     ));
-    let report = ZellijBackend::with_runtime_dir(&xdg)
-        .reconcile_sidebars(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-nested")),
-                project_root: cwd.path().to_path_buf(),
-                cwd: cwd.path().to_path_buf(),
-                width: SidebarWidth::default(),
-                birth_size: SidebarWidth::default().birth_size(Some(160)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_tabs: Vec::new(),
-                refresh_ms: None,
-            },
-            &liveness,
-        )
-        .expect("reconcile_sidebars");
+    let opts = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-nested")),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width: SidebarWidth::default(),
+        birth_size: SidebarWidth::default().birth_size(Some(160)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    let report = reconcile_until_observed(&xdg, &opts, &liveness);
 
     assert_eq!(report.redocked, 1, "the nested sidebar converges");
     assert_eq!(report.closed, 0, "geometry repair is not duplicate cleanup");
@@ -1470,24 +1462,20 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
         MuxName::Zellij,
         format!("terminal_{sidebar_id}"),
     ));
-    let report = ZellijBackend::with_runtime_dir(&xdg)
-        .reconcile_sidebars(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-nestedwide")),
-                project_root: cwd.path().to_path_buf(),
-                cwd: cwd.path().to_path_buf(),
-                width: SidebarWidth::default(),
-                birth_size: SidebarWidth::default().birth_size(Some(240)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_tabs: Vec::new(),
-                refresh_ms: None,
-            },
-            &liveness,
-        )
-        .expect("reconcile_sidebars");
+    let opts = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-nestedwide")),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width: SidebarWidth::default(),
+        birth_size: SidebarWidth::default().birth_size(Some(240)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    let report = reconcile_until_observed(&xdg, &opts, &liveness);
 
     assert_eq!(
         report.misdocked, 1,
@@ -1582,24 +1570,20 @@ fn reconcile_add_ends_docked_in_a_row_stacked_tab() {
     wait_for_pane_count(&xdg, &name, 2);
     let (_stub_dir, stub) = sidebar_command_stub();
 
-    let report = ZellijBackend::with_runtime_dir(&xdg)
-        .reconcile_sidebars(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-rowadd")),
-                project_root: cwd.path().to_path_buf(),
-                cwd: cwd.path().to_path_buf(),
-                width: SidebarWidth::default(),
-                birth_size: SidebarWidth::default().birth_size(Some(160)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_tabs: Vec::new(),
-                refresh_ms: None,
-            },
-            &rimz::mux::SidebarLiveness::default(),
-        )
-        .expect("reconcile_sidebars");
+    let opts = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-rowadd")),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width: SidebarWidth::default(),
+        birth_size: SidebarWidth::default().birth_size(Some(160)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    let report = reconcile_until_observed(&xdg, &opts, &rimz::mux::SidebarLiveness::default());
 
     assert_eq!(report.recovered, 1, "the missing sidebar is added");
     assert_eq!(report.failed, 0);
