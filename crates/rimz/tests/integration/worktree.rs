@@ -546,6 +546,86 @@ fn worktree_remove_split_landed_succeeds_without_force() {
 }
 
 #[test]
+fn worktree_status_rebase_landed_with_shifted_context_is_landed() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    if !git_succeeds(
+        &env.project_root,
+        &["merge-tree", "--write-tree", "HEAD", "HEAD"],
+    ) {
+        return;
+    }
+    commit_file(
+        &env.project_root,
+        "f.txt",
+        "l1\nl2\nl3\nl4\nl5\nl6\nl7\n",
+        "seed context",
+    );
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+
+    commit_file(
+        &path,
+        "f.txt",
+        "l1\nl2\nl3\nl4-feature\nl5\nl6\nl7\n",
+        "feature",
+    );
+    commit_file(
+        &env.project_root,
+        "f.txt",
+        "l1\nl2\nl3\nl4\nl5\nl6-trunk\nl7\n",
+        "trunk context",
+    );
+    commit_file(
+        &env.project_root,
+        "f.txt",
+        "l1\nl2\nl3\nl4-feature\nl5\nl6-trunk\nl7\n",
+        "rebased feature",
+    );
+    assert_ne!(
+        git_stdout(&env.project_root, &["rev-parse", "main^{tree}"]),
+        git_stdout(&path, &["rev-parse", "HEAD^{tree}"]),
+        "trunk has an extra context-line edit, so the fixture reaches merge absorption"
+    );
+    assert_ne!(
+        git_stdout(&path, &["rev-list", "--count", "main..HEAD"]),
+        "0",
+        "rebased landing has different commit IDs and remains ahead by ancestry"
+    );
+    assert!(
+        !git_stdout(
+            &path,
+            &[
+                "log",
+                "--right-only",
+                "--cherry-pick",
+                "--no-merges",
+                "--format=%H",
+                "main...HEAD",
+            ],
+        )
+        .is_empty(),
+        "patch-id sees residue after context drift, so merge absorption proves landing"
+    );
+    assert_eq!(
+        rimz::worktree::status(&path, &marker)
+            .expect("status")
+            .landed,
+        rimz::worktree::LandedVerdict::Landed,
+        "rebase-landed content with shifted patch context is landed"
+    );
+}
+
+#[test]
 fn gc_sweeps_merged_worktree() {
     if git_missing() {
         return;

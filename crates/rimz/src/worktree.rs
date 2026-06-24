@@ -667,6 +667,10 @@ pub fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> Lande
         return LandedVerdict::Landed;
     }
 
+    if merge_absorbed(cwd, comparison_ref, head_ref) {
+        return LandedVerdict::Landed;
+    }
+
     let range = format!("{comparison_ref}...{head_ref}");
     let non_merge = match git_stdout(
         cwd,
@@ -731,6 +735,19 @@ pub fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> Lande
 fn tree_id(cwd: &Path, ref_name: &str) -> Option<String> {
     let tree_ref = format!("{ref_name}^{{tree}}");
     git_stdout(cwd, ["rev-parse", tree_ref.as_str()]).ok()
+}
+
+/// True when a three-way merge of `head_ref` into `comparison_ref` produces
+/// `comparison_ref`'s own tree. The branch adds nothing, so its changes are
+/// already present even when patch context drift makes `--cherry-pick` miss it.
+fn merge_absorbed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> bool {
+    let Some(comparison_tree) = tree_id(cwd, comparison_ref) else {
+        return false;
+    };
+    matches!(
+        git_stdout(cwd, ["merge-tree", "--write-tree", comparison_ref, head_ref]),
+        Ok(merged_tree) if merged_tree == comparison_tree
+    )
 }
 
 fn rev_list_count(cwd: &Path, range: &str) -> Option<u32> {
