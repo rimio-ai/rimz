@@ -172,6 +172,7 @@ fn stats_argv(rimz_bin: &Path) -> Vec<String> {
         rimz_bin.to_string_lossy().into_owned(),
         "stats".to_owned(),
         "--refresh".to_owned(),
+        "--hold".to_owned(),
     ]
 }
 
@@ -285,6 +286,7 @@ mod tests {
                 rimz_bin.to_string_lossy().into_owned(),
                 "stats".to_owned(),
                 "--refresh".to_owned(),
+                "--hold".to_owned(),
             ]
         );
         assert_eq!(pane.cwd.as_path(), worktree);
@@ -318,6 +320,7 @@ mod tests {
                     "/usr/bin/rimz".to_owned(),
                     "stats".to_owned(),
                     "--refresh".to_owned(),
+                    "--hold".to_owned(),
                 ],
                 cwd: PathBuf::from("/proj/wt/reports"),
             }]
@@ -431,6 +434,7 @@ mod tests {
                     "/usr/bin/rimz".to_owned(),
                     "stats".to_owned(),
                     "--refresh".to_owned(),
+                    "--hold".to_owned(),
                 ],
                 cwd: PathBuf::from("/proj/wt"),
             }]

@@ -86,11 +86,15 @@ pub struct StatsArgs {
     /// Hold the panel open, redraw every 60s, and re-centre on resize.
     #[arg(long, conflicts_with = "json")]
     pub refresh: bool,
+    /// Ignore SIGINT so the refreshing panel survives Ctrl-C in the rimzd daemon
+    /// view; it still exits when the pane or window closes. Set only by the view.
+    #[arg(long, hide = true, requires = "refresh")]
+    pub hold: bool,
 }
 
 pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     if args.refresh {
-        return run_refresh(args.dollars);
+        return run_refresh(args.dollars, args.hold);
     }
     let loaded = load_stats(!args.json)?;
     let today_day = unix_secs_now() as i64 / DAY_SECS;
@@ -107,7 +111,10 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     )
 }
 
-fn run_refresh(dollars: bool) -> Result<()> {
+fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
+    if hold {
+        ignore_interrupt();
+    }
     let glyphs = resolve_panel_glyphs(&super::machine_config().theme);
     loop {
         let loaded = load_stats(true)?;
@@ -131,6 +138,37 @@ fn run_refresh(dollars: bool) -> Result<()> {
         }
     }
 }
+
+/// Consume SIGINT so Ctrl-C cannot kill the held daemon-view panel; a pane or
+/// window close still delivers its normal signal and ends the process.
+#[cfg(unix)]
+fn ignore_interrupt() {
+    use signal_hook::consts::signal::SIGINT;
+    use signal_hook::iterator::Signals;
+
+    match Signals::new([SIGINT]) {
+        Ok(mut signals) => {
+            if let Err(err) = thread::Builder::new()
+                .name("rimz-stats-sigint".to_owned())
+                .spawn(move || for _ in signals.forever() {})
+            {
+                tracing::warn!(
+                    error = %err,
+                    "failed to hold stats panel through Ctrl-C",
+                );
+            }
+        }
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "failed to hold stats panel through Ctrl-C",
+            );
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn ignore_interrupt() {}
 
 fn clear_screen() -> Result<()> {
     use ratatui::crossterm::{
