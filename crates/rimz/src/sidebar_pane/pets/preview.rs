@@ -18,34 +18,20 @@ pub struct PreviewCell {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PetPose {
-    pub label: &'static str,
-    pub grid: Vec<Vec<PreviewCell>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PetPreview {
     pub id: &'static str,
-    pub blurb: &'static str,
-    pub poses: Result<Vec<PetPose>, String>,
+    pub grid: Result<Vec<Vec<PreviewCell>>, String>,
 }
-
-const TRACK_RUN_RIGHT: &str = "run-right";
-
-const PREVIEW_POSES: &[(&str, &str)] = &[
-    ("idle", model::TRACK_IDLE),
-    ("run", TRACK_RUN_RIGHT),
-    ("wave", model::TRACK_WAVING),
-    ("jump", model::TRACK_JUMPING),
-    ("review", model::TRACK_REVIEW),
-    ("oops", model::TRACK_FAILED),
-];
 
 pub fn builtin_ids() -> impl Iterator<Item = &'static str> {
     BUILTIN_PETS.iter().map(|pet| pet.id)
 }
 
-pub fn load_previews(cols: u16, rows: u16, glyphs: PetsGlyphMode) -> Vec<PetPreview> {
+pub fn load_previews(
+    cols: u16,
+    rows: u16,
+    glyphs: PetsGlyphMode,
+) -> impl Iterator<Item = PetPreview> {
     let handles = BUILTIN_PETS
         .iter()
         .map(|pet| {
@@ -53,7 +39,7 @@ pub fn load_previews(cols: u16, rows: u16, glyphs: PetsGlyphMode) -> Vec<PetPrev
             thread::spawn(move || {
                 super::load_pet(PetSource::Builtin(pet))
                     .map_err(|err| err.to_string())
-                    .map(|frames| render_poses(&frames, cols, rows, glyphs))
+                    .map(|frames| render_sprite(&frames, cols, rows, glyphs))
             })
         })
         .collect::<Vec<_>>();
@@ -63,33 +49,29 @@ pub fn load_previews(cols: u16, rows: u16, glyphs: PetsGlyphMode) -> Vec<PetPrev
         .zip(handles)
         .map(|(pet, handle)| PetPreview {
             id: pet.id,
-            blurb: pet.blurb,
-            poses: handle
+            grid: handle
                 .join()
                 .unwrap_or_else(|_| Err("pet preview loader stopped".to_owned())),
         })
-        .collect()
 }
 
-fn render_poses(frames: &[RgbaImage], cols: u16, rows: u16, glyphs: PetsGlyphMode) -> Vec<PetPose> {
+fn render_sprite(
+    frames: &[RgbaImage],
+    cols: u16,
+    rows: u16,
+    glyphs: PetsGlyphMode,
+) -> Vec<Vec<PreviewCell>> {
     if frames.is_empty() {
         return Vec::new();
     }
-    let animations = default_animations();
-    PREVIEW_POSES
+    let sprite_index = default_animations()
+        .get(model::TRACK_IDLE)
+        .map(Animation::first_sprite)
+        .unwrap_or(0)
+        .min(frames.len().saturating_sub(1));
+    cellart::render_frame(&frames[sprite_index], cols, rows, glyphs)
         .iter()
-        .map(|&(label, track)| {
-            let sprite_index = animations
-                .get(track)
-                .map(Animation::first_sprite)
-                .unwrap_or(0)
-                .min(frames.len().saturating_sub(1));
-            let grid = cellart::render_frame(&frames[sprite_index], cols, rows, glyphs)
-                .iter()
-                .map(|row| row.iter().map(preview_cell).collect())
-                .collect();
-            PetPose { label, grid }
-        })
+        .map(|row| row.iter().map(preview_cell).collect())
         .collect()
 }
 
@@ -119,15 +101,12 @@ mod tests {
     }
 
     #[test]
-    fn preview_tracks_resolve_to_catalog_frames() {
-        let animations = default_animations();
-        for &(_, track) in PREVIEW_POSES {
-            let sprite_index = animations
-                .get(track)
-                .unwrap_or_else(|| panic!("{track} preview track exists"))
-                .first_sprite();
-            assert!(sprite_index < FRAME_COUNT);
-        }
+    fn preview_idle_track_resolves_to_catalog_frame() {
+        let sprite_index = default_animations()
+            .get(model::TRACK_IDLE)
+            .expect("idle preview track exists")
+            .first_sprite();
+        assert!(sprite_index < FRAME_COUNT);
     }
 
     #[test]

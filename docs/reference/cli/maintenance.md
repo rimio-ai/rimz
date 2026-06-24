@@ -29,7 +29,7 @@ rimz coverage [--json]
 rimz list-themes [--json]
 ```
 
-`list-themes` prints the bundled Alacritty theme names, one per line, each usable verbatim as `rimz config set theme.scheme <name>`; on a terminal it prefixes each name with palette chips. `--json` emits the list as an array. The palette model and custom theme files are in [theme.md](../theme.md).
+`list-themes` prints the bundled Alacritty theme names, one per line, each usable verbatim as `rimz config set theme.scheme <name>`; on a terminal it renders an aligned table: each theme's name, then grouped palette chips (background/foreground, then the six ANSI hues) under a legend header. `--json` emits the list as an array. The palette model and custom theme files are in [theme.md](../theme.md).
 
 ## List pets
 
@@ -37,7 +37,7 @@ rimz list-themes [--json]
 rimz list-pets [--json]
 ```
 
-`list-pets` previews the bundled provider-dashboard pets as cell-art on a terminal, fetching and caching the built-in sheets and honoring `RIMZ_PETS_OFFLINE`. Off a terminal it prints pet ids one per line, and `--json` emits the id array.
+`list-pets` previews each bundled provider-dashboard pet as a medium cell-art sprite in a width-fitted grid on a terminal, streaming rows as sprites load, fetching and caching the built-in sheets, and honoring `RIMZ_PETS_OFFLINE`. Off a terminal it prints pet ids one per line, and `--json` emits the id array.
 
 ## Workspace ledger tools
 

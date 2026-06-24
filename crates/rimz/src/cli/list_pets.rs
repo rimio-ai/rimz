@@ -4,13 +4,13 @@ use std::io::{IsTerminal, Write};
 
 use anyhow::Result;
 use clap::Args;
-use rimz::sidebar_pane::pets::{self, PetPose, PreviewCell};
+use rimz::sidebar_pane::pets::{self, PetPreview, PreviewCell};
 
 use super::{GlobalFlags, machine_config};
 use crate::cli::render;
 
-const PREVIEW_COLS: u16 = 12;
-const PREVIEW_ROWS: u16 = 6;
+const PREVIEW_COLS: u16 = 20;
+const PREVIEW_ROWS: u16 = 10;
 const GAP: u16 = 2;
 
 #[derive(Debug, Args)]
@@ -44,73 +44,74 @@ pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
     let width = rimz::mux::detect_terminal_size()
         .map(|(cols, _)| cols)
         .unwrap_or(80);
-    let poses_per_row = usize::from(
+    let per_row = usize::from(
         width
             .saturating_add(GAP)
             .checked_div(PREVIEW_COLS + GAP)
             .unwrap_or(1)
             .max(1),
     );
-
-    for (index, preview) in pets::load_previews(PREVIEW_COLS, PREVIEW_ROWS, glyphs)
-        .into_iter()
-        .enumerate()
-    {
-        if index > 0 {
+    let mut previews = pets::load_previews(PREVIEW_COLS, PREVIEW_ROWS, glyphs);
+    let mut any_failed = false;
+    let mut first = true;
+    loop {
+        let chunk = previews.by_ref().take(per_row).collect::<Vec<_>>();
+        if chunk.is_empty() {
+            break;
+        }
+        if !first {
             writeln!(out)?;
         }
+        first = false;
+        any_failed |= chunk.iter().any(|preview| preview.grid.is_err());
+        write_pet_row(&mut out, &chunk)?;
+        out.flush()?;
+    }
+    if any_failed {
         writeln!(
             out,
-            "{}  {}",
-            render::paint(render::palette::ACCENT.bold(), preview.id),
-            render::paint(render::palette::MUTED, preview.blurb)
+            "{}",
+            render::paint(
+                render::palette::FAINT,
+                "(some pets unavailable - check network, or RIMZ_PETS_OFFLINE serves cache only)"
+            )
         )?;
-        match preview.poses {
-            Ok(poses) => write_poses(&mut out, &poses, poses_per_row)?,
-            Err(_) => writeln!(
-                out,
-                "{}",
-                render::paint(
-                    render::palette::FAINT,
-                    "(unavailable - check network, or RIMZ_PETS_OFFLINE serves cache only)"
-                )
-            )?,
-        }
     }
     Ok(())
 }
 
-fn write_poses(
-    out: &mut impl Write,
-    poses: &[PetPose],
-    poses_per_row: usize,
-) -> std::io::Result<()> {
-    for chunk in poses.chunks(poses_per_row) {
-        for row in 0..usize::from(PREVIEW_ROWS) {
-            for (index, pose) in chunk.iter().enumerate() {
-                if index > 0 {
-                    write!(out, "{:gap$}", "", gap = usize::from(GAP))?;
-                }
-                write!(out, "{}", pose_row(pose, row))?;
-            }
-            writeln!(out)?;
-        }
-        for (index, pose) in chunk.iter().enumerate() {
+fn write_pet_row(out: &mut impl Write, chunk: &[PetPreview]) -> std::io::Result<()> {
+    for row in 0..usize::from(PREVIEW_ROWS) {
+        for (index, preview) in chunk.iter().enumerate() {
             if index > 0 {
                 write!(out, "{:gap$}", "", gap = usize::from(GAP))?;
             }
-            let centered = center(pose.label, usize::from(PREVIEW_COLS));
-            write!(out, "{}", render::paint(render::palette::FAINT, &centered))?;
+            write!(out, "{}", sprite_row(preview, row))?;
         }
         writeln!(out)?;
     }
-    Ok(())
+    for (index, preview) in chunk.iter().enumerate() {
+        if index > 0 {
+            write!(out, "{:gap$}", "", gap = usize::from(GAP))?;
+        }
+        let centered = center(preview.id, usize::from(PREVIEW_COLS));
+        write!(
+            out,
+            "{}",
+            render::paint(render::palette::ACCENT.bold(), &centered)
+        )?;
+    }
+    writeln!(out)
 }
 
-fn pose_row(pose: &PetPose, row: usize) -> String {
+fn sprite_row(preview: &PetPreview, row: usize) -> String {
+    let grid = preview.grid.as_ref().ok();
     let mut rendered = String::new();
     for col in 0..usize::from(PREVIEW_COLS) {
-        match pose.grid.get(row).and_then(|cells| cells.get(col)) {
+        match grid
+            .and_then(|grid| grid.get(row))
+            .and_then(|cells| cells.get(col))
+        {
             Some(cell) => rendered.push_str(&paint_cell(cell)),
             None => rendered.push(' '),
         }
@@ -150,4 +151,50 @@ fn paint_cell(cell: &PreviewCell) -> String {
 
 fn rgb_color((red, green, blue): (u8, u8, u8)) -> anstyle::Color {
     anstyle::Color::Rgb(anstyle::RgbColor(red, green, blue))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strip(
+        render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> std::io::Result<()>,
+    ) -> String {
+        let mut stream = anstream::StripStream::new(Vec::new());
+        render_one(&mut stream).expect("render to in-memory buffer");
+        String::from_utf8(stream.into_inner()).expect("utf-8")
+    }
+
+    #[test]
+    fn sprite_row_pads_short_or_failed_grid() {
+        let short = PetPreview {
+            id: "codex",
+            grid: Ok(vec![vec![PreviewCell {
+                ch: 'x',
+                fg: Some((1, 2, 3)),
+                bg: None,
+            }]]),
+        };
+        let failed = PetPreview {
+            id: "codex",
+            grid: Err("unavailable".to_owned()),
+        };
+
+        assert_eq!(
+            strip(|w| write!(w, "{}", sprite_row(&short, 0))),
+            format!("x{:pad$}", "", pad = usize::from(PREVIEW_COLS - 1))
+        );
+        assert_eq!(
+            sprite_row(&failed, 0),
+            " ".repeat(usize::from(PREVIEW_COLS))
+        );
+    }
+
+    #[test]
+    fn center_places_id_inside_preview_width() {
+        assert_eq!(
+            center("codex", usize::from(PREVIEW_COLS)),
+            "       codex        "
+        );
+    }
 }
