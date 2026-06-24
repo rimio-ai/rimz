@@ -284,14 +284,6 @@ pub(super) fn repairable_nested_work_pane_ids(
     Some(work.into_iter().map(|pane| pane.id).collect())
 }
 
-pub(super) fn stackable_nested_work_pane_ids(
-    sidebar: &RawPane,
-    panes: &[RawPane],
-    excluded: &HashSet<u64>,
-) -> Option<Vec<u64>> {
-    repairable_nested_work_pane_ids(sidebar, panes, excluded)
-}
-
 /// Whether a kept sidebar pane sits off the layout's dock: outside the
 /// full-height left column, nested beside a tiled pane that intrudes into its
 /// column band, or past the width trigger ([`sidebar_width_off_spec`]). Unknown

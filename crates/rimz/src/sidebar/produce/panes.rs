@@ -321,9 +321,10 @@ enum ProcessCommandMatch {
 
 impl ProcessCommandMatch {
     fn for_mux(mux: MuxName) -> Self {
-        match mux {
-            MuxName::Zellij => Self::ExactCmdline,
-            MuxName::Tmux => Self::ProgramLabel,
+        if crate::mux::lists_full_cmdline(mux) {
+            Self::ExactCmdline
+        } else {
+            Self::ProgramLabel
         }
     }
 }

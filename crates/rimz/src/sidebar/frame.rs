@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{AgentSessionId, MuxName, PaneId, ViewId, ViewKind};
+use crate::ids::{AgentSessionId, PaneId, ViewId, ViewKind};
 use crate::ledger::snapshot::{SidebarOwnView, SidebarPresence};
 use crate::pane::{ElevatedAgent, PaneRef};
 use crate::schema::diag::DiagEvent;
@@ -383,7 +383,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
             .unwrap_or_else(|| ViewId::new_unchecked(format!("pane:{}", pane.pane_id)));
         let kind = pane
             .view_kind
-            .unwrap_or_else(|| default_view_kind(pane.pane_id.mux()));
+            .unwrap_or_else(|| crate::mux::view_kind(pane.pane_id.mux()));
         let tab = tabs.entry(view_id.clone()).or_insert_with(|| TabFrame {
             view_id,
             kind,
@@ -579,13 +579,6 @@ fn split_numeric_suffix(value: &str) -> Option<(&str, u64)> {
         return None;
     }
     Some((value.get(..suffix_start)?, suffix.parse().ok()?))
-}
-
-fn default_view_kind(mux: MuxName) -> ViewKind {
-    match mux {
-        MuxName::Zellij => ViewKind::Tab,
-        MuxName::Tmux => ViewKind::Window,
-    }
 }
 
 fn pane_is_sidebar_chrome(pane: &PaneState) -> bool {

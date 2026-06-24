@@ -69,13 +69,16 @@ fn desktop_payload(
 ) -> Option<Vec<u8>> {
     match (mux, mode) {
         (_, DesktopNotificationMode::Off) => None,
-        (Some(MuxName::Zellij), DesktopNotificationMode::Auto) => None,
-        (Some(MuxName::Tmux), DesktopNotificationMode::Auto | DesktopNotificationMode::Osc) => {
-            Some(tmux_wrap(&osc777(title, body)))
+        (Some(m), DesktopNotificationMode::Auto) if crate::mux::drops_desktop_osc(m) => None,
+        (Some(m), _) => {
+            let osc = osc777(title, body);
+            Some(if crate::mux::wraps_osc_passthrough(m) {
+                tmux_wrap(&osc)
+            } else {
+                osc
+            })
         }
-        (Some(MuxName::Zellij), DesktopNotificationMode::Osc) | (None, _) => {
-            Some(osc777(title, body))
-        }
+        (None, _) => Some(osc777(title, body)),
     }
 }
 

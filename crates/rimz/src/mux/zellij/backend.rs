@@ -16,7 +16,7 @@ use super::raw_pane::{
     sidebar_geometry_off_spec, tabs_with_sidebars, views_with_sidebars,
 };
 use super::sidebar::DockOutcome;
-use crate::ids::{MuxName, PaneId, ViewKind};
+use crate::ids::{MuxName, PaneId};
 use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
     ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr,
@@ -166,7 +166,7 @@ impl MuxBackend for ZellijBackend {
                 pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
                 session_name: session_name.to_owned(),
                 view_id: Some(format!("tab_{}", p.view_position())),
-                view_kind: Some(ViewKind::Tab),
+                view_kind: Some(crate::mux::view_kind(MuxName::Zellij)),
                 view_name: p.tab_name.take(),
                 is_focused: p.is_focused,
                 is_floating: p.is_floating,

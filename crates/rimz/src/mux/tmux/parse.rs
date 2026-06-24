@@ -1,7 +1,7 @@
 //! tmux command-output parsers.
 
 use super::options::SIDEBAR_PANE_TITLE;
-use crate::ids::{MuxName, PaneId, ViewKind};
+use crate::ids::{MuxName, PaneId};
 use crate::mux::{ClientPresence, ClientView, MuxErr, Result};
 use crate::pane::PaneRef;
 
@@ -27,7 +27,7 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
         pane_id: PaneId::from_parts(MuxName::Tmux, cols[2]),
         session_name: cols[0].to_owned(),
         view_id: Some(cols[1].to_owned()),
-        view_kind: Some(ViewKind::Window),
+        view_kind: Some(crate::mux::view_kind(MuxName::Tmux)),
         view_name: trimmed_nonempty(7),
         is_focused: cols.get(6).is_some_and(|value| value.trim() == "1"),
         is_floating: false,

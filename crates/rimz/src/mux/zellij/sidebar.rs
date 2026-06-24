@@ -8,7 +8,7 @@ use super::layout::{TempLayoutFile, render_session_layout};
 use super::parse::{new_tab_template_sidebar_cols, parse_focused_terminal_client_ids, strip_ansi};
 use super::raw_pane::{
     SidebarDock, is_sidebar_pane, mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id,
-    sidebar_dock_verdict, sidebar_width_off_spec, stackable_nested_work_pane_ids, tab_extent_cols,
+    repairable_nested_work_pane_ids, sidebar_dock_verdict, sidebar_width_off_spec, tab_extent_cols,
 };
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
@@ -388,7 +388,7 @@ impl ZellijBackend {
             Some(SidebarDock::SwapReachable) => true,
             Some(SidebarDock::NestedRow) => {
                 self.stack_panes_supported()
-                    && stackable_nested_work_pane_ids(sidebar, &panes, &excluded).is_some()
+                    && repairable_nested_work_pane_ids(sidebar, &panes, &excluded).is_some()
             }
             Some(SidebarDock::Docked) | None => false,
         }
@@ -412,7 +412,7 @@ impl ZellijBackend {
             return false;
         };
         let excluded = HashSet::new();
-        let Some(work) = stackable_nested_work_pane_ids(sidebar, &panes, &excluded) else {
+        let Some(work) = repairable_nested_work_pane_ids(sidebar, &panes, &excluded) else {
             return false;
         };
         let mut args = vec!["stack-panes".to_owned(), "--".to_owned()];

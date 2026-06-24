@@ -5,6 +5,7 @@
 //! only inside the adapter — see [`crate::ids::PaneId`] for the normalized
 //! form that travels everywhere else.
 
+mod capabilities;
 mod command;
 mod focus_key;
 mod keys;
@@ -15,6 +16,7 @@ pub mod tmux;
 mod width;
 pub mod zellij;
 
+pub use capabilities::{drops_desktop_osc, lists_full_cmdline, view_kind, wraps_osc_passthrough};
 pub(crate) use command::COMMAND_TIMEOUT;
 pub use command::CommandSpec;
 pub use focus_key::{FocusChord, FocusKeyBinding};
