@@ -877,20 +877,9 @@ mod tests {
             title: "sidebar gallery".to_owned(),
             cwd: PathBuf::from("/proj/worktree"),
             panes: crate::mux::LayoutPanes {
-                columns: vec![
-                    vec![PaneCmd {
-                        argv: vec!["rimz".to_owned(), "sidebar".to_owned()],
-                    }],
-                    vec![PaneCmd {
-                        argv: vec!["rimz".to_owned(), "sidebar".to_owned()],
-                    }],
-                    vec![PaneCmd {
-                        argv: vec!["rimz".to_owned(), "sidebar".to_owned()],
-                    }],
-                    vec![PaneCmd {
-                        argv: vec!["rimz".to_owned(), "sidebar".to_owned()],
-                    }],
-                ],
+                columns: vec![vec![PaneCmd {
+                    argv: vec!["rimz".to_owned(), "sidebar".to_owned()],
+                }]],
             },
             focus: true,
             dock_sidebar: false,
@@ -903,14 +892,14 @@ mod tests {
             layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
             "{layout}",
         );
-        assert!(layout.contains("tab max_panes=5"), "{layout}");
+        assert!(layout.contains("tab max_panes=2"), "{layout}");
         assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
         assert_eq!(
             layout
                 .matches(r#"plugin location="zellij:compact-bar""#)
                 .count(),
-            5,
-            "the visible bar and all gallery swap templates carry compact-bar:\n{layout}",
+            2,
+            "the visible bar and gallery swap template carry compact-bar:\n{layout}",
         );
     }
 

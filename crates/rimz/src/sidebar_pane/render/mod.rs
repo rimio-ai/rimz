@@ -48,6 +48,7 @@ use std::io::{self, Write};
 use crate::agents::AgentStatus;
 use crate::agents::TurnPhase;
 use crate::config::AnimationSpec;
+use crate::config::GlyphRole;
 use crate::sidebar_pane::pets::PetAction;
 use crate::{ProcessState, SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
@@ -182,7 +183,16 @@ pub fn draw_with_ui(
     alert: Option<&Alert>,
     ui: &mut UiState,
 ) {
-    let area = frame.area();
+    draw_into(frame, snapshot, alert, ui, frame.area());
+}
+
+fn draw_into(
+    frame: &mut Frame<'_>,
+    snapshot: &SidebarSnapshot,
+    alert: Option<&Alert>,
+    ui: &mut UiState,
+    area: Rect,
+) {
     // Borderless: the sidebar already sits inside a framed mux pane, so a second
     // 4-sided border double-frames it and eats two precious columns. The body
     // fills the whole area; a title line and faint hairline rules carry the
@@ -218,6 +228,69 @@ pub fn draw_with_ui(
             area,
         );
     }
+}
+
+pub struct GalleryColumn<'a> {
+    pub snapshot: &'a SidebarSnapshot,
+    pub ui: &'a mut UiState,
+}
+
+pub fn draw_gallery_to_terminal<B: Backend>(
+    terminal: &mut Terminal<B>,
+    columns: &mut [GalleryColumn<'_>],
+) -> Result<(), B::Error> {
+    terminal
+        .draw(|frame| draw_gallery(frame, columns))
+        .map(|_| ())
+}
+
+fn draw_gallery(frame: &mut Frame<'_>, columns: &mut [GalleryColumn<'_>]) {
+    let area = frame.area();
+    let (column_areas, delimiter_xs) = gallery_layout(area, columns.len());
+    for (column, column_area) in columns.iter_mut().zip(column_areas) {
+        draw_into(frame, column.snapshot, None, column.ui, column_area);
+    }
+    let Some(first) = columns.first() else {
+        return;
+    };
+    let theme = Theme::for_sidebar(&first.snapshot.theme);
+    let style = theme.rule();
+    let delimiter = theme.glyph(GlyphRole::ChromeBoxVertical).to_owned();
+    let buffer = frame.buffer_mut();
+    for x in delimiter_xs {
+        for y in area.y..area.bottom() {
+            buffer[(x, y)].set_symbol(&delimiter).set_style(style);
+        }
+    }
+}
+
+fn gallery_layout(area: Rect, column_count: usize) -> (Vec<Rect>, Vec<u16>) {
+    if column_count == 0 || area.width == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    let count = column_count.min(usize::from(u16::MAX)) as u16;
+    let delimiter_count = count.saturating_sub(1);
+    let available_width = area.width.saturating_sub(delimiter_count);
+    let base_width = available_width / count;
+    let mut remainder = available_width % count;
+    let mut x = area.x;
+    let mut columns = Vec::with_capacity(column_count);
+    let mut delimiters = Vec::with_capacity(column_count.saturating_sub(1));
+
+    for index in 0..column_count {
+        let mut width = base_width;
+        if remainder > 0 {
+            width = width.saturating_add(1);
+            remainder -= 1;
+        }
+        columns.push(Rect::new(x, area.y, width, area.height));
+        x = x.saturating_add(width);
+        if index + 1 < column_count && x < area.right() {
+            delimiters.push(x);
+            x = x.saturating_add(1);
+        }
+    }
+    (columns, delimiters)
 }
 
 /// The one row-visibility predicate the make-up filter narrows the body by —

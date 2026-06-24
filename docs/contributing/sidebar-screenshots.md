@@ -33,7 +33,7 @@ The task fails at entry when `freeze`, `rsvg-convert`, or JetBrainsMono Nerd Fon
 
 `cargo xtask screenshot state <empty|fleet|provider|cockpit|focus|economy|reach> [--width W] [--height H] [--output PATH]` renders deterministic fixture frames through the same headless sidebar renderer used by tests. `cockpit`, `focus`, `economy`, and `reach` are packed gallery states for reviewing fleet breadth, expanded team cards, provider spend with pets, and remote/AFK glyph contrast.
 
-`rimz sidebar gallery` opens a live four-column tab in the current room with those packed states running through the animated sidebar renderer and no real sidebar dock.
+`rimz sidebar gallery` opens one frameless compositor pane in the current room with those packed states side by side, split by thin `│` delimiter rules and no real sidebar dock.
 
 Set `RIMZ_BIN=/path/to/rimz` to capture with a specific binary. Without it, `xtask` runs the current checkout through `cargo run --quiet -p rimz --bin rimz -- ...`.
 

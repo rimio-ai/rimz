@@ -1542,12 +1542,7 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
             title: "gallery".to_owned(),
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
-                columns: vec![
-                    vec![work_pane()],
-                    vec![work_pane()],
-                    vec![work_pane()],
-                    vec![work_pane()],
-                ],
+                columns: vec![vec![work_pane()]],
             },
             focus: true,
             dock_sidebar: false,
@@ -1555,11 +1550,11 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
         })
         .expect("open_tab");
 
-    let panes = server.wait_for_panes("rimz-gallery:gallery", 4);
+    let panes = server.wait_for_panes("rimz-gallery:gallery", 1);
     assert_eq!(
         panes.len(),
-        4,
-        "undocked tab should carry four work panes and no sidebar: {panes:?}",
+        1,
+        "undocked tab should carry one work pane and no sidebar: {panes:?}",
     );
     let listed = server
         .backend

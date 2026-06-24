@@ -16,9 +16,9 @@ expression: strip_sgr(&ansi)
 ▌  ▣ ━━━━━━━━━━━━━━━━━╸━━━━━━━━━━──────────────   67%▐
 ▌  ▤ 68k · ◌ 42k ↘ 25k ↗ 16k                         ▐
 ▌  ⧉ subagents (2)                                   ▐
-▌    ⠁ review — audit auth watcher changes           ▐
+▌    ⠁ Explore — audit auth watcher changes          ▐
 ▌      ◇ 22k · Haiku                            ◔  3m▐
-▌    ✓ test — run focused nextest                    ▐
+▌    ✓ Plan — run focused nextest                    ▐
 ▎? codex · GPT 5.1 Codex · 272k                      🮇
 ▎  approve pricing cache write              ●●○○○ 4/7🮇
 ▎  ▣ ━━━━━━━━━━╸━━━━━━─────────────────────────   41%🮇
@@ -34,6 +34,6 @@ expression: strip_sgr(&ansi)
 
   ── Total: ─────────────────────────────────────────
   W: ◎ 8  ◇ 2.0M ↘ 1.4M ↗ 398.7k ◌ 199.4k      $26.38
-  M: ◎ 8  ◇ 5.3M ↘ 3.7M ↗   1.1M ◌ 526.9k      $69.71
+  M: ◎ 8  ◇ 8.0M ↘ 5.6M ↗   1.6M ◌ 797.4k     $105.50
 
                                            ? for help

@@ -36,13 +36,46 @@ fn provider_fixture_frame_is_deterministic() {
 
 #[test]
 fn gallery_fixture_states_carry_feature_flags() {
+    let states = [
+        SidebarFixtureState::Cockpit,
+        SidebarFixtureState::Focus,
+        SidebarFixtureState::Economy,
+        SidebarFixtureState::Reach,
+    ]
+    .into_iter()
+    .map(|state| sidebar_fixture_snapshot(state).unwrap())
+    .collect::<Vec<_>>();
+    assert!(states.iter().all(|snapshot| !snapshot.providers.is_empty()));
+
+    assert_eq!(
+        states[0].theme.display.provider_tabs,
+        rimz::config::ProviderTabsMode::Never,
+    );
+    for snapshot in &states[1..] {
+        assert_eq!(
+            snapshot.theme.display.provider_tabs,
+            rimz::config::ProviderTabsMode::Always,
+        );
+    }
+    assert_eq!(states[2].theme.pets.pet, "seedy");
+    assert!(states[2].theme.pets.enabled);
+    assert_eq!(states[3].theme.pets.pet, "rocky");
+    assert!(states[3].theme.pets.enabled);
+    assert!(states.iter().any(|snapshot| {
+        snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .any(|row| row.unread)
+    }));
+
     let focus = sidebar_fixture_snapshot(SidebarFixtureState::Focus).unwrap();
     let cards = agent_cards(&focus);
     let lead = cards
         .iter()
         .find(|card| card.handle.as_deref() == Some("coder"))
         .expect("coder card");
-    assert_eq!(lead.sub_agents.len(), 5);
+    assert_eq!(lead.sub_agents.len(), 6);
     assert_eq!(
         lead.sub_agents
             .iter()
@@ -53,9 +86,29 @@ fn gallery_fixture_states_carry_feature_flags() {
     assert_eq!(
         lead.sub_agents
             .iter()
+            .filter(|child| child.name == "Plan")
+            .count(),
+        1,
+    );
+    assert_eq!(
+        lead.sub_agents
+            .iter()
             .filter(|child| child.name == "general-purpose")
             .count(),
         2,
+    );
+    let allowed = ["Explore", "Plan", "general-purpose"]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let sub_agent_names = states
+        .iter()
+        .flat_map(agent_cards)
+        .flat_map(|card| &card.sub_agents)
+        .map(|child| child.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        sub_agent_names.is_subset(&allowed),
+        "unexpected sub-agent names: {sub_agent_names:?}",
     );
     let handles = cards
         .iter()
@@ -65,20 +118,11 @@ fn gallery_fixture_states_carry_feature_flags() {
     assert!(handles.contains(&"coder"));
     assert!(handles.contains(&"reviewer"));
 
-    let economy = sidebar_fixture_snapshot(SidebarFixtureState::Economy).unwrap();
-    assert_eq!(economy.providers.len(), 4);
-    assert!(economy.theme.pets.enabled);
-    assert_eq!(
-        economy.theme.display.provider_tabs,
-        rimz::config::ProviderTabsMode::Always,
-    );
-
-    let reach = sidebar_fixture_snapshot(SidebarFixtureState::Reach).unwrap();
+    let reach = &states[3];
     assert_eq!(reach.presence, Some(rimz::SidebarPresence::Detached));
     assert!(reach.link.is_some());
-    assert_eq!(reach.theme.style, None);
 
-    let cockpit = sidebar_fixture_snapshot(SidebarFixtureState::Cockpit).unwrap();
+    let cockpit = &states[0];
     assert!(cockpit.worktree_groups.iter().any(|group| {
         group.landed == Some(true)
             && group.trunk_sync == Some(rimz::WorktreeTrunkSync::Merged)
@@ -90,25 +134,44 @@ fn gallery_fixture_states_carry_feature_flags() {
         .flat_map(|group| &group.rows)
         .filter_map(|row| row.status())
         .collect::<Vec<_>>();
+    assert!(statuses.contains(&rimz::agents::AgentStatus::Running));
+    assert!(statuses.contains(&rimz::agents::AgentStatus::Idle));
+    assert!(statuses.contains(&rimz::agents::AgentStatus::Success));
+    assert!(statuses.contains(&rimz::agents::AgentStatus::Waiting));
     assert!(statuses.contains(&rimz::agents::AgentStatus::Failed));
     assert!(statuses.contains(&rimz::agents::AgentStatus::Paused));
+    assert!(agent_cards(cockpit).iter().any(|card| {
+        card.status == Some(rimz::agents::AgentStatus::Running)
+            && card.phase == rimz::agents::TurnPhase::Acting
+    }));
+    assert!(agent_cards(cockpit).iter().any(|card| {
+        card.status == Some(rimz::agents::AgentStatus::Running)
+            && card.phase == rimz::agents::TurnPhase::Reasoning
+    }));
+    assert!(
+        agent_cards(cockpit)
+            .iter()
+            .any(|card| card.turn_error_label.as_deref() == Some("API error"))
+    );
+    assert!(
+        agent_cards(cockpit)
+            .iter()
+            .any(|card| card.compacting || card.compaction_count > 0)
+    );
 }
 
 #[test]
 fn gallery_fixture_frames_render_decisive_markers() {
     assert_fixture_frame_contains(
         SidebarFixtureState::Cockpit,
-        &["opencode", "+182", "mux-merge"],
+        &["opencode", "compact provider trace", "$3,990.00"],
     );
-    assert_fixture_frame_contains(
-        SidebarFixtureState::Focus,
-        &["coder", "Explore", "reviewer"],
-    );
+    assert_fixture_frame_contains(SidebarFixtureState::Focus, &["coder", "Plan", "reviewer"]);
     assert_fixture_frame_contains(
         SidebarFixtureState::Economy,
-        &["Claude", "Codex", "Opencode"],
+        &["OpenCode", "cost-caps", "provider-ledger"],
     );
-    assert_fixture_frame_contains(SidebarFixtureState::Reach, &["away", "48ms", "remote-link"]);
+    assert_fixture_frame_contains(SidebarFixtureState::Reach, &["away", "48ms", "edge-cache"]);
 }
 
 fn agent_cards(snapshot: &rimz::SidebarSnapshot) -> Vec<&rimz::AgentCard> {

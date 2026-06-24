@@ -27,6 +27,7 @@ mod ansi;
 mod budget;
 mod fleet;
 mod fold;
+mod gallery;
 mod link;
 mod presence;
 mod process;

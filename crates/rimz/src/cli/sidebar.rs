@@ -102,10 +102,14 @@ enum SidebarSubcmd {
         #[arg(long)]
         theme_scheme: Option<String>,
     },
-    /// Open a live four-pane sidebar feature gallery. Hidden — contributor
-    /// visual review tool, not a user-facing sidebar verb.
+    /// Open a live sidebar feature gallery. Hidden — contributor visual review
+    /// tool, not a user-facing sidebar verb.
     #[command(hide = true)]
     Gallery,
+    /// Render the live sidebar gallery compositor. Hidden — launched by
+    /// `sidebar gallery`, not a user-facing sidebar verb.
+    #[command(hide = true)]
+    GalleryRender,
     /// Presence poke from the Zellij presence plugin: refresh the liveness
     /// stamp and wake the sidebar fleet through either an exact-cache shortcut
     /// or a producer refetch. Hidden — plugin infrastructure, not a human verb.
@@ -198,20 +202,6 @@ enum SidebarFixtureState {
     Reach,
 }
 
-impl SidebarFixtureState {
-    const fn as_arg(self) -> &'static str {
-        match self {
-            Self::Empty => "empty",
-            Self::Fleet => "fleet",
-            Self::Provider => "provider",
-            Self::Cockpit => "cockpit",
-            Self::Focus => "focus",
-            Self::Economy => "economy",
-            Self::Reach => "reach",
-        }
-    }
-}
-
 impl SidebarArgs {
     /// The low-cardinality command label for the Sentry command scope.
     pub(crate) fn command_label(&self) -> &'static str {
@@ -221,6 +211,7 @@ impl SidebarArgs {
             SidebarSubcmd::Render { .. } => "sidebar render",
             SidebarSubcmd::Fixture { .. } => "sidebar fixture",
             SidebarSubcmd::Gallery => "sidebar gallery",
+            SidebarSubcmd::GalleryRender => "sidebar gallery-render",
             SidebarSubcmd::Wake { .. } => "sidebar wake",
             SidebarSubcmd::MarkRead { .. } => "sidebar mark-read",
             SidebarSubcmd::MarkUnread { .. } => "sidebar mark-unread",
@@ -276,6 +267,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             theme_scheme,
         } => fixture(state, width, height, watch, theme_mode, theme_scheme),
         SidebarSubcmd::Gallery => gallery(globals),
+        SidebarSubcmd::GalleryRender => gallery_render(),
         SidebarSubcmd::Wake {
             workspace_id,
             reason,
@@ -625,14 +617,8 @@ fn gallery(globals: &GlobalFlags) -> Result<()> {
         refresh_ms: None,
     };
     let rimz_bin = rimz_cli_program().to_string_lossy().into_owned();
-    let fixture_pane = |state: SidebarFixtureState| rimz::mux::PaneCmd {
-        argv: vec![
-            rimz_bin.clone(),
-            "sidebar".to_owned(),
-            "fixture".to_owned(),
-            state.as_arg().to_owned(),
-            "--watch".to_owned(),
-        ],
+    let gallery_pane = rimz::mux::PaneCmd {
+        argv: vec![rimz_bin, "sidebar".to_owned(), "gallery-render".to_owned()],
     };
     backend
         .open_tab(&rimz::mux::TabOptions {
@@ -640,18 +626,32 @@ fn gallery(globals: &GlobalFlags) -> Result<()> {
             title: "sidebar gallery".to_owned(),
             cwd: workspace.worktree_root.clone(),
             panes: rimz::mux::LayoutPanes {
-                columns: vec![
-                    vec![fixture_pane(SidebarFixtureState::Cockpit)],
-                    vec![fixture_pane(SidebarFixtureState::Focus)],
-                    vec![fixture_pane(SidebarFixtureState::Economy)],
-                    vec![fixture_pane(SidebarFixtureState::Reach)],
-                ],
+                columns: vec![vec![gallery_pane]],
             },
             focus: true,
             dock_sidebar: false,
             sidebar: super::build_sidebar_opts(&room, Vec::new())?,
         })
         .context("opening sidebar gallery")
+}
+
+fn gallery_render() -> Result<()> {
+    let machine_config = super::machine_config();
+    let refresh_ms = machine_config.theme.display.resolved_refresh_ms();
+    let mut snapshots = [
+        SidebarFixtureState::Cockpit,
+        SidebarFixtureState::Focus,
+        SidebarFixtureState::Economy,
+        SidebarFixtureState::Reach,
+    ]
+    .into_iter()
+    .map(sidebar_fixture_snapshot)
+    .collect::<Result<Vec<_>>>()?;
+    for snapshot in &mut snapshots {
+        snapshot.theme.mode = machine_config.theme.mode;
+        snapshot.theme.glyphs = machine_config.theme.glyphs.clone();
+    }
+    rimz::sidebar_pane::app::serve_gallery(snapshots, refresh_ms).context("serving sidebar gallery")
 }
 
 fn parse_fixture_theme_mode(value: &str) -> Result<rimz::config::ThemeMode> {

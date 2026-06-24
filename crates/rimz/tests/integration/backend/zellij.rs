@@ -713,12 +713,7 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
             title: tab_name.to_owned(),
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
-                columns: vec![
-                    vec![work_pane()],
-                    vec![work_pane()],
-                    vec![work_pane()],
-                    vec![work_pane()],
-                ],
+                columns: vec![vec![work_pane()]],
             },
             focus: true,
             dock_sidebar: false,
@@ -727,9 +722,9 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
         .expect("open gallery tab");
 
     assert_eq!(
-        wait_for_named_work_pane_count(xdg.path(), &name, tab_name, 4).len(),
-        4,
-        "gallery tab should hold four work panes",
+        wait_for_named_work_pane_count(xdg.path(), &name, tab_name, 1).len(),
+        1,
+        "gallery tab should hold one work pane",
     );
     assert_eq!(
         named_sidebar_pane_geometry(xdg.path(), &name, tab_name)
