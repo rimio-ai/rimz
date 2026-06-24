@@ -601,6 +601,8 @@ fn deliver_one(
     };
     debug_assert!(message.same_agent(&candidate.message.kind, &candidate.message.agent_id));
     debug_assert_eq!(message.message_id, candidate.message.message_id);
+    // Hook delivery handles one claimed message; settle above owns any
+    // pre-delivery spacing, so this pacer's first tick stays a no-op.
     let mut live_send = send::LiveSend {
         force: message.force,
         enter: message.enter,
