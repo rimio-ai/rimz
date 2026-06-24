@@ -9,6 +9,7 @@ mod catalog;
 mod cellart;
 mod frames;
 mod model;
+mod preview;
 mod voice;
 
 use std::collections::{BTreeSet, HashMap};
@@ -21,6 +22,7 @@ use crate::config::{PetsConfig, PetsGlyphMode};
 pub(crate) use cellart::PetCell;
 pub(crate) use cellart::PetCellGrid;
 pub(crate) use model::PetAction;
+pub use preview::{PetPose, PetPreview, PreviewCell, builtin_ids, load_previews};
 
 use asset::PetSource;
 use frames::RgbaImage;

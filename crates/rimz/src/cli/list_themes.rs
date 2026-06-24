@@ -5,6 +5,8 @@
 //! theme.scheme <name>`. `--json` emits the same list as an array for
 //! scripting.
 
+use std::io::{IsTerminal, Write};
+
 use anyhow::Result;
 use clap::Args;
 
@@ -29,11 +31,36 @@ pub fn run(args: ListThemesArgs, _globals: &GlobalFlags) -> Result<()> {
         }
         return Ok(());
     }
-    use std::io::Write;
+    let is_tty = std::io::stdout().is_terminal();
     let mut out = render::out();
     let accent = render::palette::ACCENT;
     for name in &names {
-        writeln!(out, "{}{name}{}", accent.render(), accent.render_reset())?;
+        if is_tty {
+            if let Some(swatch) = scheme::scheme_swatch(name) {
+                for rgb in [
+                    swatch.background,
+                    swatch.foreground,
+                    swatch.red,
+                    swatch.green,
+                    swatch.yellow,
+                    swatch.blue,
+                    swatch.magenta,
+                    swatch.cyan,
+                ] {
+                    write!(out, "{}", render::paint(bg_style(rgb), "  "))?;
+                }
+                write!(out, " ")?;
+            }
+            writeln!(out, "{}{name}{}", accent.render(), accent.render_reset())?;
+        } else {
+            writeln!(out, "{name}")?;
+        }
     }
     Ok(())
+}
+
+fn bg_style((red, green, blue): (u8, u8, u8)) -> anstyle::Style {
+    anstyle::Style::new().bg_color(Some(anstyle::Color::Rgb(anstyle::RgbColor(
+        red, green, blue,
+    ))))
 }

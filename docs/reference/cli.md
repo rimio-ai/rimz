@@ -28,7 +28,7 @@ rimz
 | **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `list`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) |
 | **Work with agents** | `agents`, `transcript`, `steer`, `queue`, `pane`, `worktree`, `loop` | [Agent control](./cli/agents.md) |
 | **Decisions, hooks, and trust** | `feed`, `event`, `resolver`, `hooks`, `trust` | [Feed, resolvers, hooks, and trust](./cli/feed.md) |
-| **Configure and maintain** | `config`, `coverage`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, `ping` | [Maintenance](./cli/maintenance.md) |
+| **Configure and maintain** | `config`, `coverage`, `list-pets`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, `ping` | [Maintenance](./cli/maintenance.md) |
 
 Two surfaces have their own reference outside this map: [`rimz config`](./configuration.md) edits the per-machine config (the [maintenance page](./cli/maintenance.md#configure-the-machine) covers the command mechanics), and [`rimz stats`](../internals/reach/welcome.md#rimz-stats) renders the token-activity lobby.
 

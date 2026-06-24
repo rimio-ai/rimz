@@ -147,8 +147,10 @@ red = 10
 ```toml
 [theme.pets]
 enabled = true
-pet = "codex"
+pet = "rocky"
 ```
+
+Run `rimz list-pets` to preview the bundled pets before setting `pet`.
 
 ## Animations
 

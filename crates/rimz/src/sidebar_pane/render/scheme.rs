@@ -13,8 +13,33 @@ struct AlacrittyTheme {
     colors: Option<InlinePalette>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SchemeSwatch {
+    pub background: (u8, u8, u8),
+    pub foreground: (u8, u8, u8),
+    pub red: (u8, u8, u8),
+    pub green: (u8, u8, u8),
+    pub yellow: (u8, u8, u8),
+    pub blue: (u8, u8, u8),
+    pub magenta: (u8, u8, u8),
+    pub cyan: (u8, u8, u8),
+}
+
 pub(crate) fn explicit_raw_palette(name_or_path: &str) -> Option<RawPalette> {
     load_explicit_raw_palette(name_or_path).ok()
+}
+
+pub fn scheme_swatch(name_or_path: &str) -> Option<SchemeSwatch> {
+    explicit_raw_palette(name_or_path).map(|raw| SchemeSwatch {
+        background: raw.background,
+        foreground: raw.foreground,
+        red: raw.red,
+        green: raw.green,
+        yellow: raw.yellow,
+        blue: raw.blue,
+        magenta: raw.magenta,
+        cyan: raw.cyan,
+    })
 }
 
 #[cfg(test)]
@@ -222,6 +247,13 @@ foreground = '#657b83'
             (0x21, 0x21, 0x21),
             "the band is a derived tint, not the raw background"
         );
+    }
+
+    #[test]
+    fn scheme_swatch_exposes_raw_palette() {
+        let swatch = scheme_swatch("TokyoNight Night").expect("bundled scheme");
+        assert_eq!(swatch.background, (0x1a, 0x1b, 0x26));
+        assert_eq!(swatch.green, (0x9e, 0xce, 0x6a));
     }
 
     #[test]

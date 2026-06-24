@@ -50,7 +50,7 @@ impl Default for PetsConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            pet: "codex".to_owned(),
+            pet: "rocky".to_owned(),
             size: PetsSize::default(),
             glyphs: PetsGlyphMode::default(),
             voice: true,

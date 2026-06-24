@@ -46,7 +46,7 @@ The `pet` selector resolves to one of four sources, tried in order: a built-in c
 
 **Built-ins** resolve from the CDN on first use and install into a per-machine cache.
 
-- **Catalog.** The built-in ids are `codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, and `null-signal`; each maps to `<id>-spritesheet-v4.webp`.
+- **Catalog.** The built-in ids are `codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, and `null-signal`; each maps to `<id>-spritesheet-v4.webp`. `rimz list-pets` previews them.
 - **Source.** `https://persistent.oaistatic.com/codex/pets/v1/<file>` over HTTPS, with a request timeout and a 16 MiB byte cap.
 - **Install.** The cache path is `$XDG_CACHE_HOME/rimz/pets/v1/assets/<file>`, falling back to `$HOME/.cache/rimz/pets/v1/assets/<file>` or a temp cache root. Writes use temp-file-plus-rename so a partial download never presents as a valid sheet.
 
@@ -65,7 +65,7 @@ The `pet` selector resolves to one of four sources, tried in order: a built-in c
 ```toml
 [theme.pets]
 enabled = false
-pet = "codex"
+pet = "rocky"
 size = "medium"
 glyphs = "auto"
 voice = true

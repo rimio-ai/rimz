@@ -15,6 +15,7 @@ mod gc;
 mod hook_install;
 mod hooks;
 mod list;
+mod list_pets;
 mod list_themes;
 mod loop_cmd;
 mod pane;
@@ -82,6 +83,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Workspace(args)) => workspace::run(args, &globals),
         Some(Subcmd::List(args)) => list::run(args, &globals),
         Some(Subcmd::Stats(args)) => stats::run(args, &globals),
+        Some(Subcmd::ListPets(args)) => list_pets::run(args, &globals),
         Some(Subcmd::ListThemes(args)) => list_themes::run(args, &globals),
         Some(Subcmd::Event(args)) => event::run(args, &globals),
         Some(Subcmd::Feed(args)) => feed::run(args, &globals),
@@ -177,6 +179,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::Workspace(_)) => ("workspace", None, None),
         Some(Subcmd::List(_)) => ("list", None, None),
         Some(Subcmd::Stats(_)) => ("stats", None, None),
+        Some(Subcmd::ListPets(_)) => ("list-pets", None, None),
         Some(Subcmd::ListThemes(_)) => ("list-themes", None, None),
         Some(Subcmd::Event(_)) => ("event", None, None),
         Some(Subcmd::Feed(_)) => ("feed", None, None),
@@ -537,6 +540,8 @@ enum Subcmd {
     List(list::ListArgs),
     /// Token-activity heatmap, model/agent breakdowns, and usage insights.
     Stats(stats::StatsArgs),
+    /// Preview the bundled provider-dashboard pets as cell-art.
+    ListPets(list_pets::ListPetsArgs),
     /// List the bundled sidebar theme names.
     ListThemes(list_themes::ListThemesArgs),
     /// Emit generic events into the workspace ledger.

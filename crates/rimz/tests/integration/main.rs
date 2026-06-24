@@ -22,6 +22,7 @@ mod hooks;
 mod journey;
 mod ledger;
 mod list;
+mod list_pets;
 mod list_themes;
 mod loop_schedule;
 mod message_queue;
