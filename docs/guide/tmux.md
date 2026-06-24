@@ -35,11 +35,11 @@ set -g  set-clipboard on         # yank into the host clipboard over OSC52
 These tune copy-mode, the status bar, and pane borders. None are required; each makes day-to-day work nicer.
 
 ```tmux
-# Copy-mode: vi keys, mouse-drag yanks without exiting, gentler scroll.
+# Copy-mode: vi keys, mouse-drag yanks and exits, gentler scroll.
 setw -g mode-keys vi
 bind -T copy-mode-vi v send -X begin-selection
 bind -T copy-mode-vi y send -X copy-pipe-no-clear
-bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-no-clear
+bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel
 bind -T copy-mode-vi WheelUpPane   send -X -N 3 scroll-up
 bind -T copy-mode-vi WheelDownPane send -X -N 3 scroll-down
 
