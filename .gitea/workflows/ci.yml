@@ -38,7 +38,7 @@ jobs:
     # Debian 13 keeps apt tmux at 3.5a (the live-mux floor, MIN_TMUX_VERSION =
     # 3.5.0); the image ships Node because act_runner runs JS actions (checkout,
     # rust-cache) inside the container, and dtolnay/rust-toolchain bootstraps
-    # rustup over curl from there.
+    # the Rust install step bootstraps rustup over curl from there.
     container:
       image: node:24-trixie
     # Per-commit dedupe across events. A rebase-ff merge lands the PR head sha
@@ -55,12 +55,91 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # `rust-toolchain.toml` pins the channel + components; this action
-      # respects it.
-      - name: Install Rust toolchain (from rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@stable
+      # Gitea's containerized runner has constrained outbound egress. Cache
+      # rustup plus its cargo-bin proxies by the pinned toolchain file so a hot
+      # run does not have to reach static.rust-lang.org just to bootstrap Rust.
+      - name: Rust toolchain cache
+        uses: actions/cache@v5
         with:
-          components: rustfmt, clippy, llvm-tools-preview
+          path: |
+            ~/.rustup
+            ~/.cargo/bin
+          key: gitea-rust-toolchain-${{ hashFiles('rust-toolchain.toml') }}
+
+      # `rust-toolchain.toml` pins this channel, components, and targets. Keep
+      # the install command explicit so the cold path can retry transient Rust
+      # CDN timeouts; cached runs skip the network install entirely.
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+          retry() {
+            local description="$1"
+            shift
+            local attempt delay
+            for attempt in 1 2 3; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::${description} failed after ${attempt} attempts"
+                return 1
+              fi
+              delay="$((attempt * 20))"
+              echo "::warning::${description} failed on attempt ${attempt}; retrying in ${delay}s"
+              sleep "$delay"
+            done
+          }
+
+          install_rustup() {
+            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --profile minimal
+          }
+
+          install_toolchain() {
+            rustup toolchain install stable \
+              --profile minimal \
+              --no-self-update \
+              --component rustfmt \
+              --component clippy \
+              --component llvm-tools-preview \
+              --target wasm32-wasip1 \
+              --target aarch64-apple-darwin \
+              --target x86_64-apple-darwin
+          }
+
+          toolchain_ready() {
+            command -v rustup >/dev/null 2>&1 || return 1
+            rustup toolchain list | grep -Eq '^stable(-| )' || return 1
+
+            installed_components="$(rustup component list --installed --toolchain stable)"
+            for component in rustfmt clippy llvm-tools; do
+              grep -Eq "^${component}-" <<<"$installed_components" || return 1
+            done
+
+            installed_targets="$(rustup target list --installed --toolchain stable)"
+            for target in wasm32-wasip1 aarch64-apple-darwin x86_64-apple-darwin; do
+              grep -qx "$target" <<<"$installed_targets" || return 1
+            done
+          }
+
+          if toolchain_ready; then
+            echo "Rust toolchain already restored from cache"
+          else
+            if ! command -v rustup >/dev/null 2>&1; then
+              retry "rustup bootstrap" install_rustup
+            fi
+            retry "Rust toolchain install" install_toolchain
+          fi
+
+          rustup default stable
+          rustc --version
+          cargo --version
+          rustfmt --version
+          cargo clippy --version
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
