@@ -325,9 +325,17 @@ pub(crate) fn wait_for_message(
     session_name: &str,
     timeout: Duration,
 ) -> Result<MessageStatus> {
+    wait_for_message_until(ledger, message_id, session_name, Instant::now() + timeout)
+}
+
+pub(crate) fn wait_for_message_until(
+    ledger: &rimz::Ledger,
+    message_id: &MessageId,
+    session_name: &str,
+    deadline: Instant,
+) -> Result<MessageStatus> {
     const POLL: Duration = Duration::from_millis(500);
 
-    let deadline = Instant::now() + timeout;
     loop {
         if let Some(message) = ledger
             .list_messages()?

@@ -530,14 +530,15 @@ fn add_message(
         });
     }
     let mut failed = false;
+    let wait_deadline = spec.wait.map(|timeout| std::time::Instant::now() + timeout);
     for output in &outputs {
         let mut status = output.status;
-        if let Some(timeout) = spec.wait {
-            status = send::wait_for_message(
+        if let Some(deadline) = wait_deadline {
+            status = send::wait_for_message_until(
                 &ledger,
                 &output.message_id,
                 &workspace.session_name,
-                timeout,
+                deadline,
             )?;
             if status != MessageStatus::Delivered {
                 failed = true;

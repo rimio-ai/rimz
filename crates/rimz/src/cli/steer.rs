@@ -157,18 +157,22 @@ fn report(
     });
     if let Some(timeout) = wait {
         let mut failed = false;
+        let deadline = std::time::Instant::now() + timeout;
         for outcome in outcomes {
             if let send::Outcome::Sent {
-                label, message_id, ..
+                label,
+                message_id,
+                compacted,
             } = outcome
             {
-                let status = send::wait_for_message(ledger, message_id, session_name, timeout)?;
+                let status =
+                    send::wait_for_message_until(ledger, message_id, session_name, deadline)?;
                 if status != rimz::message::MessageStatus::Delivered {
                     failed = true;
                 }
                 #[expect(clippy::print_stdout, reason = "wait status")]
                 {
-                    println!("{} {label}", wait_status_label(status));
+                    println!("{}", wait_status_line(status, label, *compacted));
                 }
             }
         }
@@ -180,11 +184,7 @@ fn report(
     if total == 1 {
         if !sent.is_empty() {
             let label = sent[0];
-            let suffix = if compacted.first() == Some(&label) {
-                " (compacted first)"
-            } else {
-                ""
-            };
+            let suffix = compacted_suffix(compacted.first() == Some(&label));
             #[expect(clippy::print_stdout, reason = "steer confirmation")]
             {
                 println!("sent {label}{suffix}");
@@ -219,6 +219,18 @@ fn report(
     Ok(())
 }
 
+fn wait_status_line(status: rimz::message::MessageStatus, label: &str, compacted: bool) -> String {
+    format!(
+        "{} {label}{}",
+        wait_status_label(status),
+        compacted_suffix(compacted)
+    )
+}
+
+fn compacted_suffix(compacted: bool) -> &'static str {
+    if compacted { " (compacted first)" } else { "" }
+}
+
 fn wait_status_label(status: rimz::message::MessageStatus) -> &'static str {
     match status {
         rimz::message::MessageStatus::Delivered => "delivered",
@@ -230,5 +242,18 @@ fn wait_status_label(status: rimz::message::MessageStatus) -> &'static str {
         | rimz::message::MessageStatus::Queued
         | rimz::message::MessageStatus::Claimed
         | rimz::message::MessageStatus::Sent => "timed out",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wait_status_line_keeps_compaction_notice() {
+        assert_eq!(
+            wait_status_line(rimz::message::MessageStatus::Delivered, "@codex", true),
+            "delivered @codex (compacted first)"
+        );
     }
 }
