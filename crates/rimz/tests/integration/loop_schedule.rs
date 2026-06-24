@@ -57,7 +57,7 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
     assert_eq!(messages[0].text, "next step");
     assert_eq!(messages[0].kind.as_str(), "claude");
     assert_eq!(messages[0].agent_id.as_str(), "sess-loop-live");
-    assert_eq!(messages[0].status, MessageStatus::Pending);
+    assert_eq!(messages[0].status, MessageStatus::Queued);
 }
 
 #[test]

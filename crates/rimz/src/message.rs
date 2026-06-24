@@ -7,13 +7,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{AgentState, AgentStatus};
-use crate::ids::{AgentKind, AgentSessionId, MessageId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 
 pub const DEFAULT_SETTLE: Duration = Duration::from_millis(400);
 pub const SETTLE_ENV: &str = "RIMZ_QUEUE_SETTLE_MS";
 /// Default spacing between discrete steer/queue pane writes.
 pub const DEFAULT_MESSAGE_INTERVAL: Duration = Duration::from_secs(1);
 pub const MESSAGE_INTERVAL_ENV: &str = "RIMZ_MESSAGE_INTERVAL_MS";
+pub const DEFAULT_DELIVERY_WINDOW: Duration = Duration::from_secs(30);
+pub const DELIVERY_WINDOW_ENV: &str = "RIMZ_MESSAGE_DELIVERY_WINDOW_MS";
 pub const MAX_DELIVERY_ATTEMPTS: u32 = 5;
 pub const CLAIM_TTL: Duration = Duration::from_secs(15);
 
@@ -154,34 +156,43 @@ impl std::fmt::Display for AutoCompact {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageStatus {
-    Pending,
+    Created,
+    #[serde(alias = "pending")]
+    Queued,
     Claimed,
+    Sent,
     Delivered,
+    TimedOut,
+    Errored,
     Removed,
     Abandoned,
 }
 
 impl MessageStatus {
     pub const fn is_terminal(self) -> bool {
-        matches!(self, Self::Delivered | Self::Removed | Self::Abandoned)
+        matches!(
+            self,
+            Self::Delivered | Self::TimedOut | Self::Errored | Self::Removed | Self::Abandoned
+        )
     }
 
     pub const fn is_open(self) -> bool {
-        matches!(self, Self::Pending | Self::Claimed)
+        matches!(self, Self::Queued | Self::Claimed)
     }
 
     pub const fn leaves_pending_queue(self) -> bool {
-        matches!(
-            self,
-            Self::Claimed | Self::Delivered | Self::Removed | Self::Abandoned
-        )
+        !matches!(self, Self::Queued)
     }
 
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Pending => "pending",
+            Self::Created => "created",
+            Self::Queued => "queued",
             Self::Claimed => "claimed",
+            Self::Sent => "sent",
             Self::Delivered => "delivered",
+            Self::TimedOut => "timed_out",
+            Self::Errored => "errored",
             Self::Removed => "removed",
             Self::Abandoned => "abandoned",
         }
@@ -212,6 +223,8 @@ pub struct MessageRecord {
     /// boundary.
     #[serde(default)]
     pub force: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<PaneId>,
     pub status: MessageStatus,
     pub enqueued_at: Timestamp,
     pub updated_at: Timestamp,
@@ -250,7 +263,8 @@ impl MessageRecord {
             enter,
             gate,
             force: false,
-            status: MessageStatus::Pending,
+            pane_id: None,
+            status: MessageStatus::Queued,
             enqueued_at: now,
             updated_at: now,
             attempts: 0,
@@ -273,6 +287,18 @@ impl MessageRecord {
     #[must_use]
     pub fn with_force(mut self, force: bool) -> Self {
         self.force = force;
+        self
+    }
+
+    #[must_use]
+    pub fn with_pane_id(mut self, pane_id: PaneId) -> Self {
+        self.pane_id = Some(pane_id);
+        self
+    }
+
+    #[must_use]
+    pub fn with_status(mut self, status: MessageStatus) -> Self {
+        self.status = status;
         self
     }
 
@@ -318,7 +344,7 @@ pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
     }
 }
 
-/// The oldest pending message for one logical agent card, the next to deliver.
+/// The oldest queued message for one logical agent card, the next to deliver.
 /// FIFO spans a card's provisional `launch_*` id and the session id it registers
 /// as, so pass the stable `agent_name` when known: a message queued before
 /// registration still sorts ahead of one queued after.
@@ -331,8 +357,7 @@ pub fn queue_head<'a>(
     pending
         .into_iter()
         .filter(|message| {
-            message.status == MessageStatus::Pending
-                && message.same_card(kind, agent_id, agent_name)
+            message.status == MessageStatus::Queued && message.same_card(kind, agent_id, agent_name)
         })
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
 }
@@ -362,6 +387,14 @@ pub fn message_interval_from_env() -> Duration {
         .and_then(|raw| raw.parse::<u64>().ok())
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT_MESSAGE_INTERVAL)
+}
+
+pub fn delivery_window_from_env() -> Duration {
+    std::env::var(DELIVERY_WINDOW_ENV)
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_DELIVERY_WINDOW)
 }
 
 pub fn claim_expired(last_attempt_at: Option<Timestamp>, now: Timestamp) -> bool {
@@ -410,6 +443,28 @@ mod tests {
         assert!(!delivery_checkpoint(&LifecycleSignal::SubagentStopped {
             errored: false
         }));
+    }
+
+    #[test]
+    fn message_status_lifecycle_helpers_match_queue_semantics() {
+        assert!(MessageStatus::Queued.is_open());
+        assert!(MessageStatus::Claimed.is_open());
+        assert!(!MessageStatus::Sent.is_open());
+        assert!(!MessageStatus::Sent.is_terminal());
+        for status in [
+            MessageStatus::Delivered,
+            MessageStatus::TimedOut,
+            MessageStatus::Errored,
+            MessageStatus::Removed,
+            MessageStatus::Abandoned,
+        ] {
+            assert!(status.is_terminal(), "{status}");
+        }
+        assert!(!MessageStatus::Queued.leaves_pending_queue());
+        assert!(MessageStatus::Sent.leaves_pending_queue());
+
+        let legacy: MessageStatus = serde_json::from_str("\"pending\"").unwrap();
+        assert_eq!(legacy, MessageStatus::Queued);
     }
 
     #[test]

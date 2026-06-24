@@ -90,7 +90,7 @@ The `@` sigil is required — a bare selector fails with a `did you mean @…?` 
 
 ### Steer
 
-`rimz steer <target> -- <text>` injects into each resolved pane immediately as a [bracketed paste](#bracketed-paste-submit), then presses Enter as a discrete keystroke *outside* the paste — the submit — while any `\n` inside the text rides the paste as a soft composer newline, so a multi-line prompt lands multi-line. By default a Rimz-launched agent's send arrives prefixed `from @sender: `, gaining `#channel` when it crosses channels; `--no-from` delivers the bytes exact. A pending feed ask attached to a bound agent skips that agent unless `--force` records the override and sends anyway. The `agent.steered` event records metadata — kind, pane, force flag, sender, text length, and the session id when bound — never the message content.
+`rimz steer <target> -- <text>` injects into each resolved pane immediately as a [bracketed paste](#bracketed-paste-submit), writes a durable message record, then presses Enter as a discrete keystroke *outside* the paste — the submit — while any `\n` inside the text rides the paste as a soft composer newline, so a multi-line prompt lands multi-line. By default a Rimz-launched agent's send arrives prefixed `from @sender: `, gaining `#channel` when it crosses channels; `--no-from` delivers the bytes exact. A pending feed ask attached to a bound agent skips that agent unless `--force` records the override and sends anyway. The `message.sent` event records metadata — message id, kind, session, pane, force flag, sender, text length, and status — never the message content.
 
 ### Bracketed-paste submit
 
@@ -108,14 +108,14 @@ The compaction is the agent's own slash command, owned by the adapter (`AgentAda
 
 ### Queue: leave a task for later
 
-A queue command sends immediately like `steer` when the target has a live pane, the gate is open, no pending ask reserves input unless `--force`, and no older pending message owns that card's FIFO head. That send leaves no durable queue record and emits `agent.steered`, not `message.*` events. A target that is busy, gated, blocked by a pending ask, missing a live pane, or behind FIFO gets a parked message under the workspace state root:
+A queue command sends immediately like `steer` when the target has a live pane, the gate is open, no pending ask reserves input unless `--force`, and no older queued message owns that card's FIFO head. That send writes the same durable `sent` record and `message.sent` event as `steer`. A target that is busy, gated, blocked by a pending ask, missing a live pane, or behind FIFO gets a parked message under the workspace state root:
 
 ```text
-queue/<msg_id>.json            pending
-queue/terminal/<msg_id>.json   claimed and final
+queue/<msg_id>.json            queued
+queue/terminal/<msg_id>.json   claimed, sent, and final
 ```
 
-`msg_` ids are UUIDv7, so filename order is FIFO order; pending scans read only `queue/*.json`, and the directory is created lazily so an empty workspace costs the hook path one missing-dir stat. Each parked record stores the workspace, kind, session id or launch placeholder id, sender, text, Enter flag, gate, force flag, status (`pending` → `claimed` → `delivered`, or `removed` / `abandoned`), timestamps, and attempt bookkeeping. The full record is the field catalog; the lifecycle below is the contract.
+`msg_` ids are UUIDv7, so filename order is FIFO order; queued scans read only `queue/*.json`, and the directory is created lazily so an empty workspace costs the hook path one missing-dir stat. Each record stores the workspace, kind, session id or launch placeholder id (or a pane-derived placeholder for a lazy send-now pane), sender, text, Enter flag, gate, force flag, pane id when known, status (`created` transient → `queued` → `claimed` → `sent` → `delivered`, or `timed_out` / `errored` / `removed` / `abandoned`), timestamps, and attempt bookkeeping. The full record is the field catalog; the lifecycle below is the contract.
 
 ### Gates
 
@@ -123,9 +123,11 @@ queue/terminal/<msg_id>.json   claimed and final
 
 ### Delivery
 
-Only **unparked root turn ends** trigger parked delivery — `Registered`, subagent stops, compaction events, and parked background turn ends do not check the queue. The lifecycle hook records the event, then spawns a detached `rimz queue deliver` helper with nulled stdio for the FIFO head. The helper waits a short settle delay (`RIMZ_QUEUE_SETTLE_MS` overrides it for tests), reads the pending head, checks a fresh snapshot for the gate, the pending-ask predicate (skipped under `--force`), and the target's live pane, then claims the head under the workspace lock immediately before sending through the same steer path.
+Only **unparked root turn ends** trigger parked delivery — `Registered`, subagent stops, compaction events, and parked background turn ends do not check the queue. The lifecycle hook records the event, then spawns a detached `rimz queue deliver` helper with nulled stdio for the FIFO head. The helper waits a short settle delay (`RIMZ_QUEUE_SETTLE_MS` overrides it for tests), reads the queued head, checks a fresh snapshot for the gate, the pending-ask predicate (skipped under `--force`), and the target's live pane, then claims the head under the workspace lock immediately before sending through the same steer path.
 
-The claim moves the record out of the pending scan and increments the attempt count. A successful send moves it to `delivered`; a send failure records `last_error` and returns it to `pending`, throttled by the claim timestamp, and after the retry cap the record becomes `abandoned`. A state miss simply leaves the message pending for a later transition. A crash after claim leaves a visible `claimed` record that `queue list` surfaces; it is not auto-redelivered. Delivery is FIFO per agent, one message per unparked root turn end. Parked queue writes append `message.queued` / `delivered` / `removed` / `abandoned` audit events (metadata only, never text), and every successful send also appends the same `agent.steered` metadata event as `steer`. `rimz gc` abandons open messages whose `(kind, agent_id)` no longer appears in the rollup.
+The claim moves the record out of the queued scan and increments the attempt count. A successful pane write moves it to `sent`; the agent's next `TurnStarted` lifecycle hook confirms the oldest `sent` record for that card as `delivered`. A pre-send failure records `last_error` and returns it to `queued`, throttled by the claim timestamp, and after the retry cap the record becomes `abandoned`; a failure after bytes were written becomes `errored` to avoid duplicate retry text. A state miss leaves the message queued for a later transition. A crash after claim leaves a visible `claimed` record that `queue list` surfaces; it is not auto-redelivered. Delivery is FIFO per agent, one message per unparked root turn end. Queue writes append `message.queued` / `message.sent` / `message.delivered` / `message.timed_out` / `message.errored` / `message.removed` / `message.abandoned` audit events (metadata only, never text). `rimz gc` abandons open messages whose `(kind, agent_id)` no longer appears in the rollup and times out `sent` records older than `RIMZ_MESSAGE_DELIVERY_WINDOW_MS`.
+
+`--wait[=DURATION]` upgrades `steer` and send-now `queue` from fire-and-return to synchronous confirmation. The command waits until the record reaches `delivered`, `timed_out`, or `errored`, prints `delivered @handle`, `timed out @handle`, or `errored @handle`, and exits nonzero for the latter two. Bare `--wait` uses `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` or the default delivery window. `--force` sent mid-turn can time out because a resumed turn emits no fresh `TurnStarted` for that paste.
 
 ### Hazards
 

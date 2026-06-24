@@ -48,9 +48,9 @@ enum QueueSubcmd {
         /// Optional target filter.
         target: Option<String>,
     },
-    /// Remove one pending message.
+    /// Remove one queued message.
     Remove { message_id: MessageId },
-    /// Remove every pending message for an agent.
+    /// Remove every queued message for an agent.
     Clear {
         target: String,
         #[arg(long)]
@@ -114,7 +114,10 @@ fn queue_add(
         smart_compact,
         file,
         no_from,
+        wait,
     } = send;
+    let wait = send::wait_duration(wait);
+    send::validate_wait(!no_enter, wait)?;
     let auto_compact = smart_compact.or_else(|| super::machine_config().harness.smart_compact);
     let text = resolve_message(&text, file.as_deref())?;
     add_message(
@@ -127,6 +130,7 @@ fn queue_add(
             force,
             auto_compact,
             no_from,
+            wait,
         },
         FanoutFlags { all, create, yes },
         globals,
@@ -154,6 +158,7 @@ pub(crate) fn queue_to_session(
             force: false,
             auto_compact: None,
             no_from: false,
+            wait: None,
         },
         FanoutFlags {
             all: false,
@@ -179,6 +184,7 @@ struct MessageSpec {
     force: bool,
     auto_compact: Option<AutoCompact>,
     no_from: bool,
+    wait: Option<Duration>,
 }
 
 /// One logical queue target. `pane` is present when the agent can be reached
@@ -188,6 +194,12 @@ struct MessageSpec {
 struct QueueTarget<'a> {
     pane: Option<&'a PaneAgent>,
     agent: Option<&'a AgentState>,
+}
+
+struct AddOutput {
+    label: String,
+    message_id: MessageId,
+    status: MessageStatus,
 }
 
 impl QueueTarget<'_> {
@@ -438,25 +450,52 @@ fn add_message(
         force: spec.force,
         enter: spec.enter,
         auto_compact: spec.auto_compact,
-        sender: sender.clone(),
         pacer: send::Pacer::new(message_interval_from_env()),
     };
     let mut kinds_seen = std::collections::BTreeSet::new();
-    let mut ids = Vec::new();
+    let mut outputs = Vec::new();
     for target in &targets {
+        let label = target.label();
         let mut park = !target.receivable_now(&snapshot, &pending, spec.gate, spec.force);
         if !park && let Some(pane) = target.pane {
+            let bound = target.bound(&snapshot);
+            let message = send::message_for_target(
+                workspace.workspace_id.clone(),
+                pane,
+                bound,
+                text.clone(),
+                spec.enter,
+                spec.gate,
+                sender.clone(),
+                spec.force,
+                spec.auto_compact,
+            );
             match send::send_to_live_pane(
                 &workspace,
                 &ledger,
                 &snapshot,
                 pane,
-                target.bound(&snapshot),
-                &text,
+                bound,
+                &message,
                 &mut live_send,
-            )? {
-                send::Outcome::Sent { .. } => continue,
-                send::Outcome::SkippedPending { .. } => park = true,
+            ) {
+                Ok(send::Outcome::Sent { message_id, .. }) => {
+                    outputs.push(AddOutput {
+                        label,
+                        message_id,
+                        status: MessageStatus::Sent,
+                    });
+                    continue;
+                }
+                Ok(send::Outcome::SkippedPending { .. }) => park = true,
+                Err(err) => {
+                    ledger.record_send_error(
+                        &message,
+                        &err.to_string(),
+                        &workspace.session_name,
+                    )?;
+                    return Err(err);
+                }
             }
         }
         if !park {
@@ -484,13 +523,33 @@ fn add_message(
         let message_id = message.message_id.clone();
         ledger.queue_message(&message, &workspace.session_name)?;
         pending.push(message);
-        ids.push(message_id);
+        outputs.push(AddOutput {
+            label,
+            message_id,
+            status: MessageStatus::Queued,
+        });
     }
-    #[expect(clippy::print_stdout, reason = "command result is message id(s)")]
-    {
-        for id in &ids {
-            println!("{id}");
+    let mut failed = false;
+    for output in &outputs {
+        let mut status = output.status;
+        if let Some(timeout) = spec.wait {
+            status = send::wait_for_message(
+                &ledger,
+                &output.message_id,
+                &workspace.session_name,
+                timeout,
+            )?;
+            if status != MessageStatus::Delivered {
+                failed = true;
+            }
         }
+        #[expect(clippy::print_stdout, reason = "command result")]
+        {
+            println!("{}", render_add_output(output, status, spec.wait.is_some()));
+        }
+    }
+    if failed {
+        std::process::exit(1);
     }
     Ok(())
 }
@@ -545,7 +604,7 @@ fn remove_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
     if !ledger.remove_message(&message_id, &workspace.session_name, "remove")? {
-        bail!("message {message_id} is not pending or claimed");
+        bail!("message {message_id} is not queued or claimed");
     }
     Ok(())
 }
@@ -567,6 +626,31 @@ fn clear_messages(target: String, worktree: Option<String>, globals: &GlobalFlag
         println!("{count}");
     }
     Ok(())
+}
+
+fn render_add_output(output: &AddOutput, status: MessageStatus, waited: bool) -> String {
+    if waited {
+        return format!("{} {}", wait_status_label(status), output.label);
+    }
+    match status {
+        MessageStatus::Sent => format!("sent {}", output.label),
+        MessageStatus::Queued => format!("queued {} ({})", output.label, output.message_id),
+        other => format!("{} {}", other.as_str(), output.label),
+    }
+}
+
+fn wait_status_label(status: MessageStatus) -> &'static str {
+    match status {
+        MessageStatus::Delivered => "delivered",
+        MessageStatus::Errored => "errored",
+        MessageStatus::TimedOut => "timed out",
+        MessageStatus::Removed => "removed",
+        MessageStatus::Abandoned => "abandoned",
+        MessageStatus::Created
+        | MessageStatus::Queued
+        | MessageStatus::Claimed
+        | MessageStatus::Sent => "timed out",
+    }
 }
 
 fn deliver_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
@@ -607,28 +691,22 @@ fn deliver_one(
         force: message.force,
         enter: message.enter,
         auto_compact: message.auto_compact,
-        sender: message.sender.clone(),
         pacer: send::Pacer::new(message_interval_from_env()),
     };
+    let send_message = message
+        .clone()
+        .with_pane_id(candidate.target.pane_id.clone());
     let send = send::send_to_live_pane(
         workspace,
         ledger,
         &candidate.snapshot,
         &candidate.target,
         send::bound_agent(&candidate.snapshot, &candidate.target),
-        &message.text,
+        &send_message,
         &mut live_send,
     );
     match send {
-        Ok(send::Outcome::Sent { .. }) => {
-            ledger.settle_message(
-                &message.message_id,
-                MessageStatus::Delivered,
-                &workspace.session_name,
-                None,
-            )?;
-            Ok(true)
-        }
+        Ok(send::Outcome::Sent { .. }) => Ok(true),
         Ok(send::Outcome::SkippedPending { request_id, .. }) => {
             ledger.record_message_delivery_failure(
                 &message.message_id,
@@ -638,11 +716,20 @@ fn deliver_one(
             Ok(false)
         }
         Err(err) => {
-            ledger.record_message_delivery_failure(
-                &message.message_id,
-                &err.to_string(),
-                &workspace.session_name,
-            )?;
+            if ledger
+                .record_message_delivery_failure(
+                    &message.message_id,
+                    &err.to_string(),
+                    &workspace.session_name,
+                )?
+                .is_none()
+            {
+                ledger.record_send_error(
+                    &send_message,
+                    &err.to_string(),
+                    &workspace.session_name,
+                )?;
+            }
             Ok(false)
         }
     }

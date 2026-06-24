@@ -26,7 +26,7 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
     assert_eq!(pending[0].text, "first task");
     assert_eq!(pending[1].text, "second task");
     assert!(pending.iter().all(|message| {
-        message.status == MessageStatus::Pending
+        message.status == MessageStatus::Queued
             && message.attempts == 0
             && message.last_attempt_at.is_none()
     }));
@@ -149,7 +149,7 @@ fn deliver_leaves_ineligible_message_unclaimed() {
 
     let pending = env.ledger().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].status, MessageStatus::Pending);
+    assert_eq!(pending[0].status, MessageStatus::Queued);
     assert_eq!(pending[0].attempts, 0, "no-pane miss must not claim");
     assert!(pending[0].last_attempt_at.is_none());
 }
@@ -261,6 +261,56 @@ fn steer_no_enter_suppresses_the_keystroke() {
     );
 }
 
+#[test]
+fn steer_wait_conflicts_with_no_enter() {
+    let env = Env::new();
+    let out = env
+        .rimz()
+        .args(["steer", "@claude", "--wait", "--no-enter", "--", "y"])
+        .output()
+        .expect("steer --wait --no-enter");
+
+    assert!(!out.status.success(), "--wait --no-enter should fail");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("--wait requires submitting"),
+        "error explains the conflict: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn steer_wait_times_out_without_turn_started_ack() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-wait-timeout",
+        "feature-wait-timeout",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+
+    let trace_log = env.project_root.join("zellij-wait-timeout-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["steer", "@claude", "--wait=0s", "--", "y"])
+        .output()
+        .expect("steer --wait");
+
+    assert!(
+        !out.status.success(),
+        "--wait should exit nonzero on timeout"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("timed out"),
+        "stdout reports timeout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let messages = env.ledger().list_messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].status, MessageStatus::TimedOut);
+}
+
 /// A `\n` in the steered text is a soft composer newline: it rides inside the
 /// bracketed paste as a real newline byte, so the message lands multi-line and
 /// the submit Enter is still the one discrete keystroke. The CLI interprets the
@@ -356,15 +406,16 @@ fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_text_then_enter(&trace_log, "from @swift-otter: ping");
-    let steered = env
+    let sent = env
         .read_events()
         .into_iter()
-        .find(|event| event.method == "agent.steered")
-        .expect("steered event");
-    assert_eq!(steered.params["sender"]["origin"], "agent");
-    assert_eq!(steered.params["sender"]["kind"], "codex");
-    assert_eq!(steered.params["sender"]["name"], "swift-otter");
-    assert_eq!(steered.params["text_len"], "ping".len());
+        .find(|event| event.method == "message.sent")
+        .expect("sent event");
+    assert_eq!(sent.params["sender"]["origin"], "agent");
+    assert_eq!(sent.params["sender"]["kind"], "codex");
+    assert_eq!(sent.params["sender"]["name"], "swift-otter");
+    assert_eq!(sent.params["text_len"], "ping".len());
+    assert_eq!(sent.params["status"], "sent");
 
     let trace_log = env.project_root.join("zellij-from-steer-no-from-trace.log");
     let out = env
@@ -427,6 +478,23 @@ fn queue_delivery_presses_enter_as_discrete_key() {
 }
 
 #[test]
+fn queue_wait_conflicts_with_no_enter() {
+    let env = Env::new();
+    let out = env
+        .rimz()
+        .args(["queue", "@claude", "--wait", "--no-enter", "--", "go"])
+        .output()
+        .expect("queue --wait --no-enter");
+
+    assert!(!out.status.success(), "--wait --no-enter should fail");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("--wait requires submitting"),
+        "error explains the conflict: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn queue_deliver_sends_deferred_message_and_marks_delivered() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -445,10 +513,10 @@ fn queue_deliver_sends_deferred_message_and_marks_delivered() {
         "queue add failed: {}",
         String::from_utf8_lossy(&add.stderr)
     );
-    let message_id = String::from_utf8_lossy(&add.stdout).trim().to_owned();
+    let message_id = queued_id_from_stdout(&add.stdout);
     let pending = env.ledger().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1, "running agent should park the message");
-    assert_eq!(pending[0].status, MessageStatus::Pending);
+    assert_eq!(pending[0].status, MessageStatus::Queued);
 
     append_lifecycle(
         &env,
@@ -486,20 +554,43 @@ fn queue_deliver_sends_deferred_message_and_marks_delivered() {
     let message = messages
         .iter()
         .find(|message| message.message_id.as_str() == message_id)
-        .expect("delivered message");
-    assert_eq!(message.status, MessageStatus::Delivered);
+        .expect("sent message");
+    assert_eq!(message.status, MessageStatus::Sent);
     let methods: Vec<String> = env
         .read_events()
         .into_iter()
         .map(|event| event.method)
         .collect();
     assert!(
-        methods.iter().any(|method| method == "agent.steered"),
+        methods.iter().any(|method| method == "message.sent"),
         "delivery records the shared send event: {methods:?}"
     );
     assert!(
-        methods.iter().any(|method| method == "message.delivered"),
-        "delivery records the queue terminal event: {methods:?}"
+        !methods.iter().any(|method| method == "message.delivered"),
+        "delivery confirmation waits for the agent ack: {methods:?}"
+    );
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-deferred-live",
+            "prompt": "later",
+            "worktree_branch": "feature-dl",
+        }),
+        pane_env,
+    );
+    let messages = env.ledger().list_messages().expect("messages");
+    let message = messages
+        .iter()
+        .find(|message| message.message_id.as_str() == message_id)
+        .expect("delivered message");
+    assert_eq!(message.status, MessageStatus::Delivered);
+    assert!(
+        env.read_events()
+            .iter()
+            .any(|event| event.method == "message.delivered"),
+        "turn start confirms delivery"
     );
 }
 
@@ -528,7 +619,7 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
         "queue add failed: {}",
         String::from_utf8_lossy(&add.stderr)
     );
-    let message_id = String::from_utf8_lossy(&add.stdout).trim().to_owned();
+    let message_id = queued_id_from_stdout(&add.stdout);
     let pending = env.ledger().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1, "running launch card should park");
     assert_eq!(pending[0].agent_id.as_str(), "launch_deferred_fold");
@@ -571,8 +662,8 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
     let message = messages
         .iter()
         .find(|message| message.message_id.as_str() == message_id)
-        .expect("delivered message");
-    assert_eq!(message.status, MessageStatus::Delivered);
+        .expect("sent message");
+    assert_eq!(message.status, MessageStatus::Sent);
     let agents = env.ledger().snapshot_cached().expect("snapshot").agents;
     assert!(
         agents.iter().any(|agent| {
@@ -616,18 +707,17 @@ fn queue_send_now_prefixes_sender_and_no_from_suppresses_it() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_text_then_enter(&trace_log, "from @swift-otter: later");
-    assert!(
-        env.ledger().list_messages().unwrap().is_empty(),
-        "send-now queue leaves no durable message record"
-    );
-    let steered = env
+    let messages = env.ledger().list_messages().unwrap();
+    assert_eq!(messages.len(), 1, "send-now queue writes a durable record");
+    assert_eq!(messages[0].status, MessageStatus::Sent);
+    let sent = env
         .read_events()
         .into_iter()
-        .find(|event| event.method == "agent.steered")
-        .expect("steered event");
-    assert_eq!(steered.params["sender"]["origin"], "agent");
-    assert_eq!(steered.params["sender"]["kind"], "codex");
-    assert_eq!(steered.params["sender"]["name"], "swift-otter");
+        .find(|event| event.method == "message.sent")
+        .expect("sent event");
+    assert_eq!(sent.params["sender"]["origin"], "agent");
+    assert_eq!(sent.params["sender"]["kind"], "codex");
+    assert_eq!(sent.params["sender"]["name"], "swift-otter");
 
     let trace_log = env.project_root.join("zellij-from-queue-no-from-trace.log");
     let out = env
@@ -1096,7 +1186,7 @@ fn steer_fanout_summary() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("steered 2 agent(s)"),
+        stdout.contains("sent 2 agent(s)"),
         "summary names the count: {stdout}"
     );
     assert!(
@@ -1147,7 +1237,7 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("steered 1 agent(s)") && stdout.contains("pending ask"),
+        stdout.contains("sent 1 agent(s)") && stdout.contains("pending ask"),
         "summary names the sent and skipped agents: {stdout}"
     );
 }
@@ -1336,7 +1426,18 @@ fn queue_add(env: &Env, target: &str, text: &str) -> String {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    queued_id_from_stdout(&out.stdout)
+}
+
+fn queued_id_from_stdout(stdout: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stdout);
+    let trimmed = text.trim();
+    trimmed
+        .strip_prefix("queued ")
+        .and_then(|rest| rest.rsplit_once('('))
+        .and_then(|(_, id)| id.strip_suffix(')'))
+        .map(str::to_owned)
+        .unwrap_or_else(|| panic!("expected `queued @target (msg_...)`, got `{trimmed}`"))
 }
 
 fn push_pending_agent_ask(env: &Env, session_id: &str) {
@@ -1470,9 +1571,8 @@ fn steer_reaches_unbound_codex_pane() {
     assert_text_then_enter(&trace_log, "continue");
 }
 
-/// `queue @codex` for the same unbound pane sends immediately like `steer`.
-/// There is no turn boundary to wait for yet, so no durable queue record is
-/// created and no message delivery audit is emitted.
+/// `queue @codex` for the same unbound pane sends immediately like `steer`
+/// and records the send against a pane-derived placeholder session.
 #[test]
 fn queue_sends_now_to_unbound_codex_pane() {
     let env = Env::new();
@@ -1494,22 +1594,21 @@ fn queue_sends_now_to_unbound_codex_pane() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_text_then_enter(&trace_log, "later");
-    assert!(
-        env.ledger().list_messages().unwrap().is_empty(),
-        "send-now queue leaves no durable record"
-    );
+    let messages = env.ledger().list_messages().unwrap();
+    assert_eq!(messages.len(), 1, "send-now queue writes a durable record");
+    assert_eq!(messages[0].status, MessageStatus::Sent);
     let methods: Vec<String> = env
         .read_events()
         .into_iter()
         .map(|event| event.method)
         .collect();
     assert!(
-        methods.iter().any(|method| method == "agent.steered"),
-        "send-now queue records agent.steered: {methods:?}"
+        methods.iter().any(|method| method == "message.sent"),
+        "send-now queue records message.sent: {methods:?}"
     );
     assert!(
-        methods.iter().all(|method| !method.starts_with("message.")),
-        "send-now queue records no message events: {methods:?}"
+        methods.iter().all(|method| method != "message.queued"),
+        "send-now queue is not parked: {methods:?}"
     );
 }
 
@@ -1541,21 +1640,24 @@ fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_text_then_enter(&trace_log, "read plan");
-    assert!(
-        env.ledger().list_messages().unwrap().is_empty(),
-        "send-now provisional queue leaves no durable record"
+    let messages = env.ledger().list_messages().unwrap();
+    assert_eq!(
+        messages.len(),
+        1,
+        "send-now provisional queue writes a durable record"
     );
+    assert_eq!(messages[0].status, MessageStatus::Sent);
     let methods: Vec<String> = env
         .read_events()
         .into_iter()
         .map(|event| event.method)
         .collect();
     assert!(
-        methods.iter().any(|method| method == "agent.steered"),
-        "send-now queue records agent.steered: {methods:?}"
+        methods.iter().any(|method| method == "message.sent"),
+        "send-now queue records message.sent: {methods:?}"
     );
     assert!(
-        methods.iter().all(|method| !method.starts_with("message.")),
-        "send-now queue records no message events: {methods:?}"
+        methods.iter().all(|method| method != "message.queued"),
+        "send-now queue is not parked: {methods:?}"
     );
 }

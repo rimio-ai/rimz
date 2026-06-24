@@ -1,5 +1,5 @@
-//! Per-agent queued-message files: `queue/<message_id>.json` while pending,
-//! `queue/terminal/<message_id>.json` once delivered, removed, or abandoned.
+//! Per-agent queued-message files: `queue/<message_id>.json` while queued,
+//! `queue/terminal/<message_id>.json` once claimed, sent, or terminal.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use crate::message::{MessageRecord, MessageStatus};
 pub enum MessageStoreErr {
     #[error("message {0} not found")]
     NotFound(MessageId),
-    #[error("message {message_id} is not pending (status = {status})")]
+    #[error("message {message_id} is not queued (status = {status})")]
     NotPending {
         message_id: MessageId,
         status: MessageStatus,
@@ -78,7 +78,7 @@ pub fn list_pending(queue_dir: &Path) -> Result<Vec<MessageRecord>> {
     let mut items: Vec<MessageRecord> =
         pending_terminal::list_pending_raw::<MessageRecord>(queue_dir)?
             .into_iter()
-            .filter(|item| item.status == MessageStatus::Pending)
+            .filter(|item| item.status == MessageStatus::Queued)
             .collect();
     items.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
     Ok(items)
@@ -123,14 +123,14 @@ mod tests {
             MessageStatus::Claimed
         );
 
-        message.status = MessageStatus::Pending;
+        message.status = MessageStatus::Queued;
         write(dir.path(), &message).unwrap();
 
         assert_eq!(list_pending(dir.path()).unwrap().len(), 1);
         assert_eq!(list(dir.path()).unwrap().len(), 1);
         assert_eq!(
             load(dir.path(), &message.message_id).unwrap().status,
-            MessageStatus::Pending
+            MessageStatus::Queued
         );
     }
 

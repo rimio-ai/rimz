@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use jiff::Timestamp;
 
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
@@ -32,14 +34,60 @@ impl Ledger {
     }
 
     #[must_use = "durability barrier; check the result"]
+    pub fn record_sent_message(
+        &self,
+        message: &MessageRecord,
+        session_name: &str,
+    ) -> Result<Option<MessageRecord>> {
+        let (sent, event) = {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            let mut message =
+                match message_store::load(&self.inner.paths.queue_dir, &message.message_id) {
+                    Ok(existing)
+                        if matches!(
+                            existing.status,
+                            MessageStatus::Created
+                                | MessageStatus::Queued
+                                | MessageStatus::Claimed
+                                | MessageStatus::Sent
+                        ) =>
+                    {
+                        let mut existing = existing;
+                        existing.pane_id = message.pane_id.clone();
+                        existing
+                    }
+                    Ok(_) => return Ok(None),
+                    Err(message_store::MessageStoreErr::NotFound(_)) => message.clone(),
+                    Err(err) => return Err(err.into()),
+                };
+            let now = Timestamp::now();
+            message.status = MessageStatus::Sent;
+            message.updated_at = now;
+            message.last_error = None;
+            message_store::write(&self.inner.paths.queue_dir, &message)?;
+            let event = EventEnvelope::message_event(
+                &message,
+                session_name,
+                MessageEventMethod::Sent,
+                None,
+            );
+            event_log::append(&self.inner.paths.events_log, &event)?;
+            (message, event)
+        };
+        self.wake_sidebars_for_event_best_effort(&event);
+        self.publish_snapshot_best_effort();
+        Ok(Some(sent))
+    }
+
+    #[must_use = "durability barrier; check the result"]
     pub fn claim_message_for_delivery(
         &self,
         message_id: &MessageId,
         now: Timestamp,
     ) -> Result<Option<MessageRecord>> {
         let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-        let pending = message_store::list_pending(&self.inner.paths.queue_dir)?;
-        let Some(message) = pending
+        let queued = message_store::list_pending(&self.inner.paths.queue_dir)?;
+        let Some(message) = queued
             .iter()
             .find(|message| message.message_id == *message_id)
         else {
@@ -49,7 +97,7 @@ impl Ledger {
             return Ok(None);
         }
         let Some(head) = queue_head(
-            pending.iter(),
+            queued.iter(),
             &message.kind,
             &message.agent_id,
             message.agent_name.as_deref(),
@@ -84,7 +132,7 @@ impl Ledger {
                 Ok(message)
                     if matches!(
                         message.status,
-                        MessageStatus::Pending | MessageStatus::Claimed
+                        MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent
                     ) =>
                 {
                     message
@@ -111,6 +159,173 @@ impl Ledger {
     }
 
     #[must_use = "durability barrier; check the result"]
+    pub fn confirm_delivered_for_card(
+        &self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        agent_name: Option<&str>,
+        session_name: &str,
+    ) -> Result<Option<MessageRecord>> {
+        let outcome = {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            let Some(mut message) = message_store::list(&self.inner.paths.queue_dir)?
+                .into_iter()
+                .filter(|message| {
+                    message.status == MessageStatus::Sent
+                        && message.same_card(kind, agent_id, agent_name)
+                })
+                .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+            else {
+                return Ok(None);
+            };
+            let now = Timestamp::now();
+            message.status = MessageStatus::Delivered;
+            message.updated_at = now;
+            message.delivered_at = Some(now);
+            message_store::write(&self.inner.paths.queue_dir, &message)?;
+            let event = EventEnvelope::message_event(
+                &message,
+                session_name,
+                MessageEventMethod::Delivered,
+                None,
+            );
+            event_log::append(&self.inner.paths.events_log, &event)?;
+            Some((message, event))
+        };
+        let Some((message, event)) = outcome else {
+            return Ok(None);
+        };
+        self.wake_sidebars_for_event_best_effort(&event);
+        self.publish_snapshot_best_effort();
+        Ok(Some(message))
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub fn mark_message_timed_out(
+        &self,
+        message_id: &MessageId,
+        session_name: &str,
+        reason: Option<&str>,
+    ) -> Result<Option<MessageRecord>> {
+        let outcome = {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            let mut message = match message_store::load(&self.inner.paths.queue_dir, message_id) {
+                Ok(message) if message.status == MessageStatus::Sent => message,
+                Ok(_) | Err(message_store::MessageStoreErr::NotFound(_)) => return Ok(None),
+                Err(err) => return Err(err.into()),
+            };
+            message.status = MessageStatus::TimedOut;
+            message.updated_at = Timestamp::now();
+            let reason = reason.unwrap_or("delivery window elapsed");
+            message.last_error = Some(reason.to_owned());
+            message_store::write(&self.inner.paths.queue_dir, &message)?;
+            let event = EventEnvelope::message_event(
+                &message,
+                session_name,
+                MessageEventMethod::TimedOut,
+                Some(reason),
+            );
+            event_log::append(&self.inner.paths.events_log, &event)?;
+            Some((message, event))
+        };
+        let Some((message, event)) = outcome else {
+            return Ok(None);
+        };
+        self.wake_sidebars_for_event_best_effort(&event);
+        self.publish_snapshot_best_effort();
+        Ok(Some(message))
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub fn timeout_sent_messages(
+        &self,
+        session_name: &str,
+        now: Timestamp,
+        window: Duration,
+    ) -> Result<usize> {
+        let mut timed_out = Vec::new();
+        let mut events = Vec::new();
+        {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            for mut message in message_store::list(&self.inner.paths.queue_dir)? {
+                if message.status != MessageStatus::Sent {
+                    continue;
+                }
+                let age = now.duration_since(message.updated_at);
+                if !age.is_negative() && age.as_millis() < window.as_millis() as i128 {
+                    continue;
+                }
+                message.status = MessageStatus::TimedOut;
+                message.last_error = Some("delivery window elapsed".to_owned());
+                message.updated_at = now;
+                message_store::write(&self.inner.paths.queue_dir, &message)?;
+                let event = EventEnvelope::message_event(
+                    &message,
+                    session_name,
+                    MessageEventMethod::TimedOut,
+                    Some("gc"),
+                );
+                event_log::append(&self.inner.paths.events_log, &event)?;
+                events.push(event);
+                timed_out.push(message);
+            }
+        }
+        for event in &events {
+            self.wake_sidebars_for_event_best_effort(event);
+        }
+        if !timed_out.is_empty() {
+            self.publish_snapshot_forced();
+        }
+        Ok(timed_out.len())
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub fn record_send_error(
+        &self,
+        message: &MessageRecord,
+        error: &str,
+        session_name: &str,
+    ) -> Result<Option<MessageRecord>> {
+        let (errored, event) = {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            let mut message =
+                match message_store::load(&self.inner.paths.queue_dir, &message.message_id) {
+                    Ok(existing)
+                        if matches!(
+                            existing.status,
+                            MessageStatus::Created
+                                | MessageStatus::Queued
+                                | MessageStatus::Claimed
+                                | MessageStatus::Sent
+                        ) =>
+                    {
+                        let mut existing = existing;
+                        existing.pane_id = message.pane_id.clone();
+                        existing
+                    }
+                    Ok(_) => return Ok(None),
+                    Err(message_store::MessageStoreErr::NotFound(_)) => message.clone(),
+                    Err(err) => return Err(err.into()),
+                };
+            message.status = MessageStatus::Errored;
+            message.last_error = Some(error.to_owned());
+            message.updated_at = Timestamp::now();
+            message_store::write(&self.inner.paths.queue_dir, &message)?;
+            let event = EventEnvelope::message_event(
+                &message,
+                session_name,
+                MessageEventMethod::Errored,
+                Some(error),
+            );
+            event_log::append(&self.inner.paths.events_log, &event)?;
+            (message, event)
+        };
+        self.wake_sidebars_for_event_best_effort(&event);
+        self.publish_snapshot_best_effort();
+        Ok(Some(errored))
+    }
+
+    #[must_use = "durability barrier; check the result"]
     pub fn record_message_delivery_failure(
         &self,
         message_id: &MessageId,
@@ -123,7 +338,7 @@ impl Ledger {
                 Ok(message)
                     if matches!(
                         message.status,
-                        MessageStatus::Pending | MessageStatus::Claimed
+                        MessageStatus::Queued | MessageStatus::Claimed
                     ) =>
                 {
                     message
@@ -145,7 +360,7 @@ impl Ledger {
                 event_log::append(&self.inner.paths.events_log, &event)?;
                 Some((message, Some(event)))
             } else {
-                message.status = MessageStatus::Pending;
+                message.status = MessageStatus::Queued;
                 message_store::write(&self.inner.paths.queue_dir, &message)?;
                 Some((message, None))
             }
@@ -265,7 +480,7 @@ mod tests {
     use crate::agents::AgentLifecycleObservation;
     use crate::agents::lifecycle::LifecycleSignal;
     use crate::agents::{AgentState, AgentStatus};
-    use crate::ids::WorkspaceId;
+    use crate::ids::{MuxName, PaneId, WorkspaceId};
     use crate::message::{DeliveryGate, MessageSender};
     use crate::{RuntimePaths, StatePaths};
 
@@ -288,7 +503,7 @@ mod tests {
             .unwrap();
         let pending = ledger.list_pending_messages().unwrap();
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].status, MessageStatus::Pending);
+        assert_eq!(pending[0].status, MessageStatus::Queued);
         assert_eq!(pending[0].last_error.as_deref(), Some("pane missing"));
     }
 
@@ -352,7 +567,7 @@ mod tests {
         assert_eq!(abandoned, 0);
         let messages = ledger.list_messages().unwrap();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].status, MessageStatus::Pending);
+        assert_eq!(messages[0].status, MessageStatus::Queued);
     }
 
     #[test]
@@ -394,6 +609,42 @@ mod tests {
         let messages = ledger.list_messages().unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].sender, sender);
+    }
+
+    #[test]
+    fn record_sent_then_turn_start_confirms_delivery() {
+        let (_dir, ledger, workspace_id) = ledger();
+        let message = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+
+        let sent = ledger
+            .record_sent_message(&message, "session")
+            .unwrap()
+            .expect("sent");
+        assert_eq!(sent.status, MessageStatus::Sent);
+        assert_eq!(sent.pane_id.as_ref().map(PaneId::as_str), Some("tmux:%1"));
+        assert!(ledger.list_pending_messages().unwrap().is_empty());
+
+        let delivered = ledger
+            .confirm_delivered_for_card(&message.kind, &message.agent_id, None, "session")
+            .unwrap()
+            .expect("delivered");
+        assert_eq!(delivered.status, MessageStatus::Delivered);
+        assert!(delivered.delivered_at.is_some());
+    }
+
+    #[test]
+    fn sent_message_times_out_after_window() {
+        let (_dir, ledger, workspace_id) = ledger();
+        let message = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+        ledger.record_sent_message(&message, "session").unwrap();
+
+        let timed_out = ledger
+            .timeout_sent_messages("session", Timestamp::now(), Duration::ZERO)
+            .unwrap();
+
+        assert_eq!(timed_out, 1);
+        let messages = ledger.list_messages().unwrap();
+        assert_eq!(messages[0].status, MessageStatus::TimedOut);
     }
 
     fn ledger() -> (tempfile::TempDir, Ledger, WorkspaceId) {

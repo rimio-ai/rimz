@@ -61,45 +61,13 @@ pub struct AgentLaunchPayload {
     pub description: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AgentSteeredPayload {
-    pub kind: AgentKind,
-    /// The steered session, when one is bound. A bare agent pane addressed by
-    /// `@kind` before its first turn has no session id yet, so the audit record
-    /// names only the kind and pane rather than minting a placeholder.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<AgentSessionId>,
-    pub pane_id: PaneId,
-    pub forced: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sender: Option<MessageSender>,
-    pub text_len: usize,
-}
-
-impl AgentSteeredPayload {
-    pub fn new(
-        kind: AgentKind,
-        agent_id: Option<AgentSessionId>,
-        pane_id: PaneId,
-        forced: bool,
-        sender: Option<MessageSender>,
-        text_len: usize,
-    ) -> Self {
-        Self {
-            kind,
-            agent_id,
-            pane_id,
-            forced,
-            sender,
-            text_len,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageEventMethod {
     Queued,
+    Sent,
     Delivered,
+    TimedOut,
+    Errored,
     Removed,
     Abandoned,
 }
@@ -108,7 +76,10 @@ impl MessageEventMethod {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "message.queued",
+            Self::Sent => "message.sent",
             Self::Delivered => "message.delivered",
+            Self::TimedOut => "message.timed_out",
+            Self::Errored => "message.errored",
             Self::Removed => "message.removed",
             Self::Abandoned => "message.abandoned",
         }
@@ -116,9 +87,13 @@ impl MessageEventMethod {
 
     pub const fn for_terminal_status(status: MessageStatus) -> Option<Self> {
         match status {
-            MessageStatus::Pending => None,
+            MessageStatus::Created => None,
+            MessageStatus::Queued => None,
             MessageStatus::Claimed => None,
+            MessageStatus::Sent => None,
             MessageStatus::Delivered => Some(Self::Delivered),
+            MessageStatus::TimedOut => Some(Self::TimedOut),
+            MessageStatus::Errored => Some(Self::Errored),
             MessageStatus::Removed => Some(Self::Removed),
             MessageStatus::Abandoned => Some(Self::Abandoned),
         }
@@ -127,7 +102,10 @@ impl MessageEventMethod {
     fn parse(raw: &str) -> Option<Self> {
         match raw {
             "message.queued" => Some(Self::Queued),
+            "message.sent" => Some(Self::Sent),
             "message.delivered" => Some(Self::Delivered),
+            "message.timed_out" => Some(Self::TimedOut),
+            "message.errored" => Some(Self::Errored),
             "message.removed" => Some(Self::Removed),
             "message.abandoned" => Some(Self::Abandoned),
             _ => None,
@@ -142,6 +120,9 @@ pub struct MessageEventPayload {
     pub agent_id: AgentSessionId,
     pub gate: DeliveryGate,
     pub status: MessageStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<PaneId>,
+    pub forced: bool,
     pub text_len: usize,
     pub enter: bool,
     pub attempts: u32,
@@ -159,6 +140,8 @@ impl MessageEventPayload {
             agent_id: message.agent_id.clone(),
             gate: message.gate,
             status: message.status,
+            pane_id: message.pane_id.clone(),
+            forced: message.force,
             text_len: message.text.len(),
             enter: message.enter,
             attempts: message.attempts,
@@ -223,7 +206,6 @@ impl AgentLifecyclePayload {
 pub enum EventKind<'a> {
     AgentLifecycle(Box<AgentLifecyclePayload>),
     AgentLaunch(AgentLaunchPayload),
-    AgentSteered(AgentSteeredPayload),
     Message {
         method: MessageEventMethod,
         payload: MessageEventPayload,
@@ -326,12 +308,6 @@ impl EventEnvelope {
                     method: self.method.as_str(),
                     params: &self.params,
                 }),
-            "agent.steered" => serde_json::from_value(self.params.clone())
-                .map(EventKind::AgentSteered)
-                .unwrap_or(EventKind::Other {
-                    method: self.method.as_str(),
-                    params: &self.params,
-                }),
             "session.rebirth" => EventKind::SessionRebirth,
             method => MessageEventMethod::parse(method)
                 .and_then(|method| {
@@ -386,29 +362,12 @@ impl EventEnvelope {
         )
     }
 
-    pub fn agent_steered(
-        workspace_id: WorkspaceId,
-        session_name: impl Into<String>,
-        payload: AgentSteeredPayload,
-    ) -> Self {
-        let params = serde_json::to_value(&payload)
-            .expect("AgentSteeredPayload contains only JSON-serializable fields");
-        Self::new(
-            workspace_id,
-            session_name,
-            "rimz",
-            "cli",
-            "agent.steered",
-            params,
-        )
-    }
-
     /// Audit record for an automated rate-limit resume: the producer typed the
     /// configured nudge into a parked agent's live pane the moment its 5h/7d
     /// window reset. A plain audit event — it rides the [`EventKind::Other`]
     /// carrier like `feed.*`, never folded into the agent rollup, because the
     /// agent's own next hook drives its state back to `running`. The nudge text
-    /// never enters the log, mirroring `agent.steered`.
+    /// never enters the log, mirroring `message.sent`.
     pub fn agent_resumed(
         workspace_id: WorkspaceId,
         session_name: impl Into<String>,
@@ -687,99 +646,6 @@ mod tests {
     }
 
     #[test]
-    fn agent_steered_constructor_keeps_the_existing_wire_shape() {
-        let workspace = workspace();
-        let payload = AgentSteeredPayload::new(
-            AgentKind::new_unchecked("claude"),
-            Some(AgentSessionId::from("sess-1")),
-            PaneId::from_parts(MuxName::Tmux, "%1"),
-            true,
-            None,
-            8,
-        );
-        let typed = EventEnvelope::agent_steered(workspace.clone(), "session", payload.clone());
-        let mut legacy = EventEnvelope::new(
-            workspace,
-            "session",
-            "rimz",
-            "cli",
-            "agent.steered",
-            json!({
-                "kind": "claude",
-                "agent_id": "sess-1",
-                "pane_id": "tmux:%1",
-                "forced": true,
-                "text_len": 8,
-            }),
-        );
-        legacy.event_id = typed.event_id.clone();
-        legacy.timestamp = typed.timestamp;
-
-        assert_eq!(
-            serde_json::to_vec(&typed).unwrap(),
-            serde_json::to_vec(&legacy).unwrap()
-        );
-        let EventKind::AgentSteered(decoded) = typed.kind() else {
-            panic!("agent.steered decodes to its typed kind");
-        };
-        assert_eq!(decoded, payload);
-    }
-
-    #[test]
-    fn agent_steered_records_agent_sender_without_message_body() {
-        let sender = MessageSender::Agent {
-            kind: AgentKind::new_unchecked("codex"),
-            name: Some("swift-otter".to_owned()),
-            profile: None,
-            role: None,
-            channel: Some("docs".to_owned()),
-        };
-        let payload = AgentSteeredPayload::new(
-            AgentKind::new_unchecked("claude"),
-            Some(AgentSessionId::from("sess-1")),
-            PaneId::from_parts(MuxName::Tmux, "%1"),
-            false,
-            Some(sender.clone()),
-            17,
-        );
-        let event = EventEnvelope::agent_steered(workspace(), "session", payload.clone());
-
-        assert_eq!(event.params["sender"]["origin"], "agent");
-        assert_eq!(event.params["sender"]["kind"], "codex");
-        assert_eq!(event.params["sender"]["name"], "swift-otter");
-        assert!(
-            !serde_json::to_string(&event.params)
-                .unwrap()
-                .contains("secret prompt body")
-        );
-        let EventKind::AgentSteered(decoded) = event.kind() else {
-            panic!("agent.steered decodes to its typed kind");
-        };
-        assert_eq!(decoded.sender, Some(sender));
-    }
-
-    #[test]
-    fn agent_steered_without_session_omits_the_agent_id() {
-        // Steering a bare agent pane before its first turn has no session id; the
-        // audit record drops the field rather than carrying an empty placeholder.
-        let payload = AgentSteeredPayload::new(
-            AgentKind::new_unchecked("codex"),
-            None,
-            PaneId::from_parts(MuxName::Zellij, "terminal_7"),
-            false,
-            None,
-            4,
-        );
-        let value = serde_json::to_value(&payload).unwrap();
-        assert!(
-            value.get("agent_id").is_none(),
-            "no session means no agent_id on the wire: {value}"
-        );
-        let decoded: AgentSteeredPayload = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded.agent_id, None);
-    }
-
-    #[test]
     fn agent_resumed_records_an_audit_event_on_the_other_carrier() {
         // Auto-continue is audit-only: the event rides the generic `Other`
         // carrier (it never folds into the agent rollup), so the rollup reduce
@@ -818,7 +684,8 @@ mod tests {
             enter: true,
             gate: DeliveryGate::Done,
             force: false,
-            status: MessageStatus::Pending,
+            pane_id: None,
+            status: MessageStatus::Queued,
             enqueued_at: now,
             updated_at: now,
             attempts: 0,
@@ -840,7 +707,8 @@ mod tests {
                 "kind": "claude",
                 "agent_id": "sess-1",
                 "gate": "done",
-                "status": "pending",
+                "status": "queued",
+                "forced": false,
                 "text_len": "secret prompt body".len(),
                 "enter": true,
                 "attempts": 0,

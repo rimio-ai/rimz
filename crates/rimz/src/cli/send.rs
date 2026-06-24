@@ -7,17 +7,19 @@
 
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use rimz::agents::AgentState;
 use rimz::feed::pending_ask_for;
-use rimz::ids::AgentKind;
-use rimz::message::{AutoCompact, MessageSender};
+use rimz::ids::{AgentKind, AgentSessionId, MessageId, WorkspaceId};
+use rimz::message::{
+    AutoCompact, DeliveryGate, MessageRecord, MessageSender, MessageStatus,
+    delivery_window_from_env,
+};
 use rimz::mux::MuxBackend;
-use rimz::schema::event::{AgentSteeredPayload, EventEnvelope};
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{PaneAgent, SidebarSnapshot};
 
@@ -59,6 +61,10 @@ pub(crate) struct SendFlags {
     /// caller. No effect for a human caller, which is already verbatim.
     #[arg(long)]
     pub(crate) no_from: bool,
+    /// Wait until the agent confirms the submitted message (`30s`, `5m`, `1h`).
+    /// Bare `--wait` uses `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` or the default window.
+    #[arg(long, value_name = "DURATION", num_args = 0..=1, value_parser = parse_wait_duration)]
+    pub(crate) wait: Option<Option<Duration>>,
 }
 
 /// Resolve the prompt a `steer`/`queue` invocation carries from its two sources:
@@ -96,23 +102,95 @@ pub(crate) fn sender_from_env(channel: Option<&str>, no_from: bool) -> MessageSe
     }
 }
 
+pub(crate) fn wait_duration(wait: Option<Option<Duration>>) -> Option<Duration> {
+    wait.map(|duration| duration.unwrap_or_else(delivery_window_from_env))
+}
+
+pub(crate) fn validate_wait(enter: bool, wait: Option<Duration>) -> Result<()> {
+    if wait.is_some() && !enter {
+        bail!("--wait requires submitting the message; remove --no-enter");
+    }
+    Ok(())
+}
+
+fn parse_wait_duration(raw: &str) -> std::result::Result<Duration, String> {
+    super::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600)])
+}
+
 /// What happened to one live-pane send in a fan-out. Every resolved pane target
 /// carries a live pane, so the only soft skip is a pending ask reserving the
 /// next input.
 pub(crate) enum Outcome {
-    Sent { label: String, compacted: bool },
-    SkippedPending { label: String, request_id: String },
+    Sent {
+        label: String,
+        message_id: MessageId,
+        compacted: bool,
+    },
+    SkippedPending {
+        label: String,
+        request_id: String,
+    },
 }
 
 /// How a live-pane send is delivered: whether to send past a pending ask,
-/// whether to submit with Enter, the optional compact-first threshold, and the
-/// caller attribution prefix and pacing state.
+/// whether to submit with Enter, the optional compact-first threshold, and
+/// pacing state.
 pub(crate) struct LiveSend {
     pub(crate) force: bool,
     pub(crate) enter: bool,
     pub(crate) auto_compact: Option<AutoCompact>,
-    pub(crate) sender: MessageSender,
     pub(crate) pacer: Pacer,
+}
+
+pub(crate) fn message_for_target(
+    workspace_id: WorkspaceId,
+    target: &PaneAgent,
+    bound: Option<&AgentState>,
+    text: String,
+    enter: bool,
+    gate: DeliveryGate,
+    sender: MessageSender,
+    force: bool,
+    auto_compact: Option<AutoCompact>,
+) -> MessageRecord {
+    let now = jiff::Timestamp::now();
+    let agent_id = bound
+        .map(|agent| agent.agent_id.clone())
+        .or_else(|| target.agent_id.clone())
+        .unwrap_or_else(|| synthetic_session_for_pane(&target.pane_id));
+    let agent_name = bound
+        .and_then(|agent| agent.name.clone())
+        .or_else(|| target.name.clone());
+    MessageRecord {
+        message_id: MessageId::new(),
+        workspace_id,
+        kind: target.kind.clone(),
+        agent_id,
+        agent_name,
+        sender,
+        text,
+        enter,
+        gate,
+        force,
+        pane_id: Some(target.pane_id.clone()),
+        status: MessageStatus::Created,
+        enqueued_at: now,
+        updated_at: now,
+        attempts: 0,
+        last_attempt_at: None,
+        last_error: None,
+        delivered_at: None,
+        auto_compact,
+    }
+}
+
+fn synthetic_session_for_pane(pane_id: &rimz::ids::PaneId) -> AgentSessionId {
+    let mut rendered = String::from("pane_");
+    rendered.extend(pane_id.as_str().chars().map(|ch| match ch {
+        'a'..='z' | 'A'..='Z' | '0'..='9' => ch,
+        _ => '_',
+    }));
+    AgentSessionId::from(rendered)
 }
 
 pub(crate) struct Pacer {
@@ -144,8 +222,8 @@ impl Pacer {
     }
 }
 
-/// Type into one live agent pane, recording the steer between the paste and the
-/// submit Enter. A pending ask skips the agent rather than aborting a broadcast;
+/// Type into one live agent pane, recording the message between the paste and
+/// the submit Enter. A pending ask skips the agent rather than aborting a broadcast;
 /// mux failures return errors.
 pub(crate) fn send_to_live_pane(
     workspace: &ResolvedWorkspace,
@@ -153,7 +231,7 @@ pub(crate) fn send_to_live_pane(
     snapshot: &SidebarSnapshot,
     target: &PaneAgent,
     bound: Option<&AgentState>,
-    text: &str,
+    message: &MessageRecord,
     send: &mut LiveSend,
 ) -> Result<Outcome> {
     let label = target.label();
@@ -182,32 +260,22 @@ pub(crate) fn send_to_live_pane(
         .filter(|agent| agent.parent_agent_id.is_none())
         .collect();
     let payload =
-        match rimz::target::sender_prefix(&send.sender, &peers, target.channel().as_deref()) {
-            Some(prefix) => format!("{prefix}{text}"),
-            None => text.to_owned(),
+        match rimz::target::sender_prefix(&message.sender, &peers, target.channel().as_deref()) {
+            Some(prefix) => format!("{prefix}{}", message.text),
+            None => message.text.clone(),
         };
     super::pane::paste_text(backend.as_ref(), pane_id, &payload)?;
-    // Record the steer once the text lands and before the submit keystroke, so a
-    // submitted steer is always preceded by its audit event. A failed Enter then
-    // returns an error over text that is already accounted for, never untracked.
-    // A lazy pane has no session id yet, so the record names only kind and pane.
-    let event = EventEnvelope::agent_steered(
-        workspace.workspace_id.clone(),
-        workspace.session_name.clone(),
-        AgentSteeredPayload::new(
-            target.kind.clone(),
-            target.agent_id.clone(),
-            pane_id.clone(),
-            send.force,
-            send.sender.attributed(),
-            text.len(),
-        ),
-    );
-    ledger.append_event(&event)?;
+    // Record the send once the text lands and before the submit keystroke, so a
+    // submitted message is always preceded by its durable record and audit event.
+    ledger.record_sent_message(message, &workspace.session_name)?;
     if send.enter {
         super::pane::send_enter(backend.as_ref(), pane_id)?;
     }
-    Ok(Outcome::Sent { label, compacted })
+    Ok(Outcome::Sent {
+        label,
+        message_id: message.message_id.clone(),
+        compacted,
+    })
 }
 
 /// Submit the agent's `/compact` ahead of the send when smart compaction is set
@@ -249,6 +317,48 @@ pub(crate) fn bound_agent<'a>(
         .agents
         .iter()
         .find(|agent| agent.kind == target.kind && &agent.agent_id == agent_id)
+}
+
+pub(crate) fn wait_for_message(
+    ledger: &rimz::Ledger,
+    message_id: &MessageId,
+    session_name: &str,
+    timeout: Duration,
+) -> Result<MessageStatus> {
+    const POLL: Duration = Duration::from_millis(500);
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(message) = ledger
+            .list_messages()?
+            .into_iter()
+            .find(|message| message.message_id == *message_id)
+        {
+            match message.status {
+                MessageStatus::Delivered
+                | MessageStatus::Errored
+                | MessageStatus::TimedOut
+                | MessageStatus::Removed
+                | MessageStatus::Abandoned => return Ok(message.status),
+                MessageStatus::Sent if Instant::now() >= deadline => {
+                    let timed_out =
+                        ledger.mark_message_timed_out(message_id, session_name, Some("wait"))?;
+                    return Ok(timed_out
+                        .map(|message| message.status)
+                        .unwrap_or(MessageStatus::TimedOut));
+                }
+                MessageStatus::Created
+                | MessageStatus::Queued
+                | MessageStatus::Claimed
+                | MessageStatus::Sent => {}
+            }
+        }
+        if Instant::now() >= deadline {
+            return Ok(MessageStatus::TimedOut);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        std::thread::sleep(remaining.min(POLL));
+    }
 }
 
 fn env_string(key: &str) -> Option<String> {

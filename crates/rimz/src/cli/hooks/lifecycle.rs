@@ -52,6 +52,7 @@ pub(super) fn handle_lifecycle_hook(
     }
     if let Some(recorded) = recorded.as_ref() {
         record_run_lifecycle(ledger, agent, event_name, payload, recorded);
+        confirm_sent_message_if_turn_started(ledger, agent, recorded, &workspace.session_name);
         spawn_queue_delivery_if_checkpoint(workspace, ledger, agent, recorded);
     }
     Ok(())
@@ -281,6 +282,34 @@ fn record_run_lifecycle(
     }
 }
 
+fn confirm_sent_message_if_turn_started(
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    recorded: &RecordedLifecycle,
+    session_name: &str,
+) {
+    if !matches!(recorded.observation.signal, LifecycleSignal::TurnStarted) {
+        return;
+    }
+    let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
+        return;
+    };
+    let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
+    if let Err(err) = ledger.confirm_delivered_for_card(
+        &kind,
+        agent_id,
+        recorded.observation.agent_name.as_deref(),
+        session_name,
+    ) {
+        warn!(
+            agent = agent.descriptor().kind,
+            agent_id = %agent_id,
+            error = %err,
+            "lifecycle: failed to confirm sent message delivery",
+        );
+    }
+}
+
 fn spawn_queue_delivery_if_checkpoint(
     workspace: &ResolvedWorkspace,
     ledger: &Ledger,
@@ -300,7 +329,7 @@ fn spawn_queue_delivery_if_checkpoint(
                 agent = agent.descriptor().kind,
                 agent_id = %agent_id,
                 error = %err,
-                "queue delivery skipped; pending messages unreadable",
+                "queue delivery skipped; queued messages unreadable",
             );
             return;
         }

@@ -139,7 +139,6 @@ fn agent_signal(event: &EventEnvelope) -> Option<String> {
             Some(payload.observation.signal.tag().to_owned())
         }
         EventKind::AgentLaunch(_)
-        | EventKind::AgentSteered(_)
         | EventKind::Message { .. }
         | EventKind::SessionRebirth
         | EventKind::Other { .. } => None,

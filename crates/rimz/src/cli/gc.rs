@@ -29,7 +29,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     spinner.set("sweeping runtime hints…");
     let report = gc::collect_runtime(args.older_than).context("collecting runtime garbage")?;
     spinner.set("repairing ledger…");
-    let (abandoned, messages_abandoned, repaired) =
+    let (abandoned, messages_abandoned, messages_timed_out, repaired) =
         match WorkspaceResolver::resolve(".", globals.root.clone()) {
             Ok(workspace) => match open_ledger(&workspace) {
                 Ok(ledger) => {
@@ -47,17 +47,29 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                     let messages_abandoned = ledger
                         .abandon_orphan_messages(&workspace.session_name)
                         .context("abandoning orphan queued messages")?;
-                    (abandoned, messages_abandoned, Some(repaired))
+                    let messages_timed_out = ledger
+                        .timeout_sent_messages(
+                            &workspace.session_name,
+                            jiff::Timestamp::now(),
+                            rimz::message::delivery_window_from_env(),
+                        )
+                        .context("timing out sent messages")?;
+                    (
+                        abandoned,
+                        messages_abandoned,
+                        messages_timed_out,
+                        Some(repaired),
+                    )
                 }
                 Err(err) => {
                     tracing::debug!(
                         error = %err,
                         "workspace ledger unavailable; runtime gc continues"
                     );
-                    (0, 0, None)
+                    (0, 0, 0, None)
                 }
             },
-            Err(_) => (0, 0, None),
+            Err(_) => (0, 0, 0, None),
         };
     spinner.set("reaping dead schedules…");
     let schedules_reaped =
@@ -71,6 +83,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         repaired,
         feed_abandoned: abandoned,
         queue_abandoned: messages_abandoned,
+        queue_timed_out: messages_timed_out,
         schedules_reaped,
         prune,
         worktrees,
@@ -88,6 +101,7 @@ struct GcOutcome {
     repaired: Option<RepairOutcome>,
     feed_abandoned: usize,
     queue_abandoned: usize,
+    queue_timed_out: usize,
     schedules_reaped: usize,
     prune: gc::WorkspacePruneReport,
     worktrees: WorktreeSweep,
@@ -195,6 +209,7 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         || runtime_items(&out.runtime) > 0
         || out.feed_abandoned > 0
         || out.queue_abandoned > 0
+        || out.queue_timed_out > 0
         || out.schedules_reaped > 0
         || out.repaired.as_ref().is_some_and(RepairOutcome::truncated)
         || !out.prune.removed.is_empty()
@@ -262,6 +277,9 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     }
     if out.queue_abandoned > 0 {
         report_note(w, &format!("queue abandoned: {}", out.queue_abandoned))?;
+    }
+    if out.queue_timed_out > 0 {
+        report_note(w, &format!("queue timed out: {}", out.queue_timed_out))?;
     }
     if out.schedules_reaped > 0 {
         report_note(w, &format!("schedules reaped: {}", out.schedules_reaped))?;
@@ -404,6 +422,7 @@ mod tests {
             repaired: None,
             feed_abandoned: 3,
             queue_abandoned: 0,
+            queue_timed_out: 0,
             schedules_reaped: 0,
             prune: gc::WorkspacePruneReport {
                 removed: vec![gc::RemovedWorkspace {

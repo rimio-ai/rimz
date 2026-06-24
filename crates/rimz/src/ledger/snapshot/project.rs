@@ -153,7 +153,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                 continue;
             }
             EventKind::AgentLifecycle(payload) => *payload,
-            EventKind::AgentSteered(_) | EventKind::Message { .. } => continue,
+            EventKind::Message { .. } => continue,
             EventKind::Other {
                 method: "agent.lifecycle",
                 ..

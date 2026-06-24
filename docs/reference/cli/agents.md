@@ -122,10 +122,11 @@ rimz steer @planner -- "Rebase on main when the run lands."                # add
 rimz steer @codex --all -y -- "Pause and report status."                  # fan out to every codex
 rimz steer @planner#feat/x --create -- "Draft the new endpoint."          # launch it if not running
 rimz steer @codex --smart-compact 70% -- "Continue the refactor."         # /compact first past 70% full
+rimz steer @claude --wait=10s -- "Run the smoke test and report back."     # wait for agent acknowledgement
 rimz steer @claude --file ./review-notes.md                               # send a file verbatim
 ```
 
-Address the target with the [agent-address grammar](#addressing-agents). Steer delivers to every reachable agent and prints which it reached and which it skipped, so one blocked agent never stops the rest. The audit event records metadata and text length, never the message content.
+Address the target with the [agent-address grammar](#addressing-agents). Steer delivers to every reachable agent, writes a durable message record, and prints `sent @handle`; broadcasts summarize sent and skipped agents, so one blocked agent never stops the rest. The `message.sent` audit event records message id, receiver, pane, force flag, sender, and text length; message content stays in the message record.
 
 The flags worth knowing tune delivery (run `rimz steer --help` for the rest):
 
@@ -135,23 +136,27 @@ The flags worth knowing tune delivery (run `rimz steer --help` for the rest):
 - `--force` types over a pending native ask, which `steer` otherwise skips to avoid clobbering the reserved input.
 - `--smart-compact <PCT|TOKENS>` submits the agent's `/compact` first when its context window has reached the threshold (a percentage like `70%` or an occupied-token count like `120000`), so the prompt lands against a fresh window. Unset, [`[harness] smart_compact`](../configuration.md#smart-compaction) supplies the threshold; a window below it sends untouched.
 - `--no-from` sends the bytes exactly. By default a Rimz-launched agent's send arrives as `from @sender: text`, gaining `#channel` when it crosses channels.
+- `--wait[=DURATION]` waits after send-now delivery until the agent's next `TurnStarted` hook confirms the message, the delivery window elapses, or the send errors. Bare `--wait` uses `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` or the default window. It conflicts with `--no-enter`, because an unsubmitted paste cannot be confirmed.
 
 A bare `@<kind>`, `@<profile>`, or `@all` also reaches an agent you just started in a fresh pane, before its first turn — `steer` addresses the pane it types into, so a just-launched agent is steerable without waiting for it to register a session. The bracketed-paste mechanism and pane-answering resolver behavior are in [harness.md → Talk and queue](../../internals/agents/harness.md#talk-and-queue).
 
 ## Queue the next message
 
-`rimz queue` sends text now when the addressed agent can receive it, and stores text only when the agent needs a later safe turn boundary. It mirrors `steer` — same address grammar, same `--worktree`, `--no-enter`, `--force`, `--all`, `--create`, `--yes`, `--smart-compact`, `--file`, and `--no-from` — and adds `--on`, the delivery gate for parked messages.
+`rimz queue` sends text now when the addressed agent can receive it, and stores text only when the agent needs a later safe turn boundary. It mirrors `steer` — same address grammar, same `--worktree`, `--no-enter`, `--force`, `--all`, `--create`, `--yes`, `--smart-compact`, `--file`, `--no-from`, and `--wait` — and adds `--on`, the delivery gate for parked messages.
 
 ```sh
-rimz queue @swift-otter -- "Add focused tests for the parser."
+rimz queue @swift-otter -- "Add focused tests for the parser."             # prints sent/queued status
 rimz queue add @codex#cli-docs --on any -- "If the run failed, capture the error first."
+rimz queue @claude --wait -- "Confirm this prompt reached the agent."
 rimz queue @all --yes -- "When you reach a boundary, summarize what changed."
 rimz queue list --json
 rimz queue remove msg_01J…
 rimz queue clear @claude-2#cli-docs
 ```
 
-The bare form and `queue add` do the same work. A target with a live pane, an open gate, no pending ask unless `--force`, and an empty FIFO head receives the text immediately through the steer path; that leaves no `queue list` record and emits `agent.steered`. Otherwise `--on done` (the default) opens a parked record once the agent is `idle` or `success`; `--on any` also opens after `failed`; `running`, `waiting`, and `paused` keep the message pending. Parked delivery is FIFO per agent, one message per unparked turn end; a failed send returns to pending and is abandoned after the retry cap. A freshly started lazy pane with no session yet can receive a send-now queue message, while parked records key on a bound session or launch placeholder card.
+The bare form and `queue add` do the same work. A target with a live pane, an open gate, no pending ask unless `--force`, and an empty FIFO head receives the text immediately through the steer path; `queue` prints `sent @handle`, writes a `sent` record, and appends `message.sent`. Otherwise `--on done` (the default) parks a `queued` record until the agent is `idle` or `success`; `--on any` also opens after `failed`; `running`, `waiting`, and `paused` keep the message queued. Parked delivery is FIFO per agent, one message per unparked turn end; a failed pre-send attempt returns to `queued` and is abandoned after the retry cap, while a written message waits for confirmation. A freshly started lazy pane can receive a send-now queue message against a pane-derived placeholder record, while parked records key on a bound session or launch placeholder card.
+
+Message statuses are `created` (transient), `queued`, `claimed`, `sent`, `delivered`, `timed_out`, `errored`, `removed`, and `abandoned`. `sent` means Rimz wrote the bytes to the pane; `delivered` means the agent acknowledged the prompt through its next turn-start hook. `queue list` and `queue list --json` show both parked and recently sent terminal records, so scripts that need ids use JSON rather than stdout parsing.
 
 Parked delivery needs installed and trusted hooks, because turn-end hooks trigger the delivery helper. The record layout, gates, and delivery walk are in [harness.md → Talk and queue](../../internals/agents/harness.md#talk-and-queue).
 

@@ -101,7 +101,7 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
         .find(|message| message.message_id == pending_message_id)
         .expect("pending message");
     assert_eq!(pending.workspace_id, new_id);
-    assert_eq!(pending.status, MessageStatus::Pending);
+    assert_eq!(pending.status, MessageStatus::Queued);
     let delivered = messages
         .iter()
         .find(|message| message.message_id == delivered_message_id)
