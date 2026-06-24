@@ -17,8 +17,8 @@ pub struct PaneTopologyCache {
     pub session_name: String,
     pub produced_at_ms: u64,
     /// Presence-plugin resolved active panes by tab position. Raw per-pane
-    /// focus marks stay on `panes`; this field carries the transition-derived
-    /// single active pane when the plugin can resolve one.
+    /// focus marks stay on `panes`; this field carries the authoritative,
+    /// transition-derived single active pane when the plugin can resolve one.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub active_panes: BTreeMap<u64, u64>,
     #[serde(default)]

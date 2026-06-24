@@ -36,7 +36,7 @@ Neither backend reports a per-pane process start, so Rimz derives `pane_process_
 
 ### Two kinds of focus
 
-`list_panes` reports `PaneRef.is_focused`, the backend's **per-view focus candidates**. Reconnect churn can leave several durable marks in one Zellij tab, so the presence plugin publishes transition-resolved marks and the producer arbitrates any contested view into one structural `TabFrame.active_pane`. The renderer consumes that resolved value; the raw marks stay visible for diagnostics.
+`list_panes` reports `PaneRef.is_focused`, the backend's **per-view focus candidates**. Reconnect churn can leave several durable marks in one Zellij tab, so the presence plugin publishes an authoritative transition-resolved `active_panes` value per resolved tab and the producer trusts that value over raw marks. Tabs without a plugin resolution fall back to deterministic arbitration into one structural `TabFrame.active_pane`; the raw marks stay visible for diagnostics.
 
 This per-view value is the focus signal the sidebar uses for selection — each tab's sidebar derives its selection baseline from its own view's active working pane ([sidebar.md](./sidebar.md#how-the-highlight-stays-on-the-right-pane)). It is one deterministic value per tab however many clients attach: when the user is viewing the tab it coincides with their focus, otherwise it names the pane they would land on. **Per-client** focus exists on both backends and is read for the viewed-pane gate on unread receipts, but selection never uses it — a sidebar pane is shared content, one buffer for every viewer, so a per-client highlight is unrenderable.
 

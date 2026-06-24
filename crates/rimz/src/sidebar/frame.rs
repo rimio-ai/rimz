@@ -327,6 +327,7 @@ pub struct FrameInputs<'a> {
     pub observed_at_ms: u64,
     pub session_name: String,
     pub source_active: BTreeMap<ViewId, PaneId>,
+    pub source_active_authoritative: bool,
     pub prior: Option<&'a PaneFrame>,
 }
 
@@ -349,6 +350,7 @@ pub fn assemble_frame_with_diagnostics(
         observed_at_ms: produced_at_ms,
         session_name: session_name.into(),
         source_active: BTreeMap::new(),
+        source_active_authoritative: false,
         prior: None,
     })
 }
@@ -360,6 +362,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         observed_at_ms,
         session_name,
         source_active,
+        source_active_authoritative,
         prior,
     } = inputs;
     let mut tabs: BTreeMap<ViewId, TabFrame> = BTreeMap::new();
@@ -425,6 +428,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         &mut tabs,
         focused_candidates,
         &source_active,
+        source_active_authoritative,
         prior,
         &mut diagnostics,
     );
@@ -447,22 +451,32 @@ fn resolve_tab_focus(
     tabs: &mut BTreeMap<ViewId, TabFrame>,
     focused_candidates: BTreeMap<ViewId, Vec<PaneId>>,
     source_active: &BTreeMap<ViewId, PaneId>,
+    source_active_authoritative: bool,
     prior: Option<&PaneFrame>,
     diagnostics: &mut Vec<DiagEvent>,
 ) {
-    for (view_id, candidates) in focused_candidates {
-        let Some(tab) = tabs.get_mut(&view_id) else {
+    for (view_id, tab) in tabs {
+        // The presence plugin resolves one active pane per tab from focus
+        // transitions; trust it over Zellij's multi-valued, per-client
+        // `is_focused` marks. A move to another pane re-marks that pane, so the
+        // plugin's resolution already reflects real focus shifts.
+        if source_active_authoritative
+            && let Some(active) = source_active.get(view_id)
+            && tab.panes.iter().any(|pane| &pane.pane_id == active)
+        {
+            tab.active_pane = Some(active.clone());
+            continue;
+        }
+        let Some(candidates) = focused_candidates.get(view_id) else {
             continue;
         };
         match candidates.as_slice() {
             [] => {}
             [only] => tab.active_pane = Some(only.clone()),
             _ => {
-                // Zellij marks `is_focused` per client, so a multi-client tab
-                // reports several focused panes while its authoritative active
-                // pane stays single-valued. When that signal names one of the
-                // marked panes it settles them — a resolved fact, recorded as
-                // neither anomaly nor on-screen contest badge.
+                // Non-authoritative sources can still settle multi-valued raw
+                // marks when they name one of the marked panes. Otherwise the
+                // tab is contested and resolved by deterministic fallback.
                 if let Some(active) = source_active
                     .get(&tab.view_id)
                     .filter(|pane| candidates.iter().any(|candidate| candidate == *pane))
@@ -470,17 +484,17 @@ fn resolve_tab_focus(
                     tab.active_pane = Some(active.clone());
                 } else {
                     tab.focus_contested = true;
-                    let resolved = resolve_contested_focus(tab, &candidates, prior);
+                    let resolved = resolve_contested_focus(tab, candidates, prior);
                     // A multi-client tab or a floating overlay can leave several
                     // panes marked focused while the mux's active-pane signal
                     // flaps between naming one candidate and omitting the tab.
                     // Record only when the prior active pane drops out of the
                     // current candidate set, so settled->contested oscillation
                     // stays silent and real focus shifts still surface.
-                    if focus_contest_is_transition(prior, &tab.view_id, &candidates) {
+                    if focus_contest_is_transition(prior, &tab.view_id, candidates) {
                         diagnostics.push(DiagEvent::FocusContested {
                             view_id: tab.view_id.clone(),
-                            candidates,
+                            candidates: candidates.clone(),
                             resolved: resolved.clone(),
                         });
                     }

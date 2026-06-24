@@ -310,6 +310,11 @@ pub struct FocusResolution {
 }
 
 impl FocusResolution {
+    /// Fold a pane manifest into one resolved live terminal per tab.
+    ///
+    /// A tab holds its resolved pane while that pane remains live in the tab.
+    /// A fresh focus flip moves the resolution, and pane removal or unresolved
+    /// ambiguity clears it.
     pub fn fold_pane_update(
         &mut self,
         previous: &BTreeMap<usize, Vec<PaneFields>>,
@@ -354,6 +359,8 @@ impl FocusResolution {
     }
 }
 
+/// Resolve a tab's active pane from fresh focus transitions first, then from
+/// the last resolved live pane, then from a lone raw focus mark.
 fn resolved_focus_for_tab(
     sticky: Option<u32>,
     previous: &[PaneFields],
@@ -390,7 +397,7 @@ fn resolved_focus_for_tab(
     if let Some(sticky) = sticky
         && next
             .iter()
-            .any(|pane| pane.id == sticky && pane.is_live_terminal() && pane.is_focused)
+            .any(|pane| pane.id == sticky && pane.is_live_terminal())
     {
         return Some(sticky);
     }

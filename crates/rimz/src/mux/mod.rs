@@ -185,9 +185,10 @@ pub struct PaneListing {
     /// For a topology-cache hit this is the cache's `produced_at_ms`; for a
     /// live mux CLI read it is stamped before the command starts.
     pub observed_at_ms: u64,
-    /// Backend/source-resolved active panes by view. Zellij's presence plugin
-    /// fills this from transition-derived focus; normal CLI reads leave it
-    /// empty and frame assembly arbitrates from raw marks.
+    /// Backend/source active panes by view. Zellij's presence plugin fills this
+    /// from transition-derived focus and marks it authoritative via
+    /// `served_from_topology`; CLI reads may include deterministic hints that
+    /// frame assembly treats only as tie-breakers for raw marks.
     pub source_active: BTreeMap<ViewId, PaneId>,
     /// Whether this listing came from the presence topology cache rather than a
     /// live mux read. A topology hit forks no mux command, so the producer skips

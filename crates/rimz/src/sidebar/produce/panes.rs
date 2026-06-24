@@ -226,6 +226,7 @@ pub fn repaired_pane_frame_for_binding(
         observed_at_ms: listing.observed_at_ms,
         session_name: session.to_owned(),
         source_active: listing.source_active,
+        source_active_authoritative: listing.served_from_topology,
         prior: read_snapshot_cache(&cache_path, session).as_ref(),
     });
     let diag = crate::diag::DiagSink::for_workspace(
@@ -533,6 +534,7 @@ pub(super) fn cached_panes_or_produce(
                     observed_at_ms: listing.observed_at_ms,
                     session_name: session.to_owned(),
                     source_active: listing.source_active,
+                    source_active_authoritative: served_from_topology,
                     prior: read_snapshot_cache(&cache_path, session).as_ref(),
                 });
             emit_frame_diagnostics(diag, diagnostics);

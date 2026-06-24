@@ -101,10 +101,11 @@ fn source_active_settles_multivalued_focus_without_contest() {
         observed_at_ms: 4,
         session_name: "rimz-test".to_owned(),
         source_active: BTreeMap::from([(ViewId::new_unchecked("tab_0"), source.clone())]),
+        source_active_authoritative: false,
         prior: None,
     });
 
-    // The mux's authoritative active pane names one of the marked panes, so the
+    // The mux's active-pane hint names one of the marked panes, so the
     // multi-client focus marks are settled, not contested: no badge, no record.
     assert_eq!(frame.observed_at_ms, Some(4));
     assert_eq!(frame.tabs[0].active_pane, Some(source.clone()));
@@ -114,9 +115,9 @@ fn source_active_settles_multivalued_focus_without_contest() {
 
 #[test]
 fn source_active_naming_a_non_candidate_stays_contested() {
-    // The authoritative active pane points at a pane that is not among the
-    // focus-marked candidates, so it cannot settle them: a genuine contest,
-    // resolved by heuristic and recorded.
+    // A non-authoritative hint only settles focus candidates. A pane outside
+    // that candidate set leaves a genuine contest, resolved by heuristic and
+    // recorded.
     let absent = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
         panes: vec![
@@ -127,6 +128,7 @@ fn source_active_naming_a_non_candidate_stays_contested() {
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
         source_active: BTreeMap::from([(ViewId::new_unchecked("tab_0"), absent)]),
+        source_active_authoritative: false,
         prior: None,
     });
 
@@ -138,6 +140,83 @@ fn source_active_naming_a_non_candidate_stays_contested() {
     assert!(matches!(
         diagnostics.as_slice(),
         [DiagEvent::FocusContested { resolved, .. }] if resolved.raw() == "terminal_1"
+    ));
+}
+
+#[test]
+fn authoritative_source_active_overrides_raw_focus_candidates() {
+    let codex = PaneId::from_parts(MuxName::Zellij, "terminal_200");
+    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_79", "tab_1", Some("zsh"), true),
+            pane("terminal_141", "tab_1", Some("zsh"), true),
+            pane("terminal_200", "tab_1", Some("codex"), false),
+        ],
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        source_active: BTreeMap::from([(ViewId::new_unchecked("tab_1"), codex.clone())]),
+        source_active_authoritative: true,
+        prior: None,
+    });
+
+    assert_eq!(frame.tabs[0].active_pane, Some(codex));
+    assert!(!frame.tabs[0].focus_contested);
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn non_authoritative_source_active_outside_candidates_stays_contested() {
+    let codex = PaneId::from_parts(MuxName::Zellij, "terminal_200");
+    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_79", "tab_1", Some("zsh"), true),
+            pane("terminal_141", "tab_1", Some("zsh"), true),
+            pane("terminal_200", "tab_1", Some("codex"), false),
+        ],
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        source_active: BTreeMap::from([(ViewId::new_unchecked("tab_1"), codex)]),
+        source_active_authoritative: false,
+        prior: None,
+    });
+
+    assert_eq!(
+        frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        Some("terminal_79")
+    );
+    assert!(frame.tabs[0].focus_contested);
+    assert!(matches!(
+        diagnostics.as_slice(),
+        [DiagEvent::FocusContested { resolved, .. }] if resolved.raw() == "terminal_79"
+    ));
+}
+
+#[test]
+fn authoritative_source_active_missing_from_tab_falls_back_to_candidates() {
+    let stale = PaneId::from_parts(MuxName::Zellij, "terminal_200");
+    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_79", "tab_1", Some("zsh"), true),
+            pane("terminal_141", "tab_1", Some("cargo build"), true),
+        ],
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        source_active: BTreeMap::from([(ViewId::new_unchecked("tab_1"), stale)]),
+        source_active_authoritative: true,
+        prior: None,
+    });
+
+    assert_eq!(
+        frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        Some("terminal_79")
+    );
+    assert!(frame.tabs[0].focus_contested);
+    assert!(matches!(
+        diagnostics.as_slice(),
+        [DiagEvent::FocusContested { resolved, .. }] if resolved.raw() == "terminal_79"
     ));
 }
 
@@ -154,6 +233,7 @@ fn settled_focus_oscillation_keeps_focus_contest_diagnostic_silent() {
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
         source_active: source_active.clone(),
+        source_active_authoritative: false,
         prior: None,
     });
     assert_eq!(
@@ -172,6 +252,7 @@ fn settled_focus_oscillation_keeps_focus_contest_diagnostic_silent() {
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
         source_active: BTreeMap::new(),
+        source_active_authoritative: false,
         prior: Some(&settled),
     });
     assert_eq!(
@@ -193,6 +274,7 @@ fn settled_focus_oscillation_keeps_focus_contest_diagnostic_silent() {
         observed_at_ms: 9,
         session_name: "rimz-test".to_owned(),
         source_active,
+        source_active_authoritative: false,
         prior: Some(&contested),
     });
     assert_eq!(
@@ -211,6 +293,7 @@ fn settled_focus_oscillation_keeps_focus_contest_diagnostic_silent() {
         observed_at_ms: 10,
         session_name: "rimz-test".to_owned(),
         source_active: BTreeMap::new(),
+        source_active_authoritative: false,
         prior: Some(&settled_again),
     });
     assert_eq!(
@@ -258,6 +341,7 @@ fn steady_contest_records_once_then_re_emits_on_resolution_change() {
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
         source_active: BTreeMap::new(),
+        source_active_authoritative: false,
         prior: Some(&prior),
     });
     assert!(steady.tabs[0].focus_contested);
@@ -283,6 +367,7 @@ fn steady_contest_records_once_then_re_emits_on_resolution_change() {
         observed_at_ms: 9,
         session_name: "rimz-test".to_owned(),
         source_active: BTreeMap::new(),
+        source_active_authoritative: false,
         prior: Some(&shifted_prior),
     });
     assert_ne!(
@@ -314,6 +399,7 @@ fn contested_focus_prefers_newly_marked_candidate() {
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
         source_active: BTreeMap::new(),
+        source_active_authoritative: false,
         prior: Some(&prior),
     });
 
@@ -346,6 +432,7 @@ fn contested_focus_sticks_to_prior_when_no_transition_is_visible() {
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
         source_active: BTreeMap::new(),
+        source_active_authoritative: false,
         prior: Some(&prior),
     });
 
@@ -367,6 +454,7 @@ fn contested_focus_sticks_to_prior_when_no_transition_is_visible() {
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
         source_active: BTreeMap::new(),
+        source_active_authoritative: false,
         prior: None,
     });
     assert_eq!(
@@ -384,6 +472,7 @@ fn contested_focus_sticks_to_prior_when_no_transition_is_visible() {
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
         source_active: BTreeMap::new(),
+        source_active_authoritative: false,
         prior: Some(&prior),
     });
 

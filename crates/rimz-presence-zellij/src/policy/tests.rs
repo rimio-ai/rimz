@@ -274,6 +274,61 @@ fn focus_resolution_sticks_when_contested_without_a_transition() {
 }
 
 #[test]
+fn focus_resolution_holds_sticky_pane_after_focus_mark_drop() {
+    let initial = tabs_by_index(vec![(
+        1,
+        vec![
+            pane_in_tab(79, 1),
+            pane_in_tab(141, 1),
+            focused(pane_in_tab(200, 1)),
+        ],
+    )]);
+    let mut resolution = FocusResolution::default();
+    resolution.fold_pane_update(&BTreeMap::new(), &initial);
+
+    let contested = tabs_by_index(vec![(
+        1,
+        vec![
+            focused(pane_in_tab(79, 1)),
+            focused(pane_in_tab(141, 1)),
+            focused(pane_in_tab(200, 1)),
+        ],
+    )]);
+    resolution.fold_pane_update(&contested, &contested);
+
+    let mark_drop = tabs_by_index(vec![(
+        1,
+        vec![
+            focused(pane_in_tab(79, 1)),
+            focused(pane_in_tab(141, 1)),
+            pane_in_tab(200, 1),
+        ],
+    )]);
+    resolution.fold_pane_update(&contested, &mark_drop);
+
+    assert_eq!(resolution.focused_pane_id(Some(1)), Some(200));
+    assert_eq!(resolution.active_panes_payload().get(&1_u64), Some(&200));
+}
+
+#[test]
+fn focus_resolution_real_flip_moves_off_sticky_pane() {
+    let initial = tabs_by_index(vec![(
+        0,
+        vec![pane_in_tab(10, 0), focused(pane_in_tab(11, 0))],
+    )]);
+    let mut resolution = FocusResolution::default();
+    resolution.fold_pane_update(&BTreeMap::new(), &initial);
+
+    let next = tabs_by_index(vec![(
+        0,
+        vec![focused(pane_in_tab(10, 0)), pane_in_tab(11, 0)],
+    )]);
+    resolution.fold_pane_update(&initial, &next);
+
+    assert_eq!(resolution.focused_pane_id(Some(0)), Some(10));
+}
+
+#[test]
 fn focus_resolution_unresolves_ambiguous_simultaneous_card_flips() {
     let previous = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), pane_in_tab(11, 0)])]);
     let next = tabs_by_index(vec![(
