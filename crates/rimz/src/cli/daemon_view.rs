@@ -33,6 +33,7 @@ pub(super) fn build_daemon_view(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_daemon_view_options(
     remote_control: &rimz::config::RemoteControlConfig,
     daemon: &DaemonConfig,
