@@ -143,27 +143,16 @@ fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
 /// window close still delivers its normal signal and ends the process.
 #[cfg(unix)]
 fn ignore_interrupt() {
-    use signal_hook::consts::signal::SIGINT;
-    use signal_hook::iterator::Signals;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
 
-    match Signals::new([SIGINT]) {
-        Ok(mut signals) => {
-            if let Err(err) = thread::Builder::new()
-                .name("rimz-stats-sigint".to_owned())
-                .spawn(move || for _ in signals.forever() {})
-            {
-                tracing::warn!(
-                    error = %err,
-                    "failed to hold stats panel through Ctrl-C",
-                );
-            }
-        }
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                "failed to hold stats panel through Ctrl-C",
-            );
-        }
+    use signal_hook::consts::signal::SIGINT;
+
+    if let Err(err) = signal_hook::flag::register(SIGINT, Arc::new(AtomicBool::new(false))) {
+        tracing::warn!(
+            error = %err,
+            "failed to hold stats panel through Ctrl-C",
+        );
     }
 }
 
