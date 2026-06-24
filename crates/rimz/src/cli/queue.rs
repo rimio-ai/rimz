@@ -463,12 +463,14 @@ fn add_message(
                 workspace.workspace_id.clone(),
                 pane,
                 bound,
-                text.clone(),
-                spec.enter,
-                spec.gate,
-                sender.clone(),
-                spec.force,
-                spec.auto_compact,
+                send::MessageDraft {
+                    text: text.clone(),
+                    enter: spec.enter,
+                    gate: spec.gate,
+                    sender: sender.clone(),
+                    force: spec.force,
+                    auto_compact: spec.auto_compact,
+                },
             );
             match send::send_to_live_pane(
                 &workspace,

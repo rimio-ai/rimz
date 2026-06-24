@@ -142,16 +142,20 @@ pub(crate) struct LiveSend {
     pub(crate) pacer: Pacer,
 }
 
+pub(crate) struct MessageDraft {
+    pub(crate) text: String,
+    pub(crate) enter: bool,
+    pub(crate) gate: DeliveryGate,
+    pub(crate) sender: MessageSender,
+    pub(crate) force: bool,
+    pub(crate) auto_compact: Option<AutoCompact>,
+}
+
 pub(crate) fn message_for_target(
     workspace_id: WorkspaceId,
     target: &PaneAgent,
     bound: Option<&AgentState>,
-    text: String,
-    enter: bool,
-    gate: DeliveryGate,
-    sender: MessageSender,
-    force: bool,
-    auto_compact: Option<AutoCompact>,
+    draft: MessageDraft,
 ) -> MessageRecord {
     let now = jiff::Timestamp::now();
     let agent_id = bound
@@ -167,11 +171,11 @@ pub(crate) fn message_for_target(
         kind: target.kind.clone(),
         agent_id,
         agent_name,
-        sender,
-        text,
-        enter,
-        gate,
-        force,
+        sender: draft.sender,
+        text: draft.text,
+        enter: draft.enter,
+        gate: draft.gate,
+        force: draft.force,
         pane_id: Some(target.pane_id.clone()),
         status: MessageStatus::Created,
         enqueued_at: now,
@@ -180,7 +184,7 @@ pub(crate) fn message_for_target(
         last_attempt_at: None,
         last_error: None,
         delivered_at: None,
-        auto_compact,
+        auto_compact: draft.auto_compact,
     }
 }
 
@@ -317,15 +321,6 @@ pub(crate) fn bound_agent<'a>(
         .agents
         .iter()
         .find(|agent| agent.kind == target.kind && &agent.agent_id == agent_id)
-}
-
-pub(crate) fn wait_for_message(
-    ledger: &rimz::Ledger,
-    message_id: &MessageId,
-    session_name: &str,
-    timeout: Duration,
-) -> Result<MessageStatus> {
-    wait_for_message_until(ledger, message_id, session_name, Instant::now() + timeout)
 }
 
 pub(crate) fn wait_for_message_until(

@@ -94,12 +94,14 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
             workspace.workspace_id.clone(),
             target,
             bound,
-            text.clone(),
-            !no_enter,
-            rimz::message::DeliveryGate::Any,
-            sender.clone(),
-            force,
-            auto_compact,
+            send::MessageDraft {
+                text: text.clone(),
+                enter: !no_enter,
+                gate: rimz::message::DeliveryGate::Any,
+                sender: sender.clone(),
+                force,
+                auto_compact,
+            },
         );
         let outcome = match send::send_to_live_pane(
             &workspace,
