@@ -205,6 +205,29 @@ impl std::fmt::Display for MessageStatus {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageBody {
+    #[default]
+    Prompt,
+    Command,
+}
+
+impl MessageBody {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Prompt => "prompt",
+            Self::Command => "command",
+        }
+    }
+}
+
+impl std::fmt::Display for MessageBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MessageRecord {
     pub message_id: MessageId,
@@ -215,6 +238,8 @@ pub struct MessageRecord {
     pub agent_name: Option<String>,
     #[serde(default)]
     pub sender: MessageSender,
+    #[serde(default)]
+    pub body: MessageBody,
     pub text: String,
     pub enter: bool,
     pub gate: DeliveryGate,
@@ -259,6 +284,7 @@ impl MessageRecord {
             agent_id: agent.agent_id.clone(),
             agent_name: agent.name.clone(),
             sender: MessageSender::Human,
+            body: MessageBody::Prompt,
             text,
             enter,
             gate,
@@ -280,6 +306,12 @@ impl MessageRecord {
     #[must_use]
     pub fn with_auto_compact(mut self, auto_compact: Option<AutoCompact>) -> Self {
         self.auto_compact = auto_compact;
+        self
+    }
+
+    #[must_use]
+    pub fn with_body(mut self, body: MessageBody) -> Self {
+        self.body = body;
         self
     }
 
@@ -544,6 +576,26 @@ mod tests {
         let json = serde_json::to_string(&message).unwrap();
         let back: MessageRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(back.auto_compact, Some(AutoCompact::Percent(70)));
+    }
+
+    #[test]
+    fn message_body_defaults_to_prompt_and_command_round_trips() {
+        let base = MessageRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+            &agent("s1", None),
+            "next".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        assert_eq!(base.body, MessageBody::Prompt);
+        let command = base.with_body(MessageBody::Command);
+        let json = serde_json::to_string(&command).unwrap();
+        let back: MessageRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.body, MessageBody::Command);
+        let mut legacy = serde_json::to_value(&back).unwrap();
+        legacy.as_object_mut().unwrap().remove("body");
+        let back: MessageRecord = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.body, MessageBody::Prompt);
     }
 
     #[test]

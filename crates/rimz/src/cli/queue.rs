@@ -448,11 +448,10 @@ fn add_message(
     }
     let mut live_send = send::LiveSend {
         force: spec.force,
-        enter: spec.enter,
-        auto_compact: spec.auto_compact,
         pacer: send::Pacer::new(message_interval_from_env()),
     };
     let mut kinds_seen = std::collections::BTreeSet::new();
+    let mut compacted = Vec::new();
     let mut outputs = Vec::new();
     for target in &targets {
         let label = target.label();
@@ -465,6 +464,7 @@ fn add_message(
                 bound,
                 send::MessageDraft {
                     text: text.clone(),
+                    body: rimz::message::MessageBody::Prompt,
                     enter: spec.enter,
                     gate: spec.gate,
                     sender: sender.clone(),
@@ -472,7 +472,7 @@ fn add_message(
                     auto_compact: spec.auto_compact,
                 },
             );
-            match send::send_to_live_pane(
+            match send::send_prompt_to_live_pane(
                 &workspace,
                 &ledger,
                 &snapshot,
@@ -481,15 +481,20 @@ fn add_message(
                 &message,
                 &mut live_send,
             ) {
-                Ok(send::Outcome::Sent { message_id, .. }) => {
-                    outputs.push(AddOutput {
-                        label,
-                        message_id,
-                        status: MessageStatus::Sent,
-                    });
-                    continue;
-                }
-                Ok(send::Outcome::SkippedPending { .. }) => park = true,
+                Ok(sent) => match sent.outcome {
+                    send::Outcome::Sent { message_id, .. } => {
+                        if sent.compacted.is_some() {
+                            compacted.push(label.clone());
+                        }
+                        outputs.push(AddOutput {
+                            label,
+                            message_id,
+                            status: MessageStatus::Sent,
+                        });
+                        continue;
+                    }
+                    send::Outcome::SkippedPending { .. } => park = true,
+                },
                 Err(err) => {
                     ledger.record_send_error(
                         &message,
@@ -530,6 +535,12 @@ fn add_message(
             message_id,
             status: MessageStatus::Queued,
         });
+    }
+    for label in &compacted {
+        #[expect(clippy::print_stdout, reason = "command result")]
+        {
+            println!("compacted {label}");
+        }
     }
     let mut failed = false;
     let wait_deadline = spec.wait.map(|timeout| std::time::Instant::now() + timeout);
@@ -692,14 +703,12 @@ fn deliver_one(
     // pre-delivery spacing, so this pacer's first tick stays a no-op.
     let mut live_send = send::LiveSend {
         force: message.force,
-        enter: message.enter,
-        auto_compact: message.auto_compact,
         pacer: send::Pacer::new(message_interval_from_env()),
     };
     let send_message = message
         .clone()
         .with_pane_id(candidate.target.pane_id.clone());
-    let send = send::send_to_live_pane(
+    let send = send::send_prompt_to_live_pane(
         workspace,
         ledger,
         &candidate.snapshot,
@@ -709,8 +718,14 @@ fn deliver_one(
         &mut live_send,
     );
     match send {
-        Ok(send::Outcome::Sent { .. }) => Ok(true),
-        Ok(send::Outcome::SkippedPending { request_id, .. }) => {
+        Ok(send::SentPrompt {
+            outcome: send::Outcome::Sent { .. },
+            ..
+        }) => Ok(true),
+        Ok(send::SentPrompt {
+            outcome: send::Outcome::SkippedPending { request_id, .. },
+            ..
+        }) => {
             ledger.record_message_delivery_failure(
                 &message.message_id,
                 &format!("pending ask {request_id} reserves input"),

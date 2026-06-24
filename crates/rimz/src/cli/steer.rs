@@ -83,11 +83,10 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
 
     let mut live_send = send::LiveSend {
         force,
-        enter: !no_enter,
-        auto_compact,
         pacer: send::Pacer::new(rimz::message::message_interval_from_env()),
     };
     let mut outcomes = Vec::with_capacity(targets.len());
+    let mut compacted = Vec::new();
     for target in &targets {
         let bound = send::bound_agent(&snapshot, target);
         let message = send::message_for_target(
@@ -96,6 +95,7 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
             bound,
             send::MessageDraft {
                 text: text.clone(),
+                body: rimz::message::MessageBody::Prompt,
                 enter: !no_enter,
                 gate: rimz::message::DeliveryGate::Any,
                 sender: sender.clone(),
@@ -103,7 +103,7 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
                 auto_compact,
             },
         );
-        let outcome = match send::send_to_live_pane(
+        let sent = match send::send_prompt_to_live_pane(
             &workspace,
             &ledger,
             &snapshot,
@@ -112,13 +112,16 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
             &message,
             &mut live_send,
         ) {
-            Ok(outcome) => outcome,
+            Ok(sent) => sent,
             Err(err) => {
                 ledger.record_send_error(&message, &err.to_string(), &workspace.session_name)?;
                 return Err(err);
             }
         };
-        outcomes.push(outcome);
+        if sent.compacted.is_some() {
+            compacted.push(target.label());
+        }
+        outcomes.push(sent.outcome);
     }
 
     report(
@@ -128,6 +131,7 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
         &args.target,
         targets.len(),
         &outcomes,
+        &compacted,
     )
 }
 
@@ -141,6 +145,7 @@ fn report(
     target: &str,
     total: usize,
     outcomes: &[send::Outcome],
+    compacted: &[String],
 ) -> Result<()> {
     let labels = |pick: fn(&send::Outcome) -> Option<&str>| -> Vec<&str> {
         outcomes.iter().filter_map(pick).collect()
@@ -149,24 +154,12 @@ fn report(
         send::Outcome::Sent { label, .. } => Some(label.as_str()),
         _ => None,
     });
-    let compacted = labels(|outcome| match outcome {
-        send::Outcome::Sent {
-            label,
-            compacted: true,
-            ..
-        } => Some(label.as_str()),
-        _ => None,
-    });
     if let Some(timeout) = wait {
         let mut failed = false;
         let deadline = std::time::Instant::now() + timeout;
         for outcome in outcomes {
-            if let send::Outcome::Sent {
-                label,
-                message_id,
-                compacted,
-            } = outcome
-            {
+            if let send::Outcome::Sent { label, message_id } = outcome {
+                print_compacted_if_needed(label, compacted);
                 let status =
                     send::wait_for_message_until(ledger, message_id, session_name, deadline)?;
                 if status != rimz::message::MessageStatus::Delivered {
@@ -174,7 +167,7 @@ fn report(
                 }
                 #[expect(clippy::print_stdout, reason = "wait status")]
                 {
-                    println!("{}", wait_status_line(status, label, *compacted));
+                    println!("{} {label}", wait_status_label(status));
                 }
             }
         }
@@ -186,10 +179,10 @@ fn report(
     if total == 1 {
         if !sent.is_empty() {
             let label = sent[0];
-            let suffix = compacted_suffix(compacted.first() == Some(&label));
+            print_compacted_if_needed(label, compacted);
             #[expect(clippy::print_stdout, reason = "steer confirmation")]
             {
-                println!("sent {label}{suffix}");
+                println!("sent {label}");
             }
             return Ok(());
         }
@@ -209,7 +202,7 @@ fn report(
         line.push_str(&format!(": {}", sent.join(", ")));
     }
     if !compacted.is_empty() {
-        line.push_str(&format!("; compacted first: {}", compacted.join(", ")));
+        line.push_str(&format!("; compacted: {}", compacted.join(", ")));
     }
     if !pending.is_empty() {
         line.push_str(&format!("; skipped pending ask: {}", pending.join(", ")));
@@ -221,16 +214,13 @@ fn report(
     Ok(())
 }
 
-fn wait_status_line(status: rimz::message::MessageStatus, label: &str, compacted: bool) -> String {
-    format!(
-        "{} {label}{}",
-        wait_status_label(status),
-        compacted_suffix(compacted)
-    )
-}
-
-fn compacted_suffix(compacted: bool) -> &'static str {
-    if compacted { " (compacted first)" } else { "" }
+fn print_compacted_if_needed(label: &str, compacted: &[String]) {
+    if compacted.iter().any(|compacted| compacted == label) {
+        #[expect(clippy::print_stdout, reason = "steer compact confirmation")]
+        {
+            println!("compacted {label}");
+        }
+    }
 }
 
 fn wait_status_label(status: rimz::message::MessageStatus) -> &'static str {
@@ -244,18 +234,5 @@ fn wait_status_label(status: rimz::message::MessageStatus) -> &'static str {
         | rimz::message::MessageStatus::Queued
         | rimz::message::MessageStatus::Claimed
         | rimz::message::MessageStatus::Sent => "timed out",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wait_status_line_keeps_compaction_notice() {
-        assert_eq!(
-            wait_status_line(rimz::message::MessageStatus::Delivered, "@codex", true),
-            "delivered @codex (compacted first)"
-        );
     }
 }

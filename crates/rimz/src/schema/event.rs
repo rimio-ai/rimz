@@ -10,7 +10,7 @@ use crate::feed::FeedItem;
 use crate::ids::{
     AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, RunId, WorkspaceId,
 };
-use crate::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
+use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus};
 use crate::pane::RuntimeOwner;
 use crate::schema::EVENT_SCHEMA_VERSION;
 
@@ -120,6 +120,8 @@ pub struct MessageEventPayload {
     pub agent_id: AgentSessionId,
     pub gate: DeliveryGate,
     pub status: MessageStatus,
+    #[serde(default)]
+    pub body: MessageBody,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
     pub forced: bool,
@@ -140,6 +142,7 @@ impl MessageEventPayload {
             agent_id: message.agent_id.clone(),
             gate: message.gate,
             status: message.status,
+            body: message.body,
             pane_id: message.pane_id.clone(),
             forced: message.force,
             text_len: message.text.len(),
@@ -680,6 +683,7 @@ mod tests {
             agent_id: AgentSessionId::from("sess-1"),
             agent_name: Some("lucid-atlas".to_owned()),
             sender: MessageSender::Human,
+            body: MessageBody::Prompt,
             text: "secret prompt body".to_owned(),
             enter: true,
             gate: DeliveryGate::Done,
@@ -708,6 +712,7 @@ mod tests {
                 "agent_id": "sess-1",
                 "gate": "done",
                 "status": "queued",
+                "body": "prompt",
                 "forced": false,
                 "text_len": "secret prompt body".len(),
                 "enter": true,

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
-use rimz::message::MessageStatus;
+use rimz::message::{MessageBody, MessageStatus};
 use rimz::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 
 use crate::common::Env;
@@ -773,9 +773,9 @@ fn queue_parked_message_lists_sender() {
     assert_eq!(messages[0]["sender"]["name"], "swift-otter");
 }
 
-/// `steer --smart-compact 70%` against a window past the threshold types `/compact`
-/// and submits it before pasting the message, so the prompt lands against a fresh
-/// window. The single-target run reports the compaction it ran.
+/// `steer --smart-compact 70%` against a window past the threshold sends a
+/// tracked `/compact` command before the prompt. The command confirms on
+/// `Compacting`; the prompt confirms independently on `TurnStarted`.
 #[test]
 fn steer_auto_compact_runs_compact_before_a_full_window() {
     let env = Env::new();
@@ -816,13 +816,80 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
         "a single steer reports the compaction it ran: {}",
         String::from_utf8_lossy(&out.stdout)
     );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("sent"),
+        "a single steer still reports the prompt send: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    let messages = env.ledger().list_messages().expect("messages");
+    let command = messages
+        .iter()
+        .find(|message| message.body == MessageBody::Command)
+        .expect("command message");
+    let prompt = messages
+        .iter()
+        .find(|message| message.body == MessageBody::Prompt)
+        .expect("prompt message");
+    assert_eq!(command.text, "/compact");
+    assert_eq!(command.status, MessageStatus::Sent);
+    assert_eq!(prompt.text, "go");
+    assert_eq!(prompt.status, MessageStatus::Sent);
+    let command_id = command.message_id.clone();
+    let prompt_id = prompt.message_id.clone();
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "PreCompact",
+            "session_id": "sess-ac",
+            "worktree_branch": "feature-ac",
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let messages = env.ledger().list_messages().expect("messages");
+    assert_eq!(
+        messages
+            .iter()
+            .find(|message| message.message_id == command_id)
+            .expect("command after compacting")
+            .status,
+        MessageStatus::Delivered
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .find(|message| message.message_id == prompt_id)
+            .expect("prompt after compacting")
+            .status,
+        MessageStatus::Sent,
+        "Compacting confirms only the command"
+    );
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-ac",
+            "prompt": "go",
+            "worktree_branch": "feature-ac",
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let messages = env.ledger().list_messages().expect("messages");
+    assert_eq!(
+        messages
+            .iter()
+            .find(|message| message.message_id == prompt_id)
+            .expect("prompt after turn start")
+            .status,
+        MessageStatus::Delivered
+    );
 }
 
-/// Auto-compacted sends run `/compact`, its Enter, the message paste, and its
-/// Enter as one atomic pane interaction. The pacer spaces messages, not writes
-/// inside one message.
+/// Auto-compacted sends are two messages. The pacer sleeps between the tracked
+/// `/compact` command and the prompt.
 #[test]
-fn steer_auto_compact_does_not_pace_inside_one_send() {
+fn steer_auto_compact_paces_command_and_prompt() {
     let env = Env::new();
     register_running_agent(
         &env,
@@ -850,8 +917,8 @@ fn steer_auto_compact_does_not_pace_inside_one_send() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        elapsed < interval,
-        "a single send must not sleep between `/compact`, paste, and Enter; elapsed {elapsed:?}"
+        elapsed >= interval,
+        "the prompt should wait for the message interval after `/compact`; elapsed {elapsed:?}"
     );
 
     let lines = trace_lines(&trace_log);
@@ -999,6 +1066,23 @@ fn queue_auto_compact_runs_compact_before_delivering() {
     assert!(
         compact_at.is_some() && paste_at.is_some() && compact_at < paste_at,
         "compaction must precede the queue text; trace: {lines:?}"
+    );
+    let messages = env.ledger().list_messages().expect("messages");
+    assert!(
+        messages.iter().any(|message| {
+            message.body == MessageBody::Command
+                && message.text == "/compact"
+                && message.status == MessageStatus::Sent
+        }),
+        "command record missing: {messages:?}"
+    );
+    assert!(
+        messages.iter().any(|message| {
+            message.body == MessageBody::Prompt
+                && message.text == "go"
+                && message.status == MessageStatus::Sent
+        }),
+        "prompt record missing: {messages:?}"
     );
 }
 

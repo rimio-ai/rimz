@@ -52,7 +52,7 @@ pub(super) fn handle_lifecycle_hook(
     }
     if let Some(recorded) = recorded.as_ref() {
         record_run_lifecycle(ledger, agent, event_name, payload, recorded);
-        confirm_sent_message_if_turn_started(ledger, agent, recorded, &workspace.session_name);
+        confirm_sent_message_for_lifecycle(ledger, agent, recorded, &workspace.session_name);
         spawn_queue_delivery_if_checkpoint(workspace, ledger, agent, recorded);
     }
     Ok(())
@@ -282,18 +282,17 @@ fn record_run_lifecycle(
     }
 }
 
-fn confirm_sent_message_if_turn_started(
+fn confirm_sent_message_for_lifecycle(
     ledger: &Ledger,
     agent: &dyn AgentAdapter,
     recorded: &RecordedLifecycle,
     session_name: &str,
 ) {
-    if !matches!(recorded.observation.signal, LifecycleSignal::TurnStarted) {
-        return;
-    }
-    if is_compact_command_turn(agent, &recorded.observation) {
-        return;
-    }
+    let body = match recorded.observation.signal {
+        LifecycleSignal::TurnStarted => rimz::message::MessageBody::Prompt,
+        LifecycleSignal::Compacting => rimz::message::MessageBody::Command,
+        _ => return,
+    };
     let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
         return;
     };
@@ -302,6 +301,7 @@ fn confirm_sent_message_if_turn_started(
         &kind,
         agent_id,
         recorded.observation.agent_name.as_deref(),
+        body,
         session_name,
     ) {
         warn!(
@@ -311,19 +311,6 @@ fn confirm_sent_message_if_turn_started(
             "lifecycle: failed to confirm sent message delivery",
         );
     }
-}
-
-fn is_compact_command_turn(
-    agent: &dyn AgentAdapter,
-    observation: &AgentLifecycleObservation,
-) -> bool {
-    let Some(command) = agent.compact_command() else {
-        return false;
-    };
-    [observation.prompt.as_deref(), observation.task.as_deref()]
-        .into_iter()
-        .flatten()
-        .any(|text| text.trim() == command)
 }
 
 fn spawn_queue_delivery_if_checkpoint(
@@ -1182,29 +1169,38 @@ mod tests {
     }
 
     #[test]
-    fn compact_prompt_turn_started_does_not_confirm_sent_message() {
+    fn lifecycle_confirms_matching_message_body() {
         let (_dir, ledger) = test_ledger();
         let agent = test_agent();
-        let message = rimz::message::MessageRecord::new(
+        let command = rimz::message::MessageRecord::new(
+            workspace_id(),
+            &agent,
+            "/compact".to_owned(),
+            true,
+            rimz::message::DeliveryGate::Done,
+        )
+        .with_body(rimz::message::MessageBody::Command);
+        let prompt = rimz::message::MessageRecord::new(
             workspace_id(),
             &agent,
             "real prompt".to_owned(),
             true,
             rimz::message::DeliveryGate::Done,
-        )
-        .with_auto_compact(Some(rimz::message::AutoCompact::Percent(70)));
-        ledger
-            .record_sent_message(&message, "session")
-            .unwrap()
-            .expect("sent");
-
-        let mut compact_observation = AgentLifecycleObservation::new(
-            Some(agent.agent_id.clone()),
-            LifecycleSignal::TurnStarted,
         );
-        compact_observation.prompt = Some("/compact".to_owned());
-        compact_observation.task = Some("/compact".to_owned());
-        confirm_sent_message_if_turn_started(
+        ledger
+            .record_sent_message(&command, "session")
+            .unwrap()
+            .expect("command sent");
+        ledger
+            .record_sent_message(&prompt, "session")
+            .unwrap()
+            .expect("prompt sent");
+
+        let compact_observation = AgentLifecycleObservation::new(
+            Some(agent.agent_id.clone()),
+            LifecycleSignal::Compacting,
+        );
+        confirm_sent_message_for_lifecycle(
             &ledger,
             &rimz::agents::ClaudeAdapter,
             &RecordedLifecycle {
@@ -1213,10 +1209,23 @@ mod tests {
             },
             "session",
         );
+        let messages = ledger.list_messages().unwrap();
         assert_eq!(
-            ledger.list_messages().unwrap()[0].status,
+            messages
+                .iter()
+                .find(|message| message.message_id == command.message_id)
+                .unwrap()
+                .status,
+            rimz::message::MessageStatus::Delivered
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .find(|message| message.message_id == prompt.message_id)
+                .unwrap()
+                .status,
             rimz::message::MessageStatus::Sent,
-            "the synthetic compact turn is not the tracked prompt"
+            "compaction cannot confirm the prompt behind it"
         );
 
         let mut real_observation = AgentLifecycleObservation::new(
@@ -1224,7 +1233,7 @@ mod tests {
             LifecycleSignal::TurnStarted,
         );
         real_observation.prompt = Some("real prompt".to_owned());
-        confirm_sent_message_if_turn_started(
+        confirm_sent_message_for_lifecycle(
             &ledger,
             &rimz::agents::ClaudeAdapter,
             &RecordedLifecycle {
@@ -1233,8 +1242,13 @@ mod tests {
             },
             "session",
         );
+        let messages = ledger.list_messages().unwrap();
         assert_eq!(
-            ledger.list_messages().unwrap()[0].status,
+            messages
+                .iter()
+                .find(|message| message.message_id == prompt.message_id)
+                .unwrap()
+                .status,
             rimz::message::MessageStatus::Delivered
         );
     }

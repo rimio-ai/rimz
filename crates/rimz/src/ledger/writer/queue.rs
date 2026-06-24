@@ -4,7 +4,7 @@ use jiff::Timestamp;
 
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::message::{
-    MAX_DELIVERY_ATTEMPTS, MessageRecord, MessageStatus, claim_expired, queue_head,
+    MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus, claim_expired, queue_head,
 };
 use crate::schema::event::{EventEnvelope, MessageEventMethod};
 
@@ -164,6 +164,7 @@ impl Ledger {
         kind: &AgentKind,
         agent_id: &AgentSessionId,
         agent_name: Option<&str>,
+        body: MessageBody,
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
         let outcome = {
@@ -172,6 +173,7 @@ impl Ledger {
                 .into_iter()
                 .filter(|message| {
                     message.status == MessageStatus::Sent
+                        && message.body == body
                         && message.same_card(kind, agent_id, agent_name)
                 })
                 .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
@@ -625,11 +627,47 @@ mod tests {
         assert!(ledger.list_pending_messages().unwrap().is_empty());
 
         let delivered = ledger
-            .confirm_delivered_for_card(&message.kind, &message.agent_id, None, "session")
+            .confirm_delivered_for_card(
+                &message.kind,
+                &message.agent_id,
+                None,
+                MessageBody::Prompt,
+                "session",
+            )
             .unwrap()
             .expect("delivered");
         assert_eq!(delivered.status, MessageStatus::Delivered);
         assert!(delivered.delivered_at.is_some());
+    }
+
+    #[test]
+    fn confirmation_matches_message_body() {
+        let (_dir, ledger, workspace_id) = ledger();
+        let prompt = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+        let command = message(&workspace_id)
+            .with_body(MessageBody::Command)
+            .with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+        ledger.record_sent_message(&prompt, "session").unwrap();
+        ledger.record_sent_message(&command, "session").unwrap();
+
+        let delivered_command = ledger
+            .confirm_delivered_for_card(
+                &command.kind,
+                &command.agent_id,
+                None,
+                MessageBody::Command,
+                "session",
+            )
+            .unwrap()
+            .expect("command delivered");
+        assert_eq!(delivered_command.message_id, command.message_id);
+
+        let messages = ledger.list_messages().unwrap();
+        let prompt = messages
+            .iter()
+            .find(|message| message.message_id == prompt.message_id)
+            .expect("prompt remains");
+        assert_eq!(prompt.status, MessageStatus::Sent);
     }
 
     #[test]

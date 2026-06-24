@@ -16,10 +16,9 @@ use rimz::agents::AgentState;
 use rimz::feed::pending_ask_for;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, WorkspaceId};
 use rimz::message::{
-    AutoCompact, DeliveryGate, MessageRecord, MessageSender, MessageStatus,
+    AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
     delivery_window_from_env,
 };
-use rimz::mux::MuxBackend;
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{PaneAgent, SidebarSnapshot};
 
@@ -124,7 +123,6 @@ pub(crate) enum Outcome {
     Sent {
         label: String,
         message_id: MessageId,
-        compacted: bool,
     },
     SkippedPending {
         label: String,
@@ -133,22 +131,25 @@ pub(crate) enum Outcome {
 }
 
 /// How a live-pane send is delivered: whether to send past a pending ask,
-/// whether to submit with Enter, the optional compact-first threshold, and
-/// pacing state.
+/// and pacing state.
 pub(crate) struct LiveSend {
     pub(crate) force: bool,
-    pub(crate) enter: bool,
-    pub(crate) auto_compact: Option<AutoCompact>,
     pub(crate) pacer: Pacer,
 }
 
 pub(crate) struct MessageDraft {
     pub(crate) text: String,
+    pub(crate) body: MessageBody,
     pub(crate) enter: bool,
     pub(crate) gate: DeliveryGate,
     pub(crate) sender: MessageSender,
     pub(crate) force: bool,
     pub(crate) auto_compact: Option<AutoCompact>,
+}
+
+pub(crate) struct SentPrompt {
+    pub(crate) outcome: Outcome,
+    pub(crate) compacted: Option<MessageId>,
 }
 
 pub(crate) fn message_for_target(
@@ -172,6 +173,7 @@ pub(crate) fn message_for_target(
         agent_id,
         agent_name,
         sender: draft.sender,
+        body: draft.body,
         text: draft.text,
         enter: draft.enter,
         gate: draft.gate,
@@ -186,6 +188,47 @@ pub(crate) fn message_for_target(
         delivered_at: None,
         auto_compact: draft.auto_compact,
     }
+}
+
+pub(crate) fn send_prompt_to_live_pane(
+    workspace: &ResolvedWorkspace,
+    ledger: &rimz::Ledger,
+    snapshot: &SidebarSnapshot,
+    target: &PaneAgent,
+    bound: Option<&AgentState>,
+    prompt: &MessageRecord,
+    send: &mut LiveSend,
+) -> Result<SentPrompt> {
+    let mut compacted = None;
+    if prompt.body == MessageBody::Prompt
+        && let Some(command) = compact_message_for_target(
+            prompt.workspace_id.clone(),
+            target,
+            bound,
+            prompt.gate,
+            prompt.sender.clone(),
+            prompt.force,
+            prompt.auto_compact,
+        )
+    {
+        match send_to_live_pane(workspace, ledger, snapshot, target, bound, &command, send) {
+            Ok(Outcome::Sent { message_id, .. }) => {
+                compacted = Some(message_id);
+            }
+            Ok(skipped @ Outcome::SkippedPending { .. }) => {
+                return Ok(SentPrompt {
+                    outcome: skipped,
+                    compacted: None,
+                });
+            }
+            Err(err) => {
+                ledger.record_send_error(&command, &err.to_string(), &workspace.session_name)?;
+                return Err(err);
+            }
+        }
+    }
+    let outcome = send_to_live_pane(workspace, ledger, snapshot, target, bound, prompt, send)?;
+    Ok(SentPrompt { outcome, compacted })
 }
 
 fn synthetic_session_for_pane(pane_id: &rimz::ids::PaneId) -> AgentSessionId {
@@ -257,57 +300,66 @@ pub(crate) fn send_to_live_pane(
     let pane_id = &target.pane_id;
     let backend = rimz::mux::backend_for(pane_id.mux());
     send.pacer.tick();
-    let compacted = compact_if_full(backend.as_ref(), bound, target, send.auto_compact)?;
-    let peers: Vec<&AgentState> = snapshot
-        .agents
-        .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
-        .collect();
-    let payload =
-        match rimz::target::sender_prefix(&message.sender, &peers, target.channel().as_deref()) {
-            Some(prefix) => format!("{prefix}{}", message.text),
-            None => message.text.clone(),
-        };
-    super::pane::paste_text(backend.as_ref(), pane_id, &payload)?;
+    match message.body {
+        MessageBody::Command => super::pane::send_text(backend.as_ref(), pane_id, &message.text)?,
+        MessageBody::Prompt => {
+            let peers: Vec<&AgentState> = snapshot
+                .agents
+                .iter()
+                .filter(|agent| agent.parent_agent_id.is_none())
+                .collect();
+            let payload = match rimz::target::sender_prefix(
+                &message.sender,
+                &peers,
+                target.channel().as_deref(),
+            ) {
+                Some(prefix) => format!("{prefix}{}", message.text),
+                None => message.text.clone(),
+            };
+            super::pane::paste_text(backend.as_ref(), pane_id, &payload)?;
+        }
+    }
     // Record the send once the text lands and before the submit keystroke, so a
     // submitted message is always preceded by its durable record and audit event.
     ledger.record_sent_message(message, &workspace.session_name)?;
-    if send.enter {
+    if message.enter {
         super::pane::send_enter(backend.as_ref(), pane_id)?;
     }
     Ok(Outcome::Sent {
         label,
         message_id: message.message_id.clone(),
-        compacted,
     })
 }
 
-/// Submit the agent's `/compact` ahead of the send when smart compaction is set
-/// and a bound agent's context has reached the threshold. A lazy pane carries no
-/// context, and an agent kind with no compaction command passes through.
-fn compact_if_full(
-    backend: &dyn MuxBackend,
-    bound: Option<&AgentState>,
+pub(crate) fn compact_message_for_target(
+    workspace_id: WorkspaceId,
     target: &PaneAgent,
+    bound: Option<&AgentState>,
+    gate: DeliveryGate,
+    sender: MessageSender,
+    force: bool,
     auto_compact: Option<AutoCompact>,
-) -> Result<bool> {
-    let Some(threshold) = auto_compact else {
-        return Ok(false);
-    };
-    let Some(agent) = bound else {
-        return Ok(false);
-    };
+) -> Option<MessageRecord> {
+    let threshold = auto_compact?;
+    let agent = bound?;
     if !threshold.triggered(agent) {
-        return Ok(false);
+        return None;
     }
-    let Some(command) = rimz::agents::find_adapter(target.kind.as_str())
-        .and_then(|adapter| adapter.compact_command())
-    else {
-        return Ok(false);
-    };
-    super::pane::send_text(backend, &target.pane_id, command)?;
-    super::pane::send_enter(backend, &target.pane_id)?;
-    Ok(true)
+    let command = rimz::agents::find_adapter(target.kind.as_str())?.compact_command()?;
+    Some(message_for_target(
+        workspace_id,
+        target,
+        bound,
+        MessageDraft {
+            text: command.to_owned(),
+            body: MessageBody::Command,
+            enter: true,
+            gate,
+            sender,
+            force,
+            auto_compact: None,
+        },
+    ))
 }
 
 /// The rollup session behind a bound pane target. A lazy pane carries no session,
