@@ -38,7 +38,7 @@ use rimz::agents::spending::{
     recorded_unknown_models, unix_secs_now, utc_date, write_provider_spending_cache_with_rollups,
     write_spending_cache,
 };
-use rimz::config::Semantic;
+use rimz::config::{GlyphRole, Semantic, ThemeConfig};
 use rimz::ledger::single_flight::{Coalesced, coalesce};
 
 const DAY_SECS: i64 = 86_400;
@@ -57,6 +57,9 @@ const MAX_MODELS: usize = 6;
 /// A two-column body (models, insights) needs at least this much panel width;
 /// narrower terminals stack to one column.
 const TWO_COL_MIN: usize = 56;
+/// The model detail row carries input, output, and cache-read; keep two columns
+/// only once each side has enough room to read.
+const MODELS_TWO_COL_MIN: usize = 78;
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 const PROGRESS_BAR_WIDTH: usize = 20;
 const SPINNER_CLEAR_COLS: usize = 120;
@@ -99,21 +102,24 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     if args.json {
         return emit_json(&loaded.stats, today_day, args.dollars);
     }
+    let glyphs = resolve_panel_glyphs(&super::machine_config().theme);
     render_panel(
         &loaded.stats,
         today_day,
         args.dollars,
+        &glyphs,
         !loaded.header_printed,
     )
 }
 
 fn run_refresh(dollars: bool) -> Result<()> {
+    let glyphs = resolve_panel_glyphs(&super::machine_config().theme);
     loop {
         let loaded = load_stats(true)?;
         let today_day = unix_secs_now() as i64 / DAY_SECS;
         let mut cols = term_cols();
         clear_screen()?;
-        render_panel(&loaded.stats, today_day, dollars, true)?;
+        render_panel(&loaded.stats, today_day, dollars, &glyphs, true)?;
         let reload_at = Instant::now() + REFRESH_INTERVAL;
         loop {
             let now = Instant::now();
@@ -125,7 +131,7 @@ fn run_refresh(dollars: bool) -> Result<()> {
             if current != cols {
                 cols = current;
                 clear_screen()?;
-                render_panel(&loaded.stats, today_day, dollars, true)?;
+                render_panel(&loaded.stats, today_day, dollars, &glyphs, true)?;
             }
         }
     }
@@ -172,6 +178,23 @@ impl Stats {
             by_agent: by_provider,
             total,
         }
+    }
+}
+
+struct PanelGlyphs {
+    total: String,
+    input: String,
+    output: String,
+    cache_read: String,
+}
+
+fn resolve_panel_glyphs(theme: &ThemeConfig) -> PanelGlyphs {
+    let glyph = |role| rimz::sidebar_pane::render::theme_glyph(theme, role);
+    PanelGlyphs {
+        total: glyph(GlyphRole::TokensTotal),
+        input: glyph(GlyphRole::TokensInput),
+        output: glyph(GlyphRole::TokensOutput),
+        cache_read: glyph(GlyphRole::TokensCacheRead),
     }
 }
 
@@ -525,7 +548,13 @@ impl PanelGeometry {
     }
 }
 
-fn render_panel(stats: &Stats, today_day: i64, dollars: bool, include_header: bool) -> Result<()> {
+fn render_panel(
+    stats: &Stats,
+    today_day: i64,
+    dollars: bool,
+    glyphs: &PanelGlyphs,
+    include_header: bool,
+) -> Result<()> {
     let geometry = PanelGeometry::current();
     let mut lines: Vec<String> = Vec::new();
     if include_header {
@@ -547,10 +576,10 @@ fn render_panel(stats: &Stats, today_day: i64, dollars: bool, include_header: bo
     windows_lines(&mut lines, stats);
     if !stats.by_model.is_empty() {
         lines.push(String::new());
-        models_lines(&mut lines, stats, geometry.panel_width);
+        models_lines(&mut lines, stats, geometry.panel_width, glyphs);
     }
     let mut agent_lines = Vec::new();
-    if agents_lines(&mut agent_lines, stats) {
+    if agents_lines(&mut agent_lines, stats, glyphs) {
         lines.push(String::new());
         lines.extend(agent_lines);
     }
@@ -627,8 +656,7 @@ fn heatmap_lines(
             match week[row] {
                 Some(value) => {
                     let lvl = level(value, grid.max);
-                    line.push_str(&render::paint(styles[lvl], &RAMP[lvl].to_string()));
-                    line.push(' ');
+                    line.push_str(&render::paint(styles[lvl], &format!("{0}{0}", RAMP[lvl])));
                 }
                 None => line.push_str("  "),
             }
@@ -649,27 +677,37 @@ fn ramp_key(styles: &[anstyle::Style; 5]) -> String {
     s
 }
 
-/// The trailing Week / Month / Year totals, tokens and dollars, columns aligned.
+/// The full-history cached total plus trailing Week / Month / Year token totals.
 fn windows_lines(lines: &mut Vec<String>, stats: &Stats) {
-    for (label, win) in [
-        ("Week", &stats.total.week),
-        ("Month", &stats.total.month),
-        ("Year", &stats.total.year),
-    ] {
-        let tokens = format!("◇ {}", fmt_tokens(win.tokens));
-        lines.push(format!(
-            "  {}{}  {}  {}",
-            render::paint(muted(), &format!("{label:<6}")),
-            render::paint(cool(), &format!("{tokens:<8}")),
-            render::paint(muted(), "·"),
-            fmt_usd(win.usd),
-        ));
-    }
+    let all_time: u64 = stats
+        .by_model
+        .values()
+        .map(|model| model.tokens + model.cache_read)
+        .sum();
+    let cells = [
+        ("All time", all_time),
+        ("Week", stats.total.week.tokens),
+        ("Month", stats.total.month.tokens),
+        ("Year", stats.total.year.tokens),
+    ];
+    let sep = render::paint(muted(), "  ·  ");
+    let row = cells
+        .into_iter()
+        .map(|(label, tokens)| {
+            format!(
+                "{} {}",
+                render::paint(muted(), label),
+                render::paint(cool(), &fmt_tokens(tokens))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(&sep);
+    lines.push(format!("  {row}"));
 }
 
 /// The per-model token breakdown: bullet rows of `name (share%)` over an
 /// `In / Out` line, two models per row where the panel is wide enough.
-fn models_lines(lines: &mut Vec<String>, stats: &Stats, panel_width: usize) {
+fn models_lines(lines: &mut Vec<String>, stats: &Stats, panel_width: usize, glyphs: &PanelGlyphs) {
     let total: u64 = stats.by_model.values().map(|m| m.tokens).sum();
     if total == 0 {
         return;
@@ -693,7 +731,7 @@ fn models_lines(lines: &mut Vec<String>, stats: &Stats, panel_width: usize) {
         named.push(("Other".to_string(), other));
     }
 
-    let two_col = panel_width >= TWO_COL_MIN;
+    let two_col = panel_width >= MODELS_TWO_COL_MIN;
     let col_w = if two_col {
         panel_width / 2
     } else {
@@ -701,10 +739,10 @@ fn models_lines(lines: &mut Vec<String>, stats: &Stats, panel_width: usize) {
     };
     lines.push(format!("  {}", render::paint(meta(), "Models")));
     for pair in named.chunks(if two_col { 2 } else { 1 }) {
-        let (n0, io0) = model_cell(&pair[0].0, &pair[0].1, total);
+        let (n0, io0) = model_cell(&pair[0].0, &pair[0].1, total, glyphs);
         match pair.get(1) {
             Some((name, spend)) => {
-                let (n1, io1) = model_cell(name, spend, total);
+                let (n1, io1) = model_cell(name, spend, total, glyphs);
                 lines.push(
                     format!("  {}{}", pad_to(&n0, col_w), n1)
                         .trim_end()
@@ -728,24 +766,35 @@ fn fold_model(acc: &mut ModelSpend, add: &ModelSpend) {
     acc.usd += add.usd;
     acc.input += add.input;
     acc.output += add.output;
+    acc.cache_read += add.cache_read;
     acc.tokens += add.tokens;
 }
 
-/// `(name line, in/out line)` for one model, styled and ready to lay out.
-fn model_cell(name: &str, spend: &ModelSpend, total: u64) -> (String, String) {
+/// `(name line, token split line)` for one model, styled and ready to lay out.
+fn model_cell(
+    name: &str,
+    spend: &ModelSpend,
+    total: u64,
+    glyphs: &PanelGlyphs,
+) -> (String, String) {
     let pct = spend.tokens as f64 / total as f64 * 100.0;
     let name_line = format!(
-        "{} {name} {}",
+        "{} {name} {} {} {}",
         render::paint(cool(), "●"),
         render::paint(muted(), &format!("({pct:.1}%)")),
+        render::paint(muted(), "·"),
+        fmt_usd(spend.usd),
     );
-    let io_line = render::paint(
-        muted(),
-        &format!(
-            "  In: {} · Out: {}",
-            fmt_tokens_lower(spend.input),
-            fmt_tokens_lower(spend.output)
-        ),
+    let io_line = format!(
+        "  {} {} {} {} {} {} {} {}",
+        render::paint(muted(), &glyphs.input),
+        fmt_tokens_lower(spend.input),
+        render::paint(muted(), "·"),
+        render::paint(muted(), &glyphs.output),
+        fmt_tokens_lower(spend.output),
+        render::paint(muted(), "·"),
+        render::paint(muted(), &glyphs.cache_read),
+        fmt_tokens_lower(spend.cache_read),
     );
     (name_line, io_line)
 }
@@ -778,7 +827,7 @@ fn agent_year_breakdown(stats: &Stats) -> Vec<AgentYearBreakdown<'_>> {
     agents
 }
 
-fn agents_lines(lines: &mut Vec<String>, stats: &Stats) -> bool {
+fn agents_lines(lines: &mut Vec<String>, stats: &Stats, glyphs: &PanelGlyphs) -> bool {
     let agents = agent_year_breakdown(stats);
     if agents.is_empty() {
         return false;
@@ -793,13 +842,14 @@ fn agents_lines(lines: &mut Vec<String>, stats: &Stats) -> bool {
     for agent in agents {
         let label = format!("● {}", agent.name);
         let label = format!("{label:<width$}", width = label_width);
-        let tokens = format!("◇ {}", fmt_tokens(agent.tally.year.tokens));
+        let tokens = format!("{} {}", glyphs.total, fmt_tokens(agent.tally.year.tokens));
         lines.push(format!(
-            "  {}  {}  {}  {}  {}",
+            "  {}  {}  {}  {}  {}  {}",
             render::paint(cool(), &label),
             render::paint(cool(), &format!("{tokens:<8}")),
             render::paint(muted(), "·"),
             fmt_usd(agent.tally.year.usd),
+            render::paint(muted(), &format!("· {} sess", agent.tally.year.sessions)),
             render::paint(muted(), &format!("({:.1}%)", agent.share * 100.0)),
         ));
     }
@@ -864,21 +914,33 @@ fn plural_days(n: u32) -> String {
 /// begins, like the GitHub graph.
 fn month_row(grid: &Grid) -> String {
     let mut buf = vec![' '; grid.weeks * 2];
-    let mut prev = String::new();
-    for col in 0..grid.weeks {
-        let date = utc_date(grid.col_sunday(col).max(0) as u64 * DAY_SECS as u64);
-        let month = date.get(5..7).unwrap_or("").to_owned();
-        if month != prev {
-            prev.clone_from(&month);
-            if let Some(idx) = month.parse::<usize>().ok().filter(|m| (1..=12).contains(m)) {
-                let start = col * 2;
-                for (i, ch) in MONTHS[idx - 1].chars().enumerate() {
-                    if let Some(slot) = buf.get_mut(start + i) {
-                        *slot = ch;
-                    }
+    let months = (0..grid.weeks)
+        .map(|col| {
+            let date = utc_date(grid.col_sunday(col).max(0) as u64 * DAY_SECS as u64);
+            date.get(5..7)
+                .and_then(|m| m.parse::<usize>().ok())
+                .filter(|m| (1..=12).contains(m))
+        })
+        .collect::<Vec<_>>();
+
+    let mut col = 0;
+    while col < months.len() {
+        let month = months[col];
+        let mut end = col + 1;
+        while end < months.len() && months[end] == month {
+            end += 1;
+        }
+        if end - col >= 2
+            && let Some(idx) = month
+        {
+            let start = col * 2;
+            for (i, ch) in MONTHS[idx - 1].chars().enumerate() {
+                if let Some(slot) = buf.get_mut(start + i) {
+                    *slot = ch;
                 }
             }
         }
+        col = end;
     }
     let cells: String = buf.into_iter().collect();
     format!("{:<GUTTER$}{}", "", cells)
@@ -1172,6 +1234,7 @@ struct ModelJson {
     tokens: u64,
     input: u64,
     output: u64,
+    cache_read: u64,
     usd: f64,
     share: f64,
 }
@@ -1210,6 +1273,7 @@ fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
             tokens: spend.tokens,
             input: spend.input,
             output: spend.output,
+            cache_read: spend.cache_read,
             usd: spend.usd,
             share: if total > 0 {
                 spend.tokens as f64 / total as f64
@@ -1294,6 +1358,27 @@ mod tests {
         tally
     }
 
+    fn panel_glyphs() -> PanelGlyphs {
+        resolve_panel_glyphs(&ThemeConfig::default())
+    }
+
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                for e in chars.by_ref() {
+                    if e == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
     fn write_jsonl(dir: &Path, filename: &str, lines: &[&str]) -> PathBuf {
         let path = dir.join(filename);
         std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
@@ -1358,6 +1443,7 @@ mod tests {
                 usd: 7.0,
                 input: 70,
                 output: 30,
+                cache_read: 5,
                 tokens: 100,
             },
         )]);
@@ -1487,6 +1573,138 @@ mod tests {
     }
 
     #[test]
+    fn heatmap_cells_render_doubled_without_gaps() {
+        let today = 20_008; // Saturday, so the current week has no future blanks.
+        let first_day = week_start(today) - 7;
+        let mut by_day = BTreeMap::new();
+        for offset in 0..14 {
+            by_day.insert(first_day + offset, day((offset + 1) as u64, 0.0));
+        }
+        let stats = Stats {
+            by_day,
+            by_model: BTreeMap::new(),
+            by_agent: BTreeMap::new(),
+            total: SpendTally::default(),
+        };
+        let mut lines = Vec::new();
+
+        heatmap_lines(&mut lines, &stats, today, 2, false);
+
+        let monday = strip_ansi(lines.iter().find(|line| line.contains("Mon")).unwrap());
+        let cells = monday.chars().skip(GUTTER).collect::<String>();
+        assert!(
+            !cells.contains(' '),
+            "heatmap cells are contiguous: {cells:?}"
+        );
+        for cell in cells.chars().collect::<Vec<_>>().chunks(2) {
+            assert_eq!(cell.len(), 2);
+            assert_eq!(cell[0], cell[1]);
+        }
+    }
+
+    #[test]
+    fn month_row_skips_one_column_leading_partial_month() {
+        let grid = Grid::build(&BTreeMap::new(), 20_282, 3, false); // 2025-07-13.
+
+        let row = month_row(&grid);
+
+        assert!(row.contains("Jul"));
+        assert!(!row.contains("Jun"));
+        assert!(!row.contains("JuJul"));
+    }
+
+    #[test]
+    fn windows_lines_emit_one_cached_all_time_token_row() {
+        let stats = Stats {
+            by_day: BTreeMap::new(),
+            by_model: BTreeMap::from([
+                (
+                    "a".to_owned(),
+                    ModelSpend {
+                        usd: 1.0,
+                        input: 40,
+                        output: 60,
+                        cache_read: 75,
+                        tokens: 100,
+                    },
+                ),
+                (
+                    "b".to_owned(),
+                    ModelSpend {
+                        usd: 2.0,
+                        input: 5,
+                        output: 20,
+                        cache_read: 50,
+                        tokens: 25,
+                    },
+                ),
+            ]),
+            by_agent: BTreeMap::new(),
+            total: SpendTally {
+                week: rimz::agents::spending::SpendWindow {
+                    tokens: 7,
+                    ..Default::default()
+                },
+                month: rimz::agents::spending::SpendWindow {
+                    tokens: 30,
+                    ..Default::default()
+                },
+                year: rimz::agents::spending::SpendWindow {
+                    tokens: 365,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        };
+        let mut lines = Vec::new();
+
+        windows_lines(&mut lines, &stats);
+
+        assert_eq!(lines.len(), 1);
+        let row = strip_ansi(&lines[0]);
+        assert!(row.contains("All time 250"));
+        assert!(row.contains("Week 7"));
+        assert!(row.contains("Month 30"));
+        assert!(row.contains("Year 365"));
+        assert!(!row.contains('$'));
+        assert!(!row.contains('◇'));
+    }
+
+    #[test]
+    fn model_cell_shows_usd_and_cache_read_detail() {
+        let glyphs = panel_glyphs();
+        let spend = ModelSpend {
+            usd: 12.4,
+            input: 1_200_000,
+            output: 500_000,
+            cache_read: 2_500_000,
+            tokens: 1_700_000,
+        };
+
+        let (name, detail) = model_cell("Opus 4.8", &spend, spend.tokens, &glyphs);
+        let name = strip_ansi(&name);
+        let detail = strip_ansi(&detail);
+
+        assert!(name.contains("Opus 4.8 (100.0%) · $12"));
+        assert!(detail.contains("↘ 1.2m"));
+        assert!(detail.contains("↗ 500.0k"));
+        assert!(detail.contains("◌ 2.5m"));
+    }
+
+    #[test]
+    fn modern_theme_flips_stats_token_glyphs_to_nerd_font() {
+        let theme = ThemeConfig {
+            style: Some(rimz::config::ThemeStyle::Modern),
+            ..Default::default()
+        };
+
+        assert_ne!(
+            rimz::sidebar_pane::render::theme_glyph(&theme, GlyphRole::TokensTotal),
+            "◇"
+        );
+    }
+
+    #[test]
     fn agent_display_name_uses_descriptor_and_kind_fallback() {
         assert_eq!(agent_display_name("claude"), "Claude");
         assert_eq!(agent_display_name("mystery"), "Mystery");
@@ -1504,8 +1722,9 @@ mod tests {
             total: SpendTally::default(),
         };
         let mut lines = Vec::new();
+        let glyphs = panel_glyphs();
 
-        assert!(agents_lines(&mut lines, &stats));
+        assert!(agents_lines(&mut lines, &stats, &glyphs));
 
         assert!(lines[0].contains("Agents"));
         let codex = lines
@@ -1519,7 +1738,9 @@ mod tests {
         assert!(codex < claude, "larger trailing-year token count leads");
         assert!(lines[codex].contains("◇ 300"));
         assert!(lines[codex].contains("$9"));
+        assert!(lines[codex].contains("4 sess"));
         assert!(lines[codex].contains("(75.0%)"));
+        assert!(lines[claude].contains("2 sess"));
         assert!(lines[claude].contains("(25.0%)"));
 
         let empty = Stats {
@@ -1529,7 +1750,7 @@ mod tests {
             total: SpendTally::default(),
         };
         let mut empty_lines = Vec::new();
-        assert!(!agents_lines(&mut empty_lines, &empty));
+        assert!(!agents_lines(&mut empty_lines, &empty, &glyphs));
         assert!(empty_lines.is_empty());
     }
 

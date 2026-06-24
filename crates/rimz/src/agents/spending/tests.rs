@@ -1130,6 +1130,7 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
             usd: 1.25,
             input: 3_000,
             output: 1_200,
+            cache_read: 0,
             tokens: 4_200,
         },
     )]);
@@ -1267,7 +1268,7 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
         input: 100,
         output: 50,
         cache_write: 10,
-        cache_read: 0,
+        cache_read: 70,
         message_id: Some("msg-1".to_owned()),
         request_id: Some("req-1".to_owned()),
         thread_id: None,
@@ -1279,6 +1280,7 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
         is_sidechain: true,
         cost_usd: 9.0,
         input: 9_000,
+        cache_read: 900,
         ..main.clone()
     };
     // An id-free Codex turn on an earlier day buckets under its own date.
@@ -1288,7 +1290,7 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
         input: 200,
         output: 20,
         cache_write: 0,
-        cache_read: 0,
+        cache_read: 40,
         message_id: None,
         request_id: None,
         thread_id: None,
@@ -1348,8 +1350,14 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
     let by_model = compute_model_breakdown(&files, &cache);
     assert_eq!(by_model.len(), 2);
     let opus = by_model["claude-opus-4-8"];
-    assert_eq!((opus.input, opus.output, opus.tokens), (110, 50, 160));
+    assert_eq!(
+        (opus.input, opus.output, opus.cache_read, opus.tokens),
+        (110, 50, 70, 160)
+    );
     assert!((opus.usd - 1.0).abs() < 1e-9);
     let codex = by_model["gpt-5-codex"];
-    assert_eq!((codex.input, codex.output, codex.tokens), (200, 20, 220));
+    assert_eq!(
+        (codex.input, codex.output, codex.cache_read, codex.tokens),
+        (200, 20, 40, 220)
+    );
 }

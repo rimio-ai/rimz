@@ -130,6 +130,13 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
     }
 }
 
+/// Resolve the glyph for `role` under `theme`'s glyph set, so non-sidebar
+/// surfaces honor the same `[theme] style` / `[theme.glyphs]` config the sidebar
+/// reads.
+pub fn theme_glyph(theme: &crate::config::ThemeConfig, role: crate::config::GlyphRole) -> String {
+    theme::GlyphSet::from_theme(theme).glyph(role).to_owned()
+}
+
 /// Whether the single lead unread row carries per-frame motion the breath grid
 /// must serve. The lead is the oldest actionable unread ask ([`lead_unread`]);
 /// it animates when the configured unread effect flows (shimmer or blink, not

@@ -191,12 +191,15 @@ pub fn compute_daily_spend(
 
 /// One model's deduplicated, account-global throughput across the full history —
 /// a row of the `rimz stats` model breakdown. `input` folds cache-write in to
-/// match the `◇` convention, so `tokens` stays `input + output`.
+/// match the `◇` convention, so `tokens` stays `input + output`; cache-read rides
+/// alongside for the model detail split and all-time cached total.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelSpend {
     pub usd: f64,
     pub input: u64,
     pub output: u64,
+    #[serde(default)]
+    pub cache_read: u64,
     pub tokens: u64,
 }
 
@@ -218,6 +221,7 @@ pub fn compute_model_breakdown(
         cell.usd += entry.cost_usd;
         cell.input += entry.input + entry.cache_write;
         cell.output += entry.output;
+        cell.cache_read += entry.cache_read;
         cell.tokens += entry.input + entry.cache_write + entry.output;
     });
     by_model
@@ -279,8 +283,9 @@ const SPENDING_CACHE_VERSION: u32 = 10;
 /// aggregate carries per-day and per-model rollups for `rimz stats`. v4:
 /// unpriced token usage contributes tokens/sessions with zero dollars, and
 /// provider-native thread ids count multi-session stores correctly. v5: GPT-5.5
-/// built-in prices heal previously zero-dollar token rows.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 5;
+/// built-in prices heal previously zero-dollar token rows. v6: per-model
+/// cache-read is published for `rimz stats`.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 6;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here

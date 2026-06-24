@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::config::{GlyphRole, ThemeGlyphsConfig};
+use crate::config::{GlyphRole, ThemeConfig, ThemeGlyphsConfig};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GlyphSetKind {
@@ -39,6 +39,10 @@ impl Default for GlyphSet {
 impl GlyphSet {
     pub(crate) fn resolve(config: &ThemeGlyphsConfig) -> Self {
         Self::resolve_with_set(config.set.as_deref(), config)
+    }
+
+    pub(crate) fn from_theme(theme: &ThemeConfig) -> Self {
+        Self::resolve_with_set(theme.glyph_set_source().as_deref(), &theme.glyphs)
     }
 
     /// Resolve with an explicit set source, used by the `[theme] style` preset
