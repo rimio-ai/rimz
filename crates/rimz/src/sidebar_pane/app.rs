@@ -36,6 +36,7 @@ use crate::sidebar_pane::render::{self, UiState};
 use crate::tui::{MouseCapture, TerminalModeGuard};
 
 mod cache_refresh;
+mod demo;
 mod fetch;
 #[cfg(test)]
 mod fixtures;
@@ -64,6 +65,7 @@ use reload::{ReloadAction, reexec_self, reload_action};
 use selection::{InputOutcome, handle_key, handle_mouse_click, handle_scroll, row_index_of_pane};
 use state::{apply_fetch_outcome, placeholder_snapshot};
 
+pub use demo::serve_fixture;
 pub use health::Health;
 pub use state::{RenderState, compute_next_state};
 

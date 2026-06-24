@@ -575,6 +575,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
                 columns: vec![vec![pane]],
             },
             focus: false,
+            dock_sidebar: true,
             sidebar: crate::cli::build_sidebar_opts(&room, Vec::new())?,
         }),
     };

@@ -1325,6 +1325,7 @@ fn closing_agent_tab_records_end_trace_when_session_survives() {
                 columns: vec![vec![PaneCmd { argv: command }]],
             },
             focus: false,
+            dock_sidebar: true,
             sidebar: SidebarPaneOptions {
                 session_name: workspace.session_name.clone(),
                 workspace_id: workspace.workspace_id.clone(),
@@ -1429,6 +1430,7 @@ fn open_tab_builds_multi_column_layout() {
                 ],
             },
             focus: true,
+            dock_sidebar: true,
             sidebar,
         })
         .expect("open_tab");
@@ -1489,6 +1491,89 @@ fn open_tab_builds_multi_column_layout() {
         server.display("rimz-tab", "#{window_name}"),
         "work",
         "focus: true should select the new window",
+    );
+}
+
+#[test]
+fn open_tab_can_suppress_hook_docked_sidebar() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let width = SidebarWidth::default();
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: "rimz-gallery".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(cwd.path()),
+            project_root: cwd.path().to_path_buf(),
+            cwd: cwd.path().to_path_buf(),
+            config: rimz::config::MultiplexerConfig::default(),
+            detected_size: Some((240, 40)),
+            truecolor: false,
+        })
+        .expect("ensure_session");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = SidebarPaneOptions {
+        session_name: "rimz-gallery".to_owned(),
+        workspace_id: WorkspaceId::from_project_root(cwd.path()),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width,
+        birth_size: width.birth_size(Some(240)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    server
+        .backend
+        .open_sidebar(&sidebar, None)
+        .expect("open_sidebar");
+    let work_pane = || PaneCmd {
+        argv: vec!["sleep".to_owned(), "600".to_owned()],
+    };
+    server
+        .backend
+        .open_tab(&TabOptions {
+            session_name: "rimz-gallery".to_owned(),
+            title: "gallery".to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![
+                    vec![work_pane()],
+                    vec![work_pane()],
+                    vec![work_pane()],
+                    vec![work_pane()],
+                ],
+            },
+            focus: true,
+            dock_sidebar: false,
+            sidebar,
+        })
+        .expect("open_tab");
+
+    let panes = server.wait_for_panes("rimz-gallery:gallery", 4);
+    assert_eq!(
+        panes.len(),
+        4,
+        "undocked tab should carry four work panes and no sidebar: {panes:?}",
+    );
+    let listed = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-gallery".to_owned()),
+            ..Default::default()
+        })
+        .expect("list panes")
+        .panes;
+    assert!(
+        listed.iter().all(|pane| {
+            pane.view_name.as_deref() != Some("gallery")
+                || pane.command.as_deref() != Some("rimz-sidebar")
+        }),
+        "gallery window should not retain the hook-docked sidebar: {listed:?}",
     );
 }
 
@@ -1571,6 +1656,7 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
                 columns: vec![vec![work_pane()], vec![work_pane()]],
             },
             focus: false,
+            dock_sidebar: true,
             sidebar,
         })
         .expect("open_tab");
@@ -1674,6 +1760,7 @@ fn open_tab_single_pane_layout_docks_one_work_pane_beside_the_sidebar() {
                 }]],
             },
             focus: false,
+            dock_sidebar: true,
             sidebar,
         })
         .expect("open_tab");

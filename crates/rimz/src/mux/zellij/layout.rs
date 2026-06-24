@@ -259,6 +259,9 @@ pub(super) fn render_tab_layout(
             reason: "tab layout has no columns".to_owned(),
         });
     }
+    if !opts.dock_sidebar {
+        return render_undocked_tab_layout(opts);
+    }
     let sidebar = sidebar_pane_kdl(
         &opts.sidebar,
         Some(&opts.sidebar.cwd),
@@ -280,6 +283,24 @@ pub(super) fn render_tab_layout(
 }}
 "#,
         swap_layout = rimz_swap_layout_kdl(sidebar_cols.get()),
+    ))
+}
+
+fn render_undocked_tab_layout(opts: &TabOptions) -> Result<String> {
+    let mut focused = false;
+    let mut columns = String::new();
+    for column in &opts.panes.columns {
+        columns.push_str(&render_tab_column(column, &opts.cwd, &mut focused, 8)?);
+    }
+    let swap_layout = rimz_undocked_swap_layout(opts.panes.columns.len().min(4) as u16);
+    Ok(format!(
+        r#"layout {{
+    pane split_direction="vertical" {{
+{columns}    }}
+    {COMPACT_BAR_KDL}
+{swap_layout}
+}}
+"#,
     ))
 }
 
@@ -324,6 +345,38 @@ fn rimz_swap_layout_kdl(sidebar_cols: u16) -> String {
     }}
 "#,
     )
+}
+
+fn rimz_undocked_swap_layout(max_work_panes: u16) -> String {
+    let mut layout = String::from(
+        r#"    swap_tiled_layout name="rimz-work-area" {
+"#,
+    );
+    for work_panes in 1..=max_work_panes.max(1) {
+        let max_panes = work_panes + 1;
+        layout.push_str(&format!(
+            r#"        tab max_panes={max_panes} {{
+"#,
+        ));
+        if work_panes == 1 {
+            layout.push_str("            pane\n");
+        } else {
+            layout.push_str("            pane split_direction=\"vertical\" {\n");
+            for _ in 0..work_panes {
+                layout.push_str("                pane\n");
+            }
+            layout.push_str("            }\n");
+        }
+        layout.push_str(
+            r#"            pane size=1 borderless=true {
+                plugin location="zellij:compact-bar"
+            }
+        }
+"#,
+        );
+    }
+    layout.push_str("    }\n");
+    layout
 }
 
 fn render_daemon_columns(
@@ -763,6 +816,7 @@ mod tests {
                 ],
             },
             focus: true,
+            dock_sidebar: true,
             sidebar,
         };
         let layout = render_tab_layout(&opts, None).expect("render tab layout");
@@ -812,6 +866,51 @@ mod tests {
         assert!(
             layout.contains("pane size=60\n"),
             "the tab's swap layout must mirror the live sidebar width too:\n{layout}",
+        );
+    }
+
+    #[test]
+    fn tab_layout_can_omit_sidebar_for_gallery_columns() {
+        let sidebar = background_view_opts(vec![]).sidebar;
+        let opts = TabOptions {
+            session_name: sidebar.session_name.clone(),
+            title: "sidebar gallery".to_owned(),
+            cwd: PathBuf::from("/proj/worktree"),
+            panes: crate::mux::LayoutPanes {
+                columns: vec![
+                    vec![PaneCmd {
+                        argv: vec!["rimz".to_owned(), "sidebar".to_owned()],
+                    }],
+                    vec![PaneCmd {
+                        argv: vec!["rimz".to_owned(), "sidebar".to_owned()],
+                    }],
+                    vec![PaneCmd {
+                        argv: vec!["rimz".to_owned(), "sidebar".to_owned()],
+                    }],
+                    vec![PaneCmd {
+                        argv: vec!["rimz".to_owned(), "sidebar".to_owned()],
+                    }],
+                ],
+            },
+            focus: true,
+            dock_sidebar: false,
+            sidebar,
+        };
+        let layout = render_tab_layout(&opts, None).expect("render gallery layout");
+        assert!(!layout.contains("rimz-sidebar"), "{layout}");
+        assert!(layout.contains("compact-bar"), "{layout}");
+        assert!(
+            layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
+            "{layout}",
+        );
+        assert!(layout.contains("tab max_panes=5"), "{layout}");
+        assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
+        assert_eq!(
+            layout
+                .matches(r#"plugin location="zellij:compact-bar""#)
+                .count(),
+            5,
+            "the visible bar and all gallery swap templates carry compact-bar:\n{layout}",
         );
     }
 

@@ -3,10 +3,13 @@
 use std::collections::HashSet;
 
 use crate::ids::{MuxName, PaneId};
-use crate::mux::{MuxErr, PaneCmd, Result, SidebarPaneOptions, TabOptions, ensure_pane_backend};
+use crate::mux::{
+    MuxBackend, MuxErr, PaneCmd, PaneListOptions, Result, SidebarPaneOptions, TabOptions,
+    ensure_pane_backend,
+};
 
 use super::TmuxBackend;
-use super::options::sidebar_serve_command;
+use super::options::{is_tmux_sidebar, sidebar_serve_command};
 
 impl TmuxBackend {
     /// Close a single pane by id (`kill-pane -t %N`), terminating its process.
@@ -138,6 +141,40 @@ impl TmuxBackend {
                 "window-size".to_owned(),
             ])
             .run();
+    }
+
+    pub(super) fn remove_sidebar_from_tab(
+        &self,
+        session_name: &str,
+        window_id: &str,
+        rebalance_even: bool,
+    ) -> Result<()> {
+        let panes = <Self as MuxBackend>::list_panes(
+            self,
+            PaneListOptions {
+                session_name: Some(session_name.to_owned()),
+                ..Default::default()
+            },
+        )?
+        .panes;
+        for pane in panes
+            .iter()
+            .filter(|pane| pane.view_id.as_deref() == Some(window_id) && is_tmux_sidebar(pane))
+        {
+            self.kill_pane(&pane.pane_id)?;
+        }
+        if !rebalance_even {
+            return Ok(());
+        }
+        self.cmd()
+            .args([
+                "select-layout".to_owned(),
+                "-t".to_owned(),
+                window_id.to_owned(),
+                "even-horizontal".to_owned(),
+            ])
+            .run()
+            .map(|_| ())
     }
 
     /// The `(cols, rows)` of the widest attached client of `session` that

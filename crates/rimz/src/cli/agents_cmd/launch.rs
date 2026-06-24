@@ -131,6 +131,7 @@ pub(super) fn launch_layout(
                     cwd: cwd.clone(),
                     panes,
                     focus: !args.bg,
+                    dock_sidebar: true,
                     sidebar,
                 })
                 .map_err(Into::into),

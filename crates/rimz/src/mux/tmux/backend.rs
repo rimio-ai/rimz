@@ -673,6 +673,10 @@ impl MuxBackend for TmuxBackend {
             self.restore_window_autosize(&window_id);
         }
         split_result?;
+        if !opts.dock_sidebar {
+            let rebalance_even = opts.panes.columns.iter().all(|column| column.len() == 1);
+            self.remove_sidebar_from_tab(&opts.session_name, &window_id, rebalance_even)?;
+        }
 
         if opts.focus {
             self.cmd()

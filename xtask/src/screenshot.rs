@@ -45,6 +45,10 @@ enum SidebarScreenshotState {
     Empty,
     Fleet,
     Provider,
+    Cockpit,
+    Focus,
+    Economy,
+    Reach,
 }
 
 impl SidebarScreenshotState {
@@ -53,8 +57,14 @@ impl SidebarScreenshotState {
             "empty" => Ok(Self::Empty),
             "fleet" => Ok(Self::Fleet),
             "provider" => Ok(Self::Provider),
+            "cockpit" => Ok(Self::Cockpit),
+            "focus" => Ok(Self::Focus),
+            "economy" => Ok(Self::Economy),
+            "reach" => Ok(Self::Reach),
             other => {
-                bail!("unknown screenshot state `{other}`; expected empty, fleet, or provider")
+                bail!(
+                    "unknown screenshot state `{other}`; expected empty, fleet, provider, cockpit, focus, economy, or reach"
+                )
             }
         }
     }
@@ -64,6 +74,10 @@ impl SidebarScreenshotState {
             Self::Empty => "empty",
             Self::Fleet => "fleet",
             Self::Provider => "provider",
+            Self::Cockpit => "cockpit",
+            Self::Focus => "focus",
+            Self::Economy => "economy",
+            Self::Reach => "reach",
         }
     }
 }
@@ -148,7 +162,7 @@ fn print_screenshot_help() {
     println!("  cargo xtask screenshot live [--lines N] [--output PATH]");
     println!("  cargo xtask screenshot pane <id> [--lines N] [--output PATH]");
     println!(
-        "  cargo xtask screenshot state <empty|fleet|provider> [--width W] [--height H] [--theme-mode auto|truecolor|256] [--theme-scheme NAME] [--output PATH]"
+        "  cargo xtask screenshot state <empty|fleet|provider|cockpit|focus|economy|reach> [--width W] [--height H] [--theme-mode auto|truecolor|256] [--theme-scheme NAME] [--output PATH]"
     );
 }
 
@@ -199,7 +213,7 @@ fn print_screenshot_pane_help() {
 )]
 fn print_screenshot_state_help() {
     println!(
-        "cargo xtask screenshot state <empty|fleet|provider> [--width W] [--height H] [--theme-mode auto|truecolor|256] [--theme-scheme NAME] [--output PATH]"
+        "cargo xtask screenshot state <empty|fleet|provider|cockpit|focus|economy|reach> [--width W] [--height H] [--theme-mode auto|truecolor|256] [--theme-scheme NAME] [--output PATH]"
     );
     println!();
     println!("Render a deterministic sidebar fixture frame and write a PNG.");
@@ -228,7 +242,9 @@ fn parse_capture_screenshot_options(args: &[String]) -> Result<CaptureScreenshot
 
 fn parse_state_screenshot_options(args: &[String]) -> Result<StateScreenshotOptions> {
     let Some(state) = args.first() else {
-        bail!("screenshot state requires empty, fleet, or provider");
+        bail!(
+            "screenshot state requires empty, fleet, provider, cockpit, focus, economy, or reach"
+        );
     };
     let mut opts = StateScreenshotOptions {
         state: SidebarScreenshotState::parse(state)?,

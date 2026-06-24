@@ -404,6 +404,7 @@ pub struct TabOptions {
     pub cwd: PathBuf,
     pub panes: LayoutPanes,
     pub focus: bool,
+    pub dock_sidebar: bool,
     pub sidebar: SidebarPaneOptions,
 }
 
@@ -580,9 +581,11 @@ pub trait MuxBackend: Send + Sync {
     /// working view so a relaunch never strands the user on the daemon view. The
     /// view never gates correctness — a failure here leaves the room intact.
     fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch>;
-    /// Open one user-facing tab/window with a caller-built pane layout. The
-    /// global sidebar is included by backend convention: tmux relies on the
-    /// session's `after-new-window` hook; Zellij renders it into the tab layout.
+    /// Open one user-facing tab/window with a caller-built pane layout. Most
+    /// callers include the global sidebar by backend convention: tmux relies on
+    /// the session's `after-new-window` hook; Zellij renders it into the tab
+    /// layout. Contributor gallery tabs can opt out through
+    /// [`TabOptions::dock_sidebar`].
     fn open_tab(&self, opts: &TabOptions) -> Result<()>;
     /// Close one pane by normalized id. Used by supervised one-shot launches
     /// after their terminal result is recorded; callers treat failure as

@@ -96,10 +96,16 @@ enum SidebarSubcmd {
         #[arg(long, default_value_t = 34)]
         height: u16,
         #[arg(long)]
+        watch: bool,
+        #[arg(long)]
         theme_mode: Option<String>,
         #[arg(long)]
         theme_scheme: Option<String>,
     },
+    /// Open a live four-pane sidebar feature gallery. Hidden — contributor
+    /// visual review tool, not a user-facing sidebar verb.
+    #[command(hide = true)]
+    Gallery,
     /// Presence poke from the Zellij presence plugin: refresh the liveness
     /// stamp and wake the sidebar fleet through either an exact-cache shortcut
     /// or a producer refetch. Hidden — plugin infrastructure, not a human verb.
@@ -186,6 +192,24 @@ enum SidebarFixtureState {
     Empty,
     Fleet,
     Provider,
+    Cockpit,
+    Focus,
+    Economy,
+    Reach,
+}
+
+impl SidebarFixtureState {
+    const fn as_arg(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Fleet => "fleet",
+            Self::Provider => "provider",
+            Self::Cockpit => "cockpit",
+            Self::Focus => "focus",
+            Self::Economy => "economy",
+            Self::Reach => "reach",
+        }
+    }
 }
 
 impl SidebarArgs {
@@ -196,6 +220,7 @@ impl SidebarArgs {
             SidebarSubcmd::Serve { .. } => "sidebar serve",
             SidebarSubcmd::Render { .. } => "sidebar render",
             SidebarSubcmd::Fixture { .. } => "sidebar fixture",
+            SidebarSubcmd::Gallery => "sidebar gallery",
             SidebarSubcmd::Wake { .. } => "sidebar wake",
             SidebarSubcmd::MarkRead { .. } => "sidebar mark-read",
             SidebarSubcmd::MarkUnread { .. } => "sidebar mark-unread",
@@ -246,9 +271,11 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             state,
             width,
             height,
+            watch,
             theme_mode,
             theme_scheme,
-        } => fixture(state, width, height, theme_mode, theme_scheme),
+        } => fixture(state, width, height, watch, theme_mode, theme_scheme),
+        SidebarSubcmd::Gallery => gallery(globals),
         SidebarSubcmd::Wake {
             workspace_id,
             reason,
@@ -558,6 +585,7 @@ fn fixture(
     state: SidebarFixtureState,
     width: u16,
     height: u16,
+    watch: bool,
     theme_mode: Option<String>,
     theme_scheme: Option<String>,
 ) -> Result<()> {
@@ -568,8 +596,62 @@ fn fixture(
     if let Some(scheme) = theme_scheme {
         snapshot.theme.scheme = Some(scheme);
     }
+    if watch {
+        let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
+        return rimz::sidebar_pane::app::serve_fixture(snapshot, refresh_ms)
+            .context("serving sidebar fixture");
+    }
     rimz::sidebar_pane::render::render_fixed_line_ansi(io::stdout(), &snapshot, None, width, height)
         .context("rendering sidebar fixture")
+}
+
+fn gallery(globals: &GlobalFlags) -> Result<()> {
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .context("resolving current workspace")?;
+    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+    let backend = rimz::mux::backend_for(mux);
+    let machine_config = super::machine_config();
+    let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
+    let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
+    let detected_size = rimz::mux::detect_terminal_size();
+    let room = super::RoomTarget {
+        workspace_id: &workspace.workspace_id,
+        project_root: &workspace.project_root,
+        session_name: &workspace.session_name,
+        cwd: &workspace.worktree_root,
+        mux_config: &mux_config,
+        width,
+        detected_size,
+        refresh_ms: None,
+    };
+    let rimz_bin = rimz_cli_program().to_string_lossy().into_owned();
+    let fixture_pane = |state: SidebarFixtureState| rimz::mux::PaneCmd {
+        argv: vec![
+            rimz_bin.clone(),
+            "sidebar".to_owned(),
+            "fixture".to_owned(),
+            state.as_arg().to_owned(),
+            "--watch".to_owned(),
+        ],
+    };
+    backend
+        .open_tab(&rimz::mux::TabOptions {
+            session_name: workspace.session_name.clone(),
+            title: "sidebar gallery".to_owned(),
+            cwd: workspace.worktree_root.clone(),
+            panes: rimz::mux::LayoutPanes {
+                columns: vec![
+                    vec![fixture_pane(SidebarFixtureState::Cockpit)],
+                    vec![fixture_pane(SidebarFixtureState::Focus)],
+                    vec![fixture_pane(SidebarFixtureState::Economy)],
+                    vec![fixture_pane(SidebarFixtureState::Reach)],
+                ],
+            },
+            focus: true,
+            dock_sidebar: false,
+            sidebar: super::build_sidebar_opts(&room, Vec::new())?,
+        })
+        .context("opening sidebar gallery")
 }
 
 fn parse_fixture_theme_mode(value: &str) -> Result<rimz::config::ThemeMode> {

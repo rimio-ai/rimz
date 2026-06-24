@@ -109,6 +109,7 @@ fn open_tab_rejects_an_empty_layout() {
         cwd: PathBuf::from("/tmp/rimz-empty"),
         panes: LayoutPanes { columns },
         focus: true,
+        dock_sidebar: true,
         sidebar: sidebar.clone(),
     };
 

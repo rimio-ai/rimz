@@ -622,6 +622,7 @@ fn open_tab_unfocused_restores_attached_client_focus() {
                 }]],
             },
             focus: true,
+            dock_sidebar: true,
             sidebar: sidebar.clone(),
         })
         .expect("open focused source tab");
@@ -653,6 +654,7 @@ fn open_tab_unfocused_restores_attached_client_focus() {
                 }]],
             },
             focus: false,
+            dock_sidebar: true,
             sidebar,
         })
         .expect("open unfocused background tab");
@@ -667,6 +669,74 @@ fn open_tab_unfocused_restores_attached_client_focus() {
         focused,
         vec![source_pane],
         "unfocused open_tab must return the attached client to the source pane: {focused:?}",
+    );
+}
+
+#[test]
+fn open_tab_can_omit_sidebar_for_gallery_layout() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("gallery");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let sidebar = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-gallery")),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width: SidebarWidth::default(),
+        birth_size: SidebarWidth::default().birth_size(Some(220)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    backend.open_sidebar(&sidebar, None).expect("open_sidebar");
+    wait_for_pane_count(xdg.path(), &name, 2);
+    let _client = AttachedClient::attach(xdg.path(), &name, 220, 40);
+    wait_for_attached_client(xdg.path(), &name);
+
+    let tab_name = "sidebar gallery";
+    let work_pane = || PaneCmd {
+        argv: vec!["sleep".to_owned(), "600".to_owned()],
+    };
+    backend
+        .open_tab(&TabOptions {
+            session_name: name.clone(),
+            title: tab_name.to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![
+                    vec![work_pane()],
+                    vec![work_pane()],
+                    vec![work_pane()],
+                    vec![work_pane()],
+                ],
+            },
+            focus: true,
+            dock_sidebar: false,
+            sidebar,
+        })
+        .expect("open gallery tab");
+
+    assert_eq!(
+        wait_for_named_work_pane_count(xdg.path(), &name, tab_name, 4).len(),
+        4,
+        "gallery tab should hold four work panes",
+    );
+    assert_eq!(
+        named_sidebar_pane_geometry(xdg.path(), &name, tab_name)
+            .expect("list gallery sidebar panes")
+            .map(|pane| pane.id),
+        None,
+        "gallery tab should not carry a rimz-sidebar pane",
     );
 }
 
@@ -2620,6 +2690,7 @@ fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
                 ],
             },
             focus: true,
+            dock_sidebar: true,
             sidebar,
         })
         .expect("open tab layout");
