@@ -45,13 +45,13 @@ The lobby reads top to bottom in three zones, the way the sidebar does: the **wo
  ─────────────────────────────────────────────────────────────────────
   your pace · tokens / day                          ◇ 412M this month
         Mar        Apr        May        Jun
-        ░ ▒ █ ▓ ▒ █ █ ▓ █ ▓ ▒ ░ ▓ █ ▒ ·
-  Mon   ▒ █ ▓ ▒ █ ▓ ░ ▒ ▓ █ █ ▓ █ ▓ ▒ ░
-        █ ▓ ▒ ░ ▓ █ ▓ ▒ ▒ ░ ▒ █ ▓ █ █ ▒
-  Wed   ▓ ▒ ░ · ▒ ▓ █ ▓ ░ ▒ ▓ █ ▒ ▓ █ ▓
-        ▒ ░ · ░ █ ▓ ▒ ░ ▓ █ ▓ ▒ █ ▓ ▒ ░
-  Fri   ░ · ░ ▒ ▓ ▒ ░ · █ ▓ █ ▓ ▓ █ ▒ ·
-        · ░ ▒ ▓ ▒ ░ · ░ ▓ ▒ ░ ▒ ░ ▒ ▓ █
+        ░░▒▒██▓▓▒▒████▓▓██▓▓▒▒░░▓▓██▒▒··
+  Mon   ▒▒██▓▓▒▒██▓▓░░▒▒▓▓████▓▓██▓▓▒▒░░
+        ██▓▓▒▒░░▓▓██▓▓▒▒▒▒░░▒▒██▓▓████▒▒
+  Wed   ▓▓▒▒░░··▒▒▓▓██▓▓░░▒▒▓▓██▒▒▓▓██▓▓
+        ▒▒░░··░░██▓▓▒▒░░▓▓██▓▓▒▒██▓▓▒▒░░
+  Fri   ░░··░░▒▒▓▓▒▒░░··██▓▓██▓▓▓▓██▒▒··
+        ··░░▒▒▓▓▒▒░░··░░▓▓▒▒░░▒▒░░▒▒▓▓██
         less · ░ ▒ ▓ █ more              W 1.4B · M 5.2B · $8,666
  ─────────────────────────────────────────────────────────────────────
  ↵ enter   ␣ needs you   n new   x kill   / find   ? help       q quit
@@ -73,7 +73,7 @@ The full glyph legend is canonical in [the sidebar interface reference](../../in
 
 The pace panel is a contribution graph of your token use, account-global, the trailing weeks of days, pinned above the footer. Each cell is one day, its shade rising with the tokens that day burned — the GitHub heatmap read in the terminal, the README's "Know Your Pace" brought to the front door before you pick a room. It is the panel [`rimz stats`](#rimz-stats) renders on its own; here it sits as hero chrome above the room list.
 
-- **The cell ramp is five steps `· ░ ▒ ▓ █`,** a calm day through your heaviest. The density carries the reading and color reinforces it: truecolor tints those same five glyphs along one cool, lightness-varying ramp from the [theme pipeline](../sidebar/sidebar.md), held distinct from the status reds and greens so a busy day reads as volume, not as "good" or "wrong"; `NO_COLOR` reads the density alone, and the single-hue lightness ramp stays legible to colorblind eyes. The scale is per-graph — the busiest day in view sets `█` — so the texture reads against your own rhythm, not an absolute ceiling.
+- **The cell ramp is five steps `· ░ ▒ ▓ █`,** a calm day through your heaviest, with each day drawn as a doubled glyph cell so the graph reads as contiguous texture. The density carries the reading and color reinforces it: truecolor tints those same five glyphs along one cool, lightness-varying ramp from the [theme pipeline](../sidebar/sidebar.md), held distinct from the status reds and greens so a busy day reads as volume, not as "good" or "wrong"; `NO_COLOR` reads the density alone, and the single-hue lightness ramp stays legible to colorblind eyes. The scale is per-graph — the busiest day in view sets `█` — so the texture reads against your own rhythm, not an absolute ceiling.
 - **The figures speak the dashboard's vocabulary.** `◇` this month's tokens pins top-right, and the legend row carries the trailing-week and trailing-month token totals and the 30-day `$`, so the texture and the hard numbers sit together. `t` toggles the cell value between tokens and dollars; the legend stays and the scale re-bases.
 - **It reads like the GitHub graph.** Month labels ride the top, weekday labels (Mon/Wed/Fri) the left, the week opening on Sunday; the trailing span fits the terminal width, more weeks on a wider screen.
 
