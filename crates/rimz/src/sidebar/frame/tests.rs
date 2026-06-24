@@ -142,6 +142,92 @@ fn source_active_naming_a_non_candidate_stays_contested() {
 }
 
 #[test]
+fn settled_focus_oscillation_keeps_focus_contest_diagnostic_silent() {
+    let terminal_1 = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let source_active = BTreeMap::from([(ViewId::new_unchecked("tab_0"), terminal_1.clone())]);
+    let (settled, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), true),
+            pane("terminal_2", "tab_0", Some("cargo build"), true),
+        ],
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        source_active: source_active.clone(),
+        prior: None,
+    });
+    assert_eq!(
+        settled.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        Some("terminal_1")
+    );
+    assert!(!settled.tabs[0].focus_contested);
+    assert!(diagnostics.is_empty());
+
+    let (contested, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), true),
+            pane("terminal_2", "tab_0", Some("cargo build"), true),
+        ],
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        source_active: BTreeMap::new(),
+        prior: Some(&settled),
+    });
+    assert_eq!(
+        contested.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        Some("terminal_2")
+    );
+    assert!(contested.tabs[0].focus_contested);
+    assert!(
+        diagnostics.is_empty(),
+        "settled->contested oscillation keeps the prior active pane as a candidate"
+    );
+
+    let (settled_again, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), true),
+            pane("terminal_2", "tab_0", Some("cargo build"), true),
+        ],
+        produced_at_ms: 9,
+        observed_at_ms: 9,
+        session_name: "rimz-test".to_owned(),
+        source_active,
+        prior: Some(&contested),
+    });
+    assert_eq!(
+        settled_again.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        Some("terminal_1")
+    );
+    assert!(!settled_again.tabs[0].focus_contested);
+    assert!(diagnostics.is_empty());
+
+    let (contested_again, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), true),
+            pane("terminal_2", "tab_0", Some("cargo build"), true),
+        ],
+        produced_at_ms: 10,
+        observed_at_ms: 10,
+        session_name: "rimz-test".to_owned(),
+        source_active: BTreeMap::new(),
+        prior: Some(&settled_again),
+    });
+    assert_eq!(
+        contested_again.tabs[0]
+            .active_pane
+            .as_ref()
+            .map(PaneId::raw),
+        Some("terminal_2")
+    );
+    assert!(contested_again.tabs[0].focus_contested);
+    assert!(
+        diagnostics.is_empty(),
+        "the next settled->contested swing stays silent too"
+    );
+}
+
+#[test]
 fn steady_contest_records_once_then_re_emits_on_resolution_change() {
     // First contest with no prior: the multi-client tab is recorded.
     let (prior, diagnostics) = assemble_frame_with_diagnostics(

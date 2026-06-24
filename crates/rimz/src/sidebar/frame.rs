@@ -471,13 +471,13 @@ fn resolve_tab_focus(
                 } else {
                     tab.focus_contested = true;
                     let resolved = resolve_contested_focus(tab, &candidates, prior);
-                    // A multi-client tab or a floating overlay leaves several
-                    // panes marked focused every frame, and the contest resolves
-                    // to the same pane each time. Record it as a transition — a
-                    // newly contested view or a changed resolution — so the
-                    // anomaly log stays a log of focus shifts instead of a
-                    // per-frame repeat that buries them.
-                    if focus_contest_is_transition(prior, &tab.view_id, &resolved) {
+                    // A multi-client tab or a floating overlay can leave several
+                    // panes marked focused while the mux's active-pane signal
+                    // flaps between naming one candidate and omitting the tab.
+                    // Record only when the prior active pane drops out of the
+                    // current candidate set, so settled->contested oscillation
+                    // stays silent and real focus shifts still surface.
+                    if focus_contest_is_transition(prior, &tab.view_id, &candidates) {
                         diagnostics.push(DiagEvent::FocusContested {
                             view_id: tab.view_id.clone(),
                             candidates,
@@ -491,22 +491,27 @@ fn resolve_tab_focus(
     }
 }
 
-/// Whether a contested-focus resolution is a transition worth recording: the
-/// prior frame did not already resolve this view's contest to the same active
-/// pane. A steady multi-client or floating-overlay contest resolves to the same
-/// pane every frame, so recording only the transition keeps the diagnostic a
-/// signal of focus shifts rather than per-frame noise.
+/// Whether a contested-focus resolution is a new focus shift worth recording.
+/// A multi-client tab or floating overlay leaves several panes marked focused
+/// while the mux's active-pane signal flaps between naming one of them
+/// (settled) and omitting it (contested), so the view oscillates
+/// settled->contested every few frames while the same pane stays focused
+/// throughout. Keying the record on the prior frame's active pane still being
+/// among the current candidates folds that whole oscillation into silence: a
+/// record fires only when focus has genuinely moved off the previously active
+/// pane (it is no longer a candidate), or when there is no prior frame.
 fn focus_contest_is_transition(
     prior: Option<&PaneFrame>,
     view_id: &ViewId,
-    resolved: &PaneId,
+    candidates: &[PaneId],
 ) -> bool {
-    let Some(prior_tab) =
-        prior.and_then(|frame| frame.tabs.iter().find(|tab| tab.view_id == *view_id))
+    let Some(prior_active) = prior
+        .and_then(|frame| frame.tabs.iter().find(|tab| tab.view_id == *view_id))
+        .and_then(|tab| tab.active_pane.as_ref())
     else {
         return true;
     };
-    !(prior_tab.focus_contested && prior_tab.active_pane.as_ref() == Some(resolved))
+    !candidates.contains(prior_active)
 }
 
 fn resolve_contested_focus(
