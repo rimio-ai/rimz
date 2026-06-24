@@ -3,13 +3,10 @@
 use std::collections::HashSet;
 
 use crate::ids::{MuxName, PaneId};
-use crate::mux::{
-    MuxBackend, MuxErr, PaneCmd, PaneListOptions, Result, SidebarPaneOptions, TabOptions,
-    ensure_pane_backend,
-};
+use crate::mux::{MuxErr, PaneCmd, Result, SidebarPaneOptions, TabOptions, ensure_pane_backend};
 
 use super::TmuxBackend;
-use super::options::{is_tmux_sidebar, sidebar_serve_command};
+use super::options::sidebar_serve_command;
 
 impl TmuxBackend {
     /// Close a single pane by id (`kill-pane -t %N`), terminating its process.
@@ -145,23 +142,12 @@ impl TmuxBackend {
 
     pub(super) fn remove_sidebar_from_tab(
         &self,
-        session_name: &str,
         window_id: &str,
+        first_pane: &str,
         rebalance_even: bool,
     ) -> Result<()> {
-        let panes = <Self as MuxBackend>::list_panes(
-            self,
-            PaneListOptions {
-                session_name: Some(session_name.to_owned()),
-                ..Default::default()
-            },
-        )?
-        .panes;
-        for pane in panes
-            .iter()
-            .filter(|pane| pane.view_id.as_deref() == Some(window_id) && is_tmux_sidebar(pane))
-        {
-            self.kill_pane(&pane.pane_id)?;
+        if let Some(sidebar_pane) = self.pane_left_of_first_work(window_id, first_pane) {
+            self.kill_pane(&PaneId::from_parts(MuxName::Tmux, sidebar_pane))?;
         }
         if !rebalance_even {
             return Ok(());
@@ -175,6 +161,37 @@ impl TmuxBackend {
             ])
             .run()
             .map(|_| ())
+    }
+
+    /// The hook-docked sidebar is born before the first work pane. Use geometry
+    /// instead of the sidebar title, which the renderer sets asynchronously.
+    fn pane_left_of_first_work(&self, window_id: &str, first_pane: &str) -> Option<String> {
+        let output = self
+            .cmd()
+            .args([
+                "list-panes",
+                "-t",
+                window_id,
+                "-F",
+                "#{pane_id}\t#{pane_left}",
+            ])
+            .run()
+            .ok()?;
+        let mut first_left = None;
+        let mut leftmost: Option<(u64, String)> = None;
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let (pane_id, left) = line.split_once('\t')?;
+            let left: u64 = left.parse().ok()?;
+            if pane_id == first_pane {
+                first_left = Some(left);
+            }
+            if leftmost.as_ref().is_none_or(|(min, _)| left < *min) {
+                leftmost = Some((left, pane_id.to_owned()));
+            }
+        }
+        let first_left = first_left?;
+        let (left, pane_id) = leftmost?;
+        (left < first_left).then_some(pane_id)
     }
 
     /// The `(cols, rows)` of the widest attached client of `session` that

@@ -643,7 +643,7 @@ impl MuxBackend for TmuxBackend {
 
         let split_result = (|| {
             let mut column_anchors = vec![first_pane.clone()];
-            let mut previous_in_column = first_pane;
+            let mut previous_in_column = first_pane.clone();
             for pane in first_column_rest {
                 previous_in_column = self.split_tab_pane(opts, "-v", &previous_in_column, pane)?;
             }
@@ -675,7 +675,7 @@ impl MuxBackend for TmuxBackend {
         split_result?;
         if !opts.dock_sidebar {
             let rebalance_even = opts.panes.columns.iter().all(|column| column.len() == 1);
-            self.remove_sidebar_from_tab(&opts.session_name, &window_id, rebalance_even)?;
+            self.remove_sidebar_from_tab(&window_id, &first_pane, rebalance_even)?;
         }
 
         if opts.focus {

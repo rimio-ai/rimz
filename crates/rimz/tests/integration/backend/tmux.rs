@@ -1513,7 +1513,8 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
             truecolor: false,
         })
         .expect("ensure_session");
-    let (_stub_dir, stub) = sidebar_command_stub();
+    // Dock suppression must not depend on the renderer's async title escape.
+    let (_stub_dir, stub) = delayed_sidebar_title_command_stub();
     let sidebar = SidebarPaneOptions {
         session_name: "rimz-gallery".to_owned(),
         workspace_id: WorkspaceId::from_project_root(cwd.path()),
@@ -2063,13 +2064,17 @@ fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
 }
 
 fn sidebar_command_stub() -> (TempDir, PathBuf) {
+    sidebar_command_stub_with_script("#!/bin/sh\nprintf '\\033]2;rimz-sidebar\\007'\nsleep 600\n")
+}
+
+fn delayed_sidebar_title_command_stub() -> (TempDir, PathBuf) {
+    sidebar_command_stub_with_script("#!/bin/sh\nsleep 600\nprintf '\\033]2;rimz-sidebar\\007'\n")
+}
+
+fn sidebar_command_stub_with_script(script: &str) -> (TempDir, PathBuf) {
     let dir = TempDir::new().expect("stub dir");
     let path = dir.path().join("rimz-stub");
-    std::fs::write(
-        &path,
-        "#!/bin/sh\nprintf '\\033]2;rimz-sidebar\\007'\nsleep 600\n",
-    )
-    .expect("write stub");
+    std::fs::write(&path, script).expect("write stub");
     chmod_executable(&path);
     (dir, path)
 }
