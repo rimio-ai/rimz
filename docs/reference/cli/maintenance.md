@@ -37,7 +37,7 @@ rimz list-themes [--json]
 rimz list-pets [--json]
 ```
 
-`list-pets` previews each bundled provider-dashboard pet as a medium cell-art sprite in a width-fitted grid on a terminal, streaming rows as sprites load, fetching and caching the built-in sheets, and honoring `RIMZ_PETS_OFFLINE`. Off a terminal it prints pet ids one per line, and `--json` emits the id array.
+`list-pets` previews each bundled provider-dashboard pet and each pet installed under `~/.codex/pets/` as a medium cell-art sprite in a width-fitted grid on a terminal, streaming rows as sprites load, fetching and caching the built-in sheets, and honoring `RIMZ_PETS_OFFLINE`. Installed pets are labeled by selectable slug. Off a terminal it prints pet ids one per line, and `--json` emits the id array with installed slugs after the built-ins.
 
 ## Workspace ledger tools
 

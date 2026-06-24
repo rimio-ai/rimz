@@ -334,7 +334,7 @@ pet = "rocky"
 size = "medium"
 ```
 
-An opt-in animated companion in the provider dashboard. `rocky` is the default pet; run `rimz list-pets` to preview the built-ins. `pet` selects a source in priority order: a built-in catalog id (`codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, `null-signal`); an `https://` URL to your own WebP spritesheet; a path-like value (containing `/`, `.`, or a leading `~`) for a local sheet or petdex directory; or a bare slug for a petdex pet under `~/.codex/pets/<slug>/`. `size`, `glyphs`, and `voice` tune the footprint, cell-art tier, and caption line. A built-in or URL sheet is fetched once into the per-machine cache (`RIMZ_PETS_OFFLINE=1` uses the cache only); pets run no commands and stay outside the trust hash. The geometry and cache contracts are in [pets.md](../internals/sidebar/pets.md).
+An opt-in animated companion in the provider dashboard. `rocky` is the default pet; run `rimz list-pets` to preview the built-ins and any pets installed under `~/.codex/pets/`. `pet` selects a source in priority order: a built-in catalog id (`codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, `null-signal`); an `https://` URL to your own WebP spritesheet; a path-like value (containing `/`, `.`, or a leading `~`) for a local sheet or petdex directory; or a bare slug for a petdex pet under `~/.codex/pets/<slug>/`. `size`, `glyphs`, and `voice` tune the footprint, cell-art tier, and caption line. A built-in or URL sheet is fetched once into the per-machine cache (`RIMZ_PETS_OFFLINE=1` uses the cache only); pets run no commands and stay outside the trust hash. The geometry and cache contracts are in [pets.md](../internals/sidebar/pets.md).
 
 ### Sidebar Bands
 

@@ -217,6 +217,25 @@ fn petdex_root_from(home: Option<PathBuf>) -> Option<PathBuf> {
         .map(|home| home.join(".codex").join("pets"))
 }
 
+pub(crate) fn installed_petdex_pets() -> Vec<String> {
+    petdex_root()
+        .map(|root| installed_petdex_pets_in(&root))
+        .unwrap_or_default()
+}
+
+fn installed_petdex_pets_in(root: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut pets = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("pet.json").is_file())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect::<Vec<_>>();
+    pets.sort();
+    pets
+}
+
 /// Reject a non-HTTPS pet URL with a clear message rather than a fetch failure;
 /// remote sheets travel over TLS only, matching the built-in CDN.
 fn require_https(url: &str) -> Result<(), AssetErr> {
@@ -459,6 +478,26 @@ mod tests {
             None,
             "empty HOME is no root"
         );
+    }
+
+    #[test]
+    fn installed_petdex_pets_lists_manifest_dirs_sorted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("b")).expect("mkdir b");
+        std::fs::create_dir_all(dir.path().join("a")).expect("mkdir a");
+        std::fs::create_dir_all(dir.path().join("no-manifest")).expect("mkdir no manifest");
+        std::fs::write(dir.path().join("a/pet.json"), "{}").expect("write a manifest");
+        std::fs::write(dir.path().join("b/pet.json"), "{}").expect("write b manifest");
+        std::fs::write(dir.path().join("stray"), "not a pet").expect("write stray file");
+
+        assert_eq!(installed_petdex_pets_in(dir.path()), ["a", "b"]);
+    }
+
+    #[test]
+    fn installed_petdex_pets_missing_root_is_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        assert!(installed_petdex_pets_in(&dir.path().join("missing")).is_empty());
     }
 
     #[test]

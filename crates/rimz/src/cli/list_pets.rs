@@ -1,4 +1,4 @@
-//! `rimz list-pets` - print or preview the bundled provider-dashboard pets.
+//! `rimz list-pets` - print or preview bundled and installed provider-dashboard pets.
 
 use std::io::{IsTerminal, Write};
 
@@ -21,8 +21,8 @@ pub struct ListPetsArgs {
 }
 
 pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
-    let ids = pets::builtin_ids().collect::<Vec<_>>();
     if args.json {
+        let ids = pets::listable_ids();
         let rendered = serde_json::to_string_pretty(&ids).expect("pet id vec serializes");
         #[expect(clippy::print_stdout, reason = "json emitter")]
         {
@@ -34,7 +34,7 @@ pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
     let is_tty = std::io::stdout().is_terminal();
     let mut out = render::out();
     if !is_tty {
-        for id in ids {
+        for id in pets::listable_ids() {
             writeln!(out, "{id}")?;
         }
         return Ok(());
@@ -94,7 +94,7 @@ fn write_pet_row(out: &mut impl Write, chunk: &[PetPreview]) -> std::io::Result<
         if index > 0 {
             write!(out, "{:gap$}", "", gap = usize::from(GAP))?;
         }
-        let centered = center(preview.id, usize::from(PREVIEW_COLS));
+        let centered = center(&preview.id, usize::from(PREVIEW_COLS));
         write!(
             out,
             "{}",
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn sprite_row_pads_short_or_failed_grid() {
         let short = PetPreview {
-            id: "codex",
+            id: "codex".to_owned(),
             grid: Ok(vec![vec![PreviewCell {
                 ch: 'x',
                 fg: Some((1, 2, 3)),
@@ -176,7 +176,7 @@ mod tests {
             }]]),
         };
         let failed = PetPreview {
-            id: "codex",
+            id: "codex".to_owned(),
             grid: Err("unavailable".to_owned()),
         };
 

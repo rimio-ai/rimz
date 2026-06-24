@@ -22,7 +22,7 @@ use crate::config::{PetsConfig, PetsGlyphMode};
 pub(crate) use cellart::PetCell;
 pub(crate) use cellart::PetCellGrid;
 pub(crate) use model::PetAction;
-pub use preview::{PetPreview, PreviewCell, builtin_ids, load_previews};
+pub use preview::{PetPreview, PreviewCell, listable_ids, load_previews};
 
 use asset::PetSource;
 use frames::RgbaImage;

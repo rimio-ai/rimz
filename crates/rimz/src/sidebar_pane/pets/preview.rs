@@ -4,7 +4,7 @@ use ratatui::style::Color;
 
 use crate::config::PetsGlyphMode;
 
-use super::asset::PetSource;
+use super::asset::{self, PetSource};
 use super::catalog::BUILTIN_PETS;
 use super::cellart::{self, PetCell};
 use super::frames::RgbaImage;
@@ -19,12 +19,27 @@ pub struct PreviewCell {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PetPreview {
-    pub id: &'static str,
+    pub id: String,
     pub grid: Result<Vec<Vec<PreviewCell>>, String>,
 }
 
-pub fn builtin_ids() -> impl Iterator<Item = &'static str> {
-    BUILTIN_PETS.iter().map(|pet| pet.id)
+fn listable_sources() -> Vec<(String, PetSource)> {
+    let mut sources = BUILTIN_PETS
+        .iter()
+        .map(|pet| (pet.id.to_owned(), PetSource::Builtin(*pet)))
+        .collect::<Vec<_>>();
+    sources.extend(asset::installed_petdex_pets().into_iter().map(|slug| {
+        let id = slug.clone();
+        (id, PetSource::Petdex(slug))
+    }));
+    sources
+}
+
+pub fn listable_ids() -> Vec<String> {
+    listable_sources()
+        .into_iter()
+        .map(|(id, _source)| id)
+        .collect()
 }
 
 pub fn load_previews(
@@ -32,23 +47,24 @@ pub fn load_previews(
     rows: u16,
     glyphs: PetsGlyphMode,
 ) -> impl Iterator<Item = PetPreview> {
-    let handles = BUILTIN_PETS
+    let sources = listable_sources();
+    let handles = sources
         .iter()
-        .map(|pet| {
-            let pet = *pet;
+        .map(|(_id, source)| {
+            let source = source.clone();
             thread::spawn(move || {
-                super::load_pet(PetSource::Builtin(pet))
+                super::load_pet(source)
                     .map_err(|err| err.to_string())
                     .map(|frames| render_sprite(&frames, cols, rows, glyphs))
             })
         })
         .collect::<Vec<_>>();
 
-    BUILTIN_PETS
-        .iter()
+    sources
+        .into_iter()
         .zip(handles)
-        .map(|(pet, handle)| PetPreview {
-            id: pet.id,
+        .map(|((id, _source), handle)| PetPreview {
+            id,
             grid: handle
                 .join()
                 .unwrap_or_else(|_| Err("pet preview loader stopped".to_owned())),
@@ -96,8 +112,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_ids_exposes_catalog() {
-        assert_eq!(builtin_ids().count(), 8);
+    fn listable_ids_exposes_catalog_first() {
+        let ids = listable_ids();
+        assert_eq!(
+            ids.iter()
+                .take(BUILTIN_PETS.len())
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "codex",
+                "dewey",
+                "fireball",
+                "rocky",
+                "seedy",
+                "stacky",
+                "bsod",
+                "null-signal",
+            ]
+        );
     }
 
     #[test]
