@@ -14,6 +14,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_HOME: /usr/local/cargo
+  RUSTUP_HOME: /usr/local/rustup
   CARGO_TARGET_DIR: target/ci
   # `-D warnings` is the deny-warnings gate.
   RUSTFLAGS: -D warnings
@@ -24,20 +26,26 @@ jobs:
     name: cargo xtask ci
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Debian trixie keeps apt tmux at 3.5a (the live-mux floor is
-    # MIN_TMUX_VERSION = 3.5.0). The node image also supplies Node for the JS
-    # actions that run inside the job container.
+    # The rimz-ci image keeps the no-persistence job container model while
+    # starting warm: Rust, cargo plugins, cargo-vet, tmux, Zellij, mold, and the
+    # release toolchain are baked once by ci-image.yml. The workspace path stays
+    # stable for rust-cache, concurrent jobs stay isolated, and every run skips
+    # per-job toolchain bootstrap. The private Gitea package pulls with a
+    # dedicated read:package PAT.
     container:
-      image: node:24-trixie
+      image: ${{ vars.RIMZ_CI_IMAGE }}
+      credentials:
+        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
+        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
     steps:
-      - uses: actions/checkout@v6
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            exit 1
+          }
 
-      # `rust-toolchain.toml` pins the channel + components; this action
-      # respects it.
-      - name: Install Rust toolchain (from rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy, llvm-tools-preview
+      - uses: actions/checkout@v6
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
@@ -47,107 +55,13 @@ jobs:
           cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # Prebuilt binaries — avoids compiling five plugins from source on every
-      # cache miss.
-      - name: Install cargo plugins
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest,cargo-deny,cargo-machete,cargo-llvm-cov,cargo-semver-checks
-
-      # cargo-vet 0.10.1+ adds Trusted Publishing support, and the imported
-      # audits now carry `trusted-publisher` entries that 0.10.0 cannot parse.
-      # Upstream ships no prebuilt binary past 0.10.0, so build the pinned
-      # crates.io release (cached) to keep CI and contributors on one version.
-      - name: Cache cargo-vet
-        uses: actions/cache@v5
-        with:
-          path: ~/.cargo/bin/cargo-vet
-          key: cargo-vet-0.10.2-linux-amd64
-      - name: Install cargo-vet (pinned 0.10.2)
-        run: |
-          set -euo pipefail
-          if cargo vet --version 2>/dev/null | grep -qx 'cargo-vet 0.10.2'; then
-            echo 'cargo-vet 0.10.2 already installed'
-          else
-            cargo install --locked cargo-vet@0.10.2
-          fi
-
-      - name: Install tmux
-        run: |
-          if ! command -v tmux >/dev/null 2>&1; then
-            if ! command -v apt-get >/dev/null 2>&1 || ! command -v dpkg-deb >/dev/null 2>&1; then
-              echo "::error::tmux is missing and this runner cannot extract the Debian package fallback"
-              exit 1
-            fi
-            tmux_root="$RUNNER_TEMP/tmux-root"
-            tmux_apt="$RUNNER_TEMP/tmux-apt"
-            mkdir -p \
-              "$tmux_root" \
-              "$tmux_apt/state/lists/partial" \
-              "$tmux_apt/cache/archives/partial" \
-              "$tmux_apt/dpkg"
-            touch "$tmux_apt/dpkg/status"
-            apt-get \
-              -o Dir::State="$tmux_apt/state" \
-              -o Dir::Cache="$tmux_apt/cache" \
-              -o Dir::State::status="$tmux_apt/dpkg/status" \
-              update
-            apt-get \
-              --yes \
-              --download-only \
-              -o Dir::State="$tmux_apt/state" \
-              -o Dir::Cache="$tmux_apt/cache" \
-              -o Dir::State::status="$tmux_apt/dpkg/status" \
-              install tmux
-            for deb in "$tmux_apt"/cache/archives/*.deb; do
-              dpkg-deb -x "$deb" "$tmux_root"
-            done
-            loader="$(find "$tmux_root" -name ld-linux-x86-64.so.2 -print -quit)"
-            if [ -z "$loader" ] || [ ! -x "$tmux_root/usr/bin/tmux" ]; then
-              echo "::error::tmux package fallback did not produce an executable tmux"
-              exit 1
-            fi
-            lib_path="$tmux_root/usr/lib/x86_64-linux-gnu:$tmux_root/lib/x86_64-linux-gnu"
-            mkdir -p "$RUNNER_TEMP/bin"
-            {
-              printf '%s\n' '#!/bin/sh'
-              printf 'exec "%s" --library-path "%s" "%s" "$@"\n' "$loader" "$lib_path" "$tmux_root/usr/bin/tmux"
-            } > "$RUNNER_TEMP/bin/tmux"
-            chmod +x "$RUNNER_TEMP/bin/tmux"
-            export PATH="$RUNNER_TEMP/bin:$PATH"
-            echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-          fi
-          # debian-13 ships tmux 3.5a (≥ MIN_TMUX_VERSION); fail loudly if a
-          # runner image is older so the live suite never silently degrades.
-          tmux -V
-
-      - name: Install Zellij
-        env:
-          ZELLIJ_VERSION: 0.44.3
-        run: |
-          mkdir -p "$RUNNER_TEMP/bin"
-          curl -fL --retry 5 --retry-delay 2 --retry-all-errors "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/bin/zellij" --version
-
-      - name: Install mold
-        env:
-          MOLD_VERSION: 2.41.0
-        run: |
-          mold_dir="$RUNNER_TEMP/mold"
-          mkdir -p "$mold_dir"
-          curl -fL --retry 5 --retry-delay 2 --retry-all-errors "https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz" \
-            | tar -xz -C "$mold_dir" --strip-components=1
-          echo "$mold_dir/bin" >> "$GITHUB_PATH"
-          "$mold_dir/bin/mold" --version
-
       - name: cargo xtask ci
         # Cap nextest to half the cores so overlapping GitHub jobs leave the
         # latency-sensitive live-mux tests enough CPU for their CLI round-trips.
         # The per-run server cap in .config/nextest.toml bounds server count,
         # not CPU.
         run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           NEXTEST_TEST_THREADS="$(( ($(nproc) + 1) / 2 ))"
           export NEXTEST_TEST_THREADS
           echo "Capping nextest to $NEXTEST_TEST_THREADS of $(nproc) cores for live-mux headroom"

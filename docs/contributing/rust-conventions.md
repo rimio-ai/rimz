@@ -215,9 +215,15 @@ Rules:
 
 ### Toolchain
 
-The stable channel is pinned in `rust-toolchain.toml`. No Cargo.toml carries `rust-version`. Required components: `rustfmt`, `clippy`, `llvm-tools-preview`. Required targets: `wasm32-wasip1` (the Zellij presence plugin; rustup and the CI toolchain action provision it from the same file).
+The stable channel is pinned in `rust-toolchain.toml`. No Cargo.toml carries `rust-version`. Required components: `rustfmt`, `clippy`, `llvm-tools-preview`. Required targets: `wasm32-wasip1` (the Zellij presence plugin; rustup provisions it for contributors, and `ci/Dockerfile` mirrors the list for CI).
 
-Repo-local Cargo config stays installation-safe: `.cargo/config.toml` defines only the `xtask` alias, so source installs use each host's platform linker. CI installs `mold` on Linux and runs `cargo xtask ci` through `mold -run`; contributors may opt into mold in their user Cargo config for faster local relinks. mold replaces the default bfd linker on the link-heavy integration-test binary, which relinks on every incremental change; it is a build-time tool only — no runtime or transitive footprint — and is the SOTA Unix linker.
+Repo-local Cargo config stays installation-safe: `.cargo/config.toml` defines only the `xtask` alias, so source installs use each host's platform linker. CI provides `mold` on Linux through the `rimz-ci` image and runs `cargo xtask ci` through `mold -run`; contributors may opt into mold in their user Cargo config for faster local relinks. mold replaces the default bfd linker on the link-heavy integration-test binary, which relinks on every incremental change; it is a build-time tool only — no runtime or transitive footprint — and is the SOTA Unix linker.
+
+### CI image
+
+The `rimz-ci` image bakes Node for Actions, the Rust stable toolchain with required components and targets, cargo gate plugins, `cargo-vet`, tmux, Zellij, mold, Python, `cargo-zigbuild`, Zig, `rcodesign`, and `gh`. Tool versions live in `ci/Dockerfile`, which is the single source of truth for containerized CI and release jobs.
+
+Refresh the image by editing `ci/Dockerfile`, then pushing that change to `main` or dispatching `.github/workflows/ci-image.yml`. The workflow builds and pushes a new immutable `rimz-ci:<tag>` image to the Gitea container registry, then repoints the repository variable `RIMZ_CI_IMAGE`; consuming workflows read only that variable.
 
 Release packaging uses extra host tools. `cargo xtask dist` packages the non-Darwin host release binary and builds packaged macOS archives for both Apple targets through `cargo-zigbuild`, so release maintainers keep `cargo-zigbuild` and `zig` on `PATH`. Install `cargo-zigbuild` with Cargo and install Zig from the host package manager or Zig's official bundle:
 
@@ -249,7 +255,7 @@ Every gate runs in CI with warnings treated as errors. Local equivalents are `ca
 - `cargo deny check` — licence, advisory, and ban check.
 - `cargo machete` — unused dependency check.
 - `cargo vet` — supply-chain audit.
-- `cargo llvm-cov nextest --workspace --all-features --locked` — coverage. This *is* the suite run inside `ci`: the tests run once, under instrumentation, instead of building and running a second uninstrumented pass. CI installs tmux and Zellij before this gate, so the same pass exercises live backend tests under nextest's live groups.
+- `cargo llvm-cov nextest --workspace --all-features --locked` — coverage. This *is* the suite run inside `ci`: the tests run once, under instrumentation, instead of building and running a second uninstrumented pass. The `rimz-ci` image provides tmux and Zellij before this gate, so the same pass exercises live backend tests under nextest's live groups.
 - `cargo semver-checks` — release-time API check; skipped while the workspace version is the unpublished pre-release `0.0.0`.
 - `cargo xtask perf` — non-gating divan benchmarks for the measured performance model; accepts cargo bench filters such as `cargo xtask perf fleet`.
 

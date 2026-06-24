@@ -20,55 +20,45 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_HOME: /usr/local/cargo
+  RUSTUP_HOME: /usr/local/rustup
   CARGO_TARGET_DIR: target/release-ci
   RUSTFLAGS: -D warnings
   RUST_BACKTRACE: 1
-  ZIG_VERSION: 0.16.0
-  ZIG_X86_64_LINUX_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
-  # Keep these off the `RCODESIGN_` prefix: rcodesign maps every
-  # `RCODESIGN_*` env var onto a config setting, so `RCODESIGN_VERSION`
-  # would reach `rcodesign sign` as an unknown `version` key and abort.
-  APPLE_CODESIGN_VERSION: 0.29.0
-  APPLE_CODESIGN_X86_64_LINUX_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
 
 jobs:
   release:
     name: build and publish dist archives
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
-    # Run inside a Debian 13 container for the same reason as CI: host-mode
-    # act_runner randomizes $GITHUB_WORKSPACE every run, which churns the
-    # rust-cache @actions/cache version (it caches `<workspace>/target/release-ci`
-    # and hashes the path) so restores never hit. A job container pins the
-    # workspace path and isolates the filesystem, exactly as on GitHub. Debian 13
-    # keeps apt tmux at 3.5a for the self-gate suite (MIN_TMUX_VERSION = 3.5.0),
-    # and the image ships Node for the JS actions.
+    # The rimz-ci image keeps the release container on the same warm baseline as
+    # CI: Rust, gate plugins, cargo-vet, Python, tmux, Zellij, mold, zig,
+    # cargo-zigbuild, rcodesign, and gh are baked once by ci-image.yml.
+    # rust-cache still restores target/release-ci, but release jobs no longer
+    # spend minutes reinstalling toolchains before the gate and dist build. The
+    # private Gitea package pulls with a dedicated read:package PAT.
     container:
-      image: node:24-trixie
+      image: ${{ vars.RIMZ_CI_IMAGE }}
+      credentials:
+        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
+        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
     # A `workflow_run` fires for every CI conclusion; gate on success so only a
     # green default-branch build publishes. Tag pushes and manual dispatches run
     # the gate themselves (the `cargo xtask ci` step below) before publishing.
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            exit 1
+          }
+
       - uses: actions/checkout@v6
         with:
           # Build the exact commit CI validated; for tags/dispatch this is the
           # event's own ref.
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-
-      # The publish steps shape JSON payloads with Python. The host runner
-      # carried it; the container image may not, so provision it for every path
-      # (rolling and tag) before publishing.
-      - name: Ensure Python (release publish)
-        run: |
-          set -euo pipefail
-          if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
-            apt-get update
-            apt-get install -y --no-install-recommends python3
-          fi
-
-      - name: Install Rust toolchain (from rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@stable
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
@@ -77,130 +67,18 @@ jobs:
           prefix-key: "rimz-release"
           cache-bin: false
 
-      # The CI gate compiles and tests through `cargo xtask ci`, which needs the
-      # full plugin set. The `workflow_run` path skips the gate (CI already
-      # passed), so it skips these too — it only builds dist artifacts.
-      - name: Install CI gate plugins
-        if: ${{ github.event_name != 'workflow_run' }}
-        env:
-          INPUT_TOOL: cargo-nextest,cargo-deny,cargo-machete,cargo-llvm-cov,cargo-semver-checks
-        run: |
-          set -euo pipefail
-          install_action_dir="$(mktemp -d)"
-          trap 'rm -rf "$install_action_dir"' EXIT
-          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
-          env \
-            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
-            DEFAULT_GITHUB_TOKEN= \
-            GH_TOKEN= \
-            GITHUB_ACTION_PATH="$install_action_dir" \
-            GITHUB_TOKEN= \
-            INPUT_CHECKSUM=true \
-            INPUT_FALLBACK=cargo-binstall \
-            RUNNER_ARCH=X64 \
-            RUNNER_OS=Linux \
-            bash --noprofile --norc "$install_action_dir/main.sh"
-
-      # cargo-vet 0.10.1+ adds Trusted Publishing support, and the imported
-      # audits now carry `trusted-publisher` entries that 0.10.0 cannot parse.
-      # Upstream ships no prebuilt binary past 0.10.0, so build the pinned
-      # crates.io release (cached) to keep CI and contributors on one version.
-      - name: Cache cargo-vet
-        if: ${{ github.event_name != 'workflow_run' }}
-        uses: actions/cache@v5
-        with:
-          path: ~/.cargo/bin/cargo-vet
-          key: cargo-vet-0.10.2-linux-amd64
-      - name: Install cargo-vet (pinned 0.10.2)
-        if: ${{ github.event_name != 'workflow_run' }}
-        run: |
-          set -euo pipefail
-          if cargo vet --version 2>/dev/null | grep -qx 'cargo-vet 0.10.2'; then
-            echo 'cargo-vet 0.10.2 already installed'
-          else
-            cargo install --locked cargo-vet@0.10.2
-          fi
-
-      - name: Install release packaging tools
-        env:
-          INPUT_TOOL: cargo-zigbuild
-        run: |
-          set -euo pipefail
-          install_action_dir="$(mktemp -d)"
-          trap 'rm -rf "$install_action_dir"' EXIT
-          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
-          env \
-            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
-            DEFAULT_GITHUB_TOKEN= \
-            GH_TOKEN= \
-            GITHUB_ACTION_PATH="$install_action_dir" \
-            GITHUB_TOKEN= \
-            INPUT_CHECKSUM=true \
-            INPUT_FALLBACK=cargo-binstall \
-            RUNNER_ARCH=X64 \
-            RUNNER_OS=Linux \
-            bash --noprofile --norc "$install_action_dir/main.sh"
-
-          zig_archive="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
-          zig_archive_path="${RUNNER_TEMP:-/tmp}/${zig_archive}"
-          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors "https://ziglang.org/download/${ZIG_VERSION}/${zig_archive}" -o "$zig_archive_path"
-          printf '%s  %s\n' "$ZIG_X86_64_LINUX_SHA256" "$zig_archive_path" | sha256sum -c -
-          zig_dir="${RUNNER_TEMP:-/tmp}/zig-${ZIG_VERSION}"
-          rm -rf "$zig_dir"
-          mkdir -p "$zig_dir"
-          tar -xJf "$zig_archive_path" -C "$zig_dir" --strip-components=1
-          echo "$zig_dir" >> "$GITHUB_PATH"
-          "$zig_dir/zig" version
-          cargo zigbuild --help >/dev/null
-
-          # rcodesign ad-hoc signs the cross-built Apple Silicon binary so it
-          # will exec on arm64. apple-codesign ships no cargo-binstall metadata
-          # and tags releases as `apple-codesign/<ver>`, so a pinned checksummed
-          # release download is deterministic where binstall is not.
-          rcodesign_archive="apple-codesign-${APPLE_CODESIGN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
-          rcodesign_archive_path="${RUNNER_TEMP:-/tmp}/${rcodesign_archive}"
-          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F${APPLE_CODESIGN_VERSION}/${rcodesign_archive}" -o "$rcodesign_archive_path"
-          printf '%s  %s\n' "$APPLE_CODESIGN_X86_64_LINUX_SHA256" "$rcodesign_archive_path" | sha256sum -c -
-          rcodesign_dir="${RUNNER_TEMP:-/tmp}/rcodesign-${APPLE_CODESIGN_VERSION}"
-          rm -rf "$rcodesign_dir"
-          mkdir -p "$rcodesign_dir"
-          tar -xzf "$rcodesign_archive_path" -C "$rcodesign_dir" --strip-components=1
-          echo "$rcodesign_dir" >> "$GITHUB_PATH"
-          "$rcodesign_dir/rcodesign" --version
-
-      # The self-gate runs the live tmux/zellij suite. The host runner carried
-      # both binaries; the container provisions them. Debian 13's apt tmux is
-      # 3.5a (≥ MIN_TMUX_VERSION 3.5.0). Only the self-gate path (tags / manual
-      # dispatch) runs the suite — the workflow_run path already passed CI and
-      # only builds dist artifacts, so it skips these.
-      - name: Install tmux (CI gate)
-        if: ${{ github.event_name != 'workflow_run' }}
-        run: |
-          set -euo pipefail
-          apt-get update
-          apt-get install -y --no-install-recommends tmux
-          tmux -V
-
-      - name: Install Zellij (CI gate)
-        if: ${{ github.event_name != 'workflow_run' }}
-        env:
-          ZELLIJ_VERSION: 0.44.3
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/bin"
-          curl -fL --retry 5 --retry-delay 2 --retry-all-errors "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/bin/zellij" --version
-
       # Self-gate: tag and manual-dispatch releases re-run the full gate on the
       # release commit. The `workflow_run` path already passed CI, so it skips.
       - name: Gate on CI
         if: ${{ github.event_name != 'workflow_run' }}
-        run: cargo xtask ci
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          cargo xtask ci
 
       - name: Build distribution archives
-        run: cargo xtask dist
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          cargo xtask dist
 
       - name: Resolve release identity
         shell: bash
@@ -350,6 +228,7 @@ jobs:
           TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
         shell: bash
         run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           set -euo pipefail
           owner="${GITHUB_REPOSITORY%/*}"
           repo="${GITHUB_REPOSITORY#*/}"

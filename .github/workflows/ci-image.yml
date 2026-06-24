@@ -1,0 +1,86 @@
+name: CI image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: image tag (defaults to date+sha)
+        required: false
+
+jobs:
+  build:
+    name: build and publish rimz-ci
+    runs-on: [linux_amd64, debian-13]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve image ref
+        env:
+          REQUESTED_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          host="${GITHUB_SERVER_URL#https://}"
+          host="${host#http://}"
+          host="${host%%/*}"
+          host="${host,,}"
+          owner="${GITHUB_REPOSITORY%/*}"
+          owner="${owner,,}"
+          tag="${REQUESTED_TAG:-$(date +%Y%m%d)-${GITHUB_SHA::7}}"
+          if ! printf '%s' "$tag" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
+            echo "::error::invalid Docker tag: ${tag}"
+            exit 1
+          fi
+          echo "REGISTRY_HOST=$host" >> "$GITHUB_ENV"
+          echo "IMAGE=${host}/${owner}/rimz-ci:${tag}" >> "$GITHUB_ENV"
+
+      - name: Build and push image
+        env:
+          TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "$TOKEN" | docker login "$REGISTRY_HOST" -u "$GITHUB_ACTOR" --password-stdin
+          docker build -f ci/Dockerfile -t "$IMAGE" ci
+          docker push "$IMAGE"
+
+      - name: Update RIMZ_CI_IMAGE variable
+        env:
+          TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          var_url="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/variables/RIMZ_CI_IMAGE"
+          body="$(printf '{"value":"%s"}' "$IMAGE")"
+          response="$(mktemp)"
+          trap 'rm -f "$response"' EXIT
+
+          code="$(curl -sS -o "$response" -w '%{http_code}' -X PUT \
+            -H "Authorization: token ${TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data "$body" \
+            "$var_url")"
+          case "$code" in
+            200|201|204)
+              ;;
+            404)
+              : > "$response"
+              code="$(curl -sS -o "$response" -w '%{http_code}' -X POST \
+                -H "Authorization: token ${TOKEN}" \
+                -H 'Content-Type: application/json' \
+                --data "$body" \
+                "$var_url")"
+              case "$code" in
+                200|201|204)
+                  ;;
+                *)
+                  cat "$response" >&2
+                  echo "::error::failed to create RIMZ_CI_IMAGE (HTTP ${code})"
+                  exit 1
+                  ;;
+              esac
+              ;;
+            *)
+              cat "$response" >&2
+              echo "::error::failed to update RIMZ_CI_IMAGE (HTTP ${code})"
+              exit 1
+              ;;
+          esac
