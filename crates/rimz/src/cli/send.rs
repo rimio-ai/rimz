@@ -106,30 +106,31 @@ pub(crate) enum Outcome {
 
 /// How a live-pane send is delivered: whether to send past a pending ask,
 /// whether to submit with Enter, the optional compact-first threshold, and the
-/// caller attribution prefix.
+/// caller attribution prefix and pacing state.
 pub(crate) struct LiveSend {
     pub(crate) force: bool,
     pub(crate) enter: bool,
     pub(crate) auto_compact: Option<AutoCompact>,
     pub(crate) sender: MessageSender,
+    pub(crate) pacer: Pacer,
 }
 
-struct Pacer {
+pub(crate) struct Pacer {
     interval: Duration,
     started: bool,
 }
 
 impl Pacer {
-    fn new(interval: Duration) -> Self {
+    pub(crate) fn new(interval: Duration) -> Self {
         Self {
             interval,
             started: false,
         }
     }
 
-    /// Sleep before every pane write after the first, so discrete steer/queue
-    /// writes land paced rather than coalesced.
-    fn tick(&mut self) {
+    /// Sleep before every delivered message after the first, so fan-outs land
+    /// paced rather than coalesced.
+    pub(crate) fn tick(&mut self) {
         self.tick_with(sleep);
     }
 
@@ -153,7 +154,7 @@ pub(crate) fn send_to_live_pane(
     target: &PaneAgent,
     bound: Option<&AgentState>,
     text: &str,
-    send: &LiveSend,
+    send: &mut LiveSend,
 ) -> Result<Outcome> {
     let label = target.label();
     if !send.force
@@ -173,14 +174,8 @@ pub(crate) fn send_to_live_pane(
     }
     let pane_id = &target.pane_id;
     let backend = rimz::mux::backend_for(pane_id.mux());
-    let mut pacer = Pacer::new(rimz::message::message_interval_from_env());
-    let compacted = compact_if_full(
-        backend.as_ref(),
-        &mut pacer,
-        bound,
-        target,
-        send.auto_compact,
-    )?;
+    send.pacer.tick();
+    let compacted = compact_if_full(backend.as_ref(), bound, target, send.auto_compact)?;
     let peers: Vec<&AgentState> = snapshot
         .agents
         .iter()
@@ -191,7 +186,6 @@ pub(crate) fn send_to_live_pane(
             Some(prefix) => format!("{prefix}{text}"),
             None => text.to_owned(),
         };
-    pacer.tick();
     super::pane::paste_text(backend.as_ref(), pane_id, &payload)?;
     // Record the steer once the text lands and before the submit keystroke, so a
     // submitted steer is always preceded by its audit event. A failed Enter then
@@ -211,7 +205,6 @@ pub(crate) fn send_to_live_pane(
     );
     ledger.append_event(&event)?;
     if send.enter {
-        pacer.tick();
         super::pane::send_enter(backend.as_ref(), pane_id)?;
     }
     Ok(Outcome::Sent { label, compacted })
@@ -222,7 +215,6 @@ pub(crate) fn send_to_live_pane(
 /// context, and an agent kind with no compaction command passes through.
 fn compact_if_full(
     backend: &dyn MuxBackend,
-    pacer: &mut Pacer,
     bound: Option<&AgentState>,
     target: &PaneAgent,
     auto_compact: Option<AutoCompact>,
@@ -241,9 +233,7 @@ fn compact_if_full(
     else {
         return Ok(false);
     };
-    pacer.tick();
     super::pane::send_text(backend, &target.pane_id, command)?;
-    pacer.tick();
     super::pane::send_enter(backend, &target.pane_id)?;
     Ok(true)
 }

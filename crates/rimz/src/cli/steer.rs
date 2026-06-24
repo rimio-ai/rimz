@@ -78,11 +78,12 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
 
-    let send = send::LiveSend {
+    let mut live_send = send::LiveSend {
         force,
         enter: !no_enter,
         auto_compact,
         sender,
+        pacer: send::Pacer::new(rimz::message::message_interval_from_env()),
     };
     let mut outcomes = Vec::with_capacity(targets.len());
     for target in &targets {
@@ -93,7 +94,7 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
             target,
             send::bound_agent(&snapshot, target),
             &text,
-            &send,
+            &mut live_send,
         )?);
     }
 

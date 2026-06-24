@@ -20,13 +20,15 @@ set -g  history-limit 100000     # long Claude/Codex output stays in scrollback
 set -sg escape-time 0            # no ESC lag in helix, nvim, fzf, agent TUIs
 set -g  focus-events on          # editors and agents see focus changes
 set -g  allow-passthrough on     # let desktop notifications pass through tmux
-set -s  extended-keys on             # distinguish modified Enter from Enter (tmux 3.6+)
+set -s  extended-keys on             # distinguish modified Enter from Enter
 set -s  extended-keys-format csi-u   # forward Shift+Enter / Alt+Enter as CSI-u
 set -ga terminal-features "*:extkeys" # ask the outer terminal to send them
+bind-key -n S-Enter send-keys Escape "[13;2u"
+bind-key -n M-Enter send-keys Escape "[13;3u"
 set -g  set-clipboard on         # yank into the host clipboard over OSC52
 ```
 
-`escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. On tmux 3.6 and newer, `extended-keys`, `extended-keys-format csi-u`, and `terminal-features … extkeys` let an agent's composer receive Shift+Enter and Alt+Enter as CSI-u soft newlines while plain Enter still submits. tmux 3.5.x re-encodes pasted newlines while extended keys are active, so Rimz applies `extended-keys` and `*:extkeys` inside its room only on tmux 3.6 and newer. `set-clipboard on` carries a yank out through OSC52, so you can copy agent output to your local clipboard even over SSH. `allow-passthrough on` lets the desktop-notification bytes Rimz emits reach your terminal ([notifications](../internals/sidebar/notifications.md)).
+`escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. `extended-keys`, `extended-keys-format csi-u`, and `terminal-features … extkeys` let an agent's composer receive Shift+Enter and Alt+Enter as CSI-u soft newlines while plain Enter still submits; the explicit `S-Enter` / `M-Enter` binds make those keys reach agents that do not request modifyOtherKeys themselves. On tmux 3.5.x, this trades clean multiline clipboard paste while extended keys are active; use Ctrl+J, `\`+Enter, or tmux 3.6+ for both modified-Enter newlines and clean paste. `set-clipboard on` carries a yank out through OSC52, so you can copy agent output to your local clipboard even over SSH. `allow-passthrough on` lets the desktop-notification bytes Rimz emits reach your terminal ([notifications](../internals/sidebar/notifications.md)).
 
 ## Recommended
 

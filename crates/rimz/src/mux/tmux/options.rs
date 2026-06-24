@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::config::TmuxConfig;
+use crate::config::{TmuxConfig, TmuxExtendedKeysFormat};
 use crate::mux::{SidebarPaneOptions, ViewSidebars};
 use crate::pane::PaneRef;
 
@@ -106,13 +106,38 @@ pub(super) fn tmux_server_options(config: &TmuxConfig) -> Vec<(&'static str, Str
 }
 
 /// Server options Rimz appends so the user's existing array entries survive.
-/// `*:extkeys` asks the outer terminal to send modified keys as CSI-u.
+/// `*:extkeys` asks the outer terminal to send modified keys.
 pub(super) fn tmux_server_append_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
     let mut opts = Vec::new();
     if config.extended_keys {
         opts.push(("terminal-features", "*:extkeys".to_owned()));
     }
     opts
+}
+
+pub(super) fn tmux_soft_newline_bindings(config: &TmuxConfig) -> Vec<Vec<String>> {
+    if !config.extended_keys {
+        return Vec::new();
+    }
+
+    let (shift_enter, alt_enter) = match config.extended_keys_format {
+        TmuxExtendedKeysFormat::CsiU => ("[13;2u", "[13;3u"),
+        TmuxExtendedKeysFormat::Xterm => ("[27;2;13~", "[27;3;13~"),
+    };
+
+    [("S-Enter", shift_enter), ("M-Enter", alt_enter)]
+        .into_iter()
+        .map(|(key, sequence)| {
+            vec![
+                "bind-key".to_owned(),
+                "-n".to_owned(),
+                key.to_owned(),
+                "send-keys".to_owned(),
+                "Escape".to_owned(),
+                sequence.to_owned(),
+            ]
+        })
+        .collect()
 }
 
 pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {

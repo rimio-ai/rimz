@@ -13,8 +13,8 @@ use rimz::agents::AgentState;
 use rimz::feed::pending_ask_for;
 use rimz::ids::MessageId;
 use rimz::message::{
-    AutoCompact, DeliveryGate, MessageRecord, MessageStatus, gate_open, queue_head,
-    settle_duration_from_env,
+    AutoCompact, DeliveryGate, MessageRecord, MessageStatus, gate_open, message_interval_from_env,
+    queue_head, settle_duration_from_env,
 };
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 use rimz::{PaneAgent, SidebarSnapshot};
@@ -434,11 +434,12 @@ fn add_message(
             super::confirm_fanout("Queue for", &target, &labels)?;
         }
     }
-    let live_send = send::LiveSend {
+    let mut live_send = send::LiveSend {
         force: spec.force,
         enter: spec.enter,
         auto_compact: spec.auto_compact,
         sender: sender.clone(),
+        pacer: send::Pacer::new(message_interval_from_env()),
     };
     let mut kinds_seen = std::collections::BTreeSet::new();
     let mut ids = Vec::new();
@@ -452,7 +453,7 @@ fn add_message(
                 pane,
                 target.bound(&snapshot),
                 &text,
-                &live_send,
+                &mut live_send,
             )? {
                 send::Outcome::Sent { .. } => continue,
                 send::Outcome::SkippedPending { .. } => park = true,
@@ -600,6 +601,13 @@ fn deliver_one(
     };
     debug_assert!(message.same_agent(&candidate.message.kind, &candidate.message.agent_id));
     debug_assert_eq!(message.message_id, candidate.message.message_id);
+    let mut live_send = send::LiveSend {
+        force: message.force,
+        enter: message.enter,
+        auto_compact: message.auto_compact,
+        sender: message.sender.clone(),
+        pacer: send::Pacer::new(message_interval_from_env()),
+    };
     let send = send::send_to_live_pane(
         workspace,
         ledger,
@@ -607,12 +615,7 @@ fn deliver_one(
         &candidate.target,
         send::bound_agent(&candidate.snapshot, &candidate.target),
         &message.text,
-        &send::LiveSend {
-            force: message.force,
-            enter: message.enter,
-            auto_compact: message.auto_compact,
-            sender: message.sender.clone(),
-        },
+        &mut live_send,
     );
     match send {
         Ok(send::Outcome::Sent { .. }) => {

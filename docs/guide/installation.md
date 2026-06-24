@@ -10,7 +10,7 @@ The source install also builds a small Zellij plugin that ships embedded in the 
 
 Rimz needs four things on your machine.
 
-- **A terminal multiplexer** — Zellij or tmux. Both are first-class; install one, or both and choose per project. Rimz refuses to start against a build too old to carry the room options it sets, so mind the floors: **tmux 3.5 or newer** and **Zellij 0.41 or newer** (tmux 3.6 and up add CSI-u soft-newline keys while preserving paste; Zellij 0.44 and up add the sidebar's single-click jumps and the presence plugin). `rimz doctor` reports the installed version and whether it clears the floor.
+- **A terminal multiplexer** — Zellij or tmux. Both are first-class; install one, or both and choose per project. Rimz refuses to start against a build too old to carry the room options it sets, so mind the floors: **tmux 3.5 or newer** and **Zellij 0.41 or newer** (tmux 3.5 adds CSI-u soft-newline keys with a multiline-paste caveat; tmux 3.6 preserves paste too; Zellij 0.44 and up add the sidebar's single-click jumps and the presence plugin). `rimz doctor` reports the installed version and whether it clears the floor.
 - **A C linker** — `cc` and `ld` link the final binary. The build pulls in no C libraries of its own; the linker is all the system toolchain provides.
 - **Git** — to clone the source.
 - **Rust, through `rustup`** — the compiler and Cargo. `rustup` reads the repo's pinned toolchain and installs the matching channel, components, and WebAssembly target on first build.
@@ -131,7 +131,7 @@ rimz doctor
 
 ## Configure your multiplexer
 
-Rimz configures each room for you. On every session birth and reattach it sets the options agents need, so a freshly installed Zellij or tmux works without editing `~/.config/zellij/config.kdl` or `~/.tmux.conf`. A Zellij room opens in locked mode so your typing reaches the agent pane, with single-click sidebar jumps, 100k-line scrollback, the system clipboard, and resurrection off; a tmux room runs with the mouse on, focus events, OSC passthrough for desktop notifications, 100k-line history, and CSI-u extended keys, so Shift+Enter and Alt+Enter reach agents as soft newlines. Rimz reasserts these on every attach.
+Rimz configures each room for you. On every session birth and reattach it sets the options agents need, so a freshly installed Zellij or tmux works without editing `~/.config/zellij/config.kdl` or `~/.tmux.conf`. A Zellij room opens in locked mode so your typing reaches the agent pane, with single-click sidebar jumps, 100k-line scrollback, the system clipboard, and resurrection off; a tmux room runs with the mouse on, focus events, OSC passthrough for desktop notifications, 100k-line history, and CSI-u extended keys, so Shift+Enter and Alt+Enter reach agents as soft newlines. On tmux 3.5.x, that trades clean multiline clipboard paste until tmux 3.6. Rimz reasserts these on every attach.
 
 Tune the room from Rimz's own config, `~/.config/rimz/config.toml`, under `[zellij]` and `[tmux]`. The setting most people reach for first is pane frames — borders that mark which pane holds focus.
 
@@ -194,7 +194,7 @@ zellij --version
 rimz doctor
 ```
 
-On tmux, `extended-keys-format` (tmux 3.5) is the option an older server rejects; Rimz enables `extended-keys` and `*:extkeys` only on tmux 3.6 and newer because 3.5.x corrupts pasted newlines while extended keys are active. On Zellij, 0.44 is the floor for single-click sidebar jumps and the presence plugin, while 0.41 through 0.43 run without them.
+On tmux, `extended-keys-format` (tmux 3.5) is the option an older server rejects; Rimz enables `extended-keys` and `*:extkeys` across supported tmux versions so Shift+Enter and Alt+Enter reach agents as soft newlines. tmux 3.5.x corrupts pasted newlines while extended keys are active; tmux 3.6 preserves paste too. On Zellij, 0.44 is the floor for single-click sidebar jumps and the presence plugin, while 0.41 through 0.43 run without them.
 
 ### `rustup` is missing
 

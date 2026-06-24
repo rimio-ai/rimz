@@ -728,10 +728,11 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
     );
 }
 
-/// Auto-compacted sends pace the four discrete pane writes: `/compact`, its
-/// submit Enter, the message paste, and the message submit Enter.
+/// Auto-compacted sends run `/compact`, its Enter, the message paste, and its
+/// Enter as one atomic pane interaction. The pacer spaces messages, not writes
+/// inside one message.
 #[test]
-fn steer_auto_compact_paces_each_pane_write() {
+fn steer_auto_compact_does_not_pace_inside_one_send() {
     let env = Env::new();
     register_running_agent(
         &env,
@@ -742,10 +743,11 @@ fn steer_auto_compact_paces_each_pane_write() {
     seed_context_fill(&env, "sess-ac-paced", 80);
 
     let trace_log = env.project_root.join("zellij-ac-paced-trace.log");
+    let interval = Duration::from_millis(1500);
     let started = Instant::now();
     let out = env
         .rimz()
-        .env("RIMZ_MESSAGE_INTERVAL_MS", "200")
+        .env("RIMZ_MESSAGE_INTERVAL_MS", interval.as_millis().to_string())
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
         .args(["steer", "@claude", "--smart-compact", "70%", "--", "go"])
@@ -758,8 +760,8 @@ fn steer_auto_compact_paces_each_pane_write() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        elapsed >= Duration::from_millis(600),
-        "three 200ms gaps should pace the four writes; elapsed {elapsed:?}"
+        elapsed < interval,
+        "a single send must not sleep between `/compact`, paste, and Enter; elapsed {elapsed:?}"
     );
 
     let lines = trace_lines(&trace_log);
@@ -1076,13 +1078,17 @@ fn steer_fanout_summary() {
     register_running_agent(&env, "sess-fsb", "feature-fsb", &[("ZELLIJ_PANE_ID", "4")]);
 
     let trace_log = env.project_root.join("zellij-fanout-trace.log");
+    let interval = Duration::from_millis(1000);
+    let started = Instant::now();
     let out = env
         .rimz()
+        .env("RIMZ_MESSAGE_INTERVAL_MS", interval.as_millis().to_string())
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
         .args(["steer", "@claude", "--all", "--yes", "--", "hello"])
         .output()
         .expect("steer fanout");
+    let elapsed = started.elapsed();
     assert!(
         out.status.success(),
         "steer fanout failed: {}",
@@ -1093,6 +1099,15 @@ fn steer_fanout_summary() {
         stdout.contains("steered 2 agent(s)"),
         "summary names the count: {stdout}"
     );
+    assert!(
+        elapsed >= interval,
+        "two-message fan-out should wait between delivered messages; elapsed {elapsed:?}"
+    );
+    let pasted = trace_lines(&trace_log)
+        .into_iter()
+        .filter(|line| is_paste_to_any_pane(line, "hello"))
+        .count();
+    assert_eq!(pasted, 2, "fan-out should paste once per live pane");
 }
 
 /// A skipped agent never aborts a broadcast: both targeted agents have a pane,
@@ -1164,6 +1179,18 @@ fn is_paste(line: &str, text: &str) -> bool {
     line.ends_with(&format!(
         "\taction\twrite\t--pane-id\t{TRACE_PANE}\t27\t91\t50\t48\t48\t126\t{payload}\t27\t91\t50\t48\t49\t126"
     ))
+}
+
+fn is_paste_to_any_pane(line: &str, text: &str) -> bool {
+    let payload = text
+        .bytes()
+        .map(|byte| byte.to_string())
+        .collect::<Vec<_>>()
+        .join("\t");
+    line.contains("\taction\twrite\t--pane-id\t")
+        && line.ends_with(&format!(
+            "\t27\t91\t50\t48\t48\t126\t{payload}\t27\t91\t50\t48\t49\t126"
+        ))
 }
 
 /// A discrete `zellij action write --pane-id <pane> 13` line — Enter sent as its

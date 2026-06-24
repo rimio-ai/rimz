@@ -60,7 +60,7 @@ Floors for the surfaces Rimz uses (from CHANGES):
 | `display-popup` | 3.2 (`-s`/`-S`/`-b`/`-T`/`-e`/`-B` 3.3; `-k` 3.6) |
 | `extended-keys` option | 3.2 (`always` value 3.2a; mode-2 revamp 3.5) |
 | `extended-keys-format` option | **3.5** |
-| Bracketed paste bypasses key interpretation while `extended-keys` is on | **3.6** |
+| Bracketed paste stays byte-preserving while `extended-keys` is on | **3.6** |
 | `allow-passthrough` option | **3.3**, default `off` (`all` value 3.4; the escape is not option-gated before 3.3) |
 | `escape-time` default 10ms (was 500ms) | 3.5 |
 | `command-error` hook | 3.5 |
@@ -71,7 +71,7 @@ Floors for the surfaces Rimz uses (from CHANGES):
 | `new-window -S` (select-if-exists by name) | 3.2 |
 | `pane_start_time` format variable | **does not exist in any release** ([formats](#the-variables-rimz-reads)) |
 
-**The floor is option-driven:** `MIN_TMUX_VERSION` is 3.5.0 because the room options Rimz applies across supported hosts include `allow-passthrough` (3.3) and `extended-keys-format` (3.5), and a batched option sequence fails at the first option the server does not know — the command surface alone would need only 3.2. `extended-keys` and `*:extkeys` have their own 3.6 gate because tmux 3.5.x re-encodes bracketed-paste control bytes as extended-key sequences. A future option below the floor either moves the constant again or gates itself (`set-option -q` silences unknown-option errors without branching on `tmux -V`).
+**The floor is option-driven:** `MIN_TMUX_VERSION` is 3.5.0 because the room options Rimz applies across supported hosts include `allow-passthrough` (3.3) and `extended-keys-format` (3.5), and a batched option sequence fails at the first option the server does not know — the command surface alone would need only 3.2. tmux 3.5.x carries the rich-key options but re-encodes bracketed-paste control bytes as extended-key sequences while they are active; 3.6 removes that paste cost. A future option below the floor either moves the constant again or gates itself (`set-option -q` silences unknown-option errors without branching on `tmux -V`).
 
 Behaviour changes inside the supported range: 3.6 keeps paste bytes uninterpreted while extended keys are active; 3.5 cut `escape-time`'s default 500→10ms and revamped extended-keys (always requests mode 2 upstream, new internal key representation; 3.5a adjusts BSpace/Shift encoding); 3.5 ran `#()`/`run-shell`/`if-shell`/popups under `default-shell`, and 3.5a reverted all but popups to `/bin/sh`; 3.3 made `command-prompt`/`confirm-before` block by default (`-b` restores async); 3.2 moved window/pane hooks off session scope ([hooks](#hooks)), renamed `refresh-client -F` to `-f`, and made `window_flags` escape `#` (`window_raw_flags` is the raw form).
 
@@ -201,9 +201,9 @@ Four scope tables — server, session, window, pane — each in a global and a l
 | --- | --- | --- | --- |
 | `focus-events` | server | **on** \| off | requests focus reporting from the terminal and forwards FocusIn/Out to apps; enables the `pane-focus-*` hooks; clients should re-attach after flipping |
 | `set-clipboard` | server | **on** \| external \| off | `on` both accepts OSC 52 from apps (into a tmux buffer) and forwards to the outer terminal (needs terminfo `Ms`); `external` forwards only, ignoring app sets |
-| `extended-keys` | server | tmux accepts on/off/always; Rimz writes **on** on tmux 3.6+ and **off** on 3.5.x | modifyOtherKeys: `on` honours app requests for mode 1/2; Rimz disables it before 3.6 because 3.5.x contaminates bracketed paste |
+| `extended-keys` | server | tmux accepts on/off/always; Rimz writes **on** by default | modifyOtherKeys: `on` honours app requests for mode 1/2; on tmux 3.5.x it contaminates bracketed paste, and 3.6 fixes that cost |
 | `extended-keys-format` | server | **csi-u** \| xterm | `C-S-a` → `^[[65;6u` (csi-u) vs `^[[27;6;65~` (xterm); **3.5+** |
-| `terminal-features` (append `*:extkeys`) | server | **`*:extkeys`** on tmux 3.6+ | requests extended keys from the outer terminal so modified keys, including Shift+Enter and Alt+Enter, arrive as CSI-u; appended only when paste remains intact, so the user's RGB and clipboard features survive |
+| `terminal-features` (append `*:extkeys`) | server | **`*:extkeys`** when extended keys are enabled | requests extended keys from the outer terminal so modified keys, including Shift+Enter and Alt+Enter, arrive as CSI-u; appended rather than replaced, so the user's RGB and clipboard features survive |
 | `escape-time` | server | ms, **0** | ESC-disambiguation delay; upstream default 10 since 3.5 (500 before) |
 | `mouse` | session | **on** \| off | mouse events become bindable keys; click focuses panes |
 | `history-limit` | session | lines, **100000** | scrollback cap **for panes created after the set** — existing panes keep their birth limit |

@@ -17,27 +17,64 @@ fn version_parser_and_floor_hold() {
 }
 
 #[test]
-fn extended_keys_are_safe_only_after_tmux_paste_fix() {
-    assert!(!extended_keys_safe(None));
-    assert!(!extended_keys_safe(parse_version("tmux 3.5a")));
-    assert!(!extended_keys_safe(Some((3, 5, 0))));
-    assert!(extended_keys_safe(Some((3, 6, 0))));
-    assert!(extended_keys_safe(Some((3, 6, 1))));
-    assert!(extended_keys_safe(Some((4, 0, 0))));
-}
-
-#[test]
-fn effective_room_config_gates_extended_keys_only_when_requested() {
-    let mut config = crate::config::TmuxConfig {
-        extended_keys: true,
+fn tmux_soft_newline_bindings_follow_extended_key_format() {
+    let csi_u = crate::config::TmuxConfig {
+        extended_keys_format: crate::config::TmuxExtendedKeysFormat::CsiU,
         ..Default::default()
     };
+    assert_eq!(
+        options::tmux_soft_newline_bindings(&csi_u),
+        vec![
+            vec![
+                "bind-key".to_owned(),
+                "-n".to_owned(),
+                "S-Enter".to_owned(),
+                "send-keys".to_owned(),
+                "Escape".to_owned(),
+                "[13;2u".to_owned(),
+            ],
+            vec![
+                "bind-key".to_owned(),
+                "-n".to_owned(),
+                "M-Enter".to_owned(),
+                "send-keys".to_owned(),
+                "Escape".to_owned(),
+                "[13;3u".to_owned(),
+            ],
+        ],
+    );
 
-    assert!(!effective_room_config(&config, Some((3, 5, 0))).extended_keys);
-    assert!(effective_room_config(&config, Some((3, 6, 0))).extended_keys);
+    let xterm = crate::config::TmuxConfig {
+        extended_keys_format: crate::config::TmuxExtendedKeysFormat::Xterm,
+        ..Default::default()
+    };
+    assert_eq!(
+        options::tmux_soft_newline_bindings(&xterm),
+        vec![
+            vec![
+                "bind-key".to_owned(),
+                "-n".to_owned(),
+                "S-Enter".to_owned(),
+                "send-keys".to_owned(),
+                "Escape".to_owned(),
+                "[27;2;13~".to_owned(),
+            ],
+            vec![
+                "bind-key".to_owned(),
+                "-n".to_owned(),
+                "M-Enter".to_owned(),
+                "send-keys".to_owned(),
+                "Escape".to_owned(),
+                "[27;3;13~".to_owned(),
+            ],
+        ],
+    );
 
-    config.extended_keys = false;
-    assert!(!effective_room_config(&config, Some((3, 6, 0))).extended_keys);
+    let disabled = crate::config::TmuxConfig {
+        extended_keys: false,
+        ..Default::default()
+    };
+    assert!(options::tmux_soft_newline_bindings(&disabled).is_empty());
 }
 
 #[test]

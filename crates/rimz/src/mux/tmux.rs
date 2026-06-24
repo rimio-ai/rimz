@@ -22,7 +22,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use options::{
-    tmux_server_append_options, tmux_server_options, tmux_session_options, tmux_window_options,
+    tmux_server_append_options, tmux_server_options, tmux_session_options,
+    tmux_soft_newline_bindings, tmux_window_options,
 };
 
 use super::{CommandSpec, MuxBackend, Result};
@@ -30,18 +31,7 @@ use crate::config::TmuxConfig;
 
 /// Minimum tmux version that supports the room options Rimz applies across all
 /// supported hosts: `extended-keys-format` (3.5) and `allow-passthrough` (3.3).
-/// Rich-key forwarding itself is layered on only when paste is safe.
 pub const MIN_TMUX_VERSION: (u32, u32, u32) = (3, 5, 0);
-
-/// Minimum tmux version that preserves bracketed-paste bytes while extended
-/// keys are active.
-pub const EXTENDED_KEYS_MIN_VERSION: (u32, u32, u32) = (3, 6, 0);
-
-/// Whether tmux at `version` handles bracketed paste without re-encoding it as
-/// extended keys. Unknown versions are treated as unsafe to protect paste data.
-pub fn extended_keys_safe(version: Option<(u32, u32, u32)>) -> bool {
-    version.is_some_and(|v| v >= EXTENDED_KEYS_MIN_VERSION)
-}
 
 /// Bundle reported by `rimz doctor` when the active backend is tmux.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -79,12 +69,6 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     let minor = parts.next()?.parse().ok()?;
     let patch = parts.next().unwrap_or("0").parse().ok()?;
     Some((major, minor, patch))
-}
-
-fn effective_room_config(config: &TmuxConfig, version: Option<(u32, u32, u32)>) -> TmuxConfig {
-    let mut config = config.clone();
-    config.extended_keys = config.extended_keys && extended_keys_safe(version);
-    config
 }
 
 #[derive(Debug, Default)]
@@ -144,10 +128,8 @@ impl TmuxBackend {
 
     /// Apply Rimz's tmux room options.
     pub(super) fn apply_room_options(&self, session: &str, config: &TmuxConfig) -> Result<()> {
-        let version = self.version().ok().and_then(|raw| parse_version(&raw));
-        let config = effective_room_config(config, version);
         let mut commands: Vec<Vec<String>> = Vec::new();
-        for (key, value) in tmux_server_options(&config) {
+        for (key, value) in tmux_server_options(config) {
             commands.push(vec![
                 "set-option".to_owned(),
                 "-s".to_owned(),
@@ -156,7 +138,7 @@ impl TmuxBackend {
             ]);
         }
         // Re-appending `*:extkeys` is idempotent for tmux and preserves user entries.
-        for (key, value) in tmux_server_append_options(&config) {
+        for (key, value) in tmux_server_append_options(config) {
             commands.push(vec![
                 "set-option".to_owned(),
                 "-as".to_owned(),
@@ -164,7 +146,7 @@ impl TmuxBackend {
                 value,
             ]);
         }
-        for (key, value) in tmux_session_options(&config) {
+        for (key, value) in tmux_session_options(config) {
             commands.push(vec![
                 "set-option".to_owned(),
                 "-t".to_owned(),
@@ -173,7 +155,7 @@ impl TmuxBackend {
                 value,
             ]);
         }
-        for (key, value) in tmux_window_options(&config) {
+        for (key, value) in tmux_window_options(config) {
             commands.push(vec![
                 "set-window-option".to_owned(),
                 "-t".to_owned(),
@@ -182,6 +164,7 @@ impl TmuxBackend {
                 value,
             ]);
         }
+        commands.extend(tmux_soft_newline_bindings(config));
         self.batch(&commands)
     }
 }
