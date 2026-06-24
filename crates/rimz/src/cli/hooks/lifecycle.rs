@@ -291,6 +291,9 @@ fn confirm_sent_message_if_turn_started(
     if !matches!(recorded.observation.signal, LifecycleSignal::TurnStarted) {
         return;
     }
+    if is_compact_command_turn(agent, &recorded.observation) {
+        return;
+    }
     let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
         return;
     };
@@ -308,6 +311,19 @@ fn confirm_sent_message_if_turn_started(
             "lifecycle: failed to confirm sent message delivery",
         );
     }
+}
+
+fn is_compact_command_turn(
+    agent: &dyn AgentAdapter,
+    observation: &AgentLifecycleObservation,
+) -> bool {
+    let Some(command) = agent.compact_command() else {
+        return false;
+    };
+    [observation.prompt.as_deref(), observation.task.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|text| text.trim() == command)
 }
 
 fn spawn_queue_delivery_if_checkpoint(
@@ -1016,6 +1032,10 @@ mod tests {
         (dir, ledger)
     }
 
+    fn workspace_id() -> rimz::ids::WorkspaceId {
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/hooks-test"))
+    }
+
     fn observed_at() -> jiff::Timestamp {
         jiff::Timestamp::from_second(1_700_000_000).unwrap()
     }
@@ -1162,6 +1182,64 @@ mod tests {
     }
 
     #[test]
+    fn compact_prompt_turn_started_does_not_confirm_sent_message() {
+        let (_dir, ledger) = test_ledger();
+        let agent = test_agent();
+        let message = rimz::message::MessageRecord::new(
+            workspace_id(),
+            &agent,
+            "real prompt".to_owned(),
+            true,
+            rimz::message::DeliveryGate::Done,
+        )
+        .with_auto_compact(Some(rimz::message::AutoCompact::Percent(70)));
+        ledger
+            .record_sent_message(&message, "session")
+            .unwrap()
+            .expect("sent");
+
+        let mut compact_observation = AgentLifecycleObservation::new(
+            Some(agent.agent_id.clone()),
+            LifecycleSignal::TurnStarted,
+        );
+        compact_observation.prompt = Some("/compact".to_owned());
+        compact_observation.task = Some("/compact".to_owned());
+        confirm_sent_message_if_turn_started(
+            &ledger,
+            &rimz::agents::ClaudeAdapter,
+            &RecordedLifecycle {
+                model_hint: None,
+                observation: compact_observation,
+            },
+            "session",
+        );
+        assert_eq!(
+            ledger.list_messages().unwrap()[0].status,
+            rimz::message::MessageStatus::Sent,
+            "the synthetic compact turn is not the tracked prompt"
+        );
+
+        let mut real_observation = AgentLifecycleObservation::new(
+            Some(agent.agent_id.clone()),
+            LifecycleSignal::TurnStarted,
+        );
+        real_observation.prompt = Some("real prompt".to_owned());
+        confirm_sent_message_if_turn_started(
+            &ledger,
+            &rimz::agents::ClaudeAdapter,
+            &RecordedLifecycle {
+                model_hint: None,
+                observation: real_observation,
+            },
+            "session",
+        );
+        assert_eq!(
+            ledger.list_messages().unwrap()[0].status,
+            rimz::message::MessageStatus::Delivered
+        );
+    }
+
+    #[test]
     fn turn_end_supplements_partial_realtime_cost_from_prior_transcript() {
         let dir = tempfile::TempDir::new().unwrap();
         let transcript = dir.path().join("2026-06-02T10-00-00-000Z_sess-1.jsonl");
@@ -1258,5 +1336,52 @@ mod tests {
             Some(0.42),
             "the turn-end transcript walk overwrites the live push with the authoritative sum"
         );
+    }
+
+    fn test_agent() -> AgentState {
+        let now = jiff::Timestamp::now();
+        AgentState {
+            agent_id: rimz::ids::AgentSessionId::from("sess-1"),
+            kind: rimz::ids::AgentKind::new_unchecked("claude"),
+            name: None,
+            kind_ordinal: None,
+            profile: None,
+            role: None,
+            team: None,
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            pane: None,
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            description: None,
+            transcript_path: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_seen: now,
+            last_activity: now,
+            registered_at: Some(now),
+        }
     }
 }
