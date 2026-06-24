@@ -213,7 +213,7 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
           }
         ]"#;
     let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    let listing = RawPaneListing::from_cli(parsed, 1).into_pane_listing(
+    let listing = RawPaneListing::from_cli(parsed, 1, None).into_pane_listing(
         "rimz-test".to_owned(),
         |mut p, session_name| {
             if !p.is_listed_pane() {
@@ -262,8 +262,9 @@ fn cli_source_active_uses_first_focused_listed_pane_per_tab() {
           {"id": 22, "is_plugin": false, "is_focused": false, "tab_id": 8, "tab_position": 3}
         ]"#;
     let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    let listing = RawPaneListing::from_cli(panes, 1);
+    let listing = RawPaneListing::from_cli(panes, 1, None);
 
+    assert!(!listing.source_active_authoritative);
     assert_eq!(
         listing.source_active.get(&ViewId::new_unchecked("tab_2")),
         Some(&PaneId::from_parts(MuxName::Zellij, "terminal_12")),
@@ -284,8 +285,9 @@ fn cli_source_active_excludes_focused_unlisted_panes() {
           {"id": 50, "is_plugin": false, "is_focused": true, "is_held": true, "tab_id": 3}
         ]"#;
     let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    let listing = RawPaneListing::from_cli(panes, 1);
+    let listing = RawPaneListing::from_cli(panes, 1, None);
 
+    assert!(!listing.source_active_authoritative);
     assert_eq!(
         listing.source_active.get(&ViewId::new_unchecked("tab_1")),
         Some(&PaneId::from_parts(MuxName::Zellij, "terminal_31")),
@@ -300,6 +302,24 @@ fn cli_source_active_excludes_focused_unlisted_panes() {
         !listing
             .source_active
             .contains_key(&ViewId::new_unchecked("tab_3"))
+    );
+}
+
+#[test]
+fn cli_source_active_uses_plugin_active_panes_when_available() {
+    let json = r#"[
+          {"id": 79, "is_plugin": false, "is_focused": true, "tab_id": 7, "tab_position": 1},
+          {"id": 200, "is_plugin": false, "is_focused": true, "tab_id": 7, "tab_position": 1}
+        ]"#;
+    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let listing =
+        RawPaneListing::from_cli(panes, 1, Some(std::collections::BTreeMap::from([(1, 200)])));
+
+    assert!(listing.source_active_authoritative);
+    assert!(!listing.served_from_topology);
+    assert_eq!(
+        listing.source_active.get(&ViewId::new_unchecked("tab_1")),
+        Some(&PaneId::from_parts(MuxName::Zellij, "terminal_200")),
     );
 }
 

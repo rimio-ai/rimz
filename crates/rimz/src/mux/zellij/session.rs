@@ -4,11 +4,12 @@ use std::time::Duration;
 
 use super::parse::{SessionState, is_transient_empty, session_state_from_line};
 use super::raw_pane::{
-    RawPane, RawPaneListing, SessionCleanliness, classify_session_panes, read_fresh_topology_cache,
+    RawPane, RawPaneListing, SessionCleanliness, classify_session_panes, read_topology_cache,
 };
 use super::{HEALTH_PROBE_TIMEOUT, LIST_PANES_ATTEMPTS, LIST_PANES_RETRY_DELAY, ZellijBackend};
 use crate::ids::WorkspaceId;
 use crate::mux::{MuxErr, Result};
+use crate::sidebar::cache::{pane_topology_cache_is_fresh, unix_now_ms};
 
 impl ZellijBackend {
     pub(super) fn list_panes_with_session(&self, session: Option<&str>) -> Result<Vec<RawPane>> {
@@ -64,17 +65,21 @@ impl ZellijBackend {
         min_topology_produced_at_ms: Option<u64>,
         timeout: Duration,
     ) -> Result<RawPaneListing> {
-        if let Some(panes) = session
+        let topology_cache = session
             .zip(workspace_id)
-            .and_then(|(session, workspace_id)| {
-                read_fresh_topology_cache(session, workspace_id, min_topology_produced_at_ms)
-            })
-        {
-            return Ok(panes);
-        }
-        let observed_at_ms = crate::sidebar::cache::unix_now_ms();
+            .and_then(|(session, workspace_id)| read_topology_cache(session, workspace_id));
+        let now_ms = unix_now_ms();
+        let active_panes = if let Some(cache) = topology_cache {
+            if pane_topology_cache_is_fresh(&cache, now_ms, min_topology_produced_at_ms) {
+                return Ok(RawPaneListing::from_topology(cache));
+            }
+            pane_topology_cache_is_fresh(&cache, now_ms, None).then_some(cache.active_panes)
+        } else {
+            None
+        };
+        let observed_at_ms = unix_now_ms();
         self.list_panes_bounded(session, timeout)
-            .map(|panes| RawPaneListing::from_cli(panes, observed_at_ms))
+            .map(|panes| RawPaneListing::from_cli(panes, observed_at_ms, active_panes))
     }
 
     /// Classify `name`'s live room from a bounded pane listing. A running

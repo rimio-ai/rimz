@@ -172,6 +172,7 @@ impl MuxBackend for TmuxBackend {
             panes,
             observed_at_ms,
             source_active: BTreeMap::new(),
+            source_active_authoritative: false,
             served_from_topology: false,
         })
     }

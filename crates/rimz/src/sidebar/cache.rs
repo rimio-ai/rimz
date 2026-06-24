@@ -250,16 +250,6 @@ pub fn pane_topology_cache_is_fresh(
     fresh && new_enough
 }
 
-/// Read a fresh same-session topology cache, or `None` when absent/stale.
-pub fn read_fresh_pane_topology_cache(
-    runtime: &RuntimePaths,
-    session: &str,
-    min_produced_at_ms: Option<u64>,
-) -> Option<PaneTopologyCache> {
-    let cache = read_pane_topology_cache(runtime, session)?;
-    pane_topology_cache_is_fresh(&cache, unix_now_ms(), min_produced_at_ms).then_some(cache)
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiffStats {
     pub added: u32,
