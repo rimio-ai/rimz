@@ -45,13 +45,13 @@ The lobby reads top to bottom in three zones, the way the sidebar does: the **wo
  ─────────────────────────────────────────────────────────────────────
   your pace · tokens / day                          ◇ 412M this month
         Mar        Apr        May        Jun
-        ░░▒▒██▓▓▒▒████▓▓██▓▓▒▒░░▓▓██▒▒··
-  Mon   ▒▒██▓▓▒▒██▓▓░░▒▒▓▓████▓▓██▓▓▒▒░░
-        ██▓▓▒▒░░▓▓██▓▓▒▒▒▒░░▒▒██▓▓████▒▒
-  Wed   ▓▓▒▒░░··▒▒▓▓██▓▓░░▒▒▓▓██▒▒▓▓██▓▓
-        ▒▒░░··░░██▓▓▒▒░░▓▓██▓▓▒▒██▓▓▒▒░░
-  Fri   ░░··░░▒▒▓▓▒▒░░··██▓▓██▓▓▓▓██▒▒··
-        ··░░▒▒▓▓▒▒░░··░░▓▓▒▒░░▒▒░░▒▒▓▓██
+        ░ ▒ █ ▓ ▒ █ ▓ █ ▓ ▒ ░ ▓ █ ▒ ·
+  Mon   ▒ █ ▓ ▒ █ ▓ ░ ▒ ▓ █ █ ▓ █ ▒ ░
+        █ ▓ ▒ ░ ▓ █ ▓ ▒ ▒ ░ ▒ █ ▓ █ ▒
+  Wed   ▓ ▒ ░ · ▒ ▓ █ ▓ ░ ▒ ▓ █ ▒ ▓ █
+        ▒ ░ · ░ █ ▓ ▒ ░ ▓ █ ▓ ▒ █ ▓ ▒
+  Fri   ░ · ░ ▒ ▓ ▒ ░ · █ ▓ █ ▓ ▓ █ ▒ ·
+        · ░ ▒ ▓ ▒ ░ · ░ ▓ ▒ ░ ▒ ░ ▒ ▓ █
         less · ░ ▒ ▓ █ more              W 1.4B · M 5.2B · $8,666
  ─────────────────────────────────────────────────────────────────────
  ↵ enter   ␣ needs you   n new   x kill   / find   ? help       q quit
@@ -73,7 +73,7 @@ The full glyph legend is canonical in [the sidebar interface reference](../../in
 
 The pace panel is a contribution graph of your token use, account-global, the trailing weeks of days, pinned above the footer. Each cell is one day, its shade rising with the tokens that day burned — the GitHub heatmap read in the terminal, the README's "Know Your Pace" brought to the front door before you pick a room. It is the panel [`rimz stats`](#rimz-stats) renders on its own; here it sits as hero chrome above the room list.
 
-- **The cell ramp is five steps `· ░ ▒ ▓ █`,** a calm day through your heaviest, with each day drawn as a doubled glyph cell so the graph reads as contiguous texture. The density carries the reading and color reinforces it: truecolor tints those same five glyphs along one cool, lightness-varying ramp from the [theme pipeline](../sidebar/sidebar.md), held distinct from the status reds and greens so a busy day reads as volume, not as "good" or "wrong"; `NO_COLOR` reads the density alone, and the single-hue lightness ramp stays legible to colorblind eyes. The scale is per-graph — the busiest day in view sets `█` — so the texture reads against your own rhythm, not an absolute ceiling.
+- **The cell ramp is five steps `· ░ ▒ ▓ █`,** a calm day through your heaviest, with each day drawn as one glyph followed by a space so the graph reads as discrete squares. The density carries the reading and color reinforces it: truecolor tints those same five glyphs along one cool, lightness-varying ramp from the [theme pipeline](../sidebar/sidebar.md), held distinct from the status reds and greens so a busy day reads as volume, not as "good" or "wrong"; `NO_COLOR` reads the density alone, and the single-hue lightness ramp stays legible to colorblind eyes. The scale is per-graph — the busiest day in view sets `█` — so the texture reads against your own rhythm, not an absolute ceiling.
 - **The figures speak the dashboard's vocabulary.** `◇` this month's tokens pins top-right, and the legend row carries the trailing-week and trailing-month token totals and the 30-day `$`, so the texture and the hard numbers sit together. `t` toggles the cell value between tokens and dollars; the legend stays and the scale re-bases.
 - **It reads like the GitHub graph.** Month labels ride the top, weekday labels (Mon/Wed/Fri) the left, the week opening on Sunday; the trailing span fits the terminal width, more weeks on a wider screen.
 
@@ -114,35 +114,35 @@ This is the same surface the dead-end reaches, so the moment that used to print 
 
   Token activity
         Mar        Apr        May        Jun
-        ░░▒▒████▓▓▒▒████▓▓████▓▓▒▒░░▓▓████▒▒··
-  Mon   ▒▒████▓▓▒▒████▓▓░░▒▒▓▓████████▓▓████▓▓▒▒░░
-        ████▓▓▒▒░░▓▓████▓▓▒▒▒▒░░▒▒████▓▓████████▒▒
-  Wed   ▓▓▒▒░░··▒▒▓▓████▓▓░░▒▒▓▓████▒▒▓▓████▓▓
-        ▒▒░░··░░████▓▓▒▒░░▓▓████▓▓▒▒████▓▓▒▒░░
-  Fri   ░░··░░▒▒▓▓▒▒░░··████▓▓████▓▓▓▓████▒▒··
-        ··░░▒▒▓▓▒▒░░··░░▓▓▒▒░░▒▒░░▒▒▓▓████
+        ░ ▒ █ █ ▓ ▒ █ █ ▓ █ █ ▓ ▒ ░ ▓ █ █ ▒ ·
+  Mon   ▒ █ █ ▓ ▒ █ █ ▓ ░ ▒ ▓ █ █ █ █ ▓ █ █ ▓ ▒ ░
+        █ █ ▓ ▒ ░ ▓ █ █ ▓ ▒ ▒ ░ ▒ █ █ ▓ █ █ █ █ ▒
+  Wed   ▓ ▒ ░ · ▒ ▓ █ █ ▓ ░ ▒ ▓ █ █ ▒ ▓ █ █ ▓
+        ▒ ░ · ░ █ █ ▓ ▒ ░ ▓ █ █ ▓ ▒ █ █ ▓ ▒ ░
+  Fri   ░ · ░ ▒ ▓ ▒ ░ · █ █ ▓ █ █ ▓ ▓ █ █ ▒ ·
+        · ░ ▒ ▓ ▒ ░ · ░ ▓ ▒ ░ ▒ ░ ▒ ▓ █ █
   Less · ░ ▒ ▓ █ More
 
   All time 78B  ·  Week 1.4B  ·  Month 5.2B  ·  Year 61B
 
   Models
-  ● Opus 4.8 (87.8%) · $72,104      ● Haiku 4.5 (3.1%) · $2,410
-    ↘ 61.0m · ↗ 260.6m · ◌ 1.2b       ↘ 4.7m · ↗ 6.6m · ◌ 88.0m
-  ● Fable 5 (4.8%) · $4,180         ● Opus 4.7 (2.9%) · $3,020
-    ↘ 4.8m · ↗ 12.9m · ◌ 210.0m       ↘ 1.8m · ↗ 8.7m · ◌ 95.0m
+  ● Opus 4.8    87.8% · $72,104 · ↘ 61.0m · ↗ 260.6m · ◌ 1.2b
+  ● Fable 5      4.8% ·  $4,180 · ↘  4.8m · ↗  12.9m · ◌ 210.0m
+  ● Haiku 4.5    3.1% ·  $2,410 · ↘  4.7m · ↗   6.6m · ◌  88.0m
+  ● Opus 4.7     2.9% ·  $3,020 · ↘  1.8m · ↗   8.7m · ◌  95.0m
 
   Agents
-  ● Claude  ◇ 48B · $82,100 · 612 sess (78.7%)
-  ● Codex   ◇ 13B · $21,440 · 85 sess (21.3%)
+  ● Claude  ◎ 612 · ◇ 48B · $82,100 · 78.7%
+  ● Codex   ◎  85 · ◇ 13B · $21,440 · 21.3%
 
-  Sessions: 697
+  ◎ Sessions: 697
   Active days: 27/28                Longest streak: 27 days
   Most active day: May 29           Current streak: 27 days
 ```
 
-The heatmap is the one the lobby embeds: the same five-step `· ░ ▒ ▓ █` ramp doubled into contiguous cells, the same per-graph scale, the same account-global aggregate described under [your pace](#your-pace--the-token-heatmap) above — one renderer with two homes. It reads in or out of a workspace because the pace is keyed to the provider account rather than any one room.
+The heatmap is the one the lobby embeds: the same five-step `· ░ ▒ ▓ █` ramp as spaced single-glyph cells, the same per-graph scale, the same account-global aggregate described under [your pace](#your-pace--the-token-heatmap) above — one renderer with two homes. It reads in or out of a workspace because the pace is keyed to the provider account rather than any one room.
 
-Beneath it the panel adds the figures the heatmap implies. The **All time / Week / Month / Year** row shows all-time tokens with cache-read included, then trailing 7/30/365-day `◇` token totals. The **Models** breakdown shares each model's slice of your `◇` token total over the full history, with dollars on the name row and input (`↘`), output (`↗`), and cache-read (`◌`) on the detail row, friendliest-name first (`claude-opus-4-8` reads as `Opus 4.8`). The **Agents** breakdown shares the same trailing-year token total by adapter kind — Claude, Codex, Pi, Open Code, and any future kind with recorded spend — with dollars, session count, and share beside each row. The token glyphs follow the sidebar glyph set, so `[theme] style = "modern"` and `[theme.glyphs] set = "nerd_font"` switch this panel to the Nerd Font token vocabulary while the CLI colors stay on the default palette. The **insights** close it: total sessions and the heaviest single day over the history, the trailing-four-week active ratio, and your longest and current active-day streaks. Tokens carry the per-model and per-agent breakdowns, so attribution is independent of pricing coverage — an unpriced model still attributes its tokens.
+Beneath it the panel adds the figures the heatmap implies. The **All time / Week / Month / Year** row shows all-time tokens with cache-read included, then trailing 7/30/365-day `◇` token totals. The **Models** breakdown shares each model's slice of your `◇` token total over the full history in one aligned row with dollars, input (`↘`), output (`↗`), and cache-read (`◌`), friendliest-name first (`claude-opus-4-8` reads as `Opus 4.8`). The **Agents** breakdown shares the same trailing-year token total by adapter kind — Claude, Codex, Pi, Open Code, and any future kind with recorded spend — leading with the glyphed session count (`◎`), then tokens, dollars, and share beside each row. The token glyphs follow the sidebar glyph set, so `[theme] style = "modern"` and `[theme.glyphs] set = "nerd_font"` switch this panel to the Nerd Font token vocabulary while the CLI colors stay on the default palette. The **insights** close it: glyphed total sessions and the heaviest single day over the history, the trailing-four-week active ratio, and your longest and current active-day streaks. Tokens carry the per-model and per-agent breakdowns, so attribution is independent of pricing coverage — an unpriced model still attributes its tokens.
 
 `rimz stats` prints the panel and returns to the shell by default, so it pipes and scrolls like any report. `--refresh` holds the panel open, clears and redraws it every 60 seconds, and exits with the pane or Ctrl-C; the `rimzd` daemon view carries that live `rimz stats --refresh` pane as the default middle-column content beside the render and managed hosts, configurable via `[daemon]`. `--dollars` scales the heatmap by spend instead of tokens — the spend view the lobby's `t` toggles to — and `--json` emits the per-day buckets, the trailing windows, the model and agent breakdowns, and the insights for scripts. `--refresh` conflicts with `--json` because the live panel is a screen, not a report. The fast path is one read of the current persistent `provider-spending.json`, matching the sidebar history read; a missing or old-shape cache takes runtime `spending.lock`, uses the same pricing refresh path as the sidebar producer, writes persistent `spending.json` plus `provider-spending.json`, and falls back to local in-memory computation only when another producer never publishes in time.
 

@@ -24,6 +24,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Result, anyhow};
 use clap::Args;
 use serde::Serialize;
+use unicode_width::UnicodeWidthChar;
 
 use super::GlobalFlags;
 use crate::cli::render;
@@ -54,12 +55,6 @@ const MIN_WEEKS: usize = 4;
 const GUTTER: usize = 6;
 /// Named models shown before the rest fold into one "Other" row.
 const MAX_MODELS: usize = 6;
-/// A two-column body (models, insights) needs at least this much panel width;
-/// narrower terminals stack to one column.
-const TWO_COL_MIN: usize = 56;
-/// The model detail row carries input, output, and cache-read; keep two columns
-/// only once each side has enough room to read.
-const MODELS_TWO_COL_MIN: usize = 78;
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 const PROGRESS_BAR_WIDTH: usize = 20;
 const SPINNER_CLEAR_COLS: usize = 120;
@@ -182,6 +177,7 @@ impl Stats {
 }
 
 struct PanelGlyphs {
+    sessions: String,
     total: String,
     input: String,
     output: String,
@@ -191,6 +187,7 @@ struct PanelGlyphs {
 fn resolve_panel_glyphs(theme: &ThemeConfig) -> PanelGlyphs {
     let glyph = |role| rimz::sidebar_pane::render::theme_glyph(theme, role);
     PanelGlyphs {
+        sessions: glyph(GlyphRole::CockpitSessions),
         total: glyph(GlyphRole::TokensTotal),
         input: glyph(GlyphRole::TokensInput),
         output: glyph(GlyphRole::TokensOutput),
@@ -572,19 +569,28 @@ fn render_panel(
     }
 
     heatmap_lines(&mut lines, stats, today_day, geometry.weeks, dollars);
+    let models = model_breakdown(stats);
+    let agents = agent_year_breakdown(stats);
+    let name_w = models
+        .iter()
+        .map(|(name, _)| display_width(name))
+        .chain(agents.iter().map(|agent| display_width(&agent.name)))
+        .max()
+        .unwrap_or(0);
+
     lines.push(String::new());
     windows_lines(&mut lines, stats);
-    if !stats.by_model.is_empty() {
+    if !models.is_empty() {
         lines.push(String::new());
-        models_lines(&mut lines, stats, geometry.panel_width, glyphs);
+        models_lines(&mut lines, &models, name_w, geometry.panel_width, glyphs);
     }
     let mut agent_lines = Vec::new();
-    if agents_lines(&mut agent_lines, stats, glyphs) {
+    if agents_lines(&mut agent_lines, &agents, name_w, glyphs) {
         lines.push(String::new());
         lines.extend(agent_lines);
     }
     lines.push(String::new());
-    insights_lines(&mut lines, stats, today_day, geometry.panel_width);
+    insights_lines(&mut lines, stats, today_day, geometry.panel_width, glyphs);
 
     emit(&lines, geometry.outer)
 }
@@ -656,7 +662,8 @@ fn heatmap_lines(
             match week[row] {
                 Some(value) => {
                     let lvl = level(value, grid.max);
-                    line.push_str(&render::paint(styles[lvl], &format!("{0}{0}", RAMP[lvl])));
+                    line.push_str(&render::paint(styles[lvl], &RAMP[lvl].to_string()));
+                    line.push(' ');
                 }
                 None => line.push_str("  "),
             }
@@ -705,13 +712,110 @@ fn windows_lines(lines: &mut Vec<String>, stats: &Stats) {
     lines.push(format!("  {row}"));
 }
 
-/// The per-model token breakdown: bullet rows of `name (share%)` over an
-/// `In / Out` line, two models per row where the panel is wide enough.
-fn models_lines(lines: &mut Vec<String>, stats: &Stats, panel_width: usize, glyphs: &PanelGlyphs) {
-    let total: u64 = stats.by_model.values().map(|m| m.tokens).sum();
+/// The per-model token breakdown: one aligned row per model.
+fn models_lines(
+    lines: &mut Vec<String>,
+    models: &[(String, ModelSpend)],
+    name_w: usize,
+    panel_width: usize,
+    glyphs: &PanelGlyphs,
+) {
+    let total: u64 = models.iter().map(|(_, model)| model.tokens).sum();
     if total == 0 {
         return;
     }
+
+    struct ModelRow {
+        name: String,
+        share: String,
+        usd: String,
+        input: String,
+        output: String,
+        cache_read: String,
+    }
+
+    let rows = models
+        .iter()
+        .map(|(name, spend)| {
+            let pct = spend.tokens as f64 / total as f64 * 100.0;
+            ModelRow {
+                name: name.clone(),
+                share: format!("{pct:.1}%"),
+                usd: fmt_usd(spend.usd),
+                input: fmt_tokens_lower(spend.input),
+                output: fmt_tokens_lower(spend.output),
+                cache_read: fmt_tokens_lower(spend.cache_read),
+            }
+        })
+        .collect::<Vec<_>>();
+    let share_w = rows
+        .iter()
+        .map(|row| display_width(&row.share))
+        .max()
+        .unwrap_or(0);
+    let usd_w = rows
+        .iter()
+        .map(|row| display_width(&row.usd))
+        .max()
+        .unwrap_or(0);
+    let input_w = rows
+        .iter()
+        .map(|row| display_width(&row.input))
+        .max()
+        .unwrap_or(0);
+    let output_w = rows
+        .iter()
+        .map(|row| display_width(&row.output))
+        .max()
+        .unwrap_or(0);
+    let cache_w = rows
+        .iter()
+        .map(|row| display_width(&row.cache_read))
+        .max()
+        .unwrap_or(0);
+    let sep = render::paint(muted(), "·");
+    let full_rows = rows
+        .iter()
+        .map(|row| {
+            let name = pad_to(&render::paint(cool(), &row.name), name_w);
+            format!(
+                "  {} {name} {} {sep} {} {sep} {} {} {sep} {} {} {sep} {} {}",
+                render::paint(cool(), "●"),
+                render::paint(muted(), &pad_left(&row.share, share_w)),
+                pad_left(&row.usd, usd_w),
+                render::paint(muted(), &glyphs.input),
+                pad_left(&row.input, input_w),
+                render::paint(muted(), &glyphs.output),
+                pad_left(&row.output, output_w),
+                render::paint(muted(), &glyphs.cache_read),
+                pad_left(&row.cache_read, cache_w),
+            )
+        })
+        .collect::<Vec<_>>();
+    let compact = full_rows.iter().any(|row| display_width(row) > panel_width);
+
+    lines.push(format!("  {}", render::paint(meta(), "Models")));
+    if compact {
+        for row in &rows {
+            let name = pad_to(&render::paint(cool(), &row.name), name_w);
+            lines.push(format!(
+                "  {} {name} {} {sep} {}",
+                render::paint(cool(), "●"),
+                render::paint(muted(), &pad_left(&row.share, share_w)),
+                pad_left(&row.usd, usd_w),
+            ));
+        }
+    } else {
+        lines.extend(full_rows);
+    }
+}
+
+fn model_breakdown(stats: &Stats) -> Vec<(String, ModelSpend)> {
+    let total: u64 = stats.by_model.values().map(|m| m.tokens).sum();
+    if total == 0 {
+        return Vec::new();
+    }
+
     let mut named: Vec<(String, ModelSpend)> = Vec::new();
     let mut other = ModelSpend::default();
     for (id, spend) in &stats.by_model {
@@ -730,36 +834,7 @@ fn models_lines(lines: &mut Vec<String>, stats: &Stats, panel_width: usize, glyp
     if other.tokens > 0 {
         named.push(("Other".to_string(), other));
     }
-
-    let two_col = panel_width >= MODELS_TWO_COL_MIN;
-    let col_w = if two_col {
-        panel_width / 2
-    } else {
-        panel_width
-    };
-    lines.push(format!("  {}", render::paint(meta(), "Models")));
-    for pair in named.chunks(if two_col { 2 } else { 1 }) {
-        let (n0, io0) = model_cell(&pair[0].0, &pair[0].1, total, glyphs);
-        match pair.get(1) {
-            Some((name, spend)) => {
-                let (n1, io1) = model_cell(name, spend, total, glyphs);
-                lines.push(
-                    format!("  {}{}", pad_to(&n0, col_w), n1)
-                        .trim_end()
-                        .to_string(),
-                );
-                lines.push(
-                    format!("  {}{}", pad_to(&io0, col_w), io1)
-                        .trim_end()
-                        .to_string(),
-                );
-            }
-            None => {
-                lines.push(format!("  {n0}"));
-                lines.push(format!("  {io0}"));
-            }
-        }
-    }
+    named
 }
 
 fn fold_model(acc: &mut ModelSpend, add: &ModelSpend) {
@@ -768,35 +843,6 @@ fn fold_model(acc: &mut ModelSpend, add: &ModelSpend) {
     acc.output += add.output;
     acc.cache_read += add.cache_read;
     acc.tokens += add.tokens;
-}
-
-/// `(name line, token split line)` for one model, styled and ready to lay out.
-fn model_cell(
-    name: &str,
-    spend: &ModelSpend,
-    total: u64,
-    glyphs: &PanelGlyphs,
-) -> (String, String) {
-    let pct = spend.tokens as f64 / total as f64 * 100.0;
-    let name_line = format!(
-        "{} {name} {} {} {}",
-        render::paint(cool(), "●"),
-        render::paint(muted(), &format!("({pct:.1}%)")),
-        render::paint(muted(), "·"),
-        fmt_usd(spend.usd),
-    );
-    let io_line = format!(
-        "  {} {} {} {} {} {} {} {}",
-        render::paint(muted(), &glyphs.input),
-        fmt_tokens_lower(spend.input),
-        render::paint(muted(), "·"),
-        render::paint(muted(), &glyphs.output),
-        fmt_tokens_lower(spend.output),
-        render::paint(muted(), "·"),
-        render::paint(muted(), &glyphs.cache_read),
-        fmt_tokens_lower(spend.cache_read),
-    );
-    (name_line, io_line)
 }
 
 struct AgentYearBreakdown<'a> {
@@ -827,30 +873,68 @@ fn agent_year_breakdown(stats: &Stats) -> Vec<AgentYearBreakdown<'_>> {
     agents
 }
 
-fn agents_lines(lines: &mut Vec<String>, stats: &Stats, glyphs: &PanelGlyphs) -> bool {
-    let agents = agent_year_breakdown(stats);
+fn agents_lines(
+    lines: &mut Vec<String>,
+    agents: &[AgentYearBreakdown<'_>],
+    name_w: usize,
+    glyphs: &PanelGlyphs,
+) -> bool {
     if agents.is_empty() {
         return false;
     }
 
-    let label_width = agents
+    struct AgentRow {
+        name: String,
+        sessions: String,
+        tokens: String,
+        usd: String,
+        pct: String,
+    }
+
+    let rows = agents
         .iter()
-        .map(|agent| agent.name.chars().count() + 2)
+        .map(|agent| AgentRow {
+            name: agent.name.clone(),
+            sessions: agent.tally.year.sessions.to_string(),
+            tokens: fmt_tokens(agent.tally.year.tokens),
+            usd: fmt_usd(agent.tally.year.usd),
+            pct: format!("{:.1}", agent.share * 100.0),
+        })
+        .collect::<Vec<_>>();
+    let sess_w = rows
+        .iter()
+        .map(|row| display_width(&row.sessions))
         .max()
         .unwrap_or(0);
+    let tok_w = rows
+        .iter()
+        .map(|row| display_width(&row.tokens))
+        .max()
+        .unwrap_or(0);
+    let usd_w = rows
+        .iter()
+        .map(|row| display_width(&row.usd))
+        .max()
+        .unwrap_or(0);
+    let pct_w = rows
+        .iter()
+        .map(|row| display_width(&row.pct))
+        .max()
+        .unwrap_or(0);
+    let sep = render::paint(muted(), "·");
+
     lines.push(format!("  {}", render::paint(meta(), "Agents")));
-    for agent in agents {
-        let label = format!("● {}", agent.name);
-        let label = format!("{label:<width$}", width = label_width);
-        let tokens = format!("{} {}", glyphs.total, fmt_tokens(agent.tally.year.tokens));
+    for row in rows {
+        let name = pad_to(&render::paint(cool(), &row.name), name_w);
         lines.push(format!(
-            "  {}  {}  {}  {}  {}  {}",
-            render::paint(cool(), &label),
-            render::paint(cool(), &format!("{tokens:<8}")),
-            render::paint(muted(), "·"),
-            fmt_usd(agent.tally.year.usd),
-            render::paint(muted(), &format!("· {} sess", agent.tally.year.sessions)),
-            render::paint(muted(), &format!("({:.1}%)", agent.share * 100.0)),
+            "  {} {name} {} {} {sep} {} {} {sep} {} {sep} {}%",
+            render::paint(cool(), "●"),
+            render::paint(muted(), &glyphs.sessions),
+            pad_left(&row.sessions, sess_w),
+            render::paint(muted(), &glyphs.total),
+            pad_left(&row.tokens, tok_w),
+            pad_left(&row.usd, usd_w),
+            pad_left(&row.pct, pct_w),
         ));
     }
     true
@@ -863,12 +947,18 @@ fn agent_display_name(kind: &str) -> String {
 }
 
 /// Sessions, active-day ratio, most active day, and longest / current streak.
-fn insights_lines(lines: &mut Vec<String>, stats: &Stats, today_day: i64, panel_width: usize) {
+fn insights_lines(
+    lines: &mut Vec<String>,
+    stats: &Stats,
+    today_day: i64,
+    panel_width: usize,
+    glyphs: &PanelGlyphs,
+) {
     let activity = Activity::of(&stats.by_day, today_day);
     lines.push(format!(
         "  {} {}",
-        render::paint(muted(), "Sessions:"),
-        stats.total.year.sessions
+        render::paint(muted(), &format!("{} Sessions:", glyphs.sessions)),
+        group_thousands(stats.total.year.sessions as u64)
     ));
 
     let most = activity
@@ -884,8 +974,19 @@ fn insights_lines(lines: &mut Vec<String>, stats: &Stats, today_day: i64, panel_
         kv("Current streak:", &plural_days(activity.current_streak)),
     ];
 
-    if panel_width >= TWO_COL_MIN {
-        let split = (panel_width * 2 / 5).clamp(28, 44);
+    let insight_gutter = 6;
+    let split = left
+        .iter()
+        .map(|line| display_width(line))
+        .max()
+        .unwrap_or(0)
+        + insight_gutter;
+    let right_w = right
+        .iter()
+        .map(|line| display_width(line))
+        .max()
+        .unwrap_or(0);
+    if split + right_w <= panel_width {
         for (l, r) in left.iter().zip(right.iter()) {
             lines.push(
                 format!("  {}{}", pad_to(l, split), r)
@@ -954,11 +1055,16 @@ fn center(text: &str, visible: usize, width: usize) -> String {
 
 /// `s` right-padded to `width` printable columns (ANSI-aware), for column layout.
 fn pad_to(s: &str, width: usize) -> String {
-    format!("{s}{}", " ".repeat(width.saturating_sub(visible_len(s))))
+    format!("{s}{}", " ".repeat(width.saturating_sub(display_width(s))))
 }
 
-/// Printable width of a string, skipping ANSI SGR escapes.
-fn visible_len(s: &str) -> usize {
+/// `s` left-padded to `width` printable columns (ANSI-aware).
+fn pad_left(s: &str, width: usize) -> String {
+    format!("{}{s}", " ".repeat(width.saturating_sub(display_width(s))))
+}
+
+/// Display width of a string, skipping ANSI SGR escapes.
+fn display_width(s: &str) -> usize {
     let mut count = 0;
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
@@ -969,7 +1075,7 @@ fn visible_len(s: &str) -> usize {
                 }
             }
         } else {
-            count += 1;
+            count += UnicodeWidthChar::width(c).unwrap_or(0);
         }
     }
     count
@@ -1159,7 +1265,12 @@ fn fmt_tokens_lower(n: u64) -> String {
 /// Dollars as `$8,666` — rounded, thousands grouped.
 fn fmt_usd(v: f64) -> String {
     let whole = v.round() as i64;
-    let digits = whole.abs().to_string();
+    let sign = if whole < 0 { "-" } else { "" };
+    format!("{sign}${}", group_thousands(whole.unsigned_abs()))
+}
+
+fn group_thousands(n: u64) -> String {
+    let digits = n.to_string();
     let mut grouped = String::new();
     for (i, ch) in digits.chars().enumerate() {
         if i > 0 && (digits.len() - i).is_multiple_of(3) {
@@ -1167,8 +1278,7 @@ fn fmt_usd(v: f64) -> String {
         }
         grouped.push(ch);
     }
-    let sign = if whole < 0 { "-" } else { "" };
-    format!("{sign}${grouped}")
+    grouped
 }
 
 /// A day key (days since the epoch) as `May 29`.
@@ -1569,11 +1679,11 @@ mod tests {
     #[test]
     fn ramp_key_keeps_less_and_more_together() {
         let key = ramp_key(&ramp_styles());
-        assert_eq!(visible_len(&key), "Less · ░ ▒ ▓ █ More".chars().count());
+        assert_eq!(display_width(&key), "Less · ░ ▒ ▓ █ More".chars().count());
     }
 
     #[test]
-    fn heatmap_cells_render_doubled_without_gaps() {
+    fn heatmap_cells_render_spaced() {
         let today = 20_008; // Saturday, so the current week has no future blanks.
         let first_day = week_start(today) - 7;
         let mut by_day = BTreeMap::new();
@@ -1591,14 +1701,18 @@ mod tests {
         heatmap_lines(&mut lines, &stats, today, 2, false);
 
         let monday = strip_ansi(lines.iter().find(|line| line.contains("Mon")).unwrap());
-        let cells = monday.chars().skip(GUTTER).collect::<String>();
-        assert!(
-            !cells.contains(' '),
-            "heatmap cells are contiguous: {cells:?}"
+        let cells = monday.chars().skip(GUTTER).collect::<Vec<_>>();
+        assert_eq!(
+            cells.len(),
+            3,
+            "the trailing day-space is trimmed at line end"
         );
-        for cell in cells.chars().collect::<Vec<_>>().chunks(2) {
-            assert_eq!(cell.len(), 2);
-            assert_eq!(cell[0], cell[1]);
+        for (idx, ch) in cells.into_iter().enumerate() {
+            if idx % 2 == 0 {
+                assert!(RAMP.contains(&ch), "day cell starts with a ramp glyph");
+            } else {
+                assert_eq!(ch, ' ', "day cell ends with a space");
+            }
         }
     }
 
@@ -1671,7 +1785,7 @@ mod tests {
     }
 
     #[test]
-    fn model_cell_shows_usd_and_cache_read_detail() {
+    fn models_lines_show_usd_and_cache_read_detail() {
         let glyphs = panel_glyphs();
         let spend = ModelSpend {
             usd: 12.4,
@@ -1680,15 +1794,43 @@ mod tests {
             cache_read: 2_500_000,
             tokens: 1_700_000,
         };
+        let stats = Stats {
+            by_day: BTreeMap::new(),
+            by_model: BTreeMap::from([
+                ("claude-opus-4-8".to_owned(), spend),
+                (
+                    "gpt-5".to_owned(),
+                    ModelSpend {
+                        tokens: 1_950_000,
+                        ..Default::default()
+                    },
+                ),
+            ]),
+            by_agent: BTreeMap::new(),
+            total: SpendTally::default(),
+        };
+        let models = model_breakdown(&stats);
+        let name_w = models
+            .iter()
+            .map(|(name, _)| display_width(name))
+            .max()
+            .unwrap_or(0);
+        let mut lines = Vec::new();
 
-        let (name, detail) = model_cell("Opus 4.8", &spend, spend.tokens, &glyphs);
-        let name = strip_ansi(&name);
-        let detail = strip_ansi(&detail);
+        models_lines(&mut lines, &models, name_w, 120, &glyphs);
+        let row = strip_ansi(
+            lines
+                .iter()
+                .find(|line| line.contains("Opus 4.8"))
+                .expect("opus row"),
+        );
 
-        assert!(name.contains("Opus 4.8 (100.0%) · $12"));
-        assert!(detail.contains("↘ 1.2m"));
-        assert!(detail.contains("↗ 500.0k"));
-        assert!(detail.contains("◌ 2.5m"));
+        assert!(row.contains("Opus 4.8"));
+        assert!(row.contains("46.6%"));
+        assert!(row.contains("$12"));
+        assert!(row.contains("↘ 1.2m"));
+        assert!(row.contains("↗ 500.0k"));
+        assert!(row.contains("◌ 2.5m"));
     }
 
     #[test]
@@ -1723,8 +1865,14 @@ mod tests {
         };
         let mut lines = Vec::new();
         let glyphs = panel_glyphs();
+        let agents = agent_year_breakdown(&stats);
+        let name_w = agents
+            .iter()
+            .map(|agent| display_width(&agent.name))
+            .max()
+            .unwrap_or(0);
 
-        assert!(agents_lines(&mut lines, &stats, &glyphs));
+        assert!(agents_lines(&mut lines, &agents, name_w, &glyphs));
 
         assert!(lines[0].contains("Agents"));
         let codex = lines
@@ -1736,21 +1884,19 @@ mod tests {
             .position(|line| line.contains("Claude"))
             .expect("claude row");
         assert!(codex < claude, "larger trailing-year token count leads");
-        assert!(lines[codex].contains("◇ 300"));
-        assert!(lines[codex].contains("$9"));
-        assert!(lines[codex].contains("4 sess"));
-        assert!(lines[codex].contains("(75.0%)"));
-        assert!(lines[claude].contains("2 sess"));
-        assert!(lines[claude].contains("(25.0%)"));
+        let codex = strip_ansi(&lines[codex]);
+        let claude = strip_ansi(&lines[claude]);
+        assert!(codex.contains("◎ 4"));
+        assert!(codex.contains("◇ 300"));
+        assert!(codex.contains("$9"));
+        assert!(codex.contains("75.0%"));
+        assert!(!codex.contains("sess"));
+        assert!(!codex.contains("(75.0%)"));
+        assert!(claude.contains("◎ 2"));
+        assert!(claude.contains("25.0%"));
 
-        let empty = Stats {
-            by_day: BTreeMap::new(),
-            by_model: BTreeMap::new(),
-            by_agent: BTreeMap::from([("codex".to_owned(), tally(0, 9.0, 1))]),
-            total: SpendTally::default(),
-        };
         let mut empty_lines = Vec::new();
-        assert!(!agents_lines(&mut empty_lines, &empty, &glyphs));
+        assert!(!agents_lines(&mut empty_lines, &[], 0, &glyphs));
         assert!(empty_lines.is_empty());
     }
 
@@ -1775,6 +1921,7 @@ mod tests {
         assert_eq!(fmt_tokens_lower(1_200_000_000), "1.2b");
         assert_eq!(fmt_usd(8_666.0), "$8,666");
         assert_eq!(fmt_usd(1_000_000.0), "$1,000,000");
+        assert_eq!(group_thousands(1_741), "1,741");
     }
 
     #[test]
