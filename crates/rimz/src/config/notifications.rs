@@ -101,7 +101,7 @@ impl NotificationsPrefs {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct NotifyHandler {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -109,16 +109,6 @@ pub struct NotifyHandler {
     #[serde(default)]
     pub when: NotifyCondition,
     pub command: String,
-}
-
-impl Default for NotifyHandler {
-    fn default() -> Self {
-        Self {
-            name: None,
-            when: NotifyCondition::default(),
-            command: String::new(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
