@@ -16,13 +16,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
 use clap::Args;
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use serde::Serialize;
 use unicode_width::UnicodeWidthChar;
 
@@ -41,6 +42,7 @@ use rimz::agents::spending::{
 };
 use rimz::config::{GlyphRole, Semantic, ThemeConfig};
 use rimz::ledger::single_flight::{Coalesced, coalesce};
+use rimz::tui::{MouseCapture, TerminalModeGuard};
 
 const DAY_SECS: i64 = 86_400;
 /// The five-step density ramp: a calm day through your heaviest.
@@ -63,9 +65,6 @@ const SPINNER_CLEAR_COLS: usize = 120;
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
 const SPENDING_WAIT_STEPS: u32 = 15;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
-/// How often `--refresh` re-checks terminal width between data reloads, so a
-/// pane resized after launch re-centres within one short tick.
-const RESIZE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The wordmark, spaced for a monospace terminal (the README carries a variant
 /// retuned for proportional HTML rendering).
@@ -88,8 +87,8 @@ pub struct StatsArgs {
     /// Hold the panel open, redraw every 60s, and re-centre on resize.
     #[arg(long, conflicts_with = "json")]
     pub refresh: bool,
-    /// Ignore SIGINT so the refreshing panel survives Ctrl-C in the rimzd daemon
-    /// view; it still exits when the pane or window closes. Set only by the view.
+    /// Keep the refreshing panel alive through Ctrl-C in the rimzd daemon view.
+    /// Set only by the view.
     #[arg(long, hide = true, requires = "refresh")]
     pub hold: bool,
 }
@@ -110,56 +109,100 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
         args.dollars,
         &glyphs,
         !loaded.header_printed,
+        "\n",
     )
 }
 
 fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
-    if hold {
-        ignore_interrupt();
-    }
     let glyphs = resolve_panel_glyphs(&super::machine_config().theme);
+    let paths = RuntimePaths::shared();
+    ensure_shared_runtime(&paths)?;
+    // Raw mode makes keypresses typed events instead of echoed cooked input;
+    // mouse reports from a sibling sidebar pane are drained below.
+    let _input = TerminalModeGuard::enable(MouseCapture::Off)?;
     loop {
-        let loaded = load_stats(true)?;
+        let stats = load_or_refresh_stats(&paths, None)?;
         let today_day = unix_secs_now() as i64 / DAY_SECS;
-        let mut cols = term_cols();
-        clear_screen()?;
-        render_panel(&loaded.stats, today_day, dollars, &glyphs, true)?;
-        let reload_at = Instant::now() + REFRESH_INTERVAL;
-        loop {
-            let now = Instant::now();
-            if now >= reload_at {
-                break;
+        let mut redraw = || {
+            clear_screen()?;
+            render_panel(&stats, today_day, dollars, &glyphs, true, "\r\n")
+        };
+        redraw()?;
+        match hold_panel(hold, &mut redraw)? {
+            PanelExit::Refresh => {}
+            PanelExit::Reload => {
+                if let Some(target) = rimz::reload::current_reexec_target() {
+                    return Err(reexec(&target));
+                }
             }
-            thread::sleep(RESIZE_POLL_INTERVAL.min(reload_at - now));
-            let current = term_cols();
-            if current != cols {
-                cols = current;
-                clear_screen()?;
-                render_panel(&loaded.stats, today_day, dollars, &glyphs, true)?;
-            }
+            PanelExit::Quit => return Ok(()),
         }
     }
 }
 
-/// Consume SIGINT so Ctrl-C cannot kill the held daemon-view panel; a pane or
-/// window close still delivers its normal signal and ends the process.
-#[cfg(unix)]
-fn ignore_interrupt() {
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
+enum PanelExit {
+    Refresh,
+    Reload,
+    Quit,
+}
 
-    use signal_hook::consts::signal::SIGINT;
-
-    if let Err(err) = signal_hook::flag::register(SIGINT, Arc::new(AtomicBool::new(false))) {
-        tracing::warn!(
-            error = %err,
-            "failed to hold stats panel through Ctrl-C",
-        );
+fn hold_panel(hold: bool, redraw: &mut dyn FnMut() -> Result<()>) -> Result<PanelExit> {
+    let deadline = Instant::now() + REFRESH_INTERVAL;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Ok(PanelExit::Refresh);
+        }
+        match event::poll(deadline - now) {
+            Ok(true) => match event::read() {
+                Ok(Event::Resize(_, _)) => redraw()?,
+                Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                    match key_outcome(key, hold) {
+                        KeyOutcome::Reload => return Ok(PanelExit::Reload),
+                        KeyOutcome::Quit => return Ok(PanelExit::Quit),
+                        KeyOutcome::Ignore => {}
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => return Ok(PanelExit::Quit),
+            },
+            Ok(false) => {}
+            Err(_) => return Ok(PanelExit::Quit),
+        }
     }
 }
 
-#[cfg(not(unix))]
-fn ignore_interrupt() {}
+#[derive(Debug, PartialEq, Eq)]
+enum KeyOutcome {
+    Reload,
+    Quit,
+    Ignore,
+}
+
+fn key_outcome(key: KeyEvent, hold: bool) -> KeyOutcome {
+    match key.code {
+        KeyCode::Char('r') | KeyCode::Char('R') => KeyOutcome::Reload,
+        KeyCode::Char('c') | KeyCode::Char('C') => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) && !hold {
+                KeyOutcome::Quit
+            } else {
+                KeyOutcome::Ignore
+            }
+        }
+        _ => KeyOutcome::Ignore,
+    }
+}
+
+fn reexec(target: &Path) -> anyhow::Error {
+    use std::os::unix::process::CommandExt;
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let err = std::process::Command::new(target).args(&args).exec();
+    anyhow!(
+        "failed to reload stats: re-exec {} failed: {err}",
+        target.display()
+    )
+}
 
 fn clear_screen() -> Result<()> {
     use ratatui::crossterm::{
@@ -361,7 +404,7 @@ fn unix_millis_now() -> u64 {
 
 fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<LoadedStats> {
     let geometry = PanelGeometry::current();
-    emit(&header_lines(geometry.panel_width), geometry.outer)?;
+    emit(&header_lines(geometry.panel_width), geometry.outer, "\n")?;
 
     let file_count = discover_spending_files().len();
     let paths = paths.clone();
@@ -584,6 +627,7 @@ fn render_panel(
     dollars: bool,
     glyphs: &PanelGlyphs,
     include_header: bool,
+    nl: &str,
 ) -> Result<()> {
     let geometry = PanelGeometry::current();
     let mut lines: Vec<String> = Vec::new();
@@ -598,7 +642,7 @@ fn render_panel(
             message.chars().count(),
             geometry.panel_width,
         ));
-        return emit(&lines, geometry.outer);
+        return emit(&lines, geometry.outer, nl);
     }
 
     heatmap_lines(&mut lines, stats, today_day, geometry.weeks, dollars);
@@ -628,7 +672,7 @@ fn render_panel(
     lines.push(String::new());
     insights_lines(&mut lines, stats, today_day, geometry.panel_width);
 
-    emit(&lines, geometry.outer)
+    emit(&lines, geometry.outer, nl)
 }
 
 fn header_lines(panel_width: usize) -> Vec<String> {
@@ -655,14 +699,14 @@ fn header_lines(panel_width: usize) -> Vec<String> {
 }
 
 /// Print the assembled panel, each line indented to centre the block on screen.
-fn emit(lines: &[String], outer: usize) -> Result<()> {
+fn emit(lines: &[String], outer: usize, nl: &str) -> Result<()> {
     let pad = " ".repeat(outer);
     let mut out = render::out();
     for line in lines {
         if line.is_empty() {
-            writeln!(out)?;
+            write!(out, "{nl}")?;
         } else {
-            writeln!(out, "{pad}{line}")?;
+            write!(out, "{pad}{line}{nl}")?;
         }
     }
     Ok(())

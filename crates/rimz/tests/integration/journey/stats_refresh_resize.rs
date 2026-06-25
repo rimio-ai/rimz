@@ -7,11 +7,11 @@
 #![cfg(unix)]
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::common::ScrubSessionEnvExt;
 
@@ -25,83 +25,24 @@ const REDRAW_BUDGET: Duration = Duration::from_secs(2);
 
 #[test]
 fn stats_refresh_recenters_on_resize() {
-    let bin = assert_cmd::cargo::cargo_bin("rimz");
-    assert!(bin.exists(), "rimz binary missing: {}", bin.display());
+    let harness = StatsRefreshHarness::launch(WIDE_COLS);
 
-    let xdg = tempfile::Builder::new()
-        .prefix("rz")
-        .rand_bytes(6)
-        .tempdir()
-        .expect("xdg tempdir");
-
-    let pty = native_pty_system();
-    let pair = pty
-        .openpty(PtySize {
-            rows: ROWS,
-            cols: WIDE_COLS,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("openpty");
-
-    let mut cmd = CommandBuilder::new(&bin);
-    cmd.scrub_session_env();
-    cmd.args(["stats", "--refresh"]);
-    cmd.env("HOME", xdg.path());
-    cmd.env("XDG_CONFIG_HOME", xdg.path());
-    cmd.env("XDG_STATE_HOME", xdg.path());
-    cmd.env("XDG_RUNTIME_DIR", xdg.path());
-    cmd.env("XDG_DATA_HOME", xdg.path());
-    cmd.env("XDG_CACHE_HOME", xdg.path());
-    cmd.env("RIMZ_PRICING_OFFLINE", "1");
-    cmd.env_remove("CLAUDE_CONFIG_DIR");
-    cmd.env_remove("CODEX_HOME");
-    cmd.env_remove("PI_AGENT_DIR");
-    cmd.env_remove("PI_CODING_AGENT_SESSION_DIR");
-    cmd.env_remove("PI_CODING_AGENT_DIR");
-    cmd.env_remove("RUST_LOG");
-    let mut child = pair.slave.spawn_command(cmd).expect("spawn rimz stats");
-    drop(pair.slave);
-
-    let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS, WIDE_COLS, 0)));
-    let mut reader = pair.master.try_clone_reader().expect("clone reader");
-    let sink = Arc::clone(&parser);
-    let reader_thread = std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => return,
-                Ok(n) => sink.lock().expect("parser").process(&buf[..n]),
-            }
-        }
-    });
-
-    let initial_col = wait_for_tagline_col(&parser, |_| true, INITIAL_BUDGET);
-    let initial_screen = screen(&parser);
+    let initial_col = wait_for_tagline_col(&harness.parser, |_| true, INITIAL_BUDGET);
+    let initial_screen = screen(&harness.parser);
     let mut resize_result = Ok(());
     let mut resized_col = None;
     let mut latency = None;
     if initial_col.is_some() {
         let resized_at = Instant::now();
-        resize_result = pair.master.resize(PtySize {
-            rows: ROWS,
-            cols: NARROW_COLS,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
+        resize_result = harness.resize(NARROW_COLS);
         if resize_result.is_ok() {
-            resized_col = wait_for_tagline_col(&parser, |col| col < 30, REDRAW_DEADLINE);
+            resized_col = wait_for_tagline_col(&harness.parser, |col| col < 30, REDRAW_DEADLINE);
             if resized_col.is_some() {
                 latency = Some(resized_at.elapsed());
             }
         }
     }
-    let resized_screen = screen(&parser);
-
-    let _ = child.kill();
-    let _ = child.wait();
-    drop(pair.master);
-    let _ = reader_thread.join();
+    let resized_screen = screen(&harness.parser);
 
     let initial_col = initial_col
         .unwrap_or_else(|| panic!("stats never rendered the tagline:\n{initial_screen}"));
@@ -119,6 +60,135 @@ fn stats_refresh_recenters_on_resize() {
         "stats took {latency:?} to redraw after resize; it must repaint on \
          resize rather than wait for the 60s refresh",
     );
+}
+
+#[test]
+fn stats_refresh_drains_input_without_echoing() {
+    let mut harness = StatsRefreshHarness::launch(NARROW_COLS);
+
+    let initial_col = wait_for_tagline_col(&harness.parser, |_| true, INITIAL_BUDGET);
+    let initial_screen = screen(&harness.parser);
+    initial_col.unwrap_or_else(|| panic!("stats never rendered the tagline:\n{initial_screen}"));
+
+    harness
+        .write_input(b"fg\x1b[<35;10;10M")
+        .expect("write stray input");
+    std::thread::sleep(Duration::from_millis(250));
+    let after_input = screen(&harness.parser);
+
+    assert!(
+        after_input.contains(TAGLINE),
+        "stats panel disappeared after stray input:\n{after_input}",
+    );
+    assert!(
+        !after_input.contains("fg"),
+        "stats echoed printable input instead of draining it:\n{after_input}",
+    );
+    assert!(
+        !after_input.contains("[<35;10;10M"),
+        "stats echoed mouse report instead of draining it:\n{after_input}",
+    );
+}
+
+struct StatsRefreshHarness {
+    parser: Arc<Mutex<vt100::Parser>>,
+    master: Option<Box<dyn MasterPty + Send>>,
+    writer: Option<Box<dyn Write + Send>>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    reader: Option<std::thread::JoinHandle<()>>,
+    _xdg: tempfile::TempDir,
+}
+
+impl StatsRefreshHarness {
+    fn launch(cols: u16) -> Self {
+        let bin = assert_cmd::cargo::cargo_bin("rimz");
+        assert!(bin.exists(), "rimz binary missing: {}", bin.display());
+
+        let xdg = tempfile::Builder::new()
+            .prefix("rz")
+            .rand_bytes(6)
+            .tempdir()
+            .expect("xdg tempdir");
+
+        let pty = native_pty_system();
+        let pair = pty
+            .openpty(PtySize {
+                rows: ROWS,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+
+        let mut cmd = CommandBuilder::new(&bin);
+        cmd.scrub_session_env();
+        cmd.args(["stats", "--refresh"]);
+        cmd.env("HOME", xdg.path());
+        cmd.env("XDG_CONFIG_HOME", xdg.path());
+        cmd.env("XDG_STATE_HOME", xdg.path());
+        cmd.env("XDG_RUNTIME_DIR", xdg.path());
+        cmd.env("XDG_DATA_HOME", xdg.path());
+        cmd.env("XDG_CACHE_HOME", xdg.path());
+        cmd.env("RIMZ_PRICING_OFFLINE", "1");
+        cmd.env_remove("CLAUDE_CONFIG_DIR");
+        cmd.env_remove("CODEX_HOME");
+        cmd.env_remove("PI_AGENT_DIR");
+        cmd.env_remove("PI_CODING_AGENT_SESSION_DIR");
+        cmd.env_remove("PI_CODING_AGENT_DIR");
+        cmd.env_remove("RUST_LOG");
+        let child = pair.slave.spawn_command(cmd).expect("spawn rimz stats");
+        drop(pair.slave);
+
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS, cols, 0)));
+        let writer = pair.master.take_writer().expect("pty writer");
+        let mut reader = pair.master.try_clone_reader().expect("clone reader");
+        let sink = Arc::clone(&parser);
+        let reader_thread = std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => sink.lock().expect("parser").process(&buf[..n]),
+                }
+            }
+        });
+
+        Self {
+            parser,
+            master: Some(pair.master),
+            writer: Some(writer),
+            child,
+            reader: Some(reader_thread),
+            _xdg: xdg,
+        }
+    }
+
+    fn resize(&self, cols: u16) -> anyhow::Result<()> {
+        self.master.as_ref().expect("pty master").resize(PtySize {
+            rows: ROWS,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+    }
+
+    fn write_input(&mut self, input: &[u8]) -> std::io::Result<()> {
+        let writer = self.writer.as_mut().expect("pty writer");
+        writer.write_all(input)?;
+        writer.flush()
+    }
+}
+
+impl Drop for StatsRefreshHarness {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        drop(self.writer.take());
+        drop(self.master.take());
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+    }
 }
 
 fn wait_for_tagline_col(

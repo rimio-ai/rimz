@@ -210,6 +210,57 @@ fn cold_spinner_requires_human_stdout_and_stderr_ttys() {
 }
 
 #[test]
+fn refresh_key_outcome_reloads_on_r() {
+    for hold in [false, true] {
+        assert_eq!(
+            key_outcome(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE), hold),
+            KeyOutcome::Reload
+        );
+        assert_eq!(
+            key_outcome(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT), hold),
+            KeyOutcome::Reload
+        );
+    }
+}
+
+#[test]
+fn refresh_key_outcome_ctrl_c_respects_hold() {
+    assert_eq!(
+        key_outcome(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            false
+        ),
+        KeyOutcome::Quit
+    );
+    assert_eq!(
+        key_outcome(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            true
+        ),
+        KeyOutcome::Ignore
+    );
+    assert_eq!(
+        key_outcome(
+            KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL),
+            false
+        ),
+        KeyOutcome::Quit
+    );
+}
+
+#[test]
+fn refresh_key_outcome_ignores_other_keys() {
+    assert_eq!(
+        key_outcome(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE), false),
+        KeyOutcome::Ignore
+    );
+    assert_eq!(
+        key_outcome(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE), false),
+        KeyOutcome::Ignore
+    );
+}
+
+#[test]
 fn progress_bar_tracks_file_count() {
     assert_eq!(progress_bar(0, 10), "░".repeat(PROGRESS_BAR_WIDTH));
     assert_eq!(
