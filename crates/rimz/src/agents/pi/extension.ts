@@ -193,6 +193,10 @@ export default function rimz(pi) {
       is_error: ev?.isError === true,
     }),
   );
+  pi.on("model_select", (ev, ctx) => feed("model_select", ctx, { model: ev?.model?.id }));
+  pi.on("thinking_level_select", (ev, ctx) =>
+    feed("thinking_level_select", ctx, { effort: ev?.level }),
+  );
   pi.on("session_before_compact", (_ev, ctx) => feed("session_before_compact", ctx, {}));
   pi.on("session_compact", (_ev, ctx) => feed("session_compact", ctx, {}));
   pi.on("session_shutdown", (ev, ctx) => {

@@ -1,7 +1,7 @@
 use super::*;
 
-use crate::agents::AgentStatus;
 use crate::agents::lifecycle::{LifecycleState, TurnPhase, step};
+use crate::agents::{AgentHookClass, AgentStatus};
 use crate::feed::{FeedKind, ResolutionMethod, Surface};
 use crate::ids::WorkspaceId;
 use serde_json::json;
@@ -314,6 +314,28 @@ fn pi_observes_rich_context_from_the_extension_envelope() {
             .observe_context("pi", &json!({ "context_window": "not a number" }))
             .is_none(),
         "malformed context payloads degrade to no enrichment"
+    );
+}
+
+#[test]
+fn model_select_is_enrichment_only() {
+    let payload = json!({ "session_id": "s", "model": "gpt-5.5", "effort": "high" });
+    assert_eq!(
+        PiAdapter.classify_hook("model_select", &payload).class,
+        AgentHookClass::Lifecycle
+    );
+    assert!(
+        PiAdapter
+            .observe_lifecycle("model_select", &payload)
+            .is_none()
+    );
+    assert_eq!(
+        PiAdapter
+            .observe_context("pi", &payload)
+            .unwrap()
+            .model_id
+            .as_deref(),
+        Some("gpt-5.5")
     );
 }
 

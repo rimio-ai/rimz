@@ -207,8 +207,9 @@ const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::RichContext,
-        ConcernCoverage::Unsupported {
-            reason: "no rich-context transport",
+        ConcernCoverage::Partial {
+            via: "extension-envelope observe_context (model/effort/cost/account windows)",
+            gap: "rides the lifecycle channel — no out-of-band transport refreshing it between turns, unlike a statusline or app-server poll",
         },
     ),
     (
@@ -287,14 +288,17 @@ const PI_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
 ];
 
 /// The non-blocking events the embedded extension forwards — the lifecycle
-/// channel, the single source of truth for classification. Mirrors the
-/// `pi.on(...)` registrations in [`extension.ts`](./extension.ts) (asserted
-/// by test).
+/// channel, the single source of truth for classification. The model/thinking
+/// selectors are enrichment-only markers: they run the context merge without
+/// emitting a lifecycle signal. Mirrors the `pi.on(...)` registrations in
+/// [`extension.ts`](./extension.ts) (asserted by test).
 const LIFECYCLE_EVENTS: &[&str] = &[
     "session_start",
     "before_agent_start",
     "agent_end",
     "tool_execution_end",
+    "model_select",
+    "thinking_level_select",
     "session_before_compact",
     "session_compact",
     "session_shutdown",
@@ -307,6 +311,8 @@ const WIRED_EVENTS: &[&str] = &[
     "before_agent_start",
     "agent_end",
     "tool_execution_end",
+    "model_select",
+    "thinking_level_select",
     "session_before_compact",
     "session_compact",
     "session_shutdown",
@@ -375,6 +381,18 @@ impl AgentAdapter for PiAdapter {
             ClassificationSample::new(
                 "tool_execution_end",
                 json!({ "session_id": "sess-1", "tool_name": "bash" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "model_select",
+                json!({ "session_id": "sess-1", "model": "gpt-5.5" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "thinking_level_select",
+                json!({ "session_id": "sess-1", "effort": "high" }),
                 AgentHookClass::Lifecycle,
                 None,
             ),

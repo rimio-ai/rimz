@@ -375,18 +375,19 @@ mod tests {
 
         let pi = agent_cells(&matrix, "pi");
         assert_eq!(count(&pi, MatrixCellState::Ok), 7);
-        assert_eq!(count(&pi, MatrixCellState::Partial), 2);
-        assert_eq!(count(&pi, MatrixCellState::Absent), 6);
+        assert_eq!(count(&pi, MatrixCellState::Partial), 3);
+        assert_eq!(count(&pi, MatrixCellState::Absent), 5);
         // Pi has no idle Notification hook, but `agent_end` plus the stall
         // window reconstruct the attention slice — partial, like Codex, not
-        // absent.
+        // absent. Rich context is reconstructed from the extension envelope,
+        // so it is partial rather than absent: live, but not out-of-band.
         assert_eq!(
             agent_labels(&matrix, "pi", MatrixCellState::Partial),
-            ["idle", "live$"]
+            ["idle", "live$", "rich"]
         );
         assert_eq!(
             agent_labels(&matrix, "pi", MatrixCellState::Absent),
-            ["plan", "ask", "sub", "bg", "rich", "remote"]
+            ["plan", "ask", "sub", "bg", "remote"]
         );
     }
 

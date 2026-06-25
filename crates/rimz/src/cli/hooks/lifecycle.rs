@@ -716,6 +716,8 @@ fn local_transcript_stat(path: &Path) -> Option<rimz::agents::TranscriptStat> {
 }
 
 const OBSERVED_CONTEXT_KEYS: &[&str] = &[
+    "model",
+    "effort",
     "rate_limits",
     "total_cost_usd",
     "context_window",
@@ -1166,6 +1168,49 @@ mod tests {
             Some(10),
             "missing token subfields preserve the last known values"
         );
+    }
+
+    #[test]
+    fn lifecycle_context_merge_accepts_model_and_effort_only_enrichment() {
+        let (_dir, ledger) = test_ledger();
+        let workspace = rimz::ResolvedWorkspace {
+            workspace_id: workspace_id(),
+            project_root: std::path::PathBuf::from("/tmp/hooks-test"),
+            root_class: rimz::workspace::RootClass::Directory,
+            worktree_root: std::path::PathBuf::from("/tmp/hooks-test"),
+            worktree_branch: None,
+            session_name: "hooks-test".to_owned(),
+            mux_hint: None,
+        };
+        let globals = GlobalFlags {
+            mux: None,
+            root: None,
+            color: crate::cli::ColorWhen::Never,
+        };
+
+        handle_lifecycle_hook(
+            &workspace,
+            &ledger,
+            &rimz::agents::PiAdapter,
+            "model_select",
+            &serde_json::json!({ "session_id": "sess-1", "model": "gpt-5.5" }),
+            &globals,
+        )
+        .unwrap();
+        handle_lifecycle_hook(
+            &workspace,
+            &ledger,
+            &rimz::agents::PiAdapter,
+            "thinking_level_select",
+            &serde_json::json!({ "session_id": "sess-1", "effort": "high" }),
+            &globals,
+        )
+        .unwrap();
+        let merged =
+            rimz::ledger::agent_context::read_one(ledger.runtime_paths(), "pi", "sess-1").unwrap();
+        assert_eq!(merged.context.model_id.as_deref(), Some("gpt-5.5"));
+        assert_eq!(merged.context.effort.as_deref(), Some("high"));
+        assert!(ledger.snapshot().unwrap().agents.is_empty());
     }
 
     #[test]

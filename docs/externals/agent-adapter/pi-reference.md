@@ -204,6 +204,4 @@ The landed verdict — the native-event → signal table, the blocking `tool_cal
 
 The account probe is wired: [`pi/account.rs`](../../../crates/rimz/src/agents/pi/account.rs) reads `auth.json` (oauth → metered subscription, api_key → unmetered), labels the sub the fleet uses — the freshest session's `message.provider` picks among several credentials, else the first OAuth entry — and the separate adapter version probe attaches `pi --version`; mapping summary in [adapter/pi.md → Account and balance](../../internals/agents/adapter/pi.md#account-and-balance).
 
-What remains unwired, for the adapter's next increments:
-
-- **Model-change marker.** `model_select` / `thinking_level_select` could stamp a mid-session model switch the moment it happens; today the change rides the next event's envelope as carry-forward.
+Wired increments from this feasibility pass are complete: `model_select` and `thinking_level_select` now push an immediate envelope, so a mid-session model or thinking-level switch stamps the row at once instead of riding the next event's carry-forward.
