@@ -153,7 +153,7 @@ fn into_context(
     AgentContext {
         source: "opencode".to_owned(),
         session_name: session.and_then(session_name),
-        session_preview: session.and_then(session_preview),
+        session_preview: None,
         model_id: None,
         model_display_name: providers.and_then(|body| model_display_name(body, model_hint)),
         effort: None,
@@ -237,20 +237,12 @@ fn model_matches(hint: &str, provider_id: &str, key: &str, model_id: &str) -> bo
 struct Session {
     #[serde(default)]
     title: Option<String>,
-    #[serde(default)]
-    preview: Option<String>,
 }
 
 fn session_name(body: &Value) -> Option<String> {
     let body = body.get("data").unwrap_or(body);
     let parsed: Session = serde_json::from_value(body.clone()).ok()?;
     nonempty(parsed.title)
-}
-
-fn session_preview(body: &Value) -> Option<String> {
-    let body = body.get("data").unwrap_or(body);
-    let parsed: Session = serde_json::from_value(body.clone()).ok()?;
-    nonempty(parsed.preview)
 }
 
 fn nonempty(value: Option<String>) -> Option<String> {
@@ -291,8 +283,7 @@ mod tests {
             })),
             Some(&json!({
                 "id": "ses_1",
-                "title": "Fix auth",
-                "preview": "Update the auth middleware"
+                "title": "Fix auth"
             })),
             Some("openai/gpt-5"),
             observed_at,
@@ -302,10 +293,7 @@ mod tests {
         assert_eq!(context.agent_version.as_deref(), Some("1.17.9"));
         assert_eq!(context.model_display_name.as_deref(), Some("GPT-5"));
         assert_eq!(context.session_name.as_deref(), Some("Fix auth"));
-        assert_eq!(
-            context.session_preview.as_deref(),
-            Some("Update the auth middleware")
-        );
+        assert!(context.session_preview.is_none());
         assert_eq!(context.observed_at, observed_at);
     }
 

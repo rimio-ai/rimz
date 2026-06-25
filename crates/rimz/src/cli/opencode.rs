@@ -130,9 +130,6 @@ fn merge_opencode_context(
     if context.session_name.is_some() {
         record.context.session_name = context.session_name;
     }
-    if context.session_preview.is_some() {
-        record.context.session_preview = context.session_preview;
-    }
     record.context.model_display_name = context.model_display_name;
     record.context.agent_version = context.agent_version;
     record.context.observed_at = observed_at;
@@ -144,7 +141,6 @@ fn merge_opencode_context(
 
 fn has_rich_fields(context: &AgentContext) -> bool {
     context.session_name.is_some()
-        || context.session_preview.is_some()
         || context.model_display_name.is_some()
         || context.agent_version.is_some()
 }
@@ -218,10 +214,7 @@ mod tests {
         assert_eq!(merged.context.model_display_name.as_deref(), Some("GPT-5"));
         assert_eq!(merged.context.agent_version.as_deref(), Some("1.17.9"));
         assert_eq!(merged.context.session_name.as_deref(), Some("Fix auth"));
-        assert_eq!(
-            merged.context.session_preview.as_deref(),
-            Some("Update the auth middleware")
-        );
+        assert!(merged.context.session_preview.is_none());
         assert_eq!(merged.rich_observed_at, Some(rich_at));
     }
 
@@ -282,7 +275,7 @@ mod tests {
         AgentContext {
             source: "opencode".to_owned(),
             session_name: Some("Fix auth".to_owned()),
-            session_preview: Some("Update the auth middleware".to_owned()),
+            session_preview: None,
             model_id: None,
             model_display_name: Some("GPT-5".to_owned()),
             effort: None,
