@@ -126,23 +126,23 @@ This is the same surface the dead-end reaches, so the moment that used to print 
   All time 78B  ·  Week 1.4B  ·  Month 5.2B  ·  Year 61B
 
   Models
-  ● Opus 4.8    87.8% · $72,104 · ↘ 61.0m · ↗ 260.6m · ◌ 1.2b
-  ● Fable 5      4.8% ·  $4,180 · ↘  4.8m · ↗  12.9m · ◌ 210.0m
-  ● Haiku 4.5    3.1% ·  $2,410 · ↘  4.7m · ↗   6.6m · ◌  88.0m
-  ● Opus 4.7     2.9% ·  $3,020 · ↘  1.8m · ↗   8.7m · ◌  95.0m
+  ● Opus 4.8  $72,104 · ↘ 61.0m · ↗ 260.6m · ◌ 1.2b     87.8% ━━━━━━━━━─
+  ● Fable 5    $4,180 · ↘  4.8m · ↗  12.9m · ◌ 210.0m    4.8% ──────────
+  ● Haiku 4.5  $2,410 · ↘  4.7m · ↗   6.6m · ◌  88.0m    3.1% ──────────
+  ● Opus 4.7   $3,020 · ↘  1.8m · ↗   8.7m · ◌  95.0m    2.9% ──────────
 
   Agents
-  ● Claude  ◎ 612 · ◇ 48B · $82,100 · 78.7%
-  ● Codex   ◎  85 · ◇ 13B · $21,440 · 21.3%
+  ● Claude     ◎ 612 · ◇ 48B · $82,100                  78.7% ━━━━━━━━──
+  ● Codex      ◎  85 · ◇ 13B · $21,440                  21.3% ━━────────
 
-  ◎ Sessions: 697
+  Sessions: 697
   Active days: 27/28                Longest streak: 27 days
   Most active day: May 29           Current streak: 27 days
 ```
 
 The heatmap is the one the lobby embeds: the same five-step `· ░ ▒ ▓ █` ramp as spaced single-glyph cells, the same per-graph scale, the same account-global aggregate described under [your pace](#your-pace--the-token-heatmap) above — one renderer with two homes. It reads in or out of a workspace because the pace is keyed to the provider account rather than any one room.
 
-Beneath it the panel adds the figures the heatmap implies. The **All time / Week / Month / Year** row shows all-time tokens with cache-read included, then trailing 7/30/365-day `◇` token totals. The **Models** breakdown shares each model's slice of your `◇` token total over the full history in one aligned row with dollars, input (`↘`), output (`↗`), and cache-read (`◌`), friendliest-name first (`claude-opus-4-8` reads as `Opus 4.8`). The **Agents** breakdown shares the same trailing-year token total by adapter kind — Claude, Codex, Pi, Open Code, and any future kind with recorded spend — leading with the glyphed session count (`◎`), then tokens, dollars, and share beside each row. The token glyphs follow the sidebar glyph set, so `[theme] style = "modern"` and `[theme.glyphs] set = "nerd_font"` switch this panel to the Nerd Font token vocabulary while the CLI colors stay on the default palette. The **insights** close it: glyphed total sessions and the heaviest single day over the history, the trailing-four-week active ratio, and your longest and current active-day streaks. Tokens carry the per-model and per-agent breakdowns, so attribution is independent of pricing coverage — an unpriced model still attributes its tokens.
+Beneath it the panel adds the figures the heatmap implies. The **All time / Week / Month / Year** row shows all-time tokens with cache-read included, then trailing 7/30/365-day `◇` token totals. The **Models** breakdown shares each model's slice of your `◇` token total over the full history with dollars, input (`↘`), output (`↗`), and cache-read (`◌`), friendliest-name first (`claude-opus-4-8` reads as `Opus 4.8`), then lands share in a right-aligned column shared with Agents and reinforced by a thin `━`/`─` bar. The **Agents** breakdown shares the same trailing-year token total by adapter kind — Claude, Codex, Pi, Open Code, and any future kind with recorded spend — leading with the glyphed session count (`◎`), then tokens and dollars before the same share column and bar. The token glyphs follow the sidebar glyph set, so `[theme] style = "modern"` and `[theme.glyphs] set = "nerd_font"` switch this panel to the Nerd Font token vocabulary while the CLI colors stay on the default palette. The **insights** close it: total sessions and the heaviest single day over the history, the trailing-four-week active ratio, and your longest and current active-day streaks. Tokens carry the per-model and per-agent breakdowns, so attribution is independent of pricing coverage — an unpriced model still attributes its tokens.
 
 `rimz stats` prints the panel and returns to the shell by default, so it pipes and scrolls like any report. `--refresh` holds the panel open, clears and redraws it every 60 seconds, exits on Ctrl-C in a standalone terminal, and exits when its pane closes; the `rimzd` daemon view carries a held live `rimz stats --refresh` pane as the default middle-column content beside the render and managed hosts, so Ctrl-C leaves the dashboard and sidebar width intact while pane close still ends the process. `[daemon]` configures that middle column. `--dollars` scales the heatmap by spend instead of tokens — the spend view the lobby's `t` toggles to — and `--json` emits the per-day buckets, the trailing windows, the model and agent breakdowns, and the insights for scripts. `--refresh` conflicts with `--json` because the live panel is a screen, not a report. The fast path is one read of the current persistent `provider-spending.json`, matching the sidebar history read; a missing or old-shape cache takes runtime `spending.lock`, uses the same pricing refresh path as the sidebar producer, writes persistent `spending.json` plus `provider-spending.json`, and falls back to local in-memory computation only when another producer never publishes in time.
 
