@@ -320,7 +320,7 @@ fn worktree_new_with_at_base_keeps_pending_commits() {
 
 #[cfg(unix)]
 #[test]
-fn agents_exec_sighup_removes_clean_worktree() {
+fn agents_exec_clean_exit_removes_clean_worktree() {
     if git_missing() {
         return;
     }
@@ -331,17 +331,16 @@ fn agents_exec_sighup_removes_clean_worktree() {
         .assert()
         .success();
     let path = env.home_root.join("project-worktrees").join("demo");
-    let mut child = spawn_agent_exec(&env, &path, "clean");
+    let mut child = spawn_agent_exec_once(&env, &path, "clean");
 
     wait_for_ready(
         &mut child,
         &env.home_root.join("clean.ready"),
         &env.home_root.join("clean.pid"),
     );
-    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
     let _status = wait_for_exit(&mut child, &env.home_root.join("clean.pid"));
 
-    assert!(!path.exists(), "clean worktree removed after SIGHUP");
+    wait_for_path_absent(&path, "clean worktree removed after clean exit");
     assert!(
         !branch_exists(&env.project_root, "demo"),
         "worktree branch deleted"
@@ -805,16 +804,15 @@ fn auto_remove_force_deletes_branch_merged_into_explicit_base() {
         "feature is landed on explicit base even though main lacks it"
     );
 
-    let mut child = spawn_agent_exec(&env, &path, "explicit-base");
+    let mut child = spawn_agent_exec_once(&env, &path, "explicit-base");
     wait_for_ready(
         &mut child,
         &env.home_root.join("explicit-base.ready"),
         &env.home_root.join("explicit-base.pid"),
     );
-    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
     let _status = wait_for_exit(&mut child, &env.home_root.join("explicit-base.pid"));
 
-    assert!(!path.exists(), "explicit-base worktree removed");
+    wait_for_path_absent(&path, "explicit-base worktree removed");
     assert!(
         !branch_exists(&env.project_root, "demo"),
         "branch deleted after proving it landed on develop"
@@ -918,6 +916,22 @@ fn git_stdout(cwd: &Path, args: &[&str]) -> String {
 #[cfg(unix)]
 fn spawn_agent_exec(env: &Env, worktree: &Path, label: &str) -> Child {
     spawn_agent_exec_command(env, env.rimz(), worktree, worktree, label)
+}
+
+#[cfg(unix)]
+fn spawn_agent_exec_once(env: &Env, worktree: &Path, label: &str) -> Child {
+    let shim_dir = write_codex_spawn_marker_shim(env);
+    let ready = env.home_root.join(format!("{label}.ready"));
+    let mut cmd = env.rimz();
+    cmd.args(["agents", "exec", "codex", "--worktree-path"])
+        .arg(worktree)
+        .current_dir(worktree)
+        .env("PATH", path_with_front(&shim_dir))
+        .env("RIMZ_TEST_AGENT_READY", &ready)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd.spawn().expect("spawn one-shot agents exec")
 }
 
 #[cfg(unix)]
@@ -1121,6 +1135,19 @@ fn wait_for_exit(child: &mut Child, agent_pid_file: &Path) -> ExitStatus {
     kill_agent_pid(agent_pid_file);
     let _ = child.wait();
     panic!("timed out waiting for agents exec to exit");
+}
+
+#[cfg(unix)]
+fn wait_for_path_absent(path: &Path, message: &str) {
+    let start = Instant::now();
+    let timeout = ready_timeout();
+    while start.elapsed() < timeout {
+        if !path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("{message}: {}", path.display());
 }
 
 #[cfg(unix)]
