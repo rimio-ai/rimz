@@ -313,6 +313,7 @@ fn span_width(span: &Span<'_>) -> usize {
 /// Center a single line within `width` by prepending padding. A line already
 /// at or past the width is returned unchanged. The line-level style survives
 /// the rebuild, so styled chrome stays styled through the helper.
+#[cfg(test)]
 pub(super) fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
     let content_width = line.width();
     let pad = width.saturating_sub(content_width) / 2;
