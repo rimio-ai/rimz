@@ -28,7 +28,10 @@ fn ambient_session_keys() -> impl Iterator<Item = String> {
 /// at builder construction: a test that *sets* one of these afterwards wins
 /// over the removal. Every builder that runs `rimz` or creates a mux server
 /// goes through this — a mux server captures the spawning environment and
-/// hands it to every pane it ever creates.
+/// hands it to every pane it ever creates. Under coverage, point child profile
+/// output at the null device: several fixtures intentionally SIGKILL long-lived
+/// child `rimz` processes, and a half-written `.profraw` poisons the merge even
+/// though the test process itself exited cleanly.
 pub trait ScrubSessionEnvExt {
     fn scrub_session_env(&mut self) -> &mut Self;
 }
@@ -38,6 +41,7 @@ impl ScrubSessionEnvExt for Command {
         for key in ambient_session_keys() {
             self.env_remove(key);
         }
+        suppress_child_coverage(self);
         self
     }
 }
@@ -47,8 +51,25 @@ impl ScrubSessionEnvExt for portable_pty::CommandBuilder {
         for key in ambient_session_keys() {
             self.env_remove(key);
         }
+        suppress_pty_child_coverage(self);
         self
     }
+}
+
+fn suppress_child_coverage(cmd: &mut Command) {
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        cmd.env("LLVM_PROFILE_FILE", profile_sink());
+    }
+}
+
+fn suppress_pty_child_coverage(cmd: &mut portable_pty::CommandBuilder) {
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        cmd.env("LLVM_PROFILE_FILE", profile_sink());
+    }
+}
+
+fn profile_sink() -> &'static str {
+    if cfg!(windows) { "NUL" } else { "/dev/null" }
 }
 
 /// Maximum wall time for a mux control command in tests. Healthy control
