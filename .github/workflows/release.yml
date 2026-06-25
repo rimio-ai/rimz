@@ -89,7 +89,10 @@ jobs:
           if curl -fsS -H 'User-Agent: rimz-release' "https://crates.io/api/v1/crates/rimz/${version}" >/dev/null; then
             echo "rimz ${version} already published"
           else
-            cargo publish -p rimz
+            # cargo xtask dist already refreshed the gitignored pricing snapshot
+            # force-included by Cargo's package include list; --allow-dirty is
+            # required because cargo otherwise rejects that ignored included file.
+            cargo publish -p rimz --allow-dirty
           fi
 
       - name: Resolve release identity
