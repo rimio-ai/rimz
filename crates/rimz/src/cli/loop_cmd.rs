@@ -200,7 +200,7 @@ fn add(args: AddArgs) -> Result<()> {
     };
     // Validate the firing time before writing, so a bad `--at`/`--days` fails here.
     let parsed = schedule::parse_schedule(&args.name, &entry)?;
-    preflight_entry(&args.name, &entry)?;
+    preflight_entry(&args.name, &entry, resolved.as_ref())?;
     config_set_entry(&args.name, &entry)?;
 
     let mut out = ui::out();
@@ -454,10 +454,16 @@ fn spawn_spec<'a>(name: &str, entry: &'a TaskEntry) -> Result<&'a str> {
     }
 }
 
-fn preflight_entry(name: &str, entry: &TaskEntry) -> Result<()> {
+fn preflight_entry(
+    name: &str,
+    entry: &TaskEntry,
+    resolved: Option<&ResolvedTaskSpec>,
+) -> Result<()> {
     match task_mode(name, entry)? {
-        TaskMode::Spawn(_) => {
-            preflight_task(entry)?;
+        TaskMode::Spawn(spec) => {
+            let resolved = resolved
+                .with_context(|| format!("missing resolved loop task spec for `{spec}`"))?;
+            preflight_resolved_task(spec, resolved)?;
         }
         TaskMode::Deliver(target) => preflight_kind(&target.kind)?,
     }
@@ -603,11 +609,16 @@ fn preflight_task(entry: &TaskEntry) -> Result<ResolvedTaskSpec> {
         .as_deref()
         .context("loop task is missing `spec`")?;
     let resolved = resolve_task_spec(spec, &workspace)?;
+    preflight_resolved_task(spec, &resolved)?;
+    Ok(resolved)
+}
+
+fn preflight_resolved_task(spec: &str, resolved: &ResolvedTaskSpec) -> Result<()> {
     if agents_spec::virtual_ping_shape(spec) {
         ping_kind_supported(&resolved.kind)?;
     }
     preflight_kind(&resolved.kind)?;
-    Ok(resolved)
+    Ok(())
 }
 
 fn preflight_kind(kind: &str) -> Result<()> {

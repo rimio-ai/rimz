@@ -15,6 +15,8 @@ Rimz stores schedule intent in per-machine `agents.toml`. `rimz loop add` valida
 - **Raw cron:** `cron = "*/15 * * * *"` uses the in-process five-field matcher for minute, hour, day-of-month, month, and day-of-week.
 - **One-shot:** `once = true` with a calendar or cron schedule. `rimz loop add --in 30m` resolves to a local `at` time and implies `once`.
 
+Calendar tasks catch up once for today's matching time when a room opens later the same day. Cron tasks fire during matching open-room minutes, so a room opened later waits for the next matching minute.
+
 One-shot tasks remove their config row immediately before the supervised run or queue delivery. The run exits the process with the agent status, so cleanup cannot happen afterward. A one-shot removed pre-fire that then fails to launch is not retried.
 
 ## Elder firing
