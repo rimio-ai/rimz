@@ -72,11 +72,11 @@ Project config can launch resolvers only after project trust allows its command-
 ## Agent hooks
 
 ```sh
-rimz hooks install [AGENT]
+rimz hooks install [--dry-run] [AGENT]
 rimz hooks uninstall [AGENT]
 ```
 
-`hooks install` writes Rimz-managed hook entries into the agent's per-user config. With no `AGENT` it installs every detected supported agent on PATH and prints a JSON array of reports; with an explicit kind (`claude`, `codex`, `pi`, …) it prints the single report. `hooks uninstall` removes only Rimz-managed hook blocks — with no `AGENT` it removes every installed set, prints `[]` when nothing is installed, and exits successfully without needing the binary on PATH.
+`hooks install` writes Rimz-managed hook entries into the agent's per-user config. With no `AGENT` it installs every detected supported agent on PATH and prints a JSON array of reports; with an explicit kind (`claude`, `codex`, `pi`, …) it prints the single report. `--dry-run` prints the same per-agent summary plus a unified diff to stderr and writes no files. `hooks uninstall` removes only Rimz-managed hook blocks — with no `AGENT` it removes every installed set, prints `[]` when nothing is installed, and exits successfully without needing the binary on PATH.
 
 Installed hooks call Rimz's hidden hook entrypoint for lifecycle and blocking feed events. Hook stdout is the agent decision channel, so installed hooks keep diagnostics off stdout and route decisions through the bridge ([the adapter boundary](../../internals/agents/agent.md#the-adapter-boundary)). Some agents add their own hook trust gate; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix.
 

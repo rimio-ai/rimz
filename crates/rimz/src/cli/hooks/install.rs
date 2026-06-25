@@ -1,7 +1,11 @@
 use super::*;
 use std::io::Write as _;
 
-pub(super) fn run_install(agent: Option<String>) -> Result<()> {
+pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
+    if dry_run {
+        return run_install_dry_run(agent);
+    }
+
     match agent {
         Some(agent) => {
             let integration = adapter_by_kind(&agent)?;
@@ -34,6 +38,31 @@ pub(super) fn run_install(agent: Option<String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn run_install_dry_run(agent: Option<String>) -> Result<()> {
+    let previews = match agent {
+        Some(agent) => {
+            let integration = adapter_by_kind(&agent)?;
+            vec![integration.preview_hook_install()?]
+        }
+        None => {
+            let adapters = super::super::hook_install::detected_installable_adapters();
+            if adapters.is_empty() {
+                anyhow::bail!(
+                    "no supported coding agents detected on PATH ({}) - install an agent and rerun, or name one: rimz hooks install <agent>",
+                    rimz::agents::known_kinds().collect::<Vec<_>>().join(", "),
+                );
+            }
+            let mut previews = Vec::new();
+            for integration in adapters {
+                previews.push(integration.preview_hook_install()?);
+            }
+            previews
+        }
+    };
+    let mut out = crate::cli::render::err();
+    crate::cli::hook_install::render_dry_run(&mut out, &previews)
 }
 
 pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {

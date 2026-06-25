@@ -47,7 +47,7 @@ use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Args, Parser, Subcommand};
 
 use rimz::agents::AgentState;
@@ -703,8 +703,16 @@ fn rimz_socket_environment_preflight(workspace_id: &WorkspaceId) -> Result<()> {
 }
 
 fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve(&args.path, globals.root.clone())
-        .with_context(|| format!("resolving workspace at {}", args.path.display()))?;
+    let workspace = match WorkspaceResolver::resolve(&args.path, globals.root.clone()) {
+        Ok(workspace) => workspace,
+        Err(rimz::workspace::WorkspaceErr::RefusedRoot { root, why }) => {
+            return Err(roomless_guidance(&root, why));
+        }
+        Err(err) => {
+            return Err(anyhow::Error::new(err))
+                .with_context(|| format!("resolving workspace at {}", args.path.display()));
+        }
+    };
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     // A same-mux room can't be nested: if we're already inside this backend's
     // session, report the directory's room and stop before any launch side
@@ -715,6 +723,16 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         return Ok(());
     }
     report_start_notices(&workspace)?;
+    if setup::ensure_default_config()? {
+        let config_path = rimz::config::MachineConfig::config_path();
+        let config_dir = config_path.parent().unwrap_or(config_path.as_path());
+        let mut err = std::io::stderr().lock();
+        writeln!(
+            err,
+            "rimz: wrote default config to {} — customize it there (`rimz config path`).",
+            render::home_relative(&config_dir.display().to_string())
+        )?;
+    }
     let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let sidebar_width = SidebarWidth::from_config(&machine_config.theme.display);
@@ -1079,6 +1097,16 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
     Ok(())
 }
 
+fn roomless_guidance(root: &Path, why: &str) -> anyhow::Error {
+    let root = render::home_relative(&root.display().to_string());
+    anyhow!(
+        "Rimz opens a control room for one project, but {root} is {why}.\n\n\
+Start one inside a project:\n  cd path/to/your-project   # a git repo works best\n  rimz\n\n\
+New project? Initialize git first:\n  git init && rimz\n\n\
+Or use this exact directory as a room:\n  rimz --root {root}"
+    )
+}
+
 fn finish_attach(
     backend: &dyn MuxBackend,
     session_name: &str,
@@ -1308,5 +1336,14 @@ mod tests {
             ])
             .is_ok()
         );
+    }
+
+    #[test]
+    fn roomless_guidance_names_project_and_escape_hatches() {
+        let message = roomless_guidance(Path::new("/tmp"), "the filesystem root").to_string();
+
+        assert!(message.contains("cd path/to/your-project"));
+        assert!(message.contains("git init && rimz"));
+        assert!(message.contains("rimz --root /tmp"));
     }
 }

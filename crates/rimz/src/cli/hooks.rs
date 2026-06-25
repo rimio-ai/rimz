@@ -85,9 +85,13 @@ enum HooksSubcmd {
         event: Option<String>,
     },
     /// Install the adapter's hooks into the agent's per-user config file.
+    /// Pass --dry-run to preview the config diff without writing files.
     /// Visible top-level command (not hidden) — the help text doubles as the
     /// install instruction.
     Install {
+        /// Preview the hook config diff without writing files.
+        #[arg(long)]
+        dry_run: bool,
         /// Agent name (`claude`, `codex`, `pi`, `opencode`). Omit to install every detected agent.
         agent: Option<String>,
     },
@@ -105,7 +109,7 @@ impl HooksArgs {
     pub(crate) fn scope(&self) -> (&'static str, Option<&str>) {
         match &self.command {
             HooksSubcmd::Feed { source, .. } => ("hooks feed", Some(source.as_str())),
-            HooksSubcmd::Install { agent } => ("hooks install", agent.as_deref()),
+            HooksSubcmd::Install { agent, .. } => ("hooks install", agent.as_deref()),
             HooksSubcmd::Uninstall { agent } => ("hooks uninstall", agent.as_deref()),
         }
     }
@@ -114,7 +118,7 @@ impl HooksArgs {
 pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         HooksSubcmd::Feed { source, event } => run_feed(source, event, globals),
-        HooksSubcmd::Install { agent } => run_install(agent),
+        HooksSubcmd::Install { agent, dry_run } => run_install(agent, dry_run),
         HooksSubcmd::Uninstall { agent } => run_uninstall(agent),
     }
 }

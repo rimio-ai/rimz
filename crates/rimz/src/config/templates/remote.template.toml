@@ -1,0 +1,15 @@
+# Rimz per-machine remote aliases.
+#
+# Save as ~/.config/rimz/remote.toml. The `rimz remote` commands read and
+# write this file; edit it directly when you want named SSH rooms in one
+# per-machine place outside a project.
+#
+# Each [[remote]] entry names one SSH target. `target` uses the same
+# `[user@]host:<session-or-path>` form accepted by `rimz remote connect`.
+
+## [[remote]]
+## name = "prod"
+## target = "agent@prod-box:query-engine"
+## reconnect = true
+## no_resume = false
+## mux = "tmux"

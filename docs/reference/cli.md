@@ -32,6 +32,8 @@ rimz
 
 Two surfaces have their own reference outside this map: [`rimz config`](./configuration.md) edits the per-machine config (the [maintenance page](./cli/maintenance.md#configure-the-machine) covers the command mechanics), and [`rimz stats`](../internals/reach/welcome.md#rimz-stats) renders the token-activity lobby.
 
+Hook install previews use `rimz hooks install --dry-run [AGENT]`, which prints the exact config diff without writing agent files.
+
 ## Start and attach a workspace
 
 ```sh

@@ -20,11 +20,13 @@ cd ~/code/query-engine   # a real, small project they already have
 rimz
 ```
 
-The first command is `rimz`, and it auto-detects the multiplexer (Zellij or tmux) and the agents (Claude, Codex), discovering or asking for everything else in flow — no wizard, config file, or account between the reader and the first frame.
+The first command is `rimz`, and it auto-detects the multiplexer (Zellij or tmux) and the agents (Claude, Codex), writes the per-machine config templates under `~/.config/rimz/`, and discovers or asks for everything else in flow — no wizard, hand-created config file, or account between the reader and the first frame.
 
-The first run on a machine opens with a consent gate before the room: showing what an agent is doing means adding reporting hooks to the agent's config, and that edit gets a review. The gate is a terminal-native sequential transcript left in scrollback, so the review, choice, diff, and result read top-to-bottom.
+The first run on a machine writes `config.toml`, `theme.toml`, `agents.toml`, and `remote.toml` when they are missing, prints where to customize them, then opens with one consent gate before the room: showing what an agent is doing means adding reporting hooks to the agent's config. The gate is a terminal-native transcript left in scrollback, so the summary, choice, and result read top-to-bottom.
 
 ```
+rimz: wrote default config to ~/.config/rimz — customize it there (`rimz config path`).
+
 ╭──────────────────────────────────────────────╮
 │ rimz · first-run setup                       │
 │                                              │
@@ -37,37 +39,30 @@ The first run on a machine opens with a consent gate before the room: showing wh
 
 Rimz found 2 coding agents on this machine: claude, codex.
 To show what an agent is doing, Rimz adds reporting hooks to the agent's config.
-2 quick questions — one per agent. Reversible any time with `rimz hooks uninstall`.
+Each hook is one line like:  rimz hooks feed --source <agent>.
+One quick question. Reversible any time with `rimz hooks uninstall`.
 
   claude · 1 of 2
-    8 hooks → ~/.claude/settings.json (additive — existing hooks kept)
+    13 hooks → ~/.claude/settings.json (additive — existing hooks kept)
     also sets your statusLine to report context to Rimz (removed on uninstall)
     undo → rimz hooks uninstall claude
-  Add hooks?  [Y/n] · d=diff · s=skip remaining d
-```
 
-```
-    --- ~/.claude/settings.json
-    +++ ~/.claude/settings.json
-    @@ -8,6 +8,14 @@
-         "UserPromptSubmit": [
-           { "hooks": [{ "type": "command", "command": "my-existing-hook" }] }
-         ],
-    +    "SessionStart": [
-    +      { "hooks": [{ "type": "command", "command": "rimz hooks feed --source claude" }] }
-    +    ],
-  Add hooks?  [Y/n] · d=diff · s=skip remaining
+  codex · 2 of 2
+    10 hooks → ~/.codex/config.toml (new file)
+    undo → rimz hooks uninstall codex
 
-✓ claude  8 hooks → ~/.claude/settings.json
-· codex  skipped — wire later with `rimz hooks install codex`
+  Add reporting hooks?  [Y/n]
+
+✓ claude  13 hooks → ~/.claude/settings.json
+✓ codex  10 hooks → ~/.codex/config.toml
 All set — your agents appear in the sidebar as they run.
 ```
 
 The gate answers the two fears before they are spoken.
 
-- The change is additive, shown as a real unified diff on `d`, so "it will overwrite my hooks" dies in one line.
+- The change is additive and names the exact config path; readers who want the full patch run `rimz hooks install --dry-run` before consenting.
 - The boundary is stated in the consent itself: the hooks report events, and answering a prompt stays with the reader.
-- Every exit stays open: `n` skips the current agent, `s` skips the rest while keeping earlier approvals, EOF keeps earlier approvals, and a fully-skipped agent still shows up as a plain process row with a hint on how to wire it later.
+- Every exit stays open: Enter wires every listed agent, `n` or EOF installs nothing, and an unwired agent still shows up as a plain process row with a hint on how to wire it later.
 - Install is per-machine state: later runs go straight to the room, and `rimz doctor` reports per-agent status.
 - A committed project config is its own separate gate with its own diff ([trust.md](../internals/sidebar/trust.md)); a toy project never shows it.
 
@@ -295,7 +290,7 @@ And because agents and scripts share one CLI, a deploy or migration script can p
 
 | Section | Reader does | Sees | Feels |
 | --- | --- | --- | --- |
-| First run | installs, consents, lands in the room | additive-diff gate, then `○ zsh` and a hint | reassured, then oriented |
+| First run | installs, consents, lands in the room | config pointer, one hook consent prompt, then `○ zsh` and a hint | reassured, then oriented |
 | The agent shows up | types `claude`, then prompts it | row re-skins to `○ claude`, then `⢿ running` | delight, then calm |
 | The question reaches you | gets notified, jumps to the pane | `? waiting`, an OS notification | the pitch lands |
 | The fleet | presses Space | grouped roster, `? 2  ! 1` | in control |

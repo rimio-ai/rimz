@@ -33,6 +33,7 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
     if args.yes {
         print_report(&report)?;
         render_merge_report(&config::merge_default_config()?)?;
+        report_remote_template()?;
         print_line("No hooks or trust grants were changed by --yes.")?;
         print_line("Run `rimz start` when ready.")?;
         return Ok(());
@@ -47,13 +48,20 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
         } else {
             write_fresh_config()?;
         }
-    } else if super::confirm("Write the default per-machine config now?")? {
-        write_fresh_config()?;
     } else {
-        print_line("Config unchanged.")?;
+        write_fresh_config()?;
     }
+    report_remote_template()?;
     print_line("Run `rimz start` when ready.")?;
     Ok(())
+}
+
+/// First-run config bootstrap: write the default config set and remote.toml
+/// when absent. Idempotent; returns whether anything was written.
+pub(crate) fn ensure_default_config() -> Result<bool> {
+    let wrote_core = config::write_default_config(false)?;
+    let wrote_remote = rimz::remote::aliases::RemoteAliases::ensure_template()?;
+    Ok(wrote_core || wrote_remote)
 }
 
 struct SetupReport {
@@ -148,6 +156,16 @@ fn write_fresh_config() -> Result<()> {
     config::write_default_config(true)?;
     for path in default_config_paths() {
         print_line(&format!("Wrote {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn report_remote_template() -> Result<()> {
+    if rimz::remote::aliases::RemoteAliases::ensure_template()? {
+        print_line(&format!(
+            "Wrote {}",
+            rimz::remote::aliases::RemoteAliases::config_path().display()
+        ))?;
     }
     Ok(())
 }

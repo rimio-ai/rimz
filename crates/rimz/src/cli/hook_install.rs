@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::io::{BufRead, IsTerminal, Write};
 
 use anyhow::Result;
@@ -67,7 +66,7 @@ pub(super) fn ensure_detected_agent_hooks() -> Result<()> {
     let mut input = stdin.lock();
     let mut out = render::err();
     let selected = prompt_consent(&missing, &mut input, &mut out)?;
-    install_selected(&missing, &selected, &mut out)
+    install_selected(&selected, &mut out)
 }
 
 fn prompt_consent(
@@ -76,48 +75,33 @@ fn prompt_consent(
     out: &mut dyn Write,
 ) -> Result<Vec<&'static str>> {
     write_intro(out, previews)?;
-    let mut selected = Vec::new();
     for (idx, preview) in previews.iter().enumerate() {
-        write_agent_block(out, preview, idx, previews.len())?;
-        loop {
-            let mut answer = String::new();
-            if input.read_line(&mut answer)? == 0 {
-                return Ok(selected);
+        writeln!(out)?;
+        write_agent_body(out, preview, idx, previews.len())?;
+    }
+    writeln!(out)?;
+    loop {
+        write_prompt(out)?;
+        let mut answer = String::new();
+        if input.read_line(&mut answer)? == 0 {
+            return Ok(Vec::new());
+        }
+        match answer.trim() {
+            "" | "y" | "Y" | "yes" | "YES" | "Yes" => {
+                return Ok(previews.iter().map(|preview| preview.agent).collect());
             }
-            match answer.trim() {
-                "" | "y" | "Y" | "yes" | "YES" | "Yes" => {
-                    selected.push(preview.agent);
-                    break;
-                }
-                "n" | "N" | "no" | "NO" | "No" => break,
-                "d" | "D" => {
-                    write_diff(out, preview)?;
-                    write_prompt(out, idx + 1 < previews.len())?;
-                }
-                "s" | "S" | "q" | "Q" if idx + 1 < previews.len() => return Ok(selected),
-                _ => {
-                    let skip_hint = if idx + 1 < previews.len() {
-                        "; s skips the rest"
-                    } else {
-                        ""
-                    };
-                    writeln!(
-                        out,
-                        "  Enter adds this agent; n skips; d shows the diff{skip_hint}."
-                    )?;
-                    write_prompt(out, idx + 1 < previews.len())?;
-                }
+            "n" | "N" | "no" | "NO" | "No" => return Ok(Vec::new()),
+            _ => {
+                writeln!(
+                    out,
+                    "  Enter adds reporting hooks for every listed agent; n skips them."
+                )?;
             }
         }
     }
-    Ok(selected)
 }
 
-fn install_selected(
-    previews: &[HookInstallPreview],
-    selected: &[&'static str],
-    out: &mut dyn Write,
-) -> Result<()> {
+fn install_selected(selected: &[&'static str], out: &mut dyn Write) -> Result<()> {
     writeln!(out)?;
     if selected.is_empty() {
         writeln!(
@@ -127,7 +111,6 @@ fn install_selected(
         return Ok(());
     }
 
-    let installed = selected.iter().copied().collect::<BTreeSet<_>>();
     for name in selected {
         let agent = rimz::agents::adapter_by_kind(name)?;
         let report = agent.install_hooks()?;
@@ -135,11 +118,6 @@ fn install_selected(
         write_untrusted_hooks_notice(name, &agent.untrusted_installed_hooks(), out)?;
     }
 
-    for preview in previews {
-        if !installed.contains(preview.agent) {
-            write_skipped_note(out, preview)?;
-        }
-    }
     writeln!(
         out,
         "All set — your agents appear in the sidebar as they run."
@@ -182,15 +160,7 @@ fn write_untrusted_hooks_notice(
 
 fn write_intro(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
     write_intro_context(out, previews)?;
-    if previews.len() == 1 {
-        writeln!(out, "One quick question. {CONSENT_REVERSIBLE}")?;
-    } else {
-        writeln!(
-            out,
-            "{} quick questions — one per agent. {CONSENT_REVERSIBLE}",
-            previews.len()
-        )?;
-    }
+    writeln!(out, "One quick question. {CONSENT_REVERSIBLE}")?;
     Ok(())
 }
 
@@ -217,6 +187,10 @@ fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> 
     writeln!(
         out,
         "To show what an agent is doing, Rimz adds reporting hooks to the agent's config."
+    )?;
+    writeln!(
+        out,
+        "Each hook is one line like:  rimz hooks feed --source <agent>."
     )?;
     Ok(())
 }
@@ -285,17 +259,6 @@ fn terminal_columns() -> usize {
         .unwrap_or(80)
 }
 
-fn write_agent_block(
-    out: &mut dyn Write,
-    preview: &HookInstallPreview,
-    idx: usize,
-    total: usize,
-) -> Result<()> {
-    writeln!(out)?;
-    write_agent_body(out, preview, idx, total)?;
-    write_prompt(out, idx + 1 < total)
-}
-
 fn write_agent_body(
     out: &mut dyn Write,
     preview: &HookInstallPreview,
@@ -340,29 +303,25 @@ fn write_agent_body(
     Ok(())
 }
 
-fn write_prompt(out: &mut dyn Write, offer_skip_rest: bool) -> Result<()> {
+fn write_prompt(out: &mut dyn Write) -> Result<()> {
     write!(
         out,
-        "  Add hooks?  {} · {}",
-        render::paint(render::palette::ACCENT.bold(), "[Y/n]"),
-        render::paint(render::palette::ACCENT.bold(), "d=diff")
+        "  Add reporting hooks?  {} ",
+        render::paint(render::palette::ACCENT.bold(), "[Y/n]")
     )?;
-    if offer_skip_rest {
-        write!(
-            out,
-            " · {}",
-            render::paint(render::palette::ACCENT.bold(), "s=skip remaining")
-        )?;
-    }
-    write!(out, " ")?;
     out.flush()?;
     Ok(())
 }
 
-fn write_diff(out: &mut dyn Write, preview: &HookInstallPreview) -> Result<()> {
-    writeln!(out)?;
-    for line in preview_diff(preview).lines() {
-        writeln!(out, "    {}", color_diff_line(line))?;
+pub(crate) fn render_dry_run(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
+    for (idx, preview) in previews.iter().enumerate() {
+        if idx > 0 {
+            writeln!(out)?;
+        }
+        write_agent_body(out, preview, idx, previews.len())?;
+        for line in preview_diff(preview).lines() {
+            writeln!(out, "    {}", color_diff_line(line))?;
+        }
     }
     Ok(())
 }
@@ -389,21 +348,6 @@ fn write_install_result(out: &mut dyn Write, report: &HookInstallReport) -> Resu
         report.agent,
         report.installed_events.len(),
         home_relative_path(&report.config_path)
-    )?;
-    Ok(())
-}
-
-fn write_skipped_note(out: &mut dyn Write, preview: &HookInstallPreview) -> Result<()> {
-    writeln!(
-        out,
-        "{}",
-        render::paint(
-            render::palette::FAINT,
-            &format!(
-                "· {}  skipped — wire later with `rimz hooks install {}`",
-                preview.agent, preview.agent
-            )
-        )
     )?;
     Ok(())
 }
@@ -538,54 +482,32 @@ mod tests {
     }
 
     #[test]
-    fn prompt_selects_and_skips_agents() {
+    fn prompt_accepts_or_declines_all_agents() {
         let previews = [
             preview("claude", Some("{}\n"), "{\"hooks\": []}\n"),
             preview("codex", Some("{}\n"), "{\"hooks\": []}\n"),
         ];
 
-        let (selected, _) = drive(&previews, b"\nn\n");
-
-        assert_eq!(selected, vec!["claude"]);
-    }
-
-    #[test]
-    fn prompt_prints_diff_and_reprompts() {
-        let previews = [preview("claude", Some("old\n"), "new\n")];
-
-        let (selected, rendered) = drive(&previews, b"d\n\n");
-
-        assert_eq!(selected, vec!["claude"]);
-        assert!(rendered.contains("-old"));
-        assert!(rendered.contains("+new"));
-        assert!(rendered.matches("Add hooks?").count() >= 2);
-    }
-
-    #[test]
-    fn prompt_eof_keeps_prior_choices_without_approving_current_agent() {
-        let previews = [
-            preview("claude", Some("{}\n"), "{\"hooks\": []}\n"),
-            preview("codex", Some("{}\n"), "{\"hooks\": []}\n"),
-        ];
+        let (selected, _) = drive(&previews, b"y\n");
+        assert_eq!(selected, vec!["claude", "codex"]);
 
         let (selected, _) = drive(&previews, b"\n");
+        assert_eq!(selected, vec!["claude", "codex"]);
 
-        assert_eq!(selected, vec!["claude"]);
+        let (selected, _) = drive(&previews, b"n\n");
+        assert!(selected.is_empty());
     }
 
     #[test]
-    fn prompt_skip_rest_keeps_prior_choices_and_stops() {
+    fn prompt_eof_declines_every_agent() {
         let previews = [
             preview("claude", Some("{}\n"), "{\"hooks\": []}\n"),
             preview("codex", Some("{}\n"), "{\"hooks\": []}\n"),
-            preview("opencode", Some("{}\n"), "{\"hooks\": []}\n"),
         ];
 
-        let (selected, rendered) = drive(&previews, b"\ns\n");
+        let (selected, _) = drive(&previews, b"");
 
-        assert_eq!(selected, vec!["claude"]);
-        assert!(rendered.contains("codex"));
-        assert!(!rendered.contains("opencode · 3 of 3"));
+        assert!(selected.is_empty());
     }
 
     #[test]
@@ -595,12 +517,20 @@ mod tests {
         let created = preview("codex", None, "{\"hooks\": []}\n");
         let previews = [additive, created];
 
-        let (_, rendered) = drive(&previews, b"n\nn\n");
+        let (_, rendered) = drive(&previews, b"n\n");
 
         assert!(rendered.contains("first-run setup"));
         assert!(rendered.contains("Rimz found 2 coding agents on this machine: claude, codex."));
-        assert!(rendered.contains("Add hooks?"));
+        assert!(rendered.contains("One quick question."));
+        assert!(
+            rendered.contains("Each hook is one line like:  rimz hooks feed --source <agent>.")
+        );
+        assert!(rendered.contains("Add reporting hooks?"));
+        assert_eq!(rendered.matches("[Y/n]").count(), 1);
+        assert!(!rendered.contains("d=diff"));
+        assert!(!rendered.contains("skip remaining"));
         assert!(rendered.contains("claude"));
+        assert!(rendered.contains("codex"));
         assert!(rendered.contains("~/.claude/settings.json"));
         assert!(rendered.contains("(additive"));
         assert!(rendered.contains("(new file)"));
@@ -661,23 +591,37 @@ mod tests {
     }
 
     #[test]
-    fn install_renderers_show_results_and_skipped_agents() {
+    fn dry_run_renders_agent_bodies_and_diffs_without_prompt() {
+        let previews = [
+            preview("claude", Some("old\n"), "new\n"),
+            preview("codex", None, "one\ntwo\n"),
+        ];
+
+        let rendered = strip(|w| render_dry_run(w, &previews));
+
+        assert!(rendered.contains("claude · 1 of 2"));
+        assert!(rendered.contains("codex · 2 of 2"));
+        assert!(rendered.contains("-old"));
+        assert!(rendered.contains("+new"));
+        assert!(rendered.contains("+one\n"));
+        assert!(!rendered.contains("Add reporting hooks?"));
+    }
+
+    #[test]
+    fn install_renderers_show_results_and_noop_message() {
         let report = HookInstallReport {
             agent: "claude",
             config_path: home_config_path("claude"),
             installed_events: vec!["SessionStart".to_owned(), "PreToolUse".to_owned()],
             merged: true,
         };
-        let skipped = preview("codex", None, "{}\n");
 
         let rendered = strip(|w| {
             write_install_result(w, &report)?;
-            write_skipped_note(w, &skipped)?;
-            install_selected(&[skipped], &[], w)
+            install_selected(&[], w)
         });
 
         assert!(rendered.contains("✓ claude  2 hooks → ~/.claude/settings.json"));
-        assert!(rendered.contains("· codex  skipped — wire later with `rimz hooks install codex`"));
         assert!(
             rendered.contains("Nothing changed - wire agents any time with `rimz hooks install`.")
         );

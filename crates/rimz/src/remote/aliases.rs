@@ -21,6 +21,7 @@ use crate::ledger::paths::config_home;
 use crate::remote::{RemoteTarget, RemoteTargetError};
 
 pub const REMOTE_FILE: &str = "remote.toml";
+pub const REMOTE_TEMPLATE: &str = include_str!("../config/templates/remote.template.toml");
 const RIMZ_CONFIG_SUBDIR: &str = "rimz";
 const ALIAS_NAME_MAX_LEN: usize = 64;
 
@@ -88,6 +89,23 @@ impl RemoteAliases {
     /// Save aliases to `$XDG_CONFIG_HOME/rimz/remote.toml`.
     pub fn save(&self) -> Result<()> {
         self.save_to(&default_path())
+    }
+
+    pub fn config_path() -> PathBuf {
+        default_path()
+    }
+
+    pub fn ensure_template() -> Result<bool> {
+        let path = Self::config_path();
+        Self::ensure_template_at(&path)
+    }
+
+    fn ensure_template_at(path: &Path) -> Result<bool> {
+        if path.exists() {
+            return Ok(false);
+        }
+        atomic::write_bytes_atomically(path, REMOTE_TEMPLATE.as_bytes())?;
+        Ok(true)
     }
 
     /// Test-only loader. Production callers go through [`Self::load`].
@@ -230,6 +248,42 @@ mod tests {
         let path = dir.path().join("remote.toml");
         let list = RemoteAliases::load_from(&path).unwrap();
         assert!(list.entries().is_empty());
+    }
+
+    #[test]
+    fn template_loads_empty_and_example_parses_when_uncommented() {
+        let list: RemoteAliases = toml::from_str(REMOTE_TEMPLATE).unwrap();
+        assert!(list.entries().is_empty());
+
+        let uncommented = REMOTE_TEMPLATE
+            .lines()
+            .map(|line| line.strip_prefix("## ").unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let list: RemoteAliases = toml::from_str(&uncommented).unwrap();
+        let entry = list.get("prod").unwrap();
+        assert_eq!(entry.target, "agent@prod-box:query-engine");
+        assert!(entry.reconnect);
+        assert!(!entry.no_resume);
+        assert_eq!(entry.mux, Some(MuxName::Tmux));
+    }
+
+    #[test]
+    fn ensure_template_writes_once_without_overwriting() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("rimz").join("remote.toml");
+
+        assert!(RemoteAliases::ensure_template_at(&path).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), REMOTE_TEMPLATE);
+
+        std::fs::write(
+            &path,
+            "[[remote]]\nname = \"dev\"\ntarget = \"dev-box:app\"\n",
+        )
+        .unwrap();
+        assert!(!RemoteAliases::ensure_template_at(&path).unwrap());
+        let list = RemoteAliases::load_from(&path).unwrap();
+        assert!(list.contains("dev"));
     }
 
     #[test]

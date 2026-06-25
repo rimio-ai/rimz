@@ -26,12 +26,13 @@ Per-machine settings load leniently: a missing file is the default config, unkno
 ## Get started
 
 ```sh
-rimz setup                 # detect this machine and offer to keep and refresh config
+rimz                       # first start writes missing config and opens the room
+rimz setup                 # detect this machine and write or refresh config
 rimz config init           # write config.toml, theme.toml, and agents.toml
 rimz config init --print   # print the commented templates without writing
 ```
 
-Most people run `rimz setup` or `rimz config init` once, then edit the few lines they care about. Setup keeps an existing config, refreshes it against the current templates, and reports any keys it skips.
+Most people run `rimz` inside a project or `rimz setup` once, then edit the few lines they care about. First start and setup write missing per-machine config without prompting, including `remote.toml`; setup keeps an existing config, refreshes it against the current templates, and reports any keys it skips.
 
 **The generated template is the field reference.** Every persisted section and default scalar ships as commented TOML with an inline note, so `rimz config init --print` is the authoritative, always-current list of keys and defaults. This page explains the *model and the knobs that are easy to misread*, and leaves the full field list to the template. Leaving a line commented keeps following the defaults shipped by future Rimz versions; uncommenting makes it this machine's override.
 
