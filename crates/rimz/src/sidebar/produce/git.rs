@@ -21,11 +21,10 @@ use crate::sidebar::enrich::{
 use crate::worktree::{self, LandedVerdict};
 
 /// How a non-producing sidebar waits for the elected producer's diff-stats
-/// write before refreshing locally. ~300ms total (15 × 20ms) — wider than the
-/// snapshot's ~200ms because the per-worktree git chain runs longer, yet still
-/// well under the ~2s backstop tick.
+/// write before refreshing locally. ~1.5s total (75 × 20ms) — wide enough for
+/// coverage-instrumented git chains, yet still under the ~2s backstop tick.
 const DIFF_STATS_WAIT_STEP: Duration = Duration::from_millis(20);
-const DIFF_STATS_WAIT_STEPS: u32 = 15;
+const DIFF_STATS_WAIT_STEPS: u32 = 75;
 
 mod roots;
 
