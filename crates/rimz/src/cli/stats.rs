@@ -616,33 +616,14 @@ fn render_panel(
     let model_rows = model_cells(&models, name_w, glyphs);
     let agent_rows = agent_cells(&agents, name_w, glyphs);
     let pct_w = stat_pct_width(&model_rows, &agent_rows);
-    let (compact, left_w, show_bar) =
-        stat_section_layout(&model_rows, &agent_rows, pct_w, geometry.panel_width);
+    let layout = stat_section_layout(&model_rows, &agent_rows, pct_w, geometry.panel_width);
     if !model_rows.is_empty() {
         lines.push(String::new());
-        emit_stat_section(
-            &mut lines,
-            "Models",
-            &model_rows,
-            compact,
-            left_w,
-            pct_w,
-            show_bar,
-            glyphs,
-        );
+        emit_stat_section(&mut lines, "Models", &model_rows, layout, glyphs);
     }
     if !agent_rows.is_empty() {
         lines.push(String::new());
-        emit_stat_section(
-            &mut lines,
-            "Agents",
-            &agent_rows,
-            compact,
-            left_w,
-            pct_w,
-            show_bar,
-            glyphs,
-        );
+        emit_stat_section(&mut lines, "Agents", &agent_rows, layout, glyphs);
     }
     lines.push(String::new());
     insights_lines(&mut lines, stats, today_day, geometry.panel_width);
@@ -781,6 +762,14 @@ impl StatCell {
             &self.left_full
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct StatSectionLayout {
+    compact: bool,
+    left_w: usize,
+    pct_w: usize,
+    show_bar: bool,
 }
 
 /// The per-model token breakdown, before the shared share column is appended.
@@ -1009,15 +998,30 @@ fn stat_section_layout(
     agent_cells: &[StatCell],
     pct_w: usize,
     panel_width: usize,
-) -> (bool, usize, bool) {
+) -> StatSectionLayout {
     let full_left_w = stat_left_width(model_cells, agent_cells, false);
     if stat_row_width(full_left_w, pct_w, true) <= panel_width {
-        (false, full_left_w, true)
+        StatSectionLayout {
+            compact: false,
+            left_w: full_left_w,
+            pct_w,
+            show_bar: true,
+        }
     } else if stat_row_width(full_left_w, pct_w, false) <= panel_width {
-        (false, full_left_w, false)
+        StatSectionLayout {
+            compact: false,
+            left_w: full_left_w,
+            pct_w,
+            show_bar: false,
+        }
     } else {
         let compact_left_w = stat_left_width(model_cells, agent_cells, true);
-        (true, compact_left_w, false)
+        StatSectionLayout {
+            compact: true,
+            left_w: compact_left_w,
+            pct_w,
+            show_bar: false,
+        }
     }
 }
 
@@ -1053,10 +1057,7 @@ fn emit_stat_section(
     lines: &mut Vec<String>,
     header: &str,
     cells: &[StatCell],
-    compact: bool,
-    left_w: usize,
-    pct_w: usize,
-    show_bar: bool,
+    layout: StatSectionLayout,
     glyphs: &PanelGlyphs,
 ) {
     if cells.is_empty() {
@@ -1069,10 +1070,10 @@ fn emit_stat_section(
         let pct = format!("{:.1}", cell.share_pct);
         let mut line = format!(
             "  {}{gutter}{}%",
-            pad_to(cell.left(compact), left_w),
-            pad_left(&pct, pct_w),
+            pad_to(cell.left(layout.compact), layout.left_w),
+            pad_left(&pct, layout.pct_w),
         );
-        if show_bar {
+        if layout.show_bar {
             line.push(' ');
             line.push_str(&share_bar(cell.share_pct, glyphs));
         }

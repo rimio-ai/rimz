@@ -362,10 +362,8 @@ fn model_cells_show_usd_and_cache_read_detail() {
 
     let cells = model_cells(&models, name_w, &glyphs);
     let pct_w = stat_pct_width(&cells, &[]);
-    let (compact, left_w, show_bar) = stat_section_layout(&cells, &[], pct_w, 120);
-    emit_stat_section(
-        &mut lines, "Models", &cells, compact, left_w, pct_w, show_bar, &glyphs,
-    );
+    let layout = stat_section_layout(&cells, &[], pct_w, 120);
+    emit_stat_section(&mut lines, "Models", &cells, layout, &glyphs);
     let row = strip_ansi(
         lines
             .iter()
@@ -422,10 +420,8 @@ fn agent_cells_rank_by_year_tokens_and_skip_empty_agents() {
 
     let cells = agent_cells(&agents, name_w, &glyphs);
     let pct_w = stat_pct_width(&[], &cells);
-    let (compact, left_w, show_bar) = stat_section_layout(&[], &cells, pct_w, 120);
-    emit_stat_section(
-        &mut lines, "Agents", &cells, compact, left_w, pct_w, show_bar, &glyphs,
-    );
+    let layout = stat_section_layout(&[], &cells, pct_w, 120);
+    emit_stat_section(&mut lines, "Agents", &cells, layout, &glyphs);
 
     assert!(lines[0].contains("Agents"));
     let codex = lines
@@ -454,10 +450,12 @@ fn agent_cells_rank_by_year_tokens_and_skip_empty_agents() {
         &mut empty_lines,
         "Agents",
         &empty_cells,
-        false,
-        0,
-        0,
-        true,
+        StatSectionLayout {
+            compact: false,
+            left_w: 0,
+            pct_w: 0,
+            show_bar: true,
+        },
         &glyphs,
     );
     assert!(empty_lines.is_empty());
@@ -508,29 +506,11 @@ fn stat_sections_share_a_percent_column() {
     let model_rows = model_cells(&models, name_w, &glyphs);
     let agent_rows = agent_cells(&agents, name_w, &glyphs);
     let pct_w = stat_pct_width(&model_rows, &agent_rows);
-    let (compact, left_w, show_bar) = stat_section_layout(&model_rows, &agent_rows, pct_w, 120);
+    let layout = stat_section_layout(&model_rows, &agent_rows, pct_w, 120);
     let mut lines = Vec::new();
 
-    emit_stat_section(
-        &mut lines,
-        "Models",
-        &model_rows,
-        compact,
-        left_w,
-        pct_w,
-        show_bar,
-        &glyphs,
-    );
-    emit_stat_section(
-        &mut lines,
-        "Agents",
-        &agent_rows,
-        compact,
-        left_w,
-        pct_w,
-        show_bar,
-        &glyphs,
-    );
+    emit_stat_section(&mut lines, "Models", &model_rows, layout, &glyphs);
+    emit_stat_section(&mut lines, "Agents", &agent_rows, layout, &glyphs);
     let model = strip_ansi(
         lines
             .iter()
