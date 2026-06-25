@@ -91,6 +91,37 @@ fn fresh_windows_reject_a_reading_whose_shortest_window_reset() {
 }
 
 #[test]
+fn fresh_windows_drop_a_window_whose_own_reset_passed_mid_shorter_window() {
+    // A 7d resets while the 5h is still mid-cycle. A lagging session keeps
+    // re-reporting the pre-reset 7d (high used, reset now past); the
+    // reading-level `content_stale_at` gate can't catch it because the shortest
+    // (5h) window is still future. Without the per-window epoch skip the lagging
+    // 62% would win the most-drained pick over the fresh post-reset 2%.
+    let active = reading([window_mins(40, 3_600, 300), window_mins(2, 600_000, 10_080)]);
+    let lagging = reading([window_mins(35, 3_600, 300), window_mins(62, -4_000, 10_080)]);
+
+    let stable = fresh_windows([&active, &lagging].into_iter(), epoch());
+    let seven_day = stable
+        .iter()
+        .find(|window| window.duration_mins == Some(10_080))
+        .expect("a 7d bar");
+    assert_eq!(
+        seven_day.used_percentage,
+        Some(2),
+        "the fresh post-reset 7d wins; the lagging pre-reset epoch is dropped"
+    );
+    let five_hour = stable
+        .iter()
+        .find(|window| window.duration_mins == Some(300))
+        .expect("a 5h bar");
+    assert_eq!(
+        five_hour.used_percentage,
+        Some(40),
+        "both 5h windows are in-epoch, so most-drained still applies"
+    );
+}
+
+#[test]
 fn fresh_windows_replay_captured_free_reset() {
     // 27 real Claude readings captured mid free-reset: the 7d budget refilled
     // (used 75% → ~1–3%) with its reset timer unchanged, while one idle session

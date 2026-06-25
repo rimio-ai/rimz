@@ -84,11 +84,12 @@ impl SidebarSnapshot {
             // between ticks and the bar flickers. Instead, reject content-stale
             // readings whole (an idle session re-emits a days-old payload with a
             // fresh capture stamp; its shortest window's passed reset gives it
-            // away), then keep the most-drained survivor per duration — within a
-            // live window usage only climbs, so this is both stable and the
-            // truest. Same inputs always yield the same bars, regardless of which
-            // session reported last; the enrich layer fuses this live reading with
-            // the cached and authoritative truth.
+            // away), drop individual windows whose own reset has passed, then keep
+            // the most-drained survivor per duration — within a live window usage
+            // only climbs, so this is both stable and the truest. Same inputs
+            // always yield the same bars, regardless of which session reported
+            // last; the enrich layer fuses this live reading with the cached and
+            // authoritative truth.
             let now = self.now;
             let windows_for = |of_kind: &str| {
                 fresh_windows(
@@ -289,8 +290,11 @@ fn display_rank(kind: &str) -> usize {
 /// gives the whole payload away. Among surviving readings, the most-drained value
 /// wins per duration: within one live window usage only climbs, so the highest
 /// reading is the most current and the pick is stable against parallel sessions
-/// reporting the same budget at different instants. Output sorted short→long for a
-/// stable paint order; windows of unknown duration sort last.
+/// reporting the same budget at different instants. A surviving reading can
+/// still carry a longer window from a previous epoch while its shortest window is
+/// mid-cycle, so each expired window is dropped before this comparison. Output
+/// sorted short→long for a stable paint order; windows of unknown duration sort
+/// last.
 pub(super) fn fresh_windows<'a>(
     readings: impl Iterator<Item = &'a AgentRateLimits>,
     now: Timestamp,
@@ -302,6 +306,9 @@ pub(super) fn fresh_windows<'a>(
         }
         for window in &reading.windows {
             if window.used_percentage.is_none() {
+                continue;
+            }
+            if window.resets_at.is_some_and(|reset| reset <= now) {
                 continue;
             }
             by_duration
