@@ -7,6 +7,7 @@ use std::process;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 
 use crate::files::{copy_atomically, remove_stale_file, sha256_file, target_dir, write_atomically};
 use crate::pricing::pricing_refresh;
@@ -14,6 +15,7 @@ use crate::runner::{run, run_with_env};
 
 const PRESENCE_PLUGIN_TARGET: &str = "wasm32-wasip1";
 const DARWIN_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
+pub(crate) const WASM_MAGIC: [u8; 4] = *b"\0asm";
 
 pub(crate) fn build(root: &Path) -> Result<()> {
     build_plugin(root)?;
@@ -64,6 +66,65 @@ pub(crate) fn build_plugin(root: &Path) -> Result<()> {
             "--locked",
         ],
     )
+}
+
+pub(crate) fn plugin_refresh(root: &Path) -> Result<()> {
+    build_plugin(root)?;
+    let artifact = plugin_artifact(root);
+    let bytes = fs::read(&artifact).with_context(|| format!("reading {}", artifact.display()))?;
+    if !is_wasm_module(&bytes) {
+        bail!("{} is not a wasm module", artifact.display());
+    }
+    copy_atomically(&artifact, &vendored_plugin_path(root))?;
+    let digest = presence_plugin_source_digest(root)?;
+    write_atomically(&vendored_srchash_path(root), digest.as_bytes())
+}
+
+pub(crate) fn vendored_plugin_path(root: &Path) -> PathBuf {
+    root.join("crates")
+        .join("rimz")
+        .join("presence")
+        .join("rimz-presence-zellij.wasm")
+}
+
+pub(crate) fn vendored_srchash_path(root: &Path) -> PathBuf {
+    let mut path = vendored_plugin_path(root).into_os_string();
+    path.push(".srchash");
+    PathBuf::from(path)
+}
+
+pub(crate) fn presence_plugin_source_digest(root: &Path) -> Result<String> {
+    let plugin_root = root.join("crates").join("rimz-presence-zellij");
+    let output = Command::new("git")
+        .args(["ls-files"])
+        .current_dir(&plugin_root)
+        .output()
+        .with_context(|| format!("running `git ls-files` in {}", plugin_root.display()))?;
+    if !output.status.success() {
+        bail!("git ls-files failed in {}", plugin_root.display());
+    }
+
+    let mut paths: Vec<_> = String::from_utf8(output.stdout)
+        .context("reading plugin source file list")?
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    paths.sort();
+
+    let mut hasher = Sha256::new();
+    for path in paths {
+        let bytes = fs::read(plugin_root.join(&path))
+            .with_context(|| format!("reading {}", plugin_root.join(&path).display()))?;
+        hasher.update(path.as_bytes());
+        hasher.update([0]);
+        hasher.update(&bytes);
+        hasher.update([0]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+pub(crate) fn is_wasm_module(bytes: &[u8]) -> bool {
+    bytes.starts_with(&WASM_MAGIC)
 }
 
 /// The built presence-plugin artifact, honoring a `CARGO_TARGET_DIR` override.

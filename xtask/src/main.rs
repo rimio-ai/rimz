@@ -43,6 +43,11 @@ const TASKS: &[TaskInfo] = &[
         runs: "cargo build -p rimz-presence-zellij --target wasm32-wasip1 --release --locked",
     },
     TaskInfo {
+        name: "plugin-refresh",
+        summary: "Rebuild and vendor the Zellij presence plugin wasm for crates.io.",
+        runs: "build-plugin, then copy the wasm and source digest into crates/rimz/presence/",
+    },
+    TaskInfo {
         name: "install",
         summary: "Build and install the host rimz binary.",
         runs: "cargo xtask stage-install, then atomically installs host rimz",
@@ -228,6 +233,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
     match task {
         "build" => build::build(root),
         "build-plugin" => build::build_plugin(root),
+        "plugin-refresh" => build::plugin_refresh(root),
         "install" => build::install(root),
         "stage-install" => build::stage_install(root).map(|_| ()),
         "dist" => build::dist(root),

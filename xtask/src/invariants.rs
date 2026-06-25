@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -45,6 +46,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_sidebar_render_runtime_uses_snapshot_clock(root, &files)?;
     ensure_no_hardcoded_ui_colors(root, &files)?;
     ensure_no_hardcoded_glyphs(root, &files)?;
+    ensure_presence_plugin_vendored(root)?;
     ensure_ledger_durability(root, &files)?;
     ensure_participant_identity(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
@@ -599,6 +601,54 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
         "config templates are missing required sections: {}",
         missing.join(", ")
     );
+}
+
+fn ensure_presence_plugin_vendored(root: &Path) -> Result<()> {
+    let wasm_path = crate::build::vendored_plugin_path(root);
+    let bytes = match fs::read(&wasm_path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            bail!(
+                "{} is missing; run `cargo xtask plugin-refresh`",
+                wasm_path.display()
+            )
+        }
+        Err(err) => return Err(err).with_context(|| format!("reading {}", wasm_path.display())),
+    };
+    if bytes.is_empty() {
+        bail!(
+            "{} is empty; run `cargo xtask plugin-refresh`",
+            wasm_path.display()
+        );
+    }
+    if !crate::build::is_wasm_module(&bytes) {
+        bail!(
+            "{} is not a wasm module; run `cargo xtask plugin-refresh`",
+            wasm_path.display()
+        );
+    }
+
+    let srchash_path = crate::build::vendored_srchash_path(root);
+    let recorded = match fs::read_to_string(&srchash_path) {
+        Ok(recorded) => recorded,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            bail!(
+                "{} is missing; run `cargo xtask plugin-refresh`",
+                srchash_path.display()
+            )
+        }
+        Err(err) => {
+            return Err(err).with_context(|| format!("reading {}", srchash_path.display()));
+        }
+    };
+    let expected = crate::build::presence_plugin_source_digest(root)?;
+    if recorded != expected {
+        bail!(
+            "{} is stale for crates/rimz-presence-zellij; run `cargo xtask plugin-refresh`",
+            srchash_path.display()
+        );
+    }
+    Ok(())
 }
 
 fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {

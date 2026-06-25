@@ -265,11 +265,11 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 ### Architectural invariants
 
-`cargo xtask invariants` is a grep-and-shape gate over the tracked tree — a low-cost trip-wire paired with the type system and review, not a substitute for either. It guards the boundaries the compiler can't: decision-channel integrity, sidebar/ledger separation, the trust hash, pane-primitive use, the render snapshot clock, inline-test size, [UI-color provenance](../reference/theme.md#how-a-tone-resolves), and more. A new boundary lands here as an `ensure_*` check with a self-test.
+`cargo xtask invariants` is a grep-and-shape gate over the tracked tree — a low-cost trip-wire paired with the type system and review, not a substitute for either. It guards the boundaries the compiler can't: decision-channel integrity, sidebar/ledger separation, the trust hash, pane-primitive use, the render snapshot clock, inline-test size, [UI-color provenance](../reference/theme.md#how-a-tone-resolves), and vendored Zellij presence-plugin freshness. A new boundary lands here as an `ensure_*` check with a self-test.
 
 ### Contributor command surface
 
-`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `install`, `hooks`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `invariants`, `docs-links`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
+`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `hooks`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `invariants`, `docs-links`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
 
 ## Reading order for new contributors
 

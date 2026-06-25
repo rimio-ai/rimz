@@ -223,6 +223,12 @@ mod tests {
     }
 
     #[test]
+    fn embedded_presence_plugin_is_present() {
+        assert!(!EMBEDDED_PRESENCE_PLUGIN.is_empty());
+        assert!(EMBEDDED_PRESENCE_PLUGIN.starts_with(b"\0asm"));
+    }
+
+    #[test]
     fn presence_plugin_floor_admits_the_tile_line_only() {
         // The floor is the `zellij-tile` pin: 0.44.x loads, anything older keeps
         // the pane poll (and stays above MIN_ZELLIJ_VERSION for everything else).

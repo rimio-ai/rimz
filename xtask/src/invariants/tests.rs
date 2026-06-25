@@ -1,6 +1,24 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::*;
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask lives under the workspace root")
+        .to_path_buf()
+}
+
+#[test]
+fn presence_wasm_magic_predicate_accepts_wasm_header() {
+    assert!(crate::build::is_wasm_module(b"\0asm\x01\0\0\0"));
+    assert!(!crate::build::is_wasm_module(b"not-wasm"));
+}
+
+#[test]
+fn vendored_presence_plugin_is_fresh_for_this_tree() {
+    ensure_presence_plugin_vendored(&repo_root()).unwrap();
+}
 
 #[test]
 fn spend_parser_path_predicate_covers_nested_modules() {

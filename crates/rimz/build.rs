@@ -31,6 +31,7 @@ use serde_json::{Map, Value};
 const GENERATED_SNAPSHOT: &str = "pricing/litellm-pricing.json";
 const THEME_CATALOG_DIR: &str = "themes/alacritty";
 const PRESENCE_PLUGIN_ENV: &str = "RIMZ_EMBED_PRESENCE_PLUGIN";
+const PRESENCE_PLUGIN_VENDOR_DIR: &str = "presence";
 const PRESENCE_PLUGIN_OUT: &str = "rimz-presence-zellij.wasm";
 const KEPT_FIELDS: [&str; 4] = [
     "input_cost_per_token",
@@ -195,7 +196,22 @@ fn write_presence_plugin_embed(out_dir: &std::path::Path) {
                 )
             })
         }
-        _ => Vec::new(),
+        _ => {
+            let manifest =
+                PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+            let path = manifest
+                .join(PRESENCE_PLUGIN_VENDOR_DIR)
+                .join(PRESENCE_PLUGIN_OUT);
+            println!("cargo:rerun-if-changed={}", path.display());
+            match fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(err) => panic!(
+                    "vendored presence plugin {} is unreadable ({err})",
+                    path.display()
+                ),
+            }
+        }
     };
     fs::write(&out_path, bytes).expect("write embedded presence plugin");
 }
