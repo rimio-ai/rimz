@@ -22,6 +22,7 @@ pub mod forge;
 pub mod ids;
 pub mod launch;
 pub mod ledger;
+pub(crate) mod loop_fire;
 pub mod message;
 pub mod mux;
 pub mod notify_log;

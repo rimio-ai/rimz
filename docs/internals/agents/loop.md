@@ -47,4 +47,4 @@ The window is account-scoped, shared by every session of a provider kind ([provi
 
 Loop tasks live in per-machine `[agents.loop.tasks.*]`, outside the trust hash, and each entry runs the rimz-owned `loop run` rather than arbitrary shell. The config shape is in [configuration.md → Loop tasks](../../reference/configuration.md#loop-tasks); the `rimz loop add` / `remove` / `list` commands are in [agents.md → Schedule turns with loop](../../reference/cli/agents.md#schedule-turns-with-loop).
 
-`schedule.rs` owns pure parsing, descriptions, and due evaluation. `cli/loop_cmd.rs` owns config editing plus the `list` and hidden `run` surfaces. `sidebar_pane/app/loop_fire.rs` owns elder firing and the `loop-fire.json` state.
+`schedule.rs` owns pure parsing, descriptions, and due evaluation. `cli/loop_cmd.rs` owns config editing plus the `list` and hidden `run` surfaces. `loop_fire.rs` owns elder firing and the `loop-fire.json` state.

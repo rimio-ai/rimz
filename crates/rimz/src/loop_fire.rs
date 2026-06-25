@@ -22,7 +22,7 @@ enum Action {
     Fire,
 }
 
-pub(super) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
+pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
     let tasks = workspace_tasks(
         MachineConfig::load_lenient().agents.r#loop.tasks.0,
         &runtime.workspace_id,
