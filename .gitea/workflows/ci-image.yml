@@ -43,6 +43,19 @@ jobs:
           mkdir -p "$auth_dir/docker"
           export DOCKER_CONFIG="$auth_dir/docker"
           export REGISTRY_AUTH_FILE="$auth_dir/auth.json"
+          origin_ip="$(getent ahostsv4 gitea-ssh.***REMOVED*** | awk 'NR == 1 { print $1 }')"
+          if [ -z "$origin_ip" ]; then
+            echo "::error::could not resolve Gitea origin host for registry push"
+            exit 1
+          fi
+          if [ "$(id -u)" -eq 0 ]; then
+            printf '%s %s\n' "$origin_ip" "$REGISTRY_HOST" >> /etc/hosts
+          elif command -v sudo >/dev/null && printf '%s %s\n' "$origin_ip" "$REGISTRY_HOST" | sudo -n tee -a /etc/hosts >/dev/null; then
+            :
+          else
+            echo "::error::cannot update /etc/hosts for direct registry push"
+            exit 1
+          fi
           echo "$TOKEN" | podman login "$REGISTRY_HOST" -u "$GITHUB_ACTOR" --password-stdin
           podman build --isolation=chroot -f ci/Dockerfile -t "$IMAGE" ci
           podman push "$IMAGE"
