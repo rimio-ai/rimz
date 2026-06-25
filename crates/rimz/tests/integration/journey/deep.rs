@@ -6,6 +6,7 @@
 //! the actual mux pane shows. They self-skip without the mux binary (the
 //! common CI shape) and under a socket-bind sandbox.
 
+use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -478,15 +479,17 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
     env.install_agent_hooks("codex");
     trust_codex_hooks(&env);
     let stub_dir = write_hook_firing_agent(&env, "codex");
+    let agent_path = path_with_front(&stub_dir);
+    trust_codex_agent_path(&env, &agent_path);
     let server_dir = TempDir::new().expect("tmux socket dir");
     let socket = server_dir.path().join("tmux.sock");
     let _server = TmuxServerGuard::new(socket.clone());
     let session = workspace_session(&env);
 
     let mut cmd = env.rimz();
-    cmd.env("PATH", path_with_front(&stub_dir))
+    cmd.env("PATH", &agent_path)
         .env("TMUX", tmux_env(&socket))
-        .env("RIMZ_TEST_AGENT_SLEEP_MS", "2500")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "10000")
         .args([
             "--mux",
             "tmux",
@@ -540,13 +543,15 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
     env.install_agent_hooks("codex");
     trust_codex_hooks(&env);
     let stub_dir = write_hook_firing_agent(&env, "codex");
+    let agent_path = path_with_front(&stub_dir);
+    trust_codex_agent_path(&env, &agent_path);
     let server_dir = TempDir::new().expect("tmux socket dir");
     let socket = server_dir.path().join("tmux.sock");
     let _server = TmuxServerGuard::new(socket.clone());
 
     let out = env
         .rimz()
-        .env("PATH", path_with_front(&stub_dir))
+        .env("PATH", &agent_path)
         .env("TMUX", tmux_env(&socket))
         .env("RIMZ_TEST_AGENT_EXIT", "1")
         .env("RIMZ_TEST_AGENT_SLEEP_MS", "1000")
@@ -758,6 +763,38 @@ fn trust_codex_hooks(env: &Env) {
         ));
     }
     std::fs::write(&config, text).expect("write trust state");
+}
+
+fn trust_codex_agent_path(env: &Env, path: &OsStr) {
+    #[derive(serde::Serialize)]
+    struct Config {
+        agents: [Agent; 1],
+    }
+    #[derive(serde::Serialize)]
+    struct Agent {
+        name: &'static str,
+        env: std::collections::BTreeMap<&'static str, String>,
+    }
+
+    let text = toml::to_string(&Config {
+        agents: [Agent {
+            name: "codex",
+            env: std::collections::BTreeMap::from([("PATH", path.to_string_lossy().into_owned())]),
+        }],
+    })
+    .expect("serialize trusted codex PATH config");
+    env.write_config(&env.project_root, &text);
+    let out = env
+        .rimz()
+        .args(["trust", "grant"])
+        .output()
+        .expect("spawn trust grant");
+    assert!(
+        out.status.success(),
+        "trust grant failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn shell_quote(value: &str) -> String {
