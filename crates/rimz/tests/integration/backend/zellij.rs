@@ -525,22 +525,7 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
 
     let _client = AttachedClient::attach(xdg.path(), &name, 200, 50);
     wait_for_attached_client(xdg.path(), &name);
-    let focused_work = scoped_zellij(xdg.path())
-        .args([
-            "--session",
-            &name,
-            "action",
-            "focus-pane-id",
-            &format!("terminal_{work_id}"),
-        ])
-        .bounded_status()
-        .expect("focus work pane");
-    assert!(focused_work.success(), "focus work pane failed");
-    assert_eq!(
-        wait_for_focused_nonplugin_id_in_tab(xdg.path(), &name, tab_id, work_id),
-        Some(work_id),
-        "fixture must start focused on the work pane",
-    );
+    focus_nonplugin_pane_until(xdg.path(), &name, tab_id, work_id, "fixture work pane");
 
     let env = Env::new();
     let run_focus_toggle = || {
@@ -1370,24 +1355,12 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
         .get("tab_id")
         .and_then(|value| value.as_u64())
         .expect("sidebar tab id");
-    let refocused = scoped_zellij(&xdg)
-        .args([
-            "--session",
-            &name,
-            "action",
-            "focus-pane-id",
-            &format!("terminal_{original_id}"),
-        ])
-        .bounded_status()
-        .expect("refocus original pane before reconcile");
-    assert!(
-        refocused.success(),
-        "refocus original pane before reconcile failed"
-    );
-    assert_eq!(
-        wait_for_focused_nonplugin_id_in_tab(&xdg, &name, tab_id, original_id),
-        Some(original_id),
-        "fixture must focus the original work pane before reconcile",
+    focus_nonplugin_pane_until(
+        &xdg,
+        &name,
+        tab_id,
+        original_id,
+        "original work pane before reconcile",
     );
 
     let mut liveness = rimz::mux::SidebarLiveness::default();
@@ -2294,6 +2267,57 @@ fn wait_for_focused_nonplugin_id_in_tab(
             }
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn focus_nonplugin_pane_until(xdg: &Path, session: &str, tab: u64, want: u64, context: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let pane_id = format!("terminal_{want}");
+    let mut last_focused = None;
+    let mut last_error = String::new();
+    loop {
+        match scoped_zellij(xdg)
+            .args([
+                "--session",
+                session,
+                "action",
+                "focus-pane-id",
+                pane_id.as_str(),
+            ])
+            .bounded_output()
+        {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                last_error = format!(
+                    "focus-pane-id exited with {}; stderr: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+            Err(err) => {
+                last_error = format!("focus-pane-id failed to run: {err}");
+            }
+        }
+
+        match focused_nonplugin_id_in_tab_result(xdg, session, tab) {
+            Ok(focused) => {
+                last_focused = focused;
+                if focused == Some(want) {
+                    return;
+                }
+            }
+            Err(err) => {
+                last_error = err;
+            }
+        }
+
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out focusing {context} ({pane_id}) in {session}/tab {tab}; \
+                 last focused: {last_focused:?}; last error: {last_error}",
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
