@@ -72,10 +72,14 @@ jobs:
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           # Re-export here, not just job-level env: the job env block does not
-          # reach the deny subprocess on Gitea. The image bakes the DB at
-          # $CARGO_HOME/advisory-dbs, and RIMZ_DENY_OFFLINE makes the gate read
-          # it with --disable-fetch instead of cloning per run.
+          # reach the deny subprocess on Gitea. New images bake the DB at
+          # $CARGO_HOME/advisory-dbs; older images fetch it once into that
+          # container-local path before RIMZ_DENY_OFFLINE makes the gate read it
+          # with --disable-fetch instead of cloning during the audit thread.
           export CARGO_HOME=/usr/local/cargo
+          if ! find "$CARGO_HOME/advisory-dbs" -maxdepth 1 -type d -name 'advisory-db-*' 2>/dev/null | grep -q .; then
+            cargo deny fetch db
+          fi
           export RIMZ_DENY_OFFLINE=1
           NEXTEST_TEST_THREADS="$(( ($(nproc) + 1) / 2 ))"
           export NEXTEST_TEST_THREADS
