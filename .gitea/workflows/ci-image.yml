@@ -81,6 +81,7 @@ jobs:
           mkdir -p "$auth_dir/docker"
           export DOCKER_CONFIG="$auth_dir/docker"
           export REGISTRY_AUTH_FILE="$auth_dir/auth.json"
+          # Runner host routing sends the public registry name directly to the origin.
           echo "$TOKEN" | podman login "$REGISTRY_HOST" -u "$GITHUB_ACTOR" --password-stdin
           if [ "$FULL_REBUILD" = 1 ]; then
             podman build --isolation=chroot -f ci/Dockerfile -t "$IMAGE" .
