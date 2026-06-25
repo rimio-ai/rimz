@@ -2275,49 +2275,67 @@ fn focus_nonplugin_pane_until(xdg: &Path, session: &str, tab: u64, want: u64, co
     let pane_id = format!("terminal_{want}");
     let mut last_focused = None;
     let mut last_error = String::new();
-    loop {
-        match scoped_zellij(xdg)
-            .args([
-                "--session",
-                session,
-                "action",
-                "focus-pane-id",
-                pane_id.as_str(),
-            ])
-            .bounded_output()
-        {
-            Ok(output) if output.status.success() => {}
-            Ok(output) => {
-                last_error = format!(
-                    "focus-pane-id exited with {}; stderr: {}",
-                    output.status,
-                    String::from_utf8_lossy(&output.stderr),
-                );
-            }
-            Err(err) => {
-                last_error = format!("focus-pane-id failed to run: {err}");
-            }
-        }
-
-        match focused_nonplugin_id_in_tab_result(xdg, session, tab) {
-            Ok(focused) => {
-                last_focused = focused;
-                if focused == Some(want) {
-                    return;
-                }
-            }
-            Err(err) => {
-                last_error = err;
-            }
-        }
-
-        if Instant::now() >= deadline {
-            panic!(
-                "timed out focusing {context} ({pane_id}) in {session}/tab {tab}; \
-                 last focused: {last_focused:?}; last error: {last_error}",
+    let run_action = |args: &[&str], last_error: &mut String| match scoped_zellij(xdg)
+        .args(["--session", session, "action"])
+        .args(args.iter().copied())
+        .bounded_output()
+    {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            *last_error = format!(
+                "{} exited with {}; stderr: {}",
+                args[0],
+                output.status,
+                String::from_utf8_lossy(&output.stderr),
             );
         }
-        std::thread::sleep(Duration::from_millis(100));
+        Err(err) => {
+            *last_error = format!("{} failed to run: {err}", args[0]);
+        }
+    };
+    let observe_focus = |last_focused: &mut Option<u64>, last_error: &mut String| -> bool {
+        match focused_nonplugin_id_in_tab_result(xdg, session, tab) {
+            Ok(focused) => {
+                *last_focused = focused;
+                focused == Some(want)
+            }
+            Err(err) => {
+                *last_error = err;
+                false
+            }
+        }
+    };
+
+    loop {
+        for _ in 0..5 {
+            run_action(&["focus-pane-id", pane_id.as_str()], &mut last_error);
+            if observe_focus(&mut last_focused, &mut last_error) {
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "timed out focusing {context} ({pane_id}) in {session}/tab {tab}; \
+                     last focused: {last_focused:?}; last error: {last_error}",
+                );
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        for action in ["focus-previous-pane", "focus-next-pane"] {
+            for _ in 0..8 {
+                run_action(&[action], &mut last_error);
+                if observe_focus(&mut last_focused, &mut last_error) {
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    panic!(
+                        "timed out focusing {context} ({pane_id}) in {session}/tab {tab}; \
+                         last focused: {last_focused:?}; last error: {last_error}",
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
     }
 }
 
