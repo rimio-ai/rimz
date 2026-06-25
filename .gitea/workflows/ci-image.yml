@@ -6,6 +6,9 @@ on:
       tag:
         description: image tag (defaults to date+sha)
         required: false
+      base:
+        description: base image (defaults to current RIMZ_CI_IMAGE)
+        required: false
 
 jobs:
   build:
@@ -18,6 +21,8 @@ jobs:
       - name: Resolve image ref
         env:
           REQUESTED_TAG: ${{ github.event.inputs.tag }}
+          REQUESTED_BASE: ${{ github.event.inputs.base }}
+          DEFAULT_BASE: ${{ vars.RIMZ_CI_IMAGE }}
         run: |
           set -euo pipefail
           host="${GITHUB_SERVER_URL#https://}"
@@ -27,12 +32,18 @@ jobs:
           owner="${GITHUB_REPOSITORY%/*}"
           owner="${owner,,}"
           tag="${REQUESTED_TAG:-$(date +%Y%m%d)-${GITHUB_SHA::7}}"
+          base="${REQUESTED_BASE:-$DEFAULT_BASE}"
+          if [ -z "$base" ]; then
+            echo "::error::RIMZ_CI_IMAGE is unset and no base image was provided"
+            exit 1
+          fi
           if ! printf '%s' "$tag" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
             echo "::error::invalid Docker tag: ${tag}"
             exit 1
           fi
           echo "REGISTRY_HOST=$host" >> "$GITHUB_ENV"
           echo "IMAGE=${host}/${owner}/rimz-ci:${tag}" >> "$GITHUB_ENV"
+          echo "BASE_IMAGE=$base" >> "$GITHUB_ENV"
 
       - name: Build and push image
         env:
@@ -43,21 +54,25 @@ jobs:
           mkdir -p "$auth_dir/docker"
           export DOCKER_CONFIG="$auth_dir/docker"
           export REGISTRY_AUTH_FILE="$auth_dir/auth.json"
-          origin_ip="$(getent ahostsv4 gitea-ssh.***REMOVED*** | awk 'NR == 1 { print $1 }')"
-          if [ -z "$origin_ip" ]; then
-            echo "::error::could not resolve Gitea origin host for registry push"
-            exit 1
-          fi
-          if [ "$(id -u)" -eq 0 ]; then
-            printf '%s %s\n' "$origin_ip" "$REGISTRY_HOST" >> /etc/hosts
-          elif command -v sudo >/dev/null && printf '%s %s\n' "$origin_ip" "$REGISTRY_HOST" | sudo -n tee -a /etc/hosts >/dev/null; then
-            :
-          else
-            echo "::error::cannot update /etc/hosts for direct registry push"
-            exit 1
-          fi
           echo "$TOKEN" | podman login "$REGISTRY_HOST" -u "$GITHUB_ACTOR" --password-stdin
-          podman build --isolation=chroot -f ci/Dockerfile -t "$IMAGE" ci
+          containerfile="$(mktemp)"
+          cat > "$containerfile" <<'CONTAINERFILE'
+          ARG BASE_IMAGE
+          FROM ${BASE_IMAGE}
+          ENV RUSTUP_HOME=/usr/local/rustup \
+              CARGO_HOME=/usr/local/cargo \
+              PATH=/usr/local/cargo/bin:$PATH
+          RUN rm -rf /usr/local/cargo/advisory-dbs \
+           && tmp="$(mktemp -d)" \
+           && printf '[package]\nname="x"\nversion="0.0.0"\nedition="2021"\n' > "$tmp/Cargo.toml" \
+           && mkdir "$tmp/src" \
+           && : > "$tmp/src/lib.rs" \
+           && ( cd "$tmp" && cargo deny fetch db ) \
+           && ( cd "$tmp" && cargo deny check advisories --disable-fetch ) \
+           && rm -rf "$tmp" \
+           && find /usr/local/cargo/advisory-dbs -maxdepth 1 -type d -name 'advisory-db-*' | grep -q .
+          CONTAINERFILE
+          podman build --isolation=chroot --build-arg BASE_IMAGE="$BASE_IMAGE" -f "$containerfile" -t "$IMAGE" .
           podman push "$IMAGE"
 
       - name: Update RIMZ_CI_IMAGE variable
