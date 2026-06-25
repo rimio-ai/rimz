@@ -34,6 +34,7 @@ pub(super) fn launch_layout(
         &launch_override_preset(&args)?,
         &args.passthrough,
     )?;
+    apply_default_launch_models(&mut layout)?;
     for kind in layout.agent_kinds() {
         agent_launch_env(&workspace.project_root, kind)?;
     }
@@ -664,6 +665,43 @@ pub(super) fn apply_supervised_turn_limit(layout: &mut LayoutSpec, limit: u32) -
                 anyhow::anyhow!("{} does not support --max-turns", adapter.descriptor().kind)
             })?;
             args.extend(turn_args);
+        }
+    }
+    Ok(())
+}
+
+/// Fill each agent cell's launch model with the adapter's default when the spec
+/// left it unset. The default is rendered as a real provider argv preset and
+/// carried as the Rimz identity model, so a fresh card names a model
+/// immediately and the agent runs that model.
+pub(super) fn apply_default_launch_models(layout: &mut LayoutSpec) -> Result<()> {
+    for column in &mut layout.columns {
+        for cell in &mut column.rows {
+            let Cell::Agent {
+                kind, args, model, ..
+            } = cell
+            else {
+                continue;
+            };
+            if model.is_some() {
+                continue;
+            }
+            let Some(adapter) = rimz::agents::find_adapter(kind) else {
+                continue;
+            };
+            let Some(default) = adapter.default_launch_model() else {
+                continue;
+            };
+            let preset = rimz::agents::LaunchPreset {
+                model: Some(default.clone()),
+                ..Default::default()
+            };
+            args.extend(
+                adapter
+                    .render_preset(&preset)
+                    .map_err(launch_option_error)?,
+            );
+            *model = Some(default);
         }
     }
     Ok(())

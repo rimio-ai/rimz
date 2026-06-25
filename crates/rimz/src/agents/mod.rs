@@ -359,9 +359,10 @@ pub trait AgentAdapter: Send + Sync {
     /// the trait methods own everything behavioral.
     fn descriptor(&self) -> &'static AgentDescriptor;
 
-    /// Display model to use before a lazy-registering agent reports a real
-    /// session model. Defaults to the descriptor's provider fallback; adapters
-    /// with user-configured launch defaults override it.
+    /// Model slug to use when `rimz agents` launches without a configured
+    /// model, and before a lazy-registering agent reports a real session
+    /// model. Defaults to the descriptor's provider fallback; adapters with
+    /// user-configured launch defaults override it.
     fn default_launch_model(&self) -> Option<String> {
         self.descriptor().default_model.map(ToOwned::to_owned)
     }

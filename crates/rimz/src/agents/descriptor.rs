@@ -52,8 +52,9 @@ pub struct AgentDescriptor {
     /// Provider-owned fallback for the model context window shown in an agent
     /// card before a richer runtime source reports the exact value.
     pub default_context_window: Option<u64>,
-    /// Provider-owned fallback for the default model shown before a
-    /// lazy-registering agent reports a session model.
+    /// Provider-owned default model slug. Used as the idle-row display
+    /// fallback before a lazy-registering agent reports a session model and as
+    /// the launch `--model` default when `rimz agents` has no configured model.
     pub default_model: Option<&'static str>,
     /// Maximum time a blocking hook may hold the bridge open before falling
     /// back to the neutral no-op. Set from the upstream's published deadline,

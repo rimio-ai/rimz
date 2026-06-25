@@ -3,12 +3,12 @@ use super::*;
 #[test]
 fn wired_unprompted_codex_panes_render_idle_agent_rows() {
     for (label, command, configured_model, expected_model) in [
-        ("bare codex command", "codex", None, "GPT-5.5"),
+        ("bare codex command", "codex", None, "gpt-5.5-codex"),
         (
             "supervised wrapper command",
             "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/main",
             None,
-            "GPT-5.5",
+            "gpt-5.5-codex",
         ),
         (
             "configured default model",

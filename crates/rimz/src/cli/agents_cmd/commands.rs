@@ -422,6 +422,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         &launch_override_preset(&args)?,
         &args.passthrough,
     )?;
+    apply_default_launch_models(&mut layout)?;
     if let Some(limit) = args.max_turns {
         apply_supervised_turn_limit(&mut layout, limit)?;
     }

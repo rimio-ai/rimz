@@ -121,7 +121,7 @@ fn stale_codex_ghosts_predating_pane_start_render_idle_live_pane() {
         );
         assert_eq!(
             rows[0].model(),
-            Some("GPT-5.5"),
+            Some("gpt-5.5-codex"),
             "fresh Codex rows use the provider fallback model, not stale session stats: {label}",
         );
         assert_eq!(

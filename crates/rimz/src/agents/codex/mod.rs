@@ -96,7 +96,9 @@ const CODEX_HOOK_CAP: Duration = Duration::from_secs(60);
 /// agent card uses this stable provider fallback instead of briefly omitting the
 /// window token.
 const DEFAULT_CONTEXT_WINDOW: u64 = 272_000;
-const DEFAULT_MODEL: &str = "GPT-5.5";
+/// Valid Codex `--model` default stamped by `rimz agents` when no launch model
+/// is configured. Adapter conformance pins this to Codex's shipped default.
+const DEFAULT_MODEL: &str = "gpt-5.5-codex";
 
 /// Everything `const` about Codex, in one place. See [`AgentDescriptor`] for
 /// the descriptor-vs-trait split.

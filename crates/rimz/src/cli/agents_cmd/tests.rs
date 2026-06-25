@@ -32,6 +32,16 @@ fn only_agent(layout: &LayoutSpec) -> (&[String], Option<PermissionMode>) {
     (args, *mode)
 }
 
+fn only_agent_args_and_model(layout: &LayoutSpec) -> (&[String], Option<&str>) {
+    let [column] = layout.columns.as_slice() else {
+        panic!("single column");
+    };
+    let [Cell::Agent { args, model, .. }] = column.rows.as_slice() else {
+        panic!("single agent cell");
+    };
+    (args, model.as_deref())
+}
+
 #[test]
 fn agents_launch_parses_spec_prompt_and_worktree_name() {
     let parsed = AgentsHarness::try_parse_from([
@@ -606,6 +616,42 @@ fn preset_renders_model_and_append_prompt_per_adapter() {
             .contains("pi does not support --append-system-prompt-file"),
         "{err:#}"
     );
+}
+
+#[test]
+fn default_launch_models_stamp_only_cells_without_models() {
+    let codex_default = rimz::agents::find_adapter("codex")
+        .expect("codex")
+        .default_launch_model()
+        .expect("codex default model");
+
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
+    apply_default_launch_models(&mut layout).expect("codex default model");
+    let (args, model) = only_agent_args_and_model(&layout);
+    assert_eq!(model, Some(codex_default.as_str()));
+    assert_eq!(args, &["--model", codex_default.as_str()]);
+
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
+    apply_default_launch_models(&mut layout).expect("claude has no default model");
+    let (args, model) = only_agent_args_and_model(&layout);
+    assert_eq!(model, None);
+    assert!(args.is_empty());
+
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
+    apply_launch_mode_and_passthrough(
+        &mut layout,
+        None,
+        &rimz::agents::LaunchPreset {
+            model: Some("o3".to_owned()),
+            ..Default::default()
+        },
+        &[],
+    )
+    .expect("explicit model preset");
+    apply_default_launch_models(&mut layout).expect("skip explicit model");
+    let (args, model) = only_agent_args_and_model(&layout);
+    assert_eq!(model, Some("o3"));
+    assert_eq!(args, &["--model", "o3"]);
 }
 
 #[test]

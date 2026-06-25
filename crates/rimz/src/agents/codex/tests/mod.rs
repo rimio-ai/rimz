@@ -116,11 +116,20 @@ fn codex_descriptor_declares_lazy_registration_and_idle_card_fallbacks() {
             .capabilities
             .registers_lazily
     );
-    assert_eq!(CodexAdapter.descriptor().default_model, Some("GPT-5.5"));
+    assert_eq!(
+        CodexAdapter.descriptor().default_model,
+        Some("gpt-5.5-codex")
+    );
     assert_eq!(
         CodexAdapter.descriptor().default_context_window,
         Some(272_000)
     );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "").unwrap();
+    let launch_model = with_codex_config_path(&path, || CodexAdapter.default_launch_model());
+    assert_eq!(launch_model.as_deref(), Some("gpt-5.5-codex"));
 }
 
 #[test]

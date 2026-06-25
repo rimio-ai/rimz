@@ -89,7 +89,8 @@ pub enum Cell {
         /// `@<role>`; the wrapper also keeps `RIMZ_AGENT_ROLE` for sender
         /// attribution from that pane.
         role: Option<String>,
-        /// The launch model selected by the profile, role, or CLI override.
+        /// The launch model selected by the profile, role, CLI override, or
+        /// adapter default.
         /// The wrapper keeps `RIMZ_AGENT_MODEL` so lifecycle hooks can stamp
         /// the card even when the agent reports the model only once.
         model: Option<String>,
