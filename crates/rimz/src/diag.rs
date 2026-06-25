@@ -178,6 +178,7 @@ impl DiagSink {
         let window_ms = DIAG_RATE_LIMIT_WINDOW.as_millis() as u64;
         limiter.retain(|entry_key, entry| {
             entry_key == &key
+                || entry.suppressed > 0
                 || entry
                     .last_emit_ms
                     .is_some_and(|last| at_ms.saturating_sub(last) < window_ms)
@@ -455,6 +456,54 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].suppressed_since_last, 0);
         assert_eq!(records[1].suppressed_since_last, 2);
+    }
+
+    #[test]
+    fn rate_limit_keeps_suppressed_count_across_foreign_emit() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = sink(dir.path());
+        sink.emit_at_ms(
+            DiagEvent::FrameRejected {
+                reason: FrameRejectReason::Empty,
+                prior_pane_count: 1,
+                fresh_pane_count: 0,
+                frames_ref: None,
+            },
+            1_000,
+        );
+        sink.emit_at_ms(
+            DiagEvent::FrameRejected {
+                reason: FrameRejectReason::Empty,
+                prior_pane_count: 1,
+                fresh_pane_count: 0,
+                frames_ref: None,
+            },
+            15_000,
+        );
+        sink.emit_at_ms(
+            DiagEvent::DuplicatePaneId {
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+            },
+            32_000,
+        );
+        sink.emit_at_ms(
+            DiagEvent::FrameRejected {
+                reason: FrameRejectReason::Empty,
+                prior_pane_count: 1,
+                fresh_pane_count: 0,
+                frames_ref: None,
+            },
+            33_000,
+        );
+
+        let text = std::fs::read_to_string(sink.log_path()).unwrap();
+        let records = text
+            .lines()
+            .map(|line| serde_json::from_str::<DiagEnvelope>(line).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[2].suppressed_since_last, 1);
     }
 
     #[test]
