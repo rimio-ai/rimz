@@ -486,13 +486,15 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
     let mut cmd = env.rimz();
     cmd.env("PATH", path_with_front(&stub_dir))
         .env("TMUX", tmux_env(&socket))
-        .env("RIMZ_TEST_AGENT_SLEEP_MS", "1500")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "2500")
         .args([
             "--mux",
             "tmux",
             "agents",
             "codex",
             "summarize the diff",
+            "--name",
+            "journey-runner",
             "-p",
             "--timeout",
             "30s",
@@ -501,16 +503,11 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let child = cmd.spawn().expect("spawn supervised print");
-    let screen = capture_all_until(
-        &socket,
-        &session,
-        |s| s.contains("coder") || s.contains("summarize the diff"),
-        CAPTURE_BUDGET,
-    );
+    let screen = capture_all_until(&socket, &session, rendered_supervised_row, CAPTURE_BUDGET);
     let out = child.wait_with_output().expect("wait supervised print");
     assert!(
-        screen.contains("coder") || screen.contains("summarize the diff"),
-        "supervised run should appear in the concurrently served tmux room:\n{screen}"
+        rendered_supervised_row(&screen),
+        "supervised run should appear in the concurrently served tmux sidebar:\n{screen}"
     );
     assert!(
         out.status.success(),
@@ -552,16 +549,21 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
         .env("PATH", path_with_front(&stub_dir))
         .env("TMUX", tmux_env(&socket))
         .env("RIMZ_TEST_AGENT_EXIT", "1")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "1000")
         .args([
             "--mux",
             "tmux",
             "agents",
             "codex",
             "summarize the diff",
+            "--name",
+            "failing-runner",
             "-p",
             "--timeout",
             "30s",
             "--keep",
+            "--output-format",
+            "json",
         ])
         .bounded_output_within(Duration::from_secs(45))
         .expect("wait failed supervised print");
@@ -571,6 +573,20 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
         "non-zero agent exit should fail the supervised run\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
+    );
+    let record: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .expect("failed supervised run should print JSON record");
+    assert_eq!(
+        record.get("status").and_then(serde_json::Value::as_str),
+        Some("failed"),
+        "non-zero agent exit should produce a failed run record\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        record.get("agent_name").and_then(serde_json::Value::as_str),
+        Some("failing-runner"),
+        "failed run record should be the launched supervised agent, not a launch precondition error"
     );
 }
 
@@ -694,6 +710,23 @@ fn run_steer(env: &Env, socket: &Path, args: &[&str]) -> std::process::Output {
     cmd.args(args).output().expect("spawn steer")
 }
 
+fn rendered_agent_row(screen: &str, name: &str) -> bool {
+    screen.lines().any(|line| {
+        line.contains(name)
+            && (line.contains('○')
+                || line.contains('◎')
+                || line.contains('◇')
+                || line.contains('!')
+                || line.contains('⡿')
+                || line.contains('⏸'))
+    })
+}
+
+fn rendered_supervised_row(screen: &str) -> bool {
+    screen.contains("summarize the diff")
+        && (rendered_agent_row(screen, "journey-runner") || rendered_agent_row(screen, "codex"))
+}
+
 fn workspace_session(env: &Env) -> String {
     rimz::WorkspaceResolver::resolve(&env.project_root, None)
         .expect("resolve workspace")
@@ -702,17 +735,6 @@ fn workspace_session(env: &Env) -> String {
 
 fn tmux_env(socket: &Path) -> String {
     format!("{},0,0", socket.display())
-}
-
-#[cfg(unix)]
-fn chmod_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut perms = std::fs::metadata(path)
-        .expect("agent metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(path, perms).expect("chmod agent");
 }
 
 fn trust_codex_hooks(env: &Env) {
