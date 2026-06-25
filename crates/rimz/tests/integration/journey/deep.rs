@@ -392,7 +392,7 @@ fn zellij_room_shows_agent_after_hook() {
 }
 
 #[test]
-fn tmux_pane_send_delivers_text_and_enter_to_real_agent_pane() {
+fn tmux_steer_delivers_text_and_enter_to_real_agent_pane() {
     if which::which("tmux").is_err() {
         eprintln!("tmux not on PATH; skipping deep tmux steer smoke");
         return;
@@ -401,17 +401,12 @@ fn tmux_pane_send_delivers_text_and_enter_to_real_agent_pane() {
     if env.skip_if_sandboxed() {
         return;
     }
-    let (socket, session, pane, _server) = real_agent_room(&env, "sess-steer-enter");
-    let target = format!("tmux:{pane}");
+    let (socket, session, _pane, _server) = real_agent_room(&env, "sess-steer-enter");
 
-    let out = run_pane_send(
-        &env,
-        &socket,
-        &[target.as_str(), "--enter", "--", "focus the parser test"],
-    );
+    let out = run_steer(&env, &socket, &["@codex", "--", "focus the parser test"]);
     assert!(
         out.status.success(),
-        "pane send failed\nstdout:\n{}\nstderr:\n{}",
+        "steer failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -423,12 +418,12 @@ fn tmux_pane_send_delivers_text_and_enter_to_real_agent_pane() {
     );
     assert!(
         screen.contains("SUBMITTED:focus the parser test"),
-        "pane send should submit a discrete Enter after the prompt:\n{screen}"
+        "steer should submit a discrete Enter after the prompt:\n{screen}"
     );
 }
 
 #[test]
-fn tmux_pane_send_without_enter_suppresses_submit_in_real_agent_pane() {
+fn tmux_steer_without_enter_suppresses_submit_in_real_agent_pane() {
     if which::which("tmux").is_err() {
         eprintln!("tmux not on PATH; skipping deep tmux steer smoke");
         return;
@@ -437,13 +432,16 @@ fn tmux_pane_send_without_enter_suppresses_submit_in_real_agent_pane() {
     if env.skip_if_sandboxed() {
         return;
     }
-    let (socket, session, pane, _server) = real_agent_room(&env, "sess-steer-no-enter");
-    let target = format!("tmux:{pane}");
+    let (socket, session, _pane, _server) = real_agent_room(&env, "sess-steer-no-enter");
 
-    let out = run_pane_send(&env, &socket, &[target.as_str(), "--", "hold the line"]);
+    let out = run_steer(
+        &env,
+        &socket,
+        &["@codex", "--no-enter", "--", "hold the line"],
+    );
     assert!(
         out.status.success(),
-        "pane send without --enter failed\nstdout:\n{}\nstderr:\n{}",
+        "steer --no-enter failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -455,11 +453,11 @@ fn tmux_pane_send_without_enter_suppresses_submit_in_real_agent_pane() {
     );
     assert!(
         screen.contains("hold the line"),
-        "pane send without --enter should still type the prompt:\n{screen}"
+        "steer --no-enter should still type the prompt:\n{screen}"
     );
     assert!(
         !screen.contains("SUBMITTED:hold the line"),
-        "pane send without --enter should not send the submitting Enter:\n{screen}"
+        "steer --no-enter should not send the submitting Enter:\n{screen}"
     );
 }
 
@@ -633,18 +631,14 @@ fn real_agent_room(env: &Env, agent_session: &str) -> (PathBuf, String, String, 
     let server_dir = TempDir::new().expect("tmux socket dir");
     let socket = server_dir.path().join("tmux.sock");
     let agent = server_dir.path().join("codex");
-    std::fs::write(
-        &agent,
-        "#!/bin/sh\n\
-         printf 'READY\\n'\n\
-         IFS= read -r line\n\
-         printf 'SUBMITTED:%s\\n' \"$line\"\n\
-         sleep 30\n",
-    )
-    .expect("write steer agent");
-    chmod_executable(&agent);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/bin/sh", &agent).expect("symlink steer agent shell");
+    #[cfg(not(unix))]
+    std::fs::copy("/bin/sh", &agent).expect("copy steer agent shell");
     let server = TmuxServerGuard::with_dir(socket.clone(), server_dir);
     let session = workspace_session(env);
+    let script =
+        "printf 'READY\\n'; IFS= read -r line; printf 'SUBMITTED:%s\\n' \"$line\"; sleep 30";
     tmux(
         &socket,
         &[
@@ -658,7 +652,7 @@ fn real_agent_room(env: &Env, agent_session: &str) -> (PathBuf, String, String, 
             "40",
             "-c",
             &env.project_root.display().to_string(),
-            &agent.display().to_string(),
+            &format!("{} -c {}", agent.display(), shell_quote(script)),
         ],
     );
     let codex_pane = tmux_capture(&socket, &["list-panes", "-t", &session, "-F", "#{pane_id}"]);
@@ -693,11 +687,11 @@ fn real_agent_room(env: &Env, agent_session: &str) -> (PathBuf, String, String, 
     (socket, session, codex_pane, server)
 }
 
-fn run_pane_send(env: &Env, socket: &Path, args: &[&str]) -> std::process::Output {
+fn run_steer(env: &Env, socket: &Path, args: &[&str]) -> std::process::Output {
     let mut cmd = env.rimz();
     cmd.env("TMUX", tmux_env(socket))
-        .args(["--mux", "tmux", "pane", "send"]);
-    cmd.args(args).output().expect("spawn pane send")
+        .args(["--mux", "tmux", "steer"]);
+    cmd.args(args).output().expect("spawn steer")
 }
 
 fn workspace_session(env: &Env) -> String {
@@ -742,6 +736,10 @@ fn trust_codex_hooks(env: &Env) {
         ));
     }
     std::fs::write(&config, text).expect("write trust state");
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 // --- tmux helpers ---
