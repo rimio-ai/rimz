@@ -57,6 +57,11 @@ live-zellij = { max-threads = 2 }
 # the shared runner sum to ~N servers across N runs rather than 2N.
 live-zellij-ci = { max-threads = 1 }
 live-tmux = { max-threads = 4 }
+# Rendered journeys each run a real `rimz sidebar serve` process over a PTY. The
+# full journey sweep now covers the dashboard, rate-limit recovery, selection,
+# remote badge, and resume paths, so cap this tier like the live-mux tier instead
+# of starting every renderer at once.
+rendered-journey = { max-threads = 4 }
 
 [[profile.default.overrides]]
 filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^journey::deep::zellij/))'
@@ -67,6 +72,10 @@ retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s",
 filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^journey::deep::tmux/))'
 test-group = 'live-tmux'
 retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
+
+[[profile.default.overrides]]
+filter = 'package(rimz) & test(/^journey::/) & not test(/^journey::deep::/)'
+test-group = 'rendered-journey'
 
 # CI runs under coverage instrumentation on a shared runner; `coverage` selects
 # this profile with `-P ci`. It inherits everything from `default` and remaps

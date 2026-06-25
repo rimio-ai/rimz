@@ -28,6 +28,55 @@ pub fn write_env_dump_shim(env: &Env, agent: &str) -> PathBuf {
 }
 
 #[cfg(unix)]
+pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
+    assert!(matches!(agent, "codex" | "claude"));
+    let dir = env.home_root.join("agent-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir agent bin");
+    let shim = dir.join(agent);
+    let version = match agent {
+        "claude" => "2.1.158 (Claude Code)",
+        _ => "0.139.0",
+    };
+    let body = format!(
+        "#!/bin/sh\n\
+         if [ \"${{1:-}}\" = \"--version\" ]; then\n\
+           printf '%s\\n' {version}\n\
+           exit 0\n\
+         fi\n\
+         rimz={rimz}\n\
+         agent={agent}\n\
+         session=${{RIMZ_TEST_AGENT_SESSION:-sess-hook-agent}}\n\
+         worktree=${{PWD:-.}}\n\
+         branch=${{RIMZ_TEST_AGENT_BRANCH:-main}}\n\
+         exit_code=${{RIMZ_TEST_AGENT_EXIT:-0}}\n\
+         sleep_ms=${{RIMZ_TEST_AGENT_SLEEP_MS:-0}}\n\
+         feed() {{\n\
+           printf '%s\\n' \"$1\" | RIMZ_AGENT_PID=${{RIMZ_AGENT_PID:-$$}} \"$rimz\" hooks feed --source \"$agent\" >/dev/null\n\
+         }}\n\
+         feed '{{\"hook_event_name\":\"SessionStart\",\"session_id\":\"'\"$session\"'\",\"model\":\"GPT-5.5\",\"reasoning_effort\":\"high\",\"worktree_path\":\"'\"$worktree\"'\",\"worktree_branch\":\"'\"$branch\"'\"}}'\n\
+         feed '{{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"'\"$session\"'\",\"prompt\":\"summarize the diff\"}}'\n\
+         feed '{{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"'\"$session\"'\",\"tool_name\":\"apply_patch\"}}'\n\
+         if [ \"$sleep_ms\" != 0 ]; then\n\
+           sleep_sec=$((sleep_ms / 1000))\n\
+           sleep_rem=$((sleep_ms % 1000))\n\
+           if [ \"$sleep_sec\" -gt 0 ]; then sleep \"$sleep_sec\"; fi\n\
+           if [ \"$sleep_rem\" -gt 0 ]; then sleep 1; fi\n\
+         fi\n\
+         if [ \"$exit_code\" != 0 ]; then\n\
+           exit \"$exit_code\"\n\
+         fi\n\
+         feed '{{\"hook_event_name\":\"Stop\",\"session_id\":\"'\"$session\"'\",\"last_assistant_message\":\"stub done\"}}'\n\
+         exit 0\n",
+        version = sh_quote(version),
+        rimz = sh_quote(&env.rimz_bin().display().to_string()),
+        agent = sh_quote(agent),
+    );
+    std::fs::write(&shim, body).expect("write hook-firing agent shim");
+    chmod_executable(&shim);
+    dir
+}
+
+#[cfg(unix)]
 pub fn write_fake_login_shell(env: &Env, name: &str, exports: &[(&str, &str)]) -> PathBuf {
     let dir = env.home_root.join("shell-bin");
     std::fs::create_dir_all(&dir).expect("mkdir shell bin");
@@ -113,4 +162,9 @@ fn chmod_executable(path: &Path) {
         .permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(path, perms).expect("chmod shim");
+}
+
+#[cfg(unix)]
+fn sh_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }

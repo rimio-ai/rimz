@@ -9,19 +9,25 @@
 //! "Running an agent" is simulated faithfully: Rimz only ever observes agents
 //! through their hooks, and the work pane itself is opaque to it (resolvers own
 //! pane I/O). So firing `rimz hooks feed --source claude` through an installed
-//! hook is the end-user act of running an agent.
+//! hook is the end-user act of running an agent. The harness's pane presence is
+//! a fixture; real focus, steering, and launched binaries live in `deep.rs`.
 //!
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+mod dashboard;
 mod deep;
 mod lifecycle_replay;
+mod rate_limit;
+mod remote;
 mod resize_redraw;
+mod resume;
 mod sidebar_phases;
 mod stats_refresh_resize;
+mod steer;
 mod teams;
 
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -39,14 +45,19 @@ use crate::common::{Env, ScrubSessionEnvExt};
 /// band, tall enough that no phase scrolls off.
 const ROWS: u16 = 40;
 const COLS: u16 = 36;
+const WIDE_COLS: u16 = 58;
+
+pub const KEY_UP: &[u8] = b"\x1b[A";
+pub const KEY_DOWN: &[u8] = b"\x1b[B";
+pub const KEY_RIGHT: &[u8] = b"\x1b[C";
 
 /// How long a phase may take to appear. The serve loop ticks every second, so
 /// a couple of ticks suffice on an idle machine; `wait_for` returns the instant
 /// the predicate holds, so this budget only bites on failure. It is generous
 /// because the full integration suite runs these PTY tests in parallel with the
-/// real-mux smokes, and a starved renderer can take several seconds to paint
-/// its first frame.
-pub const SETTLE: Duration = Duration::from_secs(15);
+/// real-mux smokes, and a starved renderer can take tens of seconds to paint its
+/// first frame on a loaded shared machine.
+pub const SETTLE: Duration = Duration::from_secs(45);
 
 /// A live Rimz "room": a real `rimz sidebar serve` renderer in a
 /// `portable-pty`, reading the [`Env`] ledger that hooks mutate.
@@ -67,6 +78,7 @@ pub struct RoomHarness<'a> {
     runtime: TempDir,
     _master: Box<dyn MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     reader: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -76,7 +88,11 @@ impl<'a> RoomHarness<'a> {
     /// latch never trips (the renderer never sees a sibling pane), so the
     /// column renders deterministically off the ledger and the tick.
     pub fn launch(env: &'a Env, mux: MuxName) -> Self {
-        Self::launch_inner(env, mux, false)
+        Self::launch_inner(env, mux, false, ROWS, COLS)
+    }
+
+    pub fn launch_wide(env: &'a Env, mux: MuxName) -> Self {
+        Self::launch_inner(env, mux, false, ROWS, WIDE_COLS)
     }
 
     /// Spawn the renderer with its pane fixture unreadable, so every
@@ -84,10 +100,16 @@ impl<'a> RoomHarness<'a> {
     /// a dead mux or moved workspace would feed. Blackbox: the real sidebar
     /// process runs; only its produce input is broken.
     pub fn launch_degraded(env: &'a Env, mux: MuxName) -> Self {
-        Self::launch_inner(env, mux, true)
+        Self::launch_inner(env, mux, true, ROWS, COLS)
     }
 
-    fn launch_inner(env: &'a Env, mux: MuxName, broken_pane_fixture: bool) -> Self {
+    fn launch_inner(
+        env: &'a Env,
+        mux: MuxName,
+        broken_pane_fixture: bool,
+        rows: u16,
+        cols: u16,
+    ) -> Self {
         let bin = cargo_bin("rimz");
         assert!(bin.exists(), "rimz binary missing: {}", bin.display());
 
@@ -114,8 +136,8 @@ impl<'a> RoomHarness<'a> {
 
         let pair = native_pty_system()
             .openpty(PtySize {
-                rows: ROWS,
-                cols: COLS,
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -149,8 +171,9 @@ impl<'a> RoomHarness<'a> {
         // Feed one long-lived parser incrementally from the reader thread, so
         // each `screen()` poll is O(grid) instead of re-parsing the whole
         // accumulated byte stream (which is O(n²) over a 15 s wait loop).
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0)));
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
+        let writer = Arc::new(Mutex::new(pair.master.take_writer().expect("pty writer")));
         let sink = Arc::clone(&parser);
         let reader = std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
@@ -171,6 +194,7 @@ impl<'a> RoomHarness<'a> {
             runtime,
             _master: pair.master,
             child,
+            writer,
             reader: Some(reader),
         }
     }
@@ -192,6 +216,34 @@ impl<'a> RoomHarness<'a> {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    pub fn send_keys(&self, bytes: &[u8]) {
+        let mut writer = self.writer.lock().expect("pty writer");
+        writer.write_all(bytes).expect("write sidebar keys");
+        writer.flush().expect("flush sidebar keys");
+    }
+
+    pub fn publish_provider_spending(&self, spending: &rimz::agents::spending::Spending) {
+        self.env.publish_provider_spending(spending);
+    }
+
+    pub fn publish_accounts(&self, accounts: &rimz::sidebar::cache::AccountsCache) {
+        self.env.publish_accounts(accounts);
+    }
+
+    pub fn publish_rate_limits(&self, cache: &rimz::sidebar::enrich::RateLimitsCache) {
+        self.env.publish_rate_limits(cache);
+    }
+
+    pub fn publish_link_stats(&self, stats: &rimz::remote::link::LinkStatsFile) {
+        let paths = rimz::RuntimePaths::under(self.env.workspace_id.clone(), self.runtime.path())
+            .expect("runtime paths");
+        rimz::ledger::atomic::write_temp_then_rename_cache(
+            &rimz::remote::link::stats_path(&paths),
+            stats,
+        )
+        .expect("publish link stats");
     }
 
     /// Wire the room the way the user does on first run: `rimz hooks install`

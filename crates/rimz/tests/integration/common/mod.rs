@@ -29,4 +29,5 @@ pub use payloads::{
 #[cfg(unix)]
 pub use shim::{
     path_with_front, write_env_dump_shim, write_fake_bash_shell, write_fake_login_shell,
+    write_hook_firing_agent,
 };

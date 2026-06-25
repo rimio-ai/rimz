@@ -8,7 +8,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -16,9 +16,11 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tempfile::TempDir;
 
 use super::{rimz_bin, session_start_at};
-use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
+use crate::common::{
+    CommandTimeoutExt, Env, ScrubSessionEnvExt, path_with_front, write_hook_firing_agent,
+};
 
-const CAPTURE_BUDGET: Duration = Duration::from_secs(15);
+const CAPTURE_BUDGET: Duration = Duration::from_secs(30);
 
 /// Shell line that runs the renderer over `env`'s ledger but with its own short
 /// `XDG_RUNTIME_DIR` (the wakeup socket must stay under the AF_UNIX limit).
@@ -81,9 +83,7 @@ fn tmux_room_shows_agent_after_hook() {
         .rand_bytes(6)
         .tempdir()
         .expect("short runtime dir");
-    let _server = TmuxServerGuard {
-        socket: socket.clone(),
-    };
+    let _server = TmuxServerGuard::new(socket.clone());
     let fake_codex = fake_codex_bin(server_dir.path());
 
     // A session with a foreground agent-shaped command, then a sidebar pane
@@ -198,9 +198,7 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
         .rand_bytes(6)
         .tempdir()
         .expect("short runtime dir");
-    let _server = TmuxServerGuard {
-        socket: socket.clone(),
-    };
+    let _server = TmuxServerGuard::new(socket.clone());
     let fake_codex = fake_codex_bin(server_dir.path());
 
     tmux(
@@ -393,6 +391,191 @@ fn zellij_room_shows_agent_after_hook() {
     );
 }
 
+#[test]
+fn tmux_pane_send_delivers_text_and_enter_to_real_agent_pane() {
+    if which::which("tmux").is_err() {
+        eprintln!("tmux not on PATH; skipping deep tmux steer smoke");
+        return;
+    }
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let (socket, session, pane, _server) = real_agent_room(&env, "sess-steer-enter");
+    let target = format!("tmux:{pane}");
+
+    let out = run_pane_send(
+        &env,
+        &socket,
+        &[target.as_str(), "--enter", "--", "focus the parser test"],
+    );
+    assert!(
+        out.status.success(),
+        "pane send failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let screen = capture_all_until(
+        &socket,
+        &session,
+        |s| s.contains("SUBMITTED:focus the parser test"),
+        CAPTURE_BUDGET,
+    );
+    assert!(
+        screen.contains("SUBMITTED:focus the parser test"),
+        "pane send should submit a discrete Enter after the prompt:\n{screen}"
+    );
+}
+
+#[test]
+fn tmux_pane_send_without_enter_suppresses_submit_in_real_agent_pane() {
+    if which::which("tmux").is_err() {
+        eprintln!("tmux not on PATH; skipping deep tmux steer smoke");
+        return;
+    }
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let (socket, session, pane, _server) = real_agent_room(&env, "sess-steer-no-enter");
+    let target = format!("tmux:{pane}");
+
+    let out = run_pane_send(&env, &socket, &[target.as_str(), "--", "hold the line"]);
+    assert!(
+        out.status.success(),
+        "pane send without --enter failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let screen = capture_all_until(
+        &socket,
+        &session,
+        |s| s.contains("hold the line"),
+        CAPTURE_BUDGET,
+    );
+    assert!(
+        screen.contains("hold the line"),
+        "pane send without --enter should still type the prompt:\n{screen}"
+    );
+    assert!(
+        !screen.contains("SUBMITTED:hold the line"),
+        "pane send without --enter should not send the submitting Enter:\n{screen}"
+    );
+}
+
+#[test]
+fn tmux_supervised_print_launches_hook_firing_agent_binary() {
+    if which::which("tmux").is_err() {
+        eprintln!("tmux not on PATH; skipping supervised tmux smoke");
+        return;
+    }
+    let Some(_rimz) = rimz_bin() else {
+        eprintln!("rimz not built; skipping supervised tmux smoke");
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    let stub_dir = write_hook_firing_agent(&env, "codex");
+    let server_dir = TempDir::new().expect("tmux socket dir");
+    let socket = server_dir.path().join("tmux.sock");
+    let _server = TmuxServerGuard::new(socket.clone());
+    let session = workspace_session(&env);
+
+    let mut cmd = env.rimz();
+    cmd.env("PATH", path_with_front(&stub_dir))
+        .env("TMUX", tmux_env(&socket))
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "1500")
+        .args([
+            "--mux",
+            "tmux",
+            "agents",
+            "codex",
+            "summarize the diff",
+            "-p",
+            "--timeout",
+            "30s",
+            "--keep",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = cmd.spawn().expect("spawn supervised print");
+    let screen = capture_all_until(
+        &socket,
+        &session,
+        |s| s.contains("coder") || s.contains("summarize the diff"),
+        CAPTURE_BUDGET,
+    );
+    let out = child.wait_with_output().expect("wait supervised print");
+    assert!(
+        screen.contains("coder") || screen.contains("summarize the diff"),
+        "supervised run should appear in the concurrently served tmux room:\n{screen}"
+    );
+    assert!(
+        out.status.success(),
+        "supervised print failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("stub done"),
+        "supervised print should emit the hook-firing stub's final message:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
+    if which::which("tmux").is_err() {
+        eprintln!("tmux not on PATH; skipping supervised tmux smoke");
+        return;
+    }
+    let Some(_rimz) = rimz_bin() else {
+        eprintln!("rimz not built; skipping supervised tmux smoke");
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    let stub_dir = write_hook_firing_agent(&env, "codex");
+    let server_dir = TempDir::new().expect("tmux socket dir");
+    let socket = server_dir.path().join("tmux.sock");
+    let _server = TmuxServerGuard::new(socket.clone());
+
+    let out = env
+        .rimz()
+        .env("PATH", path_with_front(&stub_dir))
+        .env("TMUX", tmux_env(&socket))
+        .env("RIMZ_TEST_AGENT_EXIT", "1")
+        .args([
+            "--mux",
+            "tmux",
+            "agents",
+            "codex",
+            "summarize the diff",
+            "-p",
+            "--timeout",
+            "30s",
+            "--keep",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("wait failed supervised print");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "non-zero agent exit should fail the supervised run\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// Attach a `portable-pty` client to `session` and poll the composited screen
 /// (vt100-parsed master output) until it contains `needle` or the budget
 /// elapses.
@@ -446,6 +629,121 @@ fn attach_and_read_until(runtime: &Path, session: &str, needle: &str, budget: Du
     text
 }
 
+fn real_agent_room(env: &Env, agent_session: &str) -> (PathBuf, String, String, TmuxServerGuard) {
+    let server_dir = TempDir::new().expect("tmux socket dir");
+    let socket = server_dir.path().join("tmux.sock");
+    let agent = server_dir.path().join("codex");
+    std::fs::write(
+        &agent,
+        "#!/bin/sh\n\
+         printf 'READY\\n'\n\
+         IFS= read -r line\n\
+         printf 'SUBMITTED:%s\\n' \"$line\"\n\
+         sleep 30\n",
+    )
+    .expect("write steer agent");
+    chmod_executable(&agent);
+    let server = TmuxServerGuard::with_dir(socket.clone(), server_dir);
+    let session = workspace_session(env);
+    tmux(
+        &socket,
+        &[
+            "new-session",
+            "-d",
+            "-s",
+            &session,
+            "-x",
+            "120",
+            "-y",
+            "40",
+            "-c",
+            &env.project_root.display().to_string(),
+            &agent.display().to_string(),
+        ],
+    );
+    let codex_pane = tmux_capture(&socket, &["list-panes", "-t", &session, "-F", "#{pane_id}"]);
+    let codex_pid = tmux_capture(
+        &socket,
+        &["display-message", "-p", "-t", &codex_pane, "#{pane_pid}"],
+    );
+    env.install_agent_hooks("codex");
+    let hook_env = [
+        ("TMUX_PANE", codex_pane.as_str()),
+        ("RIMZ_AGENT_PID", codex_pid.as_str()),
+        (rimz::run::ENV_AGENT_ROLE, "coder"),
+        (rimz::run::ENV_AGENT_PROFILE, "codex-coder"),
+    ];
+    let out = env.run_installed_hook_in_pane(
+        "codex",
+        &session_start_at(
+            agent_session,
+            "GPT-5.5",
+            "high",
+            env.project_root.display().to_string(),
+            Some("main"),
+        )
+        .to_string(),
+        &hook_env,
+    );
+    assert!(
+        out.status.success(),
+        "codex hook failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (socket, session, codex_pane, server)
+}
+
+fn run_pane_send(env: &Env, socket: &Path, args: &[&str]) -> std::process::Output {
+    let mut cmd = env.rimz();
+    cmd.env("TMUX", tmux_env(socket))
+        .args(["--mux", "tmux", "pane", "send"]);
+    cmd.args(args).output().expect("spawn pane send")
+}
+
+fn workspace_session(env: &Env) -> String {
+    rimz::WorkspaceResolver::resolve(&env.project_root, None)
+        .expect("resolve workspace")
+        .session_name
+}
+
+fn tmux_env(socket: &Path) -> String {
+    format!("{},0,0", socket.display())
+}
+
+#[cfg(unix)]
+fn chmod_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut perms = std::fs::metadata(path)
+        .expect("agent metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms).expect("chmod agent");
+}
+
+fn trust_codex_hooks(env: &Env) {
+    let config = env.agent_config_path("codex");
+    let mut text = std::fs::read_to_string(&config).expect("read codex config");
+    for token in [
+        "session_start",
+        "user_prompt_submit",
+        "subagent_start",
+        "subagent_stop",
+        "stop",
+        "permission_request",
+        "pre_tool_use",
+        "post_tool_use",
+        "pre_compact",
+        "post_compact",
+    ] {
+        text.push_str(&format!(
+            "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
+            config.display(),
+        ));
+    }
+    std::fs::write(&config, text).expect("write trust state");
+}
+
 // --- tmux helpers ---
 
 fn tmux(socket: &Path, args: &[&str]) {
@@ -490,6 +788,40 @@ fn capture_until(
             .expect("spawn tmux capture-pane");
         if out.status.success() {
             last = String::from_utf8_lossy(&out.stdout).into_owned();
+            if pred(&last) {
+                return last;
+            }
+        }
+        if Instant::now() >= deadline {
+            return last;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+fn capture_all_until(
+    socket: &Path,
+    session: &str,
+    pred: impl Fn(&str) -> bool,
+    budget: Duration,
+) -> String {
+    let deadline = Instant::now() + budget;
+    let mut last = String::new();
+    loop {
+        let panes = Command::new("tmux")
+            .scrub_session_env()
+            .arg("-S")
+            .arg(socket)
+            .args(["list-panes", "-t", session, "-F", "#{pane_id}"])
+            .output()
+            .expect("spawn tmux list-panes");
+        if panes.status.success() {
+            let mut frame = String::new();
+            for pane in String::from_utf8_lossy(&panes.stdout).lines() {
+                frame.push_str(&capture_until(socket, pane, |_| true, Duration::ZERO));
+                frame.push('\n');
+            }
+            last = frame;
             if pred(&last) {
                 return last;
             }
@@ -556,6 +888,20 @@ fn max_line_width(frame: &str) -> usize {
 
 struct TmuxServerGuard {
     socket: std::path::PathBuf,
+    _dir: Option<TempDir>,
+}
+
+impl TmuxServerGuard {
+    fn new(socket: PathBuf) -> Self {
+        Self { socket, _dir: None }
+    }
+
+    fn with_dir(socket: PathBuf, dir: TempDir) -> Self {
+        Self {
+            socket,
+            _dir: Some(dir),
+        }
+    }
 }
 
 impl Drop for TmuxServerGuard {
