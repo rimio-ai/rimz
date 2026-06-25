@@ -926,6 +926,7 @@ fn spawn_agent_exec_once(env: &Env, worktree: &Path, label: &str) -> Child {
     cmd.args(["agents", "exec", "codex", "--worktree-path"])
         .arg(worktree)
         .current_dir(worktree)
+        .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_READY", &ready)
         .stdin(Stdio::null())
