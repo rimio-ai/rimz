@@ -16,13 +16,13 @@ autotests = false
 # so a default `cargo package` drops it and the published crate would embed an
 # empty tier-1 table (build.rs falls back to `{}`). An `include` allowlist
 # overrides VCS ignore and ships the snapshot, so `cargo install rimz` embeds
-# real prices. The list is the binary's build inputs only: README is
-# auto-included; tests/benches are intentionally not packaged (cargo warns it
-# ignores their targets, which is harmless). The release workflow refreshes the
-# snapshot before publish and passes `--allow-dirty` (the included file is
-# gitignored, which cargo's dirty check otherwise rejects).
+# real prices. The list is the binary's build inputs only; the release workflow
+# refreshes the snapshot before publish and passes `--allow-dirty` (the included
+# file is gitignored, which cargo's dirty check otherwise rejects).
 include = [
     "/src",
+    "!AGENTS.md",
+    "!CLAUDE.md",
     "/build.rs",
     "/themes",
     "/pricing/litellm-pricing.json",

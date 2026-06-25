@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 # The Zellij presence plugin: a headless wasm32-wasip1 plugin loaded by rimz
 # into every Zellij session it manages, poking `rimz sidebar wake` on pane
