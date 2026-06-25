@@ -10,7 +10,7 @@ The log is state-dir rather than runtime-dir because its job is investigation af
 
 ## Envelope
 
-Every line is a `rimz.diag.v1` JSON object from [`schema/diag.rs`](../../../crates/rimz/src/schema/diag.rs): workspace id, session name, optional sidebar instance id, Unix milliseconds, severity, the writer's `build` id, and a tagged event.
+Every line is a `rimz.diag.v1` JSON object from [`schema/diag.rs`](../../../crates/rimz/src/schema/diag.rs): workspace id, session name, optional sidebar instance id, Unix milliseconds, severity, the writer's `build` id, an optional sink suppression count, and a tagged event.
 
 The `build` id — also stamped on every published pane frame — is a digest prefix of the writing executable's bytes ([`build_id.rs`](../../../crates/rimz/src/build_id.rs)), so records and frames written by overlapping old/new builds during an upgrade are distinguishable in place. A producer that reads a prior frame stamped by a different build additionally records a `mixed_build_writers` event, marking the overlap window itself.
 
@@ -36,8 +36,8 @@ Pure projection layers return diagnostics as data. Impure callers append them th
 
 One condition can write several records and one record can stand for many occurrences; read counts through these rules:
 
-- The sink rate-limits per identity — the record's kind plus its salient evidence fields ([`identity_key`](../../../crates/rimz/src/schema/diag.rs)) — over a five-second window, so a tight loop writes once per window while distinct evidence always passes.
-- The observer adds a per-kind cooldown upstream (`OBSERVE_COOLDOWN`); repeats inside it increment a suppressed counter that flushes on the kind's next record, so one `frame_anomaly` line can stand for a long episode.
+- The sink rate-limits per identity — the record's kind plus its salient evidence fields ([`identity_key`](../../../crates/rimz/src/schema/diag.rs)) — over a thirty-second window, flushing its suppressed counter onto the next record of that identity so steady per-tick repeats collapse to one periodic line carrying the tally.
+- The observer adds a per-kind cooldown upstream (`OBSERVE_COOLDOWN`); repeats inside it increment the `frame_anomaly` event's own suppressed counter before the generic sink window/counter applies, so one `frame_anomaly` line can stand for a long episode.
 - Every renderer instance records its own stream, so one published-frame problem records once per instance while a node-local problem records on one. The distinct `instance_id` count inside an episode separates the two.
 - The frame-capture ring churns within hours in a busy room; copy `diag-frames/` pairs out at the start of an investigation. The log records carry enough evidence to reconstruct an episode after its captures rotate.
 

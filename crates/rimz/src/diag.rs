@@ -19,7 +19,9 @@ const DIAG_LOG_NAME: &str = "diag.log.jsonl";
 const DIAG_LOG_MAX_BYTES: u64 = 1_048_576;
 const DIAG_FRAMES_DIR: &str = "diag-frames";
 const DIAG_FRAME_RING: usize = 8;
-const DIAG_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(5);
+/// Matches the observer diagnostics cadence (`OBSERVE_COOLDOWN`) so per-tick
+/// repeats collapse into periodic records carrying their suppressed count.
+const DIAG_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(30);
 static DIAG_FRAME_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -28,7 +30,13 @@ pub struct DiagSink {
     workspace_id: WorkspaceId,
     session_name: String,
     instance_id: Option<SidebarInstanceId>,
-    limiter: Arc<Mutex<HashMap<String, u64>>>,
+    limiter: Arc<Mutex<HashMap<String, LimiterEntry>>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct LimiterEntry {
+    last_emit_ms: Option<u64>,
+    suppressed: u32,
 }
 
 impl DiagSink {
@@ -89,14 +97,14 @@ impl DiagSink {
     }
 
     pub fn emit_at_ms(&self, event: DiagEvent, at_ms: u64) {
-        if !self.should_emit(&event, at_ms) {
+        let Some(suppressed_since_last) = self.suppression(&event, at_ms) else {
             return;
-        }
-        self.append(event, at_ms);
+        };
+        self.append(event, at_ms, suppressed_since_last);
     }
 
     pub fn emit_unlimited(&self, event: DiagEvent) {
-        self.append(event, crate::sidebar::cache::unix_now_ms());
+        self.append(event, crate::sidebar::cache::unix_now_ms(), 0);
     }
 
     /// Append a notification trace record to the sibling `notify.log.jsonl`.
@@ -145,7 +153,7 @@ impl DiagSink {
         Some(file_name)
     }
 
-    fn append(&self, event: DiagEvent, at_ms: u64) {
+    fn append(&self, event: DiagEvent, at_ms: u64, suppressed_since_last: u32) {
         let path = self.log_path();
         let envelope = DiagEnvelope::new(
             self.workspace_id.clone(),
@@ -153,7 +161,8 @@ impl DiagSink {
             self.instance_id.clone(),
             at_ms,
             event,
-        );
+        )
+        .with_suppressed(suppressed_since_last);
         if let Err(err) =
             crate::rotating_log::append_rotating_jsonl(&path, DIAG_LOG_MAX_BYTES, &envelope)
         {
@@ -161,21 +170,29 @@ impl DiagSink {
         }
     }
 
-    fn should_emit(&self, event: &DiagEvent, at_ms: u64) -> bool {
+    fn suppression(&self, event: &DiagEvent, at_ms: u64) -> Option<u32> {
         let key = event.identity_key();
         let Ok(mut limiter) = self.limiter.lock() else {
-            return true;
+            return Some(0);
         };
         let window_ms = DIAG_RATE_LIMIT_WINDOW.as_millis() as u64;
-        limiter.retain(|_, last| at_ms.saturating_sub(*last) < window_ms);
-        if limiter
-            .get(&key)
-            .is_some_and(|last| at_ms.saturating_sub(*last) < window_ms)
+        limiter.retain(|entry_key, entry| {
+            entry_key == &key
+                || entry
+                    .last_emit_ms
+                    .is_some_and(|last| at_ms.saturating_sub(last) < window_ms)
+        });
+        let entry = limiter.entry(key).or_default();
+        if entry
+            .last_emit_ms
+            .is_some_and(|last| at_ms.saturating_sub(last) < window_ms)
         {
-            return false;
+            entry.suppressed = entry.suppressed.saturating_add(1);
+            return None;
         }
-        limiter.insert(key, at_ms);
-        true
+        let suppressed = std::mem::take(&mut entry.suppressed);
+        entry.last_emit_ms = Some(at_ms);
+        Some(suppressed)
     }
 }
 
@@ -393,7 +410,7 @@ mod tests {
     fn rate_limit_reopens_after_window() {
         let dir = tempfile::tempdir().unwrap();
         let sink = sink(dir.path());
-        for at_ms in [1_000, 1_001, 6_000] {
+        for at_ms in [1_000, 1_001, 31_001] {
             sink.emit_at_ms(
                 DiagEvent::FrameRejected {
                     reason: FrameRejectReason::Empty,
@@ -409,8 +426,35 @@ mod tests {
         assert_eq!(
             text.lines().count(),
             2,
-            "the same identity emits again once the five-second window has elapsed"
+            "the same identity emits again once the thirty-second window has elapsed"
         );
+    }
+
+    #[test]
+    fn rate_limit_flushes_suppressed_count_after_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = sink(dir.path());
+        for at_ms in [1_000, 1_001, 1_002, 31_003] {
+            sink.emit_at_ms(
+                DiagEvent::FrameRejected {
+                    reason: FrameRejectReason::Empty,
+                    prior_pane_count: 1,
+                    fresh_pane_count: 0,
+                    frames_ref: None,
+                },
+                at_ms,
+            );
+        }
+
+        let text = std::fs::read_to_string(sink.log_path()).unwrap();
+        let records = text
+            .lines()
+            .map(|line| serde_json::from_str::<DiagEnvelope>(line).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].suppressed_since_last, 0);
+        assert_eq!(records[1].suppressed_since_last, 2);
     }
 
     #[test]

@@ -24,6 +24,8 @@ pub struct DiagEnvelope {
     pub at_ms: u64,
     pub severity: DiagSeverity,
     pub event: DiagEvent,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub suppressed_since_last: u32,
 }
 
 impl DiagEnvelope {
@@ -43,12 +45,22 @@ impl DiagEnvelope {
             at_ms,
             severity: event.severity(),
             event,
+            suppressed_since_last: 0,
         }
+    }
+
+    pub fn with_suppressed(mut self, suppressed_since_last: u32) -> Self {
+        self.suppressed_since_last = suppressed_since_last;
+        self
     }
 
     pub fn is_current_version(&self) -> bool {
         self.v == DIAG_SCHEMA_VERSION
     }
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -707,7 +719,7 @@ mod tests {
                 dropped_msgs: 0,
             },
         ];
-        for event in events {
+        for (index, event) in events.into_iter().enumerate() {
             let envelope = DiagEnvelope::new(
                 WorkspaceId::from_project_root(std::path::Path::new("/repo")),
                 "rimz-test".to_owned(),
@@ -715,8 +727,19 @@ mod tests {
                 42,
                 event,
             );
+            let envelope = if index == 0 {
+                envelope.with_suppressed(2)
+            } else {
+                envelope
+            };
             let encoded = serde_json::to_vec(&envelope).expect("encode");
-            let decoded: DiagEnvelope = serde_json::from_slice(&encoded).expect("decode");
+            let value: serde_json::Value = serde_json::from_slice(&encoded).expect("value");
+            if index == 0 {
+                assert_eq!(value["suppressed_since_last"], 2);
+            } else {
+                assert!(value.get("suppressed_since_last").is_none());
+            }
+            let decoded: DiagEnvelope = serde_json::from_value(value).expect("decode");
             assert_eq!(decoded, envelope);
             assert!(decoded.is_current_version());
         }

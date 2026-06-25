@@ -491,7 +491,10 @@ pub(super) fn collect_diagnostics(ws: &rimz::ResolvedWorkspace) -> model::Diagno
             severity: record.severity,
             kind: record.event.kind_name().to_owned(),
             at_ms: record.at_ms,
-            summary: diagnostic_summary(&record.event),
+            summary: summary_with_suppressed(
+                diagnostic_summary(&record.event),
+                record.suppressed_since_last,
+            ),
         })
         .collect();
     model::Diagnostics::Ready {
@@ -664,6 +667,14 @@ fn diagnostic_summary(event: &rimz::schema::diag::DiagEvent) -> String {
     }
 }
 
+fn summary_with_suppressed(summary: String, suppressed_since_last: u32) -> String {
+    if suppressed_since_last == 0 {
+        summary
+    } else {
+        format!("{summary}; {suppressed_since_last} suppressed")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,6 +721,18 @@ mod tests {
                 new_elder: elder.clone(),
             })
             .contains(elder.as_str())
+        );
+    }
+
+    #[test]
+    fn summary_with_suppressed_appends_nonzero_count() {
+        assert_eq!(
+            summary_with_suppressed("refuted panes".to_owned(), 0),
+            "refuted panes"
+        );
+        assert_eq!(
+            summary_with_suppressed("refuted panes".to_owned(), 3),
+            "refuted panes; 3 suppressed"
         );
     }
 
