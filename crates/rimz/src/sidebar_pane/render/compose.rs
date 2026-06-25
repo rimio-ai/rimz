@@ -5,8 +5,8 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use super::chrome::{
-    alert_lines, center_line, footer_lines, gate_notice_lines, hairline_rule, help_lines,
-    repo_header_lines, truth_notice_lines,
+    alert_lines, footer_lines, gate_notice_lines, hairline_rule, repo_header_lines,
+    truth_notice_lines,
 };
 use super::sections::{
     MakeUpHit, ProviderTabHit, cockpit_spend_line, cockpit_summary_line, content_width,
@@ -32,9 +32,7 @@ use super::{
 /// The viewport window is `UiState::scroll_offset`, resolved here each frame:
 /// clamped to the zone, then minimally auto-scrolled so the selected card —
 /// its expanded subagent lines included — sits fully in view, unless a manual
-/// wheel pin ([`ManualScroll`]) or the open help overlay holds the window —
-/// the overlay owns the viewport while it is up, immune to selection churn
-/// beneath it. The effective
+/// wheel pin ([`ManualScroll`]) holds the window. The effective
 /// offset is returned for the caller to write back, a draw byproduct like the
 /// hit-test map. When the cards overflow the viewport, each visible scroll line
 /// carries a track/thumb glyph in the right rail column — part of the composed
@@ -101,14 +99,12 @@ pub(crate) fn compose_lines(
     make_up_hits.retain(|hit| hit.line < top_shown);
 
     // Resolve the viewport offset: clamp to the zone, then — unless a manual
-    // wheel pin or the open help overlay holds the window — minimally
-    // auto-scroll the selected card fully into view. While help is open it owns
-    // the body viewport, so selection churn beneath it never pulls the block
-    // away mid-read.
+    // wheel pin holds the window — minimally auto-scroll the selected card
+    // fully into view.
     let scroll_len = scroll.len();
     let max_offset = scroll_len.saturating_sub(viewport);
     let mut offset = ui.scroll_offset.min(max_offset);
-    if ui.manual_scroll.is_none() && !ui.help_visible {
+    if ui.manual_scroll.is_none() {
         // A freshly-arrived unread outranks the selection: target its row (which
         // ranks to the top, so this scrolls to top) while the snap is armed and
         // on screen, otherwise follow the selected card as usual.
@@ -123,11 +119,10 @@ pub(crate) fn compose_lines(
     // caller stamps it at the write-back) and through the settle window after.
     // The column is reserved in every mode, so the gate reflows nothing.
     let show_bar = match snapshot.theme.display.scrollbar {
-        ScrollbarMode::Always => !ui.help_visible,
+        ScrollbarMode::Always => true,
         ScrollbarMode::Never => false,
         ScrollbarMode::Auto => {
-            !ui.help_visible
-                && (ui.scrollbar.moved_from(offset) || ui.scrollbar.visible(ui.animation_phase))
+            ui.scrollbar.moved_from(offset) || ui.scrollbar.visible(ui.animation_phase)
         }
     };
     let end = (offset + viewport).min(scroll_len);
@@ -173,6 +168,7 @@ pub(crate) fn compose_lines(
         tab_hits,
         make_up_hits,
         scroll_offset: offset,
+        bottom_height,
     }
 }
 
@@ -301,6 +297,7 @@ pub(crate) struct ComposedFrame {
     pub(crate) tab_hits: Vec<ProviderTabHit>,
     pub(crate) make_up_hits: Vec<MakeUpHit>,
     pub(crate) scroll_offset: usize,
+    pub(crate) bottom_height: usize,
 }
 
 /// Minimally nudge the viewport so the selected row's full line range — its
@@ -536,7 +533,7 @@ pub(super) fn top_lines(
 /// Compose the scrollable agent-cards zone and, in lockstep, its hit-test map:
 /// every content line gets one map entry, `Some(row)` for an agent/process row
 /// line and the worktree header that jumps into it, `None` for structural
-/// chrome (gaps, the external divider, help, `+K more`).
+/// chrome (gaps, the external divider, `+K more`).
 /// Populated rooms take their opening gap from the pinned cockpit separator;
 /// empty rooms keep the scroll zone clear. [`compose_lines`] windows this zone
 /// by the scroll offset and pins the cockpit above it and the bottom chrome
@@ -561,25 +558,13 @@ pub(super) fn lead_unread(groups: &[SidebarWorktreeGroup]) -> Option<(&str, Agen
 
 pub(super) fn scroll_lines(
     snapshot: &SidebarSnapshot,
-    alert: Option<&Alert>,
+    _alert: Option<&Alert>,
     ui: &UiState,
     width: usize,
     theme: &Theme,
 ) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
-    // An *active* alert means the body is a stale/empty fetch, not a live room:
-    // suppress the footer and help so the alert speaks alone.
-    // A recovered alert is just a lingering notice — the room below it is live.
-    let active = alert.is_some_and(Alert::is_active);
     let mut lines = Vec::new();
     let mut map: Vec<Option<usize>> = Vec::new();
-
-    if ui.help_visible && !active {
-        for line in help_lines(theme, snapshot.sidebar.focus_key_label(), width) {
-            lines.push(center_line(line, width));
-            map.push(None);
-        }
-        return (lines, map);
-    }
 
     if !snapshot.worktree_groups.is_empty() {
         let mut row_index = 0;

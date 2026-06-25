@@ -493,6 +493,18 @@ struct InputApply {
 }
 
 fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -> InputOutcome {
+    // The help popup is a transient modal: while it is up, the next
+    // interaction dismisses it and is consumed, never also acting on the
+    // sidebar beneath.
+    if ui.help_visible
+        && matches!(
+            wakeup,
+            Wakeup::Key(_) | Wakeup::MouseClick { .. } | Wakeup::Scroll { .. }
+        )
+    {
+        ui.help_visible = false;
+        return InputOutcome::redraw();
+    }
     match wakeup {
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
         Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),

@@ -183,18 +183,7 @@ pub(super) fn handle_key(
             }
         }
         KeyAction::Help => {
-            ui.help_visible = !ui.help_visible;
-            if ui.help_visible {
-                // The overlay replaces the card body from the top of the scroll
-                // zone and owns that viewport while open; selection churn below
-                // it never pulls the block away mid-read, and the wheel may
-                // still roam inside the help block.
-                ui.scroll_offset = 0;
-            } else {
-                // Closing drops any wheel peek made while reading, so the view
-                // snaps back to the selected card.
-                ui.manual_scroll = None;
-            }
+            ui.help_visible = true;
             InputOutcome::redraw()
         }
         KeyAction::Filter(action) => apply_make_up_filter(ui, snapshot, action),

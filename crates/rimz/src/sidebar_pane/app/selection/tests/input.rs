@@ -311,66 +311,24 @@ fn arrow_browse_ends_a_wheel_pin() {
     assert_eq!(ui.manual_scroll, None);
 }
 #[test]
-fn help_toggle_starts_the_replacement_body_at_top() {
-    // The overlay replaces the card body from the top of the scroll zone and
-    // owns that viewport while open — no wheel pin needed, though the wheel may
-    // still roam. Closing drops any roaming peek so the view snaps back to the
-    // selection.
+fn help_key_opens_without_touching_the_viewport() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
-    let mut ui = UiState::default();
+    let mut ui = UiState {
+        scroll_offset: 6,
+        manual_scroll: Some(ManualScroll {
+            selection_at_start: None,
+        }),
+        ..Default::default()
+    };
 
     handle_key(KeyAction::Help, &mut ui, &snapshot);
+
     assert!(ui.help_visible);
-    assert_eq!(ui.scroll_offset, 0);
-    assert_eq!(ui.manual_scroll, None, "the overlay needs no wheel pin");
-
-    handle_scroll(false, &mut ui);
-    assert!(ui.manual_scroll.is_some(), "the wheel roams while reading");
-
-    handle_key(KeyAction::Help, &mut ui, &snapshot);
-    assert!(!ui.help_visible);
-    assert_eq!(ui.manual_scroll, None);
-}
-#[test]
-fn help_overlay_holds_the_viewport_through_selection_churn() {
-    // While the overlay is open it owns the viewport: a fold that genuinely
-    // moves the selection — an external focus move landing — never pulls the
-    // view away mid-read. Closing the overlay resumes auto-follow and the
-    // selected card scrolls back into view.
-    let ws = workspace();
-    let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let snapshot = snapshot_with_panes(
-        &ws,
-        (1..=6)
-            .map(|n| pane(&format!("terminal_{n}"), "tab_0", false))
-            .collect(),
-    );
-    let mut ui = UiState::default();
-    reconcile_selection(&mut ui, &snapshot, Some(first));
-
-    // Opening help lands the viewport at the top of the replacement body.
-    handle_key(KeyAction::Help, &mut ui, &snapshot);
-    assert_eq!(ui.scroll_offset, 0);
-    // The wheel can roam inside the help block while it owns the body.
-    handle_scroll(true, &mut ui);
-    let offset = render::compose_lines(&snapshot, None, &ui, 38, 14).scroll_offset;
-    assert!(offset > 0, "the overlay overflows the short frame");
-    ui.scroll_offset = offset; // the draw's write-back
-
-    // A genuine selection move beneath the open overlay holds the window.
-    reconcile_selection(&mut ui, &snapshot, Some(second));
-    let held = render::compose_lines(&snapshot, None, &ui, 38, 14).scroll_offset;
-    assert_eq!(held, offset, "the open overlay owns the viewport");
-    ui.scroll_offset = held;
-
-    // Closing resumes auto-follow: the selected card scrolls back into view.
-    handle_key(KeyAction::Help, &mut ui, &snapshot);
-    let map = render::compose_lines(&snapshot, None, &ui, 38, 14).line_map;
+    assert_eq!(ui.scroll_offset, 6);
     assert!(
-        map.contains(&Some(ui.selected_index)),
-        "the selection is back on screen"
+        ui.manual_scroll.is_some(),
+        "opening help no longer resets card scroll state"
     );
 }
 #[test]

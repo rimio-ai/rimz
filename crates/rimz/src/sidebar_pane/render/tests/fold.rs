@@ -52,6 +52,15 @@ fn render_footer_and_help_overlay() {
     assert!(help.contains("? q waiting"));
     assert!(help.contains("! e attention"));
     assert!(help.contains("○ o idle"));
+    assert!(help.contains("any key to close"));
+    assert!(
+        help.contains("allow?"),
+        "cards render under the floating box"
+    );
+    assert!(
+        !help.contains("? close"),
+        "legend no longer names a close key"
+    );
     assert!(
         !help.contains("┄ commands"),
         "the retired seam left the legend"
@@ -63,19 +72,19 @@ fn render_footer_and_help_overlay() {
 /// `pad_chrome` patches it into the rebuilt spans and `center_line` carries it
 /// on the centered line — without the carry, every `Line::styled` chrome line
 /// (the hairlines, the footer hint, the help overlay) silently rendered at the
-/// default foreground. The help overlay itself reads in the faint tier.
+/// default foreground. The help overlay itself reads in the body tier.
 #[test]
 fn chrome_rebuilds_carry_line_level_styles() {
     let theme = Theme::fixed(false);
-    let padded = pad_chrome(Line::styled("keys & legend", theme.faint()));
+    let padded = pad_chrome(Line::styled("keys & legend", theme.body()));
     assert_eq!(padded.spans[0].content.as_ref(), " ", "gutter first");
-    assert_eq!(padded.spans[1].style, theme.faint());
+    assert_eq!(padded.spans[1].style, theme.body());
 
     let centered = center_line(Line::styled("? for help", theme.faint()), 30);
     assert_eq!(centered.style, theme.faint());
 
     for line in help_lines(&theme, Some("Alt+p"), 80) {
-        assert_eq!(line.style, theme.faint());
+        assert_eq!(line.style, theme.body());
     }
 }
 #[test]

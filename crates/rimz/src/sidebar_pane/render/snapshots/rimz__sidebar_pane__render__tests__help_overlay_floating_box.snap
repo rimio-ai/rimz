@@ -9,22 +9,22 @@ expression: screen
  ──────────────────────────────────────────────────────────────────────────────
  ? 1   ! 0   ⏸︎ 0   ✓ 0                                                ⢿ 0   ○ 0
 
-                    ╭ keys & legend ───────────────────────╮
-                    │ ↕ j/k rows   J/K worktrees  g/G ends │
-                    │ ⏎ l focus    1-9 direct              │
-                    │ ␣ n/N needs-you  (Space = n)         │
-                    │ ✉ m/M read / unread                  │
-                    │ ↔ ←/→ account tabs                   │
-                    │ filter                               │
-                    │   ? q waiting    ! e attention       │
-                    │   ⏸︎ p paused     ✓ d done            │
-                    │   ⢿ w working    ○ o idle            │
-                    │   u unread       a all               │
-                    │ global  Alt+p sidebar (toggle)       │
-                    │ ⟳ r reload   ✕ x dismiss   ? close   │
-                    │   ⠁ thinking     ⢄ delegating        │
-                    ╰──────────────────────────────────────╯
-
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌? codex                               ╭ keys & legend ───────────────────────╮▐
+▌  allow?                              │ ↕ j/k rows   J/K worktrees  g/G ends │▐
+▌  ▢ ──────────────────────────────────│ ⏎ l focus    1-9 direct              │▐
+                                       │ ␣ n/N needs-you  (Space = n)         │
+                                       │ ✉ m/M read / unread                  │
+                                       │ ↔ ←/→ account tabs                   │
+                                       │ filter                               │
+                                       │   ? q waiting    ! e attention       │
+                                       │   ⏸︎ p paused     ✓ d done            │
+                                       │   ⢿ w working    ○ o idle            │
+                                       │   u unread       a all               │
+                                       │ global  Alt+p sidebar (toggle)       │
+                                       │ ⟳ r reload   ✕ x dismiss             │
+                                       │   ⠁ thinking     ⢄ delegating        │
+                                       ╰────────── any key to close ──────────╯
  ──────────────────────────────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00
   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00

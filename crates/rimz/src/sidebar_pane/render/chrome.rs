@@ -326,10 +326,8 @@ pub(super) fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
     Line::from(spans).style(style)
 }
 
-/// The `?` overlay: a which-key style block with action glyphs and the status
-/// legend merged into the filter rows. It replaces the card body while open, so
-/// the reader gets summoned reference material without losing the pinned cockpit
-/// or footer.
+/// The `?` popup: a which-key style block with action glyphs and the status
+/// legend merged into the filter rows.
 pub(super) fn help_lines(
     theme: &Theme,
     focus_key: Option<&str>,
@@ -349,7 +347,13 @@ pub(super) fn help_lines(
     let max_row_width = rows.iter().map(Line::width).max().unwrap_or(0);
     let title_width = UnicodeWidthStr::width(TITLE) + 2;
     let desired_width = (max_row_width + 4).max(title_width + 3);
-    framed_box(theme, TITLE, rows, desired_width.min(width))
+    framed_box(
+        theme,
+        TITLE,
+        rows,
+        desired_width.min(width),
+        Some("any key to close"),
+    )
 }
 
 fn help_body_rows(theme: &Theme, focus_key: Option<&str>) -> Vec<Line<'static>> {
@@ -416,7 +420,7 @@ fn help_body_rows(theme: &Theme, focus_key: Option<&str>) -> Vec<Line<'static>> 
                 Span::raw(theme.glyph(GlyphRole::KeysReload).to_owned()),
                 Span::raw(" r reload   "),
                 Span::raw(theme.glyph(GlyphRole::KeysDismiss).to_owned()),
-                Span::raw(" x dismiss   ? close"),
+                Span::raw(" x dismiss"),
             ],
         ),
         help_row(
@@ -445,11 +449,11 @@ fn key_row(theme: &Theme, role: GlyphRole, text: &str) -> Line<'static> {
 }
 
 fn plain_row(theme: &Theme, text: impl Into<String>) -> Line<'static> {
-    Line::from(text.into()).style(theme.faint())
+    Line::from(text.into()).style(theme.body())
 }
 
 fn help_row(theme: &Theme, spans: Vec<Span<'static>>) -> Line<'static> {
-    Line::from(spans).style(theme.faint())
+    Line::from(spans).style(theme.body())
 }
 
 fn framed_box(
@@ -457,6 +461,7 @@ fn framed_box(
     title: &str,
     rows: Vec<Line<'static>>,
     box_width: usize,
+    bottom_caption: Option<&str>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(rows.len() + 2);
     let title = format!(" {title} ");
@@ -464,14 +469,14 @@ fn framed_box(
     lines.push(
         Line::from(vec![
             rule_span(theme, GlyphRole::ChromeBoxTopLeft),
-            Span::styled(title, theme.rule()),
+            Span::styled(title, theme.muted()),
             Span::styled(
                 theme.glyph(GlyphRole::ChromeHairline).repeat(fill),
-                theme.rule(),
+                theme.muted(),
             ),
             rule_span(theme, GlyphRole::ChromeBoxTopRight),
         ])
-        .style(theme.faint()),
+        .style(theme.body()),
     );
 
     let inner_width = box_width.saturating_sub(4);
@@ -483,27 +488,56 @@ fn framed_box(
         spans.extend(row.spans);
         spans.push(Span::raw(" "));
         spans.push(rule_span(theme, GlyphRole::ChromeBoxVertical));
-        lines.push(Line::from(spans).style(theme.faint()));
+        lines.push(Line::from(spans).style(theme.body()));
     }
 
-    lines.push(
-        Line::from(vec![
+    let inner = box_width.saturating_sub(2);
+    let bottom_spans = match bottom_caption {
+        Some(caption) => {
+            let caption = format!(" {caption} ");
+            let caption_width = UnicodeWidthStr::width(caption.as_str());
+            if caption_width <= inner {
+                let left = (inner - caption_width) / 2;
+                let right = inner - caption_width - left;
+                vec![
+                    rule_span(theme, GlyphRole::ChromeBoxBottomLeft),
+                    Span::styled(
+                        theme.glyph(GlyphRole::ChromeHairline).repeat(left),
+                        theme.muted(),
+                    ),
+                    Span::styled(caption, theme.muted()),
+                    Span::styled(
+                        theme.glyph(GlyphRole::ChromeHairline).repeat(right),
+                        theme.muted(),
+                    ),
+                    rule_span(theme, GlyphRole::ChromeBoxBottomRight),
+                ]
+            } else {
+                vec![
+                    rule_span(theme, GlyphRole::ChromeBoxBottomLeft),
+                    Span::styled(
+                        theme.glyph(GlyphRole::ChromeHairline).repeat(inner),
+                        theme.muted(),
+                    ),
+                    rule_span(theme, GlyphRole::ChromeBoxBottomRight),
+                ]
+            }
+        }
+        None => vec![
             rule_span(theme, GlyphRole::ChromeBoxBottomLeft),
             Span::styled(
-                theme
-                    .glyph(GlyphRole::ChromeHairline)
-                    .repeat(box_width.saturating_sub(2)),
-                theme.rule(),
+                theme.glyph(GlyphRole::ChromeHairline).repeat(inner),
+                theme.muted(),
             ),
             rule_span(theme, GlyphRole::ChromeBoxBottomRight),
-        ])
-        .style(theme.faint()),
-    );
+        ],
+    };
+    lines.push(Line::from(bottom_spans).style(theme.body()));
     lines
 }
 
 fn rule_span(theme: &Theme, role: GlyphRole) -> Span<'static> {
-    Span::styled(theme.glyph(role).to_owned(), theme.rule())
+    Span::styled(theme.glyph(role).to_owned(), theme.muted())
 }
 
 fn borderless_line(line: Line<'static>, width: usize) -> Line<'static> {

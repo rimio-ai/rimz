@@ -1,3 +1,4 @@
+use super::input::{KeyAction, Wakeup};
 use super::*;
 use crate::sidebar_pane::app::fixtures::{pane, snapshot, snapshot_with_panes, workspace};
 use jiff::Timestamp;
@@ -91,6 +92,41 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         frame_interval(&slow, &UiState::default(), false),
         crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
     );
+}
+
+#[test]
+fn help_popup_dismisses_and_consumes_any_user_input() {
+    let ws = workspace();
+    let snapshot = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_1", "tab_0", false),
+            pane("terminal_2", "tab_0", false),
+        ],
+    );
+
+    for wakeup in [
+        Wakeup::Key(KeyAction::Down),
+        Wakeup::MouseClick { column: 1, row: 0 },
+        Wakeup::Scroll { down: true },
+    ] {
+        let mut ui = UiState {
+            help_visible: true,
+            selected_index: 0,
+            scroll_offset: 4,
+            line_map: vec![Some(1)],
+            ..Default::default()
+        };
+
+        let outcome = handle_wakeup(wakeup, &mut ui, &snapshot);
+
+        assert_eq!(outcome, InputOutcome::redraw());
+        assert!(!ui.help_visible);
+        assert_eq!(ui.selected_index, 0, "key input was consumed");
+        assert_eq!(ui.scroll_offset, 4, "scroll input was consumed");
+        assert_eq!(ui.manual_scroll, None, "scroll input was consumed");
+        assert_eq!(ui.browse, None, "key input was consumed");
+    }
 }
 
 #[test]

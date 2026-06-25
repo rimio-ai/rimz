@@ -75,7 +75,7 @@ fn render_scroll_overflow_shows_bar() {
     assert_snapshot("scroll_overflow_shows_bar", rendered);
 }
 #[test]
-fn help_overlay_replaces_cards_without_scrollbar() {
+fn help_overlay_floats_over_cards_with_scrollbar() {
     let mut snapshot = overflowing_fleet();
     snapshot.theme.display.scrollbar = ScrollbarMode::Always;
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -85,14 +85,13 @@ fn help_overlay_replaces_cards_without_scrollbar() {
             help_visible: true,
             ..Default::default()
         },
-        36,
+        54,
         28,
     );
 
-    let filter = line_containing(&rendered, "filter");
     assert!(
-        !filter.ends_with('▕') && !filter.ends_with('▐'),
-        "help owns the body and suppresses the scrollbar rail:\n{rendered}"
+        line_containing(&rendered, "⑂ alpha").ends_with('▐'),
+        "the always scrollbar rail stays visible while help floats:\n{rendered}"
     );
     assert!(
         rendered.contains("keys & legend") && rendered.contains("╭") && rendered.contains("╰"),
@@ -103,8 +102,8 @@ fn help_overlay_replaces_cards_without_scrollbar() {
         "help chrome survives narrow framing:\n{rendered}"
     );
     assert!(
-        !rendered.contains("task-0"),
-        "cards give way while help is open:\n{rendered}"
+        rendered.contains("task-0"),
+        "cards keep rendering under the floating help box:\n{rendered}"
     );
 }
 #[test]

@@ -30,9 +30,9 @@ mod theme;
 mod ui_state;
 
 use self::ansi::{infallible, write_buffer_line_ansi};
-use self::chrome::hairline_rule;
 #[cfg(test)]
-use self::chrome::{abbreviate_under, center_line, help_lines};
+use self::chrome::{abbreviate_under, center_line};
+use self::chrome::{hairline_rule, help_lines};
 pub(crate) use self::compose::compose_lines;
 use self::compose::lead_unread;
 #[cfg(test)]
@@ -54,7 +54,7 @@ use crate::{ProcessState, SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use ratatui::layout::Rect;
 use ratatui::text::Text;
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 
 #[cfg(test)]
@@ -202,6 +202,7 @@ fn draw_into(
     // draw: store them so the mouse hit-test and the next frame's viewport read
     // the geometry of the frame the user is actually looking at.
     let composed = compose_lines(snapshot, alert, ui, area.width, area.height);
+    let bottom_height = composed.bottom_height;
     ui.line_map = composed.line_map;
     ui.tab_hits = composed.tab_hits;
     ui.make_up_hits = composed.make_up_hits;
@@ -228,6 +229,60 @@ fn draw_into(
             area,
         );
     }
+    if ui.help_visible {
+        draw_help_overlay(
+            frame,
+            &theme,
+            snapshot.sidebar.focus_key_label(),
+            area,
+            bottom_height,
+        );
+    }
+}
+
+fn draw_help_overlay(
+    frame: &mut Frame<'_>,
+    theme: &Theme,
+    focus_key: Option<&str>,
+    area: Rect,
+    bottom_height: usize,
+) {
+    const RIGHT_MARGIN: u16 = 1;
+
+    let avail = area.width.saturating_sub(RIGHT_MARGIN);
+    if avail == 0 {
+        return;
+    }
+    let lines = help_lines(theme, focus_key, usize::from(avail));
+    let box_w = lines.iter().map(|line| line.width()).max().unwrap_or(0) as u16;
+    let box_h = lines.len() as u16;
+    if box_w == 0 || box_h == 0 {
+        return;
+    }
+
+    let bottom = area.bottom().saturating_sub(bottom_height as u16);
+    let top = bottom.saturating_sub(box_h).max(area.y);
+    let height = bottom.saturating_sub(top);
+    if height == 0 {
+        return;
+    }
+    let x = area
+        .right()
+        .saturating_sub(RIGHT_MARGIN.saturating_add(box_w))
+        .max(area.x);
+    let width = box_w.min(area.right().saturating_sub(x));
+    if width == 0 {
+        return;
+    }
+
+    let rect = Rect {
+        x,
+        y: top,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(Paragraph::new(Text::from(lines)), rect);
 }
 
 pub struct GalleryColumn<'a> {

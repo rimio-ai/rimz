@@ -64,9 +64,8 @@ pub struct UiState {
     pub(crate) browse: Option<Browse>,
     /// First scroll-zone content line visible in the agent-cards viewport.
     /// Resolved by every draw — clamped to the zone, then auto-scrolled so the
-    /// selected card stays in view unless a [`ManualScroll`] pin or the open
-    /// help overlay holds it — and written back as a byproduct of the draw,
-    /// like `line_map`.
+    /// selected card stays in view unless a [`ManualScroll`] pin holds it —
+    /// and written back as a byproduct of the draw, like `line_map`.
     pub(crate) scroll_offset: usize,
     /// The transient wheel-scroll pin riding above the auto-follow, or `None`
     /// while the viewport follows the selection (see [`ManualScroll`]).
