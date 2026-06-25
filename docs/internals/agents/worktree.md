@@ -31,7 +31,7 @@ Seeding is best-effort enrichment layered over creation: a missing file is a sil
 
 ## Cleanup
 
-A worktree is reclaimed once its work has landed — proven, never assumed. `rimz worktree remove <name>` runs the decision on demand; the agent wrapper runs the same one through the on-disk `rimz worktree cleanup <path>` helper when an agent launched with `--worktree-path` exits ([harness.md → Cleanup](./harness.md#cleanup)), falling back to the in-process implementation if the helper cannot be resolved or spawned.
+A worktree is reclaimed once its work has landed — proven, never assumed. `rimz worktree remove <name>` runs the decision on demand; the agent wrapper runs the same one through the on-disk `rimz worktree cleanup <path>` helper when an agent launched with `--worktree-path` deliberately exits or its tab/pane closes while the room stays live ([harness.md → Cleanup](./harness.md#cleanup)), falling back to the in-process implementation if the helper cannot be resolved or spawned. Signal-close cleanup runs outside the dying pane's process group, narrowing `rimz gc` to crash residue, dirty work, pending work, and trees still occupied by user panes.
 
 The decision is pure, over three inputs — the marker, `git status --porcelain`, and whether a live **user** pane still sits inside the path. Sidebar panes are chrome that inherit the tab cwd, so worktree liveness reads user panes only.
 
@@ -48,4 +48,4 @@ Branch deletion follows the same proof. The automatic path tries `git branch -d`
 
 ## `rimz gc`
 
-`rimz gc` sweeps every clean, marked, content-landed worktree in the current repo that no live user pane occupies, measures the checkout bytes it reclaims, then runs `git worktree prune`. A `fresh`-based worktree compares against `origin/…`, so an unfetched merge keeps the tree until a fetch updates the remote-tracking base.
+`rimz gc` sweeps every clean, marked, content-landed worktree in the current repo that no live user pane occupies, measures the checkout bytes it reclaims, then runs `git worktree prune`. Routine deliberate agent closes already launch the same cleanup path, so `gc` primarily reclaims crash residue and trees that became safe only after later Git or pane state changed. A `fresh`-based worktree compares against `origin/…`, so an unfetched merge keeps the tree until a fetch updates the remote-tracking base.

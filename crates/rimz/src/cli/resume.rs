@@ -12,6 +12,17 @@ pub(super) fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &s
         )
 }
 
+/// Whether a live (non-resurrectable) session named `session_name` exists now.
+/// Used by the agent wrapper on a close signal: a live session means the pane
+/// closed deliberately while the room stayed up, while a missing session means
+/// mux loss and the agent stays recoverable.
+pub(super) fn session_is_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
+    backend
+        .list_sessions()
+        .map(|sessions| sessions.iter().any(|name| name == session_name))
+        .unwrap_or(false)
+}
+
 /// Plan the agents a reborn session re-seeds, reading the durable *audit*
 /// rollup — the one that keeps the dead-process agents a runtime read would
 /// expel, which is exactly the set a rebirth must bring back. Best-effort: a

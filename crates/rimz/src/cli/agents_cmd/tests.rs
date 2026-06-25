@@ -1256,6 +1256,14 @@ fn exec_records_end_trace_for_interactive_wrapper_exits() {
 }
 
 #[test]
+fn close_is_deliberate_keeps_only_mux_loss_signal_exits_recoverable() {
+    assert!(close_is_deliberate(false, false));
+    assert!(close_is_deliberate(false, true));
+    assert!(close_is_deliberate(true, true));
+    assert!(!close_is_deliberate(true, false));
+}
+
+#[test]
 fn run_stop_should_cancel_only_live_runs() {
     for status in [RunStatus::Pending, RunStatus::Running] {
         assert!(run_stop_should_cancel(&run_record_with_status(status)));

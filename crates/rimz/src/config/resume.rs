@@ -19,9 +19,11 @@ pub const DEFAULT_AUTO_CONTINUE_MAX_RETRIES: u32 = 13;
 /// Resume behavior, in two tenses. On an involuntary session *rebirth* —
 /// reboot, multiplexer crash, or a Rimz-initiated rebirth of a stuck room —
 /// Rimz offers to re-seed prior agents from the durable rollup; the prompt
-/// defaults to recovery, and non-interactive starts recover. Closing a tab
-/// while the room survives records the end trace that keeps that agent out of
-/// future recovery; manual `rimz reset` starts fresh. While the room is *live*,
+/// defaults to recovery, and non-interactive starts recover. A deliberate
+/// agent close — clean quit, or tab/pane close while the room remains live —
+/// records the end trace and runs marked-worktree cleanup when present; only
+/// mux loss keeps the agent recoverable. Manual `rimz reset` starts fresh.
+/// While the room is *live*,
 /// opt-in auto-continue picks a parked agent's turn back up after a rate-limit
 /// window resets or a non-clocked retry backoff elapses. Backend-neutral product
 /// behavior the cli and producer read directly, not a multiplexer preference.

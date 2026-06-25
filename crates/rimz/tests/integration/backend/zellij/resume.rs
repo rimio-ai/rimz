@@ -1,0 +1,298 @@
+use super::*;
+
+#[test]
+fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() {
+    require_zellij!();
+
+    let env = Env::new();
+    let workspace = rimz::workspace::WorkspaceResolver::resolve(&env.project_root, None)
+        .expect("resolve workspace");
+    let worktree = env.project_root.join("rimz-zellij");
+    std::fs::create_dir_all(&worktree).expect("mkdir worktree");
+    let agent_id = "sess-zellij-closed";
+    append_registered_agent(&env, &workspace, agent_id, &worktree);
+
+    let before = plan_from_env(&env);
+    assert_eq!(before.tabs.len(), 1, "seeded agent should be recoverable");
+
+    let xdg = scoped_runtime_dir();
+    let _cleanup = ScopedSessionCleanup {
+        name: workspace.session_name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let sidebar = SidebarPaneOptions {
+        session_name: workspace.session_name.clone(),
+        workspace_id: workspace.workspace_id.clone(),
+        project_root: workspace.project_root.clone(),
+        cwd: workspace.project_root.clone(),
+        width: SidebarWidth::default(),
+        birth_size: SidebarWidth::default().birth_size(Some(160)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    backend.open_sidebar(&sidebar, None).expect("open_sidebar");
+    wait_for_pane_count(xdg.path(), &workspace.session_name, 2);
+
+    let _client = AttachedClient::attach(xdg.path(), &workspace.session_name, 160, 40);
+    wait_for_attached_client(xdg.path(), &workspace.session_name);
+
+    let agent_bin = write_sleeping_agent_shim(&env, "claude");
+    let ready = env.home_root.join("zellij-agent-ready");
+    let command = zellij_agent_exec_command(&env, xdg.path(), &agent_bin, &ready, agent_id);
+    let tab_name = "#rimz-zellij";
+    backend
+        .open_tab(&TabOptions {
+            session_name: workspace.session_name.clone(),
+            title: tab_name.to_owned(),
+            cwd: worktree.clone(),
+            panes: LayoutPanes {
+                columns: vec![vec![PaneCmd { argv: command }]],
+            },
+            focus: true,
+            dock_sidebar: true,
+            sidebar,
+        })
+        .expect("open agent tab");
+    wait_for_path(&ready, "agent shim did not start");
+
+    close_all_sidebar_panes(xdg.path(), &workspace.session_name);
+    assert!(
+        matches!(
+            backend.probe_session_health(&workspace.session_name),
+            Ok(SessionHealth::Stuck)
+        ),
+        "session should be live but unclean after removing every sidebar",
+    );
+
+    let work = wait_for_named_work_pane_count(xdg.path(), &workspace.session_name, tab_name, 1);
+    let pane_id = format!("terminal_{}", work[0].id);
+    let closed = scoped_zellij(xdg.path())
+        .args([
+            "--session",
+            &workspace.session_name,
+            "action",
+            "close-pane",
+            "--pane-id",
+            &pane_id,
+        ])
+        .bounded_output()
+        .expect("close agent pane");
+    assert!(
+        closed.status.success(),
+        "close-pane failed: {}",
+        String::from_utf8_lossy(&closed.stderr),
+    );
+    assert!(
+        backend
+            .list_sessions()
+            .expect("list sessions")
+            .contains(&workspace.session_name),
+        "closing one agent pane must leave the room alive",
+    );
+    wait_for_agent_tombstone(&env, agent_id);
+
+    let after = plan_from_env(&env);
+    assert!(
+        after.is_empty(),
+        "a closed-pane end trace removes the agent from resume candidates",
+    );
+}
+
+fn append_registered_agent(
+    env: &Env,
+    workspace: &rimz::ResolvedWorkspace,
+    agent_id: &str,
+    worktree: &Path,
+) {
+    let mut observation = rimz::agents::AgentLifecycleObservation::new(
+        Some(agent_id.into()),
+        rimz::agents::LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some("zellij-closed-lane".to_owned());
+    observation.worktree_path = Some(worktree.display().to_string());
+    observation.worktree_branch = Some("zellij-fixes".to_owned());
+    observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_99"));
+    env.ledger()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .expect("append registered agent");
+}
+
+fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
+    let dir = env.home_root.join("zellij-agent-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir agent bin");
+    let path = dir.join(agent);
+    std::fs::write(
+        &path,
+        "#!/bin/sh\n\
+         printf ready > \"$RIMZ_TEST_AGENT_READY\"\n\
+         trap 'exit 0' HUP TERM INT\n\
+         while :; do sleep 1; done\n",
+    )
+    .expect("write agent shim");
+    chmod_executable(&path);
+    dir
+}
+
+fn zellij_agent_exec_command(
+    env: &Env,
+    zellij_runtime: &Path,
+    agent_bin: &Path,
+    ready: &Path,
+    agent_id: &str,
+) -> Vec<String> {
+    let path = path_with_front(agent_bin);
+    let rimz_bin = env.rimz_bin().to_string_lossy().into_owned();
+    vec![
+        "/usr/bin/env".to_owned(),
+        format!("XDG_STATE_HOME={}", env.state_root().display()),
+        format!("XDG_RUNTIME_DIR={}", zellij_runtime.display()),
+        format!("XDG_CONFIG_HOME={}", env.config_root().display()),
+        format!("HOME={}", env.home_root.display()),
+        "SHELL=/definitely/not/a/shell".to_owned(),
+        format!("PATH={path}"),
+        format!("RIMZ_TEST_AGENT_READY={}", ready.display()),
+        rimz_bin,
+        "--mux".to_owned(),
+        "zellij".to_owned(),
+        "agents".to_owned(),
+        "exec".to_owned(),
+        "claude".to_owned(),
+        "--resume".to_owned(),
+        agent_id.to_owned(),
+        "--close-pane-on-exit".to_owned(),
+    ]
+}
+
+fn close_all_sidebar_panes(xdg: &Path, session: &str) {
+    let panes = expect_list_panes_json(xdg, session);
+    let sidebar_ids: Vec<String> = panes
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|pane| pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false))
+        .filter(|pane| pane.get("title").and_then(|value| value.as_str()) == Some("rimz-sidebar"))
+        .filter_map(|pane| pane.get("id").and_then(|value| value.as_u64()))
+        .map(|id| format!("terminal_{id}"))
+        .collect();
+    assert!(
+        !sidebar_ids.is_empty(),
+        "test setup should create at least one sidebar pane",
+    );
+    for pane_id in sidebar_ids {
+        let output = scoped_zellij(xdg)
+            .args([
+                "--session",
+                session,
+                "action",
+                "close-pane",
+                "--pane-id",
+                &pane_id,
+            ])
+            .bounded_output()
+            .expect("close sidebar pane");
+        assert!(
+            output.status.success(),
+            "close sidebar pane failed: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+    wait_for_no_sidebar_panes(xdg, session);
+}
+
+fn wait_for_no_sidebar_panes(xdg: &Path, session: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let panes = expect_list_panes_json(xdg, session);
+        let has_sidebar = panes
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .any(|pane| {
+                pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
+                    && pane.get("title").and_then(|value| value.as_str()) == Some("rimz-sidebar")
+            });
+        if !has_sidebar {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("session {session} still has a rimz-sidebar pane");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn chmod_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).expect("chmod");
+    }
+}
+
+fn path_with_front(dir: &Path) -> String {
+    let original = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![dir.to_path_buf()];
+    paths.extend(std::env::split_paths(&original));
+    std::env::join_paths(paths)
+        .expect("join PATH")
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn wait_for_path(path: &Path, message: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("{message}: {}", path.display());
+}
+
+fn wait_for_agent_tombstone(env: &Env, agent_id: &str) {
+    let key = (
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        agent_id.into(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let events = env.read_events();
+        let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&events);
+        if ended.contains(&key) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("agent.ended tombstone was not recorded for {agent_id}");
+}
+
+fn plan_from_env(env: &Env) -> rimz::resume::ResumePlan {
+    let projection = env
+        .ledger()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("audit projection");
+    let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
+    rimz::resume::plan_resume(
+        &projection.agents,
+        &ended,
+        rimz::resume::DEFAULT_RESUME_MAX,
+        |path| path.is_dir(),
+        &env.rimz_bin(),
+    )
+}

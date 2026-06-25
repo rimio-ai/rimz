@@ -1362,6 +1362,99 @@ fn closing_agent_tab_records_end_trace_when_session_survives() {
     );
 }
 
+/// A signaled agent close is still a deliberate close when the tmux session
+/// survives, so the wrapper launches clean Rimz-worktree disposal outside the
+/// dying pane.
+#[test]
+fn closing_agent_tab_disposes_clean_worktree_when_session_survives() {
+    require_tmux!();
+    if git_missing() {
+        return;
+    }
+
+    let env = Env::new();
+    init_repo(&env.project_root);
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let created = env
+        .rimz()
+        .args(["worktree", "new", "rimz-clean"])
+        .output()
+        .expect("spawn worktree new");
+    assert!(
+        created.status.success(),
+        "worktree new failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&created.stdout),
+        String::from_utf8_lossy(&created.stderr),
+    );
+    let worktree = env.home_root.join("project-worktrees").join("rimz-clean");
+    assert!(
+        worktree.is_dir(),
+        "worktree should exist before agent close"
+    );
+
+    let server = TmuxServer::new();
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: workspace.session_name.clone(),
+            workspace_id: workspace.workspace_id.clone(),
+            project_root: workspace.project_root.clone(),
+            cwd: workspace.worktree_root.clone(),
+            config: rimz::config::MultiplexerConfig::default(),
+            detected_size: Some((160, 40)),
+            truecolor: false,
+        })
+        .expect("ensure session");
+
+    let agent_bin = write_sleeping_agent_shim(&env, "claude");
+    let ready = env.home_root.join("agent-ready-clean");
+    let mut command = tmux_agent_exec_command(&env, &agent_bin, &ready, "sess-clean-worktree");
+    command.extend(["--worktree-path".to_owned(), worktree.display().to_string()]);
+    let (_stub_dir, stub) = sidebar_command_stub();
+    server
+        .backend
+        .open_tab(&TabOptions {
+            session_name: workspace.session_name.clone(),
+            title: "#rimz-clean".to_owned(),
+            cwd: worktree.clone(),
+            panes: LayoutPanes {
+                columns: vec![vec![PaneCmd { argv: command }]],
+            },
+            focus: false,
+            dock_sidebar: true,
+            sidebar: SidebarPaneOptions {
+                session_name: workspace.session_name.clone(),
+                workspace_id: workspace.workspace_id.clone(),
+                project_root: workspace.project_root.clone(),
+                cwd: worktree.clone(),
+                width: SidebarWidth::default(),
+                birth_size: SidebarWidth::default().birth_size(Some(160)),
+                rimz_bin: stub,
+                replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
+                resume_tabs: Vec::new(),
+                refresh_ms: None,
+            },
+        })
+        .expect("open agent tab");
+    wait_for_path(&ready, "agent shim did not start");
+
+    let target = format!("{}:#rimz-clean", workspace.session_name);
+    server.tmux(&["kill-window", "-t", target.as_str()]);
+    assert!(
+        server
+            .backend
+            .list_sessions()
+            .expect("list sessions")
+            .contains(&workspace.session_name),
+        "closing one tab must leave the room alive"
+    );
+    wait_for_path_absent(
+        &worktree,
+        "clean worktree was not removed after agent tab close",
+    );
+}
+
 /// `open_tab` builds a caller-specified multi-column layout imperatively: the
 /// first pane is the `new-window`, the remaining rows of a column split `-v`
 /// below it, and each later column splits `-h` to the right of the previous
@@ -2090,6 +2183,35 @@ fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
     dir
 }
 
+fn tmux_agent_exec_command(
+    env: &Env,
+    agent_bin: &Path,
+    ready: &Path,
+    agent_id: &str,
+) -> Vec<String> {
+    let path = path_with_front(agent_bin);
+    let rimz_bin = env.rimz_bin().to_string_lossy().into_owned();
+    vec![
+        "/usr/bin/env".to_owned(),
+        format!("XDG_STATE_HOME={}", env.state_root().display()),
+        format!("XDG_RUNTIME_DIR={}", env.runtime_root.display()),
+        format!("XDG_CONFIG_HOME={}", env.config_root().display()),
+        format!("HOME={}", env.home_root.display()),
+        "SHELL=/definitely/not/a/shell".to_owned(),
+        format!("PATH={path}"),
+        format!("RIMZ_TEST_AGENT_READY={}", ready.display()),
+        rimz_bin,
+        "--mux".to_owned(),
+        "tmux".to_owned(),
+        "agents".to_owned(),
+        "exec".to_owned(),
+        "claude".to_owned(),
+        "--resume".to_owned(),
+        agent_id.to_owned(),
+        "--close-pane-on-exit".to_owned(),
+    ]
+}
+
 fn chmod_executable(path: &Path) {
     #[cfg(unix)]
     {
@@ -2114,6 +2236,17 @@ fn wait_for_path(path: &Path, message: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         if path.exists() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("{message}: {}", path.display());
+}
+
+fn wait_for_path_absent(path: &Path, message: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if !path.exists() {
             return;
         }
         thread::sleep(Duration::from_millis(25));
@@ -2148,6 +2281,34 @@ fn plan_from_env(env: &Env) -> rimz::resume::ResumePlan {
         |path| path.is_dir(),
         &env.rimz_bin(),
     )
+}
+
+fn git_missing() -> bool {
+    Command::new("git").arg("--version").output().is_err()
+}
+
+fn init_repo(path: &Path) {
+    git(path, &["init", "-b", "main"]);
+    git(path, &["config", "user.email", "rimz@example.com"]);
+    git(path, &["config", "user.name", "Rimz Test"]);
+    std::fs::write(path.join("README.md"), "fixture\n").expect("write fixture");
+    git(path, &["add", "README.md"]);
+    git(path, &["commit", "-m", "initial"]);
+}
+
+fn git(cwd: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("spawn git");
+    assert!(
+        output.status.success(),
+        "git {} failed\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 }
 
 fn recv_presence_line_until<F>(

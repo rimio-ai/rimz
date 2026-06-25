@@ -352,6 +352,7 @@ fn sidebar_stub_alive_for(seconds: u32) -> (TempDir, PathBuf) {
 
 mod daemon;
 mod presence;
+mod resume;
 mod self_close;
 
 /// Zellij 0.44.3 suppresses terminal mouse reporting when an attach command

@@ -104,20 +104,24 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         record_launch_failed(&workspace, identity, args.prompt.as_deref());
     }
 
+    let session_name = run_context
+        .as_ref()
+        .map(|context| context.session_name.as_str())
+        .unwrap_or(&workspace.session_name);
+    let session_live_now = !outcome.signaled || session_live(globals, session_name);
+    let deliberate = close_is_deliberate(outcome.signaled, session_live_now);
+    if deliberate && should_record_end_trace(&args) {
+        record_own_agent_end_trace(&workspace, &args);
+    }
     if let Some(path) = entered_worktree.as_deref()
-        && let Err(err) = cleanup_worktree_via_ondisk(path, globals, !outcome.signaled)
+        && deliberate
+        && let Err(err) =
+            cleanup_worktree_via_ondisk(path, globals, !outcome.signaled, outcome.signaled)
     {
         let _ = writeln!(
             std::io::stderr().lock(),
             "rimz: worktree cleanup did not complete: {err}"
         );
-    }
-    let session_name = run_context
-        .as_ref()
-        .map(|context| context.session_name.as_str())
-        .unwrap_or(&workspace.session_name);
-    if should_record_end_trace(&args) && room_is_live(globals, session_name) {
-        record_own_agent_end_trace(&workspace, &args);
     }
     if args.close_pane_on_exit {
         close_own_pane(globals, session_name);
@@ -135,6 +139,12 @@ pub(super) fn should_exec_agent_directly(args: &ExecArgs) -> bool {
 
 pub(super) fn should_record_end_trace(args: &ExecArgs) -> bool {
     !args.exit_on_run_completion
+}
+
+/// Clean quits are deliberate. Signal exits are deliberate only while the mux
+/// session still exists; if the mux is gone, keep the agent for recovery.
+pub(super) fn close_is_deliberate(signaled: bool, session_live: bool) -> bool {
+    !signaled || session_live
 }
 
 fn enter_worktree(path: &Path) -> Result<PathBuf> {
@@ -195,6 +205,7 @@ fn cleanup_worktree_via_ondisk(
     path: &Path,
     globals: &GlobalFlags,
     interactive: bool,
+    detached: bool,
 ) -> Result<()> {
     let cleanup_path = cleanup_target_path(path);
     let path = cleanup_path.as_path();
@@ -210,6 +221,10 @@ fn cleanup_worktree_via_ondisk(
     }
     if let Some(mux) = globals.mux {
         command.args(["--mux", mux.as_str()]);
+    }
+
+    if detached {
+        return spawn_detached_worktree_cleanup(command);
     }
 
     match command.status() {
@@ -231,6 +246,33 @@ fn cleanup_worktree_via_ondisk(
             worktree::cleanup_worktree(path, globals, interactive)
         }
     }
+}
+
+#[cfg(unix)]
+fn spawn_detached_worktree_cleanup(mut command: Command) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        // Keep cleanup outside the pane's foreground process group; null stdio
+        // removes the remaining terminal dependency.
+        .process_group(0);
+    rimz::child_process::spawn_detached_reaped(&mut command, "worktree-cleanup-detached")
+        .map(|_| ())
+        .context("spawning detached worktree cleanup")
+}
+
+#[cfg(not(unix))]
+fn spawn_detached_worktree_cleanup(mut command: Command) -> Result<()> {
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("spawning detached worktree cleanup")?;
+    Ok(())
 }
 
 fn cleanup_target_path(path: &Path) -> std::path::PathBuf {
@@ -651,12 +693,12 @@ fn signal_child(pid: u32, signal: ChildSignal) {
 #[cfg(not(unix))]
 fn signal_child(_pid: u32, _signal: ChildSignal) {}
 
-fn room_is_live(globals: &GlobalFlags, session_name: &str) -> bool {
+fn session_live(globals: &GlobalFlags, session_name: &str) -> bool {
     let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
         return false;
     };
     let backend = rimz::mux::backend_for(mux);
-    crate::cli::resume::session_is_healthy_live(backend.as_ref(), session_name)
+    crate::cli::resume::session_is_live(backend.as_ref(), session_name)
 }
 
 fn close_own_pane(globals: &GlobalFlags, session_name: &str) {
