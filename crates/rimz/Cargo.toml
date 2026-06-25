@@ -21,7 +21,7 @@ autotests = false
 # file is gitignored, which cargo's dirty check otherwise rejects).
 include = [
     "/src",
-    # Keep these after `/src`; negation order decides whether nested docs stay out.
+    # Must stay AFTER `/src`; negation order decides whether nested docs stay out.
     "!AGENTS.md",
     "!CLAUDE.md",
     "/build.rs",
