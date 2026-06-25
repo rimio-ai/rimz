@@ -567,7 +567,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
 fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
     snapshot.theme.style = Some(rimz::config::ThemeStyle::Modern);
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
-    let lead = agent_row_with(
+    let mut lead = agent_row_with(
         "agent:claude:auth-router",
         "claude",
         "terminal_41",
@@ -592,7 +592,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                     Some("Haiku"),
                     Some("trace handler graph"),
                     Some(20_100),
-                    Some(120),
+                    Some(420),
                     now,
                 ),
                 sub_agent(
@@ -604,7 +604,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                     Some("Haiku"),
                     Some("exercise auth edge cases"),
                     Some(18_700),
-                    Some(160),
+                    Some(390),
                     now,
                 ),
                 sub_agent(
@@ -616,7 +616,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                     Some("Haiku"),
                     None,
                     Some(11_400),
-                    Some(240),
+                    Some(360),
                     now,
                 ),
                 sub_agent(
@@ -628,7 +628,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                     Some("Haiku"),
                     Some("write migration runbook"),
                     Some(9_900),
-                    Some(360),
+                    Some(300),
                     now,
                 ),
                 sub_agent(
@@ -661,6 +661,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             ..AgentRowOptions::default()
         },
     );
+    lead.unread = true;
     let planner = agent_row_with(
         "agent:claude:planner",
         "claude",
@@ -680,7 +681,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             ..AgentRowOptions::default()
         },
     );
-    let mut reviewer = agent_row_with(
+    let reviewer = agent_row_with(
         "agent:codex:reviewer",
         "codex",
         "terminal_43",
@@ -699,7 +700,6 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             ..AgentRowOptions::default()
         },
     );
-    reviewer.unread = true;
     let docs = agent_row_with(
         "agent:pi:auth-docs",
         "pi",
@@ -1384,7 +1384,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             ..AgentRowOptions::default()
         },
     );
-    let mut codex = agent_row_with(
+    let codex = agent_row_with(
         "agent:codex:reach",
         "codex",
         "terminal_62",
@@ -1402,7 +1402,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             ..AgentRowOptions::default()
         },
     );
-    codex.unread = true;
     let pi = agent_row_with(
         "agent:pi:reach",
         "pi",
@@ -1456,7 +1455,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             ..AgentRowOptions::default()
         },
     );
-    let pi_vpn = agent_row_with(
+    let mut pi_vpn = agent_row_with(
         "agent:pi:vpn",
         "pi",
         "terminal_66",
@@ -1474,6 +1473,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             ..AgentRowOptions::default()
         },
     );
+    pi_vpn.unread = true;
     let opencode_vpn = agent_row_with(
         "agent:opencode:vpn",
         "opencode",
@@ -1806,11 +1806,6 @@ fn agent_row_with(
     let account_sub_provider = options
         .account_sub_provider
         .or_else(|| openai_sub_provider(name));
-    let model = if openai_sub_provider(name).is_some() {
-        "GPT-5.5"
-    } else {
-        model
-    };
     let mut card = rimz::AgentCard {
         status: Some(status),
         phase,
@@ -1920,7 +1915,7 @@ fn default_sub_agents(now: jiff::Timestamp) -> Vec<rimz::SidebarSubAgent> {
             Some("Haiku"),
             Some("audit auth watcher changes"),
             Some(22_400),
-            Some(180),
+            Some(320),
             now,
         ),
         sub_agent(
@@ -1932,7 +1927,7 @@ fn default_sub_agents(now: jiff::Timestamp) -> Vec<rimz::SidebarSubAgent> {
             Some("Haiku"),
             None,
             Some(18_900),
-            Some(260),
+            Some(180),
             now,
         ),
     ]

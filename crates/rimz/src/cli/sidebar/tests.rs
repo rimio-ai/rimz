@@ -68,6 +68,11 @@ fn gallery_fixture_states_carry_feature_flags() {
             .flat_map(|group| &group.rows)
             .any(|row| row.unread)
     }));
+    let lead_kinds = states.iter().map(top_agent_kind).collect::<Vec<_>>();
+    assert_eq!(
+        lead_kinds,
+        vec![Some("codex"), Some("claude"), Some("opencode"), Some("pi")]
+    );
 
     let focus = sidebar_fixture_snapshot(SidebarFixtureState::Focus).unwrap();
     let cards = agent_cards(&focus);
@@ -223,10 +228,7 @@ fn gallery_fixture_frames_render_decisive_markers() {
         SidebarFixtureState::Cockpit,
         &["pricing-refresh", "mux-merge", "$3,990.00"],
     );
-    assert_fixture_frame_contains(
-        SidebarFixtureState::Focus,
-        &["coder", "reviewer", "rollout-guard"],
-    );
+    assert_fixture_frame_contains(SidebarFixtureState::Focus, &["coder", "subagents", "Plan"]);
     assert_fixture_frame_contains(
         SidebarFixtureState::Economy,
         &["OpenAI OAuth", "usage-alerts", "GPT 5.5"],
@@ -244,6 +246,17 @@ fn agent_cards(snapshot: &rimz::SidebarSnapshot) -> Vec<&rimz::AgentCard> {
             rimz::RowCard::Process(_) => None,
         })
         .collect()
+}
+
+fn top_agent_kind(snapshot: &rimz::SidebarSnapshot) -> Option<&str> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .find_map(|row| match &row.card {
+            rimz::RowCard::Agent(_) => Some(row.name.as_str()),
+            rimz::RowCard::Process(_) => None,
+        })
 }
 
 fn assert_fixture_frame_contains(state: SidebarFixtureState, markers: &[&str]) {
