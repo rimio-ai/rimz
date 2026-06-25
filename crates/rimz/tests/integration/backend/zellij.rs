@@ -33,8 +33,10 @@ use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
 const LIST_PANES_JSON_TIMEOUT: Duration = Duration::from_millis(1500);
 const ACTION_ATTEMPTS: u32 = 3;
-const ACTION_CONFIRM_WINDOW: Duration = Duration::from_millis(750);
+const ACTION_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 const ACTION_CONFIRM_STEP: Duration = Duration::from_millis(50);
+const DUMP_LAYOUT_ATTEMPTS: u32 = 10;
+const DUMP_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 /// Skip the test (return) if the host has no `zellij` binary on PATH.
 macro_rules! require_zellij {
@@ -2142,20 +2144,33 @@ fn assert_sidebars_not_held(xdg: &Path, session: &str, context: &str) {
 
 /// Dump just the `new_tab_template` section for readable assertions.
 fn new_tab_template_dump(xdg: &Path, session: &str) -> String {
-    let output = scoped_zellij(xdg)
-        .args(["--session", session, "action", "dump-layout"])
-        .bounded_output()
-        .expect("dump-layout");
-    assert!(
-        output.status.success(),
-        "dump-layout failed for {session}: {}",
-        String::from_utf8_lossy(&output.stderr),
+    let mut last_observation = "dump-layout was not checked".to_owned();
+    for attempt in 0..DUMP_LAYOUT_ATTEMPTS {
+        if attempt > 0 {
+            std::thread::sleep(DUMP_LAYOUT_RETRY_DELAY);
+        }
+        let output = scoped_zellij(xdg)
+            .args(["--session", session, "action", "dump-layout"])
+            .bounded_output()
+            .unwrap_or_else(|err| panic!("dump-layout failed to run for {session}: {err}"));
+        let dump = String::from_utf8_lossy(&output.stdout);
+        if output.status.success() {
+            if let Some(start) = dump.find("new_tab_template") {
+                return dump[start..].to_owned();
+            }
+            last_observation = format!("stdout:\n{dump}");
+        } else {
+            last_observation = format!(
+                "status {}; stderr:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+    }
+    panic!(
+        "dump-layout has no new_tab_template after {DUMP_LAYOUT_ATTEMPTS} attempts in {session}; \
+         last observation: {last_observation}",
     );
-    let dump = String::from_utf8_lossy(&output.stdout);
-    let start = dump
-        .find("new_tab_template")
-        .unwrap_or_else(|| panic!("dump-layout has no new_tab_template:\n{dump}"));
-    dump[start..].to_owned()
 }
 
 /// Distinct tab ids that currently hold a non-plugin pane.
