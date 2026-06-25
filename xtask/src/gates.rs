@@ -42,7 +42,17 @@ pub(crate) fn doctest(root: &Path) -> Result<()> {
 }
 
 pub(crate) fn deny(root: &Path) -> Result<()> {
-    run(root, "cargo", ["deny", "check", "-D", "warnings"])
+    let mut args = vec!["deny", "check", "-D", "warnings"];
+    if deny_offline(std::env::var("RIMZ_DENY_OFFLINE").ok().as_deref()) {
+        // Gitea bakes the advisory DB into the image; read it locally instead
+        // of cloning per run. Unset elsewhere keeps the public-upstream fetch.
+        args.push("--disable-fetch");
+    }
+    run(root, "cargo", args)
+}
+
+fn deny_offline(raw: Option<&str>) -> bool {
+    matches!(raw, Some("1") | Some("true"))
 }
 
 pub(crate) fn vet(root: &Path) -> Result<()> {
@@ -270,5 +280,14 @@ mod tests {
         assert!(!semver_registry_baseline_missing(
             b"error: failed to retrieve index\nCaused by:\n    registry request failed"
         ));
+    }
+
+    #[test]
+    fn deny_offline_enabled_only_for_truthy_flag() {
+        assert!(deny_offline(Some("1")));
+        assert!(deny_offline(Some("true")));
+        assert!(!deny_offline(Some("0")));
+        assert!(!deny_offline(Some("")));
+        assert!(!deny_offline(None));
     }
 }

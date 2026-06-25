@@ -71,6 +71,12 @@ jobs:
         # not CPU.
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          # Re-export here, not just job-level env: the job env block does not
+          # reach the deny subprocess on Gitea. The image bakes the DB at
+          # $CARGO_HOME/advisory-dbs, and RIMZ_DENY_OFFLINE makes the gate read
+          # it with --disable-fetch instead of cloning per run.
+          export CARGO_HOME=/usr/local/cargo
+          export RIMZ_DENY_OFFLINE=1
           NEXTEST_TEST_THREADS="$(( ($(nproc) + 1) / 2 ))"
           export NEXTEST_TEST_THREADS
           echo "Capping nextest to $NEXTEST_TEST_THREADS of $(nproc) cores for live-mux headroom"

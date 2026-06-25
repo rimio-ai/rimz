@@ -31,6 +31,21 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 2 --retry-all-
       cargo-nextest cargo-deny cargo-machete cargo-llvm-cov cargo-semver-checks cargo-zigbuild \
  && cargo install --locked cargo-vet@${CARGO_VET_VERSION}
 
+# Bake a warm RustSec advisory DB so the Gitea deny gate reads it locally
+# (`cargo deny check --disable-fetch`) instead of cloning per run. The per-run
+# clone is the source of flaky FETCH_HEAD failures. CARGO_HOME above puts it at
+# /usr/local/cargo/advisory-dbs, where the runtime gate resolves it.
+# `cargo deny fetch db` requires a manifest in cwd, so use a throwaway crate;
+# with no deny.toml it uses the default RustSec URL, matching the committed
+# deny.toml because it sets no db-urls.
+RUN tmp="$(mktemp -d)" \
+ && printf '[package]\nname="x"\nversion="0.0.0"\nedition="2021"\n' > "$tmp/Cargo.toml" \
+ && mkdir "$tmp/src" \
+ && : > "$tmp/src/lib.rs" \
+ && ( cd "$tmp" && cargo deny fetch db ) \
+ && rm -rf "$tmp" \
+ && find /usr/local/cargo/advisory-dbs -maxdepth 1 -type d -name 'advisory-db-*' | grep -q .
+
 RUN curl -fL --retry 5 --retry-delay 2 --retry-all-errors "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" \
       | tar -xz -C /usr/local/bin \
  && curl -fL --retry 5 --retry-delay 2 --retry-all-errors "https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz" \

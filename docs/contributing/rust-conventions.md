@@ -221,7 +221,7 @@ Repo-local Cargo config stays installation-safe: `.cargo/config.toml` defines on
 
 ### CI image
 
-The `rimz-ci` image bakes Node for Actions, the Rust stable toolchain with required components and targets, cargo gate plugins, `cargo-vet`, tmux, Zellij, mold, Python, `cargo-zigbuild`, Zig, `rcodesign`, and `gh`. Tool versions live in `ci/Dockerfile`, which is the single source of truth for containerized CI and release jobs.
+The `rimz-ci` image bakes Node for Actions, the Rust stable toolchain with required components and targets, cargo gate plugins, `cargo-vet`, a warm RustSec advisory database, tmux, Zellij, mold, Python, `cargo-zigbuild`, Zig, `rcodesign`, and `gh`. Tool versions live in `ci/Dockerfile`, which is the single source of truth for containerized CI and release jobs.
 
 Refresh the image by editing `ci/Dockerfile`, then pushing that change to `main` or dispatching `.github/workflows/ci-image.yml`. The workflow builds and pushes a new immutable `rimz-ci:<tag>` image to the Gitea container registry, then repoints the repository variable `RIMZ_CI_IMAGE`; consuming workflows read only that variable.
 
@@ -252,7 +252,7 @@ Every gate runs in CI with warnings treated as errors. Local equivalents are `ca
 - `cargo nextest run --workspace --all-features --locked` — test runner (the `test` task; the standalone fast signal); accepts nextest filters such as `cargo xtask test auth`.
 - `cargo xtask doctest` — doctests.
 - `cargo xtask docs-links` — every relative markdown link target and `#anchor` resolves in the working tree (offline and deterministic; external URLs are out of scope).
-- `cargo deny check` — licence, advisory, and ban check.
+- `cargo deny check` — licence, advisory, and ban check. Gitea CI reads the baked advisory DB with `--disable-fetch` via `RIMZ_DENY_OFFLINE`; GitHub CI leaves the flag unset and fetches public upstream.
 - `cargo machete` — unused dependency check.
 - `cargo vet` — supply-chain audit.
 - `cargo llvm-cov nextest --workspace --all-features --locked` — coverage. This *is* the suite run inside `ci`: the tests run once, under instrumentation, instead of building and running a second uninstrumented pass. The `rimz-ci` image provides tmux and Zellij before this gate, so the same pass exercises live backend tests under nextest's live groups.
