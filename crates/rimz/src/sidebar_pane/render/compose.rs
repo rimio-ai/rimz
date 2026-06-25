@@ -67,7 +67,7 @@ pub(crate) fn compose_lines(
     // the same frame the cards carry (see `with_gutter`).
     let inner = content_width(cells);
     let (mut lines, mut map, mut make_up_hits) = top_lines(snapshot, ui, cells, &theme);
-    let (scroll, scroll_map) = scroll_lines(snapshot, alert, ui, cells, &theme);
+    let (scroll, scroll_map) = scroll_lines(snapshot, ui, cells, &theme);
 
     // The tab hits arrive from the bottom chrome relative to its own lines;
     // they are translated to absolute screen coordinates once the block's final
@@ -558,7 +558,6 @@ pub(super) fn lead_unread(groups: &[SidebarWorktreeGroup]) -> Option<(&str, Agen
 
 pub(super) fn scroll_lines(
     snapshot: &SidebarSnapshot,
-    _alert: Option<&Alert>,
     ui: &UiState,
     width: usize,
     theme: &Theme,
