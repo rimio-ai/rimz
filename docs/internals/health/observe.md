@@ -26,7 +26,7 @@ In tmux poll mode, a row born late in warmup can still look short-lived on the f
 | --- | --- | --- | --- |
 | Roster flap | `OBSERVE_ROSTER_FLAP_WINDOW` | a populated roster empties while `own_view` still counts working siblings, then refills inside the window | active `PaneClosed` events cover every vanished row's pane (a genuinely emptied tab is [self-close](../sidebar/sidebar.md#self-close) territory) |
 | Row presence flap | `OBSERVE_ROW_FLAP_WINDOW` | one row (keyed by row id) disappears and returns inside the window; or a row is born and vanishes inside it (the phantom-card case, group key recorded) | a `PaneClosed` event justifies the absence, or the row's group had its idle/process tail at the visible cap at either edge — ranking churn legitimately rotates rows through `WORKTREE_ROW_CAP` |
-| Value oscillation | `OBSERVE_VALUE_OSC_WINDOW` | a watched per-row value returns to its exact prior figure after differing, inside the window — status, context %, token total, todo progress, group key (the worktree↔`external` bounce), model | the field's first appearance (enrichment warm-up is `None`→value, never an oscillation) |
+| Value oscillation | `OBSERVE_VALUE_OSC_WINDOW` | a watched per-row value returns to its exact prior figure after differing, inside the window — status, context %, token total, group key (the worktree↔`external` bounce), model | the field's first appearance (enrichment warm-up is `None`→value, never an oscillation) |
 | Status churn | `OBSERVE_STATUS_CHURN_WINDOW` | four or more status transitions on one row inside the window — a rate verdict, deliberately wider than the oscillation window | a quick `running → idle → running` turn boundary, which is normal pace |
 
 ## Per-frame checks

@@ -297,10 +297,6 @@ pub struct AgentCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub todo_done: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub todo_total: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<AgentContext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_severity: Option<ContextSeverity>,

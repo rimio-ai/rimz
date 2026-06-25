@@ -378,8 +378,6 @@ fn idle_agent_row(
             cache_write_input_tokens: None,
             fresh_input_tokens: None,
             output_tokens: None,
-            todo_done: None,
-            todo_total: None,
             context: None,
             context_severity: None,
             // No session yet — the pane's process start is this row's spawn key.

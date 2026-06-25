@@ -30,7 +30,7 @@ The full glyph vocabulary and every rendered frame live in [the interface refere
 Routing attention is half the read; the other half is *how the work is going*. Rimz gives every agent a small, legible state and rides it with live stats, so progress and health read without leaving the sidebar.
 
 - Each agent rolls up to one of five states — `running`, `waiting`, `idle`, `success`, `failed` — and Rimz derives one of its own: `paused`, a display park for an agent that stopped mid-turn on a provider limit, lifted by provider recovery, window reset, or the next hook event. Short-lived heads ride the running state (thinking, compaction, delegation) so the moment-to-moment phase shows inside one state ([agent.md](./docs/internals/agents/agent.md)).
-- A context meter, token totals, live dollar cost, diff stats, todo progress, and a last-activity age ride the rows: which agent is burning toward a rate limit, which is one approval from done. The provider dashboard carries the pace — spend for today, the week, and the month per provider, with 5h/7d budget bars draining in real time. These enrich display; the ledger and explicit events decide state and correctness.
+- A context meter, token totals, live dollar cost, diff stats, and a last-activity age ride the rows: which agent is burning toward a rate limit, which is one approval from done. The provider dashboard carries the pace — spend for today, the week, and the month per provider, with 5h/7d budget bars draining in real time. These enrich display; the ledger and explicit events decide state and correctness.
 
 ### Run the fleet like a team
 

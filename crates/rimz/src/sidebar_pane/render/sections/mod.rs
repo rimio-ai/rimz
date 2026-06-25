@@ -2,7 +2,7 @@
 //! ordering; these modules only map the view-model to terminal lines.
 //!
 //! The renderer expresses one *design grammar* for every meter — context-%,
-//! todo progress, diff stats — so the rows read as one polished card per
+//! diff stats — so the rows read as one polished card per
 //! agent, not a stack of one-off widgets. See the
 //! [grammar in docs/internals/sidebar/sidebar.md](../../../../docs/internals/sidebar/sidebar.md).
 //!
@@ -60,7 +60,7 @@ pub(super) enum Tier {
     L0,
     /// Default: line 1 cue + capability + context gauge (~30 columns).
     L1,
-    /// Wide: line 2 also inlines todo / extra meters (~44+).
+    /// Wide: line 2 also inlines extra meters (~44+).
     L2,
 }
 

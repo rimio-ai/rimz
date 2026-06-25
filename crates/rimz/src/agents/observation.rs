@@ -98,9 +98,6 @@ pub struct AgentLifecycleObservation {
     pub cache_write_input_tokens: Option<u64>,
     pub fresh_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    /// Completed / total todos for the agent's current plan or task list.
-    pub todo_done: Option<u32>,
-    pub todo_total: Option<u32>,
     /// Normalized multiplexer pane id the agent process is running inside,
     /// read from the per-pane env var the mux exports (`TMUX_PANE` or
     /// `ZELLIJ_PANE_ID`). Lets the sidebar bind each agent row to its actual
@@ -142,8 +139,6 @@ impl AgentLifecycleObservation {
             cache_write_input_tokens: None,
             fresh_input_tokens: None,
             output_tokens: None,
-            todo_done: None,
-            todo_total: None,
             pane_id: None,
             parent_agent_id: None,
         }

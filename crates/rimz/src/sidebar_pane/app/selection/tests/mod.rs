@@ -52,8 +52,6 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             effort: Some("high".to_owned()),
             context_pct: Some(38),
             total_tokens: Some(12_400),
-            todo_done: Some(3),
-            todo_total: Some(5),
             ..crate::AgentCard::default()
         })),
     };

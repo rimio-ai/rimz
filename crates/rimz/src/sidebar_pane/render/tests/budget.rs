@@ -72,8 +72,6 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
             context_pct: Some(((index * 13) % 100) as u8),
             context_window: Some(200_000),
             total_tokens: Some(10_000 + (index as u64) * 991),
-            todo_done: Some(3),
-            todo_total: Some(7),
             context_severity: Some(crate::agents::ContextSeverity::Yellow),
             // Row 0 is the default selection, so its card expands these in every
             // composed frame — the sub-agent loop stays inside the measured work.

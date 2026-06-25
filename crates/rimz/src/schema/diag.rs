@@ -401,7 +401,6 @@ pub enum WatchedField {
     Status,
     ContextPct,
     TotalTokens,
-    TodoDone,
     GroupKey,
     Model,
 }

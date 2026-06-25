@@ -504,13 +504,6 @@ pub struct AgentState {
     pub fresh_input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
-    /// Completed and total todos for the agent's current plan, as reported
-    /// by the agent's plan/todo tool. `todo_total = 0` (or `None`) renders as
-    /// "no todo state".
-    #[serde(default)]
-    pub todo_done: Option<u32>,
-    #[serde(default)]
-    pub todo_total: Option<u32>,
     /// Rich session-scoped enrichment from a high-frequency out-of-band source
     /// (Claude's statusline). Folded in at snapshot time by
     /// `SidebarSnapshot::with_agent_context`, never reduced from the event log.

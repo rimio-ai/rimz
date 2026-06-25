@@ -185,8 +185,6 @@
 
 [theme.glyphs.unicode.card]
 ## subagents = "⧉"
-## todo_done = "●"
-## todo_pending = "○"
 ## parked_bg = "⋯"
 
 [theme.glyphs.unicode.process]
@@ -282,8 +280,6 @@
 
 [theme.glyphs.nerd_font.card]
 ## subagents = ""
-## todo_done = "●"
-## todo_pending = "○"
 ## parked_bg = "⋯"
 
 [theme.glyphs.nerd_font.process]

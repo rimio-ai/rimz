@@ -57,8 +57,6 @@ fn registered(
         cache_write_input_tokens: None,
         fresh_input_tokens: None,
         output_tokens: None,
-        todo_done: None,
-        todo_total: None,
         pane_id: Some(PaneId::from_parts(MuxName::Zellij, pane_raw)),
         parent_agent_id: None,
     }

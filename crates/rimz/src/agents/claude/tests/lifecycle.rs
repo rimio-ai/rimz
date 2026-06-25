@@ -175,25 +175,6 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
     assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
     assert_eq!(prompt.task.as_deref(), Some("fix auth flow"));
 
-    let todo = ClaudeAdapter
-        .observe_lifecycle(
-            "UserPromptSubmit",
-            &json!({
-                "session_id": "sess-1",
-                "tool_input": {
-                    "todos": [
-                        { "status": "completed" },
-                        { "status": "completed" },
-                        { "status": "in_progress" },
-                        { "status": "pending" },
-                    ]
-                }
-            }),
-        )
-        .unwrap();
-    assert_eq!(todo.todo_done, Some(2));
-    assert_eq!(todo.todo_total, Some(4));
-
     for (tool, expected) in [
         (
             "Edit",

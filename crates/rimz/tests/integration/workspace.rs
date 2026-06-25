@@ -152,8 +152,6 @@ fn message_agent() -> AgentState {
         cache_write_input_tokens: None,
         fresh_input_tokens: None,
         output_tokens: None,
-        todo_done: None,
-        todo_total: None,
         context: None,
         subagent_description: None,
         subagent_started_at: None,
@@ -280,8 +278,6 @@ fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycl
         cache_write_input_tokens: None,
         fresh_input_tokens: None,
         output_tokens: None,
-        todo_done: None,
-        todo_total: None,
         pane_id: None,
         parent_agent_id: None,
     }

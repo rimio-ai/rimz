@@ -1155,7 +1155,6 @@ fn agent_row(
 struct AgentRowOptions {
     handle: Option<String>,
     sub_agents: Option<Vec<rimz::SidebarSubAgent>>,
-    todo: Option<(u32, u32)>,
     age_secs: Option<i64>,
     compacting: bool,
     compaction_count: u32,
@@ -1180,7 +1179,6 @@ fn agent_row_with(
         .map_or((None, None, None), |(pct, window, total)| {
             (Some(pct), Some(window), Some(total))
         });
-    let (todo_done, todo_total) = options.todo.unwrap_or((4, 7));
     let activity_at = options.age_secs.map_or(now, |secs| {
         now - std::time::Duration::from_secs(secs.max(0) as u64)
     });
@@ -1197,8 +1195,6 @@ fn agent_row_with(
         cache_read_input_tokens: Some(total_tokens.unwrap_or_default() / 3),
         fresh_input_tokens: Some(total_tokens.unwrap_or_default() / 5),
         output_tokens: Some(total_tokens.unwrap_or_default() / 8),
-        todo_done: Some(todo_done),
-        todo_total: Some(todo_total),
         context_severity: context_pct.map(|pct| {
             rimz::agents::ContextSeverity::classify(
                 pct,
@@ -1213,10 +1209,6 @@ fn agent_row_with(
     };
     if status == rimz::agents::AgentStatus::Failed {
         card.turn_error_label = Some("API error".to_owned());
-        if options.todo.is_none() {
-            card.todo_done = Some(2);
-            card.todo_total = Some(5);
-        }
     }
     match options.sub_agents {
         Some(sub_agents) => card.sub_agents = sub_agents,

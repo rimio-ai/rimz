@@ -19,7 +19,7 @@ Native event → internal mapping. The table says *which native events are wired
 | `SessionEnd`                  | lifecycle     | `Ended` → removed (`ends_session`)                                                                                           |
 | `Notification`                | lifecycle     | none (silent)                                                                                                                |
 | `PreToolUse` (broad)          | lifecycle     | `ToolUsed { mutates: false, edits: false }` as proof-of-work only; persisted when it reconciles a resting row or closes a compaction bracket |
-| `PostToolUse`                 | lifecycle     | `ToolUsed { mutates: true, edits }` for a mutating tool (else none) - `edits` for a file-writing tool; `TodoWrite` todos; context/tokens |
+| `PostToolUse`                 | lifecycle     | `ToolUsed { mutates: true, edits }` for a mutating tool (else none) - `edits` for a file-writing tool; context/tokens |
 | `PreCompact`                  | lifecycle     | `Compacting` - stamps the head, keeps the prior status (see [agent.md](../agent.md#the-compaction-bracket))                   |
 | `PostCompact`                 | lifecycle     | `CompactionEnded` with known trigger - safely redundant as a close; carries the auto/manual trigger bit                       |
 | `PermissionRequest`           | blocking-feed | `waiting` - sync                                                                                                             |

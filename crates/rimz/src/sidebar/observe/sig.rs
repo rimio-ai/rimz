@@ -38,7 +38,6 @@ pub struct WatchedValues {
     pub status: Option<String>,
     pub context_pct: Option<u8>,
     pub total_tokens: Option<u64>,
-    pub todo_done: Option<u32>,
     pub group_key: String,
     pub model: Option<String>,
 }
@@ -54,10 +53,6 @@ impl WatchedValues {
             (
                 WatchedField::TotalTokens,
                 self.total_tokens.map(|value| value.to_string()),
-            ),
-            (
-                WatchedField::TodoDone,
-                self.todo_done.map(|value| value.to_string()),
             ),
             (WatchedField::GroupKey, Some(self.group_key.clone())),
             (WatchedField::Model, self.model.clone()),
@@ -119,7 +114,6 @@ pub fn extract_sig(
                     status: row.status().map(|status| status.as_str().to_owned()),
                     context_pct: row.context_gauge_percent(),
                     total_tokens: row.total_tokens(),
-                    todo_done: row.as_agent().and_then(|agent| agent.todo_done),
                     group_key: group.key.clone(),
                     model: row.model().map(ToOwned::to_owned),
                 },

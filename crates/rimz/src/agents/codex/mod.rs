@@ -1001,8 +1001,6 @@ fn build_codex_observation(
         .last_input_tokens
         .map(|input| input.saturating_sub(usage.last_cached_input_tokens.unwrap_or(0)));
     observation.output_tokens = usage.last_output_tokens;
-    observation.todo_done = None;
-    observation.todo_total = None;
     observation
 }
 

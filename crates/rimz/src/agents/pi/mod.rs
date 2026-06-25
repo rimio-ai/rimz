@@ -521,8 +521,7 @@ impl AgentAdapter for PiAdapter {
         observation.effort = parsed.effort;
         // The gauge is payload-first and payload-only: the extension stamps
         // it on every envelope from the in-process `ctx.getContextUsage()`,
-        // so no transcript tail is ever read (the `None` fallback). The one
-        // declared absence left is the todo surface — pi has none.
+        // so no transcript tail is ever read (the `None` fallback).
         observation.context_pct = payload_context_pct(payload, None);
         observation.context_window = parsed.context_window;
         observation.total_tokens = parsed.total_tokens;

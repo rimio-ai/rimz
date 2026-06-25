@@ -532,8 +532,6 @@ mod tests {
             cache_write_input_tokens: None,
             fresh_input_tokens: None,
             output_tokens: None,
-            todo_done: None,
-            todo_total: None,
             context: None,
             subagent_description: None,
             subagent_started_at: None,

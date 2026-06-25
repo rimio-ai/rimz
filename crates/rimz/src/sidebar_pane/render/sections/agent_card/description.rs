@@ -11,13 +11,10 @@ use super::*;
 /// holds, and the fall-through returns once it clears. The row emphasis that
 /// drives the glyph and name also drives the description: unread actionable
 /// rows and unread results blink, rows worth a look or selected rows read at
-/// full body weight, and calm unselected rows soften. At L2 the todo progress
-/// (`●●●○○ 3/5`) pins to a right column, aligning under the cost/age above so
-/// the dots read as a tidy gutter instead of floating after the text.
+/// full body weight, and calm unselected rows soften.
 pub(super) fn description_line(
     theme: &Theme,
     row: &SidebarRow,
-    tier: Tier,
     width: usize,
     attention: CardAttention,
     animation_phase: u64,
@@ -71,12 +68,6 @@ pub(super) fn description_line(
             format!("  {} bg", theme.glyph(GlyphRole::CardParkedBg)),
             theme.faint(),
         ));
-    }
-    let todo_total = agent(row).and_then(|agent| agent.todo_total).unwrap_or(0);
-    if tier == Tier::L2 && todo_total > 0 {
-        let done = agent(row).and_then(|agent| agent.todo_done).unwrap_or(0);
-        let total = todo_total;
-        return pin_right(left, todo_spans(theme, done, total), width);
     }
     Line::from(trim_spans_to_width(left, width))
 }

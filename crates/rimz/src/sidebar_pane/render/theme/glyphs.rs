@@ -142,8 +142,6 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::WorktreeReconciling => "⟳",
         GlyphRole::WorktreeDotted => "┄",
         GlyphRole::CardSubagents => "⧉",
-        GlyphRole::CardTodoDone => "●",
-        GlyphRole::CardTodoPending => "○",
         GlyphRole::CardParkedBg => "⋯",
         GlyphRole::ProcessCpu => "C",
         GlyphRole::ProcessMem => "M",
@@ -244,9 +242,7 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         | GlyphRole::WorktreeDotted => return None,
         // agent card.
         GlyphRole::CardSubagents => "\u{ed50}", // nf-fa-gitter
-        GlyphRole::CardTodoDone | GlyphRole::CardTodoPending | GlyphRole::CardParkedBg => {
-            return None;
-        }
+        GlyphRole::CardParkedBg => return None,
         // process resource grid.
         GlyphRole::ProcessCpu => "\u{ef8f}", // nf-fa-bars_progress
         GlyphRole::ProcessMem => "\u{efc5}", // nf-fa-memory
@@ -335,8 +331,6 @@ mod tests {
             GlyphRole::WorktreeBehind,
             GlyphRole::WorktreeTrunkEqual,
             GlyphRole::WorktreeDotted,
-            GlyphRole::CardTodoDone,
-            GlyphRole::CardTodoPending,
             GlyphRole::CardParkedBg,
             GlyphRole::ChromeAlert,
             GlyphRole::ChromeRemoteControl,

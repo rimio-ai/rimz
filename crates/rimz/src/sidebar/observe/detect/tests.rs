@@ -63,7 +63,6 @@ fn row_with_status(id: &str, pane: &str, group: &str, status: &str) -> RowSig {
             status: Some(status.to_owned()),
             context_pct: Some(10),
             total_tokens: Some(100),
-            todo_done: Some(1),
             group_key: group.to_owned(),
             model: Some("sonnet".to_owned()),
         },

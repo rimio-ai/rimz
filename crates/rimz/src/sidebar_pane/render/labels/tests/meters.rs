@@ -467,7 +467,7 @@ fn pace_style_floors_then_climbs_the_warm_tail() {
 }
 
 #[test]
-fn no_color_shape_contracts_keep_budget_todo_and_diff_readable() {
+fn no_color_shape_contracts_keep_budget_and_diff_readable() {
     let plain = Theme::fixed(true);
     let spans = infinite_bar_spans(&plain, Color::Indexed(208), 8);
     assert_eq!(text(&spans), "▱▱▱▱▱▱▱▱");
@@ -476,10 +476,6 @@ fn no_color_shape_contracts_keep_budget_todo_and_diff_readable() {
     let lit = Theme::fixed(false);
     let spans = infinite_bar_spans(&lit, Color::Indexed(208), 8);
     assert_eq!(spans[0].style.fg, Some(Color::Indexed(208)));
-
-    let spans = todo_spans(&plain, 3, 5);
-    assert_eq!(text(&spans), "●●●○○ 3/5");
-    assert_no_fg(&spans);
 
     let spans = diff_spans(&plain, 127, 43);
     assert_eq!(text(&spans), "+127 -43");

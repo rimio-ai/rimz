@@ -593,38 +593,6 @@ pub(in crate::sidebar_pane::render) fn infinite_bar_spans(
     )]
 }
 
-/// Todo progress: filled dots for done, hollow dots for remaining, with the
-/// numeric ratio appended. The shape carries it; the dots stay dim chrome and
-/// the ratio reads at the card's soft middle weight.
-pub(in crate::sidebar_pane::render) fn todo_spans(
-    theme: &Theme,
-    done: u32,
-    total: u32,
-) -> Vec<Span<'static>> {
-    let total = total.max(done);
-    let cap = 5_u32;
-    let scaled_total = total.min(cap);
-    let scaled_done = if total <= cap {
-        done
-    } else {
-        // Scale down proportionally so the dot count stays bounded.
-        ((done as u64) * cap as u64 / total.max(1) as u64) as u32
-    };
-    let dots = format!(
-        "{}{}",
-        theme
-            .glyph(GlyphRole::CardTodoDone)
-            .repeat(scaled_done as usize),
-        theme
-            .glyph(GlyphRole::CardTodoPending)
-            .repeat(scaled_total.saturating_sub(scaled_done) as usize)
-    );
-    vec![
-        Span::styled(dots, theme.muted()),
-        Span::styled(format!(" {done}/{total}"), theme.body()),
-    ]
-}
-
 /// The `◇ {total}` marker: the blue diamond + the formatted cumulative
 /// total. The shared head of every token line — [`token_breakdown_spans`] builds
 /// on it, and a breakdown-less line (a Codex rollup-only total) uses it alone.

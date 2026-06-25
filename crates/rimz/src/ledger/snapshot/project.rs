@@ -694,8 +694,6 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         cache_write_input_tokens: enrichment.cache_write_input_tokens,
         fresh_input_tokens: enrichment.fresh_input_tokens,
         output_tokens: enrichment.output_tokens,
-        todo_done: enrichment.todo_done,
-        todo_total: enrichment.todo_total,
         context: None,
         subagent_description: None,
         subagent_started_at: None,
@@ -796,8 +794,6 @@ fn assemble_launch_state(
         cache_write_input_tokens: prior.and_then(|state| state.cache_write_input_tokens),
         fresh_input_tokens: prior.and_then(|state| state.fresh_input_tokens),
         output_tokens: prior.and_then(|state| state.output_tokens),
-        todo_done: prior.and_then(|state| state.todo_done),
-        todo_total: prior.and_then(|state| state.todo_total),
         context: None,
         subagent_description: None,
         subagent_started_at: None,
@@ -876,8 +872,6 @@ struct EnrichmentProjection {
     cache_write_input_tokens: Option<u64>,
     fresh_input_tokens: Option<u64>,
     output_tokens: Option<u64>,
-    todo_done: Option<u32>,
-    todo_total: Option<u32>,
 }
 
 fn enrichment_projection(
@@ -931,12 +925,6 @@ fn enrichment_projection(
         cache_write_input_tokens,
         fresh_input_tokens,
         output_tokens,
-        todo_done: observation
-            .todo_done
-            .or_else(|| prior.and_then(|p| p.todo_done)),
-        todo_total: observation
-            .todo_total
-            .or_else(|| prior.and_then(|p| p.todo_total)),
     }
 }
 

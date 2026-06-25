@@ -1052,7 +1052,6 @@ fn build_claude_observation(
     // forward. The gauge percentage is derived downstream from the folded
     // window, never baked here against a guessed denominator.
     let context_window = context_window_for(model.as_deref());
-    let (todo_done, todo_total) = todos_from_payload(payload);
     let mut observation =
         AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
     observation.parent_agent_id = parent_agent_id;
@@ -1064,8 +1063,6 @@ fn build_claude_observation(
     observation.effort = claude_effort(payload, parts);
     observation.context_window = context_window;
     observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
-    observation.todo_done = todo_done;
-    observation.todo_total = todo_total;
     observation
 }
 
@@ -1120,31 +1117,6 @@ fn pending_background_tasks(tasks: &[BackgroundTask]) -> Vec<String> {
                 .to_owned()
         })
         .collect()
-}
-
-/// Read a Claude `TodoWrite` payload's `tool_input.todos` (or the post-hook
-/// shape under `tool_response.todos`) into a `(done, total)` pair. Returns
-/// `(None, None)` when the payload carries no todo state — the snapshot
-/// reducer then carries the prior pair forward.
-fn todos_from_payload(payload: &Value) -> (Option<u32>, Option<u32>) {
-    let todos = ["tool_input", "tool_response", "input", "response"]
-        .into_iter()
-        .find_map(|key| payload.get(key).and_then(|v| v.get("todos")))
-        .or_else(|| payload.get("todos"))
-        .and_then(Value::as_array);
-    let Some(todos) = todos else {
-        return (None, None);
-    };
-    let total = todos.len() as u32;
-    let done = todos
-        .iter()
-        .filter(|todo| {
-            todo.get("status")
-                .and_then(Value::as_str)
-                .is_some_and(|s| matches!(s, "completed" | "done"))
-        })
-        .count() as u32;
-    (Some(done), Some(total))
 }
 
 /// Context-window usage derived from a Claude transcript tail. Carries the

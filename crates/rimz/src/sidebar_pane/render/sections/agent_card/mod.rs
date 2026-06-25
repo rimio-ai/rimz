@@ -21,8 +21,7 @@ use crate::sidebar_pane::render::labels::{
     agent_role_style_at, compacting_glyph, compacting_head_style, context_breakdown_spans,
     context_compaction_spans, context_gauge_spans, context_total_spans, elapsed_glyph, emphasize,
     loading_dots, resolver_glyph, resolver_style, severity_heat_amount, severity_heat_color,
-    subagent_glyph, subagent_head_style, todo_spans, token_total_glyph, unread_run_spans,
-    window_style,
+    subagent_glyph, subagent_head_style, token_total_glyph, unread_run_spans, window_style,
 };
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
@@ -124,38 +123,17 @@ pub(super) fn row_lines(
             match row.status().unwrap_or(AgentStatus::Idle) {
                 AgentStatus::Idle => {}
                 AgentStatus::Running | AgentStatus::Waiting => {
-                    inner.push(description_line(
-                        theme,
-                        row,
-                        tier,
-                        cw,
-                        attention,
-                        animation_phase,
-                    ));
+                    inner.push(description_line(theme, row, cw, attention, animation_phase));
                     if let Some(line) = gauge_line(theme, row, bands, cw) {
                         inner.push(line);
                     }
                 }
                 AgentStatus::Paused | AgentStatus::Success | AgentStatus::Failed => {
-                    inner.push(description_line(
-                        theme,
-                        row,
-                        tier,
-                        cw,
-                        attention,
-                        animation_phase,
-                    ));
+                    inner.push(description_line(theme, row, cw, attention, animation_phase));
                 }
             }
         } else {
-            inner.push(description_line(
-                theme,
-                row,
-                tier,
-                cw,
-                attention,
-                animation_phase,
-            ));
+            inner.push(description_line(theme, row, cw, attention, animation_phase));
             // A just-started idle agent sits on the 0% baseline gauge with no
             // history behind it, so it rests at identity + description alone.
             // Once an agent has real context, spend, or compaction history, the

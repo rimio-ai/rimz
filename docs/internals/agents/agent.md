@@ -256,7 +256,7 @@ Installing hooks edits the agent's own config, so it is a security surface, neve
 
 ## Enrichment
 
-The ledger and explicit events decide routing, ranking, and state; enrichment paints the row. `task`, `context_pct`, `context_window`, `total_tokens`, and the todo counts are **enrichment**: display-only and redactable. A missing value means "the agent didn't report it," never zero — the sidebar projects it to a visible 0% baseline so every observed agent paints a context bar.
+The ledger and explicit events decide routing, ranking, and state; enrichment paints the row. `task`, `context_pct`, `context_window`, and `total_tokens` are **enrichment**: display-only and redactable. A missing value means "the agent didn't report it," never zero — the sidebar projects it to a visible 0% baseline so every observed agent paints a context bar.
 
 `context_window` is the model's window in tokens, and uniformly across agents it is the model's max **input** tokens: the gauge numerator counts input-side occupancy only (`input + cache`, never output — see [`context_used_tokens`](../../../crates/rimz/src/agents/state.rs)), so a model that splits its window into separate input and output caps scales against the input cap. Each adapter resolves the window its own way (Claude from the payload model id, where `[1m]` widens it; Codex from the rollout's `model_context_window`; OpenCode from its model catalog), and the card's identity line renders it (`258k`, `1M`), preferring the fresher out-of-band reading from [`AgentContext`](#rich-context-agentcontext) when one exists.
 

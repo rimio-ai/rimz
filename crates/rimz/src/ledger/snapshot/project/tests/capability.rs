@@ -37,8 +37,6 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
             "cache_read_input_tokens": 9_000,
             "fresh_input_tokens": 1_200,
             "output_tokens": 800,
-            "todo_done": 3,
-            "todo_total": 5,
             "worktree_branch": "main",
         }),
     );
@@ -72,8 +70,6 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
     assert_eq!(agent.cache_read_input_tokens, Some(9_000));
     assert_eq!(agent.fresh_input_tokens, Some(1_200));
     assert_eq!(agent.output_tokens, Some(800));
-    assert_eq!(agent.todo_done, Some(3));
-    assert_eq!(agent.todo_total, Some(5));
     assert_eq!(agent.profile.as_deref(), Some("codex-coder"));
     assert_eq!(agent.role.as_deref(), Some("coder"));
     assert_eq!(agent.team.as_deref(), Some("pcr"));

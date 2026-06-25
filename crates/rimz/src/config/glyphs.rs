@@ -65,8 +65,6 @@ pub enum GlyphRole {
     WorktreeDotted,
     // card — the agent card body.
     CardSubagents,
-    CardTodoDone,
-    CardTodoPending,
     CardParkedBg,
     // process — the process-row resource grid.
     ProcessCpu,
@@ -149,8 +147,6 @@ impl GlyphRole {
         Self::WorktreeReconciling,
         Self::WorktreeDotted,
         Self::CardSubagents,
-        Self::CardTodoDone,
-        Self::CardTodoPending,
         Self::CardParkedBg,
         Self::ProcessCpu,
         Self::ProcessMem,
@@ -225,10 +221,7 @@ impl GlyphRole {
             | Self::WorktreePrClosed
             | Self::WorktreeReconciling
             | Self::WorktreeDotted => "worktree",
-            Self::CardSubagents
-            | Self::CardTodoDone
-            | Self::CardTodoPending
-            | Self::CardParkedBg => "card",
+            Self::CardSubagents | Self::CardParkedBg => "card",
             Self::ProcessCpu | Self::ProcessMem | Self::ProcessIo => "process",
             Self::KeysMove
             | Self::KeysFocus
@@ -306,8 +299,6 @@ impl GlyphRole {
             Self::WorktreeReconciling => "reconciling",
             Self::WorktreeDotted => "dotted",
             Self::CardSubagents => "subagents",
-            Self::CardTodoDone => "todo_done",
-            Self::CardTodoPending => "todo_pending",
             Self::CardParkedBg => "parked_bg",
             Self::ProcessCpu => "cpu",
             Self::ProcessMem => "mem",

@@ -90,8 +90,7 @@ pub struct ClaudePreToolUse {
     pub tool_input: Option<Value>,
 }
 
-/// Silent lifecycle event. `tool_response` is available for audit enrichment;
-/// `todos` inside `tool_input` or `tool_response` carry the `TodoWrite` state.
+/// Silent lifecycle event. `tool_response` is available for audit enrichment.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ClaudePostToolUse {

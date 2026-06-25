@@ -1,7 +1,7 @@
 //! Semantic sidebar vocabulary: the canonical status glyphs and the
 //! gauge / spinner / pulse glyph helpers.
 //!
-//! Every meter in the sidebar — context-window %, todo progress, diff stats —
+//! Every meter in the sidebar — context-window %, diff stats —
 //! renders through the same vocabulary so they read as siblings, not as
 //! one-off widgets (see [the sidebar grammar](../../../docs/internals/sidebar/sidebar.md)).
 

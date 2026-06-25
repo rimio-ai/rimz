@@ -158,8 +158,6 @@ fn render_enriched_selected_agent_card() {
     claude.effort = Some("xhigh".to_owned());
     claude.context_pct = Some(38);
     claude.total_tokens = Some(12_400);
-    claude.todo_done = Some(3);
-    claude.todo_total = Some(5);
     claude.context = Some(claude_context(fixed_now()));
     let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
     snapshot.worktree_groups[0].diff_added = Some(127);
@@ -202,9 +200,8 @@ fn render_enriched_selected_agent_card() {
     assert!(rendered.contains("· 200k"), "window token:\n{rendered}");
     // Per-row cost now reads at full cent resolution, like every other spend.
     assert!(rendered.contains("$1.27"));
-    // Line 2 is the full-width description; todo dots inline at L2.
+    // Line 2 is the full-width description.
     assert!(rendered.contains("ledger refactor"));
-    assert!(rendered.contains("●●●○○ 3/5"));
     // The context bar carries the `▣` label and the percent used as its
     // value (always — the window size moved to the token line below); the
     // fill carries the same reading.

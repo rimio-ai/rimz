@@ -194,8 +194,6 @@ impl AgentLifecyclePayload {
                 cache_write_input_tokens: optional_u64(params, "cache_write_input_tokens"),
                 fresh_input_tokens: optional_u64(params, "fresh_input_tokens"),
                 output_tokens: optional_u64(params, "output_tokens"),
-                todo_done: optional_u64(params, "todo_done").map(clamp_u32),
-                todo_total: optional_u64(params, "todo_total").map(clamp_u32),
                 pane_id: optional_string(params, "pane_id")
                     .and_then(|raw| PaneId::parse(&raw).ok()),
                 parent_agent_id: optional_string(params, "parent_agent_id")
@@ -481,8 +479,6 @@ mod tests {
             cache_write_input_tokens: Some(1_000),
             fresh_input_tokens: Some(2_000),
             output_tokens: Some(1_000),
-            todo_done: Some(3),
-            todo_total: Some(5),
             pane_id: Some(PaneId::from_parts(MuxName::Tmux, "%1")),
             parent_agent_id: Some(AgentSessionId::from("parent-1")),
         }
@@ -540,8 +536,6 @@ mod tests {
                 "cache_write_input_tokens": 1_000,
                 "fresh_input_tokens": 2_000,
                 "output_tokens": 1_000,
-                "todo_done": 3,
-                "todo_total": 5,
                 "pane_id": "tmux:%1",
                 "parent_agent_id": "parent-1",
             }),
@@ -599,8 +593,6 @@ mod tests {
             "cache_write_input_tokens",
             "fresh_input_tokens",
             "output_tokens",
-            "todo_done",
-            "todo_total",
             "pane_id",
             "parent_agent_id",
         ] {
@@ -800,7 +792,6 @@ mod tests {
                 "signal": { "signal": "registered" },
                 "agent_pid": "not-a-pid",
                 "context_pct": 300,
-                "todo_done": u64::MAX,
                 "pane_id": "not-a-pane",
             }),
         );
@@ -813,7 +804,6 @@ mod tests {
         assert_eq!(payload.observation.signal, LifecycleSignal::Registered);
         assert_eq!(payload.observation.agent_pid, None);
         assert_eq!(payload.observation.context_pct, Some(100));
-        assert_eq!(payload.observation.todo_done, Some(u32::MAX));
         assert_eq!(payload.observation.pane_id, None);
     }
 
