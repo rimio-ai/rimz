@@ -43,9 +43,9 @@ jobs:
           mkdir -p "$auth_dir/docker"
           export DOCKER_CONFIG="$auth_dir/docker"
           export REGISTRY_AUTH_FILE="$auth_dir/auth.json"
-          echo "$TOKEN" | docker login "$REGISTRY_HOST" -u "$GITHUB_ACTOR" --password-stdin
-          docker build -f ci/Dockerfile -t "$IMAGE" ci
-          docker push "$IMAGE"
+          echo "$TOKEN" | podman login "$REGISTRY_HOST" -u "$GITHUB_ACTOR" --password-stdin
+          podman build --isolation=chroot -f ci/Dockerfile -t "$IMAGE" ci
+          podman push "$IMAGE"
 
       - name: Update RIMZ_CI_IMAGE variable
         env:
