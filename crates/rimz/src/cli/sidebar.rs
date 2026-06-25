@@ -623,7 +623,7 @@ fn gallery(globals: &GlobalFlags) -> Result<()> {
     backend
         .open_tab(&rimz::mux::TabOptions {
             session_name: workspace.session_name.clone(),
-            title: "sidebar gallery".to_owned(),
+            title: "gallery".to_owned(),
             cwd: workspace.worktree_root.clone(),
             panes: rimz::mux::LayoutPanes {
                 columns: vec![vec![gallery_pane]],

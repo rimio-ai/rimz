@@ -97,6 +97,12 @@ fn gallery_fixture_states_carry_feature_flags() {
             .count(),
         2,
     );
+    assert!(lead.sub_agents.iter().all(|child| {
+        child.name != "Explore" || child.status == rimz::agents::AgentStatus::Success
+    }));
+    assert!(lead.sub_agents.iter().any(|child| {
+        child.name == "Plan" && child.status == rimz::agents::AgentStatus::Running
+    }));
     let allowed = ["Explore", "Plan", "general-purpose"]
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
@@ -110,6 +116,11 @@ fn gallery_fixture_states_carry_feature_flags() {
         sub_agent_names.is_subset(&allowed),
         "unexpected sub-agent names: {sub_agent_names:?}",
     );
+    assert!(states.iter().flat_map(agent_cards).all(|card| {
+        card.sub_agents
+            .iter()
+            .all(|child| child.status != rimz::agents::AgentStatus::Waiting)
+    }));
     let handles = cards
         .iter()
         .filter_map(|card| card.handle.as_deref())
@@ -158,20 +169,69 @@ fn gallery_fixture_states_carry_feature_flags() {
             .iter()
             .any(|card| card.compacting || card.compaction_count > 0)
     );
+
+    for snapshot in &states {
+        let live = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.status_counts)
+            .map(|count| count.count)
+            .sum::<usize>();
+        assert!((12..=30).contains(&live), "live count {live}");
+        let statuses = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .filter_map(|row| row.status())
+            .collect::<Vec<_>>();
+        for status in [
+            rimz::agents::AgentStatus::Waiting,
+            rimz::agents::AgentStatus::Failed,
+            rimz::agents::AgentStatus::Paused,
+            rimz::agents::AgentStatus::Success,
+            rimz::agents::AgentStatus::Running,
+            rimz::agents::AgentStatus::Idle,
+        ] {
+            assert!(statuses.contains(&status), "missing {status:?}");
+        }
+        let sessions = snapshot.value_tally.as_ref().unwrap().headline.sessions;
+        assert!((60..=120).contains(&sessions), "sessions {sessions}");
+    }
+    assert!(states.iter().flat_map(agent_cards).any(|card| {
+        card.context
+            .as_ref()
+            .and_then(|context| context.cost.as_ref())
+            .and_then(|cost| cost.total_cost_usd)
+            .is_some()
+    }));
+    for row in states
+        .iter()
+        .flat_map(|snapshot| &snapshot.worktree_groups)
+        .flat_map(|group| &group.rows)
+        .filter(|row| matches!(row.name.as_str(), "pi" | "opencode"))
+    {
+        let rimz::RowCard::Agent(card) = &row.card else {
+            continue;
+        };
+        assert_eq!(card.model.as_deref(), Some("GPT-5.5"));
+    }
 }
 
 #[test]
 fn gallery_fixture_frames_render_decisive_markers() {
     assert_fixture_frame_contains(
         SidebarFixtureState::Cockpit,
-        &["opencode", "compact provider trace", "$3,990.00"],
+        &["pricing-refresh", "mux-merge", "$3,990.00"],
     );
-    assert_fixture_frame_contains(SidebarFixtureState::Focus, &["coder", "Plan", "reviewer"]);
+    assert_fixture_frame_contains(
+        SidebarFixtureState::Focus,
+        &["coder", "reviewer", "rollout-guard"],
+    );
     assert_fixture_frame_contains(
         SidebarFixtureState::Economy,
-        &["OpenCode", "cost-caps", "provider-ledger"],
+        &["OpenAI OAuth", "usage-alerts", "GPT 5.5"],
     );
-    assert_fixture_frame_contains(SidebarFixtureState::Reach, &["away", "48ms", "edge-cache"]);
+    assert_fixture_frame_contains(SidebarFixtureState::Reach, &["away", "48ms", "vpn-check"]);
 }
 
 fn agent_cards(snapshot: &rimz::SidebarSnapshot) -> Vec<&rimz::AgentCard> {
