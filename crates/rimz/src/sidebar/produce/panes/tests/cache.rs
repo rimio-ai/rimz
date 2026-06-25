@@ -51,7 +51,10 @@ fn snapshot_cache_serves_only_fresh_same_session_readable_entries() {
 fn snapshot_cache_misses_before_requested_pane_freshness_floor() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("snapshot.json");
-    let produced_at_ms = unix_now_ms();
+    // Isolate the forced-freshness floor from the TTL gate. Coverage CI can
+    // take longer than the 750ms poll TTL to write and read the cache, and
+    // future producer stamps intentionally saturate to age 0.
+    let produced_at_ms = unix_now_ms().saturating_add(60_000);
     write_snapshot_cache(&path, "rimz-query-engine", produced_at_ms);
 
     assert!(
