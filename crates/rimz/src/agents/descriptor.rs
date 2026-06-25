@@ -425,6 +425,6 @@ mod tests {
         let opencode = crate::agents::registry::descriptor_by_kind("opencode").unwrap();
         assert!(!opencode.capabilities.remote_control.pane_sessions);
         assert!(!opencode.capabilities.remote_control.background_sessions);
-        assert!(!opencode.capabilities.rich_context);
+        assert!(opencode.capabilities.rich_context);
     }
 }

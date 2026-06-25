@@ -13,6 +13,11 @@ use serde_json::Value;
 pub(crate) struct OpencodeHookPayload {
     pub session_id: Option<String>,
     pub parent_session_id: Option<String>,
+    #[allow(
+        dead_code,
+        reason = "parsed to pin the plugin envelope; refresh spawning reads raw payload JSON"
+    )]
+    pub server_url: Option<String>,
     pub prompt: Option<String>,
     pub is_error: Option<bool>,
     pub error_message: Option<String>,
@@ -69,5 +74,15 @@ mod tests {
         let typed = parse_payload(&json!({ "total_tokens": "bad", "session_id": "ses_1" }));
         assert!(typed.session_id.is_none());
         assert!(typed.total_tokens.is_none());
+    }
+
+    #[test]
+    fn parse_payload_reads_server_url() {
+        let parsed = parse_payload(&json!({
+            "session_id": "ses_1",
+            "server_url": "http://127.0.0.1:4096/"
+        }));
+        assert_eq!(parsed.session_id.as_deref(), Some("ses_1"));
+        assert_eq!(parsed.server_url.as_deref(), Some("http://127.0.0.1:4096/"));
     }
 }

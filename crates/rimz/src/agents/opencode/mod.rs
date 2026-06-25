@@ -12,6 +12,7 @@
 pub(crate) mod account;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
+pub mod server;
 pub(crate) mod spend;
 
 use std::path::{Path, PathBuf};
@@ -27,8 +28,9 @@ use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, Result, SubagentIdentity, choice_is_allow,
-    classify_agent_hook, read_optional_file, resolve_subagent_identity, sanitize_user_prompt,
+    HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, RefreshSpawn, Result,
+    SubagentIdentity, choice_is_allow, classify_agent_hook, read_optional_file,
+    resolve_subagent_identity, sanitize_user_prompt,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ids::AgentSessionId;
@@ -55,7 +57,7 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     capabilities: Capabilities {
         blocking_feed: true,
         native_ask_ui: true,
-        rich_context: false,
+        rich_context: true,
         context_usage: true,
         account_spend: true,
         subagents: true,
@@ -159,8 +161,8 @@ const OPENCODE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::RichContext,
-        ConcernCoverage::Unsupported {
-            reason: "per-launch random-port server has no discovery surface",
+        ConcernCoverage::Wired {
+            via: "embedded server /config/providers + /session over plugin serverUrl",
         },
     ),
     (
@@ -476,6 +478,34 @@ impl AgentAdapter for OpencodeAdapter {
             event_name,
             "chat_message" | "session_idle" | "session_error"
         )
+    }
+
+    fn post_lifecycle_refresh(
+        &self,
+        event_name: &str,
+        ctx: &LifecycleRefreshCtx<'_>,
+    ) -> Option<RefreshSpawn> {
+        if !matches!(
+            event_name,
+            "session_created" | "chat_message" | "session_idle" | "session_error"
+        ) {
+            return None;
+        }
+        let server_url = ctx.server_url.filter(|url| !url.is_empty())?;
+        let mut args = vec![
+            "opencode".to_owned(),
+            "refresh-context".to_owned(),
+            "--session-id".to_owned(),
+            ctx.agent_id.to_owned(),
+            "--workspace-id".to_owned(),
+            ctx.workspace_id.to_owned(),
+            "--server-url".to_owned(),
+            server_url.to_owned(),
+        ];
+        if let Some(model) = ctx.model_hint {
+            args.extend(["--model".to_owned(), model.to_owned()]);
+        }
+        Some(RefreshSpawn { args })
     }
 
     fn transcript_files(&self) -> Vec<PathBuf> {

@@ -290,6 +290,7 @@ pub struct LifecycleRefreshCtx<'a> {
     pub agent_id: &'a str,
     pub workspace_id: &'a str,
     pub model_hint: Option<&'a str>,
+    pub server_url: Option<&'a str>,
 }
 
 /// File identity for a bounded transcript/rollout tail read. Producers persist it

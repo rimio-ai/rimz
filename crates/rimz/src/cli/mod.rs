@@ -18,6 +18,7 @@ mod list;
 mod list_pets;
 mod list_themes;
 mod loop_cmd;
+mod opencode;
 mod pane;
 mod parse;
 mod queue;
@@ -101,6 +102,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
         Some(Subcmd::Codex(args)) => codex::run(args, &globals),
+        Some(Subcmd::Opencode(args)) => opencode::run(args, &globals),
         Some(Subcmd::Config(args)) => config::run(args, &globals),
         Some(Subcmd::Coverage(args)) => coverage::run(args, &globals),
         Some(Subcmd::Trust(args)) => trust::run(args, &globals),
@@ -202,6 +204,10 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::Codex(args)) => {
             let (command, session) = args.scope();
             (command, session, Some("codex"))
+        }
+        Some(Subcmd::Opencode(args)) => {
+            let (command, session) = args.scope();
+            (command, session, Some("opencode"))
         }
         Some(Subcmd::Config(_)) => ("config", None, None),
         Some(Subcmd::Coverage(_)) => ("coverage", None, None),
@@ -582,6 +588,9 @@ enum Subcmd {
     /// Codex helper API. The Codex hook calls these; humans usually do not.
     #[command(hide = true)]
     Codex(codex::CodexArgs),
+    /// OpenCode helper API. The OpenCode hook calls these; humans usually do not.
+    #[command(hide = true)]
+    Opencode(opencode::OpencodeArgs),
     /// Inspect and edit the per-machine config.
     Config(config::ConfigArgs),
     /// Adapter integration-concern and lifecycle-hook coverage matrices.

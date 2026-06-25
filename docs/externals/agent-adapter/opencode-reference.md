@@ -2,7 +2,7 @@
 
 > This doc mirrors OpenCode ahead of its adapter, the path [pi-reference.md](./pi-reference.md) proved. The mapping onto Rimz's internal types lands beside it with the adapter, under `docs/internals/agents/adapter/`: the agent-agnostic boundary, lifecycle, and context read-path is [agent.md](../../internals/agents/agent.md), and the account, balance, and spend model is [provider.md](../../internals/agents/provider.md). [Mapping feasibility](#mapping-feasibility) below is that work's starting brief.
 
-This is the single home for the **OpenCode upstream protocol surface** a Rimz adapter binds to — the in-process plugin API (hooks, bus events, blocking returns, install surface), the SQLite session store, the server HTTP API, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the opencode.ai docs and the published TypeScript wire types, pinned to the source URLs below; the storage, auth, event, and CLI shapes are additionally verified against a live `opencode` 1.15.13 install (2026-06-04).
+This is the single home for the **OpenCode upstream protocol surface** a Rimz adapter binds to — the in-process plugin API (hooks, bus events, blocking returns, install surface), the SQLite session store, the server HTTP API, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the opencode.ai docs and the published TypeScript wire types, pinned to the source URLs below; the storage, auth, event, and CLI shapes are additionally verified against an installed `opencode` 1.17.9 binary and 1.17.7 SDK/plugin packages (2026-06-25).
 
 Coverage is **depth on what an adapter would wire, breadth as an index**: the hooks, events, store fields, and decision returns an adapter would parse or emit are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists.
 
@@ -54,7 +54,7 @@ A plugin module exports an async factory receiving `PluginInput` and returning i
 
 ## Plugin hooks
 
-The `Hooks` members an adapter would wire (verbatim from the published 1.15.13 types):
+The `Hooks` members an adapter would wire (verbatim from the published 1.17.7 types):
 
 ```ts
 event?: (input: { event: Event }) => Promise<void>
@@ -71,7 +71,7 @@ Index of the rest: `config`, `auth` (custom provider login flows), `provider`, `
 
 ## Bus events
 
-The `event` hook and the server's `GET /event` SSE stream carry one tagged union — `{ type, properties }`. The catalog below is extracted from the live 1.15.13 SDK types; upstream rebuilt the event system in v1.15.0, so re-verify names on each refresh.
+The `event` hook and the server's `GET /event` SSE stream carry one tagged union — `{ type, properties }`. The catalog below is extracted from the live 1.17.7 SDK types; upstream rebuilt the event system in v1.15.0, so re-verify names on each refresh.
 
 ### Events an adapter would wire
 
@@ -128,7 +128,7 @@ type AssistantMessage = {
 }
 ```
 
-A live 1.15.13 row additionally carries `agent` ("build", …) and `variant` ("xhigh", …) on the assistant blob — the published SDK type lags the wire; parse tolerantly.
+A live 1.17.9 row additionally carries `agent` ("build", …) and `variant` ("xhigh", …) on the assistant blob — the published SDK type lags the wire; parse tolerantly.
 
 ## The decision channel — `permission.ask`
 
@@ -158,13 +158,15 @@ Setting `output.status` to `allow` or `deny` short-circuits the dialog; leaving 
 
 **Pinned caveat.** [anomalyco/opencode#19927](https://github.com/anomalyco/opencode/issues/19927) reports first-encounter commands bypassing the `permission.ask` hook on some paths; re-verify against the current release before relying on the hook as the sole interception point.
 
-**The `question` tool.** OpenCode ships a built-in `question` tool (its user-question primitive). The 1.15.13 SDK publishes no `question.*` event; newer development builds reference a `question.asked` bus event — re-verify on refresh before wiring a user-question feed kind.
+**The `question` tool.** OpenCode ships a built-in `question` tool (its user-question primitive). The 1.17.7 SDK publishes no `question.*` event in the `Event` union, so user-question wiring waits for a contracted bus event rather than guessing from development references.
 
 ## Server HTTP API (index)
 
 Each TUI launch owns a private server; there is no fixed port and no published discovery surface (no lockfile, no well-known socket) — the one in-process place the port surfaces is the plugin's `serverUrl`. Detached modes exist: `opencode serve` (`--port`, `--hostname`, `--mdns`, `--cors`), `opencode web`, and `opencode attach <url>` to point a TUI at a running server. Optional HTTP basic auth rides `OPENCODE_SERVER_PASSWORD` (with `OPENCODE_SERVER_USERNAME`, default `opencode`).
 
-- `GET /global/health` → `{"healthy":true,"version":"1.15.13"}` (live-verified) — the version probe.
+- `GET /global/health` → `{"healthy":true,"version":"1.17.9"}` (live-verified) — the version probe.
+- `GET /config/providers` → provider catalog, including `providers[].models` and display `name`; Rimz uses it read-only to map the lifecycle model hint to `model_display_name`.
+- `GET /session/:id` → session metadata, including `title`, `version`, `model`, token/cost aggregates, and timestamps; Rimz uses it read-only for the session title.
 - `GET /event` — the SSE stream of the bus events above.
 - `GET /doc` — the OpenAPI 3.1 spec the SDK is generated from; the version-exact method catalog.
 - `GET /session`, `GET /session/:id/message`, `POST /session/:id/message`, `POST /session/:id/permissions/:permissionID`, `GET /config`, `GET /find/*`, … — the typed client is `createOpencodeClient` from `@opencode-ai/sdk`.
@@ -173,7 +175,7 @@ Each TUI launch owns a private server; there is no fixed port and no published d
 
 ## Session store — SQLite
 
-OpenCode 1.15 stores sessions in **one SQLite database** — `~/.local/share/opencode/opencode.db` (under the `XDG_DATA_HOME` root; WAL mode, so `-shm` / `-wal` siblings ride along), schema-managed by Drizzle migrations. Earlier releases wrote a flat JSON tree under `storage/`; a live 1.15.13 leaves only the `storage/migration` marker and `storage/session_diff/<sessionID>.json`, and third-party writeups describing the flat tree are stale. The session/message/part tables are the transcript: per-row JSON blobs in a `data` column, with the hot fields lifted into typed columns.
+OpenCode 1.17 stores sessions in **one SQLite database** — `~/.local/share/opencode/opencode.db` (under the `XDG_DATA_HOME` root; WAL mode, so `-shm` / `-wal` siblings ride along), schema-managed by Drizzle migrations. Earlier releases wrote a flat JSON tree under `storage/`; a live 1.17.9 install leaves only the `storage/migration` marker and `storage/session_diff/<sessionID>.json`, and third-party writeups describing the flat tree are stale. The session/message/part tables are the transcript: per-row JSON blobs in a `data` column, with the hot fields lifted into typed columns.
 
 | Table | Key columns (live-verified) |
 | --- | --- |
@@ -182,7 +184,7 @@ OpenCode 1.15 stores sessions in **one SQLite database** — `~/.local/share/ope
 | `part` | `id`, `message_id`, `session_id`, `time_created`, `time_updated`, `data` (JSON — `step-finish` parts carry per-step `tokens` + `cost`; `tool` parts carry the call state) |
 | the rest | `project` (worktree identity), `workspace`, `permission` (per-project ruleset), `todo`, `session_share`, `event` / `event_sequence`, `account` / `account_state` (OpenCode-cloud login, not provider auth), `data_migration`, `__drizzle_migrations` |
 
-A live assistant `message.data` blob (1.15.13, paths trimmed):
+A live assistant `message.data` blob (1.17.9, paths trimmed):
 
 ```jsonc
 {"parentID":"msg_…","role":"assistant","mode":"build","agent":"build","variant":"xhigh",
@@ -226,7 +228,7 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 
 | Surface | Meaning |
 | --- | --- |
-| `opencode -v` | version (`1.15.13` verified) |
+| `opencode -v` | version (`1.17.9` verified) |
 | `opencode [project]` | the TUI, embedding its private server (`--port` default 0 — random per launch; `--hostname` default `127.0.0.1`) |
 | `opencode -c` / `--continue`, `-s <id>` / `--session <id>`, `--fork` | resume the newest session / resume by id — the resume-on-rebirth seed / branch into a copy |
 | `opencode run [message…]` | headless one-shot |
@@ -267,12 +269,12 @@ The adapter verdict has landed in [opencode.md](../../internals/agents/adapter/o
 
 - **Identity.** The plugin runs inside the server the pane's TUI embeds, so an interactive OpenCode is standalone and stampable — the in-process environment carries the pane id, and pid capture rides the spawned `rimz` child. A session exists only once created (typically at the first prompt), so OpenCode is a `registers_lazily` candidate — the Codex pattern: idle-row synthesis before the first turn, cwd-bind from `Session.directory` ([agent.md → The instance lifecycle](../../internals/agents/agent.md#the-instance-lifecycle)). A session served by a detached `opencode serve`, reached over `attach`, or driven from the web UI is daemon-routed/remote — the documented remote-agent gap.
 - **Context gauge.** Every assistant message carries the full token split — in-process on `message.updated`, at rest in SQLite — so the gauge rides lifecycle events with no transcript tail. The plugin resolves the context-window divisor for every model family from OpenCode's own model catalog as the model's max input tokens (`Model.limit.input`, falling back to the total `Model.limit.context`; read once per server launch via the in-process `client.config.providers()`), keyed `${providerID}/${modelID}` and stamped onto each lifecycle envelope; a Claude-family local table is the offline fallback when the catalog read is unavailable.
+- **Rich context.** The plugin stamps `serverUrl` onto lifecycle envelopes, so Rust has a real out-of-band read lane to the same embedded server. `rimz opencode refresh-context` reads `GET /global/health`, `GET /config/providers`, and `GET /session/:id` after turn boundaries to fill `agent_version`, `model_display_name`, and the session title without blocking the hook. The route is display-only and read-only today; remote control (`POST /session/:id/message`, `POST /session/:id/permissions/:permissionID`) stays a separate subsystem.
 - **Spend.** The SQLite store is the cost surface: per-message rows supply trailing-window bucketing and origin paths. The adapter opens SQLite read-only against the WAL database. Zero `cost` under a subscription login prices from tokens via [provider.md → Token pricing](../../internals/agents/provider.md#token-pricing) (the Codex rule); a positive `cost` is authoritative (the Pi rule).
 - **Account probe and usage.** `auth.json` distinguishes oauth from API-key credentials per provider — enough for logged-in plus metered/unmetered on the dashboard, the same single account fact Pi's probe documents. The selected OAuth credential also feeds the out-of-band usage probe, which queries the backing provider's own quota endpoint over that token: an `anthropic` credential reuses Claude's Anthropic OAuth usage fetcher, `openai`/`openai-codex` reuse Codex's ChatGPT usage fetcher, and any other provider has no mapped endpoint and returns nothing. OpenCode introduces no endpoint of its own.
 
 **What OpenCode cannot support:**
 
 - **No realtime balance transport, no plan tier.** The plugin sees no provider response headers, so OpenCode surfaces no live rate-limit windows the way Claude's statusline or Codex's app-server do, and no plan tier anywhere. Its budget bars come entirely from the out-of-band OAuth usage probe over the backing-provider token ([provider.md → Per-provider mapping](../../internals/agents/provider.md#per-provider-mapping)); an API-key or `wellknown` login has no token, so it shows account identity and spend without bars. The `session.status` `retry` state is the one in-band throttling glimpse, and it is uncontracted.
-- **No rich-context transport.** The per-launch server sits on a random port with no discovery surface, so Rust has no statusline or app-server analogue to read out of band; the in-process plugin reads its owning server directly (the model catalog for the context window), and the events plus the SQLite store cover the rest of the gauge. A future increment: the Rimz plugin publishes its `serverUrl` to a runtime sidecar, the way the Codex broker holds a warm connection, should Rust need an out-of-band read beyond what the plugin already stamps.
 - **Few native asks by default.** Permission defaults are permissive, so the blocking channel engages only as far as the user's `permission` config asks. The [#19927](https://github.com/anomalyco/opencode/issues/19927) hook-bypass report stays pinned as an upstream caveat to re-check on reference refresh.
 - **No per-session end event.** `dispose` fires per server, not per session; a session that ends inside a still-running instance leaves by pane liveness and the reaper alone, the Codex posture.

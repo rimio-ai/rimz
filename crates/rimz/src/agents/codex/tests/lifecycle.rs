@@ -272,6 +272,7 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
         agent_id: "sess-1",
         workspace_id: "ws-1",
         model_hint: Some("gpt-5"),
+        server_url: None,
     };
     let spawn = CodexAdapter
         .post_lifecycle_refresh("Stop", &ctx)

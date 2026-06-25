@@ -190,6 +190,76 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
 }
 
 #[test]
+fn opencode_context_refreshes_are_bounded_to_turn_events_with_server_url() {
+    let ctx = crate::agents::LifecycleRefreshCtx {
+        agent_id: "sess-1",
+        workspace_id: "ws-1",
+        model_hint: Some("gpt-5"),
+        server_url: Some("http://127.0.0.1:4096/"),
+    };
+    for event in [
+        "session_created",
+        "chat_message",
+        "session_idle",
+        "session_error",
+    ] {
+        let spawn = OpencodeAdapter
+            .post_lifecycle_refresh(event, &ctx)
+            .unwrap_or_else(|| panic!("{event} refreshes"));
+        assert_eq!(
+            spawn.args,
+            [
+                "opencode",
+                "refresh-context",
+                "--session-id",
+                "sess-1",
+                "--workspace-id",
+                "ws-1",
+                "--server-url",
+                "http://127.0.0.1:4096/",
+                "--model",
+                "gpt-5",
+            ],
+            "{event}"
+        );
+    }
+
+    let bare = crate::agents::LifecycleRefreshCtx {
+        agent_id: "sess-1",
+        workspace_id: "ws-1",
+        model_hint: None,
+        server_url: Some("http://127.0.0.1:4096/"),
+    };
+    assert!(
+        !OpencodeAdapter
+            .post_lifecycle_refresh("session_idle", &bare)
+            .unwrap()
+            .args
+            .iter()
+            .any(|arg| arg == "--model")
+    );
+    let missing_url = crate::agents::LifecycleRefreshCtx {
+        agent_id: "sess-1",
+        workspace_id: "ws-1",
+        model_hint: None,
+        server_url: None,
+    };
+    assert!(
+        OpencodeAdapter
+            .post_lifecycle_refresh("session_idle", &missing_url)
+            .is_none()
+    );
+    for event in ["tool_after", "session_compacting", "session_compacted"] {
+        assert!(
+            OpencodeAdapter
+                .post_lifecycle_refresh(event, &ctx)
+                .is_none(),
+            "{event}"
+        );
+    }
+}
+
+#[test]
 fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
     for (tool_name, expected) in [
         (
@@ -399,6 +469,7 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("\"hooks\", \"feed\", \"--source\", \"opencode\""));
     assert!(PLUGIN_SOURCE.contains("RIMZ_AGENT_PID"));
     assert!(PLUGIN_SOURCE.contains("RIMZ_BIN"));
+    assert!(PLUGIN_SOURCE.contains("server_url: input.serverUrl"));
     assert!(PLUGIN_SOURCE.contains("permission.ask"));
     assert!(PLUGIN_SOURCE.contains("{\"status\":\"deny\"}"));
     assert!(PLUGIN_SOURCE.contains("export const RimzPlugin"));

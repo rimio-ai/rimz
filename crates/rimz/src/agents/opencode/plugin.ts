@@ -40,6 +40,7 @@ export const RimzPlugin: Plugin = async (input) => {
       hook_event_name: hookEventName,
       session_id: sessionID,
       cwd: cwd(extra.cwd),
+      server_url: input.serverUrl ? String(input.serverUrl) : undefined,
       model: currentGauge?.model,
       provider_id: currentGauge?.providerID,
       effort: currentGauge?.effort,

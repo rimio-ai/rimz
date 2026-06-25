@@ -509,6 +509,7 @@ fn manage_agent_context(ctx: AgentContextHook<'_>) {
         agent_id,
         workspace_id: workspace.workspace_id.as_str(),
         model_hint,
+        server_url: payload.get("server_url").and_then(Value::as_str),
     };
     if let Some(spawn) = agent.post_lifecycle_refresh(event_name, &refresh_ctx) {
         spawn_refresh_detached(&spawn);

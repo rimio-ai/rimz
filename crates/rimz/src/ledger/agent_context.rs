@@ -45,6 +45,12 @@ pub struct AgentContextRecord {
     /// instead of the whole-record freshness.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limits_observed_at: Option<Timestamp>,
+    /// When a rich-context transport last wrote display-only metadata that is
+    /// not rate-limit/account data. Local token/cost pushes bump
+    /// `context.observed_at`, so rich-context throttles use this stamp instead
+    /// of whole-record freshness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rich_observed_at: Option<Timestamp>,
     /// Transcript/rollout file used for the latest local context refresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
@@ -92,6 +98,7 @@ pub fn write(
             agent_id: agent_id.into(),
             context: context.clone(),
             rate_limits_observed_at: None,
+            rich_observed_at: None,
             transcript_path: None,
             transcript_stat: None,
         },
@@ -120,6 +127,7 @@ pub fn new_record(kind: &str, agent_id: &str, context: AgentContext) -> AgentCon
         agent_id: agent_id.into(),
         context,
         rate_limits_observed_at: None,
+        rich_observed_at: None,
         transcript_path: None,
         transcript_stat: None,
     }
