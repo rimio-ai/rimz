@@ -36,7 +36,7 @@ jobs:
 
       - name: Build and push image
         env:
-          TOKEN: ${{ secrets.GITEA_TOKEN }}
+          TOKEN: ${{ secrets.REGISTRY_PUSH_TOKEN }}
         run: |
           set -euo pipefail
           echo "$TOKEN" | docker login "$REGISTRY_HOST" -u "$GITHUB_ACTOR" --password-stdin
@@ -45,7 +45,7 @@ jobs:
 
       - name: Update RIMZ_CI_IMAGE variable
         env:
-          TOKEN: ${{ secrets.GITEA_TOKEN }}
+          TOKEN: ${{ secrets.REGISTRY_PUSH_TOKEN }}
         run: |
           set -euo pipefail
           var_url="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/variables/RIMZ_CI_IMAGE"
