@@ -320,7 +320,7 @@ fn path_with_stub_first(stub_dir: &Path) -> String {
 }
 
 #[test]
-fn doctor_json_reports_remote_control_preflight_refusals() {
+fn doctor_json_reports_remote_control_refusals_and_skips() {
     let env = Env::new();
     write_machine_config(&env, "[remote_control]\nclaude = true\ncodex = true\n");
     let settings = write_claude_settings(&env, r#"{ "disableRemoteControl": true }"#);
@@ -363,16 +363,28 @@ fn doctor_json_reports_remote_control_preflight_refusals() {
         "{refusals}"
     );
     assert!(
-        refusals.contains("managed standalone Codex install is missing"),
-        "{refusals}"
-    );
-    assert!(
         refusals.contains("[remote_control] claude = false"),
         "{refusals}"
     );
     assert!(
-        refusals.contains("[remote_control] codex = false"),
+        !refusals.contains("managed standalone Codex install is missing"),
         "{refusals}"
+    );
+
+    let skipped = remote["skipped"]
+        .as_array()
+        .expect("skipped")
+        .iter()
+        .map(|skip| skip.as_str().expect("skipped string"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        skipped.contains("managed standalone Codex install is missing"),
+        "{skipped}"
+    );
+    assert!(
+        skipped.contains("[remote_control] codex = false"),
+        "{skipped}"
     );
 }
 

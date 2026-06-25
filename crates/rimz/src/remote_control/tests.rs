@@ -88,6 +88,37 @@ fn preflight_blocks_only_codex_without_its_standalone() {
     assert!(preflight_decision(true, true).is_ok());
 }
 
+#[test]
+fn start_decision_skips_uninstalled_hosts_but_keeps_hard_refusals() {
+    assert_eq!(
+        start_decision(Err(PreflightError::CodexStandaloneMissing), Ok(())),
+        Ok(()),
+    );
+    assert_eq!(
+        start_decision(
+            Err(PreflightError::CodexStandaloneMissing),
+            Err(PreflightError::ClaudeTooOld {
+                found: CliVersion::new(2, 1, 50),
+            }),
+        ),
+        Err(PreflightError::ClaudeTooOld {
+            found: CliVersion::new(2, 1, 50),
+        }),
+    );
+    assert_eq!(
+        start_decision(
+            Ok(()),
+            Err(PreflightError::ClaudeRemoteControlDisabled {
+                settings_path: settings_path(),
+            }),
+        ),
+        Err(PreflightError::ClaudeRemoteControlDisabled {
+            settings_path: settings_path(),
+        }),
+    );
+    assert_eq!(start_decision(Ok(()), Ok(())), Ok(()));
+}
+
 fn claude_settings() -> claude_rc::ClaudeRcSettings {
     claude_rc::ClaudeRcSettings::default()
 }
@@ -115,6 +146,30 @@ fn claude_decision(
         env_api_key,
         env_auth_token,
     )
+}
+
+#[test]
+fn only_codex_standalone_missing_is_an_uninstalled_host() {
+    assert!(PreflightError::CodexStandaloneMissing.is_uninstalled_host());
+
+    let hard_refusals = [
+        PreflightError::ClaudeTooOld {
+            found: CliVersion::new(2, 1, 50),
+        },
+        PreflightError::ClaudeRemoteControlDisabled {
+            settings_path: settings_path(),
+        },
+        PreflightError::ClaudeAgentViewDisabled {
+            settings_path: settings_path(),
+            found: CliVersion::new(2, 1, 173),
+        },
+        PreflightError::ClaudeAuthConflict {
+            sources: vec![ClaudeAuthConflictSource::ApiKeyEnv],
+        },
+    ];
+    for refusal in hard_refusals {
+        assert!(!refusal.is_uninstalled_host(), "{refusal:?}");
+    }
 }
 
 #[test]

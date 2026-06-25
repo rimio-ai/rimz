@@ -340,9 +340,9 @@ fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presen
     model::Presence::Poll { reason }
 }
 
-/// Per-machine remote-control auto-launch posture. Configured agents have hard
-/// preconditions `rimz start` enforces fail-fast, so doctor surfaces the same
-/// gaps and fixes ahead of time.
+/// Per-machine remote-control auto-launch posture. Doctor separates hard
+/// `rimz start` refusals for installed-agent misconfiguration from enabled
+/// hosts whose agent is not installed; start skips those inert toggles.
 pub(super) fn collect_remote_control() -> model::RemoteControl {
     let config = match MachineConfig::load() {
         Ok(config) => config.remote_control,
@@ -386,13 +386,19 @@ pub(super) fn collect_remote_control() -> model::RemoteControl {
         agents.push(model::RemoteAgent { label, ready });
     }
 
-    let refusals = [codex_preflight.as_ref(), claude_preflight.as_ref()]
-        .into_iter()
-        .flatten()
-        .filter_map(|result| result.as_ref().err())
-        .map(ToString::to_string)
-        .collect();
-    model::RemoteControl::On { agents, refusals }
+    let (skipped, refusals): (Vec<_>, Vec<_>) =
+        [codex_preflight.as_ref(), claude_preflight.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|result| result.as_ref().err())
+            .partition(|err| err.is_uninstalled_host());
+    let skipped = skipped.into_iter().map(ToString::to_string).collect();
+    let refusals = refusals.into_iter().map(ToString::to_string).collect();
+    model::RemoteControl::On {
+        agents,
+        refusals,
+        skipped,
+    }
 }
 
 pub(super) fn collect_socket_headroom(

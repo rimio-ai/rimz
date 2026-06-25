@@ -221,7 +221,11 @@ pub(super) enum RemoteControl {
     Off,
     On {
         agents: Vec<RemoteAgent>,
+        /// Fixable misconfigurations on installed agents — `rimz start` aborts
+        /// on these.
         refusals: Vec<String>,
+        /// Enabled hosts whose agent is not installed — `rimz start` skips them.
+        skipped: Vec<String>,
     },
 }
 

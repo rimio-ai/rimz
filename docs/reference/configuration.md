@@ -217,7 +217,7 @@ claude = false
 codex = false
 ```
 
-These opt this machine into background remote-control infrastructure shown in the `rimzd` daemon view. `claude = true` adds `claude remote-control` to the daemon column when `claude` is on PATH; `codex = true` ensures the managed standalone Codex daemon before the room opens (a `codex` CLI on PATH already adds the per-session app-server broker). An enabled host is a fail-fast precondition for `rimz start`: Claude refuses on an incompatible version or settings, Codex refuses when the managed install is missing, and `rimz doctor` prints the same refusal and fix. The mechanics are in [provider.md](../internals/agents/provider.md) and the security boundary in [security.md](../guide/security.md).
+These opt this machine into background remote-control infrastructure shown in the `rimzd` daemon view. `claude = true` adds `claude remote-control` to the daemon column when `claude` is on PATH; `codex = true` ensures the managed standalone Codex daemon before the room opens (a `codex` CLI on PATH already adds the per-session app-server broker). `rimz start` refuses when an installed enabled host has a fixable misconfiguration, such as incompatible Claude version or settings. An enabled host whose agent is not installed is skipped so the room still starts; `rimz doctor` reports that advisory with the install fix. The mechanics are in [provider.md](../internals/agents/provider.md) and the security boundary in [security.md](../guide/security.md).
 
 ### Daemon view
 

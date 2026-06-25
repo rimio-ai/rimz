@@ -82,13 +82,14 @@ fn build_daemon_view_options(
 }
 
 /// Ensure the per-user Codex remote-control daemon (a detached singleton keyed by
-/// its control socket — never a pane; its standalone-install precondition is
-/// enforced earlier by [`rimz::remote_control::preflight`]) and open the `rimzd`
-/// daemon view, best-effort. On Zellij the view already leads from session birth
-/// ([`MuxBackend::open_sidebar`] renders it first), so this is the idempotent
-/// `AlreadyRunning` no-op there; on tmux it opens the window and leads it via
-/// `swap-window`. The view always carries a content column (live stats by
-/// default); daemon hosts are conditional.
+/// its control socket — never a pane) and open the `rimzd` daemon view,
+/// best-effort. [`rimz::remote_control::ensure_codex_daemon`] self-gates on the
+/// managed standalone install, so a missing install no-ops here just as
+/// `rimz start` skips that host. On Zellij the view already leads from session
+/// birth ([`MuxBackend::open_sidebar`] renders it first), so this is the
+/// idempotent `AlreadyRunning` no-op there; on tmux it opens the window and
+/// leads it via `swap-window`. The view always carries a content column (live
+/// stats by default); daemon hosts are conditional.
 pub(super) fn maybe_launch_remote_control(
     backend: &dyn MuxBackend,
     workspace: &rimz::ResolvedWorkspace,

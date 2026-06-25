@@ -441,7 +441,11 @@ fn render_remote_control(w: &mut impl Write, remote: &RemoteControl) -> io::Resu
             kv.push("remote control", cell("off").fg(palette::FAINT));
             kv.render(w)
         }
-        RemoteControl::On { agents, refusals } => {
+        RemoteControl::On {
+            agents,
+            refusals,
+            skipped,
+        } => {
             let mut kv = KeyVals::new().indent(2);
             for agent in agents {
                 let (name, rest) = agent
@@ -463,6 +467,19 @@ fn render_remote_control(w: &mut impl Write, remote: &RemoteControl) -> io::Resu
                     paint(palette::ALARM, "✗ `rimz start` refuses:")
                 )?;
                 for line in refusal.lines() {
+                    writeln!(w, "      {}", paint(palette::MUTED, line))?;
+                }
+            }
+            for skip in skipped {
+                writeln!(
+                    w,
+                    "    {}",
+                    paint(
+                        palette::WARN,
+                        "⚠ enabled but not installed — skipped (the room still starts):",
+                    )
+                )?;
+                for line in skip.lines() {
                     writeln!(w, "      {}", paint(palette::MUTED, line))?;
                 }
             }
@@ -936,6 +953,7 @@ mod tests {
                         ready: false,
                     }],
                     refusals: vec!["disableRemoteControl: true".to_owned()],
+                    skipped: vec!["managed standalone Codex install is missing".to_owned()],
                 },
             )
         });
@@ -943,5 +961,14 @@ mod tests {
         assert!(out.contains("enabled, blocked"), "{out}");
         assert!(out.contains("`rimz start` refuses"), "{out}");
         assert!(out.contains("disableRemoteControl: true"), "{out}");
+        assert!(
+            out.contains("enabled but not installed")
+                && out.contains("skipped (the room still starts)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("managed standalone Codex install is missing"),
+            "{out}"
+        );
     }
 }

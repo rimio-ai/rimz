@@ -24,11 +24,12 @@
 //! `remote-control start` boots and updates its daemon from the standalone's
 //! fixed path, so a `codex` merely on PATH (a different binary) is not enough.
 //! When the `codex` toggle is on but that install is absent, [`preflight`]
-//! refuses the start with the fix — fail-fast, rather than ensuring a daemon
-//! that only prints an install error. Claude has version- and settings-gated
-//! preconditions too: old binaries lack remote control, `disableRemoteControl`
-//! blocks the surface, newer agent-view settings can kill the host, and API-key
-//! auth disables remote control on affected releases.
+//! skips that inert host so the room still starts, and `rimz doctor` surfaces
+//! the install fix. Claude has version- and settings-gated preconditions: old
+//! binaries lack remote control, `disableRemoteControl` blocks the surface,
+//! newer agent-view settings can kill the host, and API-key auth disables
+//! remote control on affected releases. Those installed-but-blocked cases stay
+//! fail-fast at `rimz start`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -174,14 +175,15 @@ fn standalone_bin_under(codex_home: &Path) -> Option<PathBuf> {
 /// drifts from one place to the other.
 pub const CODEX_INSTALL_COMMAND: &str = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
 
-/// A configured remote-control host cannot start. Returned by [`preflight`] so
-/// `rimz start` refuses up front with the fix, instead of launching a doomed
-/// host. Fail-fast precondition, not best-effort: sidebar wakeups and app-server
-/// enrichment degrade silently, but a capability the user switched on does not.
+/// A configured remote-control host cannot start. [`preflight`] skips
+/// uninstalled hosts so the room still launches, while installed agents with
+/// fixable misconfigurations make `rimz start` refuse up front with the fix.
+/// `rimz doctor` surfaces both categories.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PreflightError {
     /// `[remote_control] codex = true` but the managed standalone install is
-    /// absent. The `Display` carries the full, user-facing fix.
+    /// absent. `rimz start` skips this host; the `Display` carries the
+    /// user-facing install fix for `rimz doctor`.
     CodexStandaloneMissing,
     /// `[remote_control] claude = true` but the installed Claude Code version is
     /// older than remote-control support.
@@ -199,6 +201,15 @@ pub enum PreflightError {
     ClaudeAuthConflict {
         sources: Vec<ClaudeAuthConflictSource>,
     },
+}
+
+impl PreflightError {
+    /// Whether this refusal is an enabled host whose agent is not installed.
+    /// `rimz start` skips these so the room still launches; `rimz doctor`
+    /// reports them as advisories with the install fix.
+    pub fn is_uninstalled_host(&self) -> bool {
+        matches!(self, Self::CodexStandaloneMissing)
+    }
 }
 
 /// A configured auth source that disables Claude remote control on affected
@@ -231,12 +242,14 @@ impl std::fmt::Display for PreflightError {
             Self::CodexStandaloneMissing => write!(
                 f,
                 "Codex remote-control is enabled (`[remote_control] codex = true`) but the \
-                 managed standalone Codex install is missing.\n\
+                 managed standalone Codex install is missing, so `rimz start` brings the \
+                 room up without the Codex remote-control host.\n\
                  `codex remote-control start` boots its app-server daemon from \
                  `$CODEX_HOME/packages/standalone/current/codex` (CODEX_HOME defaults to \
                  `~/.codex`); a `codex` on PATH is a different binary and does not satisfy it.\n\n\
                  Install it with:\n    {CODEX_INSTALL_COMMAND}\n\n\
-                 then re-run, or set `[remote_control] codex = false` to disable the Codex host."
+                 then re-run to enable the host, or set `[remote_control] codex = false` to \
+                 silence this."
             ),
             Self::ClaudeTooOld { found } => write!(
                 f,
@@ -287,15 +300,33 @@ impl std::fmt::Display for PreflightError {
 
 impl std::error::Error for PreflightError {}
 
-/// Refuse `rimz start` when a configured remote-control host cannot possibly
-/// start, so the user gets the fix instead of a workspace built around a host
-/// that only errors. Codex's `remote-control start` requires the managed
-/// standalone install ([`codex_standalone_bin`]); Claude's host is version- and
-/// settings-gated when the `claude` binary is present. A missing `claude` is
-/// still skipped at launch (best-effort), so it never blocks a start.
+/// Gate `rimz start` for configured remote-control hosts. An enabled host whose
+/// agent is not installed is skipped so the room still launches; an installed
+/// agent with a fixable misconfiguration refuses the start with the fix. Codex's
+/// `remote-control start` requires the managed standalone install
+/// ([`codex_standalone_bin`]); Claude's host is version- and settings-gated
+/// when the `claude` binary is present. `rimz doctor` reports both hard
+/// refusals and skipped hosts.
 pub fn preflight(config: &RemoteControlConfig) -> Result<(), PreflightError> {
-    preflight_codex(config)?;
-    preflight_claude(config)
+    start_decision(preflight_codex(config), preflight_claude(config))
+}
+
+/// The pure start-gate decision over the two host preflights: abort on the first
+/// fixable misconfiguration of an installed agent, and skip an enabled host
+/// whose agent is not installed ([`PreflightError::is_uninstalled_host`]) so the
+/// room still starts.
+fn start_decision(
+    codex: Result<(), PreflightError>,
+    claude: Result<(), PreflightError>,
+) -> Result<(), PreflightError> {
+    for refusal in [codex, claude] {
+        if let Err(err) = refusal
+            && !err.is_uninstalled_host()
+        {
+            return Err(err);
+        }
+    }
+    Ok(())
 }
 
 /// Check only the configured Codex remote-control daemon precondition.

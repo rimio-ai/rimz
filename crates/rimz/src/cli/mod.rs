@@ -740,9 +740,10 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // pane's birth size; the pair sizes a detached tmux birth.
     let detected_size = rimz::mux::detect_terminal_size();
     let remote_control = &machine_config.remote_control;
-    // Fail-fast precondition: an enabled host that cannot start aborts the
-    // launch here, with the fix, before any hook-install or session side
-    // effects — never bring a workspace up around a doomed host.
+    // Fail-fast precondition for installed agents: fixable host misconfiguration
+    // aborts the launch here with the fix, before hook-install or session side
+    // effects. An enabled host whose agent is not installed is an inert toggle,
+    // skipped here so the room still starts; `rimz doctor` surfaces it.
     rimz::remote_control::preflight(remote_control)?;
     rimz_socket_environment_preflight(&workspace.workspace_id)?;
     mux_environment_preflight(mux, &workspace.session_name)?;

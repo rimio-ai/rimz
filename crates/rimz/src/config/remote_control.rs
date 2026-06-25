@@ -14,9 +14,10 @@ pub struct RemoteControlConfig {
     /// Ensure the per-user Codex app-server daemon by spawning `codex
     /// remote-control start` detached on workspace start — a per-user singleton
     /// (one control socket), not a pane. `remote-control start` boots its daemon
-    /// from the managed standalone install, so when this is on that install must
-    /// be present (a `codex` on PATH alone won't do); otherwise `rimz start`
-    /// refuses fail-fast with the fix. The daemon it brings up is the one Codex
-    /// enrichment re-uses over the control socket.
+    /// from the managed standalone install (a `codex` on PATH alone won't do).
+    /// When that install is absent, `rimz start` skips the Codex host and still
+    /// brings the room up; `rimz doctor` flags it with the install fix. The
+    /// daemon it brings up is the one Codex enrichment re-uses over the control
+    /// socket.
     pub codex: bool,
 }
