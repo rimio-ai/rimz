@@ -223,7 +223,7 @@ Repo-local Cargo config stays installation-safe: `.cargo/config.toml` defines on
 
 The `rimz-ci` image bakes Node for Actions, the Rust stable toolchain with required components and targets, cargo gate plugins, `cargo-vet`, a warm RustSec advisory database, tmux, Zellij, mold, Python, `cargo-zigbuild`, Zig, `rcodesign`, and `gh`. Tool versions live in `ci/Dockerfile`, which is the single source of truth for containerized CI and release jobs.
 
-Refresh the image by editing `ci/Dockerfile`, then pushing that change to `main` or dispatching `.github/workflows/ci-image.yml`. The workflow builds and pushes a new immutable `rimz-ci:<tag>` image to the Gitea container registry, then repoints the repository variable `RIMZ_CI_IMAGE`; consuming workflows read only that variable.
+Refresh the image by editing `ci/Dockerfile`, then pushing that change to `main` or dispatching `.gitea/workflows/ci-image.yml`. The workflow builds and pushes a new immutable `rimz-ci:<tag>` image to the Gitea container registry, then repoints the repository variable `RIMZ_CI_IMAGE`; consuming workflows read only that variable.
 
 Release packaging uses extra host tools. `cargo xtask dist` packages the non-Darwin host release binary and builds packaged macOS archives for both Apple targets through `cargo-zigbuild`, so release maintainers keep `cargo-zigbuild` and `zig` on `PATH`. Install `cargo-zigbuild` with Cargo and install Zig from the host package manager or Zig's official bundle:
 
