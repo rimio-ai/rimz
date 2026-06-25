@@ -32,6 +32,8 @@ use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
 
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
 const LIST_PANES_JSON_TIMEOUT: Duration = Duration::from_millis(1500);
+const LIST_PANES_JSON_ATTEMPTS: u32 = 5;
+const LIST_PANES_JSON_RETRY_DELAY: Duration = Duration::from_millis(50);
 const ACTION_ATTEMPTS: u32 = 3;
 const ACTION_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 const ACTION_CONFIRM_STEP: Duration = Duration::from_millis(50);
@@ -1719,24 +1721,38 @@ fn open_new_tab(xdg: &Path, session: &str) {
 /// Parsed `list-panes -j -a` for `session`. Callers that poll keep the last
 /// error so deadline failures report the command failure instead of "no panes".
 fn list_panes_json(xdg: &Path, session: &str) -> std::result::Result<serde_json::Value, String> {
-    let output = scoped_zellij(xdg)
-        .args(["--session", session, "action", "list-panes", "-j", "-a"])
-        .bounded_output_within(LIST_PANES_JSON_TIMEOUT)
-        .map_err(|err| format!("list-panes failed for {session}: {err}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "list-panes failed for {session} with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        ));
+    let mut last_error = "list-panes was not run".to_owned();
+    for attempt in 0..LIST_PANES_JSON_ATTEMPTS {
+        match scoped_zellij(xdg)
+            .args(["--session", session, "action", "list-panes", "-j", "-a"])
+            .bounded_output_within(LIST_PANES_JSON_TIMEOUT)
+        {
+            Ok(output) if output.status.success() => match serde_json::from_slice(&output.stdout) {
+                Ok(panes) => return Ok(panes),
+                Err(err) => {
+                    last_error = format!(
+                        "parsing list-panes JSON for {session}: {err}; stdout: {}; stderr: {}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr),
+                    );
+                }
+            },
+            Ok(output) => {
+                last_error = format!(
+                    "list-panes failed for {session} with {}: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+            Err(err) => {
+                last_error = format!("list-panes failed for {session}: {err}");
+            }
+        }
+        if attempt + 1 < LIST_PANES_JSON_ATTEMPTS {
+            std::thread::sleep(LIST_PANES_JSON_RETRY_DELAY);
+        }
     }
-    serde_json::from_slice(&output.stdout).map_err(|err| {
-        format!(
-            "parsing list-panes JSON for {session}: {err}; stdout: {}; stderr: {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        )
-    })
+    Err(last_error)
 }
 
 fn expect_list_panes_json(xdg: &Path, session: &str) -> serde_json::Value {
