@@ -25,7 +25,7 @@ The first command is `rimz`, and it auto-detects the multiplexer (Zellij or tmux
 The first run on a machine writes `config.toml`, `theme.toml`, `agents.toml`, and `remote.toml` when they are missing, prints where to customize them, then opens with one consent gate before the room: showing what an agent is doing means adding reporting hooks to the agent's config. The gate is a terminal-native transcript left in scrollback, so the summary, choice, and result read top-to-bottom.
 
 ```
-rimz: wrote default config to ~/.config/rimz — customize it there (`rimz config path`).
+rimz: initialized config under ~/.config/rimz — customize files there (`rimz config path`).
 
 ╭──────────────────────────────────────────────╮
 │ rimz · first-run setup                       │

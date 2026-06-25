@@ -729,7 +729,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         let mut err = std::io::stderr().lock();
         writeln!(
             err,
-            "rimz: wrote default config to {} — customize it there (`rimz config path`).",
+            "rimz: initialized config under {} — customize files there (`rimz config path`).",
             render::home_relative(&config_dir.display().to_string())
         )?;
     }
