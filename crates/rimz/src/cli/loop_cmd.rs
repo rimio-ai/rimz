@@ -1,34 +1,35 @@
-//! `rimz loop` — schedule agent wake-ups on this machine's OS scheduler.
+//! `rimz loop` — schedule agent wake-ups from the room's sidebar elder.
 //!
-//! Rimz keeps no daemon: the OS scheduler keeps time and fires
-//! `rimz loop run <name>`, which drives one configured prompt through either the
-//! supervised `agents -p` seam or the queue path to a pinned live session. A
-//! `<kind>-ping` virtual cell is the window-priming special case and gets the
-//! budget-window skip optimization.
+//! The elected sidebar elder keeps time while a room for the task's project is
+//! open and fires `rimz loop run <name>`, which drives one configured prompt
+//! through either the supervised `agents -p` seam or the queue path to a pinned
+//! live session. A `<kind>-ping` virtual cell is the window-priming special case
+//! and gets the budget-window skip optimization.
 //!
-//! This handler parses, edits the per-machine config, and installs/uninstalls the
-//! OS scheduler entry with a consent preview. The pure schedule parsing and
-//! artifact rendering live in [`rimz::schedule`]; delivery mode reuses the
-//! shared queue seam.
+//! This handler parses and edits the per-machine config, lists room-open state,
+//! and owns the hidden runner the elder spawns. The pure schedule parsing and
+//! due evaluation live in [`rimz::schedule`]; delivery mode reuses the shared
+//! queue seam.
 
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 use jiff::{Timestamp, Zoned};
 use toml_edit::{DocumentMut, InlineTable, Item, Table, Value, value};
 
 use rimz::agents::{find_adapter, hook_trust_fix};
 use rimz::agents_spec::{self, Cell, LayoutSpec};
 use rimz::config::{MachineConfig, TaskEntry, TaskTarget};
+use rimz::ids::WorkspaceId;
 use rimz::ledger::atomic::write_bytes_atomically;
 use rimz::ledger::paths::{RuntimePaths, config_home, runtime_home};
 use rimz::message::DeliveryGate;
-use rimz::schedule::{self, Schedule, Scheduler};
+use rimz::schedule;
 use rimz::sidebar::enrich::shortest_window_running;
+use rimz::sidebar::fresh_sidebar_present;
 use rimz::workspace::WorkspaceResolver;
 
 use super::GlobalFlags;
@@ -44,15 +45,11 @@ pub struct LoopArgs {
 enum LoopSubcmd {
     /// Add or replace a task in the per-machine config.
     Add(Box<AddArgs>),
-    /// Remove a task from the config (and uninstall its scheduler entry).
+    /// Remove a task from the config.
     Remove(NameArgs),
-    /// List configured tasks and whether each is installed.
+    /// List configured tasks and whether their room is open.
     List,
-    /// Install configured tasks onto this machine's OS scheduler.
-    Install(SelectArgs),
-    /// Remove installed scheduler entries, keeping the config.
-    Uninstall(SelectArgs),
-    /// Run one task now. The OS scheduler calls this; humans rarely do.
+    /// Run one task now. The sidebar elder calls this; humans rarely do.
     #[command(hide = true)]
     Run(NameArgs),
 }
@@ -82,10 +79,10 @@ struct AddArgs {
     /// Interval such as `15m`, `2h`, or `1d`.
     #[arg(long, conflicts_with_all = ["at", "days", "cron"])]
     every: Option<String>,
-    /// Raw 5-field cron expression (cron backend only; replaces `--at`/`--days`).
+    /// Raw 5-field cron expression (replaces `--at`/`--days`).
     #[arg(long, conflicts_with_all = ["at", "days", "every", "in_after"])]
     cron: Option<String>,
-    /// Remove the task after a successful scheduler fire.
+    /// Remove the task after a successful fire.
     #[arg(long)]
     once: bool,
     /// Fire once after a duration such as `30m`; resolves to a concrete local time.
@@ -116,32 +113,11 @@ struct NameArgs {
     name: String,
 }
 
-#[derive(Debug, Args)]
-struct SelectArgs {
-    /// One task name; omit to act on every configured task.
-    name: Option<String>,
-    /// Which OS scheduler to target.
-    #[arg(long, value_enum, default_value_t = SchedulerArg::Auto)]
-    scheduler: SchedulerArg,
-    /// Skip the confirmation prompt.
-    #[arg(long, short = 'y')]
-    yes: bool,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum SchedulerArg {
-    Auto,
-    Systemd,
-    Cron,
-}
-
 pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         LoopSubcmd::Add(args) => add(*args),
         LoopSubcmd::Remove(args) => remove(&args.name),
         LoopSubcmd::List => list(),
-        LoopSubcmd::Install(args) => install(args),
-        LoopSubcmd::Uninstall(args) => uninstall(args),
         LoopSubcmd::Run(args) => run_one(&args.name, globals),
     }
 }
@@ -224,6 +200,7 @@ fn add(args: AddArgs) -> Result<()> {
     };
     // Validate the firing time before writing, so a bad `--at`/`--days` fails here.
     let parsed = schedule::parse_schedule(&args.name, &entry)?;
+    preflight_entry(&args.name, &entry)?;
     config_set_entry(&args.name, &entry)?;
 
     let mut out = ui::out();
@@ -237,16 +214,17 @@ fn add(args: AddArgs) -> Result<()> {
     )?;
     writeln!(
         out,
-        "install it on this machine's scheduler with `rimz loop install {}`",
-        args.name
+        "live while a room for {} is open",
+        entry.root.display()
     )?;
+    if !room_open(&entry.root) {
+        writeln!(out, "no room is open there; start one with `rimz start`")?;
+    }
     Ok(())
 }
 
 fn remove(name: &str) -> Result<()> {
-    // Best-effort scheduler cleanup first, so removing the config never strands an
-    // installed timer; missing schedulers are simply skipped.
-    let removed = remove_loop_schedule(name)?;
+    let removed = config_remove(name)?;
     let mut out = ui::out();
     if removed {
         writeln!(out, "removed loop task `{name}`")?;
@@ -265,19 +243,16 @@ fn list() -> Result<()> {
         writeln!(out, "no loop tasks; add one with `rimz loop add`")?;
         return Ok(());
     }
-    let scheduler = detect_scheduler(SchedulerArg::Auto).ok();
-    match scheduler {
-        Some(scheduler) => writeln!(out, "scheduler: {}", scheduler.label())?,
-        None => writeln!(out, "scheduler: none available (systemd --user or crontab)")?,
-    }
     for (name, entry) in &tasks {
         let when = match schedule::parse_schedule(name, entry) {
             Ok(schedule) => schedule.describe(),
             Err(err) => format!("invalid: {err}"),
         };
-        let state = scheduler
-            .map(|scheduler| status_label(scheduler, name))
-            .unwrap_or_else(|| "—".to_owned());
+        let state = if room_open(&entry.root) {
+            "room open"
+        } else {
+            "no room"
+        };
         writeln!(
             out,
             "  {name:<16} {} {when:<24} [{state}] {}",
@@ -288,223 +263,9 @@ fn list() -> Result<()> {
     Ok(())
 }
 
-fn status_label(scheduler: Scheduler, name: &str) -> String {
-    match scheduler {
-        Scheduler::SystemdUser => match systemctl_is_enabled(name) {
-            Some(state) => state,
-            None => "not installed".to_owned(),
-        },
-        Scheduler::Cron => {
-            let crontab = read_crontab().unwrap_or_default();
-            if schedule::list_crontab(&crontab)
-                .iter()
-                .any(|entry| entry.name == name)
-            {
-                "installed".to_owned()
-            } else {
-                "not installed".to_owned()
-            }
-        }
-    }
-}
-
-// ---- install / uninstall ----------------------------------------------------
-
-fn install(args: SelectArgs) -> Result<()> {
-    let scheduler = detect_scheduler(args.scheduler)?;
-    let names = selected_names(args.name.as_deref())?;
-    let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned());
-
-    let mut plans = Vec::new();
-    for name in &names {
-        let entry = load_entry(name)?;
-        preflight_entry(name, &entry)?;
-        let parsed = schedule::parse_schedule(name, &entry)?;
-        plans.push((
-            name.clone(),
-            entry,
-            build_plan(scheduler, name, &parsed.schedule, &rimz_bin, &shell)?,
-        ));
-    }
-
-    preview_plans(scheduler, &plans)?;
-    if !confirmed(args.yes, &format!("install {} loop task(s)", plans.len()))? {
-        bail!("aborted");
-    }
-
-    let mut out = ui::out();
-    for (name, _entry, plan) in &plans {
-        apply_install(name, plan)?;
-        writeln!(out, "installed loop `{name}` ({})", scheduler.label())?;
-    }
-    if scheduler == Scheduler::SystemdUser && linger_disabled() {
-        writeln!(
-            out,
-            "note: enable lingering so timers fire while you are logged out — `loginctl enable-linger {}`",
-            std::env::var("USER").unwrap_or_else(|_| "$USER".to_owned())
-        )?;
-    }
-    Ok(())
-}
-
-fn uninstall(args: SelectArgs) -> Result<()> {
-    let scheduler = detect_scheduler(args.scheduler)?;
-    let names = selected_names(args.name.as_deref())?;
-    let mut out = ui::out();
-    for name in &names {
-        uninstall_one(scheduler, name)?;
-        writeln!(out, "uninstalled loop `{name}` ({})", scheduler.label())?;
-    }
-    Ok(())
-}
-
-/// The rendered scheduler artifacts for one task, ready to preview and write.
-enum Plan {
-    Systemd {
-        service_path: PathBuf,
-        timer_path: PathBuf,
-        service: String,
-        timer: String,
-    },
-    Cron {
-        line: String,
-    },
-}
-
-fn build_plan(
-    scheduler: Scheduler,
-    name: &str,
-    schedule: &Schedule,
-    rimz_bin: &Path,
-    shell: &str,
-) -> Result<Plan> {
-    let command = schedule::run_command(rimz_bin, shell, name);
-    match scheduler {
-        Scheduler::SystemdUser => {
-            let trigger = schedule::systemd_trigger(name, schedule)?;
-            let description = schedule::description(name);
-            let dir = config_home().join("systemd").join("user");
-            let stem = schedule::unit_stem(name);
-            Ok(Plan::Systemd {
-                service_path: dir.join(format!("{stem}.service")),
-                timer_path: dir.join(format!("{stem}.timer")),
-                service: schedule::render_systemd_service(&command, &description),
-                timer: schedule::render_systemd_timer(&trigger, &description),
-            })
-        }
-        Scheduler::Cron => Ok(Plan::Cron {
-            line: format!("{} {}", schedule::cron_expr(schedule), command),
-        }),
-    }
-}
-
-fn preview_plans(scheduler: Scheduler, plans: &[(String, TaskEntry, Plan)]) -> Result<()> {
-    let mut out = ui::out();
-    writeln!(out, "rimz loop install ({})", scheduler.label())?;
-    for (name, entry, plan) in plans {
-        writeln!(
-            out,
-            "\n  {name}: {} in {}",
-            task_subject(entry),
-            entry.root.display()
-        )?;
-        match plan {
-            Plan::Systemd {
-                service_path,
-                timer_path,
-                service,
-                timer,
-            } => {
-                writeln!(out, "  writes {}", timer_path.display())?;
-                indent(&mut out, timer)?;
-                writeln!(out, "  writes {}", service_path.display())?;
-                indent(&mut out, service)?;
-                writeln!(
-                    out,
-                    "  then: systemctl --user enable --now {}.timer",
-                    schedule::unit_stem(name)
-                )?;
-            }
-            Plan::Cron { line } => {
-                writeln!(out, "  adds to your crontab:")?;
-                indent(&mut out, line)?;
-            }
-        }
-    }
-    writeln!(out, "\nundo with `rimz loop uninstall`")?;
-    Ok(())
-}
-
-fn indent(out: &mut impl Write, text: &str) -> Result<()> {
-    for line in text.lines() {
-        writeln!(out, "    {line}")?;
-    }
-    Ok(())
-}
-
-fn apply_install(name: &str, plan: &Plan) -> Result<()> {
-    match plan {
-        Plan::Systemd {
-            service_path,
-            timer_path,
-            service,
-            timer,
-        } => {
-            write_bytes_atomically(service_path, service.as_bytes())
-                .with_context(|| format!("writing {}", service_path.display()))?;
-            write_bytes_atomically(timer_path, timer.as_bytes())
-                .with_context(|| format!("writing {}", timer_path.display()))?;
-            run_systemctl(&["daemon-reload"])?;
-            run_systemctl(&[
-                "enable",
-                "--now",
-                &format!("{}.timer", schedule::unit_stem(name)),
-            ])?;
-            Ok(())
-        }
-        Plan::Cron { line } => {
-            let existing = read_crontab().unwrap_or_default();
-            let updated = schedule::splice_crontab(&existing, name, line);
-            write_crontab(&updated)
-        }
-    }
-}
-
-fn uninstall_one(scheduler: Scheduler, name: &str) -> Result<()> {
-    match scheduler {
-        Scheduler::SystemdUser => {
-            let stem = schedule::unit_stem(name);
-            let dir = config_home().join("systemd").join("user");
-            let timer = dir.join(format!("{stem}.timer"));
-            // Only disable a timer that exists, so removing an absent task
-            // stays quiet instead of erroring on a missing unit.
-            if timer.exists() {
-                run_systemctl_quiet(&["disable", "--now", &format!("{stem}.timer")]);
-            }
-            let mut removed = false;
-            for ext in ["timer", "service"] {
-                let path = dir.join(format!("{stem}.{ext}"));
-                if path.exists() {
-                    std::fs::remove_file(&path)
-                        .with_context(|| format!("removing {}", path.display()))?;
-                    removed = true;
-                }
-            }
-            if removed {
-                run_systemctl_quiet(&["daemon-reload"]);
-            }
-            Ok(())
-        }
-        Scheduler::Cron => {
-            let existing = read_crontab().unwrap_or_default();
-            let updated = schedule::reclaim_crontab(&existing, Some(name));
-            if updated != existing {
-                write_crontab(&updated)?;
-            }
-            Ok(())
-        }
-    }
+fn room_open(root: &Path) -> bool {
+    RuntimePaths::for_workspace(WorkspaceId::from_project_root(root))
+        .is_ok_and(|runtime| fresh_sidebar_present(&runtime))
 }
 
 // ---- run --------------------------------------------------------------------
@@ -547,7 +308,7 @@ fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
         // `run_blocking_task` exits with the supervised run status, so one-shot
         // cleanup happens before the terminal run. A one-shot removed pre-fire
         // that then fails to launch is not retried.
-        let _ = remove_loop_schedule(name)?;
+        let _ = config_remove(name)?;
     }
     let effort = entry
         .effort
@@ -580,12 +341,12 @@ fn run_delivery_task(
             "loop `{name}`: target {} not alive; removing schedule",
             target.handle
         )?;
-        let _ = remove_loop_schedule(name)?;
+        let _ = config_remove(name)?;
         return Ok(());
     }
     let prompt = resolve_task_prompt(entry)?;
     if entry.once {
-        let _ = remove_loop_schedule(name)?;
+        let _ = config_remove(name)?;
     }
     match super::queue::queue_to_session(
         &entry.root,
@@ -602,7 +363,7 @@ fn run_delivery_task(
                 "loop `{name}`: target {} not alive; removing schedule",
                 target.handle
             )?;
-            let _ = remove_loop_schedule(name)?;
+            let _ = config_remove(name)?;
             Ok(())
         }
         Err(err) => Err(err),
@@ -628,13 +389,6 @@ fn queue_resolution_miss(err: &anyhow::Error) -> bool {
     )
 }
 
-fn remove_loop_schedule(name: &str) -> Result<bool> {
-    if let Ok(scheduler) = detect_scheduler(SchedulerArg::Auto) {
-        let _ = uninstall_one(scheduler, name);
-    }
-    config_remove(name)
-}
-
 pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
     let mut reaped = 0;
     for (name, entry) in load_tasks() {
@@ -649,7 +403,7 @@ pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
         match delivery_target_alive(&entry, target) {
             Ok(true) => {}
             Ok(false) => {
-                let _ = remove_loop_schedule(&name)?;
+                let _ = config_remove(&name)?;
                 reaped += 1;
             }
             Err(err) => {
@@ -885,33 +639,6 @@ fn load_entry(name: &str) -> Result<TaskEntry> {
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))
 }
 
-fn selected_names(name: Option<&str>) -> Result<Vec<String>> {
-    match name {
-        Some(name) => {
-            // Surface a typo before touching the scheduler.
-            load_entry(name)?;
-            Ok(vec![name.to_owned()])
-        }
-        None => {
-            let names: Vec<String> = load_tasks().into_keys().collect();
-            if names.is_empty() {
-                bail!("no loop tasks; add one with `rimz loop add`");
-            }
-            Ok(names)
-        }
-    }
-}
-
-fn confirmed(yes: bool, prompt: &str) -> Result<bool> {
-    if yes {
-        return Ok(true);
-    }
-    if !std::io::stdin().is_terminal() {
-        bail!("{prompt}? re-run with --yes to proceed without a prompt");
-    }
-    super::confirm(&format!("{prompt}?"))
-}
-
 fn resolve_add_timing(args: &AddArgs) -> Result<(Option<String>, Option<String>, bool)> {
     let Some(raw) = args.in_after.as_deref() else {
         return Ok((args.at.clone(), args.days.clone(), args.once));
@@ -1136,117 +863,4 @@ fn config_remove(name: &str) -> Result<bool> {
             .with_context(|| format!("writing {}", path.display()))?;
     }
     Ok(removed)
-}
-
-// ---- OS scheduler glue ------------------------------------------------------
-
-fn detect_scheduler(choice: SchedulerArg) -> Result<Scheduler> {
-    match choice {
-        SchedulerArg::Systemd => systemd_user_available()
-            .then_some(Scheduler::SystemdUser)
-            .context("systemd user manager is not available; try `--scheduler cron`"),
-        SchedulerArg::Cron => binary_on_path("crontab")
-            .then_some(Scheduler::Cron)
-            .context("`crontab` was not found on PATH"),
-        SchedulerArg::Auto => {
-            if systemd_user_available() {
-                Ok(Scheduler::SystemdUser)
-            } else if binary_on_path("crontab") {
-                Ok(Scheduler::Cron)
-            } else {
-                bail!(
-                    "no supported scheduler found; install systemd (--user) or cron, or pass --scheduler"
-                )
-            }
-        }
-    }
-}
-
-fn systemd_user_available() -> bool {
-    binary_on_path("systemctl")
-        && Command::new("systemctl")
-            .args(["--user", "show-environment"])
-            .output()
-            .map(|out| out.status.success())
-            .unwrap_or(false)
-}
-
-fn binary_on_path(name: &str) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&paths).any(|dir| dir.join(name).exists())
-}
-
-fn run_systemctl(args: &[&str]) -> Result<()> {
-    let status = Command::new("systemctl")
-        .arg("--user")
-        .args(args)
-        .status()
-        .with_context(|| format!("running `systemctl --user {}`", args.join(" ")))?;
-    if !status.success() {
-        bail!("`systemctl --user {}` failed", args.join(" "));
-    }
-    Ok(())
-}
-
-/// Run a best-effort `systemctl --user` call, capturing output so a missing
-/// unit never leaks an error to the terminal.
-fn run_systemctl_quiet(args: &[&str]) {
-    let _ = Command::new("systemctl").arg("--user").args(args).output();
-}
-
-fn systemctl_is_enabled(name: &str) -> Option<String> {
-    let unit = format!("{}.timer", schedule::unit_stem(name));
-    let out = Command::new("systemctl")
-        .args(["--user", "is-enabled", &unit])
-        .output()
-        .ok()?;
-    let label = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    (!label.is_empty()).then_some(label)
-}
-
-fn linger_disabled() -> bool {
-    let Ok(user) = std::env::var("USER") else {
-        return false;
-    };
-    Command::new("loginctl")
-        .args(["show-user", &user, "--property=Linger"])
-        .output()
-        .ok()
-        .map(|out| String::from_utf8_lossy(&out.stdout).trim() == "Linger=no")
-        .unwrap_or(false)
-}
-
-fn read_crontab() -> Result<String> {
-    let out = Command::new("crontab")
-        .arg("-l")
-        .output()
-        .context("running `crontab -l`")?;
-    // A missing crontab exits non-zero with an empty list; treat it as empty.
-    Ok(if out.status.success() {
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    } else {
-        String::new()
-    })
-}
-
-fn write_crontab(content: &str) -> Result<()> {
-    use std::process::Stdio;
-    let mut child = Command::new("crontab")
-        .arg("-")
-        .stdin(Stdio::piped())
-        .spawn()
-        .context("running `crontab -`")?;
-    child
-        .stdin
-        .take()
-        .context("opening crontab stdin")?
-        .write_all(content.as_bytes())
-        .context("writing crontab")?;
-    let status = child.wait().context("waiting for `crontab -`")?;
-    if !status.success() {
-        bail!("`crontab -` failed to install the task");
-    }
-    Ok(())
 }

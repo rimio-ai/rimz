@@ -178,7 +178,7 @@ root = "/home/you/code/app"
 at = "09:30"
 ```
 
-Each task chooses either `spec` or `bind`. `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. A `<kind>-ping` spec is the window-primer: it defaults the prompt to `ping` and skips when that provider's budget window is already counting down. Bind-mode pins delivery to one live agent session and sends the prompt through the queue path; `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only. The config records the intent; `rimz loop install` applies it to this machine's OS scheduler after a consent preview. Each task carries an absolute `root` so the scheduler knows which room hosts the turn. The full model is in [loop.md](../internals/agents/loop.md), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
+Each task chooses either `spec` or `bind`. `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. A `<kind>-ping` spec is the window-primer: it defaults the prompt to `ping` and skips when that provider's budget window is already counting down. Bind-mode pins delivery to one live agent session and sends the prompt through the queue path; `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only. The config records the intent; a running room for the task's project fires it from the sidebar elder. Each task carries an absolute `root` so the elder scopes firing to its room. The full model is in [loop.md](../internals/agents/loop.md), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
 
 ## Behavior settings
 

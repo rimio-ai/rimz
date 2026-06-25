@@ -422,7 +422,7 @@ fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks) -> io::Result<()> {
         ]);
     }
     table.render(w)?;
-    note(w, Health::Neutral, "`rimz loop list` shows installed state")
+    note(w, Health::Neutral, "`rimz loop list` shows room-open state")
 }
 
 fn render_remote_control(w: &mut impl Write, remote: &RemoteControl) -> io::Result<()> {

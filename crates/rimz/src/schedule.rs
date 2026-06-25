@@ -1,19 +1,17 @@
 //! Scheduled loop task core.
 //!
-//! Rimz keeps no daemon: the OS scheduler keeps time and fires
-//! `rimz loop run <name>`, which drives one configured loop wake-up. A
+//! The elected sidebar elder keeps time for loop tasks while a room is open and
+//! fires `rimz loop run <name>`, which drives one configured loop wake-up. A
 //! `<kind>-ping` virtual cell is the window-priming special case; the schedule
 //! machinery stays generic.
 //!
 //! This module is the pure core. It normalizes a [`crate::config::TaskEntry`]
-//! into a [`Schedule`], renders the cron line and systemd units, builds the
-//! login-shell command the scheduler runs, and owns the marker-fenced, idempotent
-//! crontab reclaim. The side-effecting install/uninstall glue (writing units,
-//! `systemctl --user`, reading/writing the crontab) lives in the CLI handler.
-
-use std::path::Path;
+//! into a [`Schedule`], validates user-facing syntax, describes tasks for the
+//! CLI, and evaluates whether a schedule is due at a given local wall-clock
+//! instant. The side-effecting elder tick lives in the sidebar pane.
 
 use crate::config::TaskEntry;
+use jiff::{Timestamp, Zoned};
 
 /// Errors from parsing or validating a schedule entry.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -38,28 +36,8 @@ pub enum ScheduleErr {
     BadInterval { name: String, value: String },
     #[error("schedule `{name}` sets both `once` and `every`; one-shot intervals are contradictory")]
     OnceWithInterval { name: String },
-    #[error("schedule `{name}` uses a raw `cron` expression, which only the cron backend supports")]
-    RawCronOnSystemd { name: String },
     #[error("schedule name `{name}` must be non-empty and use only letters, digits, `-`, or `_`")]
     BadName { name: String },
-}
-
-/// The OS scheduler an install targets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Scheduler {
-    /// A systemd user timer (`~/.config/systemd/user/`), driven by `systemctl --user`.
-    SystemdUser,
-    /// The user crontab, edited through `crontab -l` / `crontab -`.
-    Cron,
-}
-
-impl Scheduler {
-    pub fn label(self) -> &'static str {
-        match self {
-            Scheduler::SystemdUser => "systemd user timer",
-            Scheduler::Cron => "crontab",
-        }
-    }
 }
 
 /// A weekday in Mon..Sun order.
@@ -92,20 +70,7 @@ impl Weekday {
             .expect("weekday in order")
     }
 
-    /// The cron day-of-week number: Sun=0, Mon=1, … Sat=6.
-    fn cron_num(self) -> u8 {
-        match self {
-            Weekday::Sun => 0,
-            Weekday::Mon => 1,
-            Weekday::Tue => 2,
-            Weekday::Wed => 3,
-            Weekday::Thu => 4,
-            Weekday::Fri => 5,
-            Weekday::Sat => 6,
-        }
-    }
-
-    fn systemd_name(self) -> &'static str {
+    fn short_name(self) -> &'static str {
         match self {
             Weekday::Mon => "Mon",
             Weekday::Tue => "Tue",
@@ -144,24 +109,11 @@ pub struct CalendarSpec {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntervalSpec {
     pub minutes: u32,
-    cron_minutes: u32,
 }
 
 impl IntervalSpec {
     fn new(minutes: u32) -> Self {
-        Self {
-            minutes,
-            cron_minutes: cron_interval_minutes(minutes),
-        }
-    }
-
-    fn cron_note(&self) -> Option<String> {
-        (self.minutes != self.cron_minutes).then(|| {
-            format!(
-                " (cron rounds to every {})",
-                format_minutes(self.cron_minutes)
-            )
-        })
+        Self { minutes }
     }
 }
 
@@ -174,7 +126,7 @@ pub enum Schedule {
 }
 
 impl Schedule {
-    /// A short human description for listings and the install preview.
+    /// A short human description for listings.
     pub fn describe(&self) -> String {
         match self {
             Schedule::RawCron(cron) => format!("cron `{cron}`"),
@@ -184,15 +136,26 @@ impl Schedule {
                 } else {
                     spec.weekdays
                         .iter()
-                        .map(|d| d.systemd_name())
+                        .map(|d| d.short_name())
                         .collect::<Vec<_>>()
                         .join(",")
                 };
                 format!("{:02}:{:02} {days}", spec.hour, spec.minute)
             }
+            Schedule::Interval(spec) => format!("every {}", format_minutes(spec.minutes)),
+        }
+    }
+
+    /// Whether this schedule is due now, given the last time its task was
+    /// armed or fired. First-sight arming is owned by the elder firing module.
+    pub fn due(&self, last_fire: Timestamp, now: &Zoned) -> bool {
+        match self {
             Schedule::Interval(spec) => {
-                let note = spec.cron_note().unwrap_or_default();
-                format!("every {}{note}", format_minutes(spec.minutes))
+                now.timestamp().duration_since(last_fire).as_secs() >= i64::from(spec.minutes) * 60
+            }
+            Schedule::Calendar(spec) => calendar_due(spec, last_fire, now),
+            Schedule::RawCron(expr) => {
+                cron_matches(expr, now) && minute_bucket(last_fire) < minute_bucket(now.timestamp())
             }
         }
     }
@@ -206,7 +169,7 @@ pub struct ParsedSchedule {
 }
 
 impl ParsedSchedule {
-    /// A short human description for listings and the install preview.
+    /// A short human description for listings.
     pub fn describe(&self) -> String {
         let description = self.schedule.describe();
         if self.once {
@@ -217,21 +180,8 @@ impl ParsedSchedule {
     }
 }
 
-/// The crontab fence that marks a rimz-owned block: a `# rimz-loop:<name>`
-/// comment line followed by the command line, so reclaim is exact and never
-/// touches a user's own crontab lines.
-pub const CRON_TAG_PREFIX: &str = "# rimz-loop:";
-
-/// One rimz-owned crontab block: its schedule name and command line.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CronEntry {
-    pub name: String,
-    pub line: String,
-}
-
 /// Validate a schedule name: non-empty and limited to a filesystem- and
-/// shell-safe charset, so it is safe both as a systemd unit stem and inside the
-/// crontab command without quoting.
+/// shell-safe charset.
 pub fn validate_name(name: &str) -> Result<(), ScheduleErr> {
     let ok = !name.is_empty()
         && name
@@ -247,8 +197,8 @@ pub fn validate_name(name: &str) -> Result<(), ScheduleErr> {
 }
 
 /// Parse and validate an entry's firing time into a [`ParsedSchedule`]. Agent
-/// support is validated separately at run/install time, where the adapter
-/// registry is in scope.
+/// support is validated separately by the CLI, where the adapter registry is in
+/// scope.
 pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, ScheduleErr> {
     let has_calendar = entry.at.is_some() || entry.days.is_some();
     let set_count = usize::from(has_calendar)
@@ -400,56 +350,6 @@ fn validate_cron_expr(name: &str, cron: &str) -> Result<(), ScheduleErr> {
     }
 }
 
-/// The cron schedule expression (the five fields before the command).
-pub fn cron_expr(schedule: &Schedule) -> String {
-    match schedule {
-        Schedule::RawCron(raw) => raw.clone(),
-        Schedule::Interval(spec) => interval_cron_expr(spec.cron_minutes),
-        Schedule::Calendar(spec) => {
-            let dow = if spec.weekdays.is_empty() {
-                "*".to_owned()
-            } else {
-                let mut nums: Vec<u8> = spec.weekdays.iter().map(|d| d.cron_num()).collect();
-                nums.sort_unstable();
-                nums.iter().map(u8::to_string).collect::<Vec<_>>().join(",")
-            };
-            format!("{} {} * * {}", spec.minute, spec.hour, dow)
-        }
-    }
-}
-
-fn interval_cron_expr(minutes: u32) -> String {
-    if minutes < 60 {
-        format!("*/{minutes} * * * *")
-    } else {
-        let hours = minutes / 60;
-        format!("0 */{hours} * * *")
-    }
-}
-
-fn cron_interval_minutes(minutes: u32) -> u32 {
-    const CLEAN: &[u32] = &[
-        1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60, 120, 180, 240, 360, 480, 720, 1440,
-    ];
-    if minutes < 60 && 60 % minutes == 0 {
-        return minutes;
-    }
-    if minutes >= 60 && minutes.is_multiple_of(60) {
-        let hours = minutes / 60;
-        if hours <= 24 && 24 % hours == 0 {
-            return minutes;
-        }
-    }
-    CLEAN
-        .iter()
-        .copied()
-        .min_by_key(|candidate| {
-            let distance = candidate.abs_diff(minutes);
-            (distance, *candidate < minutes)
-        })
-        .unwrap_or(60)
-}
-
 fn format_minutes(minutes: u32) -> String {
     if minutes >= 1440 && minutes.is_multiple_of(1440) {
         format!("{}d", minutes / 1440)
@@ -460,170 +360,116 @@ fn format_minutes(minutes: u32) -> String {
     }
 }
 
-/// The systemd `OnCalendar=` value for a calendar schedule. Raw cron and
-/// interval schedules use other timer triggers.
-pub fn systemd_oncalendar(name: &str, schedule: &Schedule) -> Result<String, ScheduleErr> {
-    let Schedule::Calendar(spec) = schedule else {
-        return Err(ScheduleErr::RawCronOnSystemd {
-            name: name.to_owned(),
-        });
+fn calendar_due(spec: &CalendarSpec, last_fire: Timestamp, now: &Zoned) -> bool {
+    if !spec.weekdays.is_empty() && !spec.weekdays.contains(&weekday_from_jiff(now.weekday())) {
+        return false;
+    }
+    if (now.hour(), now.minute()) < (spec.hour as i8, spec.minute as i8) {
+        return false;
+    }
+    let Ok(occurrence) = now
+        .date()
+        .at(spec.hour as i8, spec.minute as i8, 0, 0)
+        .to_zoned(now.time_zone().clone())
+    else {
+        return false;
     };
-    let days = if spec.weekdays.is_empty() {
-        "*-*-*".to_owned()
-    } else {
-        spec.weekdays
-            .iter()
-            .map(|d| d.systemd_name())
-            .collect::<Vec<_>>()
-            .join(",")
+    last_fire < occurrence.timestamp() && now.timestamp() >= occurrence.timestamp()
+}
+
+fn weekday_from_jiff(day: jiff::civil::Weekday) -> Weekday {
+    match day {
+        jiff::civil::Weekday::Monday => Weekday::Mon,
+        jiff::civil::Weekday::Tuesday => Weekday::Tue,
+        jiff::civil::Weekday::Wednesday => Weekday::Wed,
+        jiff::civil::Weekday::Thursday => Weekday::Thu,
+        jiff::civil::Weekday::Friday => Weekday::Fri,
+        jiff::civil::Weekday::Saturday => Weekday::Sat,
+        jiff::civil::Weekday::Sunday => Weekday::Sun,
+    }
+}
+
+fn minute_bucket(timestamp: Timestamp) -> i64 {
+    timestamp.as_second().div_euclid(60)
+}
+
+fn cron_matches(expr: &str, now: &Zoned) -> bool {
+    let fields: Vec<&str> = expr.split_whitespace().collect();
+    let [minute, hour, day_of_month, month, day_of_week] = fields.as_slice() else {
+        return false;
     };
-    Ok(format!("{days} {:02}:{:02}:00", spec.hour, spec.minute))
-}
-
-/// The systemd trigger for a schedule.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SystemdTrigger {
-    OnCalendar(String),
-    OnActive { boot: String, active: String },
-}
-
-pub fn systemd_trigger(name: &str, schedule: &Schedule) -> Result<SystemdTrigger, ScheduleErr> {
-    match schedule {
-        Schedule::Calendar(_) => Ok(SystemdTrigger::OnCalendar(systemd_oncalendar(
-            name, schedule,
-        )?)),
-        Schedule::Interval(spec) => {
-            let minutes = format!("{}min", spec.minutes);
-            Ok(SystemdTrigger::OnActive {
-                boot: minutes.clone(),
-                active: minutes,
-            })
-        }
-        Schedule::RawCron(_) => Err(ScheduleErr::RawCronOnSystemd {
-            name: name.to_owned(),
-        }),
-    }
-}
-
-/// The login-shell command an OS scheduler entry runs. Wrapping in the user's
-/// login shell re-applies the interactive PATH so the mux and agent binaries
-/// resolve the same way they do in a terminal; the absolute `rimz` path is baked
-/// in so the entry never depends on PATH to find Rimz itself.
-pub fn run_command(rimz_bin: &Path, shell: &str, name: &str) -> String {
-    let inner = format!(
-        "exec {} loop run {name}",
-        shell_single_quote(&rimz_bin.display().to_string())
-    );
-    format!("{shell} -lc {}", shell_single_quote(&inner))
-}
-
-fn shell_single_quote(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('\'');
-    for ch in value.chars() {
-        if ch == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(ch);
-        }
-    }
-    out.push('\'');
-    out
-}
-
-/// The systemd unit file stem for a schedule: `rimz-loop-<name>`.
-pub fn unit_stem(name: &str) -> String {
-    format!("rimz-loop-{name}")
-}
-
-/// A one-line human description for the systemd units.
-pub fn description(name: &str) -> String {
-    format!("Rimz loop: {name}")
-}
-
-/// Render the `.service` oneshot unit that runs the ping command.
-pub fn render_systemd_service(command: &str, description: &str) -> String {
-    format!(
-        "[Unit]\n\
-         Description={description}\n\
-         \n\
-         [Service]\n\
-         Type=oneshot\n\
-         ExecStart={command}\n"
-    )
-}
-
-/// Render the `.timer` unit that fires the service on the schedule.
-pub fn render_systemd_timer(trigger: &SystemdTrigger, description: &str) -> String {
-    let trigger = match trigger {
-        SystemdTrigger::OnCalendar(oncalendar) => format!("OnCalendar={oncalendar}\n"),
-        SystemdTrigger::OnActive { boot, active } => {
-            format!("OnBootSec={boot}\nOnUnitActiveSec={active}\n")
-        }
+    let minute_match = cron_field_matches(minute, now.minute(), 0, 59);
+    let hour_match = cron_field_matches(hour, now.hour(), 0, 23);
+    let dom_match = cron_field_matches(day_of_month, now.day(), 1, 31);
+    let month_match = cron_field_matches(month, now.month(), 1, 12);
+    let dow_match = cron_dow_matches(day_of_week, now.weekday());
+    let dom_restricted = day_of_month.trim() != "*";
+    let dow_restricted = day_of_week.trim() != "*";
+    let day_match = match (dom_restricted, dow_restricted) {
+        (true, true) => dom_match || dow_match,
+        (true, false) => dom_match,
+        (false, true) => dow_match,
+        (false, false) => true,
     };
-    format!(
-        "[Unit]\n\
-         Description={description} timer\n\
-         \n\
-         [Timer]\n\
-         {trigger}\
-         \n\
-         [Install]\n\
-         WantedBy=timers.target\n"
-    )
+    minute_match && hour_match && month_match && day_match
 }
 
-/// Replace (or add) the rimz-owned crontab block for `name`, preserving every
-/// other line. Idempotent: splicing the same name twice leaves one block.
-pub fn splice_crontab(existing: &str, name: &str, line: &str) -> String {
-    let mut base = reclaim_crontab(existing, Some(name));
-    base.push_str(&format!("{CRON_TAG_PREFIX}{name}\n{line}\n"));
-    base
+fn cron_field_matches(expr: &str, value: i8, min: i8, max: i8) -> bool {
+    cron_field_matches_any(expr, &[value], min, max)
 }
 
-/// Remove the rimz-owned crontab block for `name`, or every rimz-owned block
-/// when `name` is `None`. A block is its `# rimz-loop:<name>` tag line plus
-/// the command line that follows; foreign lines are untouched.
-pub fn reclaim_crontab(existing: &str, name: Option<&str>) -> String {
-    let mut out: Vec<&str> = Vec::new();
-    let mut lines = existing.lines();
-    while let Some(line) = lines.next() {
-        if let Some(tagged) = line.strip_prefix(CRON_TAG_PREFIX) {
-            let matches = name.is_none_or(|n| tagged.trim() == n);
-            if matches {
-                lines.next(); // drop the command line that follows the tag
-                continue;
-            }
+fn cron_field_matches_any(expr: &str, values: &[i8], min: i8, max: i8) -> bool {
+    expr.split(',').any(|part| {
+        let part = part.trim();
+        if part.is_empty() {
+            return false;
         }
-        out.push(line);
-    }
-    let mut joined = out.join("\n");
-    if !joined.is_empty() {
-        joined.push('\n');
-    }
-    joined
+        if part == "*" {
+            return true;
+        }
+        if let Some(step) = part.strip_prefix("*/") {
+            let Ok(step) = step.parse::<i8>() else {
+                return false;
+            };
+            return step > 0
+                && values
+                    .iter()
+                    .any(|value| (*value - min).rem_euclid(step) == 0);
+        }
+        if let Some((start, end)) = part.split_once('-') {
+            let Some(start) = parse_cron_value(start, min, max) else {
+                return false;
+            };
+            let Some(end) = parse_cron_value(end, min, max) else {
+                return false;
+            };
+            return start <= end && values.iter().any(|value| start <= *value && *value <= end);
+        }
+        parse_cron_value(part, min, max).is_some_and(|parsed| values.contains(&parsed))
+    })
 }
 
-/// The rimz-owned blocks currently in a crontab, in file order.
-pub fn list_crontab(existing: &str) -> Vec<CronEntry> {
-    let mut entries = Vec::new();
-    let mut lines = existing.lines();
-    while let Some(line) = lines.next() {
-        if let Some(tagged) = line.strip_prefix(CRON_TAG_PREFIX)
-            && let Some(command) = lines.next()
-        {
-            entries.push(CronEntry {
-                name: tagged.trim().to_owned(),
-                line: command.to_owned(),
-            });
-        }
+fn parse_cron_value(raw: &str, min: i8, max: i8) -> Option<i8> {
+    let value: i8 = raw.trim().parse().ok()?;
+    (min..=max).contains(&value).then_some(value)
+}
+
+fn cron_dow_matches(expr: &str, day: jiff::civil::Weekday) -> bool {
+    match day {
+        jiff::civil::Weekday::Sunday => cron_field_matches_any(expr, &[0, 7], 0, 7),
+        jiff::civil::Weekday::Monday => cron_field_matches(expr, 1, 0, 7),
+        jiff::civil::Weekday::Tuesday => cron_field_matches(expr, 2, 0, 7),
+        jiff::civil::Weekday::Wednesday => cron_field_matches(expr, 3, 0, 7),
+        jiff::civil::Weekday::Thursday => cron_field_matches(expr, 4, 0, 7),
+        jiff::civil::Weekday::Friday => cron_field_matches(expr, 5, 0, 7),
+        jiff::civil::Weekday::Saturday => cron_field_matches(expr, 6, 0, 7),
     }
-    entries
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jiff::civil::date;
     use std::path::PathBuf;
 
     fn entry(
@@ -653,18 +499,13 @@ mod tests {
     }
 
     #[test]
-    fn weekdays_map_to_cron_and_systemd() {
+    fn weekdays_describe_in_mon_to_sun_order() {
         let parsed = parse_schedule(
             "morning",
             &entry(Some("07:30"), Some("weekdays"), None, None, false),
         )
         .expect("parse");
-        let schedule = parsed.schedule;
-        assert_eq!(cron_expr(&schedule), "30 7 * * 1,2,3,4,5");
-        assert_eq!(
-            systemd_oncalendar("morning", &schedule).expect("oncalendar"),
-            "Mon,Tue,Wed,Thu,Fri 07:30:00"
-        );
+        assert_eq!(parsed.describe(), "07:30 Mon,Tue,Wed,Thu,Fri");
     }
 
     #[test]
@@ -677,11 +518,7 @@ mod tests {
                 .expect("parse")
                 .schedule;
         assert_eq!(from_none, from_daily);
-        assert_eq!(cron_expr(&from_none), "0 7 * * *");
-        assert_eq!(
-            systemd_oncalendar("m", &from_none).expect("oncalendar"),
-            "*-*-* 07:00:00"
-        );
+        assert_eq!(from_none.describe(), "07:00 every day");
     }
 
     #[test]
@@ -692,60 +529,45 @@ mod tests {
         )
         .expect("parse")
         .schedule;
-        assert_eq!(cron_expr(&list), "5 6 * * 1,3,5");
+        assert_eq!(
+            list,
+            Schedule::Calendar(CalendarSpec {
+                minute: 5,
+                hour: 6,
+                weekdays: vec![Weekday::Mon, Weekday::Wed, Weekday::Fri],
+            })
+        );
         let range = parse_schedule(
             "m",
             &entry(Some("06:00"), Some("mon-fri"), None, None, false),
         )
         .expect("parse")
         .schedule;
-        assert_eq!(cron_expr(&range), "0 6 * * 1,2,3,4,5");
+        assert_eq!(range.describe(), "06:00 Mon,Tue,Wed,Thu,Fri");
         let weekends = parse_schedule(
             "m",
             &entry(Some("09:00"), Some("weekends"), None, None, false),
         )
         .expect("parse")
         .schedule;
-        assert_eq!(cron_expr(&weekends), "0 9 * * 0,6");
+        assert_eq!(weekends.describe(), "09:00 Sat,Sun");
     }
 
     #[test]
-    fn raw_cron_passes_through_cron_and_is_rejected_by_systemd() {
+    fn raw_cron_passes_through() {
         let schedule = parse_schedule("m", &entry(None, None, None, Some("0 7 * * 1-5"), false))
             .expect("parse")
             .schedule;
-        assert_eq!(cron_expr(&schedule), "0 7 * * 1-5");
-        assert_eq!(
-            systemd_oncalendar("m", &schedule),
-            Err(ScheduleErr::RawCronOnSystemd {
-                name: "m".to_owned()
-            })
-        );
+        assert_eq!(schedule, Schedule::RawCron("0 7 * * 1-5".to_owned()));
+        assert_eq!(schedule.describe(), "cron `0 7 * * 1-5`");
     }
 
     #[test]
-    fn intervals_map_to_cron_and_systemd() {
-        for (raw, cron) in [
-            ("5m", "*/5 * * * *"),
-            ("15m", "*/15 * * * *"),
-            ("30m", "*/30 * * * *"),
-            ("1h", "0 */1 * * *"),
-            ("2h", "0 */2 * * *"),
-        ] {
-            let schedule = parse_schedule("m", &entry(None, None, Some(raw), None, false))
-                .expect("parse")
-                .schedule;
-            assert_eq!(cron_expr(&schedule), cron, "{raw}");
-        }
-
-        let schedule = parse_schedule("m", &entry(None, None, Some("30m"), None, false))
+    fn intervals_describe_exact_duration() {
+        let schedule = parse_schedule("m", &entry(None, None, Some("7m"), None, false))
             .expect("parse")
             .schedule;
-        let trigger = systemd_trigger("m", &schedule).expect("trigger");
-        assert_eq!(
-            render_systemd_timer(&trigger, "Rimz loop: m"),
-            "[Unit]\nDescription=Rimz loop: m timer\n\n[Timer]\nOnBootSec=30min\nOnUnitActiveSec=30min\n\n[Install]\nWantedBy=timers.target\n"
-        );
+        assert_eq!(schedule.describe(), "every 7m");
     }
 
     #[test]
@@ -753,7 +575,6 @@ mod tests {
         let schedule = parse_schedule("m", &entry(None, None, Some("1s"), None, false))
             .expect("parse")
             .schedule;
-        assert_eq!(cron_expr(&schedule), "*/1 * * * *");
         assert_eq!(schedule.describe(), "every 1m");
     }
 
@@ -835,49 +656,73 @@ mod tests {
         assert!(validate_name("bad/name").is_err());
     }
 
-    #[test]
-    fn run_command_wraps_a_login_shell() {
-        let cmd = run_command(Path::new("/usr/local/bin/rimz"), "/bin/zsh", "morning");
-        assert_eq!(
-            cmd,
-            "/bin/zsh -lc 'exec '\\''/usr/local/bin/rimz'\\'' loop run morning'"
-        );
+    fn zdt(year: i16, month: i8, day: i8, hour: i8, minute: i8, second: i8) -> Zoned {
+        date(year, month, day)
+            .at(hour, minute, second, 0)
+            .in_tz("UTC")
+            .expect("zoned test time")
+    }
+
+    fn seconds_before(ts: Timestamp, seconds: i64) -> Timestamp {
+        Timestamp::from_second(ts.as_second() - seconds).expect("shifted timestamp")
     }
 
     #[test]
-    fn crontab_splice_is_idempotent_and_preserves_foreign_lines() {
-        let existing = "# my own job\n0 0 * * * backup.sh\n";
-        let line = "0 7 * * 1-5 /bin/sh -lc 'rimz loop run morning'";
-        let once = splice_crontab(existing, "morning", line);
-        let twice = splice_crontab(&once, "morning", line);
-        assert_eq!(once, twice, "re-splicing the same name leaves one block");
-        assert!(once.contains("# my own job"));
-        assert!(once.contains("0 0 * * * backup.sh"));
-        assert_eq!(
-            list_crontab(&once),
-            vec![CronEntry {
-                name: "morning".to_owned(),
-                line: line.to_owned(),
-            }]
-        );
+    fn interval_due_at_exact_boundary_only() {
+        let schedule = Schedule::Interval(IntervalSpec::new(15));
+        let now = zdt(2026, 6, 24, 8, 15, 0);
+        assert!(!schedule.due(seconds_before(now.timestamp(), 899), &now));
+        assert!(schedule.due(seconds_before(now.timestamp(), 900), &now));
     }
 
     #[test]
-    fn crontab_reclaim_removes_only_rimz_blocks() {
-        let base = "0 0 * * * backup.sh\n";
-        let with_two = splice_crontab(&splice_crontab(base, "a", "LA"), "b", "LB");
-        assert_eq!(list_crontab(&with_two).len(), 2);
+    fn calendar_fires_once_per_matching_day() {
+        let schedule = parse_schedule("m", &entry(Some("07:30"), Some("wed"), None, None, false))
+            .expect("parse")
+            .schedule;
+        let now = zdt(2026, 6, 24, 7, 30, 0);
+        let occurrence = now.timestamp();
+        assert!(schedule.due(seconds_before(occurrence, 60), &now));
+        assert!(!schedule.due(occurrence, &now));
+    }
 
-        let without_a = reclaim_crontab(&with_two, Some("a"));
-        let names: Vec<String> = list_crontab(&without_a)
-            .into_iter()
-            .map(|e| e.name)
-            .collect();
-        assert_eq!(names, vec!["b".to_owned()]);
-        assert!(without_a.contains("0 0 * * * backup.sh"));
+    #[test]
+    fn calendar_waits_for_matching_weekday_and_time() {
+        let weekday_schedule =
+            parse_schedule("m", &entry(Some("07:30"), Some("mon"), None, None, false))
+                .expect("parse")
+                .schedule;
+        let wednesday = zdt(2026, 6, 24, 7, 30, 0);
+        assert!(!weekday_schedule.due(seconds_before(wednesday.timestamp(), 86_400), &wednesday));
 
-        let cleared = reclaim_crontab(&with_two, None);
-        assert!(list_crontab(&cleared).is_empty());
-        assert_eq!(cleared, "0 0 * * * backup.sh\n");
+        let time_schedule = parse_schedule("m", &entry(Some("07:30"), None, None, None, false))
+            .expect("parse")
+            .schedule;
+        let before_time = zdt(2026, 6, 24, 7, 29, 59);
+        assert!(!time_schedule.due(
+            seconds_before(before_time.timestamp(), 86_400),
+            &before_time
+        ));
+    }
+
+    #[test]
+    fn cron_interval_matches_and_suppresses_same_minute() {
+        let schedule = Schedule::RawCron("*/15 * * * *".to_owned());
+        let now = zdt(2026, 6, 24, 8, 30, 12);
+        assert!(schedule.due(seconds_before(now.timestamp(), 60), &now));
+        assert!(!schedule.due(seconds_before(now.timestamp(), 1), &now));
+
+        let off_minute = zdt(2026, 6, 24, 8, 31, 0);
+        assert!(!schedule.due(seconds_before(off_minute.timestamp(), 60), &off_minute));
+    }
+
+    #[test]
+    fn cron_weekday_gates() {
+        let schedule = Schedule::RawCron("0 7 * * 1-5".to_owned());
+        let wednesday = zdt(2026, 6, 24, 7, 0, 0);
+        assert!(schedule.due(seconds_before(wednesday.timestamp(), 60), &wednesday));
+
+        let saturday = zdt(2026, 6, 27, 7, 0, 0);
+        assert!(!schedule.due(seconds_before(saturday.timestamp(), 60), &saturday));
     }
 }

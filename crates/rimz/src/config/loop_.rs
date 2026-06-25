@@ -11,8 +11,8 @@ pub struct LoopConfig {
     pub tasks: Tasks,
 }
 
-/// Named loop tasks, ordered by name. A map keeps `rimz loop
-/// add/remove/install` addressing one task by a stable name.
+/// Named loop tasks, ordered by name. A map keeps `rimz loop add/remove/run`
+/// addressing one task by a stable name.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
 pub struct Tasks(pub BTreeMap<String, TaskEntry>);

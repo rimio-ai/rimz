@@ -44,6 +44,7 @@ mod gate;
 mod health;
 mod input;
 mod lifecycle;
+mod loop_fire;
 mod loop_state;
 mod notify;
 mod reload;

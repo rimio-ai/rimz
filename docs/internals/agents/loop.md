@@ -2,20 +2,30 @@
 
 > See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. Loop tasks ride the supervised-run path in [harness.md](./harness.md#supervised-runs), the queue path in [harness.md](./harness.md#talk-and-queue), and the budget-window model in [provider.md](./provider.md).
 
-Loop tasks run one scheduled wake-up on this machine's OS scheduler. Rimz keeps no daemon; systemd user timers or cron keep time and fire `rimz loop run <name>`, which resolves the recorded project `root` and then uses exactly one configured mode: `spec` spawns one transient supervised pane, while `bind` delivers a prompt to one living agent instance.
+Loop tasks run scheduled wake-ups from the room's elected sidebar elder. While a room for the task's project is open, the elder's data tick evaluates configured tasks and fires `rimz loop run <name>`, which resolves the recorded project `root` and then uses exactly one configured mode: `spec` spawns one transient supervised pane, while `bind` delivers a prompt to one living agent instance.
 
 In `spec` mode, each task names exactly one agent cell: a built-in kind, a profile, or an adapter-supported virtual cell such as `claude-auto`, `codex-yolo`, or `claude-ping`. Team specs, multi-cell layouts, and command cells are rejected at add time because a scheduled task owns one supervised pane.
 
 ## Schedule forms
 
-Rimz stores schedule intent in per-machine `agents.toml` and installs scheduler artifacts after a consent preview.
+Rimz stores schedule intent in per-machine `agents.toml`. `rimz loop add` validates the task, runs hook preflight, and makes it live immediately while a room for the task's project is open.
 
 - **Calendar:** `at = "07:00"` with optional `days = "weekdays"`, `daily`, `weekends`, `mon-fri`, or `mon,wed,fri`.
-- **Interval:** `every = "15m"`, `2h`, or `1d`; cron uses clean divisor expressions and systemd uses `OnBootSec` plus `OnUnitActiveSec`.
-- **Raw cron:** `cron = "*/15 * * * *"`; cron backend only.
+- **Interval:** `every = "15m"`, `2h`, or `1d`; the elder fires at the exact interval measured from the last arm or fire.
+- **Raw cron:** `cron = "*/15 * * * *"` uses the in-process five-field matcher for minute, hour, day-of-month, month, and day-of-week.
 - **One-shot:** `once = true` with a calendar or cron schedule. `rimz loop add --in 30m` resolves to a local `at` time and implies `once`.
 
-One-shot tasks remove their scheduler artifact and config row immediately before the supervised run. The run exits the process with the agent status, so cleanup cannot happen afterward. A one-shot removed pre-fire that then fails to launch is not retried.
+One-shot tasks remove their config row immediately before the supervised run or queue delivery. The run exits the process with the agent status, so cleanup cannot happen afterward. A one-shot removed pre-fire that then fails to launch is not retried.
+
+## Elder firing
+
+The elder keeps a per-room `loop-fire.json` map of task name to last-fire `Timestamp` under the workspace runtime dir. First sight arms a task by recording `now` and does not fire; the next matching occurrence fires. A fire records `now` before spawning the detached helper, which guards against duplicate pane spawns on sub-interval ticks.
+
+Each room fires only tasks whose stored absolute `root` maps to its `WorkspaceId`. The root is canonicalized at add time, so workspace ownership is a pure hash comparison and two open rooms do not fire each other's tasks.
+
+The elder spawns `rimz loop run <name>` with fresh null stdio. The hidden runner resolves the task's recorded root, applies the same preflight as an immediate run, and then either launches the supervised pane or queues the prompt to the pinned session.
+
+Self-paced loops use ordinary one-shots. The agent schedules its next wake with `--in <delay>` at the end of the current wake; the config row is removed before delivery, and the agent creates the next one only when it still has work. This keeps the state visible in `rimz loop list`.
 
 ## Delivering to a living instance
 
@@ -23,22 +33,7 @@ Bind-mode pins a schedule to one exact agent session. `rimz loop add <name> --bi
 
 On fire, `loop run` resolves the recorded `root`, checks that the root agent session still exists, and sends the prompt through the same queue path as `rimz queue`. An idle agent receives the text immediately; a running agent parks the message for the next `done` turn boundary; a missing session is skipped and the schedule is removed because that exact conversation cannot return.
 
-`rimz gc` repeats the same liveness check for bind-mode tasks and reaps schedules whose pinned session has left the rollup. This is a safety sweep for timers that did not get a successful fire after the agent exited.
-
-Self-paced loops use ordinary one-shots. The agent schedules its next wake with `--in <delay>` at the end of the current wake; the timer and config row are removed before delivery, and the agent creates the next one only when it still has work. This churns OS scheduler artifacts once per wake, which keeps the scheduler simple and the state visible in `rimz loop list`.
-
-## Scheduler artifacts
-
-Two backends are supported, selected by `--scheduler` (default auto: systemd when its user manager answers, else cron):
-
-- a **systemd user timer** under `~/.config/systemd/user/rimz-loop-<name>.{timer,service}`, enabled with `systemctl --user enable --now`. Enable lingering (`loginctl enable-linger`) so timers fire while you are logged out.
-- the **user crontab**, where each entry is a `# rimz-loop:<name>` fence plus its command line, spliced in idempotently and reclaimed exactly so foreign lines are untouched.
-
-Both run the command through your login shell (`$SHELL -lc`) so the mux and agent binaries resolve on the interactive PATH, with the absolute `rimz` path baked in.
-
-## Carrying the workspace
-
-A scheduler process runs outside any pane, so it has no mux identity pin. Each entry records the absolute project `root` at add time; `loop run` resolves the workspace from that root deterministically, with no pin to read ([ARCHITECTURE.md](../../../ARCHITECTURE.md)).
+`rimz gc` repeats the same liveness check for bind-mode tasks and reaps schedules whose pinned session has left the rollup. This is a safety sweep for tasks that did not get a successful fire after the agent exited.
 
 ## Window-priming pings
 
@@ -48,6 +43,6 @@ The window is account-scoped, shared by every session of a provider kind ([provi
 
 ## Config and code
 
-Loop tasks live in per-machine `[agents.loop.tasks.*]`, outside the trust hash, and each entry runs the rimz-owned `loop run` rather than arbitrary shell. The config shape is in [configuration.md → Loop tasks](../../reference/configuration.md#loop-tasks); the `rimz loop add` / `install` / `uninstall` / `remove` / `list` commands are in [agents.md → Schedule turns with loop](../../reference/cli/agents.md#schedule-turns-with-loop).
+Loop tasks live in per-machine `[agents.loop.tasks.*]`, outside the trust hash, and each entry runs the rimz-owned `loop run` rather than arbitrary shell. The config shape is in [configuration.md → Loop tasks](../../reference/configuration.md#loop-tasks); the `rimz loop add` / `remove` / `list` commands are in [agents.md → Schedule turns with loop](../../reference/cli/agents.md#schedule-turns-with-loop).
 
-The pure schedule parsing, artifact rendering, and crontab reclaim live in `schedule.rs`; the CLI handler in `cli/loop_cmd.rs` owns config editing and OS scheduler glue.
+`schedule.rs` owns pure parsing, descriptions, and due evaluation. `cli/loop_cmd.rs` owns config editing plus the `list` and hidden `run` surfaces. `sidebar_pane/app/loop_fire.rs` owns elder firing and the `loop-fire.json` state.

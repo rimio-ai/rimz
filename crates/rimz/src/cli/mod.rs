@@ -560,7 +560,7 @@ enum Subcmd {
     Worktree(worktree::WorktreeArgs),
     /// Launch agent tabs, optionally in Rimz-owned worktrees.
     Agents(Box<agents_cmd::AgentsArgs>),
-    /// Schedule supervised agent turns on this machine's OS scheduler.
+    /// Schedule supervised agent turns from the room's sidebar elder.
     #[command(name = "loop")]
     Loop(loop_cmd::LoopArgs),
     /// Reload running sidebars in place (pick up a freshly-installed build).
