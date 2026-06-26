@@ -85,7 +85,7 @@ A pane's group is decided by the room's **group roots**, enumerated by the [root
 
 Pane creation order replaces the earlier spawn key (`pane_process_start` with a `registered_at` fallback): that key read a different clock for each agent — Codex's process start against Claude's hook registration — and inverted co-launched panes whenever the two sources disagreed. The pane ordinal is one signal both agents share and matches what you see in the mux, so the sidebar order tracks the pane order until you reorder the panes yourself.
 
-**The cap protects visible work.** Each worktree caps only its idle/process tail, showing up to `WORKTREE_ROW_CAP` rows from that tail with a dim `+K more` for the hidden remainder. Active, blocked, paused, finished, and focused rows are exempt and always shown, so a row that may need unread convergence or a direct jump target never disappears behind the count. The inactive idle and process tail trims first — bare process rows rank last and go first — while inactive success rows stay visible for unread convergence.
+**The cap protects visible work.** Each worktree caps only its idle/process tail, showing up to `WORKTREE_ROW_CAP` rows from that tail with a dim `+K more` for the hidden remainder. Active, blocked, paused, finished, and focused rows are exempt and always shown, so a row that may need unread convergence or a direct jump target never disappears behind the count. A live process row also stays visible when it is the group's only live member, keeping the group in the live band while the ordinary inactive idle tail trims behind `+K more`. Inactive success rows stay visible for unread convergence.
 
 ## Composing the frame
 

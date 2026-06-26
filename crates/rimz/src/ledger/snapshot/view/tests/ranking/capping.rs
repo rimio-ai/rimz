@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::ATTENTION_AGE_CEILING_SECS;
 
 #[test]
 fn calm_tail_cap_never_hides_attention_or_focused_rows() {
@@ -116,6 +117,54 @@ fn cap_keeps_sticky_unread_idle_rows() {
     assert!(
         snapshot.worktree_groups[0].hidden_count > 0,
         "the ordinary idle tail still trims behind +K more"
+    );
+}
+
+#[test]
+fn cap_keeps_process_liveness_anchor_for_inactive_agent_groups() {
+    let inactive = ATTENTION_AGE_CEILING_SECS + 1;
+    let mut agents = Vec::new();
+    let mut panes = Vec::new();
+    for (label, worktree) in [("a", "/repo/a"), ("b", "/repo/b")] {
+        for i in 0..7 {
+            let id = format!("{label}-{i}");
+            let pane_id = format!("%{label}{i}");
+            agents.push(
+                agent_in(&id, worktree, AgentStatus::Idle, 1_000 + i)
+                    .active_ago(inactive)
+                    .in_pane(&pane_id),
+            );
+            panes.push(pane(&pane_id, "claude", worktree));
+        }
+    }
+    agents.push(agent_in("fresh-c", "/repo/c", AgentStatus::Idle, 3_000).in_pane("%c0"));
+    panes.push(pane("%c0", "claude", "/repo/c"));
+    panes.push(pane("%99", "zsh", "/repo/b"));
+
+    let snapshot = room(Vec::new(), agents).with_live_panes(panes, None);
+    let groups = snapshot
+        .worktree_groups
+        .iter()
+        .map(|group| group.label.clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        groups,
+        vec!["c", "b", "a"],
+        "a capped live process keeps its mixed group above inactive-only groups"
+    );
+    let mixed = snapshot
+        .worktree_groups
+        .iter()
+        .find(|group| group.label == "b")
+        .expect("group b present");
+    assert!(
+        mixed.rows.iter().any(|row| row.id == "tmux:%99"),
+        "the process row remains visible as the group's live anchor"
+    );
+    assert!(
+        mixed.hidden_count > 0,
+        "ordinary inactive idle rows still trim behind +K more"
     );
 }
 

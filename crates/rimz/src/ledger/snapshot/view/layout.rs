@@ -233,9 +233,23 @@ pub(super) fn sort_groups_for_presentation(groups: &mut [SidebarWorktreeGroup]) 
 /// rows, non-idle agent rows, and the focused pane. Inactive success rows still
 /// stay visible so a renderer never drops an unread stamp before receipts
 /// converge; sticky unread idle rows stay visible until the human reads them,
-/// while ordinary inactive idle rows are the first calm rows hidden behind `+K
+/// and the first live process row stays visible when it is the group's only
+/// live member, so capping never turns a live shell's group into an inactive
+/// one. Ordinary inactive idle rows are the first calm rows hidden behind `+K
 /// more`.
 pub(super) fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
+    let process_is_only_live_member = rows.iter().map(row_band).min() == Some(1)
+        && rows
+            .iter()
+            .filter(|row| row_band(row) == 1)
+            .all(SidebarRow::is_process);
+    let liveness_process_id = if process_is_only_live_member {
+        rows.iter()
+            .find(|row| row.is_process() && row_band(row) == 1)
+            .map(|row| row.id.clone())
+    } else {
+        None
+    };
     let mut visible = Vec::new();
     for row in rows {
         if row.unread
@@ -243,6 +257,7 @@ pub(super) fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
                 .status()
                 .is_some_and(|status| status != AgentStatus::Idle)
             || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
+            || liveness_process_id.as_deref() == Some(row.id.as_str())
             || visible.len() < WORKTREE_ROW_CAP
         {
             visible.push(row);
