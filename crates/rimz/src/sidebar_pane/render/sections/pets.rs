@@ -43,6 +43,17 @@ pub(super) fn dashboard_pet_grid_lines(
     theme: &Theme,
     width: usize,
 ) -> Vec<Line<'static>> {
+    if let Some(pixel) = theme
+        .pet_body_enabled()
+        .then(|| pet.and_then(|view| view.pixel.as_ref()))
+        .flatten()
+    {
+        let mut lines = (0..pixel.size.rows)
+            .map(|_| Line::from(" ".repeat(width)))
+            .collect::<Vec<_>>();
+        lines.push(Line::from(" ".repeat(width)));
+        return lines;
+    }
     let Some(grid) = theme
         .pet_body_enabled()
         .then(|| pet.and_then(|view| view.grid.as_ref()))
@@ -50,7 +61,9 @@ pub(super) fn dashboard_pet_grid_lines(
     else {
         return Vec::new();
     };
-    grid_lines(grid, width)
+    let mut lines = grid_lines(grid, width);
+    lines.push(Line::from(" ".repeat(width)));
+    lines
 }
 
 fn pet_caption(pet: Option<&PetView>) -> Option<&str> {

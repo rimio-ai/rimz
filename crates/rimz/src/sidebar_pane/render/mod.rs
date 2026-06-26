@@ -206,6 +206,11 @@ fn draw_into(
     ui.line_map = composed.line_map;
     ui.tab_hits = composed.tab_hits;
     ui.make_up_hits = composed.make_up_hits;
+    ui.pet_pixel_rect = composed.pet_pixel_rect.map(|mut rect| {
+        rect.x = rect.x.saturating_add(area.x);
+        rect.y = rect.y.saturating_add(area.y);
+        rect
+    });
     ui.scrollbar
         .observe(composed.scroll_offset, ui.animation_phase);
     ui.scroll_offset = composed.scroll_offset;
@@ -454,16 +459,6 @@ pub(crate) fn active_dashboard_tab(snapshot: &SidebarSnapshot, ui: &UiState) -> 
         return Some(kind);
     }
     panels.first().map(|panel| panel.kind.clone())
-}
-
-pub(crate) fn active_dashboard_block_rows(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<u16> {
-    let active_kind = active_dashboard_tab(snapshot, ui)?;
-    snapshot
-        .providers
-        .iter()
-        .find(|panel| panel.kind == active_kind)
-        .map(sections::provider_dashboard_block_rows)
-        .and_then(|rows| u16::try_from(rows).ok())
 }
 
 pub(crate) fn dashboard_tabs(snapshot: &SidebarSnapshot) -> Vec<String> {

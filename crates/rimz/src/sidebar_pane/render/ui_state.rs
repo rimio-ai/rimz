@@ -3,6 +3,7 @@ use crate::ids::PaneId;
 use crate::schema::diag::GateRule;
 use crate::sidebar_pane::pets::PetView;
 use jiff::Timestamp;
+use ratatui::layout::Rect;
 
 use super::sections::{MakeUpHit, ProviderTabHit};
 use super::{CostRolls, EffectState, ScrollbarFade, TallyAnim};
@@ -101,6 +102,10 @@ pub struct UiState {
     /// snapshot and the renderer-local asset cache before drawing. Render reads
     /// this data only; it never fetches, decodes, or slices pet assets.
     pub(crate) pet: Option<PetView>,
+    /// Absolute screen rect of the pixel pet placeholder column in the most
+    /// recently drawn frame. `None` when cell art, `NO_COLOR`, loading, disabled,
+    /// or too-narrow geometry owns the pet path.
+    pub(crate) pet_pixel_rect: Option<Rect>,
     /// Hit-test map of the dashboard tab rail in the most recently drawn
     /// frame: the absolute screen line and column range of each tab's
     /// cap-to-cap footprint, written as a byproduct of every draw like

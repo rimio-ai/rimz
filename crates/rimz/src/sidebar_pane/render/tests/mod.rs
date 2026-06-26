@@ -16,8 +16,8 @@ use serde_json::json;
 use std::time::Duration;
 
 use super::sections::{
-    dashboard_panel_lines, fleet_header_lines, fleet_ledger_lines, provider_dashboard_block_rows,
-    provider_panel_lines, worktree_group_lines,
+    dashboard_panel_lines, fleet_header_lines, fleet_ledger_lines, provider_panel_lines,
+    worktree_group_lines,
 };
 
 mod agent_card;
@@ -433,7 +433,7 @@ fn bottom_chrome_texts_with_ui(
     ui: &UiState,
 ) -> (Vec<String>, Vec<ProviderTabHit>) {
     let theme = Theme::fixed(true);
-    let (lines, hits) = build_bottom_chrome(snapshot, alert, &theme, 40, ui);
+    let (lines, hits, _) = build_bottom_chrome(snapshot, alert, &theme, 40, ui);
     (line_texts(&lines), hits)
 }
 

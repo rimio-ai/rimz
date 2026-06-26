@@ -37,6 +37,8 @@ const LIST_PANES_JSON_RETRY_DELAY: Duration = Duration::from_millis(50);
 const ACTION_ATTEMPTS: u32 = 3;
 const ACTION_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 const ACTION_CONFIRM_STEP: Duration = Duration::from_millis(50);
+const CLIENT_ATTACH_CONFIRM_WINDOW: Duration = Duration::from_millis(750);
+const CLIENT_ATTACH_PROBE_STEP: Duration = Duration::from_millis(100);
 const DUMP_LAYOUT_ATTEMPTS: u32 = 10;
 const DUMP_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
@@ -234,6 +236,10 @@ impl AttachedClient {
         // the server captures the spawning env for every pane it creates.
         cmd.scrub_session_env();
         cmd.env("XDG_RUNTIME_DIR", xdg);
+        cmd.env("XDG_STATE_HOME", xdg);
+        cmd.env("XDG_CONFIG_HOME", xdg);
+        cmd.env("XDG_CACHE_HOME", xdg);
+        cmd.env("HOME", xdg);
         cmd.args(["attach", name]);
         let child = pair.slave.spawn_command(cmd).expect("spawn zellij attach");
         drop(pair.slave);
@@ -1097,28 +1103,131 @@ fn reconcile_defers_the_add_on_a_detached_session() {
     );
 }
 
-/// Poll until an attached client registers on `session` — `list-clients`
-/// reports a row past the header. A pane action that lands while the client is
-/// still mid-startup gets its mount dropped exactly like on a detached
-/// session, so tests that mount panes against a PTY client gate on this first
-/// (the same attachment signal reconcile's defer gate reads).
+/// Poll until an attached client registers on `session` and stays present
+/// across the same confirmation window the Zellij reconcile gate uses. A pane
+/// action that lands while the client is still mid-startup gets its mount
+/// dropped exactly like on a detached session, so tests that mount panes
+/// against a PTY client gate on this first.
 fn wait_for_attached_client(xdg: &Path, session: &str) {
     let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let mut last_probes = Vec::new();
+    let mut last_error = String::new();
     loop {
-        let attached = scoped_zellij(xdg)
-            .args(["--session", session, "action", "list-clients"])
-            .bounded_output()
-            .is_ok_and(|out| {
-                out.status.success() && String::from_utf8_lossy(&out.stdout).lines().count() > 1
-            });
-        if attached {
-            return;
+        match stable_attached_client_probes(xdg, session) {
+            Ok(probes) => {
+                let attached = stable_client_present(&probes);
+                last_probes = probes;
+                if attached {
+                    return;
+                }
+            }
+            Err(err) => last_error = err,
         }
         if Instant::now() > deadline {
-            panic!("no client attached to {session}");
+            panic!(
+                "no stable client attached to {session}; last probes: {last_probes:?}; \
+                 last error: {last_error}",
+            );
         }
         std::thread::sleep(Duration::from_millis(150));
     }
+}
+
+fn stable_attached_client_probes(
+    xdg: &Path,
+    session: &str,
+) -> std::result::Result<Vec<BTreeSet<u32>>, String> {
+    let mut probes = vec![focused_terminal_client_ids(xdg, session)?];
+    if !stable_client_present(&probes) {
+        return Ok(probes);
+    }
+
+    let deadline = Instant::now() + CLIENT_ATTACH_CONFIRM_WINDOW;
+    while Instant::now() < deadline {
+        std::thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(CLIENT_ATTACH_PROBE_STEP),
+        );
+        probes.push(focused_terminal_client_ids(xdg, session)?);
+        if !stable_client_present(&probes) {
+            return Ok(probes);
+        }
+    }
+    Ok(probes)
+}
+
+fn focused_terminal_client_ids(
+    xdg: &Path,
+    session: &str,
+) -> std::result::Result<BTreeSet<u32>, String> {
+    let output = scoped_zellij(xdg)
+        .args(["--session", session, "action", "list-clients"])
+        .bounded_output()
+        .map_err(|err| format!("list-clients failed to run: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "list-clients exited with {}; stderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        ));
+    }
+    Ok(parse_focused_terminal_client_ids_for_test(&output.stdout))
+}
+
+fn parse_focused_terminal_client_ids_for_test(stdout: &[u8]) -> BTreeSet<u32> {
+    let mut clients = BTreeSet::new();
+    for line in String::from_utf8_lossy(stdout).lines() {
+        let clean = strip_ansi_for_test(line);
+        let mut cols = clean.split_whitespace();
+        let Some(first) = cols.next() else {
+            continue;
+        };
+        let Some(raw_pane) = cols.next() else {
+            continue;
+        };
+        if first == "CLIENT_ID" || raw_pane == "ZELLIJ_PANE_ID" {
+            continue;
+        }
+        if !raw_pane.starts_with("terminal_") {
+            continue;
+        }
+        if let Ok(client) = first.parse::<u32>() {
+            clients.insert(client);
+        }
+    }
+    clients
+}
+
+fn strip_ansi_for_test(line: &str) -> String {
+    let mut clean = String::new();
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for code in chars.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+        } else {
+            clean.push(ch);
+        }
+    }
+    clean
+}
+
+fn stable_client_present(probes: &[BTreeSet<u32>]) -> bool {
+    let Some((first, rest)) = probes.split_first() else {
+        return false;
+    };
+    if first.is_empty() {
+        return false;
+    }
+    let common = rest.iter().fold(first.clone(), |common, ids| {
+        common.intersection(ids).copied().collect()
+    });
+    !common.is_empty()
 }
 
 /// The raw `list-panes` JSON object for the session's `rimz-sidebar` pane.
@@ -1157,13 +1266,34 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     };
     let cwd = TempDir::new().expect("cwd tempdir");
 
-    // A background session with one long-lived working pane.
-    let layout = cwd.path().join("plain.kdl");
+    // A background session with a deterministic right-side sidebar, matching the
+    // shape a raced live add used to leave behind.
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let stub_kdl = serde_json::to_string(&stub.to_string_lossy()).expect("stub kdl string");
+    let cwd_kdl = serde_json::to_string(&cwd.path().to_string_lossy()).expect("cwd kdl string");
+    let layout = cwd.path().join("right-sidebar.kdl");
     std::fs::write(
         &layout,
-        "layout {\n    pane command=\"sleep\" {\n        args \"600\"\n    }\n}\n",
+        format!(
+            r#"layout {{
+    pane split_direction="vertical" {{
+        pane cwd={cwd_kdl} {{
+            command "sleep"
+            args "600"
+            start_suspended false
+            close_on_exit true
+        }}
+        pane name="rimz-sidebar" cwd={cwd_kdl} {{
+            command {stub_kdl}
+            start_suspended false
+            close_on_exit true
+        }}
+    }}
+}}
+"#,
+        ),
     )
-    .expect("write plain layout");
+    .expect("write right-sidebar layout");
     let created = scoped_zellij(xdg_dir.path())
         .args(["attach", "--create-background", &name, "options"])
         .arg("--default-cwd")
@@ -1171,41 +1301,20 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
         .arg("--default-layout")
         .arg(&layout)
         .bounded_status()
-        .expect("create plain session");
+        .expect("create right-sidebar session");
     assert!(created.success(), "create-background failed for {name}");
-    wait_for_pane_count(xdg_dir.path(), &name, 1);
+    let initial = wait_for_pane_count(xdg_dir.path(), &name, 2);
+    assert_eq!(
+        initial.len(),
+        2,
+        "layout should birth a sidebar and one work pane: {initial:?}",
+    );
 
     // A wide client: the 50% mis-mount must exceed the `max_cols` cap (72) to
     // trip the tolerant width trigger — at 240 columns it lands at ~120.
     let _client = AttachedClient::attach(xdg_dir.path(), &name, 240, 60);
     let xdg = xdg_dir.path().to_path_buf();
     wait_for_attached_client(&xdg, &name);
-    let (_stub_dir, stub) = sidebar_command_stub();
-
-    // Recreate the mis-mounted shape against the attached client: a right-side
-    // 50% pane titled like the sidebar, exactly where a raced add left it.
-    let spawned = scoped_zellij(&xdg)
-        .args([
-            "--session",
-            &name,
-            "action",
-            "new-pane",
-            "--direction",
-            "right",
-            "--name",
-            "rimz-sidebar",
-            "--",
-        ])
-        .arg(&stub)
-        .bounded_output()
-        .expect("new-pane");
-    assert!(
-        spawned.status.success(),
-        "new-pane failed: {}",
-        String::from_utf8_lossy(&spawned.stderr),
-    );
-    let panes = wait_for_pane_count(&xdg, &name, 2);
-    assert!(panes.len() >= 2, "sidebar pane should mount: {panes:?}");
     let before = raw_sidebar_pane(&xdg, &name);
     let sidebar_id = before.get("id").and_then(|value| value.as_u64()).unwrap();
     assert!(
@@ -1262,12 +1371,40 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
     };
     let cwd = TempDir::new().expect("cwd tempdir");
 
-    let layout = cwd.path().join("plain.kdl");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let stub_kdl = serde_json::to_string(&stub.to_string_lossy()).expect("stub kdl string");
+    let cwd_kdl = serde_json::to_string(&cwd.path().to_string_lossy()).expect("cwd kdl string");
+    let layout = cwd.path().join("nested.kdl");
     std::fs::write(
         &layout,
-        "layout {\n    pane command=\"sleep\" {\n        args \"600\"\n    }\n}\n",
+        format!(
+            r#"layout {{
+    pane split_direction="horizontal" {{
+        pane split_direction="vertical" {{
+            pane name="rimz-sidebar" cwd={cwd_kdl} {{
+                command {stub_kdl}
+                start_suspended false
+                close_on_exit true
+            }}
+            pane cwd={cwd_kdl} {{
+                command "sleep"
+                args "600"
+                start_suspended false
+                close_on_exit true
+            }}
+        }}
+        pane cwd={cwd_kdl} {{
+            command "sleep"
+            args "600"
+            start_suspended false
+            close_on_exit true
+        }}
+    }}
+}}
+"#,
+        ),
     )
-    .expect("write plain layout");
+    .expect("write nested layout");
     let created = scoped_zellij(xdg_dir.path())
         .args(["attach", "--create-background", &name, "options"])
         .arg("--default-cwd")
@@ -1275,91 +1412,48 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
         .arg("--default-layout")
         .arg(&layout)
         .bounded_status()
-        .expect("create plain session");
+        .expect("create nested session");
     assert!(created.success(), "create-background failed for {name}");
-    let initial = wait_for_pane_count(xdg_dir.path(), &name, 1);
-    let original_id = initial
-        .first()
-        .and_then(|pane| pane.pane_id.raw().strip_prefix("terminal_"))
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .expect("initial terminal id");
+    let initial = wait_for_pane_count(xdg_dir.path(), &name, 3);
+    assert_eq!(
+        initial.len(),
+        3,
+        "layout should birth a sidebar and two work panes: {initial:?}",
+    );
 
     let _client = AttachedClient::attach(xdg_dir.path(), &name, 160, 60);
     let xdg = xdg_dir.path().to_path_buf();
     wait_for_attached_client(&xdg, &name);
-    let (_stub_dir, stub) = sidebar_command_stub();
 
-    let down = scoped_zellij(&xdg)
-        .args([
-            "--session",
-            &name,
-            "action",
-            "new-pane",
-            "--direction",
-            "down",
-            "--",
-            "sleep",
-            "600",
-        ])
-        .bounded_output()
-        .expect("new-pane down");
-    assert!(
-        down.status.success(),
-        "new-pane down failed: {}",
-        String::from_utf8_lossy(&down.stderr),
-    );
-    let focused = scoped_zellij(&xdg)
-        .args([
-            "--session",
-            &name,
-            "action",
-            "focus-pane-id",
-            &format!("terminal_{original_id}"),
-        ])
-        .bounded_status()
-        .expect("focus original pane");
-    assert!(focused.success(), "focus original pane failed");
-    let spawned = scoped_zellij(&xdg)
-        .args([
-            "--session",
-            &name,
-            "action",
-            "new-pane",
-            "--direction",
-            "right",
-            "--name",
-            "rimz-sidebar",
-            "--",
-        ])
-        .arg(&stub)
-        .bounded_output()
-        .expect("new-pane sidebar");
-    assert!(
-        spawned.status.success(),
-        "new-pane sidebar failed: {}",
-        String::from_utf8_lossy(&spawned.stderr),
-    );
     let before = raw_sidebar_pane(&xdg, &name);
     let sidebar_id = before.get("id").and_then(|value| value.as_u64()).unwrap();
-    let moved = scoped_zellij(&xdg)
-        .args([
-            "--session",
-            &name,
-            "action",
-            "move-pane",
-            "left",
-            "--pane-id",
-            &format!("terminal_{sidebar_id}"),
-        ])
-        .bounded_status()
-        .expect("move sidebar left");
-    assert!(moved.success(), "move sidebar left failed");
-    let before = raw_sidebar_pane(&xdg, &name);
     assert_eq!(
         before.get("pane_x").and_then(|value| value.as_u64()),
         Some(0),
         "the nested sidebar starts in the left row band: {before}",
     );
+    let sidebar_cols = before
+        .get("pane_columns")
+        .and_then(|value| value.as_u64())
+        .expect("sidebar columns before");
+    let before_work = work_pane_geometry(&xdg, &name);
+    let before_right_xs: BTreeSet<u64> = before_work
+        .iter()
+        .filter(|pane| pane.x >= sidebar_cols)
+        .map(|pane| pane.x)
+        .collect();
+    assert!(
+        before_work.len() == 2
+            && before_work.iter().any(|pane| pane.x == 0)
+            && before_right_xs.len() == 1,
+        "fixture should start as a repairable nested sidebar: \
+         sidebar={before}, work={before_work:?}",
+    );
+    let original_id = before_work
+        .iter()
+        .find(|pane| pane.x >= sidebar_cols)
+        .map(|pane| pane.id)
+        .expect("right-side work pane");
     let tab_id = before
         .get("tab_id")
         .and_then(|value| value.as_u64())

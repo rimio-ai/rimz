@@ -141,6 +141,7 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
                 fg: ratatui::style::Color::White,
                 bg: ratatui::style::Color::Black,
             }]]),
+            pixel: None,
             caption: Some("resting".to_owned()),
             loading: false,
             action: crate::sidebar_pane::pets::PetAction::Idle,
@@ -195,6 +196,7 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
                 fg: ratatui::style::Color::White,
                 bg: ratatui::style::Color::Black,
             }]]),
+            pixel: None,
             caption: Some("resting".to_owned()),
             loading: false,
             action: crate::sidebar_pane::pets::PetAction::Idle,
@@ -222,19 +224,109 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
 }
 
 #[test]
-fn refresh_pet_view_skips_body_when_terminal_is_too_short() {
+fn refresh_pet_view_uses_fixed_pet_size_when_dashboard_present() {
     let ws = workspace();
     let mut snapshot = snapshot(&ws);
     snapshot.theme.pets.enabled = true;
     let mut ui = UiState::default();
     let mut assets = PetAssets::default();
 
-    refresh_pet_view(&mut ui, &mut assets, &snapshot, false, Some((54, 11)));
+    refresh_pet_view(
+        &mut ui,
+        &mut assets,
+        &snapshot,
+        PetRenderCaps::default(),
+        false,
+    );
 
     let pet = ui.pet.expect("pet view");
     assert_eq!(pet.grid, None);
-    assert!(!pet.loading);
+    if render::pet_body_enabled(&snapshot) {
+        assert!(pet.loading);
+    } else {
+        assert!(!pet.loading, "NO_COLOR suppresses pet body loading");
+    }
     assert_eq!(pet.caption.as_deref(), Some("resting"));
+}
+
+#[test]
+fn pixel_shift_clear_uses_fresh_rect_from_draw() {
+    let ws = workspace();
+    let mut snapshot = snapshot(&ws);
+    snapshot.providers = vec![crate::sidebar::test_support::provider_panel(
+        "codex",
+        Vec::new(),
+    )];
+    snapshot.theme.pets.enabled = true;
+    snapshot.theme.pets.pet = "codex".to_owned();
+    snapshot.theme.pets.glyphs = crate::config::PetsGlyphMode::Pixel;
+    let pixel = PetPixelView {
+        pet_id: "codex".to_owned(),
+        sprite_index: 0,
+        size: crate::sidebar_pane::pets::PetGridSize { cols: 2, rows: 1 },
+    };
+    let stale_rect = ratatui::layout::Rect::new(0, 0, 2, 1);
+    let mut ui = UiState {
+        pet: Some(crate::sidebar_pane::pets::PetView {
+            grid: None,
+            pixel: Some(pixel.clone()),
+            caption: Some("resting".to_owned()),
+            loading: false,
+            action: crate::sidebar_pane::pets::PetAction::Idle,
+            active_track: "idle",
+        }),
+        pet_pixel_rect: Some(stale_rect),
+        ..Default::default()
+    };
+    let assets = PetAssets::test_loaded_pixel_frame("codex");
+    let mut painter = PixelPainter::default();
+    painter
+        .paint(
+            &mut Vec::new(),
+            stale_rect,
+            &pixel,
+            assets.pixel_frame("codex", 0).expect("pixel frame"),
+        )
+        .expect("seed old pixel placement");
+    #[derive(Clone)]
+    struct SharedBuffer(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+    impl std::io::Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let output = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let backend = CrosstermBackend::new(SharedBuffer(output.clone()));
+    let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24));
+    let mut terminal =
+        Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).expect("terminal");
+
+    draw_frame_and_paint_pet_pixel(
+        &mut terminal,
+        &snapshot,
+        None,
+        &mut ui,
+        &assets,
+        &mut painter,
+    )
+    .expect("draw");
+    let output = output.borrow();
+    let output = String::from_utf8_lossy(&output);
+
+    assert_ne!(
+        ui.pet_pixel_rect,
+        Some(stale_rect),
+        "draw computes the fresh pixel rect after the stale pre-draw state"
+    );
+    assert!(
+        output.contains("\u{1b}[J") || output.contains("\u{1b}[K"),
+        "stale rect must trigger a full terminal clear after the fresh draw"
+    );
 }
 
 #[test]

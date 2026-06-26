@@ -1261,19 +1261,18 @@ fn sidebar_pets_defaults_parse_and_round_trip() {
     let config = MachineConfig::load_from(&write_named(
         &dir,
         "theme.toml",
-        "[theme.pets]\nenabled = true\npet = \"dewey\"\nsize = \"small\"\nglyphs = \"octant\"\nvoice = false\n",
+        "[theme.pets]\nenabled = true\npet = \"dewey\"\nglyphs = \"pixel\"\nvoice = false\n",
     ))
     .expect("load");
     assert!(config.theme.pets.enabled);
     assert_eq!(config.theme.pets.pet, "dewey");
-    assert_eq!(config.theme.pets.size, PetsSize::Small);
-    assert_eq!(config.theme.pets.glyphs, PetsGlyphMode::Octant);
+    assert_eq!(config.theme.pets.glyphs, PetsGlyphMode::Pixel);
     assert!(!config.theme.pets.voice);
 
     let defaults_dir = tempdir().expect("tempdir");
     let defaults = MachineConfig::load_from(&write(&defaults_dir, "")).expect("load");
     assert_eq!(defaults.theme.pets, PetsConfig::default());
-    assert_eq!(defaults.theme.pets.size, PetsSize::Medium);
+    assert!(defaults.theme.pets.is_default());
 
     let encoded = toml::to_string(&config.theme.pets).expect("serialize pets");
     let round_tripped: PetsConfig = toml::from_str(&encoded).expect("parse pets");

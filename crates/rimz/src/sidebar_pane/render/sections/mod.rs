@@ -40,7 +40,6 @@ pub(super) use provider::dashboard_panel_lines;
 pub(super) use provider::provider_panel_lines;
 pub(super) use provider::{
     dashboard_panel_lines_with_footer, fleet_ledger_lines, fleet_total_lines,
-    provider_dashboard_block_rows,
 };
 pub(super) use worktree::worktree_group_lines;
 

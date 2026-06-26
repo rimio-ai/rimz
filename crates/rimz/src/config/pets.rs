@@ -1,29 +1,18 @@
 use serde::{Deserialize, Serialize};
 
-/// `[theme.pets] glyphs`: which Unicode block tier the pet renderer uses.
+/// `[theme.pets] glyphs`: which pet render tier the dashboard uses.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum PetsGlyphMode {
-    /// Use the default renderer tier: sextants with the half-block floor.
+    /// Use the default renderer ladder: pixels, then sextants.
     #[default]
     Auto,
-    /// Use half-block cells (`▀`), the broadest terminal-font floor.
-    Half,
-    /// Use Unicode sextants, the default quality/coverage tier.
+    /// Use kitty graphics pixels when supported; fall back to cell art.
+    Pixel,
+    /// Use Unicode sextants.
     Sextant,
-    /// Use Unicode 16 octants. Sharpest tier, intended for explicit opt-in.
+    /// Use Unicode 16 octants.
     Octant,
-}
-
-/// `[theme.pets] size`: how much space the provider-dashboard pet occupies.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "lowercase")]
-pub enum PetsSize {
-    /// Match the original dashboard pet footprint.
-    #[default]
-    Medium,
-    /// Fit the pet to the active provider block height.
-    Small,
 }
 
 /// `[theme.pets]`: opt-in animated companion in the provider dashboard.
@@ -38,9 +27,7 @@ pub struct PetsConfig {
     /// sheet or a petdex pet directory; and a bare slug (`wall-e`) is a petdex
     /// pet installed under `~/.codex/pets/<slug>/`.
     pub pet: String,
-    /// Dashboard pet footprint.
-    pub size: PetsSize,
-    /// Unicode block-glyph tier.
+    /// Render tier: `auto` tries pixels, then sextants.
     pub glyphs: PetsGlyphMode,
     /// Show canned captions on fleet-status changes.
     pub voice: bool,
@@ -51,7 +38,6 @@ impl Default for PetsConfig {
         Self {
             enabled: false,
             pet: "rocky".to_owned(),
-            size: PetsSize::default(),
             glyphs: PetsGlyphMode::default(),
             voice: true,
         }

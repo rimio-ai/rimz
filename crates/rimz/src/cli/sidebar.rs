@@ -265,7 +265,15 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             watch,
             theme_mode,
             theme_scheme,
-        } => fixture(state, width, height, watch, theme_mode, theme_scheme),
+        } => fixture(
+            globals,
+            state,
+            width,
+            height,
+            watch,
+            theme_mode,
+            theme_scheme,
+        ),
         SidebarSubcmd::Gallery => gallery(globals),
         SidebarSubcmd::GalleryRender => gallery_render(),
         SidebarSubcmd::Wake {
@@ -515,6 +523,7 @@ fn serve(
         Some(mux) => mux,
         None => rimz::mux::auto_detect_backend(globals.mux)?,
     };
+    let machine_config = rimz::config::MachineConfig::load().unwrap_or_default();
     rimz::sidebar_pane::app::serve(rimz::sidebar_pane::app::ServeConfig {
         workspace_id,
         mux,
@@ -522,9 +531,8 @@ fn serve(
         instance_id: SidebarInstanceId::new(),
         tick_seconds,
         refresh_ms_override: refresh_ms,
-        notification_prefs: rimz::config::MachineConfig::load()
-            .unwrap_or_default()
-            .notifications,
+        notification_prefs: machine_config.notifications,
+        pet_glyphs: machine_config.theme.pets.glyphs,
         own_pane: rimz::mux::own_pane_id(mux),
     })
     .context("serving sidebar")
@@ -574,6 +582,7 @@ fn render(width: u16, height: u16) -> Result<()> {
 }
 
 fn fixture(
+    globals: &GlobalFlags,
     state: SidebarFixtureState,
     width: u16,
     height: u16,
@@ -590,8 +599,16 @@ fn fixture(
     }
     if watch {
         let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
-        return rimz::sidebar_pane::app::serve_fixture(snapshot, refresh_ms)
-            .context("serving sidebar fixture");
+        let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
+            .context("resolving current workspace")?;
+        let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+        return rimz::sidebar_pane::app::serve_fixture(
+            snapshot,
+            refresh_ms,
+            mux,
+            &workspace.session_name,
+        )
+        .context("serving sidebar fixture");
     }
     rimz::sidebar_pane::render::render_fixed_line_ansi(io::stdout(), &snapshot, None, width, height)
         .context("rendering sidebar fixture")
@@ -653,8 +670,13 @@ fn gallery_render() -> Result<()> {
     for snapshot in &mut snapshots {
         snapshot.theme.mode = machine_config.theme.mode;
         snapshot.theme.glyphs = machine_config.theme.glyphs.clone();
+        snapshot.theme.pets.glyphs = machine_config.theme.pets.glyphs;
     }
-    rimz::sidebar_pane::app::serve_gallery(snapshots, refresh_ms).context("serving sidebar gallery")
+    let workspace =
+        WorkspaceResolver::resolve_participant(".", None).context("resolving gallery workspace")?;
+    let mux = rimz::mux::auto_detect_backend(None)?;
+    rimz::sidebar_pane::app::serve_gallery(snapshots, refresh_ms, mux, &workspace.session_name)
+        .context("serving sidebar gallery")
 }
 
 fn parse_fixture_theme_mode(value: &str) -> Result<rimz::config::ThemeMode> {

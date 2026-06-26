@@ -9,6 +9,7 @@ mod catalog;
 mod cellart;
 mod frames;
 mod model;
+mod pixel;
 mod preview;
 mod voice;
 
@@ -18,11 +19,19 @@ use std::thread;
 
 use crate::config::{PetsConfig, PetsGlyphMode};
 
+pub(crate) use cellart::GlyphTier;
 #[cfg(test)]
 pub(crate) use cellart::PetCell;
 pub(crate) use cellart::PetCellGrid;
 pub(crate) use model::PetAction;
-pub use preview::{PetPreview, PreviewCell, listable_ids, load_previews};
+pub(crate) use pixel::PixelPainter;
+pub(crate) use pixel::probe::detect as detect_pet_render_caps;
+pub use pixel::probe::{PetRenderCaps, detect_env as detect_pet_render_env};
+pub use pixel::{inline_placeholder_row, transmit_rgba_chunks, virtual_place, wrap_pixel_payload};
+pub use preview::{
+    PetPixelPreview, PetPreview, PixelPreviewFrame, PreviewCell, listable_ids, load_pixel_previews,
+    load_previews_with_caps,
+};
 
 use asset::PetSource;
 use frames::RgbaImage;
@@ -31,16 +40,30 @@ use model::AnimationSet;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PetView {
     pub(crate) grid: Option<PetCellGrid>,
+    pub(crate) pixel: Option<PetPixelView>,
     pub(crate) caption: Option<String>,
     pub(crate) loading: bool,
     pub(crate) action: PetAction,
     pub(crate) active_track: &'static str,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PetPixelView {
+    pub(crate) pet_id: String,
+    pub(crate) sprite_index: usize,
+    pub(crate) size: PetGridSize,
+}
+
+impl PetView {
+    pub(crate) fn has_body(&self) -> bool {
+        self.grid.is_some() || self.pixel.is_some()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct PetGridSize {
-    pub(crate) cols: u16,
-    pub(crate) rows: u16,
+pub struct PetGridSize {
+    pub cols: u16,
+    pub rows: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,69 +74,40 @@ pub(crate) struct PetViewFrame {
     pub(crate) size: Option<PetGridSize>,
     pub(crate) motion_enabled: bool,
     pub(crate) unread_triggered: bool,
+    pub(crate) tier: PetRenderTier,
 }
 
-impl PetGridSize {
-    const MIN_COLS: u16 = 12;
-    const MAX_COLS: u16 = 20;
-    const MIN_ROWS: u16 = 4;
-    const MAX_ROWS: u16 = 10;
-    const DASHBOARD_BLOCK_MIN_COLS: u16 = 35;
-    const DASHBOARD_PET_GAP_COLS: u16 = 1;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PetRenderTier {
+    Pixel,
+    Octant,
+    Sextant,
+}
 
-    pub(crate) fn for_dashboard_column(width: u16, height: u16) -> Option<Self> {
-        let cols = width
-            .saturating_sub(Self::DASHBOARD_BLOCK_MIN_COLS)
-            .min(Self::MAX_COLS);
-        if cols < Self::MIN_COLS {
-            return None;
-        }
-        Self::for_cols_and_height(cols, height)
+pub(crate) fn resolve_render_tier(mode: PetsGlyphMode, caps: PetRenderCaps) -> PetRenderTier {
+    match mode {
+        PetsGlyphMode::Sextant => PetRenderTier::Sextant,
+        PetsGlyphMode::Octant => PetRenderTier::Octant,
+        PetsGlyphMode::Auto | PetsGlyphMode::Pixel if caps.pixel => PetRenderTier::Pixel,
+        PetsGlyphMode::Auto | PetsGlyphMode::Pixel => PetRenderTier::Sextant,
     }
+}
 
-    pub(crate) fn for_dashboard_block(
-        target_rows: u16,
-        inner_width: u16,
-        terminal_height: u16,
-    ) -> Option<Self> {
-        let max_rows_for_height = terminal_height / 3;
-        if max_rows_for_height < Self::MIN_ROWS {
-            return None;
-        }
-        let rows = target_rows.clamp(Self::MIN_ROWS, Self::MAX_ROWS.min(max_rows_for_height));
-        let max_cols = inner_width
-            .saturating_sub(Self::DASHBOARD_BLOCK_MIN_COLS + Self::DASHBOARD_PET_GAP_COLS);
-        if max_cols < Self::MIN_COLS {
-            return None;
-        }
-        let aspect_cols = ((u32::from(rows) * catalog::FRAME_WIDTH * 2) / catalog::FRAME_HEIGHT)
-            .max(u32::from(Self::MIN_COLS))
-            .min(u32::from(Self::MAX_COLS)) as u16;
-        Some(Self {
-            cols: aspect_cols.min(max_cols),
-            rows,
-        })
+fn cell_tier(tier: PetRenderTier) -> Option<GlyphTier> {
+    match tier {
+        PetRenderTier::Pixel => None,
+        PetRenderTier::Octant => Some(GlyphTier::Octant),
+        PetRenderTier::Sextant => Some(GlyphTier::Sextant),
     }
+}
 
-    pub(crate) fn for_standalone_dashboard(width: u16, height: u16) -> Option<Self> {
-        let cols = width.min(Self::MAX_COLS);
-        if cols < Self::MIN_COLS {
-            return None;
-        }
-        Self::for_cols_and_height(cols, height)
-    }
+pub const DASHBOARD_PIXEL_PET: PetGridSize = PetGridSize { cols: 15, rows: 9 };
+pub const DASHBOARD_CELL_PET: PetGridSize = PetGridSize { cols: 18, rows: 9 };
 
-    fn for_cols_and_height(cols: u16, height: u16) -> Option<Self> {
-        let rows = ((u32::from(cols) * catalog::FRAME_HEIGHT) / catalog::FRAME_WIDTH / 2)
-            .clamp(u32::from(Self::MIN_ROWS), u32::from(Self::MAX_ROWS)) as u16;
-        let max_rows_for_height = height / 3;
-        if max_rows_for_height < Self::MIN_ROWS {
-            return None;
-        }
-        Some(Self {
-            cols,
-            rows: rows.min(max_rows_for_height.min(Self::MAX_ROWS)),
-        })
+pub(crate) fn dashboard_pet_size(tier: PetRenderTier) -> PetGridSize {
+    match tier {
+        PetRenderTier::Pixel => DASHBOARD_PIXEL_PET,
+        PetRenderTier::Octant | PetRenderTier::Sextant => DASHBOARD_CELL_PET,
     }
 }
 
@@ -175,7 +169,7 @@ struct MemoKey {
     sprite_index: usize,
     cols: u16,
     rows: u16,
-    glyphs: PetsGlyphMode,
+    tier: GlyphTier,
 }
 
 type LoadResult = Result<Vec<RgbaImage>, String>;
@@ -192,7 +186,14 @@ struct LoadedGridRequest<'a> {
     previous_action: Option<PetAction>,
     frame: PetViewFrame,
     size: PetGridSize,
-    glyphs: PetsGlyphMode,
+    tier: GlyphTier,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LoadedSpriteRequest<'a> {
+    pet_id: &'a str,
+    previous_action: Option<PetAction>,
+    frame: PetViewFrame,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,6 +208,24 @@ struct TrackSelection {
 }
 
 impl PetAssets {
+    #[cfg(test)]
+    pub(crate) fn test_loaded_pixel_frame(pet_id: &str) -> Self {
+        let frame = RgbaImage {
+            width: 1,
+            height: 1,
+            data: vec![255, 0, 0, 255],
+        };
+        Self {
+            loaded: Some(LoadedPet {
+                id: pet_id.to_owned(),
+                frames: vec![frame; catalog::FRAME_COUNT],
+                animations: model::default_animations(),
+                memo: HashMap::new(),
+            }),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn observe_unread_rows(
         &mut self,
         unread_rows: impl IntoIterator<Item = String>,
@@ -240,6 +259,7 @@ impl PetAssets {
             size,
             motion_enabled: _,
             unread_triggered: _,
+            tier,
         } = frame;
         if !config.enabled {
             self.reset_runtime_state();
@@ -254,6 +274,7 @@ impl PetAssets {
             self.caption = Some("no pet selected".to_owned());
             return Some(PetView {
                 grid: None,
+                pixel: None,
                 caption: self.caption.clone(),
                 loading: false,
                 action,
@@ -280,13 +301,30 @@ impl PetAssets {
             .as_ref()
             .filter(|failed| failed.id == id)
             .map(|failed| failed.caption.clone());
+        let mut pixel_view = None;
         let grid = size.and_then(|size| {
+            if tier == PetRenderTier::Pixel {
+                if let Some((sprite_index, track)) = self.loaded_sprite(LoadedSpriteRequest {
+                    pet_id: id,
+                    previous_action,
+                    frame,
+                }) {
+                    active_track = track;
+                    pixel_view = Some(PetPixelView {
+                        pet_id: id.to_owned(),
+                        sprite_index,
+                        size,
+                    });
+                }
+                return None;
+            }
+            let cell_tier = cell_tier(tier).expect("non-pixel pet view uses a cell tier");
             self.loaded_grid(LoadedGridRequest {
                 pet_id: id,
                 previous_action,
                 frame,
                 size,
-                glyphs: config.glyphs,
+                tier: cell_tier,
             })
             .map(|(grid, track)| {
                 active_track = track;
@@ -295,6 +333,7 @@ impl PetAssets {
         });
         Some(PetView {
             grid,
+            pixel: pixel_view,
             caption: unavailable_caption
                 .or_else(|| self.caption.clone())
                 .or_else(|| loading.then(|| "fetching pet...".to_owned())),
@@ -302,6 +341,13 @@ impl PetAssets {
             action,
             active_track,
         })
+    }
+
+    pub(crate) fn pixel_frame(&self, pet_id: &str, sprite_index: usize) -> Option<&RgbaImage> {
+        let loaded = self.loaded.as_ref()?;
+        (loaded.id == pet_id)
+            .then(|| loaded.frames.get(sprite_index))
+            .flatten()
     }
 
     fn observe_action(&mut self, action: PetAction, voice: bool, seed: u64) {
@@ -432,7 +478,40 @@ impl PetAssets {
             previous_action,
             frame,
             size,
-            glyphs,
+            tier,
+        } = request;
+        let (sprite_index, track) = self.loaded_sprite(LoadedSpriteRequest {
+            pet_id,
+            previous_action,
+            frame,
+        })?;
+        let loaded = self.loaded.as_mut()?;
+        if loaded.id != pet_id {
+            return None;
+        }
+        let key = MemoKey {
+            sprite_index,
+            cols: size.cols,
+            rows: size.rows,
+            tier,
+        };
+        loaded.memo.retain(|memo_key, _| {
+            memo_key.cols == size.cols && memo_key.rows == size.rows && memo_key.tier == tier
+        });
+        if let Some(grid) = loaded.memo.get(&key) {
+            return Some((grid.clone(), track));
+        }
+        let frame = loaded.frames.get(sprite_index)?;
+        let grid = cellart::render_frame(frame, size.cols, size.rows, tier);
+        loaded.memo.insert(key, grid.clone());
+        Some((grid, track))
+    }
+
+    fn loaded_sprite(&mut self, request: LoadedSpriteRequest<'_>) -> Option<(usize, &'static str)> {
+        let LoadedSpriteRequest {
+            pet_id,
+            previous_action,
+            frame,
         } = request;
         let jump_duration = {
             let loaded = self.loaded.as_ref()?;
@@ -453,7 +532,7 @@ impl PetAssets {
             jump_duration,
             unread_triggered: frame.unread_triggered,
         });
-        let loaded = self.loaded.as_mut()?;
+        let loaded = self.loaded.as_ref()?;
         if loaded.id != pet_id {
             return None;
         }
@@ -469,22 +548,7 @@ impl PetAssets {
             })
             .unwrap_or(0)
             .min(loaded.frames.len().saturating_sub(1));
-        let key = MemoKey {
-            sprite_index,
-            cols: size.cols,
-            rows: size.rows,
-            glyphs,
-        };
-        loaded.memo.retain(|memo_key, _| {
-            memo_key.cols == size.cols && memo_key.rows == size.rows && memo_key.glyphs == glyphs
-        });
-        if let Some(grid) = loaded.memo.get(&key) {
-            return Some((grid.clone(), track.name));
-        }
-        let frame = loaded.frames.get(sprite_index)?;
-        let grid = cellart::render_frame(frame, size.cols, size.rows, glyphs);
-        loaded.memo.insert(key, grid.clone());
-        Some((grid, track.name))
+        Some((sprite_index, track.name))
     }
 
     fn selected_track(&mut self, selection: TrackSelection) -> SelectedTrack {
@@ -544,443 +608,4 @@ fn load_pet(source: PetSource) -> Result<Vec<RgbaImage>, asset::AssetErr> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::{PetsGlyphMode, PetsSize};
-
-    fn frame(
-        action: PetAction,
-        phase: u64,
-        refresh_ms: u16,
-        size: Option<PetGridSize>,
-        motion_enabled: bool,
-        unread_triggered: bool,
-    ) -> PetViewFrame {
-        PetViewFrame {
-            action,
-            phase,
-            refresh_ms,
-            size,
-            motion_enabled,
-            unread_triggered,
-        }
-    }
-
-    #[test]
-    fn pet_grid_size_matches_provider_dashboard_block_height() {
-        assert!(PetGridSize::for_dashboard_block(7, 47, 34).is_none());
-        assert_eq!(
-            PetGridSize::for_dashboard_block(7, 48, 34).expect("size"),
-            PetGridSize { cols: 12, rows: 7 }
-        );
-        assert_eq!(
-            PetGridSize::for_dashboard_block(12, 80, 34).expect("size"),
-            PetGridSize { cols: 18, rows: 10 },
-            "target rows clamp to the maximum dashboard height"
-        );
-        assert_eq!(
-            PetGridSize::for_dashboard_block(2, 80, 34).expect("size"),
-            PetGridSize { cols: 12, rows: 4 },
-            "target rows clamp to the minimum dashboard height"
-        );
-        assert!(PetGridSize::for_dashboard_block(7, 80, 11).is_none());
-    }
-
-    #[test]
-    fn standalone_pet_grid_size_uses_available_dashboard_width() {
-        let wide = PetGridSize::for_standalone_dashboard(80, 34).expect("size");
-        assert_eq!((wide.cols, wide.rows), (20, 10), "caps at 20x10");
-    }
-
-    #[test]
-    fn disabled_config_clears_runtime_state() {
-        let mut assets = PetAssets {
-            previous_action: Some(PetAction::Running),
-            jump_started_phase: Some(1),
-            previous_unread_rows: BTreeSet::from(["agent-1".to_owned()]),
-            caption: Some("x".to_owned()),
-            failed: Some(FailedPet {
-                id: "codex".to_owned(),
-                caption: "pet unavailable".to_owned(),
-                failed_at_phase: 0,
-            }),
-            ..PetAssets::default()
-        };
-        assert!(
-            assets
-                .view(
-                    &PetsConfig::default(),
-                    frame(
-                        PetAction::Idle,
-                        0,
-                        100,
-                        Some(PetGridSize { cols: 12, rows: 6 }),
-                        true,
-                        false,
-                    ),
-                )
-                .is_none()
-        );
-        assert_eq!(assets.previous_action, None);
-        assert_eq!(assets.jump_started_phase, None);
-        assert!(assets.previous_unread_rows.is_empty());
-        assert_eq!(assets.caption, None);
-        assert!(assets.failed.is_none());
-    }
-
-    #[test]
-    fn empty_pet_selector_rests_with_no_pet() {
-        let mut assets = loaded_assets(Some(PetAction::Running));
-        assets.jump_started_phase = Some(3);
-        assets.previous_unread_rows = BTreeSet::from(["agent-1".to_owned()]);
-        assets.caption = Some("running".to_owned());
-        assets.failed = Some(FailedPet {
-            id: "codex".to_owned(),
-            caption: "pet unavailable".to_owned(),
-            failed_at_phase: 0,
-        });
-        let config = PetsConfig {
-            enabled: true,
-            pet: "  ".to_owned(),
-            size: PetsSize::Medium,
-            glyphs: PetsGlyphMode::Auto,
-            voice: true,
-        };
-        let view = assets
-            .view(
-                &config,
-                frame(
-                    PetAction::Idle,
-                    0,
-                    100,
-                    Some(PetGridSize { cols: 12, rows: 6 }),
-                    true,
-                    false,
-                ),
-            )
-            .expect("enabled pets produce a view");
-        assert_eq!(view.grid, None);
-        assert_eq!(view.caption.as_deref(), Some("no pet selected"));
-        assert!(assets.loading.is_none(), "an empty selector loads nothing");
-        assert!(assets.loaded.is_none());
-        assert_eq!(assets.previous_action, None);
-        assert_eq!(assets.jump_started_phase, None);
-        assert_eq!(
-            assets.previous_unread_rows,
-            BTreeSet::from(["agent-1".to_owned()])
-        );
-        assert!(assets.failed.is_none());
-    }
-
-    #[test]
-    fn local_pet_path_begins_loading_under_its_own_id() {
-        let mut assets = PetAssets::default();
-        let config = PetsConfig {
-            enabled: true,
-            pet: "/no/such/pet/sheet.webp".to_owned(),
-            size: PetsSize::Medium,
-            glyphs: PetsGlyphMode::Auto,
-            voice: true,
-        };
-        // `poll_loader` runs before the spawn, so the first view always reports
-        // loading regardless of how fast the loader thread fails the read.
-        let view = assets
-            .view(
-                &config,
-                frame(
-                    PetAction::Idle,
-                    0,
-                    100,
-                    Some(PetGridSize { cols: 12, rows: 6 }),
-                    true,
-                    false,
-                ),
-            )
-            .expect("enabled pets produce a view");
-        assert_eq!(view.grid, None);
-        assert!(view.loading, "a local-path selector spawns a loader");
-        assert!(
-            assets
-                .loading
-                .as_ref()
-                .is_some_and(|loading| loading.id == "/no/such/pet/sheet.webp"),
-            "the loader is keyed by the local path"
-        );
-    }
-
-    #[test]
-    fn missing_body_size_does_not_start_asset_loading() {
-        let mut assets = PetAssets::default();
-        let config = PetsConfig {
-            enabled: true,
-            pet: "codex".to_owned(),
-            size: PetsSize::Medium,
-            glyphs: PetsGlyphMode::Auto,
-            voice: true,
-        };
-
-        let view = assets
-            .view(&config, frame(PetAction::Idle, 0, 100, None, true, false))
-            .expect("enabled pets produce a view");
-
-        assert_eq!(view.grid, None);
-        assert!(!view.loading);
-        assert_eq!(view.caption.as_deref(), Some("resting"));
-        assert!(assets.loading.is_none());
-    }
-
-    #[test]
-    fn failed_loader_settles_without_immediate_retry() {
-        let mut assets = PetAssets::default();
-        let (sender, receiver) = mpsc::channel();
-        sender
-            .send(Err("offline".to_owned()))
-            .expect("send failure");
-        assets.loading = Some(LoadingPet {
-            id: "codex".to_owned(),
-            receiver,
-        });
-        let config = PetsConfig {
-            enabled: true,
-            pet: "codex".to_owned(),
-            size: PetsSize::Medium,
-            glyphs: PetsGlyphMode::Auto,
-            voice: true,
-        };
-
-        let view = assets
-            .view(
-                &config,
-                frame(
-                    PetAction::Idle,
-                    0,
-                    100,
-                    Some(PetGridSize { cols: 12, rows: 6 }),
-                    true,
-                    false,
-                ),
-            )
-            .expect("enabled pets produce a view");
-        assert!(!view.loading);
-        assert_eq!(view.caption.as_deref(), Some("pet unavailable"));
-        assert!(assets.loading.is_none());
-        assert!(assets.failed.is_some());
-
-        let view = assets
-            .view(
-                &config,
-                frame(
-                    PetAction::Idle,
-                    1,
-                    100,
-                    Some(PetGridSize { cols: 12, rows: 6 }),
-                    true,
-                    false,
-                ),
-            )
-            .expect("enabled pets produce a view");
-        assert!(!view.loading);
-        assert!(assets.loading.is_none());
-    }
-
-    #[test]
-    fn retry_due_waits_for_cooldown_then_clears() {
-        // 20s cooldown at 100ms refresh is 200 phases.
-        assert!(!retry_due(0, 0, 100));
-        assert!(!retry_due(0, 199, 100));
-        assert!(retry_due(0, 200, 100));
-        assert!(retry_due(0, 5_000, 100));
-        // The window tracks the failure point, not the origin.
-        assert!(!retry_due(1_000, 1_100, 100));
-        assert!(retry_due(1_000, 1_200, 100));
-    }
-
-    #[test]
-    fn action_transition_jumps_once_then_settles() {
-        let refresh_ms = 100;
-        let mut assets = loaded_assets(Some(PetAction::Running));
-        let config = enabled_config();
-        let size = Some(PetGridSize { cols: 12, rows: 6 });
-
-        let view = assets
-            .view(
-                &config,
-                frame(PetAction::Ask, 10, refresh_ms, size, true, false),
-            )
-            .expect("enabled pets produce a view");
-        assert_eq!(view.active_track, model::TRACK_JUMPING);
-        assert_eq!(assets.jump_started_phase, Some(10));
-
-        let jump = model::default_animations()
-            .remove(model::TRACK_JUMPING)
-            .expect("jumping track");
-        let phases = jump
-            .loop_duration(refresh_ms)
-            .as_millis()
-            .div_ceil(u128::from(refresh_ms));
-        let view = assets
-            .view(
-                &config,
-                frame(
-                    PetAction::Ask,
-                    10 + phases as u64,
-                    refresh_ms,
-                    size,
-                    true,
-                    false,
-                ),
-            )
-            .expect("enabled pets produce a view");
-        assert_eq!(view.active_track, model::TRACK_ASK);
-        assert_eq!(assets.jump_started_phase, None);
-    }
-
-    #[test]
-    fn unread_trigger_jumps_once_without_action_change() {
-        let refresh_ms = 100;
-        let mut assets = loaded_assets(Some(PetAction::Running));
-        let config = enabled_config();
-        let size = Some(PetGridSize { cols: 12, rows: 6 });
-
-        let view = assets
-            .view(
-                &config,
-                frame(PetAction::Running, 10, refresh_ms, size, true, true),
-            )
-            .expect("enabled pets produce a view");
-        assert_eq!(view.active_track, model::TRACK_JUMPING);
-        assert_eq!(assets.jump_started_phase, Some(10));
-
-        let jump = model::default_animations()
-            .remove(model::TRACK_JUMPING)
-            .expect("jumping track");
-        let phases = jump
-            .loop_duration(refresh_ms)
-            .as_millis()
-            .div_ceil(u128::from(refresh_ms));
-        let view = assets
-            .view(
-                &config,
-                frame(
-                    PetAction::Running,
-                    10 + phases as u64,
-                    refresh_ms,
-                    size,
-                    true,
-                    false,
-                ),
-            )
-            .expect("enabled pets produce a view");
-        assert_eq!(view.active_track, model::TRACK_RUNNING);
-        assert_eq!(assets.jump_started_phase, None);
-    }
-
-    #[test]
-    fn static_mode_skips_transition_jump() {
-        let mut assets = loaded_assets(Some(PetAction::Running));
-        let view = assets
-            .view(
-                &enabled_config(),
-                frame(
-                    PetAction::Idle,
-                    10,
-                    100,
-                    Some(PetGridSize { cols: 12, rows: 6 }),
-                    false,
-                    false,
-                ),
-            )
-            .expect("enabled pets produce a view");
-
-        assert_eq!(view.active_track, model::TRACK_IDLE);
-        assert_eq!(assets.jump_started_phase, None);
-    }
-
-    #[test]
-    fn memoized_grids_are_evicted_on_resize() {
-        let frame = RgbaImage {
-            width: 1,
-            height: 1,
-            data: vec![255, 0, 0, 255],
-        };
-        let mut assets = PetAssets {
-            loaded: Some(LoadedPet {
-                id: "codex".to_owned(),
-                frames: vec![frame; catalog::FRAME_COUNT],
-                animations: model::default_animations(),
-                memo: HashMap::new(),
-            }),
-            ..PetAssets::default()
-        };
-
-        assert!(
-            assets
-                .loaded_grid(LoadedGridRequest {
-                    pet_id: "codex",
-                    previous_action: None,
-                    frame: PetViewFrame {
-                        action: PetAction::Idle,
-                        phase: 0,
-                        refresh_ms: 100,
-                        size: Some(PetGridSize { cols: 12, rows: 6 }),
-                        motion_enabled: true,
-                        unread_triggered: false,
-                    },
-                    size: PetGridSize { cols: 12, rows: 6 },
-                    glyphs: PetsGlyphMode::Half,
-                })
-                .is_some()
-        );
-        assert_eq!(assets.loaded.as_ref().expect("loaded").memo.len(), 1);
-
-        assert!(
-            assets
-                .loaded_grid(LoadedGridRequest {
-                    pet_id: "codex",
-                    previous_action: None,
-                    frame: PetViewFrame {
-                        action: PetAction::Idle,
-                        phase: 0,
-                        refresh_ms: 100,
-                        size: Some(PetGridSize { cols: 13, rows: 6 }),
-                        motion_enabled: true,
-                        unread_triggered: false,
-                    },
-                    size: PetGridSize { cols: 13, rows: 6 },
-                    glyphs: PetsGlyphMode::Half,
-                })
-                .is_some()
-        );
-        let memo = &assets.loaded.as_ref().expect("loaded").memo;
-        assert_eq!(memo.len(), 1);
-        assert!(memo.keys().all(|key| key.cols == 13));
-    }
-
-    fn enabled_config() -> PetsConfig {
-        PetsConfig {
-            enabled: true,
-            pet: "codex".to_owned(),
-            size: PetsSize::Medium,
-            glyphs: PetsGlyphMode::Auto,
-            voice: true,
-        }
-    }
-
-    fn loaded_assets(previous_action: Option<PetAction>) -> PetAssets {
-        let frame = RgbaImage {
-            width: 1,
-            height: 1,
-            data: vec![255, 0, 0, 255],
-        };
-        PetAssets {
-            loaded: Some(LoadedPet {
-                id: "codex".to_owned(),
-                frames: vec![frame; catalog::FRAME_COUNT],
-                animations: model::default_animations(),
-                memo: HashMap::new(),
-            }),
-            previous_action,
-            ..PetAssets::default()
-        }
-    }
-}
+mod tests;

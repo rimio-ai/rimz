@@ -57,7 +57,7 @@ pub fn capabilities() -> Result<TmuxCapabilities> {
 
 /// Parse `"tmux 3.5a"` (and tolerant of leading/trailing whitespace and the
 /// alphabetic patch-letter suffix tmux uses for point releases).
-fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
+pub(crate) fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     let trimmed = raw.trim();
     let after_prefix = trimmed.strip_prefix("tmux ").unwrap_or(trimmed);
     let head = after_prefix

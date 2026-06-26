@@ -142,7 +142,7 @@ red = 10
 
 ## Pets
 
-`[theme.pets]` toggles and selects the provider-dashboard companion: `enabled`, `pet`, `size`, `glyphs`, and `voice` live with the rest of the display layer. Asset sources, cache behavior, and geometry are in [pets.md](../internals/sidebar/pets.md).
+`[theme.pets]` toggles and selects the provider-dashboard companion: `enabled`, `pet`, `glyphs`, and `voice` live with the rest of the display layer. `glyphs = "auto"` tries pixels, then sextant cell art; `pixel` explicitly opts past the terminal-name allowlist while keeping the hard pixel gates; `octant` pins the sharper cell-art tier, and `sextant` pins the portable cell tier. Asset sources, cache behavior, and fixed per-tier geometry are in [pets.md](../internals/sidebar/pets.md).
 
 ```toml
 [theme.pets]

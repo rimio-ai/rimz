@@ -102,7 +102,7 @@ fn pets_enabled_keeps_rail_to_provider_tabs_only() {
     let panels = two_provider_panels();
     let zones = crate::config::BudgetBarConfig::default();
     let active = "claude".to_owned();
-    let (lines, hits) = dashboard_panel_lines(
+    let (lines, hits, _) = dashboard_panel_lines(
         &theme,
         &panels,
         Some(&active),

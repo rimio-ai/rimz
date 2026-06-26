@@ -5,7 +5,7 @@ use super::state::{
 use super::*;
 use crate::sidebar::read_marks::{ReadMarkStore, write_manual_read_marks};
 use crate::sidebar::unread::{self, UnreadClearCause};
-use crate::sidebar_pane::pets::PetAssets;
+use crate::sidebar_pane::pets::{PetAssets, PetRenderCaps, PixelPainter, detect_pet_render_caps};
 
 pub(super) struct LoopState {
     last_snapshot: Option<SidebarSnapshot>,
@@ -19,6 +19,8 @@ pub(super) struct LoopState {
     self_close: SelfCloseState,
     ui: UiState,
     pet_assets: PetAssets,
+    pixel_painter: PixelPainter,
+    pet_render_caps: PetRenderCaps,
     read_marks: ReadMarkStore,
     remind: RemindState,
     dirty: bool,
@@ -39,6 +41,8 @@ impl LoopState {
         initial_width: Option<u16>,
         observe_tx: SyncSender<ObserveMsg>,
         read_marks: ReadMarkStore,
+        pet_render_caps: PetRenderCaps,
+        pixel_wrap: bool,
     ) -> Self {
         let current = placeholder_snapshot(workspace_id);
         let now = Instant::now();
@@ -54,6 +58,8 @@ impl LoopState {
             self_close: SelfCloseState::default(),
             ui: UiState::default(),
             pet_assets: PetAssets::default(),
+            pixel_painter: PixelPainter::new(pixel_wrap),
+            pet_render_caps,
             read_marks,
             remind: RemindState::default(),
             dirty: true,
@@ -270,10 +276,12 @@ impl LoopState {
 
     pub(super) fn on_resize(
         &mut self,
+        config: &ServeConfig,
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         anim_start: Instant,
     ) -> Result<()> {
+        self.refresh_pet_render_caps(config.mux, &config.session_name);
         // A grow is the mux handing the sidebar a freed sibling's space — the
         // precondition for the self-close full-width flash. Hold the paint until
         // the next fresh pane-frame fold carries the sibling count.
@@ -289,11 +297,16 @@ impl LoopState {
             self.dirty = true;
             self.paint_hold
                 .engage(Instant::now(), crate::sidebar::cache::unix_now_ms());
+            self.clear_pixel(terminal);
         } else {
             if apply_input(
                 Wakeup::Resize,
                 &mut self.ui,
-                &mut self.pet_assets,
+                &mut PetRender {
+                    assets: &mut self.pet_assets,
+                    pixel_painter: &mut self.pixel_painter,
+                    caps: self.pet_render_caps,
+                },
                 &mut self.health,
                 terminal,
                 &self.current,
@@ -315,6 +328,19 @@ impl LoopState {
         Ok(())
     }
 
+    fn refresh_pet_render_caps(&mut self, mux: MuxName, session_name: &str) {
+        self.refresh_pet_render_caps_with(mux, session_name, detect_pet_render_caps);
+    }
+
+    fn refresh_pet_render_caps_with(
+        &mut self,
+        mux: MuxName,
+        session_name: &str,
+        detect: impl FnOnce(MuxName, crate::config::PetsGlyphMode, &str) -> PetRenderCaps,
+    ) {
+        self.pet_render_caps = detect(mux, self.current.theme.pets.glyphs, session_name);
+    }
+
     pub(super) fn on_input(
         &mut self,
         config: &ServeConfig,
@@ -327,7 +353,11 @@ impl LoopState {
         let applied = apply_input(
             wakeup,
             &mut self.ui,
-            &mut self.pet_assets,
+            &mut PetRender {
+                assets: &mut self.pet_assets,
+                pixel_painter: &mut self.pixel_painter,
+                caps: self.pet_render_caps,
+            },
             &mut self.health,
             terminal,
             &self.current,
@@ -489,6 +519,12 @@ impl LoopState {
             .maybe_remind(config, terminal, &self.current, diag);
     }
 
+    pub(super) fn clear_pixel(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) {
+        if let Err(err) = self.pixel_painter.clear(terminal.backend_mut()) {
+            debug!(error = %err, "pet pixel clear failed");
+        }
+    }
+
     pub(super) fn paint_frame_if_due(
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -537,14 +573,16 @@ impl LoopState {
                     &mut self.ui,
                     &mut self.pet_assets,
                     &self.current,
+                    self.pet_render_caps,
                     alert_active,
-                    terminal.size().ok().map(|size| (size.width, size.height)),
                 );
-                render::draw_to_terminal_with_ui(
+                super::draw_frame_and_paint_pet_pixel(
                     terminal,
                     &self.current,
                     self.health.alert.as_ref(),
                     &mut self.ui,
+                    &self.pet_assets,
+                    &mut self.pixel_painter,
                 )?;
                 self.dirty = false;
             }
@@ -699,6 +737,7 @@ mod tests {
             tick_seconds: 1,
             refresh_ms_override: None,
             notification_prefs: crate::config::NotificationsPrefs::default(),
+            pet_glyphs: crate::config::PetsGlyphMode::Auto,
             own_pane: None,
         }
     }
@@ -706,7 +745,10 @@ mod tests {
     fn loop_state(ws: &WorkspaceId) -> (tempfile::TempDir, LoopState) {
         let (tx, _rx) = std::sync::mpsc::sync_channel(64);
         let (dir, store) = read_marks(ws);
-        (dir, LoopState::new(ws.clone(), None, tx, store))
+        (
+            dir,
+            LoopState::new(ws.clone(), None, tx, store, PetRenderCaps::default(), true),
+        )
     }
 
     fn process_snapshot(ws: &WorkspaceId, observed_at_ms: u64) -> SidebarSnapshot {
@@ -877,11 +919,51 @@ mod tests {
     }
 
     #[test]
+    fn resize_reprobe_refreshes_pet_render_caps_with_current_glyph_mode() {
+        let ws = workspace();
+        let (_dir, mut state) = loop_state(&ws);
+        state.current.theme.pets.glyphs = crate::config::PetsGlyphMode::Pixel;
+        let mut observed = None;
+
+        state.refresh_pet_render_caps_with(
+            crate::MuxName::Tmux,
+            "rimz-test",
+            |mux, mode, session| {
+                observed = Some((mux, mode, session.to_owned()));
+                PetRenderCaps { pixel: true }
+            },
+        );
+
+        assert_eq!(
+            observed,
+            Some((
+                crate::MuxName::Tmux,
+                crate::config::PetsGlyphMode::Pixel,
+                "rimz-test".to_owned()
+            ))
+        );
+        assert_eq!(state.pet_render_caps, PetRenderCaps { pixel: true });
+    }
+
+    #[test]
+    fn resize_reprobe_can_downgrade_enabled_pet_render_caps() {
+        let ws = workspace();
+        let (_dir, mut state) = loop_state(&ws);
+        state.pet_render_caps = PetRenderCaps { pixel: true };
+
+        state.refresh_pet_render_caps_with(crate::MuxName::Tmux, "rimz-test", |_, _, _| {
+            PetRenderCaps { pixel: false }
+        });
+
+        assert_eq!(state.pet_render_caps, PetRenderCaps::default());
+    }
+
+    #[test]
     fn failed_anomaly_send_preserves_carried_drop_count() {
         let ws = workspace();
         let (tx, _rx) = std::sync::mpsc::sync_channel(0);
         let (_dir, store) = read_marks(&ws);
-        let mut state = LoopState::new(ws.clone(), None, tx, store);
+        let mut state = LoopState::new(ws.clone(), None, tx, store, PetRenderCaps::default(), true);
         let mut current = agent_snapshot(&ws);
         let mut duplicate = current.worktree_groups[0].rows[0].clone();
         duplicate.pane = duplicate.pane.map(|mut pane| {

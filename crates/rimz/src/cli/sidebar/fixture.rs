@@ -1000,7 +1000,6 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
     snapshot.theme.pets = rimz::config::PetsConfig {
         enabled: true,
         pet: "seedy".to_owned(),
-        size: rimz::config::PetsSize::Medium,
         ..rimz::config::PetsConfig::default()
     };
     let opencode = agent_row_with(
@@ -1363,7 +1362,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
     snapshot.theme.pets = rimz::config::PetsConfig {
         enabled: true,
         pet: "rocky".to_owned(),
-        size: rimz::config::PetsSize::Medium,
         ..rimz::config::PetsConfig::default()
     };
     let claude = agent_row_with(

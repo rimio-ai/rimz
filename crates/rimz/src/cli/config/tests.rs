@@ -6,7 +6,7 @@ use rimz::config::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
     BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, ContextMeterConfig,
     DisplayConfig, GlowMode, GlyphGroup, GlyphNamespaces, InlineAnsiColors, InlinePalette,
-    InlinePrimaryColors, InlineSelectionColors, PaletteRole, PetsConfig, PetsGlyphMode, PetsSize,
+    InlinePrimaryColors, InlineSelectionColors, PaletteRole, PetsConfig, PetsGlyphMode,
     ProviderTabsMode, ScrollbarMode, ThemeAnimationsConfig, ThemeColor, ThemeConfig,
     ThemeGlyphsConfig, ThemeMode, ThemeProviderStyle, ThemeStyle, UnreadEffect,
 };
@@ -30,7 +30,6 @@ fn validates_config_key_read_and_write_surfaces() {
         "theme.providers.claude.color",
         "theme.pets.enabled",
         "theme.pets.pet",
-        "theme.pets.size",
         "theme.pets.glyphs",
         "theme.pets.voice",
         "theme.mode",
@@ -313,7 +312,6 @@ fn fully_populated_theme() -> ThemeConfig {
         pets: PetsConfig {
             enabled: true,
             pet: "dewey".to_owned(),
-            size: PetsSize::Small,
             glyphs: PetsGlyphMode::Octant,
             voice: false,
         },

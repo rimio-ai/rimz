@@ -1,4 +1,3 @@
-use crate::config::PetsGlyphMode;
 use ratatui::style::Color;
 
 use super::frames::RgbaImage;
@@ -13,25 +12,15 @@ pub(crate) struct PetCell {
     pub(crate) bg: Color,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GlyphTier {
-    Half,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum GlyphTier {
     Sextant,
     Octant,
 }
 
 impl GlyphTier {
-    fn from_config(mode: PetsGlyphMode) -> Self {
-        match mode {
-            PetsGlyphMode::Auto | PetsGlyphMode::Sextant => Self::Sextant,
-            PetsGlyphMode::Half => Self::Half,
-            PetsGlyphMode::Octant => Self::Octant,
-        }
-    }
-
     fn subcells(self) -> (u32, u32) {
         match self {
-            Self::Half => (1, 2),
             Self::Sextant => (2, 3),
             Self::Octant => (2, 4),
         }
@@ -39,7 +28,6 @@ impl GlyphTier {
 
     fn glyph(self, mask: u8) -> char {
         match self {
-            Self::Half => '▀',
             Self::Sextant => sextant_char(mask),
             Self::Octant => octant_char(mask),
         }
@@ -59,9 +47,8 @@ pub(crate) fn render_frame(
     frame: &RgbaImage,
     cols: u16,
     rows: u16,
-    glyphs: PetsGlyphMode,
+    tier: GlyphTier,
 ) -> PetCellGrid {
-    let tier = GlyphTier::from_config(glyphs);
     let (sub_w, sub_h) = tier.subcells();
     let sample_w = u32::from(cols) * sub_w;
     let sample_h = u32::from(rows) * sub_h;
@@ -70,13 +57,6 @@ pub(crate) fn render_frame(
     for cell_y in 0..u32::from(rows) {
         let mut row = Vec::with_capacity(usize::from(cols));
         for cell_x in 0..u32::from(cols) {
-            if tier == GlyphTier::Half {
-                let top = sample_at(&samples, sample_w, cell_x, cell_y * 2);
-                let bottom = sample_at(&samples, sample_w, cell_x, cell_y * 2 + 1);
-                row.push(half_cell(top, bottom));
-                continue;
-            }
-
             let mut sub = [((0.0, 0.0, 0.0), 0.0); 8];
             let count = (sub_w * sub_h) as usize;
             for dy in 0..sub_h {
@@ -90,31 +70,6 @@ pub(crate) fn render_frame(
         grid.push(row);
     }
     grid
-}
-
-/// A two-tone half-block cell. Each half is ink or transparent: an inked half
-/// paints its color, a transparent half drops to the terminal background.
-fn half_cell(top: Sample, bottom: Sample) -> PetCell {
-    let ink = |sample: Sample| sample.1 >= INK_THRESHOLD;
-    let color = |sample: Sample| rgb_color(linear_to_rgb(sample.0));
-    match (ink(top), ink(bottom)) {
-        (false, false) => transparent_cell(),
-        (true, false) => PetCell {
-            ch: '▀',
-            fg: color(top),
-            bg: Color::Reset,
-        },
-        (false, true) => PetCell {
-            ch: '▄',
-            fg: color(bottom),
-            bg: Color::Reset,
-        },
-        (true, true) => PetCell {
-            ch: '▀',
-            fg: color(top),
-            bg: color(bottom),
-        },
-    }
 }
 
 /// A sextant/octant cell. A fully-opaque cell keeps the two-color partition for
@@ -423,42 +378,15 @@ mod tests {
     }
 
     #[test]
-    fn render_half_block_uses_top_as_fg_and_bottom_as_bg() {
-        let image = RgbaImage {
-            width: 1,
-            height: 2,
-            data: vec![255, 0, 0, 255, 0, 0, 255, 255],
-        };
-        let grid = render_frame(&image, 1, 1, PetsGlyphMode::Half);
-        assert_eq!(grid[0][0].ch, '▀');
-        assert_eq!(grid[0][0].fg, Color::Rgb(255, 0, 0));
-        assert_eq!(grid[0][0].bg, Color::Rgb(0, 0, 255));
-    }
-
-    #[test]
     fn transparent_pixels_drop_to_terminal_background() {
         let image = RgbaImage {
             width: 1,
-            height: 2,
-            data: vec![255, 0, 0, 0, 255, 0, 0, 0],
+            height: 1,
+            data: vec![255, 0, 0, 0],
         };
-        let grid = render_frame(&image, 1, 1, PetsGlyphMode::Half);
+        let grid = render_frame(&image, 1, 1, GlyphTier::Sextant);
         assert_eq!(grid[0][0].ch, ' ');
         assert_eq!(grid[0][0].fg, Color::Reset);
-        assert_eq!(grid[0][0].bg, Color::Reset);
-    }
-
-    #[test]
-    fn half_edge_keeps_terminal_background_under_the_sprite() {
-        let image = RgbaImage {
-            width: 1,
-            height: 2,
-            // Opaque red top, fully transparent bottom.
-            data: vec![255, 0, 0, 255, 0, 0, 0, 0],
-        };
-        let grid = render_frame(&image, 1, 1, PetsGlyphMode::Half);
-        assert_eq!(grid[0][0].ch, '▀');
-        assert_eq!(grid[0][0].fg, Color::Rgb(255, 0, 0));
         assert_eq!(grid[0][0].bg, Color::Reset);
     }
 }

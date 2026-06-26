@@ -6,9 +6,10 @@ use crate::config::PetsGlyphMode;
 
 use super::asset::{self, PetSource};
 use super::catalog::BUILTIN_PETS;
-use super::cellart::{self, PetCell};
+use super::cellart::{self, GlyphTier, PetCell};
 use super::frames::RgbaImage;
 use super::model::{self, Animation, default_animations};
+use super::{PetRenderCaps, PetRenderTier, resolve_render_tier};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreviewCell {
@@ -21,6 +22,19 @@ pub struct PreviewCell {
 pub struct PetPreview {
     pub id: String,
     pub grid: Result<Vec<Vec<PreviewCell>>, String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PixelPreviewFrame {
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PetPixelPreview {
+    pub id: String,
+    pub frame: Result<PixelPreviewFrame, String>,
 }
 
 fn listable_sources() -> Vec<(String, PetSource)> {
@@ -42,10 +56,23 @@ pub fn listable_ids() -> Vec<String> {
         .collect()
 }
 
-pub fn load_previews(
+pub fn load_previews_with_caps(
     cols: u16,
     rows: u16,
     glyphs: PetsGlyphMode,
+    caps: PetRenderCaps,
+) -> impl Iterator<Item = PetPreview> {
+    let tier = match resolve_render_tier(glyphs, caps) {
+        PetRenderTier::Pixel | PetRenderTier::Sextant => GlyphTier::Sextant,
+        PetRenderTier::Octant => GlyphTier::Octant,
+    };
+    load_previews_for_tier(cols, rows, tier)
+}
+
+fn load_previews_for_tier(
+    cols: u16,
+    rows: u16,
+    tier: GlyphTier,
 ) -> impl Iterator<Item = PetPreview> {
     let sources = listable_sources();
     let handles = sources
@@ -55,7 +82,7 @@ pub fn load_previews(
             thread::spawn(move || {
                 super::load_pet(source)
                     .map_err(|err| err.to_string())
-                    .map(|frames| render_sprite(&frames, cols, rows, glyphs))
+                    .map(|frames| render_sprite(&frames, cols, rows, tier))
             })
         })
         .collect::<Vec<_>>();
@@ -71,24 +98,71 @@ pub fn load_previews(
         })
 }
 
+pub fn load_pixel_previews() -> impl Iterator<Item = PetPixelPreview> {
+    let sources = listable_sources();
+    let handles = sources
+        .iter()
+        .map(|(_id, source)| {
+            let source = source.clone();
+            thread::spawn(move || {
+                super::load_pet(source)
+                    .map_err(|err| err.to_string())
+                    .and_then(|frames| {
+                        idle_sprite(&frames)
+                            .cloned()
+                            .map(PixelPreviewFrame::from)
+                            .ok_or_else(|| "pet sheet has no frames".to_owned())
+                    })
+            })
+        })
+        .collect::<Vec<_>>();
+
+    sources
+        .into_iter()
+        .zip(handles)
+        .map(|((id, _source), handle)| PetPixelPreview {
+            id,
+            frame: handle
+                .join()
+                .unwrap_or_else(|_| Err("pet preview loader stopped".to_owned())),
+        })
+}
+
 fn render_sprite(
     frames: &[RgbaImage],
     cols: u16,
     rows: u16,
-    glyphs: PetsGlyphMode,
+    tier: GlyphTier,
 ) -> Vec<Vec<PreviewCell>> {
-    if frames.is_empty() {
+    let Some(sprite) = idle_sprite(frames) else {
         return Vec::new();
+    };
+    cellart::render_frame(sprite, cols, rows, tier)
+        .iter()
+        .map(|row| row.iter().map(preview_cell).collect())
+        .collect()
+}
+
+fn idle_sprite(frames: &[RgbaImage]) -> Option<&RgbaImage> {
+    if frames.is_empty() {
+        return None;
     }
     let sprite_index = default_animations()
         .get(model::TRACK_IDLE)
         .map(Animation::first_sprite)
         .unwrap_or(0)
         .min(frames.len().saturating_sub(1));
-    cellart::render_frame(&frames[sprite_index], cols, rows, glyphs)
-        .iter()
-        .map(|row| row.iter().map(preview_cell).collect())
-        .collect()
+    frames.get(sprite_index)
+}
+
+impl From<RgbaImage> for PixelPreviewFrame {
+    fn from(frame: RgbaImage) -> Self {
+        Self {
+            width: frame.width,
+            height: frame.height,
+            data: frame.data,
+        }
+    }
 }
 
 fn preview_cell(cell: &PetCell) -> PreviewCell {

@@ -26,6 +26,7 @@ fn serve_config(ws: &WorkspaceId) -> ServeConfig {
         tick_seconds: 1,
         refresh_ms_override: None,
         notification_prefs: crate::config::NotificationsPrefs::default(),
+        pet_glyphs: crate::config::PetsGlyphMode::Auto,
         own_pane: None,
     }
 }

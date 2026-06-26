@@ -159,7 +159,7 @@ fn render_fleet_ledger_keeps_zero_rows_for_missing_or_zero_tally() {
 
     let panel = provider_panel("claude", "Claude", 173, true, true, Some((25, 40)));
     let active = panel.kind.clone();
-    let (lines, _) = dashboard_panel_lines(
+    let (lines, _, _) = dashboard_panel_lines(
         &theme,
         std::slice::from_ref(&panel),
         Some(&active),
@@ -173,11 +173,6 @@ fn render_fleet_ledger_keeps_zero_rows_for_missing_or_zero_tally() {
     );
     let rendered = line_texts(&lines).join("\n");
 
-    assert_eq!(
-        provider_dashboard_block_rows(&panel),
-        lines.len() - 2,
-        "row-count helper matches painted active block:\n{rendered}"
-    );
     assert!(
         rendered.contains("W: $0.00") && rendered.contains("M: $0.00"),
         "normal total USD row renders zero:\n{rendered}"
@@ -271,11 +266,6 @@ fn pets_provider_dashboard_owns_total_rows() {
         "normal layout has a blank row above Total:\n{rendered}"
     );
     assert_eq!(
-        crate::sidebar_pane::render::active_dashboard_block_rows(&snapshot, &UiState::default()),
-        Some(9),
-        "small pet sizing targets the provider block, excluding footer and bottom gap"
-    );
-    assert_eq!(
         lines.iter().filter(|line| line.contains("W: ◎")).count(),
         1,
         "tabbed dashboard does not duplicate the bottom W row:\n{rendered}"
@@ -328,7 +318,12 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
     };
     let ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
-            grid: Some((0..6).map(|_| vec![cell.clone(); 12]).collect()),
+            grid: Some(
+                (0..usize::from(crate::sidebar_pane::pets::DASHBOARD_CELL_PET.rows))
+                    .map(|_| vec![cell.clone(); 12])
+                    .collect(),
+            ),
+            pixel: None,
             caption: Some("ready".to_owned()),
             loading: false,
             action: crate::sidebar_pane::pets::PetAction::Idle,
@@ -351,11 +346,7 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
     );
     assert!(
         !footer.contains('▀'),
-        "footer row is below the pet body:\n{rendered}"
-    );
-    assert!(
-        footer.trim_end().ends_with("? for help"),
-        "help is right-aligned on the bottom row:\n{footer}"
+        "cell-art pet leaves breathing room on the footer row:\n{rendered}"
     );
     assert_eq!(
         footer_index,
@@ -366,6 +357,10 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
         lines[footer_index.saturating_sub(1)].contains("W: $0.00")
             && lines[footer_index.saturating_sub(1)].contains("M: $0.00"),
         "the zero total row sits above the footer:\n{rendered}"
+    );
+    assert!(
+        lines[footer_index.saturating_sub(1)].contains('▀'),
+        "cell-art pet ends one row above the footer:\n{rendered}"
     );
     assert_eq!(
         lines

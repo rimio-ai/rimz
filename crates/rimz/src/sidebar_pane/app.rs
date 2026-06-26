@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
-use crate::config::{NotificationsPrefs, PetsSize};
+use crate::config::{NotificationsPrefs, PetsGlyphMode};
 use crate::ids::PaneId;
 use crate::ledger::paths::PathErr;
 use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
@@ -25,7 +25,10 @@ use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL};
 use crate::sidebar_pane::osc;
-use crate::sidebar_pane::pets::{PetAssets, PetGridSize, PetViewFrame};
+use crate::sidebar_pane::pets::{
+    PetAssets, PetPixelView, PetRenderCaps, PetRenderTier, PetViewFrame, PixelPainter,
+    dashboard_pet_size, detect_pet_render_caps, resolve_render_tier,
+};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -70,8 +73,6 @@ pub use health::Health;
 pub use state::{RenderState, compute_next_state};
 
 const SIDEBAR_TERMINAL_TITLE: &str = "rimz-sidebar";
-const PET_FALLBACK_TERMINAL_SIZE: (u16, u16) = (54, 34);
-
 thread_local! {
     static PRODUCE_PANIC_DIAGNOSTIC_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
 }
@@ -88,6 +89,9 @@ pub struct ServeConfig {
     /// config-shaped so recovery can fall back to `[sidebar].refresh_ms`.
     pub refresh_ms_override: Option<u16>,
     pub notification_prefs: NotificationsPrefs,
+    /// Initial pet render tier from machine theme config, used before the first
+    /// produced snapshot arrives.
+    pub pet_glyphs: PetsGlyphMode,
     /// The sidebar's own mux pane, resolved once from the per-pane env at
     /// launch (`crate::mux::own_pane_id`) — the fold's self-exclusion and the
     /// heartbeat's pane claim. `None` outside a pane. Carried here rather than
@@ -146,6 +150,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // ledger uses, so a resize is just another wakeup; without it the first
     // usable frame waits for the next `tick`, reading as a blank sidebar.
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout)?;
+    let pet_render_caps =
+        detect_pet_render_caps(config.mux, config.pet_glyphs, &config.session_name);
     spawn_event_waker(socket_path.clone());
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -169,6 +175,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         initial_width,
         observe_tx,
         read_marks,
+        pet_render_caps,
+        config.mux == MuxName::Tmux,
     );
     // Monotonic base for the animation frame. Deriving the phase from elapsed
     // wall-clock (rather than a per-tick counter) keeps the spin continuous
@@ -270,7 +278,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             // backstop poll runs there too.
             Wakeup::Tick => {}
             Wakeup::Resize => {
-                state.on_resize(&mut fetch, &mut terminal, anim_start)?;
+                state.on_resize(&config, &mut fetch, &mut terminal, anim_start)?;
             }
             // The `r` keypress rides the local `reload` control word; an
             // external `rimz reload` arrives as the typed event. Both resolve
@@ -300,6 +308,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     if state.tab_emptied {
         close_self_closing_view_floating_panes(&config);
     }
+    state.clear_pixel(&mut terminal);
     if let Some(target) = state.reexec_to {
         // Restore the terminal and release this instance's runtime files before
         // replacing the process image — `exec` never returns, so their RAII
@@ -409,7 +418,7 @@ fn set_terminal_title() -> io::Result<()> {
 fn apply_input(
     wakeup: Wakeup,
     ui: &mut UiState,
-    pet_assets: &mut PetAssets,
+    pets: &mut PetRender<'_>,
     health: &mut Health,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     snapshot: &SidebarSnapshot,
@@ -426,12 +435,19 @@ fn apply_input(
             wall_clock_phase(anim_start, snapshot.theme.display.resolved_refresh_ms());
         refresh_pet_view(
             ui,
-            pet_assets,
+            pets.assets,
             snapshot,
+            pets.caps,
             health.alert.as_ref().is_some_and(render::Alert::is_active),
-            terminal.size().ok().map(|size| (size.width, size.height)),
         );
-        render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
+        draw_frame_and_paint_pet_pixel(
+            terminal,
+            snapshot,
+            health.alert.as_ref(),
+            ui,
+            pets.assets,
+            pets.pixel_painter,
+        )?;
     }
     Ok(InputApply {
         painted: outcome.redraw,
@@ -443,30 +459,30 @@ fn apply_input(
     })
 }
 
+struct PetRender<'a> {
+    assets: &'a mut PetAssets,
+    pixel_painter: &'a mut PixelPainter,
+    caps: PetRenderCaps,
+}
+
 fn refresh_pet_view(
     ui: &mut UiState,
     pet_assets: &mut PetAssets,
     snapshot: &SidebarSnapshot,
+    caps: PetRenderCaps,
     alert_active: bool,
-    terminal_size: Option<(u16, u16)>,
 ) {
-    let (width, height) = terminal_size.unwrap_or(PET_FALLBACK_TERMINAL_SIZE);
     let action = render::selected_pet_action(snapshot, ui);
-    let size = if snapshot.theme.pets.enabled
-        && render::dashboard_present(snapshot, alert_active)
-        && render::pet_body_enabled(snapshot)
-    {
-        let inner = width.saturating_sub(2);
-        match snapshot.theme.pets.size {
-            PetsSize::Medium => PetGridSize::for_dashboard_column(inner, height),
-            PetsSize::Small => match render::active_dashboard_block_rows(snapshot, ui) {
-                Some(rows) => PetGridSize::for_dashboard_block(rows, inner, height),
-                None => PetGridSize::for_standalone_dashboard(inner, height),
-            },
-        }
+    let resolved_tier = resolve_render_tier(snapshot.theme.pets.glyphs, caps);
+    let tier = if resolved_tier == PetRenderTier::Pixel && !pet_pixel_enabled(snapshot, caps) {
+        PetRenderTier::Sextant
     } else {
-        None
+        resolved_tier
     };
+    let size = (snapshot.theme.pets.enabled
+        && render::dashboard_present(snapshot, alert_active)
+        && render::pet_body_enabled(snapshot))
+    .then(|| dashboard_pet_size(tier));
     let unread_triggered = if snapshot.theme.pets.enabled {
         pet_assets.observe_unread_rows(render::unread_pet_row_ids(snapshot))
     } else {
@@ -481,8 +497,62 @@ fn refresh_pet_view(
             size,
             motion_enabled: render::pet_motion_enabled(snapshot, action),
             unread_triggered,
+            tier,
         },
     );
+}
+
+fn pet_pixel_enabled(snapshot: &SidebarSnapshot, caps: PetRenderCaps) -> bool {
+    matches!(
+        resolve_render_tier(snapshot.theme.pets.glyphs, caps),
+        PetRenderTier::Pixel
+    ) && !snapshot.providers.is_empty()
+        && render::pet_body_enabled(snapshot)
+}
+
+fn draw_frame_and_paint_pet_pixel<W: Write>(
+    terminal: &mut Terminal<CrosstermBackend<W>>,
+    snapshot: &SidebarSnapshot,
+    alert: Option<&render::Alert>,
+    ui: &mut UiState,
+    pet_assets: &PetAssets,
+    pixel_painter: &mut PixelPainter,
+) -> io::Result<()> {
+    render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
+    // `draw_into` writes the fresh pixel rect into `ui`, so placement-shift
+    // recovery must run after one draw. A pre-draw check only sees the previous
+    // frame's rect and misses the steady same-pet layout shift.
+    if pixel_painter.needs_full_redraw(paintable_pet_pixel(ui, pet_assets)) {
+        terminal.clear()?;
+        render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
+    }
+    paint_pet_pixel(ui, pet_assets, pixel_painter, terminal)
+}
+
+fn paint_pet_pixel<W: Write>(
+    ui: &UiState,
+    pet_assets: &PetAssets,
+    pixel_painter: &mut PixelPainter,
+    terminal: &mut Terminal<CrosstermBackend<W>>,
+) -> io::Result<()> {
+    if let Some((rect, pixel)) = paintable_pet_pixel(ui, pet_assets) {
+        let frame = pet_assets
+            .pixel_frame(&pixel.pet_id, pixel.sprite_index)
+            .expect("paintable pixel pet has a loaded frame");
+        return pixel_painter.paint(terminal.backend_mut(), rect, pixel, frame);
+    }
+    pixel_painter.hide_after_draw(terminal.backend_mut())
+}
+
+fn paintable_pet_pixel<'a>(
+    ui: &'a UiState,
+    pet_assets: &PetAssets,
+) -> Option<(ratatui::layout::Rect, &'a PetPixelView)> {
+    let rect = ui.pet_pixel_rect?;
+    let pixel = ui.pet.as_ref()?.pixel.as_ref()?;
+    pet_assets
+        .pixel_frame(&pixel.pet_id, pixel.sprite_index)
+        .map(|_| (rect, pixel))
 }
 
 struct InputApply {

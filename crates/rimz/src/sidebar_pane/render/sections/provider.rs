@@ -449,6 +449,15 @@ pub(crate) struct ProviderTabHit {
     pub(crate) kind: String,
 }
 
+/// Pixel pet body placement relative to the unpadded dashboard panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PetPixelRect {
+    pub(crate) line: usize,
+    pub(crate) col: usize,
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+}
+
 /// The pinned per-provider dashboard. In stacked mode every account paints its
 /// own block — the dashboard's top hairline, then each provider header and
 /// brand/budget/spend body separated from the next by a blank row. In
@@ -473,7 +482,7 @@ pub(in crate::sidebar_pane::render) fn provider_panel_lines(
     now: Timestamp,
 ) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
     let active_tab = active_kind.map(str::to_owned);
-    dashboard_panel_lines(
+    let (lines, hits, _) = dashboard_panel_lines(
         theme,
         providers,
         active_tab.as_ref(),
@@ -484,7 +493,8 @@ pub(in crate::sidebar_pane::render) fn provider_panel_lines(
         width,
         zones,
         now,
-    )
+    );
+    (lines, hits)
 }
 
 #[cfg(test)]
@@ -500,7 +510,11 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
     width: usize,
     zones: &BudgetBarConfig,
     now: Timestamp,
-) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
+) -> (
+    Vec<Line<'static>>,
+    Vec<ProviderTabHit>,
+    Option<PetPixelRect>,
+) {
     dashboard_panel_lines_with_footer(
         theme,
         providers,
@@ -529,14 +543,22 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
     width: usize,
     zones: &BudgetBarConfig,
     now: Timestamp,
-) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
+) -> (
+    Vec<Line<'static>>,
+    Vec<ProviderTabHit>,
+    Option<PetPixelRect>,
+) {
     let mut lines = Vec::new();
     let first = providers.first();
     if first.is_none() && !pets_enabled {
-        return (lines, Vec::new());
+        return (lines, Vec::new(), None);
     }
     if first.is_none() {
-        return (super::pets::pet_panel_lines(pet, theme, width), Vec::new());
+        return (
+            super::pets::pet_panel_lines(pet, theme, width),
+            Vec::new(),
+            None,
+        );
     }
     if !tabbed {
         let mut blocks = Vec::new();
@@ -548,7 +570,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
             }
             blocks.extend(single_block_lines(theme, panel, width, zones, now));
         }
-        return (blocks, Vec::new());
+        return (blocks, Vec::new(), None);
     }
 
     let active_kind = active_tab
@@ -582,13 +604,32 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
                         folded_footer: None,
                     },
                 );
-                let pet = super::pets::dashboard_pet_grid_lines(pet, theme, pet_w);
+                let pet_lines = super::pets::dashboard_pet_grid_lines(pet, theme, pet_w);
+                let footer_rows = usize::from(folded_footer.is_some());
+                let block_rows = block.len() + footer_rows;
+                let pet_rows = pet_lines.len();
+                let rows = block_rows.max(pet_rows);
+                let pet_top = rows.saturating_sub(pet_rows);
+                let pet_pixel_rect =
+                    pet.and_then(|view| view.pixel.as_ref())
+                        .map(|pixel| PetPixelRect {
+                            line: 2 + pet_top,
+                            col: block_w + PET_COLUMN_GAP,
+                            width: pet_w as u16,
+                            height: pixel.size.rows,
+                        });
                 let footer = folded_footer
                     .clone()
                     .map(|footer| folded_footer_line(theme, footer, block_w));
-                lines.extend(zip_provider_pet_lines(
-                    block, pet, footer, block_w, pet_w, width,
-                ));
+                let layout = ProviderPetZipLayout {
+                    pet_top,
+                    rows,
+                    block_w,
+                    pet_w,
+                    width,
+                };
+                lines.extend(zip_provider_pet_lines(block, pet_lines, footer, layout));
+                return (lines, hits, pet_pixel_rect);
             } else {
                 // A blank line below the rail sets the tabs apart from the active
                 // account's tall spend block when the pet column is unavailable.
@@ -626,7 +667,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
             ));
         }
     }
-    (lines, hits)
+    (lines, hits, None)
 }
 
 fn single_block_lines(
@@ -685,43 +726,6 @@ fn active_provider_block_lines(
     lines
 }
 
-pub(in crate::sidebar_pane::render) fn provider_dashboard_block_rows(
-    panel: &SidebarProviderPanel,
-) -> usize {
-    let layout = ProviderLayout::Normal;
-    1 + provider_body_row_count(panel, layout) + total_spend_row_count(layout)
-}
-
-fn provider_body_row_count(panel: &SidebarProviderPanel, layout: ProviderLayout) -> usize {
-    let art_start = 0;
-    let art = panel.art.len().saturating_sub(art_start);
-    (provider_stats_row_count(layout) + provider_bar_count(panel)).max(art)
-}
-
-fn provider_stats_row_count(layout: ProviderLayout) -> usize {
-    match layout {
-        ProviderLayout::Wide | ProviderLayout::Normal | ProviderLayout::Narrow => 1,
-    }
-}
-
-fn total_spend_row_count(layout: ProviderLayout) -> usize {
-    usize::from(matches!(
-        layout,
-        ProviderLayout::Wide | ProviderLayout::Normal
-    )) + 1
-        + match layout {
-            ProviderLayout::Wide => 2,
-            ProviderLayout::Normal | ProviderLayout::Narrow => 3,
-        }
-}
-
-fn provider_bar_count(panel: &SidebarProviderPanel) -> usize {
-    if !panel.metered || panel.windows.is_empty() {
-        return 1;
-    }
-    select_provider_bars(panel).len()
-}
-
 fn folded_footer_line(theme: &Theme, line: Line<'static>, width: usize) -> Line<'static> {
     let (left, right) = split_footer_spans(theme, line.spans);
     if right.is_empty() {
@@ -761,9 +765,19 @@ fn split_footer_spans(
 fn pet_column_width(theme: &Theme, pet: Option<&PetView>) -> Option<usize> {
     theme
         .pet_body_enabled()
-        .then(|| pet.and_then(|view| view.grid.as_ref()))
+        .then(|| {
+            pet.and_then(|view| {
+                view.pixel
+                    .as_ref()
+                    .map(|pixel| usize::from(pixel.size.cols))
+                    .or_else(|| {
+                        view.grid
+                            .as_ref()
+                            .and_then(|grid| grid.iter().map(Vec::len).max())
+                    })
+            })
+        })
         .flatten()
-        .and_then(|grid| grid.iter().map(Vec::len).max())
         .filter(|width| *width > 0)
 }
 
@@ -788,35 +802,41 @@ fn provider_pet_caption_line(theme: &Theme, pet: Option<&PetView>, width: usize)
     Line::from(spans)
 }
 
+struct ProviderPetZipLayout {
+    pet_top: usize,
+    rows: usize,
+    block_w: usize,
+    pet_w: usize,
+    width: usize,
+}
+
 fn zip_provider_pet_lines(
     block: Vec<Line<'static>>,
     pet: Vec<Line<'static>>,
     footer: Option<Line<'static>>,
-    block_w: usize,
-    pet_w: usize,
-    width: usize,
+    layout: ProviderPetZipLayout,
 ) -> Vec<Line<'static>> {
-    let block_rows = block.len() + usize::from(footer.is_some());
-    let pet_rows = pet.len() + usize::from(!pet.is_empty());
-    let rows = block_rows.max(pet_rows);
-    let mut lines = Vec::with_capacity(rows);
-    for index in 0..rows {
-        let footer_row = footer.is_some() && index + 1 == rows;
+    let mut lines = Vec::with_capacity(layout.rows);
+    for index in 0..layout.rows {
+        let footer_row = footer.is_some() && index + 1 == layout.rows;
         let mut block_line = pad_line_to(
             if footer_row {
                 footer.clone().unwrap_or_else(|| Line::from(""))
             } else {
                 block.get(index).cloned().unwrap_or_else(|| Line::from(""))
             },
-            block_w,
+            layout.block_w,
         );
         block_line.spans.push(Span::raw(" ".repeat(PET_COLUMN_GAP)));
+        let pet_index = index.checked_sub(layout.pet_top);
         let pet_line = pad_line_to(
-            pet.get(index).cloned().unwrap_or_else(|| Line::from("")),
-            pet_w,
+            pet_index
+                .and_then(|index| pet.get(index).cloned())
+                .unwrap_or_else(|| Line::from("")),
+            layout.pet_w,
         );
         block_line.spans.extend(pet_line.spans);
-        block_line.spans = trim_spans_to_width(block_line.spans, width);
+        block_line.spans = trim_spans_to_width(block_line.spans, layout.width);
         lines.push(block_line);
     }
     lines

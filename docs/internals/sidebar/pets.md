@@ -6,11 +6,11 @@ Pets are renderer-local attention art. The dashboard shows one animated companio
 
 ## Dashboard Placement
 
-The pet shares the dashboard area with the single active provider block. The rail stays provider-tabs-only, and the active tab follows the selected pane's provider unless `Left`/`Right` or mouse picks another provider. With no provider blocks, the pet renders alone.
+The pet shares the dashboard area with the single active provider block. The rail stays provider-tabs-only, and the active tab follows the selected pane's provider unless `Left`/`Right` or mouse picks another provider. With no provider blocks, the pet renders alone as cell art.
 
-`size = "medium"` keeps the fixed pet footprint. `size = "small"` fits the sprite body to the active provider block's height.
+Geometry follows the resolved render tier with fixed dashboard footprints shared by the live sidebar, gallery, and `rimz list-pets`: pixel pets reserve `15×9` cells, while octant and sextant cell-art pets reserve `18×9` cells. Provider blocks keep their normal total-spend spacer in every tier. The dashboard pet column adds one empty row beneath either tier, bottom-aligns that reserved block to the panel, and leaves the art one row above the panel bottom with identical vertical space. With no provider blocks, the pet renders alone as fixed-size cell art.
 
-The sprite drops out under `NO_COLOR`, and on panes too narrow or short to hold it, leaving the provider block the full width. The rendered look and provider-block layout tiers live in [interface/sidebar.md Zone 3](../../interface/sidebar.md#zone-3--the-provider-dashboard).
+The sprite drops out under `NO_COLOR`, and on panes too narrow to hold it, leaving the provider block the full width. The rendered look and provider-block layout tiers live in [interface/sidebar.md Zone 3](../../interface/sidebar.md#zone-3--the-provider-dashboard).
 
 ## Focused-Card Action
 
@@ -36,7 +36,17 @@ Captions are canned strings in the renderer. They read action transitions only; 
 
 The pet renders as ordinary terminal cells through ratatui. Each WebP frame is downsampled into a small grid of `char + fg + bg` cells, then copied into the buffer like every other dashboard line. That keeps output pane-local across tmux, Zellij, detached sessions, and plain terminals.
 
-`[theme.pets] glyphs = "auto"` uses sextants as the default quality tier. `half`, `sextant`, and `octant` pin the block-glyph tier explicitly. The converter averages source pixels in linear light and chooses the best split for each cell's foreground/background pair.
+`[theme.pets] glyphs = "auto"` resolves through the ladder pixel → sextant. `pixel` tries pixels first and falls back to sextant when the pixel gate misses; `octant` and `sextant` pin their cell tier explicitly. Octant stays available as the sharper manual cell tier, while auto keeps the portable sextant fallback. The converter averages source pixels in linear light and chooses the best split for each cell's foreground/background pair.
+
+## Pixel Tier
+
+The pixel tier renders the same decoded WebP frames through the kitty graphics protocol after ratatui flushes the dashboard. The renderer reserves the pet column as blank cells and records its screen rect; the serve loop owns stdout and writes the image placement in that rect.
+
+Pixel rendering in the live sidebar and gallery is a tmux enrichment with three hard gates: tmux backend, tmux 3.6 or newer, and `allow-passthrough` set to `on` or `all`. Auto mode also requires every rendering client attached to the sidebar session to report a kitty-capable terminfo name (`xterm-ghostty`, `ghostty`, `xterm-kitty`, or `kitty`) through tmux formats; control-mode clients are ignored because they render no screen. `glyphs = "pixel"` skips only the terminfo allowlist so newer kitty-capable terminals can opt in; tmux and passthrough remain hard gates. A pixel-gate miss or Zellij pane uses sextant cell art unless `octant` is pinned; `NO_COLOR`, disabled pets, and too-narrow panes clear any prior pixel placement.
+
+tmux receives every graphics escape through its passthrough DCS wrapper, and the placement uses kitty Unicode placeholders so redraws and pane repaints keep ownership in the sidebar pane. A plain Ghostty or kitty terminal receives native, unwrapped graphics for `rimz list-pets`; inside tmux, list-pets uses the same passthrough wrapper as the sidebar. Rimz reads `tmux -V`, `allow-passthrough`, session-scoped `list-clients -F '#{client_control_mode} #{client_termname}'`, `tmux display-message -p '#{session_name}'`, and `$TERM` for standalone preview detection; it adds no command-executing config and no project trust-hash surface. A detached launch has no client termname yet, so `auto` can start on sextant cell art and upgrade on the resize wakeup that arrives when a Ghostty or kitty client attaches.
+
+The live sidebar, `rimz sidebar gallery`, and `rimz list-pets` share the same fixed footprints and pixel/sextant auto ladder, with octant available when pinned. Gallery columns paint through separate image-id ranges so one column cannot delete or ghost another column's image. List-pets uses the same idle sprite as cell previews and falls back to sextant cells when pixels are unavailable.
 
 The render module receives only `PetView` data: a cell grid, an optional caption, loading state, current action, and active animation track. Network fetch, disk cache, WebP decode, frame slicing, animation selection, and memoized cell-art conversion stay in `src/sidebar_pane/pets/`.
 
@@ -66,9 +76,8 @@ The `pet` selector resolves to one of four sources, tried in order: a built-in c
 [theme.pets]
 enabled = false
 pet = "rocky"
-size = "medium"
 glyphs = "auto"
 voice = true
 ```
 
-Pets are off by default; `enabled = true` starts the dashboard overlay and allows asset fetches for built-in and configured `https://` sources. The full key reference lives in [configuration.md Pets](../../reference/configuration.md#pets).
+Pets are off by default; `enabled = true` starts the dashboard overlay and allows asset fetches for built-in and configured `https://` sources. `glyphs` accepts `auto`, `pixel`, `octant`, or `sextant`; `auto` falls back to sextant, and `octant` is the explicit sharper cell tier. `voice = false` disables canned captions. The full key reference lives in [configuration.md Pets](../../reference/configuration.md#pets).

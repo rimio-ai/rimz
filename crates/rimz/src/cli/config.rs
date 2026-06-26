@@ -765,7 +765,6 @@ fn exact_set_keys() -> BTreeSet<String> {
         "agents.attention.inactive_after_secs",
         "theme.pets.enabled",
         "theme.pets.pet",
-        "theme.pets.size",
         "theme.pets.glyphs",
         "theme.pets.voice",
         "agents.loop.tasks",

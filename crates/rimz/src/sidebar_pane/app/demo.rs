@@ -5,8 +5,9 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
+use crate::MuxName;
 use crate::SidebarSnapshot;
-use crate::sidebar_pane::pets::PetAssets;
+use crate::sidebar_pane::pets::{PetAssets, PixelPainter, detect_pet_render_caps};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::tui::{MouseCapture, TerminalModeGuard};
 
@@ -14,9 +15,15 @@ struct GalleryState {
     snapshot: SidebarSnapshot,
     ui: UiState,
     pets: PetAssets,
+    pixel_painter: PixelPainter,
 }
 
-pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Result<()> {
+pub fn serve_fixture(
+    snapshot: SidebarSnapshot,
+    refresh_ms: u16,
+    mux: MuxName,
+    session_name: &str,
+) -> super::Result<()> {
     let refresh_ms = refresh_ms.max(1);
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Off)?;
     let backend = CrosstermBackend::new(io::stdout());
@@ -25,19 +32,20 @@ pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Resul
 
     let mut ui = UiState::default();
     let mut pets = PetAssets::default();
+    let caps = detect_pet_render_caps(mux, snapshot.theme.pets.glyphs, session_name);
+    let mut pixel_painter = PixelPainter::new(mux == MuxName::Tmux);
     let anim_start = Instant::now();
     let cadence = Duration::from_millis(u64::from(refresh_ms));
 
     loop {
         ui.animation_phase = super::timing::wall_clock_phase(anim_start, refresh_ms);
-        super::refresh_pet_view(
-            &mut ui,
-            &mut pets,
-            &snapshot,
-            false,
-            terminal.size().ok().map(|size| (size.width, size.height)),
-        );
+        super::refresh_pet_view(&mut ui, &mut pets, &snapshot, caps, false);
         render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui)?;
+        if pixel_painter.needs_full_redraw(super::paintable_pet_pixel(&ui, &pets)) {
+            terminal.clear()?;
+            render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui)?;
+        }
+        super::paint_pet_pixel(&ui, &pets, &mut pixel_painter, &mut terminal)?;
 
         if !event::poll(cadence)? {
             continue;
@@ -51,19 +59,36 @@ pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Resul
     Ok(())
 }
 
-pub fn serve_gallery(snapshots: Vec<SidebarSnapshot>, refresh_ms: u16) -> super::Result<()> {
+pub fn serve_gallery(
+    snapshots: Vec<SidebarSnapshot>,
+    refresh_ms: u16,
+    mux: MuxName,
+    session_name: &str,
+) -> super::Result<()> {
     let refresh_ms = refresh_ms.max(1);
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Off)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
+    let glyphs = snapshots
+        .iter()
+        .find(|snapshot| snapshot.theme.pets.enabled)
+        .map(|snapshot| snapshot.theme.pets.glyphs)
+        .unwrap_or_default();
+    let caps = detect_pet_render_caps(mux, glyphs, session_name);
+    let id_base = PixelPainter::runtime_id_base();
     let mut states = snapshots
         .into_iter()
-        .map(|snapshot| GalleryState {
+        .enumerate()
+        .map(|(index, snapshot)| GalleryState {
             snapshot,
             ui: UiState::default(),
             pets: PetAssets::default(),
+            pixel_painter: PixelPainter::with_id_base(
+                id_base.wrapping_add((index as u32) << 12),
+                mux == MuxName::Tmux,
+            ),
         })
         .collect::<Vec<_>>();
     let anim_start = Instant::now();
@@ -71,28 +96,27 @@ pub fn serve_gallery(snapshots: Vec<SidebarSnapshot>, refresh_ms: u16) -> super:
 
     loop {
         let phase = super::timing::wall_clock_phase(anim_start, refresh_ms);
-        let terminal_size = terminal
-            .size()
-            .ok()
-            .map(|size| (gallery_column_width(size.width, states.len()), size.height));
         for state in &mut states {
             state.ui.animation_phase = phase;
-            super::refresh_pet_view(
-                &mut state.ui,
-                &mut state.pets,
-                &state.snapshot,
-                false,
-                terminal_size,
-            );
+            super::refresh_pet_view(&mut state.ui, &mut state.pets, &state.snapshot, caps, false);
         }
-        let mut columns = states
-            .iter_mut()
-            .map(|state| render::GalleryColumn {
-                snapshot: &state.snapshot,
-                ui: &mut state.ui,
-            })
-            .collect::<Vec<_>>();
-        render::draw_gallery_to_terminal(&mut terminal, &mut columns)?;
+        draw_gallery_to_terminal(&mut terminal, &mut states)?;
+        if states.iter().any(|state| {
+            state
+                .pixel_painter
+                .needs_full_redraw(super::paintable_pet_pixel(&state.ui, &state.pets))
+        }) {
+            terminal.clear()?;
+            draw_gallery_to_terminal(&mut terminal, &mut states)?;
+        }
+        for state in &mut states {
+            super::paint_pet_pixel(
+                &state.ui,
+                &state.pets,
+                &mut state.pixel_painter,
+                &mut terminal,
+            )?;
+        }
 
         if !event::poll(cadence)? {
             continue;
@@ -106,10 +130,18 @@ pub fn serve_gallery(snapshots: Vec<SidebarSnapshot>, refresh_ms: u16) -> super:
     Ok(())
 }
 
-fn gallery_column_width(width: u16, column_count: usize) -> u16 {
-    let count = column_count.max(1).min(usize::from(u16::MAX)) as u16;
-    let delimiters = column_count.saturating_sub(1).min(usize::from(u16::MAX)) as u16;
-    width.saturating_sub(delimiters) / count
+fn draw_gallery_to_terminal<W: io::Write>(
+    terminal: &mut Terminal<CrosstermBackend<W>>,
+    states: &mut [GalleryState],
+) -> io::Result<()> {
+    let mut columns = states
+        .iter_mut()
+        .map(|state| render::GalleryColumn {
+            snapshot: &state.snapshot,
+            ui: &mut state.ui,
+        })
+        .collect::<Vec<_>>();
+    render::draw_gallery_to_terminal(terminal, &mut columns)
 }
 
 fn fixture_quit_key(key: event::KeyEvent) -> bool {

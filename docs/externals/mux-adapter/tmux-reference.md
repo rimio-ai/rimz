@@ -62,6 +62,7 @@ Floors for the surfaces Rimz uses (from CHANGES):
 | `extended-keys-format` option | **3.5** |
 | Bracketed paste stays byte-preserving while `extended-keys` is on | **3.6** |
 | `allow-passthrough` option | **3.3**, default `off` (`all` value 3.4; the escape is not option-gated before 3.3) |
+| Kitty graphics passthrough for dashboard pets | **3.6** plus `allow-passthrough=on/all` and a kitty-capable outer terminal |
 | `escape-time` default 10ms (was 500ms) | 3.5 |
 | `command-error` hook | 3.5 |
 | `client-active`, `window-resized` hooks | 3.2 |
@@ -71,7 +72,7 @@ Floors for the surfaces Rimz uses (from CHANGES):
 | `new-window -S` (select-if-exists by name) | 3.2 |
 | `pane_start_time` format variable | **does not exist in any release** ([formats](#the-variables-rimz-reads)) |
 
-**The floor is option-driven:** `MIN_TMUX_VERSION` is 3.5.0 because the room options Rimz applies across supported hosts include `allow-passthrough` (3.3) and `extended-keys-format` (3.5), and a batched option sequence fails at the first option the server does not know — the command surface alone would need only 3.2. tmux 3.5.x carries the rich-key options but re-encodes bracketed-paste control bytes as extended-key sequences while they are active; 3.6 removes that paste cost. A future option below the floor either moves the constant again or gates itself (`set-option -q` silences unknown-option errors without branching on `tmux -V`).
+**The floor is option-driven:** `MIN_TMUX_VERSION` is 3.5.0 because the room options Rimz applies across supported hosts include `allow-passthrough` (3.3) and `extended-keys-format` (3.5), and a batched option sequence fails at the first option the server does not know — the command surface alone would need only 3.2. tmux 3.5.x carries the rich-key options but re-encodes bracketed-paste control bytes as extended-key sequences while they are active; 3.6 removes that paste cost. The optional pet pixel tier gates itself higher at tmux 3.6 because it relies on kitty graphics passthrough plus Unicode-placeholder repaint behavior. A future option below the floor either moves the constant again or gates itself (`set-option -q` silences unknown-option errors without branching on `tmux -V`).
 
 Behaviour changes inside the supported range: 3.6 keeps paste bytes uninterpreted while extended keys are active; 3.5 cut `escape-time`'s default 500→10ms and revamped extended-keys (always requests mode 2 upstream, new internal key representation; 3.5a adjusts BSpace/Shift encoding); 3.5 ran `#()`/`run-shell`/`if-shell`/popups under `default-shell`, and 3.5a reverted all but popups to `/bin/sh`; 3.3 made `command-prompt`/`confirm-before` block by default (`-b` restores async); 3.2 moved window/pane hooks off session scope ([hooks](#hooks)), renamed `refresh-client -F` to `-f`, and made `window_flags` escape `#` (`window_raw_flags` is the raw form).
 
@@ -208,7 +209,7 @@ Four scope tables — server, session, window, pane — each in a global and a l
 | `mouse` | session | **on** \| off | mouse events become bindable keys; click focuses panes |
 | `history-limit` | session | lines, **100000** | scrollback cap **for panes created after the set** — existing panes keep their birth limit |
 | `renumber-windows` | session | **on** \| off | closing a window renumbers indexes (respects `base-index`); `@id`s never move |
-| `allow-passthrough` | pane (set at window scope) | off \| **on** \| all | the `\ePtmux;…\e\\` passthrough escape; **3.3+, default off**; `on` works only while the pane is visible, `all` always (3.4) |
+| `allow-passthrough` | pane (set at window scope) | off \| **on** \| all | the `\ePtmux;…\e\\` passthrough escape; **3.3+, default off**; `on` works only while the pane is visible, `all` always (3.4); the pet pixel tier also requires tmux 3.6+ and a kitty-capable attached client termname (`#{client_termname}`) unless `[theme.pets] glyphs = "pixel"` explicitly opts past that allowlist |
 | `aggressive-resize` | window | **on** \| off | size to the smallest/largest session currently *viewing* the window rather than merely linked to it |
 | `pane-border-status` | window | **off** \| top \| bottom | a per-pane border text line (`pane-border-format`) |
 | `pane-border-format` | window | format string | text rendered in the `pane-border-status` row; when Rimz owns `pane-border-status`, it drives this to blank the sidebar segment |

@@ -53,6 +53,7 @@ fn refresh_override_stamps_folded_snapshot() {
         tick_seconds: 2,
         refresh_ms_override: Some(50),
         notification_prefs: NotificationsPrefs::default(),
+        pet_glyphs: crate::config::PetsGlyphMode::Auto,
         own_pane: None,
     };
 
@@ -340,6 +341,7 @@ fn test_config(workspace_id: WorkspaceId, instance_id: SidebarInstanceId) -> Ser
         tick_seconds: 2,
         refresh_ms_override: None,
         notification_prefs: NotificationsPrefs::default(),
+        pet_glyphs: crate::config::PetsGlyphMode::Auto,
         // No own pane: the fold must admit every published fixture pane even
         // when the test process itself runs inside a live mux pane.
         own_pane: None,
