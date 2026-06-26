@@ -27,7 +27,7 @@ use rimz::config::LaunchPlacement;
 use rimz::ids::{AgentKind, AgentSessionId, EventId};
 use rimz::ledger::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
 use rimz::message::{DeliveryGate, gate_open};
-use rimz::mux::{LayoutPanes, PaneCmd, SplitPaneOptions, TabOptions, own_pane_id};
+use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, TabOptions, own_pane_id};
 use rimz::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::workspace::WorkspaceResolver;
 

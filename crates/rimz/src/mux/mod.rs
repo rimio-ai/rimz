@@ -397,8 +397,16 @@ pub struct PaneCmd {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayoutColumn {
+    pub panes: Vec<PaneCmd>,
+    /// Zellij renders this column as a native stack; tmux has no native stack
+    /// and tiles the panes vertically.
+    pub stacked: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayoutPanes {
-    pub columns: Vec<Vec<PaneCmd>>,
+    pub columns: Vec<LayoutColumn>,
 }
 
 #[derive(Clone, Debug)]

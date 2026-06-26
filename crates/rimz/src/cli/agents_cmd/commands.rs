@@ -573,7 +573,10 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             title: format!("run: {}", adapter.descriptor().kind),
             cwd: launch.cwd.clone(),
             panes: LayoutPanes {
-                columns: vec![vec![pane]],
+                columns: vec![LayoutColumn {
+                    panes: vec![pane],
+                    stacked: false,
+                }],
             },
             focus: false,
             dock_sidebar: true,

@@ -19,7 +19,7 @@ use rimz::RuntimePaths;
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::{AgentKind, MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::mux::{
-    ClientFocusOptions, LayoutPanes, MuxBackend, NamedKey, PaneCmd, PaneListOptions,
+    ClientFocusOptions, LayoutColumn, LayoutPanes, MuxBackend, NamedKey, PaneCmd, PaneListOptions,
     SessionOptions, SidebarPaneOptions, SidebarWidth, SplitPaneOptions, TabOptions, TmuxBackend,
 };
 use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed, write_heartbeat};
@@ -27,6 +27,13 @@ use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
 
 use crate::common::{Env, ScrubSessionEnvExt};
+
+fn tiled_column(panes: Vec<PaneCmd>) -> LayoutColumn {
+    LayoutColumn {
+        panes,
+        stacked: false,
+    }
+}
 
 /// Poll `capture_pane` on `pane_id` until its text contains `needle` or the
 /// budget elapses; returns the last capture seen either way. Faster than a flat
@@ -1322,7 +1329,7 @@ fn closing_agent_tab_records_end_trace_when_session_survives() {
             title: "#rimz-gc".to_owned(),
             cwd: worktree.clone(),
             panes: LayoutPanes {
-                columns: vec![vec![PaneCmd { argv: command }]],
+                columns: vec![tiled_column(vec![PaneCmd { argv: command }])],
             },
             focus: false,
             dock_sidebar: true,
@@ -1418,7 +1425,7 @@ fn closing_agent_tab_disposes_clean_worktree_when_session_survives() {
             title: "#rimz-clean".to_owned(),
             cwd: worktree.clone(),
             panes: LayoutPanes {
-                columns: vec![vec![PaneCmd { argv: command }]],
+                columns: vec![tiled_column(vec![PaneCmd { argv: command }])],
             },
             focus: false,
             dock_sidebar: true,
@@ -1515,11 +1522,11 @@ fn open_tab_builds_multi_column_layout() {
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![
-                    // Column 0: two stacked rows — the `new-window` pane plus a
+                    // Column 0: two tiled rows — the `new-window` pane plus a
                     // `-v` split, exercising the in-column anchor tracking.
-                    vec![work_pane(), work_pane()],
+                    tiled_column(vec![work_pane(), work_pane()]),
                     // Column 1: one pane to the right — the `-h` split path.
-                    vec![work_pane()],
+                    tiled_column(vec![work_pane()]),
                 ],
             },
             focus: true,
@@ -1557,11 +1564,11 @@ fn open_tab_builds_multi_column_layout() {
     assert_eq!(
         column0.len(),
         2,
-        "column 0 splits into two stacked rows: {work:?}"
+        "column 0 splits into two tiled rows: {work:?}"
     );
     assert_ne!(
         column0[0].top, column0[1].top,
-        "column 0's rows stack vertically — same left, different top: {work:?}",
+        "column 0's rows tile vertically — same left, different top: {work:?}",
     );
     assert_eq!(
         column1.len(),
@@ -1635,7 +1642,7 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
             title: "gallery".to_owned(),
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
-                columns: vec![vec![work_pane()]],
+                columns: vec![tiled_column(vec![work_pane()])],
             },
             focus: true,
             dock_sidebar: false,
@@ -1742,7 +1749,10 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
             title: "float".to_owned(),
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
-                columns: vec![vec![work_pane()], vec![work_pane()]],
+                columns: vec![
+                    tiled_column(vec![work_pane()]),
+                    tiled_column(vec![work_pane()]),
+                ],
             },
             focus: false,
             dock_sidebar: true,
@@ -1844,9 +1854,9 @@ fn open_tab_single_pane_layout_docks_one_work_pane_beside_the_sidebar() {
             title: "solo".to_owned(),
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
-                columns: vec![vec![PaneCmd {
+                columns: vec![tiled_column(vec![PaneCmd {
                     argv: vec!["sleep".to_owned(), "600".to_owned()],
-                }]],
+                }])],
             },
             focus: false,
             dock_sidebar: true,

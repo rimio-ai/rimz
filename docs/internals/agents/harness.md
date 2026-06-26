@@ -38,13 +38,16 @@ reach a member by @handle#channel, then:
 
 ### The layout IR
 
-`rimz agents <spec>` resolves either a named `[agents.teams]` entry or an inline DSL, and both compile to the same backend-neutral panes. The inline grammar is compact: commas split columns, plus signs stack rows within a column, and each cell is a built-in `term`, an agent kind, a virtual `<kind>-<mode>` / `<kind>-ping` variant (`claude-auto`, `codex-yolo`), a configured profile, or a configured command ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)). A named team is an ordered role list that opens as one side-by-side column per role unless it declares its own `layout`, which uses the same grammar and resolves declared role names before falling through to roleless cells. A named team also accepts `<team>.<role>` to launch one declared role with its team identity; under the default placement this splits beside the caller or opens a tab when no launching pane exists, so recovering a member never takes over the pane issuing the command.
+`rimz agents <spec>` resolves either a named `[agents.teams]` entry or an inline DSL, and both compile to the same backend-neutral panes. The inline grammar is compact: commas split columns, plus signs tile rows within a column, slashes stack rows within a column on Zellij, and each cell is a built-in `term`, an agent kind, a virtual `<kind>-<mode>` / `<kind>-ping` variant (`claude-auto`, `codex-yolo`), a configured profile, or a configured command ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)). A named team is an ordered role list that opens as one side-by-side column per role unless it declares its own `layout`, which uses the same grammar and resolves declared role names before falling through to roleless cells. A named team also accepts `<team>.<role>` to launch one declared role with its team identity; under the default placement this splits beside the caller or opens a tab when no launching pane exists, so recovering a member never takes over the pane issuing the command.
 
 ```text
-claude,codex+term      → Claude left; Codex stacked over a shell right
+claude,codex+term      → Claude left; Codex tiled over a shell right
+claude/codex/term      → two agents plus a shell in one Zellij stack; tmux tiles them
 vim,htop+zsh           → raw command panes
 claude-auto,codex-yolo → agent cells with adapter-owned permission posture
 ```
+
+Stacks are presentation only: Zellij renders a native stack with one expanded pane, while tmux keeps the same cells as tiled rows because it has no native stack.
 
 The compile target is the seam the whole harness hangs off. Each cell becomes a `LayoutPanes` entry that runs the hidden **`rimz agents exec <kind>`** wrapper — carrying the prompt, worktree path, profile, role, model, effort, and `-- <args>` resolved from the profile and role — or, for a command cell, its raw argv (empty argv reserved for the user's shell). Backends never resolve agent kinds or worktrees: the wrapper does. It runs the agent in the pane, inheriting the pane's TTY, launching through the user's shell-startup path when that shell and `/usr/bin/env` are available and falling back to direct exec otherwise. Because the wrapper stays resident, it is also where the supervised-run and cleanup paths below attach.
 

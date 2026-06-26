@@ -69,7 +69,7 @@ fn no_commands() -> CommandsConfig {
 }
 
 #[test]
-fn parses_columns_and_stacked_rows() {
+fn parses_columns_and_tiled_rows() {
     let spec =
         parse_layout_spec("claude,codex+term", &no_profiles(), &no_commands()).expect("parse");
     assert_eq!(
@@ -77,17 +77,61 @@ fn parses_columns_and_stacked_rows() {
         LayoutSpec {
             columns: vec![
                 Column {
-                    rows: vec![Cell::agent(AgentKind::new_unchecked("claude"))]
+                    rows: vec![Cell::agent(AgentKind::new_unchecked("claude"))],
+                    stacked: false,
                 },
                 Column {
                     rows: vec![
                         Cell::agent(AgentKind::new_unchecked("codex")),
                         Cell::shell()
-                    ]
+                    ],
+                    stacked: false,
                 }
             ]
         }
     );
+}
+
+#[test]
+fn parses_stacked_columns_and_rejects_mixed_row_operators() {
+    let spec = parse_layout_spec("claude/codex", &no_profiles(), &no_commands()).expect("parse");
+    assert_eq!(spec.columns.len(), 1);
+    assert!(spec.columns[0].stacked);
+    assert_eq!(spec.columns[0].rows.len(), 2);
+
+    let spec =
+        parse_layout_spec("term,claude/codex", &no_profiles(), &no_commands()).expect("parse");
+    assert_eq!(spec.columns.len(), 2);
+    assert!(!spec.columns[0].stacked);
+    assert!(spec.columns[1].stacked);
+    assert_eq!(spec.columns[1].rows.len(), 2);
+
+    assert_eq!(
+        parse_layout_spec("claude+codex/term", &no_profiles(), &no_commands()),
+        Err(LayoutErr::MixedRowOperators {
+            column: "claude+codex/term".to_owned()
+        })
+    );
+}
+
+#[test]
+fn known_spec_token_recognizes_valid_slash_layouts_only() {
+    let profiles = no_profiles();
+    let commands = no_commands();
+    let teams = TeamsConfig::default();
+
+    assert!(is_known_spec_token(
+        "claude/codex",
+        &profiles,
+        &commands,
+        &teams
+    ));
+    assert!(!is_known_spec_token(
+        "https://example.invalid",
+        &profiles,
+        &commands,
+        &teams
+    ));
 }
 
 #[test]
@@ -747,6 +791,20 @@ fn invalid_names_and_keyword_errors_are_specific() {
             name: "bad name".to_owned()
         })
     );
+    let bad_profile = profiles([("bad/name", profile("claude"))]);
+    assert_eq!(
+        parse_layout_spec("term", &bad_profile, &no_commands()),
+        Err(LayoutErr::InvalidProfileName {
+            name: "bad/name".to_owned()
+        })
+    );
+    let bad_command = commands([("bad/name", "nvim")]);
+    assert_eq!(
+        parse_layout_spec("term", &no_profiles(), &bad_command),
+        Err(LayoutErr::InvalidCommandName {
+            name: "bad/name".to_owned()
+        })
+    );
     let bad_quote = commands([("bad-command", "nvim 'unterminated")]);
     assert_eq!(
         parse_layout_spec("bad-command", &no_profiles(), &bad_quote),
@@ -1054,6 +1112,16 @@ fn team_names_reject_dots_and_spec_team_handles_team_role_specs() {
             name: "pc.r".to_owned()
         })
     );
+    let bad_teams = TeamsConfig(BTreeMap::from([(
+        "pc/r".to_owned(),
+        team(vec![role("planner", "planner-profile")]),
+    )]));
+    assert_eq!(
+        validate_config(&profiles, &no_commands(), &bad_teams),
+        Err(LayoutErr::InvalidTeamName {
+            name: "pc/r".to_owned()
+        })
+    );
 }
 
 #[test]
@@ -1118,13 +1186,39 @@ fn roleless_team_layout_resolves_builtin_cells() {
             columns: vec![
                 Column {
                     rows: vec![Cell::agent(AgentKind::new_unchecked("claude"))],
+                    stacked: false,
                 },
                 Column {
                     rows: vec![Cell::agent(AgentKind::new_unchecked("codex"))],
+                    stacked: false,
                 },
             ],
         }
     );
+}
+
+#[test]
+fn team_layout_can_stack_roles() {
+    let profiles = profiles([
+        ("planner-profile", profile("claude")),
+        ("coder-profile", profile("codex")),
+    ]);
+    let teams = TeamsConfig(BTreeMap::from([(
+        "review".to_owned(),
+        team_with_layout(
+            vec![
+                role("planner", "planner-profile"),
+                role("coder", "coder-profile"),
+            ],
+            "planner/coder",
+        ),
+    )]));
+
+    let spec = resolve_spec(Some("review"), &profiles, &no_commands(), &teams).expect("team");
+
+    assert_eq!(spec.columns.len(), 1);
+    assert!(spec.columns[0].stacked);
+    assert_eq!(spec.columns[0].rows.len(), 2);
 }
 
 #[test]
@@ -1152,6 +1246,15 @@ fn team_validation_rejects_bad_role_names_duplicates_and_unknown_profiles() {
     assert!(matches!(
         validate_config(&profiles, &no_commands(), &bad_name),
         Err(LayoutErr::InvalidRoleName { name, .. }) if name == "bad role"
+    ));
+
+    let bad_name = TeamsConfig(BTreeMap::from([(
+        "review".to_owned(),
+        team(vec![role("bad/role", "planner")]),
+    )]));
+    assert!(matches!(
+        validate_config(&profiles, &no_commands(), &bad_name),
+        Err(LayoutErr::InvalidRoleName { name, .. }) if name == "bad/role"
     ));
 
     let kind_name = TeamsConfig(BTreeMap::from([(

@@ -608,7 +608,7 @@ impl MuxBackend for TmuxBackend {
                 reason: "tab layout has no columns".to_owned(),
             });
         };
-        let Some((first, first_column_rest)) = first_column.split_first() else {
+        let Some((first, first_column_rest)) = first_column.panes.split_first() else {
             return Err(MuxErr::Output {
                 program: "tmux".to_owned(),
                 reason: "tab layout has an empty column".to_owned(),
@@ -649,7 +649,8 @@ impl MuxBackend for TmuxBackend {
                 previous_in_column = self.split_tab_pane(opts, "-v", &previous_in_column, pane)?;
             }
             for column in rest_columns {
-                let Some((top, rows)) = column.split_first() else {
+                // tmux has no native stack, so stacked columns use tiled rows.
+                let Some((top, rows)) = column.panes.split_first() else {
                     return Err(MuxErr::Output {
                         program: "tmux".to_owned(),
                         reason: "tab layout has an empty column".to_owned(),
@@ -675,7 +676,11 @@ impl MuxBackend for TmuxBackend {
         }
         split_result?;
         if !opts.dock_sidebar {
-            let rebalance_even = opts.panes.columns.iter().all(|column| column.len() == 1);
+            let rebalance_even = opts
+                .panes
+                .columns
+                .iter()
+                .all(|column| column.panes.len() == 1);
             self.remove_sidebar_from_tab(&window_id, &first_pane, rebalance_even)?;
         }
 

@@ -626,7 +626,10 @@ fn gallery(globals: &GlobalFlags) -> Result<()> {
             title: "gallery".to_owned(),
             cwd: workspace.worktree_root.clone(),
             panes: rimz::mux::LayoutPanes {
-                columns: vec![vec![gallery_pane]],
+                columns: vec![rimz::mux::LayoutColumn {
+                    panes: vec![gallery_pane],
+                    stacked: false,
+                }],
             },
             focus: true,
             dock_sidebar: false,

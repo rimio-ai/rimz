@@ -54,7 +54,8 @@ A `<SPEC>` is a shape, and the optional `PROMPT` broadcasts to every agent cell 
 
 ```sh
 rimz agents peer                                    # built-in claude,codex side by side
-rimz agents claude,codex+term                       # Claude | Codex stacked over a shell
+rimz agents claude,codex+term                       # Claude | Codex tiled over a shell
+rimz agents claude/codex/term                       # one Zellij stack; tmux tiles rows
 rimz agents claude,codex --worktree=cli-docs "Review the CLI docs."
 rimz agents codex --from-pr 42 "Review this pull request."
 rimz agents 'vim,codex+term' "Review the CLI docs."  # a raw command cell beside an agent
@@ -63,7 +64,7 @@ rimz agents claude --worktree "Take one approach."   # parallel attempts, each i
 rimz agents claude --worktree "Take another approach."
 ```
 
-The spec is a named [team](../configuration.md#agent-profiles-commands-and-teams), one declared role of a team as `<team>.<role>`, or an inline grammar: **commas split columns, plus signs stack rows,** and each cell is `term`, an agent kind, a virtual `<kind>-<mode>` cell, a configured profile, or a configured command. Use `rimz agents <team>.<role>` to re-add one role of a running or stopped team with the same role handle and team channel. The built-in `peer` team is the roleless `claude,codex`. The full grammar and how cells compile to panes are in [harness.md → The layout IR](../../internals/agents/harness.md#the-layout-ir).
+The spec is a named [team](../configuration.md#agent-profiles-commands-and-teams), one declared role of a team as `<team>.<role>`, or an inline grammar: **commas split columns, plus signs tile rows, slashes stack rows** as a Zellij stack while tmux tiles them, and each cell is `term`, an agent kind, a virtual `<kind>-<mode>` cell, a configured profile, or a configured command. Use `rimz agents <team>.<role>` to re-add one role of a running or stopped team with the same role handle and team channel. The built-in `peer` team is the roleless `claude,codex`. The full grammar and how cells compile to panes are in [harness.md → The layout IR](../../internals/agents/harness.md#the-layout-ir).
 
 Permission-mode cells exist where the adapter supports them: `-auto`, `-ask`, `-plan`, and `-yolo` (so `claude-plan` passes plan mode while `codex-plan` has none and keeps the default posture), and `-ping` opens the agent at lowest effort with a `"ping"` prompt to keep the provider window warm. The built-in set is `claude-{auto,ask,plan,yolo,ping}`, `codex-{auto,ask,plan,yolo,ping}`, and `pi-{ask,plan}`. On the command line, `--ask` keeps native prompts and `--yolo` passes the adapter's bypass flags; with neither, each provider keeps its own prompting. A second positional that is itself a known cell is rejected with a `rimz agents a,b` hint, so the old space-separated fan-out never silently becomes a prompt.
 

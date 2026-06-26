@@ -51,7 +51,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
             title: tab_name.to_owned(),
             cwd: worktree.clone(),
             panes: LayoutPanes {
-                columns: vec![vec![PaneCmd { argv: command }]],
+                columns: vec![tiled_column(vec![PaneCmd { argv: command }])],
             },
             focus: true,
             dock_sidebar: true,

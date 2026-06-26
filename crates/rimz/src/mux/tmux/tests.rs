@@ -83,7 +83,8 @@ fn open_tab_rejects_an_empty_layout() {
 
     use crate::ids::WorkspaceId;
     use crate::mux::{
-        LayoutPanes, MuxBackend, MuxErr, PaneCmd, SidebarPaneOptions, SidebarWidth, TabOptions,
+        LayoutColumn, LayoutPanes, MuxBackend, MuxErr, PaneCmd, SidebarPaneOptions, SidebarWidth,
+        TabOptions,
     };
 
     // Pointed at a socket no server owns: the empty-layout guards return before
@@ -107,7 +108,15 @@ fn open_tab_rejects_an_empty_layout() {
         session_name: "rimz-empty".to_owned(),
         title: "work".to_owned(),
         cwd: PathBuf::from("/tmp/rimz-empty"),
-        panes: LayoutPanes { columns },
+        panes: LayoutPanes {
+            columns: columns
+                .into_iter()
+                .map(|panes| LayoutColumn {
+                    panes,
+                    stacked: false,
+                })
+                .collect(),
+        },
         focus: true,
         dock_sidebar: true,
         sidebar: sidebar.clone(),

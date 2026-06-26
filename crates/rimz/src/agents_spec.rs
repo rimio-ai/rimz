@@ -1,12 +1,12 @@
 //! Backend-neutral agent layout IR plus team/profile/command resolution.
 //!
-//! Commas split columns, plus signs stack rows within a column, and each cell is
-//! a profile, a command, or a built-in cell. Named teams compile to one column
-//! per role unless they declare an explicit role-first layout shape. Built-ins
-//! provide `term`, every registered agent kind, and `<kind>-<mode>` /
-//! `<kind>-ping` virtual variants; per-machine `[agents.profiles]` entries can
-//! specialize agent cells and `[agents.commands]` entries provide raw command
-//! panes.
+//! Commas split columns, plus signs tile rows within a column, slashes stack
+//! rows within a column, and each cell is a profile, a command, or a built-in
+//! cell. Named teams compile to one column per role unless they declare an
+//! explicit role-first layout shape. Built-ins provide `term`, every registered
+//! agent kind, and `<kind>-<mode>` / `<kind>-ping` virtual variants; per-machine
+//! `[agents.profiles]` entries can specialize agent cells and `[agents.commands]`
+//! entries provide raw command panes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -32,7 +32,10 @@ pub struct LayoutSpec {
 impl LayoutSpec {
     pub fn single(cell: Cell) -> Self {
         Self {
-            columns: vec![Column { rows: vec![cell] }],
+            columns: vec![Column {
+                rows: vec![cell],
+                stacked: false,
+            }],
         }
     }
 
@@ -64,6 +67,7 @@ impl LayoutSpec {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Column {
     pub rows: Vec<Cell>,
+    pub stacked: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -155,6 +159,8 @@ pub enum LayoutErr {
     Empty,
     #[error("empty layout cell in `{0}`")]
     EmptyCell(String),
+    #[error("a layout column uses `+` (tile) or `/` (stack), not both: `{column}`")]
+    MixedRowOperators { column: String },
     #[error(
         "unknown layout cell `{cell}`; define it under [agents.profiles] or [agents.commands], or use one of: {valid}"
     )]
@@ -173,7 +179,7 @@ pub enum LayoutErr {
         role: String,
         valid_roles: String,
     },
-    #[error("invalid team name `{name}`; team names cannot contain `.`")]
+    #[error("invalid team name `{name}`; team names cannot contain `.` or `/`")]
     InvalidTeamName { name: String },
     #[error(
         "team name `{0}` is reserved for an inline profile/command cell; choose another [agents.teams] name"
@@ -188,7 +194,7 @@ pub enum LayoutErr {
         profile: String,
     },
     #[error(
-        "invalid role name `{name}` in team `{team}`; roles cannot be empty or contain whitespace, `,`, `+`, `:`, or `#`"
+        "invalid role name `{name}` in team `{team}`; roles cannot be empty or contain whitespace, `,`, `+`, `/`, `:`, or `#`"
     )]
     InvalidRoleName { team: String, name: String },
     #[error("duplicate role `{role}` in team `{team}`")]
@@ -214,7 +220,7 @@ pub enum LayoutErr {
     )]
     RepoProfileEscapesTrust { profile: String, base: String },
     #[error(
-        "invalid profile name `{name}`; profiles cannot be empty or contain whitespace, `,`, or `+`"
+        "invalid profile name `{name}`; profiles cannot be empty or contain whitespace, `,`, `+`, or `/`"
     )]
     InvalidProfileName { name: String },
     #[error("profile name `{name}` is reserved for `rimz agents`")]
@@ -232,7 +238,7 @@ pub enum LayoutErr {
         reason: &'static str,
     },
     #[error(
-        "invalid command name `{name}`; commands cannot be empty or contain whitespace, `,`, or `+`"
+        "invalid command name `{name}`; commands cannot be empty or contain whitespace, `,`, `+`, or `/`"
     )]
     InvalidCommandName { name: String },
     #[error("command name `{name}` is reserved for `rimz agents`")]
@@ -382,6 +388,7 @@ pub fn resolve_team(
                     .expect("validated role cell exists")
                     .clone(),
             ],
+            stacked: false,
         })
         .collect();
     Ok(LayoutSpec { columns })
@@ -467,34 +474,28 @@ fn parse_team_layout(
         .collect();
     let mut columns = Vec::new();
     for column_raw in raw.split(',') {
-        if column_raw.trim().is_empty() {
-            return Err(LayoutErr::EmptyCell(raw.to_owned()));
-        }
+        let (cell_names, stacked) = split_column_rows(raw, column_raw)?;
         let mut rows = Vec::new();
-        for cell_raw in column_raw.split('+') {
-            let cell_raw = cell_raw.trim();
-            if cell_raw.is_empty() {
-                return Err(LayoutErr::EmptyCell(raw.to_owned()));
-            }
-            if let Some(cell) = role_cells.get(cell_raw) {
+        for cell_name in cell_names {
+            if let Some(cell) = role_cells.get(cell_name) {
                 *placements
-                    .get_mut(cell_raw)
+                    .get_mut(cell_name)
                     .expect("placement map mirrors role cells") += 1;
                 rows.push(cell.clone());
                 continue;
             }
-            match parse_cell(cell_raw, profiles, commands) {
+            match parse_cell(cell_name, profiles, commands) {
                 Ok(cell) => rows.push(cell),
                 Err(LayoutErr::UnknownCell { .. }) => {
                     return Err(LayoutErr::UnknownRoleInLayout {
                         team: team_name.to_owned(),
-                        role: cell_raw.to_owned(),
+                        role: cell_name.to_owned(),
                     });
                 }
                 Err(err) => return Err(err),
             }
         }
-        columns.push(Column { rows });
+        columns.push(Column { rows, stacked });
     }
 
     for (role, count) in placements {
@@ -644,7 +645,9 @@ pub fn is_known_spec_token(
     !raw.is_empty()
         && (spec_team(raw, teams).is_some()
             || raw == "peer"
-            || is_cell_word(raw, profiles, commands))
+            || is_cell_word(raw, profiles, commands)
+            || (raw.contains([',', '+', '/'])
+                && parse_layout_spec_validated(raw, profiles, commands).is_ok()))
 }
 
 fn parse_layout_spec_validated(
@@ -659,24 +662,42 @@ fn parse_layout_spec_validated(
 
     let mut columns = Vec::new();
     for column_raw in raw.split(',') {
-        if column_raw.trim().is_empty() {
-            return Err(LayoutErr::EmptyCell(raw.to_owned()));
-        }
+        let (cell_names, stacked) = split_column_rows(raw, column_raw)?;
         let mut rows = Vec::new();
-        for cell_raw in column_raw.split('+') {
-            let cell_raw = cell_raw.trim();
-            if cell_raw.is_empty() {
-                return Err(LayoutErr::EmptyCell(raw.to_owned()));
-            }
-            rows.push(parse_cell(cell_raw, profiles, commands)?);
+        for cell_name in cell_names {
+            rows.push(parse_cell(cell_name, profiles, commands)?);
         }
-        columns.push(Column { rows });
+        columns.push(Column { rows, stacked });
     }
     Ok(LayoutSpec { columns })
 }
 
+fn split_column_rows<'a>(layout_raw: &str, column_raw: &'a str) -> Result<(Vec<&'a str>, bool)> {
+    let column_raw = column_raw.trim();
+    if column_raw.is_empty() {
+        return Err(LayoutErr::EmptyCell(layout_raw.to_owned()));
+    }
+    let tiled = column_raw.contains('+');
+    let stacked = column_raw.contains('/');
+    if tiled && stacked {
+        return Err(LayoutErr::MixedRowOperators {
+            column: column_raw.to_owned(),
+        });
+    }
+    let separator = if stacked { '/' } else { '+' };
+    let mut rows = Vec::new();
+    for cell_raw in column_raw.split(separator) {
+        let cell_raw = cell_raw.trim();
+        if cell_raw.is_empty() {
+            return Err(LayoutErr::EmptyCell(layout_raw.to_owned()));
+        }
+        rows.push(cell_raw);
+    }
+    Ok((rows, stacked))
+}
+
 fn is_inline_spec(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> bool {
-    raw.contains([',', '+']) || is_cell_word(raw, profiles, commands)
+    raw.contains([',', '+', '/']) || is_cell_word(raw, profiles, commands)
 }
 
 fn is_cell_word(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> bool {
@@ -899,7 +920,7 @@ fn validate_profile_names(profiles: &ProfilesConfig) -> Result<()> {
         if name.is_empty()
             || name
                 .chars()
-                .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+')
+                .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+' || ch == '/')
         {
             return Err(LayoutErr::InvalidProfileName { name: name.clone() });
         }
@@ -921,7 +942,7 @@ fn validate_command_names(commands: &CommandsConfig) -> Result<()> {
         if name.is_empty()
             || name
                 .chars()
-                .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+')
+                .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+' || ch == '/')
         {
             return Err(LayoutErr::InvalidCommandName { name: name.clone() });
         }
@@ -959,7 +980,7 @@ fn is_kind_ordinal_shape(name: &str) -> bool {
 }
 
 fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
-    if let Some(name) = teams.0.keys().find(|name| name.contains('.')) {
+    if let Some(name) = teams.0.keys().find(|name| name.contains(['.', '/'])) {
         return Err(LayoutErr::InvalidTeamName { name: name.clone() });
     }
     if let Some(name) = teams
@@ -1035,9 +1056,9 @@ fn validate_team(
 
 fn invalid_role_name(name: &str) -> bool {
     name.is_empty()
-        || name
-            .chars()
-            .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+' || ch == ':' || ch == '#')
+        || name.chars().any(|ch| {
+            ch.is_whitespace() || ch == ',' || ch == '+' || ch == '/' || ch == ':' || ch == '#'
+        })
 }
 
 fn valid_cells(profiles: &ProfilesConfig, commands: &CommandsConfig) -> String {

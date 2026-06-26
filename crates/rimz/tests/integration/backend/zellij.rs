@@ -21,9 +21,9 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{
-    ClientFocusOptions, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, SessionHealth,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions,
-    TabOptions, ZellijBackend, zellij,
+    ClientFocusOptions, LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions,
+    SessionHealth, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth,
+    SplitPaneOptions, TabOptions, ZellijBackend, zellij,
 };
 use rimz::pane::PaneRef;
 use tempfile::TempDir;
@@ -39,6 +39,13 @@ const ACTION_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 const ACTION_CONFIRM_STEP: Duration = Duration::from_millis(50);
 const DUMP_LAYOUT_ATTEMPTS: u32 = 10;
 const DUMP_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+fn tiled_column(panes: Vec<PaneCmd>) -> LayoutColumn {
+    LayoutColumn {
+        panes,
+        stacked: false,
+    }
+}
 
 /// Skip the test (return) if the host has no `zellij` binary on PATH.
 macro_rules! require_zellij {
@@ -607,9 +614,9 @@ fn open_tab_unfocused_restores_attached_client_focus() {
             title: source_tab.to_owned(),
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
-                columns: vec![vec![PaneCmd {
+                columns: vec![tiled_column(vec![PaneCmd {
                     argv: vec!["sleep".to_owned(), "600".to_owned()],
-                }]],
+                }])],
             },
             focus: true,
             dock_sidebar: true,
@@ -639,9 +646,9 @@ fn open_tab_unfocused_restores_attached_client_focus() {
             title: background_tab.to_owned(),
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
-                columns: vec![vec![PaneCmd {
+                columns: vec![tiled_column(vec![PaneCmd {
                     argv: vec!["sleep".to_owned(), "600".to_owned()],
-                }]],
+                }])],
             },
             focus: false,
             dock_sidebar: true,
@@ -703,7 +710,7 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
             title: tab_name.to_owned(),
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
-                columns: vec![vec![work_pane()]],
+                columns: vec![tiled_column(vec![work_pane()])],
             },
             focus: true,
             dock_sidebar: false,
@@ -2750,12 +2757,12 @@ fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![
-                    vec![PaneCmd {
+                    tiled_column(vec![PaneCmd {
                         argv: vec!["sleep".to_owned(), "600".to_owned()],
-                    }],
-                    vec![PaneCmd {
+                    }]),
+                    tiled_column(vec![PaneCmd {
                         argv: vec!["sleep".to_owned(), "600".to_owned()],
-                    }],
+                    }]),
                 ],
             },
             focus: true,

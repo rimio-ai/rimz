@@ -93,7 +93,7 @@ effort = "high"
 vim = "nvim -p"
 
 [agents.teams.review]
-layout = "planner+reviewer,coder+term"
+layout = "planner/reviewer,coder+term"
 
 [[agents.teams.review.roles]]
 role = "planner"
@@ -123,11 +123,11 @@ A profile may be named like a kind: `[agents.profiles.claude]` overrides the bas
 
 ### Teams
 
-A team is an ordered `roles` list that feeds `rimz agents <name>`; each role binds a role name to a profile and may set any of the same **override fields** (replacing, like profiles). Each member answers to `@<role>` in that channel. `rimz agents <team>.<role>` launches one declared role with the same identity it has inside the full team. By default the roles open left to right as one side-by-side column per role in one tab; an optional `layout` uses the inline shape grammar (comma = column, plus = row), resolving declared role names first and then falling back to roleless cells. The built-in `peer` team is the roleless `claude,codex`.
+A team is an ordered `roles` list that feeds `rimz agents <name>`; each role binds a role name to a profile and may set any of the same **override fields** (replacing, like profiles). Each member answers to `@<role>` in that channel. `rimz agents <team>.<role>` launches one declared role with the same identity it has inside the full team. By default the roles open left to right as one side-by-side column per role in one tab; an optional `layout` uses the inline shape grammar (comma = column, plus = tiled row, slash = Zellij stacked row with tmux tiling), resolving declared role names first and then falling back to roleless cells. The built-in `peer` team is the roleless `claude,codex`.
 
 ### Inline specs and cell resolution
 
-An inline spec like `rimz agents "claude,codex+term"` keeps the same shape grammar: commas split columns, plus signs stack rows. Each cell resolves in this order:
+An inline spec like `rimz agents "claude,codex+term"` keeps the same shape grammar: commas split columns, plus signs tile rows, and slashes stack rows as a Zellij stack while tmux tiles them. Each cell resolves in this order:
 
 1. `[agents.commands]`,
 2. `[agents.profiles]`,

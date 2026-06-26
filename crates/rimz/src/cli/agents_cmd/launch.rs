@@ -257,7 +257,7 @@ fn single_pane_argv(panes: &LayoutPanes) -> Result<Vec<String>> {
     panes
         .columns
         .first()
-        .and_then(|column| column.first())
+        .and_then(|column| column.panes.first())
         .map(|pane| pane.argv.clone())
         .context("in-pane launch produced no pane command")
 }
@@ -873,7 +873,7 @@ pub(super) fn layout_panes_with_names(
         .columns
         .iter()
         .map(|column| {
-            column
+            let panes = column
                 .rows
                 .iter()
                 .map(|cell| {
@@ -897,7 +897,11 @@ pub(super) fn layout_panes_with_names(
                         },
                     )
                 })
-                .collect::<Result<Vec<_>>>()
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LayoutColumn {
+                panes,
+                stacked: column.stacked,
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(LayoutPanes { columns })
