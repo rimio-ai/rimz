@@ -5,7 +5,10 @@ use std::num::NonZeroU16;
 use std::time::{Duration, Instant};
 
 use super::layout::{TempLayoutFile, render_session_layout};
-use super::parse::{new_tab_template_sidebar_cols, parse_focused_terminal_client_ids, strip_ansi};
+use super::parse::{
+    is_session_not_found, new_tab_template_sidebar_cols, parse_focused_terminal_client_ids,
+    strip_ansi,
+};
 use super::raw_pane::{
     SidebarDock, is_sidebar_pane, mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id,
     repairable_nested_work_pane_ids, sidebar_dock_verdict, sidebar_width_off_spec, tab_extent_cols,
@@ -657,6 +660,11 @@ impl ZellijBackend {
                 std::thread::sleep(TAB_NAMES_RETRY_DELAY);
             }
             let output = self.zellij_action(session).arg("query-tab-names").run()?;
+            if is_session_not_found(&output.stdout) || is_session_not_found(&output.stderr) {
+                return Err(MuxErr::SessionNotFound {
+                    session: session.to_owned(),
+                });
+            }
             let names: Vec<String> = String::from_utf8_lossy(&output.stdout)
                 .lines()
                 .map(strip_ansi)

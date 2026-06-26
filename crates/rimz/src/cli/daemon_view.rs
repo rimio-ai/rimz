@@ -109,6 +109,10 @@ pub(super) fn maybe_launch_remote_control(
             session = %workspace.session_name,
             "daemon view already present; skipping",
         ),
+        Err(rimz::mux::MuxErr::SessionNotFound { session }) => tracing::debug!(
+            session = %session,
+            "daemon view deferred; session not addressable yet (pre-attach gate will rebirth it)",
+        ),
         Err(err) => tracing::warn!(
             session = %workspace.session_name,
             error = %err,

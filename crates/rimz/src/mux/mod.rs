@@ -77,6 +77,8 @@ pub enum MuxErr {
     },
     #[error("could not parse mux output from `{program}`: {reason}")]
     Output { program: String, reason: String },
+    #[error("session `{session}` is not active")]
+    SessionNotFound { session: String },
     #[error(
         "multiplexer command `{program} {}` did not finish within {seconds}s; killed",
         args_summary(args)

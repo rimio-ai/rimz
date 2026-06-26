@@ -310,13 +310,19 @@ fn ensure_session_view(
     opts: &SidebarPaneOptions,
 ) {
     let live = sidebar_liveness(runtime);
-    if let Err(err) = backend.reconcile_sidebars(opts, &live) {
-        tracing::warn!(
+    match backend.reconcile_sidebars(opts, &live) {
+        Ok(_) => {}
+        Err(crate::mux::MuxErr::SessionNotFound { session }) => tracing::debug!(
+            session = %session,
+            mux = %backend.name(),
+            "sidebar reconcile skipped; session not addressable yet (pre-attach gate will rebirth it)",
+        ),
+        Err(err) => tracing::warn!(
             session = %opts.session_name,
             mux = %backend.name(),
             error = %err,
             "ensuring the session sidebar view failed; continuing",
-        );
+        ),
     }
 }
 

@@ -1,21 +1,30 @@
 use super::*;
 
 #[cfg(unix)]
-#[test]
-fn add_sidebar_timeout_never_closes_stdout_only_hint() {
+fn zellij_shim(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
 
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let shim = temp.path().join("zellij");
+    let mut file = std::fs::File::create(&shim).expect("create shim");
+    file.write_all(script.as_bytes()).expect("write shim");
+    let mut perms = file.metadata().expect("shim metadata").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&shim, perms).expect("chmod shim");
+    drop(file);
+    (temp, shim)
+}
+
+#[cfg(unix)]
+#[test]
+fn add_sidebar_timeout_never_closes_stdout_only_hint() {
     use crate::config::MultiplexerConfig;
     use crate::ids::WorkspaceId;
     use crate::mux::{SidebarPaneOptions, SidebarWidth};
 
-    let temp = tempfile::TempDir::new().expect("tempdir");
-    let project_root = temp.path().join("project");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
-    let shim = temp.path().join("zellij");
-    let log = temp.path().join("zellij.log");
-    let script = r#"#!/bin/sh
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
 dir=$(dirname "$0")
 log="$dir/zellij.log"
 state="$dir/new-pane-count"
@@ -48,13 +57,11 @@ case " $* " in
     exit 0
     ;;
 esac
-"#;
-    let mut file = std::fs::File::create(&shim).expect("create shim");
-    file.write_all(script.as_bytes()).expect("write shim");
-    let mut perms = file.metadata().expect("shim metadata").permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&shim, perms).expect("chmod shim");
-    drop(file);
+"#,
+    );
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    let log = temp.path().join("zellij.log");
 
     let width = SidebarWidth::default();
     let opts = SidebarPaneOptions {
@@ -86,6 +93,66 @@ esac
             "action new-pane --direction right --tab-id 1 --name rimz-sidebar --borderless true"
         ),
         "repair-created sidebar panes must be explicitly borderless:\n{log}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn list_panes_surfaces_session_not_found_banner() {
+    use std::time::Duration;
+
+    use crate::mux::MuxErr;
+
+    let (_temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'zellij 0.44.3\n'
+  exit 0
+fi
+
+printf '\033[32;1mrimz-other\033[m [Created 6m ago]\n'
+printf "Session 'missing-room' not found. The following sessions are active:\n" >&2
+exit 0
+"#,
+    );
+    let backend = ZellijBackend::with_program_for_test(&shim);
+
+    let err = backend
+        .list_panes_bounded(Some("missing-room"), Duration::from_millis(200))
+        .expect_err("banner should classify as session-not-found");
+
+    assert!(
+        matches!(err, MuxErr::SessionNotFound { ref session } if session == "missing-room"),
+        "got: {err}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn tab_names_surfaces_session_not_found_banner() {
+    use crate::mux::MuxErr;
+
+    let (_temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'zellij 0.44.3\n'
+  exit 0
+fi
+
+printf '\033[32;1mrimz-other\033[m [Created 6m ago]\n'
+printf "Session 'missing-room' not found. The following sessions are active:\n" >&2
+exit 0
+"#,
+    );
+    let backend = ZellijBackend::with_program_for_test(&shim);
+
+    let err = backend
+        .tab_names("missing-room")
+        .expect_err("banner should classify as session-not-found");
+
+    assert!(
+        matches!(err, MuxErr::SessionNotFound { ref session } if session == "missing-room"),
+        "got: {err}",
     );
 }
 

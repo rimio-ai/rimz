@@ -14,6 +14,23 @@ pub(super) fn is_transient_empty(stdout: &[u8]) -> bool {
     stdout.iter().all(u8::is_ascii_whitespace)
 }
 
+/// Whether `action`-client output is Zellij's "this session is not addressable"
+/// answer. When the named session is absent, exited (resurrectable), or still
+/// registering, `zellij --session <name> action ...` prints a `Session '<name>'
+/// not found...` banner and still exits 0. The line is non-whitespace when it
+/// lands on stdout, so [`is_transient_empty`] misses it; callers recognize it
+/// here and surface a typed mux error instead of feeding the banner or session
+/// list to a JSON or tab-name parser.
+pub(super) fn is_session_not_found(stream: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(stream);
+    let Some(first) = text.lines().next() else {
+        return false;
+    };
+    let clean = strip_ansi(first);
+    let clean = clean.trim_start();
+    clean.starts_with("Session '") && clean.contains("' not found")
+}
+
 /// Liveness of a Zellij session, as reported by `zellij list-sessions`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SessionState {
@@ -439,6 +456,24 @@ mod tests {
         // A real, parseable answer — even an empty pane set — is not transient.
         assert!(!is_transient_empty(b"[]"));
         assert!(!is_transient_empty(b"[{\"id\":0}]"));
+    }
+
+    #[test]
+    fn session_not_found_detects_zellij_action_banner() {
+        let banner = b"Session 'rimz-rimz-f89e49' not found. The following sessions are active:\n\
+                       \x1b[32;1mrimz-project-123456\x1b[m [Created 6m ago]\n";
+        assert!(is_session_not_found(banner));
+        assert!(is_session_not_found(
+            b"Session 'rimz-rimz-f89e49' not found. The following sessions are active:\n"
+        ));
+    }
+
+    #[test]
+    fn session_not_found_rejects_real_action_output() {
+        assert!(!is_session_not_found(b"[{\"id\":0}]"));
+        assert!(!is_session_not_found(b"rimzd\nTab #2\n#start\n"));
+        assert!(!is_session_not_found(b""));
+        assert!(!is_session_not_found(b"  \n\t"));
     }
 
     #[test]
