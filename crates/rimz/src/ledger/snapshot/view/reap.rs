@@ -4,6 +4,7 @@ use jiff::Timestamp;
 
 use crate::agents::AgentState;
 use crate::feed::FeedItem;
+use crate::ids::AgentSessionId;
 use crate::ledger::snapshot::panes::{agent_owner_pid, is_daemon_mode_codex};
 use crate::ledger::snapshot::process::command_is_sidebar_chrome;
 use crate::pane::PaneRef;
@@ -62,6 +63,29 @@ impl SidebarSnapshot {
                 && !loaded.contains(agent.agent_id.as_str());
             !reapable
         });
+    }
+
+    /// Reap a Codex root session superseded by a strictly-newer same-pane root
+    /// proven from its rollout head to be a fresh `/clear` / `/new` conversation.
+    /// Producer-only: the lineage comes from Codex rollout JSONL, fetched outside
+    /// the ledger projection. Forks are absent from `fresh_replacements`, so a
+    /// `/side` / `/btw` fork never causes the primary to drop and stays available
+    /// for the pane projection to pin to the earliest-registered primary.
+    pub fn drop_cleared_codex_sessions(&mut self, fresh_replacements: &BTreeSet<AgentSessionId>) {
+        if fresh_replacements.is_empty() {
+            return;
+        }
+        let superseded: Vec<bool> = self
+            .agents
+            .iter()
+            .map(|older| {
+                self.agents
+                    .iter()
+                    .any(|newer| cleared_codex_session_supersedes(older, newer, fresh_replacements))
+            })
+            .collect();
+        let mut superseded = superseded.into_iter();
+        self.agents.retain(|_| !superseded.next().unwrap_or(false));
     }
 
     /// Reap ghost sessions from the agent rollup. This filters the *derived*
@@ -226,6 +250,40 @@ fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool {
 fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
     match (agent_owner_pid(older), agent_owner_pid(newer)) {
         (Some(older_pid), Some(newer_pid)) => older_pid != newer_pid,
+        _ => false,
+    }
+}
+
+fn cleared_codex_session_supersedes(
+    older: &AgentState,
+    newer: &AgentState,
+    fresh_replacements: &BTreeSet<AgentSessionId>,
+) -> bool {
+    older.parent_agent_id.is_none()
+        && newer.parent_agent_id.is_none()
+        && older.kind == "codex"
+        && newer.kind == "codex"
+        && newer.agent_id != older.agent_id
+        && newer.last_activity > older.last_activity
+        && fresh_replacements.contains(&newer.agent_id)
+        && same_cleared_codex_scope(older, newer)
+}
+
+fn same_cleared_codex_scope(older: &AgentState, newer: &AgentState) -> bool {
+    let Some(older_path) = older
+        .worktree_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+    else {
+        return false;
+    };
+    if newer.worktree_path.as_deref() != Some(older_path)
+        || newer.worktree_branch != older.worktree_branch
+    {
+        return false;
+    }
+    match (older.pane.as_ref(), newer.pane.as_ref()) {
+        (Some(older_pane), Some(newer_pane)) => older_pane.pane_id == newer_pane.pane_id,
         _ => false,
     }
 }

@@ -1,12 +1,14 @@
 use super::*;
-use crate::agents::{AgentStatus, TurnPhase};
+use crate::agents::codex::SessionOrigin;
+use crate::agents::{AgentState, AgentStatus, TurnPhase};
+use crate::ids::AgentSessionId;
 use crate::ledger::atomic;
 use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
 use crate::sidebar::cache::DiffStatsCacheEntry;
 use crate::sidebar::cache::{AccountsCache, unix_now_ms};
-use crate::sidebar::test_support::{activity_row, pane, worktree_group};
+use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
 use jiff::SignedDuration;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 fn runtime() -> (tempfile::TempDir, RuntimePaths, SidebarSnapshot) {
@@ -374,6 +376,64 @@ fn focused_worktree_paths_keys_on_viewed_row_panes() {
 }
 
 #[test]
+fn fresh_codex_replacements_reads_lineage_only_for_shared_pane_roots() {
+    let mut fresh = codex_root("fresh", "/repo/main", "%1");
+    fresh.worktree_branch = Some("main".to_owned());
+    let mut fork = codex_root("fork", "/repo/main", "%1");
+    fork.worktree_branch = Some("main".to_owned());
+    let solo = codex_root("solo", "/repo/solo", "%2");
+    let distinct_pane = codex_root("other-pane", "/repo/main", "%3");
+    let mut child = codex_root("child", "/repo/main", "%1");
+    child.parent_agent_id = Some("fresh".into());
+    let mut claude = codex_root("claude", "/repo/main", "%1");
+    claude.kind = crate::ids::AgentKind::new_unchecked("claude");
+    let snapshot = SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
+        Vec::new(),
+        vec![fresh, fork, solo, distinct_pane, child, claude],
+        Timestamp::now(),
+    );
+
+    let mut seen = Vec::new();
+    let replacements = fresh_codex_replacements(&snapshot, |id| {
+        seen.push(id.to_owned());
+        match id {
+            "fresh" => Some(SessionOrigin::Fresh),
+            "fork" => Some(SessionOrigin::Forked),
+            other => panic!("unexpected lineage read for {other}"),
+        }
+    });
+
+    assert_eq!(
+        replacements,
+        BTreeSet::from([AgentSessionId::from("fresh")])
+    );
+    assert_eq!(seen, vec!["fresh", "fork"]);
+}
+
+#[test]
+fn fresh_codex_replacements_skips_lineage_when_no_shared_pane_scope() {
+    let snapshot = SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
+        Vec::new(),
+        vec![
+            codex_root("one", "/repo/main", "%1"),
+            codex_root("two", "/repo/main", "%2"),
+        ],
+        Timestamp::now(),
+    );
+
+    let mut called = false;
+    let replacements = fresh_codex_replacements(&snapshot, |_| {
+        called = true;
+        Some(SessionOrigin::Fresh)
+    });
+
+    assert!(replacements.is_empty());
+    assert!(!called);
+}
+
+#[test]
 fn frame_fold_carries_viewed_panes_onto_snapshot() {
     let (_dir, runtime, snapshot) = runtime();
     let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
@@ -398,6 +458,13 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
     );
 
     assert_eq!(snapshot.viewed_panes, vec![pane_id]);
+}
+
+fn codex_root(id: &str, worktree: &str, pane_id: &str) -> AgentState {
+    let mut agent = root_agent("codex", id, None);
+    agent.worktree_path = Some(worktree.to_owned());
+    agent.pane = Some(pane(pane_id, "codex", worktree));
+    agent
 }
 
 #[test]

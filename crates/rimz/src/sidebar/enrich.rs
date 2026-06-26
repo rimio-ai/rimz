@@ -10,13 +10,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
-use crate::agents::AgentStatus;
+use crate::agents::codex::SessionOrigin;
 use crate::agents::spending::{
     HeadlineSpec, ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
     compute_scoped_tally, discover_spending_files, read_provider_spending_cache,
     read_spending_cache, read_workspace_spending_cache, unix_secs_now,
 };
-use crate::ids::{PaneId, WorkspaceId};
+use crate::agents::{AgentState, AgentStatus};
+use crate::ids::{AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::snapshot::{LazyAgentPairingDiagnostic, LazyAgentPairingResult};
 use crate::{
     RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarSnapshot,
@@ -173,6 +174,59 @@ pub fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
         }
     }
     focused
+}
+
+fn fresh_codex_replacements(
+    snapshot: &SidebarSnapshot,
+    mut session_origin: impl FnMut(&str) -> Option<SessionOrigin>,
+) -> BTreeSet<AgentSessionId> {
+    let scopes = shared_same_pane_codex_root_scopes(snapshot);
+    if scopes.is_empty() {
+        return BTreeSet::new();
+    }
+    snapshot
+        .agents
+        .iter()
+        .filter(|agent| {
+            codex_clear_scope(agent).is_some_and(|scope| scopes.contains(&scope))
+                && matches!(
+                    session_origin(agent.agent_id.as_str()),
+                    Some(SessionOrigin::Fresh)
+                )
+        })
+        .map(|agent| agent.agent_id.clone())
+        .collect()
+}
+
+fn shared_same_pane_codex_root_scopes<'a>(
+    snapshot: &'a SidebarSnapshot,
+) -> BTreeSet<(&'a str, Option<&'a str>, &'a str)> {
+    let mut counts: BTreeMap<(&str, Option<&str>, &str), usize> = BTreeMap::new();
+    for agent in &snapshot.agents {
+        if let Some(scope) = codex_clear_scope(agent) {
+            *counts.entry(scope).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter_map(|(scope, count)| (count >= 2).then_some(scope))
+        .collect()
+}
+
+fn codex_clear_scope(agent: &AgentState) -> Option<(&str, Option<&str>, &str)> {
+    if agent.kind != "codex" || agent.parent_agent_id.is_some() {
+        return None;
+    }
+    let worktree = agent
+        .worktree_path
+        .as_deref()
+        .filter(|path| !path.is_empty())?;
+    let pane = agent.pane.as_ref()?;
+    Some((
+        worktree,
+        agent.worktree_branch.as_deref(),
+        pane.pane_id.as_str(),
+    ))
 }
 
 /// Fold the remote-link stats sidecar onto the snapshot. Local rooms never have
@@ -502,6 +556,16 @@ pub fn enrich(
             let loaded = crate::agents::codex::loaded_daemon_threads();
             snapshot.drop_dead_daemon_sessions(&daemon_pids, loaded.as_ref());
         }
+    }
+    // Producer-only: Codex `/clear` / `/new` starts a fresh session id in the
+    // same pane without firing `SessionStart { source: "clear" }`. Only
+    // same-pane root pairs pay the rollout-head read; a missing head or a
+    // `forked_from_id` keeps both sessions so `/side` / `/btw` stays pinned to
+    // its primary.
+    if producing {
+        let fresh_replacements =
+            fresh_codex_replacements(&snapshot, crate::agents::codex::session_origin);
+        snapshot.drop_cleared_codex_sessions(&fresh_replacements);
     }
 
     if let Some(frame) = frame {

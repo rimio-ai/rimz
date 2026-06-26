@@ -41,7 +41,7 @@ Codex shares the same keyed subagent identity as Claude (`resolve_subagent_ident
 
 Codex registers its session lazily. A plain CLI launch fires no `SessionStart`; the first prompt fires `SessionStart` and `UserPromptSubmit` together, both carrying the session id. So a freshly launched Codex is an agent instance with no session id until its first turn, which is why the sidebar synthesizes an idle row for it ([agent.md → The instance lifecycle](../agent.md#the-instance-lifecycle)).
 
-`/clear` currently fires **no** `SessionStart` (the wired `source = "clear"` never arrives), so Rimz cannot yet detect a cleared session as a fresh instance — the prior session's row persists until the next bound turn. This is a known upstream gap; Rimz waits for `SessionStart { source: "clear" }` and treats the miss as a documented limitation rather than working around it.
+`/clear` / `/new` currently fire **no** `SessionStart` (the wired `source = "clear"` never arrives), so Rimz reads the new session's rollout `session_meta` instead: a same-pane newer root with no `forked_from_id` reaps the superseded prior session before the pane fold, letting the card re-pin to the fresh conversation. A same-pane newer root with `forked_from_id` is a fork and stays subordinate to the primary.
 
 A `/side` / `/btw` thread fork registers a **fresh** session id in the same pane and `codex` process while the main session stays live. The pane's card stays pinned to the primary (earliest-`registered_at`) session, so the fork's newer activity never repaints it; the fork is not rendered ([sidebar.md → Presence model](../../sidebar/sidebar.md#presence-model)) and is not nested as a child row.
 

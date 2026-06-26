@@ -22,6 +22,12 @@ fn rollup_ids(snapshot: &SidebarSnapshot) -> Vec<String> {
     ids
 }
 
+fn fresh_set(ids: &[&str]) -> BTreeSet<crate::ids::AgentSessionId> {
+    ids.iter()
+        .map(|id| crate::ids::AgentSessionId::from(*id))
+        .collect()
+}
+
 #[test]
 fn daemon_session_reap_handles_loaded_set_edges() {
     struct Case {
@@ -84,6 +90,74 @@ fn daemon_session_reap_handles_loaded_set_edges() {
             .map(|ids| ids.into_iter().map(str::to_owned).collect::<BTreeSet<_>>());
         let mut snapshot = room(Vec::new(), case.agents);
         snapshot.drop_dead_daemon_sessions(&daemon_pids, loaded.as_ref());
+        assert_eq!(rollup_ids(&snapshot), case.expected, "{}", case.label);
+    }
+}
+
+#[test]
+fn cleared_codex_session_reap_handles_lineage_and_scope_edges() {
+    struct Case {
+        label: &'static str,
+        agents: Vec<AgentState>,
+        fresh: Vec<&'static str>,
+        expected: Vec<&'static str>,
+    }
+
+    let same_pane_pair = || {
+        vec![
+            paneless_codex("old", "/repo/a", 1_000)
+                .branch("main")
+                .in_pane("%1")
+                .active_ago(120),
+            paneless_codex("new", "/repo/a", 2_000)
+                .branch("main")
+                .in_pane("%1")
+                .active_ago(5),
+        ]
+    };
+
+    for case in [
+        Case {
+            label: "fresh same-pane replacement drops the prior session",
+            agents: same_pane_pair(),
+            fresh: vec!["new"],
+            expected: vec!["new"],
+        },
+        Case {
+            label: "fork or unknown lineage keeps both same-pane sessions",
+            agents: same_pane_pair(),
+            fresh: Vec::new(),
+            expected: vec!["new", "old"],
+        },
+        Case {
+            label: "different worktree keeps both sessions",
+            agents: vec![
+                paneless_codex("old", "/repo/a", 1_000)
+                    .in_pane("%1")
+                    .active_ago(120),
+                paneless_codex("new", "/repo/b", 2_000)
+                    .in_pane("%1")
+                    .active_ago(5),
+            ],
+            fresh: vec!["new"],
+            expected: vec!["new", "old"],
+        },
+        Case {
+            label: "distinct panes in one worktree are concurrent sessions",
+            agents: vec![
+                paneless_codex("old", "/repo/a", 1_000)
+                    .in_pane("%1")
+                    .active_ago(120),
+                paneless_codex("new", "/repo/a", 2_000)
+                    .in_pane("%2")
+                    .active_ago(5),
+            ],
+            fresh: vec!["new"],
+            expected: vec!["new", "old"],
+        },
+    ] {
+        let mut snapshot = room(Vec::new(), case.agents);
+        snapshot.drop_cleared_codex_sessions(&fresh_set(&case.fresh));
         assert_eq!(rollup_ids(&snapshot), case.expected, "{}", case.label);
     }
 }

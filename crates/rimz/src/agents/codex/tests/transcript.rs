@@ -524,3 +524,34 @@ fn find_session_transcript_walks_codex_date_hierarchy() {
     assert_eq!(found, expected);
     assert!(find_session_transcript_under(dir.path(), "sess-missing").is_none());
 }
+
+#[test]
+fn session_origin_reads_only_rollout_head_lineage() {
+    let dir = tempfile::tempdir().unwrap();
+    let day_dir = dir.path().join("2026").join("06").join("26");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let write_rollout = |session_id: &str, head: &str| {
+        std::fs::write(
+            day_dir.join(format!("rollout-2026-06-26T00-00-00-{session_id}.jsonl")),
+            format!("{head}\n{{\"type\":\"turn_context\",\"payload\":{{\"model\":\"gpt-5\"}}}}\n"),
+        )
+        .unwrap();
+    };
+
+    write_rollout(
+        "fresh",
+        r#"{"type":"session_meta","payload":{"id":"fresh"}}"#,
+    );
+    write_rollout(
+        "fork",
+        r#"{"type":"session_meta","payload":{"id":"fork","forked_from_id":"fresh"}}"#,
+    );
+    write_rollout("not-meta", r#"{"type":"turn_context","payload":{}}"#);
+
+    with_codex_sessions_root(dir.path(), || {
+        assert_eq!(session_origin("fresh"), Some(SessionOrigin::Fresh));
+        assert_eq!(session_origin("fork"), Some(SessionOrigin::Forked));
+        assert_eq!(session_origin("not-meta"), None);
+        assert_eq!(session_origin("missing"), None);
+    });
+}

@@ -16,6 +16,9 @@
 //! token usage only on a live, subscribing `thread/resume` — never read-only.
 //! The adapter emits raw tokens and the window, not a baked percentage; the
 //! snapshot fold derives the gauge percentage from them.
+//! The rollout head also feeds [`session_origin`], which lets the sidebar reap a
+//! superseded same-pane session after `/clear` / `/new` without confusing a fork
+//! for a replacement.
 //! Metadata Claude gets from its statusline (rate-limit windows, model display
 //! name, thread preview/name, version) comes from the app-server read-only
 //! methods via [`refresh_app_server_context`], spawned out-of-band by `rimz codex
@@ -51,7 +54,7 @@ use self::payloads::{
     parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
     parse_user_prompt_submit,
 };
-pub use self::transcript::refresh_transcript_context;
+pub use self::transcript::{SessionOrigin, refresh_transcript_context, session_origin};
 use self::transcript::{
     TranscriptUsage, configured_model, configured_reasoning_effort, detect_turn_error,
     find_session_transcript, payload_reasoning_effort, usage_from_transcript_tail,
@@ -60,7 +63,7 @@ use self::transcript::{
 use self::transcript::{
     configured_model_at, configured_reasoning_effort_at, detect_turn_complete,
     find_session_transcript_under, transcript_enrichment, transcript_stat, usage_from_transcript,
-    with_codex_config_path,
+    with_codex_config_path, with_codex_sessions_root,
 };
 use super::context::AgentContext;
 use super::descriptor::{

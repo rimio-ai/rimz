@@ -3,7 +3,8 @@
 //! This module locates session JSONL files, reads bounded tails, folds token usage, and enriches context/cost fields without touching the live app-server.
 
 use std::env;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::{LazyLock, Mutex};
@@ -61,6 +62,38 @@ pub fn refresh_transcript_context(
         turn_complete,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
+    })
+}
+
+/// A Codex session's origin, read from its rollout `session_meta` head record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionOrigin {
+    /// A fresh `/clear` / `/new` conversation with no fork parent.
+    Fresh,
+    /// A `/side` / `/btw` / `/fork` thread carrying a parent id.
+    Forked,
+}
+
+/// Read a session's origin from the first rollout line. `None` means unknown:
+/// the rollout was absent, unreadable, malformed, or did not start with
+/// `session_meta`, so callers keep every session.
+pub fn session_origin(session_id: &str) -> Option<SessionOrigin> {
+    let path = find_session_transcript(session_id)?;
+    let file = File::open(path).ok()?;
+    let mut line = String::new();
+    BufReader::new(file).read_line(&mut line).ok()?;
+    let value = serde_json::from_str::<Value>(line.trim()).ok()?;
+    (value.get("type").and_then(Value::as_str) == Some("session_meta")).then(|| {
+        let forked = value
+            .get("payload")
+            .and_then(|payload| payload.get("forked_from_id"))
+            .and_then(Value::as_str)
+            .is_some_and(|parent| !parent.is_empty());
+        if forked {
+            SessionOrigin::Forked
+        } else {
+            SessionOrigin::Fresh
+        }
     })
 }
 
@@ -201,6 +234,10 @@ fn configured_config_path() -> Option<PathBuf> {
 static TEST_CODEX_CONFIG: LazyLock<Mutex<Option<PathBuf>>> = LazyLock::new(|| Mutex::new(None));
 
 #[cfg(test)]
+static TEST_CODEX_SESSIONS_ROOT: LazyLock<Mutex<Option<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+#[cfg(test)]
 pub(super) fn with_codex_config_path<T>(path: &Path, f: impl FnOnce() -> T) -> T {
     struct Guard {
         prior: Option<PathBuf>,
@@ -217,6 +254,28 @@ pub(super) fn with_codex_config_path<T>(path: &Path, f: impl FnOnce() -> T) -> T
     let prior = TEST_CODEX_CONFIG
         .lock()
         .expect("test config mutex is not poisoned")
+        .replace(path.to_path_buf());
+    let _guard = Guard { prior };
+    f()
+}
+
+#[cfg(test)]
+pub(super) fn with_codex_sessions_root<T>(path: &Path, f: impl FnOnce() -> T) -> T {
+    struct Guard {
+        prior: Option<PathBuf>,
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            *TEST_CODEX_SESSIONS_ROOT
+                .lock()
+                .expect("test sessions mutex is not poisoned") = self.prior.take();
+        }
+    }
+
+    let prior = TEST_CODEX_SESSIONS_ROOT
+        .lock()
+        .expect("test sessions mutex is not poisoned")
         .replace(path.to_path_buf());
     let _guard = Guard { prior };
     f()
@@ -274,6 +333,14 @@ impl TranscriptUsage {
 /// `RIMZ_CODEX_SESSIONS` so tests can point at a tempdir without touching the
 /// real `~/.codex/sessions/` tree.
 fn codex_sessions_root() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = TEST_CODEX_SESSIONS_ROOT
+        .lock()
+        .expect("test sessions mutex is not poisoned")
+        .clone()
+    {
+        return Some(path);
+    }
     if let Some(raw) = env::var_os("RIMZ_CODEX_SESSIONS").filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(raw));
     }
