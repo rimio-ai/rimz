@@ -3,8 +3,10 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// The rimzd daemon view's middle column. Unset or empty keeps the built-in
-/// live-stats pane (`rimz stats --refresh`); listing panes replaces or extends
-/// it. Per-machine personal policy, outside the project trust hash.
+/// held live-stats pane (`rimz stats --refresh --hold`); listing panes replaces
+/// or extends it. A running room reloads command/cwd edits on save; pane-count
+/// changes take effect on room restart. Per-machine personal policy, outside
+/// the project trust hash.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct DaemonConfig {

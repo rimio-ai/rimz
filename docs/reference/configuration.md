@@ -231,7 +231,7 @@ command = "btop"
 cwd = "/var/log"
 ```
 
-`[daemon]` configures the `rimzd` daemon view's middle column, beside the sidebar and any managed hosts. Unset or empty keeps the built-in live stats pane (`rimz stats --refresh`). Listing `[[daemon.pane]]` entries replaces that default, so include `command = "stats"` when you want live stats plus extra panes. The reserved command token `"stats"` expands to the built-in stats argv; any other `command` is split into argv and run directly without a shell. `cwd` is optional: absent runs from the worktree root, absolute paths are used as-is, and relative paths are joined onto the worktree root. A pane with an empty or unparseable command is skipped; if every configured pane is skipped, Rimz falls back to the built-in stats pane.
+`[daemon]` configures the `rimzd` daemon view's middle column, beside the sidebar and any managed hosts. Unset or empty keeps the built-in held live stats pane (`rimz stats --refresh --hold`). Listing `[[daemon.pane]]` entries replaces that default, so include `command = "stats"` when you want live stats plus extra panes. The reserved command token `"stats"` expands to the built-in stats argv; any other `command` is split into argv and run directly without a shell. `cwd` is optional: absent runs from the worktree root, absolute paths are used as-is, and relative paths are joined onto the worktree root. A running room reloads command and cwd edits when `config.toml` is saved; adding or removing `[[daemon.pane]]` entries changes the pane count and takes effect on room restart. A pane with an empty or unparseable command is skipped; if every configured pane is skipped, Rimz falls back to the built-in stats pane.
 
 ### Accounts
 

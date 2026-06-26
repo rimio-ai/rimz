@@ -16,6 +16,7 @@ pub mod bridge;
 pub mod build_id;
 pub mod child_process;
 pub mod config;
+pub mod daemon_content;
 pub mod diag;
 pub mod feed;
 pub mod forge;

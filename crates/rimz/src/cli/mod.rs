@@ -7,6 +7,7 @@ mod attach_exec;
 mod codex;
 mod config;
 mod coverage;
+mod daemon;
 mod daemon_view;
 mod doctor;
 mod event;
@@ -103,6 +104,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
         Some(Subcmd::Codex(args)) => codex::run(args, &globals),
         Some(Subcmd::Opencode(args)) => opencode::run(args, &globals),
+        Some(Subcmd::Daemon(args)) => daemon::run(args, &globals),
         Some(Subcmd::Config(args)) => config::run(args, &globals),
         Some(Subcmd::Coverage(args)) => coverage::run(args, &globals),
         Some(Subcmd::Trust(args)) => trust::run(args, &globals),
@@ -209,6 +211,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
             let (command, session) = args.scope();
             (command, session, Some("opencode"))
         }
+        Some(Subcmd::Daemon(_)) => ("daemon", None, None),
         Some(Subcmd::Config(_)) => ("config", None, None),
         Some(Subcmd::Coverage(_)) => ("coverage", None, None),
         Some(Subcmd::Trust(_)) => ("trust", None, None),
@@ -591,6 +594,9 @@ enum Subcmd {
     /// OpenCode helper API. The OpenCode hook calls these; humans usually do not.
     #[command(hide = true)]
     Opencode(opencode::OpencodeArgs),
+    /// Daemon dashboard helper API. The rimzd content panes call this; humans do not.
+    #[command(hide = true)]
+    Daemon(daemon::DaemonArgs),
     /// Inspect and edit the per-machine config.
     Config(config::ConfigArgs),
     /// Adapter integration-concern and lifecycle-hook coverage matrices.

@@ -13,6 +13,7 @@
 # The rimzd dashboard's middle column (beside the sidebar and managed hosts).
 # Unset keeps one live-stats pane. List panes to replace or extend it; the
 # reserved command "stats" is the live-stats pane. cwd defaults to the worktree.
+# Command/cwd edits reload on save; adding/removing panes needs a room restart.
 ## [[daemon.pane]]
 ## command = "stats"
 ## [[daemon.pane]]

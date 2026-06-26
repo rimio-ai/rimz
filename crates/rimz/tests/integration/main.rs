@@ -14,6 +14,8 @@ mod chain_advance;
 mod codex_broker;
 mod config;
 mod coverage;
+#[cfg(unix)]
+mod daemon_content;
 mod doctor;
 mod examples;
 mod feed_runtime;
