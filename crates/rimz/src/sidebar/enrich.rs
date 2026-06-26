@@ -230,9 +230,9 @@ fn cached_session_origin(
         .or_insert_with(|| session_origin(agent.agent_id.as_str()))
 }
 
-fn live_codex_panes_by_worktree<'a>(
-    panes: &'a [crate::pane::PaneRef],
-) -> BTreeMap<&'a str, Vec<&'a crate::pane::PaneRef>> {
+fn live_codex_panes_by_worktree(
+    panes: &[crate::pane::PaneRef],
+) -> BTreeMap<&str, Vec<&crate::pane::PaneRef>> {
     let mut live: BTreeMap<&str, Vec<&crate::pane::PaneRef>> = BTreeMap::new();
     for pane in panes {
         if pane_agent_kind(pane) != Some("codex") {
@@ -262,11 +262,7 @@ fn same_live_codex_pane(
             older_pane.pane_id == newer_pane.pane_id
                 && panes.iter().any(|pane| pane.pane_id == older_pane.pane_id)
         }
-        (older_pane, newer_pane) => {
-            panes.len() == 1
-                && older_pane.is_none_or(|stamped| stamped.pane_id == panes[0].pane_id)
-                && newer_pane.is_none_or(|stamped| stamped.pane_id == panes[0].pane_id)
-        }
+        _ => false,
     }
 }
 

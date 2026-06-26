@@ -33,11 +33,12 @@ pub(super) fn select_focused_pane_binding(
         .iter()
         .map(|pane| binding_candidate_record(kind, agent_id, worktree_path, prior_agents, pane))
         .collect::<Vec<_>>();
-    let candidates: Vec<&PaneRef> = panes
-        .iter()
-        .zip(candidate_records.iter())
-        .filter_map(|(pane, record)| record.reject_reasons.is_empty().then_some(pane))
-        .collect();
+    let mut candidates = selectable_binding_candidates(panes, &candidate_records, false);
+    if candidates.is_empty() && codex_session_can_share_occupied_pane(kind, agent_id, prior_agents)
+    {
+        candidates = selectable_binding_candidates(panes, &candidate_records, true);
+        allow_occupied_codex_candidates(&mut candidate_records, &candidates);
+    }
     let candidate_count = candidates.len();
     if candidates.is_empty() {
         return FocusedPaneBindingSelection {
@@ -100,6 +101,60 @@ pub(super) fn select_focused_pane_binding(
     }
 }
 
+fn selectable_binding_candidates<'a>(
+    panes: &'a [PaneRef],
+    records: &[BindingCandidateRecord],
+    allow_occupied_codex_pane: bool,
+) -> Vec<&'a PaneRef> {
+    panes
+        .iter()
+        .zip(records.iter())
+        .filter_map(|(pane, record)| {
+            binding_candidate_selectable(record, allow_occupied_codex_pane).then_some(pane)
+        })
+        .collect()
+}
+
+fn binding_candidate_selectable(
+    record: &BindingCandidateRecord,
+    allow_occupied_codex_pane: bool,
+) -> bool {
+    record.reject_reasons.is_empty()
+        || allow_occupied_codex_pane
+            && record
+                .reject_reasons
+                .iter()
+                .all(|reason| matches!(reason, BindingRejectReason::StampedToOther { .. }))
+}
+
+fn codex_session_can_share_occupied_pane(
+    kind: &str,
+    agent_id: &str,
+    prior_agents: &[PriorAgentPane<'_>],
+) -> bool {
+    kind == "codex"
+        && !prior_agents
+            .iter()
+            .any(|agent| agent.kind == kind && agent.agent_id == agent_id)
+}
+
+fn allow_occupied_codex_candidates(
+    records: &mut [BindingCandidateRecord],
+    candidates: &[&PaneRef],
+) {
+    for candidate in candidates {
+        let Some(record) = records
+            .iter_mut()
+            .find(|record| record.pane_id == candidate.pane_id)
+        else {
+            continue;
+        };
+        record
+            .reject_reasons
+            .retain(|reason| !matches!(reason, BindingRejectReason::StampedToOther { .. }));
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct FocusedPaneBindingSelection {
     pub(super) pane_id: Option<PaneId>,
@@ -124,6 +179,8 @@ pub(super) struct BindingCandidateRecord {
     pub(super) command: Option<String>,
     pub(super) is_focused: bool,
     pub(super) pane_process_start: Option<jiff::Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) occupied_by_agent_id: Option<String>,
     pub(super) reject_reasons: Vec<BindingRejectReason>,
 }
 
@@ -161,9 +218,11 @@ fn binding_candidate_record(
             got: pane.command.clone(),
         });
     }
-    if let Some(stamped) = pane_stamped_to_other_agent(kind, agent_id, prior_agents, pane) {
+    let occupied_by_agent_id =
+        pane_stamped_to_other_agent(kind, agent_id, prior_agents, pane).map(ToOwned::to_owned);
+    if let Some(stamped) = &occupied_by_agent_id {
         reject_reasons.push(BindingRejectReason::StampedToOther {
-            agent_id: stamped.to_owned(),
+            agent_id: stamped.clone(),
         });
     }
     BindingCandidateRecord {
@@ -172,6 +231,7 @@ fn binding_candidate_record(
         command: pane.command.clone(),
         is_focused: pane.is_focused,
         pane_process_start: pane.pane_process_start,
+        occupied_by_agent_id,
         reject_reasons,
     }
 }

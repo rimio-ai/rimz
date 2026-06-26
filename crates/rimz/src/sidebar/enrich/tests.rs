@@ -383,12 +383,10 @@ fn fresh_codex_replacements_pairs_daemon_clear_on_unique_live_pane() {
     let mut old = codex_root("old", "/repo/main", "terminal_1");
     old.worktree_branch = Some("main".to_owned());
     old.last_activity = old_at;
-    let mut fork = root_agent("codex", "fork", None);
-    fork.worktree_path = Some("/repo/main".to_owned());
+    let mut fork = codex_root("fork", "/repo/main", "terminal_1");
     fork.worktree_branch = Some("main".to_owned());
     fork.last_activity = fork_at;
-    let mut new = root_agent("codex", "new", None);
-    new.worktree_path = Some("/repo/main".to_owned());
+    let mut new = codex_root("new", "/repo/main", "terminal_1");
     new.worktree_branch = Some("main".to_owned());
     new.last_activity = new_at;
     let snapshot = SidebarSnapshot::build_with_agents(
@@ -419,6 +417,39 @@ fn fresh_codex_replacements_pairs_daemon_clear_on_unique_live_pane() {
     assert_eq!(
         seen.into_iter().collect::<BTreeSet<_>>(),
         BTreeSet::from(["fork".to_owned(), "new".to_owned(), "old".to_owned()])
+    );
+}
+
+#[test]
+fn fresh_codex_replacements_does_not_claim_paneless_sibling_occupies_live_pane() {
+    let mut live = codex_root("live", "/repo/main", "terminal_1");
+    live.worktree_branch = Some("main".to_owned());
+    live.last_activity = Timestamp::from_second(1_000).unwrap();
+    let mut closed = root_agent("codex", "closed", None);
+    closed.worktree_path = Some("/repo/main".to_owned());
+    closed.worktree_branch = Some("main".to_owned());
+    closed.last_activity = Timestamp::from_second(2_000).unwrap();
+    let snapshot = SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
+        Vec::new(),
+        vec![live, closed],
+        Timestamp::now(),
+    );
+
+    let mut called = false;
+    let replacements = fresh_codex_replacements(
+        &snapshot,
+        &[pane("terminal_1", "codex", "/repo/main")],
+        |_| {
+            called = true;
+            Some(SessionOrigin::Fresh)
+        },
+    );
+
+    assert!(replacements.is_empty());
+    assert!(
+        !called,
+        "lineage is read only after both sessions prove the same live pane"
     );
 }
 

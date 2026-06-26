@@ -109,12 +109,6 @@ fn command_reject(command: &str) -> BindingRejectReason {
     }
 }
 
-fn stamped_old() -> BindingRejectReason {
-    StampedToOther {
-        agent_id: "old".to_owned(),
-    }
-}
-
 #[test]
 fn agent_kind_matches_known_launch_shapes() {
     for (comm, source, expected) in [
@@ -353,14 +347,14 @@ fn focus_recovery_cases() -> Vec<Case> {
             reject_reasons: vec![(0, NotTabFocused)],
         },
         Case {
-            name: "unprovable foreign stamp",
+            name: "codex can share occupied pane when no free candidate",
             panes: vec![candidate("terminal_30", true)],
             client_focus: Some(vec![id("terminal_30")]),
             prior_stamps: vec![("terminal_30", epoch)],
-            expected_pane: None,
-            candidate_count: 0,
-            method: BindingSelectionMethod::None,
-            reject_reasons: vec![(0, stamped_old())],
+            expected_pane: Some("terminal_30"),
+            candidate_count: 1,
+            method: SingleCandidate,
+            reject_reasons: vec![],
         },
         Case {
             name: "stale foreign stamp",
@@ -373,17 +367,17 @@ fn focus_recovery_cases() -> Vec<Case> {
             reject_reasons: vec![],
         },
         Case {
-            name: "current foreign stamp",
+            name: "codex can share current occupied pane",
             panes: vec![started("terminal_30", epoch)],
             client_focus: Some(vec![id("terminal_30")]),
             prior_stamps: vec![("terminal_30", later)],
-            expected_pane: None,
-            candidate_count: 0,
-            method: BindingSelectionMethod::None,
-            reject_reasons: vec![(0, stamped_old())],
+            expected_pane: Some("terminal_30"),
+            candidate_count: 1,
+            method: SingleCandidate,
+            reject_reasons: vec![],
         },
         Case {
-            name: "all rejected candidates record their reasons",
+            name: "codex occupied fallback records surrounding reasons",
             panes: vec![
                 pane("terminal_4", "claude", "/repo/main", false),
                 pane("terminal_30", "codex", "/repo/other", false),
@@ -391,14 +385,98 @@ fn focus_recovery_cases() -> Vec<Case> {
             ],
             client_focus: None,
             prior_stamps: vec![("terminal_42", epoch)],
-            expected_pane: None,
-            candidate_count: 0,
-            method: BindingSelectionMethod::None,
+            expected_pane: Some("terminal_42"),
+            candidate_count: 1,
+            method: SingleCandidate,
             reject_reasons: vec![
                 (0, command_reject("claude")),
                 (1, cwd_reject("/repo/other")),
-                (2, stamped_old()),
             ],
         },
     ]
+}
+
+#[test]
+fn occupied_pane_fallback_stays_codex_and_first_event_only() {
+    let epoch = jiff::Timestamp::UNIX_EPOCH;
+    let occupied_pane_id = id("terminal_30");
+
+    let old_codex = PriorAgentPane {
+        kind: "codex",
+        agent_id: "old",
+        pane_id: Some(&occupied_pane_id),
+        last_activity: epoch,
+    };
+    let selected = select_focused_pane_binding(
+        "codex",
+        "new",
+        "/repo/main",
+        &[old_codex],
+        &[candidate("terminal_30", true)],
+        Some(std::slice::from_ref(&occupied_pane_id)),
+    );
+    assert_eq!(
+        selected.pane_id.as_ref().map(|pane| pane.raw()),
+        Some("terminal_30")
+    );
+    assert_eq!(
+        selected.candidates[0].occupied_by_agent_id.as_deref(),
+        Some("old"),
+        "selected occupied pane still records the prior owner"
+    );
+    assert!(
+        selected.candidates[0].reject_reasons.is_empty(),
+        "accepted occupied Codex candidate is no longer logged as rejected"
+    );
+
+    let old_codex = PriorAgentPane {
+        kind: "codex",
+        agent_id: "old",
+        pane_id: Some(&occupied_pane_id),
+        last_activity: epoch,
+    };
+    let known_new_codex = PriorAgentPane {
+        kind: "codex",
+        agent_id: "new",
+        pane_id: None,
+        last_activity: epoch,
+    };
+    let selected = select_focused_pane_binding(
+        "codex",
+        "new",
+        "/repo/main",
+        &[old_codex, known_new_codex],
+        &[candidate("terminal_30", true)],
+        Some(std::slice::from_ref(&occupied_pane_id)),
+    );
+    assert_eq!(
+        selected.pane_id, None,
+        "an already-known unstamped session cannot later claim a sibling's occupied pane"
+    );
+    assert_eq!(selected.candidate_count, 0);
+    assert_eq!(
+        selected.candidates[0].occupied_by_agent_id.as_deref(),
+        Some("old"),
+        "blocked occupied pane still records the owner"
+    );
+
+    let old_claude = PriorAgentPane {
+        kind: "claude",
+        agent_id: "old",
+        pane_id: Some(&occupied_pane_id),
+        last_activity: epoch,
+    };
+    let selected = select_focused_pane_binding(
+        "claude",
+        "new",
+        "/repo/main",
+        &[old_claude],
+        &[pane("terminal_30", "claude", "/repo/main", true)],
+        Some(std::slice::from_ref(&occupied_pane_id)),
+    );
+    assert_eq!(
+        selected.pane_id, None,
+        "non-Codex recovery keeps the one-owner pane stamp rule"
+    );
+    assert_eq!(selected.candidate_count, 0);
 }
