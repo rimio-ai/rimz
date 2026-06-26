@@ -542,7 +542,7 @@ pub(super) fn cached_panes_or_produce(
             let (viewed_panes, presence) = if served_from_topology {
                 prior.as_ref().map_or_else(
                     || (Vec::new(), None),
-                    |prior| (prior.viewed_panes.clone(), prior.presence.clone()),
+                    |prior| (prior.viewed_panes.clone(), prior.presence),
                 )
             } else {
                 match crate::mux::backend_for(mux).client_view(ClientFocusOptions {
