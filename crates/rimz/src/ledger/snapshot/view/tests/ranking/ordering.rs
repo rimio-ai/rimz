@@ -201,7 +201,7 @@ fn stale_attention_sinks_below_live_work_then_leads_inactive() {
 }
 
 #[test]
-fn inactive_success_sinks_below_process_rows() {
+fn agent_cards_lead_process_rows_even_when_inactive() {
     let mut snapshot = room_with_agent_panes(
         Vec::new(),
         vec![
@@ -221,8 +221,8 @@ fn inactive_success_sinks_below_process_rows() {
         .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["zsh", "old-done"],
-        "process rows sit above inactive calm agent rows"
+        vec!["old-done", "zsh"],
+        "agent cards lead the channel; the process row tails even an inactive agent"
     );
 }
 
@@ -275,6 +275,48 @@ fn inactive_groups_sink_below_process_groups() {
         group_labels(&snapshot),
         vec!["c", "b", "a"],
         "fresh calm groups outrank process groups, and inactive calm groups sink below both"
+    );
+}
+
+#[test]
+fn live_process_keeps_mixed_group_above_inactive_groups() {
+    let mut snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("old-a", "/repo/a", AgentStatus::Success, 1_000)
+                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+            agent_in("old-b", "/repo/b", AgentStatus::Success, 2_000)
+                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+            agent_in("fresh-c", "/repo/c", AgentStatus::Idle, 3_000),
+        ],
+    );
+    snapshot
+        .worktree_groups
+        .iter_mut()
+        .find(|group| group.label == "b")
+        .expect("group b present")
+        .rows
+        .push(process_row("zsh", "/repo/b"));
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(
+        group_labels(&snapshot),
+        vec!["c", "b", "a"],
+        "a live process keeps its mixed group above inactive-only groups"
+    );
+    let mixed_order = snapshot
+        .worktree_groups
+        .iter()
+        .find(|group| group.label == "b")
+        .expect("group b present")
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        mixed_order,
+        vec!["old-b", "zsh"],
+        "agent rows still lead inside the mixed group"
     );
 }
 

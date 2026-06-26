@@ -252,12 +252,15 @@ pub(super) fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
 }
 
 pub(super) fn compare_rows(left: &SidebarRow, right: &SidebarRow) -> Ordering {
-    // Three layers: the unread inbox first, live work over dormant, then the
-    // most attention-hungry within each band. The final tiebreak is the stable
-    // `id` alone — never `name`, which mutates through the session-name → task
-    // → prompt label ladder and would reshuffle a bucket on every rename.
-    row_band(left)
-        .cmp(&row_band(right))
+    // Agent cards lead the channel; process rows are the command tail beneath
+    // them, whatever either's activity. Within each side the three layers hold:
+    // the unread inbox first, live work over dormant, then the most
+    // attention-hungry within each band. The final tiebreak is the stable `id`
+    // alone — never `name`, which mutates through the session-name → task →
+    // prompt label ladder and would reshuffle a bucket on every rename.
+    left.is_process()
+        .cmp(&right.is_process())
+        .then_with(|| row_band(left).cmp(&row_band(right)))
         .then_with(|| row_rank(left).cmp(&row_rank(right)))
         .then_with(|| within_bucket(left, right))
         .then_with(|| left.id.cmp(&right.id))
@@ -339,14 +342,11 @@ pub(super) fn compare_groups(
         .then_with(|| left.label.cmp(&right.label))
 }
 
-/// The group's band (layers 1 and 2), read off its most-urgent member. `rows` is
-/// already sorted by `compare_rows` and the cap never hides the top row, so
-/// `rows.first()` is the true top; an empty group sinks last.
+/// The group's band (layers 1 and 2), read from its liveliest member. Row order
+/// seats process rows below agent cards, so group liveness is computed across
+/// all rows instead of borrowed from `rows.first()`; an empty group sinks last.
 fn group_band(group: &SidebarWorktreeGroup) -> u8 {
-    match group.rows.first() {
-        Some(row) => row_band(row),
-        None => u8::MAX,
-    }
+    group.rows.iter().map(row_band).min().unwrap_or(u8::MAX)
 }
 
 /// The group's rank within its band: an attention top row leads by its bucket
@@ -355,14 +355,18 @@ fn group_band(group: &SidebarWorktreeGroup) -> u8 {
 /// process-only group ranks just under calm agent groups; an empty group sinks
 /// last.
 fn group_rank(group: &SidebarWorktreeGroup) -> u8 {
-    let Some(row) = group.rows.first() else {
-        return u8::MAX;
-    };
-    match row.status() {
-        Some(status) if status.is_attention() => status_rank(status),
-        Some(_) => 3,
-        None => 4,
-    }
+    let band = group_band(group);
+    group
+        .rows
+        .iter()
+        .filter(|row| row_band(row) == band)
+        .map(|row| match row.status() {
+            Some(status) if status.is_attention() => status_rank(status),
+            Some(_) => 3,
+            None => 4,
+        })
+        .min()
+        .unwrap_or(u8::MAX)
 }
 
 fn group_is_external(group: &SidebarWorktreeGroup) -> bool {

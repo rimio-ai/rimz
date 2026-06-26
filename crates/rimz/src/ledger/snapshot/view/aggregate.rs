@@ -117,30 +117,32 @@ pub(super) fn build_worktree_groups_from_rows(
     groups
 }
 
-/// Stamp the inactive sink: a row with no activity past `inactive_after_secs`
-/// drops into the inactive partition, beneath every live row, whatever its
-/// status — a stale `waiting` ask sinks the same as a stale `idle`, then leads
-/// the inactive band by its attention rank. Durable `unread` still outranks the
-/// sink. The boundary is strict (`>`), so the configured window is the last
-/// live second.
+/// Stamp the inactive sink: an agent row with no activity past
+/// `inactive_after_secs` drops into the inactive partition, beneath every live
+/// agent row, whatever its status — a stale `waiting` ask sinks the same as a
+/// stale `idle`, then leads the inactive band by its attention rank. Process
+/// rows are exempt: their activity clock is foreground-process start, not
+/// attention, and row ordering already seats them below every agent card.
+/// Durable `unread` still outranks the sink. The boundary is strict (`>`), so
+/// the configured window is the last live second.
 fn stamp_inactive(rows: &mut [SidebarRow], now: Timestamp, inactive_after_secs: u32) {
     for row in rows {
-        row.inactive =
-            now.duration_since(row.last_activity).as_secs() > i64::from(inactive_after_secs);
+        row.inactive = !row.is_process()
+            && now.duration_since(row.last_activity).as_secs() > i64::from(inactive_after_secs);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ledger::snapshot::row::{ProcessCard, RowCard};
+    use crate::agents::AgentStatus;
+    use crate::ledger::snapshot::row::{AgentCard, ProcessCard, RowCard};
 
     fn now() -> Timestamp {
         Timestamp::from_second(1_750_000_000).expect("fixed test instant is valid")
     }
 
-    /// A status-less row whose only activity was `age_secs` before `now` — all
-    /// `stamp_inactive` reads is `last_activity`, so the card kind is irrelevant.
+    /// An idle agent row whose only activity was `age_secs` before `now`.
     fn row_aged(age_secs: i64) -> SidebarRow {
         SidebarRow {
             id: "r".into(),
@@ -151,7 +153,10 @@ mod tests {
             unread: false,
             inactive: false,
             last_activity: now() - std::time::Duration::from_secs(age_secs as u64),
-            card: RowCard::Process(ProcessCard::default()),
+            card: RowCard::Agent(Box::new(AgentCard {
+                status: Some(AgentStatus::Idle),
+                ..Default::default()
+            })),
         }
     }
 
@@ -177,5 +182,42 @@ mod tests {
         let mut past = vec![row_aged(3_601)];
         stamp_inactive(&mut past, now(), 3_600);
         assert!(past[0].inactive, "one second past the window sinks");
+    }
+
+    #[test]
+    fn process_rows_never_sink_inactive() {
+        let aged = now() - std::time::Duration::from_secs(7_200);
+        let mut rows = vec![
+            SidebarRow {
+                id: "agent".into(),
+                name: "agent".into(),
+                pane: None,
+                worktree_path: None,
+                worktree_branch: None,
+                unread: false,
+                inactive: false,
+                last_activity: aged,
+                card: RowCard::Agent(Box::new(AgentCard {
+                    status: Some(AgentStatus::Idle),
+                    ..Default::default()
+                })),
+            },
+            SidebarRow {
+                id: "process".into(),
+                name: "process".into(),
+                pane: None,
+                worktree_path: None,
+                worktree_branch: None,
+                unread: false,
+                inactive: false,
+                last_activity: aged,
+                card: RowCard::Process(ProcessCard::default()),
+            },
+        ];
+
+        stamp_inactive(&mut rows, now(), 3_600);
+
+        assert!(rows[0].inactive, "aged agent rows sink");
+        assert!(!rows[1].inactive, "aged process rows stay live");
     }
 }
