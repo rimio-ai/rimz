@@ -46,6 +46,17 @@ fn stdout_line(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
+fn write_infocmp_shim(path: &Path) {
+    std::fs::write(path, "#!/bin/sh\nprintf 'CANNED,'\n").expect("write infocmp shim");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let permissions = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("chmod infocmp shim");
+    }
+}
+
 fn write_link_notify_command_config(env: &Env) {
     let dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&dir).expect("mkdir rimz config dir");
@@ -144,6 +155,7 @@ fn exec_hands_ssh_the_expected_argv() {
         .env("RIMZ_SSH_BIN", ssh_shim())
         .env("RIMZ_TEST_SSH_LOG", &log)
         .env("RIMZ_REMOTE_PROBE_MS", "0")
+        .env("TERM", "xterm-256color")
         .bounded_output()
         .expect("run rimz remote connect --attach");
     assert!(
@@ -166,6 +178,65 @@ fn exec_hands_ssh_the_expected_argv() {
     assert_eq!(argv[13], "dev-box");
     assert!(argv[14].starts_with("PATH=\"$HOME/.cargo/bin"));
     assert!(argv[14].ends_with("exec rimz attach --attach -- 'query-engine'"));
+}
+
+#[test]
+fn exec_pins_term_for_unportable_terminal() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let missing_infocmp = env.project_root.join("missing-infocmp");
+    let out = env
+        .rimz()
+        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
+        .env("RIMZ_SSH_BIN", ssh_shim())
+        .env("RIMZ_TEST_SSH_LOG", &log)
+        .env("RIMZ_REMOTE_PROBE_MS", "0")
+        .env("RIMZ_INFOCMP_BIN", &missing_infocmp)
+        .env("TERM", "alacritty")
+        .bounded_output()
+        .expect("run rimz remote connect --attach");
+    assert!(
+        out.status.success(),
+        "shim exits 0 → clean exit\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let invocations = shim_invocations(&log);
+    let argv = &invocations[0];
+    let snippet = argv.last().expect("snippet");
+    assert!(snippet.contains("export TERM=xterm-256color;"), "{snippet}");
+    assert!(snippet.ends_with("exec rimz attach --attach -- 'query-engine'"));
+}
+
+#[test]
+fn exec_copies_terminfo_for_unportable_terminal() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let infocmp = env.project_root.join("infocmp-shim");
+    write_infocmp_shim(&infocmp);
+    let out = env
+        .rimz()
+        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
+        .env("RIMZ_SSH_BIN", ssh_shim())
+        .env("RIMZ_TEST_SSH_LOG", &log)
+        .env("RIMZ_REMOTE_PROBE_MS", "0")
+        .env("RIMZ_INFOCMP_BIN", &infocmp)
+        .env("TERM", "alacritty")
+        .bounded_output()
+        .expect("run rimz remote connect --attach");
+    assert!(
+        out.status.success(),
+        "shim exits 0 → clean exit\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let invocations = shim_invocations(&log);
+    let argv = &invocations[0];
+    let snippet = argv.last().expect("snippet");
+    assert!(
+        snippet
+            .contains("printf '%s\\n' 'CANNED,' | tic -x - 2>/dev/null && export TERM='alacritty'"),
+        "{snippet}"
+    );
+    assert!(snippet.ends_with("exec rimz attach --attach -- 'query-engine'"));
 }
 
 #[test]

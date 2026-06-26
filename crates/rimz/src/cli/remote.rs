@@ -8,7 +8,10 @@ use clap::{Args, Subcommand};
 use super::{AttachAction, AttachFlags, GlobalFlags, attach_action, exec_attach_command};
 use rimz::ids::MuxName;
 use rimz::remote::aliases::{RemoteAlias, RemoteAliases};
-use rimz::remote::{RemoteTarget, ssh_attach_spec, ssh_attach_spec_with_control};
+use rimz::remote::{
+    RemoteTarget, TermPlan, infocmp_program, ssh_attach_spec, ssh_attach_spec_with_control,
+    term_plan_from,
+};
 
 mod link_stats;
 mod list;
@@ -228,7 +231,8 @@ fn resolve_connect(
 /// Workspace resolution, session birth, the sidebar, and the health gate all
 /// run on the remote host's own `rimz`; the room renders here over `ssh -t`.
 fn attach_remote(remote: RemoteConnect, mode: super::AttachMode) -> Result<()> {
-    let plain_spec = ssh_attach_spec(&remote.target, remote.no_resume, remote.mux);
+    let term = remote_term_plan();
+    let plain_spec = ssh_attach_spec(&remote.target, remote.no_resume, remote.mux, &term);
 
     // The local nesting block does not apply: a remote room inside a local
     // pane is a legitimate shape (the remote rimz checks its own env).
@@ -257,6 +261,7 @@ fn attach_remote(remote: RemoteConnect, mode: super::AttachMode) -> Result<()> {
                     &remote.target,
                     remote.no_resume,
                     remote.mux,
+                    &term,
                     Some(&control),
                 );
                 supervisor::supervise_remote(&control_spec, &plain_spec, &remote.target, &control)
@@ -266,6 +271,21 @@ fn attach_remote(remote: RemoteConnect, mode: super::AttachMode) -> Result<()> {
             }
         }
     }
+}
+
+fn remote_term_plan() -> TermPlan {
+    term_plan_from(std::env::var("TERM").ok().as_deref(), run_infocmp)
+}
+
+fn run_infocmp(term: &str) -> Option<String> {
+    let out = std::process::Command::new(infocmp_program())
+        .arg("-x")
+        .arg(term)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 #[cfg(test)]
@@ -326,11 +346,12 @@ mod tests {
             .unwrap();
 
         let raw = resolve_connect("raw-box:session", false, false, None, &aliases).unwrap();
-        let raw_spec = ssh_attach_spec(&raw.target, raw.no_resume, raw.mux);
+        let raw_spec = ssh_attach_spec(&raw.target, raw.no_resume, raw.mux, &TermPlan::Keep);
         assert_eq!(raw_spec.args[8], "raw-box");
 
         let named = resolve_connect("prod", false, false, None, &aliases).unwrap();
-        let named_spec = ssh_attach_spec(&named.target, named.no_resume, named.mux);
+        let named_spec =
+            ssh_attach_spec(&named.target, named.no_resume, named.mux, &TermPlan::Keep);
         assert_eq!(named_spec.args[8], "prod-box");
 
         let fresh = resolve_connect("fresh", false, false, None, &aliases).unwrap();

@@ -5,9 +5,9 @@
 //! `rimz remote connect` makes the local rimz a thin SSH launcher and link
 //! supervisor: everything room-shaped — workspace resolution, session birth,
 //! sidebar, health gate — runs on the remote host's own `rimz`, and the room
-//! renders here because `ssh -t` carries the terminal. This module is pure:
-//! it parses targets, builds `CommandSpec`s, and decides reconnects; the cli
-//! owns process I/O.
+//! renders here because `ssh -t` carries and provisions the terminal. This
+//! module is pure: it parses targets, builds `CommandSpec`s, and decides
+//! reconnects; the cli owns process I/O.
 
 pub mod aliases;
 pub mod link;
@@ -22,6 +22,9 @@ use crate::mux::CommandSpec;
 /// `RIMZ_ZELLIJ_BIN` — the single chokepoint every ssh invocation resolves
 /// through.
 pub const SSH_BIN_ENV: &str = "RIMZ_SSH_BIN";
+
+/// Binary override for tests, mirroring `RIMZ_SSH_BIN`.
+pub const INFOCMP_BIN_ENV: &str = "RIMZ_INFOCMP_BIN";
 
 /// The exit code OpenSSH reserves for its own transport and usage errors —
 /// the "link died" signal the reconnect loop watches for.
@@ -170,27 +173,35 @@ pub fn ssh_program() -> String {
     std::env::var(SSH_BIN_ENV).unwrap_or_else(|_| "ssh".to_owned())
 }
 
+/// The `infocmp` program, honoring the `RIMZ_INFOCMP_BIN` test-shim override.
+pub fn infocmp_program() -> String {
+    std::env::var(INFOCMP_BIN_ENV).unwrap_or_else(|_| "infocmp".to_owned())
+}
+
 /// Compile a remote target into the full ssh invocation.
 ///
 /// The keepalive options give the reconnect loop its dead-link signal
 /// (~15s detection); `-t` forces a remote PTY so the room renders
-/// interactively; `--` stops ssh option parsing before a destination that
-/// could look flag-ish. The final argument is the guarded snippet — one argv
-/// element; ssh hands it to the remote login shell as the command string.
+/// interactively and carries the local `$TERM`, which the snippet provisions
+/// when needed; `--` stops ssh option parsing before a destination that could
+/// look flag-ish. The final argument is the guarded snippet — one argv element;
+/// ssh hands it to the remote login shell as the command string.
 pub fn ssh_attach_spec(
     target: &RemoteTarget,
     no_resume: bool,
     mux: Option<MuxName>,
+    term: &TermPlan,
 ) -> CommandSpec {
-    ssh_attach_spec_with_control(target, no_resume, mux, None)
+    ssh_attach_spec_with_control(target, no_resume, mux, term, None)
 }
 
 /// [`ssh_attach_spec`] plus optional ControlMaster setup for the supervised
-/// remote path. `None` is byte-identical to the legacy invocation.
+/// remote path. `None` keeps the plain ControlMaster shape.
 pub fn ssh_attach_spec_with_control(
     target: &RemoteTarget,
     no_resume: bool,
     mux: Option<MuxName>,
+    term: &TermPlan,
     control: Option<&Path>,
 ) -> CommandSpec {
     CommandSpec::new(ssh_program())
@@ -205,12 +216,91 @@ pub fn ssh_attach_spec_with_control(
         .args(control.into_iter().flat_map(link::control_options))
         .args(["-t", "--"])
         .arg(target.destination.clone())
-        .arg(guarded_snippet(target, no_resume, mux))
+        .arg(guarded_snippet(target, no_resume, mux, term))
+}
+
+/// How the remote session resolves the local terminal. `-t` carries the local
+/// `$TERM` across; on hosts that lack its terminfo entry the remote tmux/zellij
+/// client aborts, so Rimz provisions it before `exec`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TermPlan {
+    /// `$TERM` is universally present remotely — emit nothing.
+    Keep,
+    /// `$TERM` is non-portable and no local `infocmp` source is available.
+    Downgrade,
+    /// Ship the local terminfo source and `tic` it on the remote.
+    Copy { name: String, source: String },
+}
+
+impl TermPlan {
+    /// The shell that sets `TERM` for the remote `rimz`, terminated with `; `
+    /// so it slots in front of `exec` (empty for `Keep`).
+    fn remote_setup(&self) -> String {
+        match self {
+            TermPlan::Keep => String::new(),
+            TermPlan::Downgrade => "export TERM=xterm-256color; ".to_owned(),
+            TermPlan::Copy { name, source } => format!(
+                "export TERM=xterm-256color; \
+                 printf '%s\\n' {source} | tic -x - 2>/dev/null && export TERM={name}; ",
+                source = sh_quote(source),
+                name = sh_quote(name),
+            ),
+        }
+    }
+}
+
+/// Names the remote host can be trusted to resolve; everything else needs
+/// provisioning.
+pub fn term_needs_terminfo_copy(name: &str) -> bool {
+    const UNIVERSAL: &[&str] = &[
+        "xterm",
+        "xterm-color",
+        "xterm-16color",
+        "xterm-256color",
+        "screen",
+        "screen-256color",
+        "tmux",
+        "tmux-256color",
+        "vt100",
+        "vt102",
+        "vt220",
+        "ansi",
+        "linux",
+        "dumb",
+    ];
+    !UNIVERSAL.contains(&name)
+}
+
+/// Decide how the remote session should resolve the local terminal. Pure: the
+/// caller supplies the `infocmp` reader because process I/O lives in the cli.
+pub fn term_plan_from(
+    term: Option<&str>,
+    infocmp: impl FnOnce(&str) -> Option<String>,
+) -> TermPlan {
+    let Some(name) = term.filter(|term| !term.is_empty()) else {
+        return TermPlan::Keep;
+    };
+    if !term_needs_terminfo_copy(name) {
+        return TermPlan::Keep;
+    }
+    match infocmp(name) {
+        Some(source) if !source.trim().is_empty() => TermPlan::Copy {
+            name: name.to_owned(),
+            source,
+        },
+        _ => TermPlan::Downgrade,
+    }
 }
 
 /// The single remote shell command: repair the non-login-shell PATH, fail
-/// with the install fix when the host has no `rimz`, then exec into the room.
-fn guarded_snippet(target: &RemoteTarget, no_resume: bool, mux: Option<MuxName>) -> String {
+/// with the install fix when the host has no `rimz`, provision the carried
+/// terminal when needed, then exec into the room.
+fn guarded_snippet(
+    target: &RemoteTarget,
+    no_resume: bool,
+    mux: Option<MuxName>,
+    term: &TermPlan,
+) -> String {
     let (verb, arg) = match &target.spec {
         RemoteSpec::Path(path) => ("start", quote_remote_path(path)),
         RemoteSpec::Session(name) => ("attach", sh_quote(name)),
@@ -229,9 +319,10 @@ fn guarded_snippet(target: &RemoteTarget, no_resume: bool, mux: Option<MuxName>)
     format!(
         "{}; \
          command -v rimz >/dev/null 2>&1 || {{ echo {not_found} >&2; exit {code}; }}; \
-         exec {rimz} -- {arg}",
+         {term_setup}exec {rimz} -- {arg}",
         remote_path_prefix(),
         code = REMOTE_RIMZ_MISSING_EXIT,
+        term_setup = term.remote_setup(),
     )
 }
 
@@ -539,9 +630,80 @@ mod tests {
     }
 
     #[test]
+    fn term_copy_need_is_selective() {
+        assert!(term_needs_terminfo_copy("alacritty"));
+        assert!(term_needs_terminfo_copy("xterm-kitty"));
+        assert!(term_needs_terminfo_copy("xterm-ghostty"));
+        assert!(!term_needs_terminfo_copy("xterm-256color"));
+        assert!(!term_needs_terminfo_copy("screen-256color"));
+        assert!(!term_needs_terminfo_copy("tmux-256color"));
+    }
+
+    #[test]
+    fn term_plan_keeps_portable_or_absent_terms() {
+        assert_eq!(term_plan_from(None, |_| None), TermPlan::Keep);
+        assert_eq!(term_plan_from(Some(""), |_| None), TermPlan::Keep);
+        assert_eq!(
+            term_plan_from(Some("xterm-256color"), |_| None),
+            TermPlan::Keep
+        );
+    }
+
+    #[test]
+    fn term_plan_copies_nonportable_terms_with_source() {
+        assert_eq!(
+            term_plan_from(Some("alacritty"), |_| Some("ALACRITTY|fake,".to_owned())),
+            TermPlan::Copy {
+                name: "alacritty".to_owned(),
+                source: "ALACRITTY|fake,".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn term_plan_downgrades_nonportable_terms_without_source() {
+        assert_eq!(
+            term_plan_from(Some("alacritty"), |_| None),
+            TermPlan::Downgrade
+        );
+        assert_eq!(
+            term_plan_from(Some("alacritty"), |_| Some("  ".to_owned())),
+            TermPlan::Downgrade
+        );
+    }
+
+    #[test]
+    fn term_downgrade_sets_term_before_exec() {
+        let target = parse("dev-box:query-engine");
+        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Downgrade);
+        let snippet = spec.args.last().expect("snippet");
+        assert!(
+            snippet.contains("export TERM=xterm-256color; exec rimz"),
+            "{snippet}"
+        );
+    }
+
+    #[test]
+    fn term_copy_installs_terminfo_before_exec() {
+        let target = parse("dev-box:query-engine");
+        let term = TermPlan::Copy {
+            name: "alacritty".to_owned(),
+            source: "ALACRITTY|fake,".to_owned(),
+        };
+        let spec = ssh_attach_spec(&target, false, None, &term);
+        let snippet = spec.args.last().expect("snippet");
+        assert!(
+            snippet.contains(
+                "export TERM=xterm-256color; printf '%s\\n' 'ALACRITTY|fake,' | tic -x - 2>/dev/null && export TERM='alacritty'; exec rimz"
+            ),
+            "{snippet}"
+        );
+    }
+
+    #[test]
     fn session_spec_compiles_to_remote_attach() {
         let target = parse("dev-box:query-engine");
-        let spec = ssh_attach_spec(&target, false, None);
+        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep);
         assert_eq!(spec.program, "ssh");
         assert_eq!(
             spec.args[..8],
@@ -569,9 +731,14 @@ mod tests {
     #[test]
     fn supervised_spec_adds_controlmaster_without_changing_the_plain_spec() {
         let target = parse("dev-box:query-engine");
-        let plain = ssh_attach_spec(&target, false, None);
-        let control =
-            ssh_attach_spec_with_control(&target, false, None, Some(Path::new("/tmp/rimz.sock")));
+        let plain = ssh_attach_spec(&target, false, None, &TermPlan::Keep);
+        let control = ssh_attach_spec_with_control(
+            &target,
+            false,
+            None,
+            &TermPlan::Keep,
+            Some(Path::new("/tmp/rimz.sock")),
+        );
 
         assert_eq!(plain.args[..6], control.args[..6]);
         assert_eq!(
@@ -591,7 +758,7 @@ mod tests {
     #[test]
     fn path_spec_compiles_to_remote_start() {
         let target = parse("dev-box:~/code/query-engine");
-        let spec = ssh_attach_spec(&target, false, None);
+        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep);
         let snippet = spec.args.last().expect("snippet");
         assert!(snippet.ends_with("exec rimz start --attach -- \"$HOME\"'/code/query-engine'"));
     }
@@ -599,7 +766,7 @@ mod tests {
     #[test]
     fn no_resume_and_mux_ride_the_remote_invocation() {
         let target = parse("dev-box:query-engine");
-        let spec = ssh_attach_spec(&target, true, Some(MuxName::Tmux));
+        let spec = ssh_attach_spec(&target, true, Some(MuxName::Tmux), &TermPlan::Keep);
         let snippet = spec.args.last().expect("snippet");
         assert!(snippet.contains("exec rimz attach --attach --no-resume --mux tmux -- "));
     }
@@ -607,13 +774,13 @@ mod tests {
     #[test]
     fn display_ssh_command_is_pasteable() {
         let target = parse("dev-box:query-engine");
-        let spec = ssh_attach_spec(&target, false, None);
+        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep);
         let line = display_ssh_command(&spec);
         assert!(line.starts_with("ssh -o ServerAliveInterval=5"));
         assert!(line.contains(" -t -- dev-box '"));
         assert!(line.ends_with("'"));
 
-        let v6 = ssh_attach_spec(&parse("[::1]:query-engine"), false, None);
+        let v6 = ssh_attach_spec(&parse("[::1]:query-engine"), false, None, &TermPlan::Keep);
         assert!(
             display_ssh_command(&v6).contains(" -- '[::1]' "),
             "bracketed destinations quote against shell globbing"
