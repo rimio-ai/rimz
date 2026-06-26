@@ -21,6 +21,48 @@ fn vendored_presence_plugin_is_fresh_for_this_tree() {
 }
 
 #[test]
+fn package_include_list_covers_build_inputs() {
+    let manifest = r#"
+[package]
+include = [
+    "/presence/rimz-presence-zellij.wasm",
+    "/pricing/litellm-pricing.json",
+]
+"#;
+
+    ensure_include_covers_build_inputs(manifest).unwrap();
+}
+
+#[test]
+fn package_include_list_flags_missing_presence_wasm() {
+    let manifest = r#"
+[package]
+include = [
+    "/pricing/litellm-pricing.json",
+]
+"#;
+
+    let err = ensure_include_covers_build_inputs(manifest).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("/presence/rimz-presence-zellij.wasm")
+    );
+}
+
+#[test]
+fn package_include_list_flags_missing_pricing_snapshot() {
+    let manifest = r#"
+[package]
+include = [
+    "/presence/rimz-presence-zellij.wasm",
+]
+"#;
+
+    let err = ensure_include_covers_build_inputs(manifest).unwrap_err();
+    assert!(err.to_string().contains("/pricing/litellm-pricing.json"));
+}
+
+#[test]
 fn spend_parser_path_predicate_covers_nested_modules() {
     let agents_root = Path::new("/repo/crates/rimz/src/agents");
 

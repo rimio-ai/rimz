@@ -648,6 +648,40 @@ fn ensure_presence_plugin_vendored(root: &Path) -> Result<()> {
             srchash_path.display()
         );
     }
+
+    let manifest_path = root.join("crates/rimz/Cargo.toml");
+    let manifest_toml = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    ensure_include_covers_build_inputs(&manifest_toml)?;
+    Ok(())
+}
+
+const PACKAGED_BUILD_INPUTS: &[&str] = &[
+    "/presence/rimz-presence-zellij.wasm",
+    "/pricing/litellm-pricing.json",
+];
+
+/// The crate `include` allowlist packages only its entries, so build.rs inputs
+/// must be force-listed or the published crate drops them and falls back at
+/// build time.
+fn ensure_include_covers_build_inputs(manifest_toml: &str) -> Result<()> {
+    let manifest: toml::Value =
+        toml::from_str(manifest_toml).context("parsing crates/rimz/Cargo.toml")?;
+    let include: Vec<&str> = manifest
+        .get("package")
+        .and_then(|package| package.get("include"))
+        .and_then(toml::Value::as_array)
+        .map(|entries| entries.iter().filter_map(toml::Value::as_str).collect())
+        .unwrap_or_default();
+
+    for required in PACKAGED_BUILD_INPUTS {
+        if !include.iter().any(|entry| entry == required) {
+            bail!(
+                "crates/rimz/Cargo.toml [package].include is missing {required}; \
+                 add it or the published crate drops this build input"
+            );
+        }
+    }
     Ok(())
 }
 

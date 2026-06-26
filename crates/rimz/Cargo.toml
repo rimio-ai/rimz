@@ -14,11 +14,12 @@ categories = ["command-line-utilities", "development-tools"]
 autotests = false
 # The generated pricing snapshot (pricing/litellm-pricing.json) is gitignored,
 # so a default `cargo package` drops it and the published crate would embed an
-# empty tier-1 table (build.rs falls back to `{}`). An `include` allowlist
-# overrides VCS ignore and ships the snapshot, so `cargo install rimz` embeds
-# real prices. The list is the binary's build inputs only; the release workflow
-# refreshes the snapshot before publish and passes `--allow-dirty` (the included
-# file is gitignored, which cargo's dirty check otherwise rejects).
+# empty tier-1 table (build.rs falls back to `{}`). The vendored presence wasm is
+# git-tracked, but an `include` allowlist packages only its entries; dropping it
+# makes build.rs embed empty bytes and ships a Zellij poll-mode binary. The list
+# force-lists those build inputs plus the license bundle; the release workflow
+# refreshes the pricing snapshot before publish and passes `--allow-dirty` (the
+# included snapshot is gitignored, which cargo's dirty check otherwise rejects).
 include = [
     "/src",
     # Must stay AFTER `/src`; negation order decides whether nested docs stay out.
@@ -27,6 +28,8 @@ include = [
     "/build.rs",
     "/themes",
     "/pricing/litellm-pricing.json",
+    "/presence/rimz-presence-zellij.wasm",
+    "/LICENSE",
 ]
 
 [lib]
