@@ -11,8 +11,9 @@
 //! Windows: the heatmap, model breakdown, and agent breakdown read the full
 //! available history (the cache spans the trailing year); "Active days" reports
 //! the trailing four weeks; the Week/Month/Year totals are the trailing 7/30/365
-//! days. `--refresh` holds the panel open, redraws it every minute, and
-//! re-centres promptly after a width change.
+//! days. `--refresh` holds the panel open, recomputes on a background thread,
+//! repaints the held frame in place every minute, and re-centres promptly after
+//! a width change.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
@@ -58,13 +59,16 @@ const GUTTER: usize = 6;
 /// Named models shown before the rest fold into one "Other" row.
 const MAX_MODELS: usize = 6;
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
-const PROGRESS_BAR_WIDTH: usize = 20;
+const MIN_PROGRESS_BAR_WIDTH: usize = 8;
 const SHARE_BAR_WIDTH: usize = 10;
 const STAT_GUTTER: usize = 3;
-const SPINNER_CLEAR_COLS: usize = 120;
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
 const SPENDING_WAIT_STEPS: u32 = 15;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+/// Refresh-repaint line terminator: clear-to-EOL, then CRLF (raw mode). Lets a
+/// repaint overwrite the prior frame in place without a whole-screen blank.
+const REFRESH_NL: &str = "\x1b[K\r\n";
+const REFRESH_POLL_TICK: Duration = Duration::from_millis(100);
 
 /// The wordmark, spaced for a monospace terminal (the README carries a variant
 /// retuned for proportional HTML rendering).
@@ -84,7 +88,7 @@ pub struct StatsArgs {
     /// Emit the stats as JSON instead of the panel.
     #[arg(long)]
     pub json: bool,
-    /// Hold the panel open, redraw every 60s, and re-centre on resize.
+    /// Hold the panel open, refresh stats every 60s, and re-centre on resize.
     #[arg(long, conflicts_with = "json")]
     pub refresh: bool,
     /// Keep the refreshing panel alive through Ctrl-C in the rimzd daemon view.
@@ -120,54 +124,70 @@ fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
     // Raw mode makes keypresses typed events instead of echoed cooked input;
     // mouse reports from a sibling sidebar pane are drained below.
     let _input = TerminalModeGuard::enable(MouseCapture::Off)?;
+    let mut current: Option<Stats> = None;
     loop {
-        let stats = load_or_refresh_stats(&paths, None)?;
-        let today_day = unix_secs_now() as i64 / DAY_SECS;
-        let mut redraw = || {
-            clear_screen()?;
-            render_panel(&stats, today_day, dollars, &glyphs, true, "\r\n")
-        };
-        redraw()?;
-        match hold_panel(hold, &mut redraw)? {
-            PanelExit::Refresh => {}
-            PanelExit::Reload => {
+        let (tx, rx) = mpsc::channel();
+        let worker_paths = paths.clone();
+        thread::spawn(move || {
+            let _ = tx.send(load_or_refresh_stats(&worker_paths, None));
+        });
+        match hold_cycle(hold, &mut current, &rx, dollars, &glyphs)? {
+            CycleExit::Refresh => {}
+            CycleExit::Reload => {
                 if let Some(target) = rimz::reload::current_reexec_target() {
                     return Err(reexec(&target));
                 }
             }
-            PanelExit::Quit => return Ok(()),
+            CycleExit::Quit => return Ok(()),
         }
     }
 }
 
-enum PanelExit {
+enum CycleExit {
     Refresh,
     Reload,
     Quit,
 }
 
-fn hold_panel(hold: bool, redraw: &mut dyn FnMut() -> Result<()>) -> Result<PanelExit> {
+fn hold_cycle(
+    hold: bool,
+    current: &mut Option<Stats>,
+    rx: &mpsc::Receiver<Result<Stats>>,
+    dollars: bool,
+    glyphs: &PanelGlyphs,
+) -> Result<CycleExit> {
     let deadline = Instant::now() + REFRESH_INTERVAL;
     loop {
+        if let Ok(result) = rx.try_recv() {
+            *current = Some(result?);
+            if let Some(stats) = current.as_ref() {
+                repaint(stats, dollars, glyphs)?;
+            }
+        }
         let now = Instant::now();
         if now >= deadline {
-            return Ok(PanelExit::Refresh);
+            return Ok(CycleExit::Refresh);
         }
-        match event::poll(deadline - now) {
+        let timeout = (deadline - now).min(REFRESH_POLL_TICK);
+        match event::poll(timeout) {
             Ok(true) => match event::read() {
-                Ok(Event::Resize(_, _)) => redraw()?,
+                Ok(Event::Resize(_, _)) => {
+                    if let Some(stats) = current.as_ref() {
+                        repaint(stats, dollars, glyphs)?;
+                    }
+                }
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                     match key_outcome(key, hold) {
-                        KeyOutcome::Reload => return Ok(PanelExit::Reload),
-                        KeyOutcome::Quit => return Ok(PanelExit::Quit),
+                        KeyOutcome::Reload => return Ok(CycleExit::Reload),
+                        KeyOutcome::Quit => return Ok(CycleExit::Quit),
                         KeyOutcome::Ignore => {}
                     }
                 }
                 Ok(_) => {}
-                Err(_) => return Ok(PanelExit::Quit),
+                Err(_) => return Ok(CycleExit::Quit),
             },
             Ok(false) => {}
-            Err(_) => return Ok(PanelExit::Quit),
+            Err(_) => return Ok(CycleExit::Quit),
         }
     }
 }
@@ -204,15 +224,19 @@ fn reexec(target: &Path) -> anyhow::Error {
     )
 }
 
-fn clear_screen() -> Result<()> {
+/// Repaint the held panel in place: home the cursor, overwrite each line
+/// (clearing to its end), then clear anything below without a whole-screen blank.
+fn repaint(stats: &Stats, dollars: bool, glyphs: &PanelGlyphs) -> Result<()> {
     use ratatui::crossterm::{
         cursor::MoveTo,
         execute,
         terminal::{Clear, ClearType},
     };
 
-    let mut stdout = std::io::stdout();
-    execute!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
+    execute!(std::io::stdout(), MoveTo(0, 0))?;
+    let today_day = unix_secs_now() as i64 / DAY_SECS;
+    render_panel(stats, today_day, dollars, glyphs, true, REFRESH_NL)?;
+    execute!(std::io::stdout(), Clear(ClearType::FromCursorDown))?;
     Ok(())
 }
 
@@ -497,31 +521,33 @@ fn write_progress_line(frame: char, progress: SpendProgress) -> Result<()> {
     let done = progress.finished_files.min(total);
     let plural = if total == 1 { "" } else { "s" };
     let count_width = total.max(1).to_string().len();
-    let bar = progress_bar(done, total);
+    let prefix = format!("{frame} Reading session file{plural} [");
+    let suffix = format!("] {done:>count_width$}/{total}");
+    let width = term_cols()
+        .saturating_sub(prefix.chars().count() + suffix.chars().count())
+        .max(MIN_PROGRESS_BAR_WIDTH);
+    let bar = progress_bar(done, total, width);
     let mut stderr = std::io::stderr().lock();
-    write!(
-        stderr,
-        "\r{frame} Reading session file{plural} [{bar}] {done:>count_width$}/{total}"
-    )?;
+    write!(stderr, "\r{prefix}{bar}{suffix}")?;
     stderr.flush()?;
     Ok(())
 }
 
-fn progress_bar(done: usize, total: usize) -> String {
+fn progress_bar(done: usize, total: usize, width: usize) -> String {
     let filled = done
-        .saturating_mul(PROGRESS_BAR_WIDTH)
+        .saturating_mul(width)
         .checked_div(total)
         .unwrap_or(0)
-        .min(PROGRESS_BAR_WIDTH);
-    let mut bar = String::with_capacity(PROGRESS_BAR_WIDTH);
+        .min(width);
+    let mut bar = String::with_capacity(width);
     bar.extend(std::iter::repeat_n('█', filled));
-    bar.extend(std::iter::repeat_n('░', PROGRESS_BAR_WIDTH - filled));
+    bar.extend(std::iter::repeat_n('░', width - filled));
     bar
 }
 
 fn clear_spinner_line() -> Result<()> {
     let mut stderr = std::io::stderr().lock();
-    write!(stderr, "\r{:<width$}\r", "", width = SPINNER_CLEAR_COLS)?;
+    write!(stderr, "\r\x1b[K")?;
     stderr.flush()?;
     Ok(())
 }

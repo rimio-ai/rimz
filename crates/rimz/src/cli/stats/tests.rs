@@ -262,12 +262,12 @@ fn refresh_key_outcome_ignores_other_keys() {
 
 #[test]
 fn progress_bar_tracks_file_count() {
-    assert_eq!(progress_bar(0, 10), "░".repeat(PROGRESS_BAR_WIDTH));
+    assert_eq!(progress_bar(0, 10, 20), "░".repeat(20));
     assert_eq!(
-        progress_bar(5, 10),
+        progress_bar(5, 10, 20),
         format!("{}{}", "█".repeat(10), "░".repeat(10))
     );
-    assert_eq!(progress_bar(10, 10), "█".repeat(PROGRESS_BAR_WIDTH));
+    assert_eq!(progress_bar(10, 10, 20), "█".repeat(20));
 }
 
 #[test]
