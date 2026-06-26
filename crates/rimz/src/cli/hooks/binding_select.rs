@@ -28,15 +28,18 @@ pub(super) fn select_focused_pane_binding(
     prior_agents: &[PriorAgentPane<'_>],
     panes: &[PaneRef],
     client_focus: Option<&[PaneId]>,
+    allow_occupied_codex_pane: bool,
 ) -> FocusedPaneBindingSelection {
     let mut candidate_records = panes
         .iter()
         .map(|pane| binding_candidate_record(kind, agent_id, worktree_path, prior_agents, pane))
         .collect::<Vec<_>>();
     let mut candidates = selectable_binding_candidates(panes, &candidate_records, false);
-    if candidates.is_empty() && codex_session_can_share_occupied_pane(kind, agent_id, prior_agents)
+    if candidates.is_empty()
+        && allow_occupied_codex_pane
+        && codex_session_can_share_occupied_pane(kind, agent_id, prior_agents)
     {
-        candidates = selectable_binding_candidates(panes, &candidate_records, true);
+        candidates = selectable_occupied_codex_candidates(panes, &candidate_records, client_focus);
         allow_occupied_codex_candidates(&mut candidate_records, &candidates);
     }
     let candidate_count = candidates.len();
@@ -99,6 +102,28 @@ pub(super) fn select_focused_pane_binding(
         method,
         candidates: candidate_records,
     }
+}
+
+fn selectable_occupied_codex_candidates<'a>(
+    panes: &'a [PaneRef],
+    records: &[BindingCandidateRecord],
+    client_focus: Option<&[PaneId]>,
+) -> Vec<&'a PaneRef> {
+    panes
+        .iter()
+        .zip(records.iter())
+        .filter_map(|(pane, record)| {
+            (binding_candidate_selectable(record, true)
+                && pane_is_focus_evidence(pane, client_focus))
+            .then_some(pane)
+        })
+        .collect()
+}
+
+fn pane_is_focus_evidence(pane: &PaneRef, client_focus: Option<&[PaneId]>) -> bool {
+    client_focus
+        .map(|focused| focused.iter().any(|pane_id| pane_id == &pane.pane_id))
+        .unwrap_or(pane.is_focused)
 }
 
 fn selectable_binding_candidates<'a>(

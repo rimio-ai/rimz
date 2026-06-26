@@ -261,6 +261,7 @@ fn focused_pane_recovery_selects_or_rejects_by_focus_and_stamp_state() {
             &prior,
             &case.panes,
             case.client_focus.as_deref(),
+            true,
         );
 
         assert_eq!(
@@ -381,7 +382,7 @@ fn focus_recovery_cases() -> Vec<Case> {
             panes: vec![
                 pane("terminal_4", "claude", "/repo/main", false),
                 pane("terminal_30", "codex", "/repo/other", false),
-                candidate("terminal_42", false),
+                candidate("terminal_42", true),
             ],
             client_focus: None,
             prior_stamps: vec![("terminal_42", epoch)],
@@ -414,6 +415,7 @@ fn occupied_pane_fallback_stays_codex_and_first_event_only() {
         &[old_codex],
         &[candidate("terminal_30", true)],
         Some(std::slice::from_ref(&occupied_pane_id)),
+        true,
     );
     assert_eq!(
         selected.pane_id.as_ref().map(|pane| pane.raw()),
@@ -435,6 +437,48 @@ fn occupied_pane_fallback_stays_codex_and_first_event_only() {
         pane_id: Some(&occupied_pane_id),
         last_activity: epoch,
     };
+    let selected = select_focused_pane_binding(
+        "codex",
+        "new",
+        "/repo/main",
+        &[old_codex],
+        &[candidate("terminal_30", true)],
+        Some(std::slice::from_ref(&occupied_pane_id)),
+        false,
+    );
+    assert_eq!(
+        selected.pane_id, None,
+        "occupied fallback is limited to prompt-start recovery"
+    );
+    assert_eq!(selected.candidate_count, 0);
+
+    let old_codex = PriorAgentPane {
+        kind: "codex",
+        agent_id: "old",
+        pane_id: Some(&occupied_pane_id),
+        last_activity: epoch,
+    };
+    let selected = select_focused_pane_binding(
+        "codex",
+        "new",
+        "/repo/main",
+        &[old_codex],
+        &[candidate("terminal_30", false)],
+        Some(&[]),
+        true,
+    );
+    assert_eq!(
+        selected.pane_id, None,
+        "occupied fallback requires focus evidence"
+    );
+    assert_eq!(selected.candidate_count, 0);
+
+    let old_codex = PriorAgentPane {
+        kind: "codex",
+        agent_id: "old",
+        pane_id: Some(&occupied_pane_id),
+        last_activity: epoch,
+    };
     let known_new_codex = PriorAgentPane {
         kind: "codex",
         agent_id: "new",
@@ -448,6 +492,7 @@ fn occupied_pane_fallback_stays_codex_and_first_event_only() {
         &[old_codex, known_new_codex],
         &[candidate("terminal_30", true)],
         Some(std::slice::from_ref(&occupied_pane_id)),
+        true,
     );
     assert_eq!(
         selected.pane_id, None,
@@ -473,6 +518,7 @@ fn occupied_pane_fallback_stays_codex_and_first_event_only() {
         &[old_claude],
         &[pane("terminal_30", "claude", "/repo/main", true)],
         Some(std::slice::from_ref(&occupied_pane_id)),
+        true,
     );
     assert_eq!(
         selected.pane_id, None,

@@ -78,6 +78,7 @@ pub(super) fn recover_focused_pane_binding(
         &prior,
         &inputs.panes,
         inputs.client_focus.as_deref(),
+        matches!(observation.signal, LifecycleSignal::TurnStarted),
     );
     let outcome = match &selection.pane_id {
         Some(pane_id) => BindingRecoveryOutcome::Selected {
