@@ -100,6 +100,7 @@ fn source_active_settles_multivalued_focus_without_contest() {
         produced_at_ms: 8,
         observed_at_ms: 4,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::from([(ViewId::new_unchecked("tab_0"), source.clone())]),
         source_active_authoritative: false,
         prior: None,
@@ -111,6 +112,79 @@ fn source_active_settles_multivalued_focus_without_contest() {
     assert_eq!(frame.tabs[0].active_pane, Some(source.clone()));
     assert!(!frame.tabs[0].focus_contested);
     assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn client_viewed_pane_settles_multivalued_focus_without_contest() {
+    let viewed = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), true),
+            pane("terminal_2", "tab_0", Some("cargo build"), true),
+        ],
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        client_viewed: std::slice::from_ref(&viewed),
+        source_active: BTreeMap::new(),
+        source_active_authoritative: false,
+        prior: None,
+    });
+
+    assert_eq!(frame.tabs[0].active_pane, Some(viewed));
+    assert!(!frame.tabs[0].focus_contested);
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn client_viewed_pane_overrides_authoritative_source_active() {
+    let source = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let viewed = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), true),
+            pane("terminal_2", "tab_0", Some("cargo build"), false),
+        ],
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        client_viewed: std::slice::from_ref(&viewed),
+        source_active: BTreeMap::from([(ViewId::new_unchecked("tab_0"), source)]),
+        source_active_authoritative: true,
+        prior: None,
+    });
+
+    assert_eq!(frame.tabs[0].active_pane, Some(viewed));
+    assert!(!frame.tabs[0].focus_contested);
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn client_viewed_outside_tab_leaves_contested_fallback_unchanged() {
+    let viewed = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), true),
+            pane("terminal_2", "tab_0", Some("cargo build"), true),
+        ],
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        client_viewed: std::slice::from_ref(&viewed),
+        source_active: BTreeMap::new(),
+        source_active_authoritative: false,
+        prior: None,
+    });
+
+    assert_eq!(
+        frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        Some("terminal_1")
+    );
+    assert!(frame.tabs[0].focus_contested);
+    assert!(matches!(
+        diagnostics.as_slice(),
+        [DiagEvent::FocusContested { resolved, .. }] if resolved.raw() == "terminal_1"
+    ));
 }
 
 #[test]
@@ -127,6 +201,7 @@ fn source_active_naming_a_non_candidate_stays_contested() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::from([(ViewId::new_unchecked("tab_0"), absent)]),
         source_active_authoritative: false,
         prior: None,
@@ -155,6 +230,7 @@ fn authoritative_source_active_overrides_raw_focus_candidates() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::from([(ViewId::new_unchecked("tab_1"), codex.clone())]),
         source_active_authoritative: true,
         prior: None,
@@ -177,6 +253,7 @@ fn non_authoritative_source_active_outside_candidates_stays_contested() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::from([(ViewId::new_unchecked("tab_1"), codex)]),
         source_active_authoritative: false,
         prior: None,
@@ -204,6 +281,7 @@ fn authoritative_source_active_missing_from_tab_falls_back_to_candidates() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::from([(ViewId::new_unchecked("tab_1"), stale)]),
         source_active_authoritative: true,
         prior: None,
@@ -232,6 +310,7 @@ fn settled_focus_oscillation_keeps_focus_contest_diagnostic_silent() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: source_active.clone(),
         source_active_authoritative: false,
         prior: None,
@@ -251,6 +330,7 @@ fn settled_focus_oscillation_keeps_focus_contest_diagnostic_silent() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::new(),
         source_active_authoritative: false,
         prior: Some(&settled),
@@ -273,6 +353,7 @@ fn settled_focus_oscillation_keeps_focus_contest_diagnostic_silent() {
         produced_at_ms: 9,
         observed_at_ms: 9,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active,
         source_active_authoritative: false,
         prior: Some(&contested),
@@ -292,6 +373,7 @@ fn settled_focus_oscillation_keeps_focus_contest_diagnostic_silent() {
         produced_at_ms: 10,
         observed_at_ms: 10,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::new(),
         source_active_authoritative: false,
         prior: Some(&settled_again),
@@ -340,6 +422,7 @@ fn steady_contest_records_once_then_re_emits_on_resolution_change() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::new(),
         source_active_authoritative: false,
         prior: Some(&prior),
@@ -366,6 +449,7 @@ fn steady_contest_records_once_then_re_emits_on_resolution_change() {
         produced_at_ms: 9,
         observed_at_ms: 9,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::new(),
         source_active_authoritative: false,
         prior: Some(&shifted_prior),
@@ -398,6 +482,7 @@ fn contested_focus_prefers_newly_marked_candidate() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::new(),
         source_active_authoritative: false,
         prior: Some(&prior),
@@ -431,6 +516,7 @@ fn contested_focus_sticks_to_prior_when_no_transition_is_visible() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::new(),
         source_active_authoritative: false,
         prior: Some(&prior),
@@ -453,6 +539,7 @@ fn contested_focus_sticks_to_prior_when_no_transition_is_visible() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::new(),
         source_active_authoritative: false,
         prior: None,
@@ -471,6 +558,7 @@ fn contested_focus_sticks_to_prior_when_no_transition_is_visible() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         source_active: BTreeMap::new(),
         source_active_authoritative: false,
         prior: Some(&prior),

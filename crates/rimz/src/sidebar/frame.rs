@@ -37,8 +37,9 @@ pub struct PaneFrame {
     /// Empty on healthy frames and on legacy frames.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub carried_panes: Vec<CarriedPane>,
-    /// Panes attached clients are currently viewing, one per client. This is the
-    /// global-focus signal that the per-tab `active_pane` is not.
+    /// Panes attached clients are currently viewing, one per client. Assembly
+    /// uses this as the converged focus truth for each viewed tab before
+    /// publishing it for snapshot enrichment.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub viewed_panes: Vec<PaneId>,
     /// Producer-sampled session presence. Absent on legacy frames and on
@@ -65,10 +66,10 @@ pub struct TabFrame {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_pane: Option<PaneId>,
-    /// Focus marks for this view were multi-valued and no authoritative active
-    /// pane settled them, so `active_pane` is a heuristic arbitration. A
-    /// multi-client tab whose mux-reported active pane names one of the marked
-    /// panes is settled, not contested.
+    /// Focus marks for this view were multi-valued and no authoritative client
+    /// or mux active pane settled them, so `active_pane` is a heuristic
+    /// arbitration. A viewed tab, or a multi-client tab whose mux-reported
+    /// active pane names one of the marked panes, is settled, not contested.
     #[serde(default, skip_serializing_if = "is_false")]
     pub focus_contested: bool,
     pub panes: Vec<PaneState>,
@@ -326,6 +327,7 @@ pub struct FrameInputs<'a> {
     pub produced_at_ms: u64,
     pub observed_at_ms: u64,
     pub session_name: String,
+    pub client_viewed: &'a [PaneId],
     pub source_active: BTreeMap<ViewId, PaneId>,
     pub source_active_authoritative: bool,
     pub prior: Option<&'a PaneFrame>,
@@ -349,6 +351,7 @@ pub fn assemble_frame_with_diagnostics(
         produced_at_ms,
         observed_at_ms: produced_at_ms,
         session_name: session_name.into(),
+        client_viewed: &[],
         source_active: BTreeMap::new(),
         source_active_authoritative: false,
         prior: None,
@@ -361,6 +364,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         produced_at_ms,
         observed_at_ms,
         session_name,
+        client_viewed,
         source_active,
         source_active_authoritative,
         prior,
@@ -427,6 +431,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
     resolve_tab_focus(
         &mut tabs,
         focused_candidates,
+        client_viewed,
         &source_active,
         source_active_authoritative,
         prior,
@@ -450,14 +455,31 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
 fn resolve_tab_focus(
     tabs: &mut BTreeMap<ViewId, TabFrame>,
     focused_candidates: BTreeMap<ViewId, Vec<PaneId>>,
+    client_viewed: &[PaneId],
     source_active: &BTreeMap<ViewId, PaneId>,
     source_active_authoritative: bool,
     prior: Option<&PaneFrame>,
     diagnostics: &mut Vec<DiagEvent>,
 ) {
     for (view_id, tab) in tabs {
+        // The attached client's focused pane is the converged single-focus
+        // truth for the tab it views. Stale multi-valued `is_focused` marks and
+        // a sticky plugin resolution never override it. Resolve to one pane per
+        // tab so the shared sidebar buffer stays renderable.
+        if let Some(active) = client_viewed
+            .iter()
+            .filter(|pane| {
+                tab.panes
+                    .iter()
+                    .any(|candidate| &candidate.pane_id == *pane)
+            })
+            .min_by(|left, right| pane_id_order(left.as_str(), right.as_str()))
+        {
+            tab.active_pane = Some(active.clone());
+            continue;
+        }
         // The presence plugin resolves one active pane per tab from focus
-        // transitions; trust it over Zellij's multi-valued, per-client
+        // transitions; trust it over Zellij's multi-valued remembered
         // `is_focused` marks. A move to another pane re-marks that pane, so the
         // plugin's resolution already reflects real focus shifts.
         if source_active_authoritative

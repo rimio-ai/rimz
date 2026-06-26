@@ -57,10 +57,11 @@ fn fresh_snapshot_cache(
 /// The session's live panes from the mux — the `list-panes` round-trip the
 /// snapshot cache amortizes across the fleet. The ledger rollup is read
 /// separately (fresh from `latest.json`), so this enumerates only the pane set.
-/// The per-view `is_focused` mark rides the pane list itself for the sidebar's
-/// selection baseline. The elected producer also samples the attached clients'
-/// viewed panes once per tick so focus-clearing unread is gated on the tab the
-/// user is actually viewing.
+/// The per-view `is_focused` mark rides the pane list itself as a fallback
+/// focus candidate. The elected producer also samples the attached clients'
+/// viewed panes once per tick so the viewed tab anchors to the user's focused
+/// pane and focus-clearing unread is gated on the tab the user is actually
+/// viewing.
 fn list_session_panes(
     mux: MuxName,
     session: &str,
@@ -226,6 +227,7 @@ pub fn repaired_pane_frame_for_binding(
         produced_at_ms: unix_now_ms(),
         observed_at_ms: listing.observed_at_ms,
         session_name: session.to_owned(),
+        client_viewed: &[],
         source_active: listing.source_active,
         source_active_authoritative: listing.source_active_authoritative,
         prior: read_snapshot_cache(&cache_path, session).as_ref(),
@@ -529,46 +531,49 @@ pub(super) fn cached_panes_or_produce(
             };
             let served_from_topology = listing.served_from_topology;
             let source_active_authoritative = listing.source_active_authoritative;
+            let source_active = listing.source_active;
+            let observed_at_ms = listing.observed_at_ms;
             let panes = filter_foreign_session_panes(listing.panes, session, diag);
-            let (mut frame, diagnostics) =
-                crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
-                    panes,
-                    produced_at_ms: unix_now_ms(),
-                    observed_at_ms: listing.observed_at_ms,
-                    session_name: session.to_owned(),
-                    source_active: listing.source_active,
-                    source_active_authoritative,
-                    prior: read_snapshot_cache(&cache_path, session).as_ref(),
-                });
-            emit_frame_diagnostics(diag, diagnostics);
+            let prior = read_snapshot_cache(&cache_path, session);
             // Sample attached-client focus and presence only on a live read. A
             // topology-served frame forks no mux command (the topology cache's
             // contract), so carry the prior publish's client view forward as the
             // freshest non-forking estimate rather than reach for `list-clients`.
-            if served_from_topology {
-                if let Some(prior) = read_snapshot_cache(&cache_path, session) {
-                    frame.viewed_panes = prior.viewed_panes;
-                    frame.presence = prior.presence;
-                }
+            let (viewed_panes, presence) = if served_from_topology {
+                prior.as_ref().map_or_else(
+                    || (Vec::new(), None),
+                    |prior| (prior.viewed_panes.clone(), prior.presence.clone()),
+                )
             } else {
                 match crate::mux::backend_for(mux).client_view(ClientFocusOptions {
                     session_name: Some(session.to_owned()),
                     ..Default::default()
                 }) {
-                    Ok(client_view) => {
-                        frame.viewed_panes = client_view.viewed_panes;
-                        frame.presence = Some(SidebarPresence::classify(
+                    Ok(client_view) => (
+                        client_view.viewed_panes,
+                        Some(SidebarPresence::classify(
                             unix_now_ms(),
                             client_view.presence.human_clients,
                             client_view.presence.last_input_ms,
-                        ));
-                    }
-                    Err(_) => {
-                        frame.viewed_panes = Vec::new();
-                        frame.presence = None;
-                    }
+                        )),
+                    ),
+                    Err(_) => (Vec::new(), None),
                 }
-            }
+            };
+            let (mut frame, diagnostics) =
+                crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
+                    panes,
+                    produced_at_ms: unix_now_ms(),
+                    observed_at_ms,
+                    session_name: session.to_owned(),
+                    client_viewed: &viewed_panes,
+                    source_active,
+                    source_active_authoritative,
+                    prior: prior.as_ref(),
+                });
+            frame.viewed_panes = viewed_panes;
+            frame.presence = presence;
+            emit_frame_diagnostics(diag, diagnostics);
             repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
             Ok(frame)
         };
