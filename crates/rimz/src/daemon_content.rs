@@ -118,9 +118,15 @@ pub fn run_supervisor(slot: usize, worktree_root: &Path) -> io::Result<ExitStatu
             if let Some(daemon) = load_daemon_config(&config_path) {
                 let next = resolve_slot(&daemon, slot, &rimz_bin, worktree_root);
                 if needs_restart(&current, &next) {
-                    terminate_child(&mut child)?;
-                    child = spawn_child(&next)?;
-                    current = next;
+                    match reload_child(&mut child, &current, &next)? {
+                        ReloadedChild::Next(next_child) => {
+                            child = next_child;
+                            current = next;
+                        }
+                        ReloadedChild::Current(current_child) => {
+                            child = current_child;
+                        }
+                    }
                 }
             }
         }
@@ -172,6 +178,40 @@ fn load_daemon_config(config_path: &Path) -> Option<DaemonConfig> {
 
 fn needs_restart(current: &ResolvedPane, next: &ResolvedPane) -> bool {
     current.argv != next.argv || current.cwd != next.cwd
+}
+
+enum ReloadedChild {
+    Next(Child),
+    Current(Child),
+}
+
+fn reload_child(
+    child: &mut Child,
+    current: &ResolvedPane,
+    next: &ResolvedPane,
+) -> io::Result<ReloadedChild> {
+    terminate_child(child)?;
+    match spawn_child(next) {
+        Ok(child) => Ok(ReloadedChild::Next(child)),
+        Err(err) => {
+            tracing::warn!(
+                argv = ?next.argv,
+                cwd = %next.cwd.display(),
+                error = %err,
+                "daemon content reload command failed; restarting previous child",
+            );
+            spawn_child(current)
+                .map(ReloadedChild::Current)
+                .inspect_err(|restart_err| {
+                    tracing::warn!(
+                        argv = ?current.argv,
+                        cwd = %current.cwd.display(),
+                        error = %restart_err,
+                        "daemon content previous command could not restart",
+                    );
+                })
+        }
+    }
 }
 
 fn spawn_child(pane: &ResolvedPane) -> io::Result<Child> {

@@ -51,6 +51,22 @@ fn content_supervisor_restarts_child_when_config_is_saved() {
         "broken mid-edit config should keep the current child"
     );
 
+    let missing_command = format!("rimz-missing-daemon-content-command-{}", std::process::id());
+    write_config(&config_path, &missing_command);
+    std::thread::sleep(Duration::from_millis(700));
+    assert!(
+        supervisor
+            .child
+            .try_wait()
+            .expect("poll supervisor")
+            .is_none(),
+        "unspawnable reload command should keep the supervisor running"
+    );
+    assert!(
+        pid_file_alive(&first_pid),
+        "unspawnable reload command should keep the previous command running"
+    );
+
     write_config(&config_path, &sentinel_command(&second_pid, &second_marker));
 
     assert!(
@@ -120,6 +136,13 @@ fn read_pid(path: &Path) -> i32 {
         .trim()
         .parse()
         .expect("parse pid")
+}
+
+fn pid_file_alive(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|pid| pid.trim().parse().ok())
+        .is_some_and(pid_alive)
 }
 
 fn pid_alive(pid: i32) -> bool {
