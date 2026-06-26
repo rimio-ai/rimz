@@ -256,6 +256,7 @@ fn probe_stream_waits_for_control_master_before_starting() {
         .env("RIMZ_TEST_SSH_SLEEP_MS", "220")
         .env("RIMZ_REMOTE_PROBE_MS", "20")
         .env("RIMZ_REMOTE_PROBE_TIMEOUT_MS", "20")
+        .env("TERM", "xterm-256color")
         .bounded_output()
         .expect("run rimz remote connect --attach");
     assert!(
@@ -305,6 +306,7 @@ fn link_drop_on_an_established_session_reconnects() {
         // Gatetime 0: even the shim's instant session counts as established.
         .env("RIMZ_REMOTE_GATETIME_MS", "0")
         .env("RIMZ_REMOTE_BACKOFF_MS", "1")
+        .env("TERM", "xterm-256color")
         .bounded_output()
         .expect("run rimz remote connect --attach");
     assert!(
@@ -351,6 +353,7 @@ fn local_link_notify_command_receives_lost_and_restored_env() {
         .env("RIMZ_REMOTE_GATETIME_MS", "20")
         .env("RIMZ_REMOTE_BACKOFF_MS", "1")
         .env("RIMZ_NOTIFY_TEST_LOG", &notify_log)
+        .env("TERM", "xterm-256color")
         .bounded_output()
         .expect("run rimz remote connect --attach");
     assert!(
@@ -402,6 +405,7 @@ fn remote_alias_round_trip_connects_lists_resets_and_deletes() {
     let printed = env
         .rimz()
         .args(["remote", "connect", "prod", "--print"])
+        .env("TERM", "xterm-256color")
         .bounded_output()
         .expect("run rimz remote connect alias --print");
     let line = stdout_line(&printed);
@@ -432,6 +436,7 @@ fn remote_alias_round_trip_connects_lists_resets_and_deletes() {
     let reset = env
         .rimz()
         .args(["remote", "reset", "prod", "--print"])
+        .env("TERM", "xterm-256color")
         .bounded_output()
         .expect("run rimz remote reset --print");
     let line = stdout_line(&reset);
