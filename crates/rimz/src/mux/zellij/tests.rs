@@ -171,7 +171,7 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
     );
     assert!(has("--default-mode", "locked"));
     assert!(has("--mouse-click-through", "true"));
-    assert!(has("--focus-follows-mouse", "true"));
+    assert!(has("--focus-follows-mouse", "false"));
     assert!(has("--auto-layout", "true"));
     assert!(has("--session-serialization", "false"));
     for flag in [

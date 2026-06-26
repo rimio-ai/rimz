@@ -55,7 +55,7 @@
 [zellij]
 # Critical room invariants Rimz always applies:
 mouse_click_through = true            # single click on a card jumps to the agent (Zellij >= 0.44.0)
-focus_follows_mouse = true            # focus the pane under the pointer so the first click lands
+focus_follows_mouse = false           # off so a single click passes through to the renderer
 session_serialization = false         # Rimz owns rebirth instead of Zellij resurrection
 auto_layout = true                    # use Rimz's swap layout for no-direction new panes
 

@@ -1103,7 +1103,7 @@ fn zellij_room_defaults_are_agent_friendly() {
     assert!(config.zellij.mouse_click_through);
     assert_eq!(config.zellij.advanced_mouse_actions, None);
     assert_eq!(config.zellij.mouse_hover_effects, None);
-    assert!(config.zellij.focus_follows_mouse);
+    assert!(!config.zellij.focus_follows_mouse);
     assert_eq!(config.zellij.pane_frames, None);
     assert_eq!(config.zellij.on_force_close, None);
     assert_eq!(config.zellij.scroll_buffer_size, None);

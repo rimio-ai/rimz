@@ -39,11 +39,11 @@ default_shell "zsh"                    // or your shell of choice
 theme "dracula"                        // any bundled or custom theme
 show_startup_tips false                // skip the startup tip banner
 show_release_notes false               // skip the release-notes pane on upgrade
-focus_follows_mouse true               // focus the pane under the pointer
+focus_follows_mouse false              // let click-through handle the first press
 mouse_click_through true               // a single click both focuses and registers
 ```
 
-`pane_frames true` draws a titled border around each pane so you can always see which one holds focus — the single most useful upgrade for a multi-agent layout. `focus_follows_mouse` and `mouse_click_through` make a click land on its target the first time; Rimz already sets both inside its room (single-click sidebar jumps depend on them), and setting them here brings the same feel to your own sessions.
+`pane_frames true` draws a titled border around each pane so you can always see which one holds focus — the single most useful upgrade for a multi-agent layout. `mouse_click_through` makes a click land on its target the first time when focus-follows-mouse is off; Rimz sets that pair inside its room for single-click sidebar jumps, and setting them here brings the same feel to your own sessions.
 
 ## A note on resurrection
 
