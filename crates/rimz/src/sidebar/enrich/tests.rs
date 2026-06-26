@@ -376,58 +376,78 @@ fn focused_worktree_paths_keys_on_viewed_row_panes() {
 }
 
 #[test]
-fn fresh_codex_replacements_reads_lineage_only_for_shared_pane_roots() {
-    let mut fresh = codex_root("fresh", "/repo/main", "%1");
-    fresh.worktree_branch = Some("main".to_owned());
-    let mut fork = codex_root("fork", "/repo/main", "%1");
+fn fresh_codex_replacements_pairs_daemon_clear_on_unique_live_pane() {
+    let old_at = Timestamp::from_second(1_000).unwrap();
+    let fork_at = Timestamp::from_second(2_000).unwrap();
+    let new_at = Timestamp::from_second(3_000).unwrap();
+    let mut old = codex_root("old", "/repo/main", "terminal_1");
+    old.worktree_branch = Some("main".to_owned());
+    old.last_activity = old_at;
+    let mut fork = root_agent("codex", "fork", None);
+    fork.worktree_path = Some("/repo/main".to_owned());
     fork.worktree_branch = Some("main".to_owned());
-    let solo = codex_root("solo", "/repo/solo", "%2");
-    let distinct_pane = codex_root("other-pane", "/repo/main", "%3");
-    let mut child = codex_root("child", "/repo/main", "%1");
-    child.parent_agent_id = Some("fresh".into());
-    let mut claude = codex_root("claude", "/repo/main", "%1");
-    claude.kind = crate::ids::AgentKind::new_unchecked("claude");
+    fork.last_activity = fork_at;
+    let mut new = root_agent("codex", "new", None);
+    new.worktree_path = Some("/repo/main".to_owned());
+    new.worktree_branch = Some("main".to_owned());
+    new.last_activity = new_at;
     let snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
         Vec::new(),
-        vec![fresh, fork, solo, distinct_pane, child, claude],
+        vec![old, fork, new],
         Timestamp::now(),
     );
 
     let mut seen = Vec::new();
-    let replacements = fresh_codex_replacements(&snapshot, |id| {
-        seen.push(id.to_owned());
-        match id {
-            "fresh" => Some(SessionOrigin::Fresh),
-            "fork" => Some(SessionOrigin::Forked),
-            other => panic!("unexpected lineage read for {other}"),
-        }
-    });
+    let replacements = fresh_codex_replacements(
+        &snapshot,
+        &[pane("terminal_1", "codex", "/repo/main")],
+        |id| {
+            seen.push(id.to_owned());
+            match id {
+                "old" | "new" => Some(SessionOrigin::Fresh),
+                "fork" => Some(SessionOrigin::Forked),
+                other => panic!("unexpected lineage read for {other}"),
+            }
+        },
+    );
 
     assert_eq!(
         replacements,
-        BTreeSet::from([AgentSessionId::from("fresh")])
+        BTreeSet::from([(AgentSessionId::from("old"), AgentSessionId::from("new"))])
     );
-    assert_eq!(seen, vec!["fresh", "fork"]);
+    assert_eq!(
+        seen.into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from(["fork".to_owned(), "new".to_owned(), "old".to_owned()])
+    );
 }
 
 #[test]
-fn fresh_codex_replacements_skips_lineage_when_no_shared_pane_scope() {
+fn fresh_codex_replacements_skips_lineage_when_live_pane_scope_is_ambiguous() {
+    let mut old = codex_root("old", "/repo/main", "terminal_1");
+    old.last_activity = Timestamp::from_second(1_000).unwrap();
+    let mut new = root_agent("codex", "new", None);
+    new.worktree_path = Some("/repo/main".to_owned());
+    new.last_activity = Timestamp::from_second(2_000).unwrap();
     let snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
         Vec::new(),
-        vec![
-            codex_root("one", "/repo/main", "%1"),
-            codex_root("two", "/repo/main", "%2"),
-        ],
+        vec![old, new],
         Timestamp::now(),
     );
 
     let mut called = false;
-    let replacements = fresh_codex_replacements(&snapshot, |_| {
-        called = true;
-        Some(SessionOrigin::Fresh)
-    });
+    let replacements = fresh_codex_replacements(
+        &snapshot,
+        &[
+            pane("terminal_1", "codex", "/repo/main"),
+            pane("terminal_2", "codex", "/repo/main"),
+        ],
+        |_| {
+            called = true;
+            Some(SessionOrigin::Fresh)
+        },
+    );
 
     assert!(replacements.is_empty());
     assert!(!called);

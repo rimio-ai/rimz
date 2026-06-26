@@ -124,8 +124,12 @@ fn forked_side_session_survives_the_reaper_and_keeps_primary_card() {
 
 #[test]
 fn cleared_fresh_session_reap_repins_shared_pane_but_fork_keeps_primary() {
-    for (label, fresh, expected) in [
-        ("fresh replacement", vec!["new-sess"], "new-sess"),
+    for (label, replacements, expected) in [
+        (
+            "fresh replacement",
+            vec![("main-sess", "new-sess")],
+            "new-sess",
+        ),
         ("fork or unknown", Vec::new(), "main-sess"),
     ] {
         let mut main = agent("codex", "main-sess", AgentStatus::Running, 1_000)
@@ -137,17 +141,22 @@ fn cleared_fresh_session_reap_repins_shared_pane_but_fork_keeps_primary() {
 
         let mut replacement = agent("codex", "new-sess", AgentStatus::Running, 2_000)
             .worktree("/repo/main")
-            .in_pane("%1")
             .active_ago(5);
         replacement.registered_at = Some(ago(60));
         replacement.agent_pid = Some(9_999);
 
-        let fresh: BTreeSet<crate::ids::AgentSessionId> = fresh
-            .into_iter()
-            .map(crate::ids::AgentSessionId::from)
-            .collect();
+        let replacements: BTreeSet<(crate::ids::AgentSessionId, crate::ids::AgentSessionId)> =
+            replacements
+                .into_iter()
+                .map(|(older, newer)| {
+                    (
+                        crate::ids::AgentSessionId::from(older),
+                        crate::ids::AgentSessionId::from(newer),
+                    )
+                })
+                .collect();
         let mut snapshot = room(Vec::new(), vec![main, replacement]);
-        snapshot.drop_cleared_codex_sessions(&fresh);
+        snapshot.drop_cleared_codex_sessions(&replacements);
         let snapshot = snapshot.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
 
         let rows = rows(&snapshot);

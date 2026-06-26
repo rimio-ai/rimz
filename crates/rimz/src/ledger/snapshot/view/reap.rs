@@ -65,14 +65,16 @@ impl SidebarSnapshot {
         });
     }
 
-    /// Reap a Codex root session superseded by a strictly-newer same-pane root
-    /// proven from its rollout head to be a fresh `/clear` / `/new` conversation.
-    /// Producer-only: the lineage comes from Codex rollout JSONL, fetched outside
-    /// the ledger projection. Forks are absent from `fresh_replacements`, so a
-    /// `/side` / `/btw` fork never causes the primary to drop and stays available
-    /// for the pane projection to pin to the earliest-registered primary.
-    pub fn drop_cleared_codex_sessions(&mut self, fresh_replacements: &BTreeSet<AgentSessionId>) {
-        if fresh_replacements.is_empty() {
+    /// Reap Codex roots superseded by strictly-newer same-live-pane roots proven
+    /// from rollout heads to be fresh `/clear` / `/new` conversations.
+    /// Producer-only: the lineage and live-pane scope are fetched outside the
+    /// ledger projection. Forks are absent from `replacements`, so a `/side` /
+    /// `/btw` fork never causes the primary to drop.
+    pub fn drop_cleared_codex_sessions(
+        &mut self,
+        replacements: &BTreeSet<(AgentSessionId, AgentSessionId)>,
+    ) {
+        if replacements.is_empty() {
             return;
         }
         let superseded: Vec<bool> = self
@@ -81,7 +83,7 @@ impl SidebarSnapshot {
             .map(|older| {
                 self.agents
                     .iter()
-                    .any(|newer| cleared_codex_session_supersedes(older, newer, fresh_replacements))
+                    .any(|newer| cleared_codex_session_supersedes(older, newer, replacements))
             })
             .collect();
         let mut superseded = superseded.into_iter();
@@ -257,7 +259,7 @@ fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
 fn cleared_codex_session_supersedes(
     older: &AgentState,
     newer: &AgentState,
-    fresh_replacements: &BTreeSet<AgentSessionId>,
+    replacements: &BTreeSet<(AgentSessionId, AgentSessionId)>,
 ) -> bool {
     older.parent_agent_id.is_none()
         && newer.parent_agent_id.is_none()
@@ -265,7 +267,7 @@ fn cleared_codex_session_supersedes(
         && newer.kind == "codex"
         && newer.agent_id != older.agent_id
         && newer.last_activity > older.last_activity
-        && fresh_replacements.contains(&newer.agent_id)
+        && replacements.contains(&(older.agent_id.clone(), newer.agent_id.clone()))
         && same_cleared_codex_scope(older, newer)
 }
 
@@ -282,10 +284,7 @@ fn same_cleared_codex_scope(older: &AgentState, newer: &AgentState) -> bool {
     {
         return false;
     }
-    match (older.pane.as_ref(), newer.pane.as_ref()) {
-        (Some(older_pane), Some(newer_pane)) => older_pane.pane_id == newer_pane.pane_id,
-        _ => false,
-    }
+    true
 }
 
 pub(super) fn is_agent_native_item(item: &FeedItem) -> bool {

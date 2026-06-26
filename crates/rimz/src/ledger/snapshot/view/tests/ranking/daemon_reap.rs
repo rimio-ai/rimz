@@ -22,9 +22,17 @@ fn rollup_ids(snapshot: &SidebarSnapshot) -> Vec<String> {
     ids
 }
 
-fn fresh_set(ids: &[&str]) -> BTreeSet<crate::ids::AgentSessionId> {
-    ids.iter()
-        .map(|id| crate::ids::AgentSessionId::from(*id))
+fn replacement_pairs(
+    pairs: &[(&str, &str)],
+) -> BTreeSet<(crate::ids::AgentSessionId, crate::ids::AgentSessionId)> {
+    pairs
+        .iter()
+        .map(|(older, newer)| {
+            (
+                crate::ids::AgentSessionId::from(*older),
+                crate::ids::AgentSessionId::from(*newer),
+            )
+        })
         .collect()
 }
 
@@ -99,7 +107,7 @@ fn cleared_codex_session_reap_handles_lineage_and_scope_edges() {
     struct Case {
         label: &'static str,
         agents: Vec<AgentState>,
-        fresh: Vec<&'static str>,
+        replacements: Vec<(&'static str, &'static str)>,
         expected: Vec<&'static str>,
     }
 
@@ -120,13 +128,13 @@ fn cleared_codex_session_reap_handles_lineage_and_scope_edges() {
         Case {
             label: "fresh same-pane replacement drops the prior session",
             agents: same_pane_pair(),
-            fresh: vec!["new"],
+            replacements: vec![("old", "new")],
             expected: vec!["new"],
         },
         Case {
             label: "fork or unknown lineage keeps both same-pane sessions",
             agents: same_pane_pair(),
-            fresh: Vec::new(),
+            replacements: Vec::new(),
             expected: vec!["new", "old"],
         },
         Case {
@@ -139,11 +147,11 @@ fn cleared_codex_session_reap_handles_lineage_and_scope_edges() {
                     .in_pane("%1")
                     .active_ago(5),
             ],
-            fresh: vec!["new"],
+            replacements: vec![("old", "new")],
             expected: vec!["new", "old"],
         },
         Case {
-            label: "distinct panes in one worktree are concurrent sessions",
+            label: "producer keeps distinct panes by omitting replacement pair",
             agents: vec![
                 paneless_codex("old", "/repo/a", 1_000)
                     .in_pane("%1")
@@ -152,12 +160,12 @@ fn cleared_codex_session_reap_handles_lineage_and_scope_edges() {
                     .in_pane("%2")
                     .active_ago(5),
             ],
-            fresh: vec!["new"],
+            replacements: Vec::new(),
             expected: vec!["new", "old"],
         },
     ] {
         let mut snapshot = room(Vec::new(), case.agents);
-        snapshot.drop_cleared_codex_sessions(&fresh_set(&case.fresh));
+        snapshot.drop_cleared_codex_sessions(&replacement_pairs(&case.replacements));
         assert_eq!(rollup_ids(&snapshot), case.expected, "{}", case.label);
     }
 }
