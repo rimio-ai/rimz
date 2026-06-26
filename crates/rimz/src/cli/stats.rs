@@ -59,8 +59,8 @@ const GUTTER: usize = 6;
 /// Named models shown before the rest fold into one "Other" row.
 const MAX_MODELS: usize = 6;
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
-const MIN_PROGRESS_BAR_WIDTH: usize = 8;
-const SHARE_BAR_WIDTH: usize = 10;
+const PROGRESS_BAR_WIDTH: usize = 20;
+const MIN_SHARE_BAR_WIDTH: usize = 10;
 const STAT_GUTTER: usize = 3;
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
 const SPENDING_WAIT_STEPS: u32 = 15;
@@ -521,27 +521,25 @@ fn write_progress_line(frame: char, progress: SpendProgress) -> Result<()> {
     let done = progress.finished_files.min(total);
     let plural = if total == 1 { "" } else { "s" };
     let count_width = total.max(1).to_string().len();
-    let prefix = format!("{frame} Reading session file{plural} [");
-    let suffix = format!("] {done:>count_width$}/{total}");
-    let width = term_cols()
-        .saturating_sub(prefix.chars().count() + suffix.chars().count())
-        .max(MIN_PROGRESS_BAR_WIDTH);
-    let bar = progress_bar(done, total, width);
+    let bar = progress_bar(done, total);
     let mut stderr = std::io::stderr().lock();
-    write!(stderr, "\r{prefix}{bar}{suffix}")?;
+    write!(
+        stderr,
+        "\r{frame} Reading session file{plural} [{bar}] {done:>count_width$}/{total}"
+    )?;
     stderr.flush()?;
     Ok(())
 }
 
-fn progress_bar(done: usize, total: usize, width: usize) -> String {
+fn progress_bar(done: usize, total: usize) -> String {
     let filled = done
-        .saturating_mul(width)
+        .saturating_mul(PROGRESS_BAR_WIDTH)
         .checked_div(total)
         .unwrap_or(0)
-        .min(width);
-    let mut bar = String::with_capacity(width);
+        .min(PROGRESS_BAR_WIDTH);
+    let mut bar = String::with_capacity(PROGRESS_BAR_WIDTH);
     bar.extend(std::iter::repeat_n('█', filled));
-    bar.extend(std::iter::repeat_n('░', width - filled));
+    bar.extend(std::iter::repeat_n('░', PROGRESS_BAR_WIDTH - filled));
     bar
 }
 
@@ -839,7 +837,7 @@ struct StatSectionLayout {
     compact: bool,
     left_w: usize,
     pct_w: usize,
-    show_bar: bool,
+    bar_w: usize,
 }
 
 /// The per-model token breakdown, before the shared share column is appended.
@@ -1070,19 +1068,20 @@ fn stat_section_layout(
     panel_width: usize,
 ) -> StatSectionLayout {
     let full_left_w = stat_left_width(model_cells, agent_cells, false);
-    if stat_row_width(full_left_w, pct_w, true) <= panel_width {
+    let prefix_w = stat_prefix_width(full_left_w, pct_w);
+    if prefix_w + 1 + MIN_SHARE_BAR_WIDTH <= panel_width {
         StatSectionLayout {
             compact: false,
             left_w: full_left_w,
             pct_w,
-            show_bar: true,
+            bar_w: panel_width - prefix_w - 1,
         }
-    } else if stat_row_width(full_left_w, pct_w, false) <= panel_width {
+    } else if prefix_w <= panel_width {
         StatSectionLayout {
             compact: false,
             left_w: full_left_w,
             pct_w,
-            show_bar: false,
+            bar_w: 0,
         }
     } else {
         let compact_left_w = stat_left_width(model_cells, agent_cells, true);
@@ -1090,7 +1089,7 @@ fn stat_section_layout(
             compact: true,
             left_w: compact_left_w,
             pct_w,
-            show_bar: false,
+            bar_w: 0,
         }
     }
 }
@@ -1104,21 +1103,21 @@ fn stat_left_width(model_cells: &[StatCell], agent_cells: &[StatCell], compact: 
         .unwrap_or(0)
 }
 
-fn stat_row_width(left_w: usize, pct_w: usize, show_bar: bool) -> usize {
-    let bar_w = if show_bar { 1 + SHARE_BAR_WIDTH } else { 0 };
-    2 + left_w + STAT_GUTTER + pct_w + 1 + bar_w
+/// The stat row up to and including the `%`, before the share bar.
+fn stat_prefix_width(left_w: usize, pct_w: usize) -> usize {
+    2 + left_w + STAT_GUTTER + pct_w + 1
 }
 
-fn share_bar(share_pct: f64, glyphs: &PanelGlyphs) -> String {
-    let filled = ((share_pct / 100.0) * SHARE_BAR_WIDTH as f64)
+fn share_bar(share_pct: f64, width: usize, glyphs: &PanelGlyphs) -> String {
+    let filled = ((share_pct / 100.0) * width as f64)
         .round()
-        .clamp(0.0, SHARE_BAR_WIDTH as f64) as usize;
+        .clamp(0.0, width as f64) as usize;
     format!(
         "{}{}",
         render::paint(cool(), &glyphs.bar_filled.repeat(filled)),
         render::paint(
             rgb(Semantic::DEFAULT.faint),
-            &glyphs.bar_track.repeat(SHARE_BAR_WIDTH - filled),
+            &glyphs.bar_track.repeat(width - filled),
         ),
     )
 }
@@ -1143,9 +1142,9 @@ fn emit_stat_section(
             pad_to(cell.left(layout.compact), layout.left_w),
             pad_left(&pct, layout.pct_w),
         );
-        if layout.show_bar {
+        if layout.bar_w > 0 {
             line.push(' ');
-            line.push_str(&share_bar(cell.share_pct, glyphs));
+            line.push_str(&share_bar(cell.share_pct, layout.bar_w, glyphs));
         }
         lines.push(line);
     }

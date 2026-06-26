@@ -262,12 +262,12 @@ fn refresh_key_outcome_ignores_other_keys() {
 
 #[test]
 fn progress_bar_tracks_file_count() {
-    assert_eq!(progress_bar(0, 10, 20), "░".repeat(20));
+    assert_eq!(progress_bar(0, 10), "░".repeat(PROGRESS_BAR_WIDTH));
     assert_eq!(
-        progress_bar(5, 10, 20),
+        progress_bar(5, 10),
         format!("{}{}", "█".repeat(10), "░".repeat(10))
     );
-    assert_eq!(progress_bar(10, 10, 20), "█".repeat(20));
+    assert_eq!(progress_bar(10, 10), "█".repeat(PROGRESS_BAR_WIDTH));
 }
 
 #[test]
@@ -505,7 +505,7 @@ fn agent_cells_rank_by_year_tokens_and_skip_empty_agents() {
             compact: false,
             left_w: 0,
             pct_w: 0,
-            show_bar: true,
+            bar_w: MIN_SHARE_BAR_WIDTH,
         },
         &glyphs,
     );
@@ -516,16 +516,67 @@ fn agent_cells_rank_by_year_tokens_and_skip_empty_agents() {
 fn share_bar_fills_proportionally() {
     let glyphs = panel_glyphs();
     let counts = |share| {
-        let bar = strip_ansi(&share_bar(share, &glyphs));
+        let bar = strip_ansi(&share_bar(share, MIN_SHARE_BAR_WIDTH, &glyphs));
         (
             bar.matches(glyphs.bar_filled.as_str()).count(),
             bar.matches(glyphs.bar_track.as_str()).count(),
         )
     };
 
-    assert_eq!(counts(0.0), (0, SHARE_BAR_WIDTH));
-    assert_eq!(counts(100.0), (SHARE_BAR_WIDTH, 0));
+    assert_eq!(counts(0.0), (0, MIN_SHARE_BAR_WIDTH));
+    assert_eq!(counts(100.0), (MIN_SHARE_BAR_WIDTH, 0));
     assert_eq!(counts(46.6), (5, 5));
+}
+
+#[test]
+fn stat_share_bar_stretches_to_panel_width() {
+    let glyphs = panel_glyphs();
+    let stats = Stats {
+        by_day: BTreeMap::new(),
+        by_model: BTreeMap::from([
+            (
+                "claude-opus-4-8".to_owned(),
+                ModelSpend {
+                    tokens: 1_000,
+                    usd: 12.0,
+                    input: 200,
+                    output: 800,
+                    cache_read: 50,
+                },
+            ),
+            (
+                "gpt-5".to_owned(),
+                ModelSpend {
+                    tokens: 1_000,
+                    ..Default::default()
+                },
+            ),
+        ]),
+        by_agent: BTreeMap::new(),
+        total: SpendTally::default(),
+    };
+    let models = model_breakdown(&stats);
+    let name_w = models
+        .iter()
+        .map(|(name, _)| display_width(name))
+        .max()
+        .unwrap_or(0);
+    let cells = model_cells(&models, name_w, &glyphs);
+    let pct_w = stat_pct_width(&cells, &[]);
+    let panel_width = 120;
+    let layout = stat_section_layout(&cells, &[], pct_w, panel_width);
+    let mut lines = Vec::new();
+
+    assert!(layout.bar_w > 0);
+    emit_stat_section(&mut lines, "Models", &cells, layout, &glyphs);
+    let row = strip_ansi(
+        lines
+            .iter()
+            .find(|line| line.contains("Opus 4.8"))
+            .expect("model row"),
+    );
+
+    assert_eq!(display_width(&row), panel_width);
 }
 
 #[test]
