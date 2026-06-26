@@ -857,7 +857,7 @@ fn sidebar_trunk_parses_and_defaults_unset() {
 }
 
 #[test]
-fn sidebar_spend_headline_window_parses_and_defaults_24h() {
+fn sidebar_spend_headline_window_parses_and_defaults_session() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(
         &dir,
@@ -874,7 +874,7 @@ fn sidebar_spend_headline_window_parses_and_defaults_24h() {
     );
     assert_eq!(
         MachineConfig::default().sidebar.spend_window,
-        crate::agents::SpendWindowMode::Trailing24h
+        crate::agents::SpendWindowMode::Session
     );
     assert_eq!(MachineConfig::default().sidebar.spend_timezone, None);
 }

@@ -314,7 +314,7 @@ The sidebar's palette, glyphs, animations, color depth, color stops, and pets ar
 [sidebar]
 focus_key = "Alt+p"
 trunk = "develop"
-spend_window = "24h"
+spend_window = "session"
 spend_timezone = "America/New_York"
 
 [agents.attention]
@@ -324,7 +324,7 @@ inactive_after_secs = 3600
 
 `focus_key` is the global multiplexer chord that focuses the sidebar from any pane and toggles back to your last working pane; both backends bind it at session birth, the default is `Alt+p`, and `""` or `off` registers nothing. `trunk` is a preferred comparison branch for the worktree header's git stats, falling back to `main` → `master` → the remote default when it does not resolve. `[agents.attention]` tunes attention timing: `stalled_after_secs` is when a silent running agent escalates to the actionable `!` bucket (30 minutes by default), and `inactive_after_secs` is when an idle card sinks below live work (one hour — the prompt-cache boundary, so a cold card reads as cold). The `[theme.display]` knobs that share this area — render cadence, sizing, `scrollbar`, and `card_density` — are theme settings; see [theme.md → Display](./theme.md#display).
 
-`spend_window` sets the cockpit and provider headline row: `"24h"` keeps the trailing-24-hour default, `"today"` starts at local calendar midnight, and `"session"` starts at the latest activity burst after a five-hour idle gap. `spend_timezone` is an optional IANA zone for `"today"`; unset uses the system local zone.
+`spend_window` sets the cockpit and provider headline row: `"session"` starts at the latest activity burst after a five-hour idle gap and is the default, `"24h"` keeps a trailing-24-hour window, and `"today"` starts at local calendar midnight. `spend_timezone` is an optional IANA zone for `"today"`; unset uses the system local zone.
 
 ### Pets
 

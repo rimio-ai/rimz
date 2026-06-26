@@ -52,7 +52,7 @@ fn claude_line_ts_in(ts: &str, cost: f64, msg_id: &str, req_id: &str, cwd: &Path
 }
 
 fn claude_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
-    claude_line_ts(&format!("{date}T10:00:00.000Z"), cost, msg_id, req_id)
+    claude_line_ts(&format!("{date}T15:00:00.000Z"), cost, msg_id, req_id)
 }
 
 fn claude_line_ago(secs_ago: u64, cost: f64, msg_id: &str, req_id: &str) -> String {
@@ -66,7 +66,7 @@ fn claude_line_ago(secs_ago: u64, cost: f64, msg_id: &str, req_id: &str) -> Stri
 
 fn claude_sidechain_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
     format!(
-        r#"{{"timestamp":"{date}T10:00:00.000Z","costUSD":{cost},"requestId":"{req_id}","isSidechain":true,"message":{{"id":"{msg_id}","usage":{{"input_tokens":50000,"output_tokens":5}}}}}}"#
+        r#"{{"timestamp":"{date}T15:00:00.000Z","costUSD":{cost},"requestId":"{req_id}","isSidechain":true,"message":{{"id":"{msg_id}","usage":{{"input_tokens":50000,"output_tokens":5}}}}}}"#
     )
 }
 
@@ -86,13 +86,13 @@ fn append_line(path: &Path, line: &str) {
 
 fn codex_total_line(date: &str, input: u64, output: u64) -> String {
     format!(
-        r#"{{"type":"event_msg","timestamp":"{date}T10:00:00.000Z","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"output_tokens":{output}}}}}}}}}"#
+        r#"{{"type":"event_msg","timestamp":"{date}T15:00:00.000Z","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"output_tokens":{output}}}}}}}}}"#
     )
 }
 
 fn codex_token_line(date: &str, input: u64, cached: u64, output: u64) -> String {
     format!(
-        r#"{{"type":"event_msg","timestamp":"{date}T10:00:00.000Z","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"output_tokens":{output}}}}}}}}}"#
+        r#"{{"type":"event_msg","timestamp":"{date}T15:00:00.000Z","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"output_tokens":{output}}}}}}}}}"#
     )
 }
 
@@ -211,10 +211,10 @@ fn token_split_and_session_counts_populate_windows() {
     let session = dir.path().join("sess-1");
     std::fs::create_dir_all(session.join("subagents")).unwrap();
     let main_line = format!(
-        r#"{{"timestamp":"{today}T10:00:00.000Z","costUSD":0.5,"requestId":"req-1","message":{{"id":"msg-1","usage":{{"input_tokens":12000,"output_tokens":64000,"cache_creation_input_tokens":12000,"cache_read_input_tokens":68000}}}}}}"#
+        r#"{{"timestamp":"{today}T15:00:00.000Z","costUSD":0.5,"requestId":"req-1","message":{{"id":"msg-1","usage":{{"input_tokens":12000,"output_tokens":64000,"cache_creation_input_tokens":12000,"cache_read_input_tokens":68000}}}}}}"#
     );
     let sub_line = format!(
-        r#"{{"timestamp":"{today}T10:01:00.000Z","costUSD":0.1,"requestId":"req-2","isSidechain":true,"message":{{"id":"msg-2","usage":{{"input_tokens":1000,"output_tokens":500,"cache_creation_input_tokens":0,"cache_read_input_tokens":2000}}}}}}"#
+        r#"{{"timestamp":"{today}T15:01:00.000Z","costUSD":0.1,"requestId":"req-2","isSidechain":true,"message":{{"id":"msg-2","usage":{{"input_tokens":1000,"output_tokens":500,"cache_creation_input_tokens":0,"cache_read_input_tokens":2000}}}}}}"#
     );
     let main = write_jsonl(&session, "chat.jsonl", &[&main_line]);
     let subfile = write_jsonl(&session.join("subagents"), "worker.jsonl", &[&sub_line]);
@@ -281,7 +281,7 @@ fn native_thread_ids_count_many_sessions_in_one_store() {
 fn scoped_tally_includes_project_and_linked_worktree_roots_only() {
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);
-    let ts = format!("{today}T10:00:00.000Z");
+    let ts = format!("{today}T15:00:00.000Z");
     let project = dir.path().join("repo");
     let linked = dir.path().join("linked-worktree");
     let other = dir.path().join("other-project");
@@ -359,7 +359,7 @@ fn scoped_tally_counts_sessions_under_worktree_home_not_just_listed_roots() {
     // still scope it in; a session outside the home must stay out.
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);
-    let ts = format!("{today}T10:00:00.000Z");
+    let ts = format!("{today}T15:00:00.000Z");
     let project = dir.path().join("repo");
     let home = dir.path().join("repo-worktrees");
     let removed_worktree = home.join("budget-reset");
@@ -1033,7 +1033,7 @@ fn unknown_model_chase_records_and_heals_active_files() {
     let today = utc_date(NOW_SECS);
     let model = "new-claude-pricing-test-model";
     let line = format!(
-        r#"{{"timestamp":"{today}T10:00:00.000Z","requestId":"req-1","message":{{"id":"msg-1","model":"{model}","usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#
+        r#"{{"timestamp":"{today}T15:00:00.000Z","requestId":"req-1","message":{{"id":"msg-1","model":"{model}","usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#
     );
     let file = write_jsonl(dir.path(), "chat.jsonl", &[&line]);
     let mut cache = SpendingDiskCache::default();

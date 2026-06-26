@@ -70,7 +70,7 @@ The account probe forks `claude auth status`, capturing stdout with stdin and st
 
 ## Cost
 
-Claude's full-history spend is parsed by [`claude/spend.rs`](../../../../crates/rimz/src/agents/claude/spend.rs), read-only and sidebar-safe, aggregated by [`spending::compute_spending`](../../../../crates/rimz/src/agents/spending.rs) into the trailing 24h / 7d / 30d / 365d windows ([provider.md → Cost history](../provider.md#cost-history)). Two Claude-specific concerns:
+Claude's full-history spend is parsed by [`claude/spend.rs`](../../../../crates/rimz/src/agents/claude/spend.rs), read-only and sidebar-safe, aggregated by [`spending::compute_spending`](../../../../crates/rimz/src/agents/spending.rs) into the configured headline window plus trailing 7d / 30d / 365d windows ([provider.md → Cost history](../provider.md#cost-history)). Two Claude-specific concerns:
 
 - **Dedup.** Claude replays a parent message into each subagent file with an inflated cost; `compute_spending` dedups by `(message.id, requestId)` across files and suppresses the sidechain replay so a turn is counted once. A Claude session's subagent files fold under its `session_id` directory, so one thread counts once.
 - **Cost source.** Current Claude transcripts carry no `costUSD`, so `compute_spending` prices each `message.usage` through the per-model [pricing table](../provider.md#token-pricing) — input, output, cache-creation, and cache-read each at their own rate. An older Claude turn that still logs a positive `costUSD` uses that authoritative figure verbatim instead. A turn whose model has no known price keeps its tokens and session with zero dollars while the pricing chase looks for a price; the sentinel `<synthetic>` model is filtered out because it is not an API model id.

@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SidebarConfig {
-    /// The cockpit and provider stats headline window: trailing 24 hours, the
-    /// local calendar day, or the current session burst.
+    /// The cockpit and provider stats headline window: the current session
+    /// burst, trailing 24 hours, or the local calendar day.
     #[serde(default)]
     pub spend_window: crate::agents::spending::SpendWindowMode,
     /// IANA time zone used for `spend_window = "today"`. Unset uses the system

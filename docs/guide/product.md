@@ -12,7 +12,7 @@ Rimz gives every project one room: a Zellij or tmux session with a sidebar where
 
 Ranking does the triage for you: the most overdue work rises to the top, calm work settles below, and the cockpit line sums the whole fleet (`? 2  ! 1 …`).
 
-Account-scoped usage lifts off the rows into the provider dashboard pinned at the bottom: one tab per provider with its plan, spend for today, the week, and the month, draining included-window bars, and paid/API usage when available. One look tells you where the week is going.
+Account-scoped usage lifts off the rows into the provider dashboard pinned at the bottom: one tab per provider with its plan, headline spend, the week, and the month, draining included-window bars, and paid/API usage when available. One look tells you where the week is going.
 
 Select a row and you land in that pane, where you read the prompt and answer in the agent's own UI. The column always mirrors what's running: when an agent exits, its row reverts to the shell.
 

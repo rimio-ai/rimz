@@ -84,12 +84,12 @@ const WIDEST_SPEND_WINDOW_SECS: u64 = 365 * 86_400;
 #[serde(rename_all = "kebab-case")]
 pub enum SpendWindowMode {
     /// Trailing 24 hours, matching Rimz's original "today" row behaviour.
-    #[default]
     #[serde(rename = "24h")]
     Trailing24h,
     /// The local calendar day, using `[sidebar] spend_timezone` when set.
     Today,
     /// The current activity burst since the last five-hour idle gap.
+    #[default]
     Session,
 }
 
@@ -108,8 +108,8 @@ const SESSION_GAP_SECS: u64 = 5 * 3_600;
 /// headline window is independent.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpendTally {
-    /// Configured headline window (`[sidebar] spend_window`): trailing 24 hours
-    /// by default, the local calendar day, or the current session.
+    /// Configured headline window (`[sidebar] spend_window`): the current
+    /// session by default, trailing 24 hours, or the local calendar day.
     #[serde(rename = "today")]
     pub headline: SpendWindow,
     /// Trailing 7 days.
@@ -285,12 +285,15 @@ const SPENDING_CACHE_VERSION: u32 = 10;
 /// provider-native thread ids count multi-session stores correctly. v5: GPT-5.5
 /// built-in prices heal previously zero-dollar token rows. v6: per-model
 /// cache-read is published for `rimz stats`.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 6;
+/// v7: the default headline window changed from trailing 24 hours to session,
+/// so cached headline aggregates need a cheap re-aggregate.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 7;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
 /// can force a cheap re-aggregate without re-reading transcripts.
-pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 1;
+/// v2: the default headline window changed from trailing 24 hours to session.
+pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 2;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///
