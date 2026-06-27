@@ -911,7 +911,8 @@ fn windows_lines(lines: &mut Vec<String>, stats: &Stats, active: Option<Window>)
     let row = cells
         .into_iter()
         .map(|(window, label, tokens)| {
-            let pad = " ".repeat(inner_w.saturating_sub(label.chars().count() + 1 + tokens.len()));
+            let pad = " "
+                .repeat(inner_w.saturating_sub(label.chars().count() + 1 + tokens.chars().count()));
             if window == active {
                 render::paint(active_tab(), &format!(" {label} {tokens}{pad} "))
             } else {
