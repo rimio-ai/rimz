@@ -292,6 +292,7 @@ fn parse_message_entry(
         is_sidechain: false,
         model: Some(model.to_owned()),
         origin_path: origin,
+        rolled: false,
     })
 }
 

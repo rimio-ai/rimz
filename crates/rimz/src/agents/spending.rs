@@ -79,6 +79,11 @@ impl SpendWindow {
 /// totals, sessions, or the unknown-model pricing chase.
 const WIDEST_SPEND_WINDOW_SECS: u64 = 365 * 86_400;
 
+/// Raw rows newer than this stay verbatim; older rows fold into
+/// day/model/origin/thread rollups so the shared cache stays bounded by recent
+/// activity instead of lifetime history.
+const RAW_RETAIN_SECS: u64 = 35 * 86_400;
+
 /// The headline spend window shown in the cockpit and provider dashboard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -409,6 +414,16 @@ pub struct CachedEntry {
     /// omits it rather than guessing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_path: Option<PathBuf>,
+    /// Synthetic per-day rollup produced by recency compaction. Rolled rows
+    /// carry no dedup IDs because compaction runs after cross-file dedup.
+    /// Native thread ids are retained so old multi-session stores keep session
+    /// counts exact.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub rolled: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[cfg(test)]
@@ -688,7 +703,7 @@ fn compute_spending_with_origins_and_scope_progress(
             });
         }
     }
-    if prune_spending_cache(files, cache, now_secs) {
+    if compact_spending_cache(cache, files, now_secs) {
         cache.dirty = true;
     }
 
@@ -1028,33 +1043,237 @@ fn has_healed_unknown(entry: &FileCacheEntry, prices: &PriceBook, now_secs: u64)
     })
 }
 
-fn prune_spending_cache(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+/// Fold finalized raw rows older than [`RAW_RETAIN_SECS`] into
+/// day/model/origin/thread rollups after cross-file deduplication. Recent rows
+/// stay verbatim so the month/week/headline surfaces keep exact timestamps; old
+/// rows keep year, daily, model, scope, and session aggregates bounded by
+/// rendered history.
+pub(crate) fn compact_spending_cache(
     cache: &mut SpendingDiskCache,
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
     now_secs: u64,
 ) -> bool {
-    let discovered: BTreeSet<String> = files
-        .iter()
-        .map(|(_, file)| file.to_string_lossy().into_owned())
-        .collect();
-    let before_files = cache.files.len();
-    cache
-        .files
-        .retain(|key, _| discovered.contains(key) || Path::new(key.as_str()).exists());
-    let mut changed = cache.files.len() != before_files;
-    for entry in cache.files.values_mut() {
-        let before_entries = entry.entries.len();
-        entry
-            .entries
-            .retain(|entry| within_widest_window(entry.ts_secs, now_secs));
-        changed |= entry.entries.len() != before_entries;
-        let before_unknowns = entry.unknown_models.len();
-        entry
-            .unknown_models
-            .retain(|_, ts_secs| within_widest_window(*ts_secs, now_secs));
-        changed |= entry.unknown_models.len() != before_unknowns;
+    let retained_message_ids = retained_raw_message_ids(cache, files, now_secs);
+    let mut rolled_by_file = BTreeMap::<String, BTreeMap<RollupKey, CachedEntry>>::new();
+    for source in old_counted_entries_for_compaction(cache, files, now_secs, &retained_message_ids)
+    {
+        if within_widest_window(source.entry.ts_secs, now_secs) {
+            merge_rollup(
+                rolled_by_file.entry(source.file_key).or_default(),
+                rolled_entry_from(&source.entry),
+            );
+        }
+    }
+
+    let mut changed = false;
+    for (_, file) in files {
+        let file_key = file.to_string_lossy().into_owned();
+        let Some(cached_file) = cache.files.get_mut(&file_key) else {
+            continue;
+        };
+        let before_len = cached_file.entries.len();
+        let mut retained = Vec::with_capacity(cached_file.entries.len());
+        let mut retained_rollups = BTreeMap::<RollupKey, CachedEntry>::new();
+        for entry in cached_file.entries.drain(..) {
+            if entry.rolled {
+                if within_widest_window(entry.ts_secs, now_secs) {
+                    merge_rollup(&mut retained_rollups, entry);
+                } else {
+                    changed = true;
+                }
+            } else if raw_entry_ready_for_compaction(&entry, now_secs, &retained_message_ids) {
+                changed = true;
+            } else {
+                retained.push(entry);
+            }
+        }
+        if let Some(new_rollups) = rolled_by_file.remove(&file_key) {
+            for rollup in new_rollups.into_values() {
+                merge_rollup(&mut retained_rollups, rollup);
+            }
+        }
+        retained.extend(retained_rollups.into_values());
+        changed |= retained.len() != before_len;
+        cached_file.entries = retained;
     }
     changed
+}
+
+fn retained_raw_message_ids(
+    cache: &SpendingDiskCache,
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    now_secs: u64,
+) -> BTreeSet<String> {
+    let mut message_ids = BTreeSet::new();
+    for (_, file) in files {
+        let file_key = file.to_string_lossy().into_owned();
+        let Some(cached_file) = cache.files.get(&file_key) else {
+            continue;
+        };
+        message_ids.extend(
+            cached_file
+                .entries
+                .iter()
+                .filter(|entry| !entry.rolled && within_raw_retain_window(entry.ts_secs, now_secs))
+                .filter_map(|entry| entry.message_id.clone()),
+        );
+    }
+    message_ids
+}
+
+fn raw_entry_ready_for_compaction(
+    entry: &CachedEntry,
+    now_secs: u64,
+    retained_message_ids: &BTreeSet<String>,
+) -> bool {
+    !entry.rolled
+        && !within_raw_retain_window(entry.ts_secs, now_secs)
+        && entry
+            .message_id
+            .as_ref()
+            .is_none_or(|message_id| !retained_message_ids.contains(message_id))
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct RollupKey {
+    day: u64,
+    model: Option<String>,
+    origin_path: Option<PathBuf>,
+    thread_id: Option<String>,
+}
+
+impl RollupKey {
+    fn from_entry(entry: &CachedEntry) -> Self {
+        Self {
+            day: entry.ts_secs / 86_400,
+            model: entry.model.clone(),
+            origin_path: entry.origin_path.clone(),
+            thread_id: entry.thread_id.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CompactionSourceEntry {
+    file_key: String,
+    entry: CachedEntry,
+}
+
+fn old_counted_entries_for_compaction(
+    cache: &SpendingDiskCache,
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    now_secs: u64,
+    retained_message_ids: &BTreeSet<String>,
+) -> Vec<CompactionSourceEntry> {
+    let mut deduped = CompactionDedupedEntries {
+        by_exact_key: HashMap::new(),
+        msg_has_non_sidechain: HashMap::new(),
+        free_entries: Vec::new(),
+    };
+    for (_, file) in files {
+        let file_key = file.to_string_lossy().into_owned();
+        let Some(cached_file) = cache.files.get(&file_key) else {
+            continue;
+        };
+        for entry in cached_file
+            .entries
+            .iter()
+            .filter(|entry| raw_entry_ready_for_compaction(entry, now_secs, retained_message_ids))
+        {
+            insert_compaction_dedup_entry(
+                &mut deduped,
+                CompactionSourceEntry {
+                    file_key: file_key.clone(),
+                    entry: entry.clone(),
+                },
+            );
+        }
+    }
+    counted_compaction_entries(deduped)
+}
+
+struct CompactionDedupedEntries {
+    by_exact_key: HashMap<(String, Option<String>), CompactionSourceEntry>,
+    msg_has_non_sidechain: HashMap<String, bool>,
+    free_entries: Vec<CompactionSourceEntry>,
+}
+
+fn insert_compaction_dedup_entry(
+    deduped: &mut CompactionDedupedEntries,
+    source: CompactionSourceEntry,
+) {
+    let Some(ref msg_id) = source.entry.message_id else {
+        deduped.free_entries.push(source);
+        return;
+    };
+    let has_non_sidechain = deduped
+        .msg_has_non_sidechain
+        .entry(msg_id.clone())
+        .or_insert(false);
+    if !source.entry.is_sidechain {
+        *has_non_sidechain = true;
+    }
+    let exact_key = (msg_id.clone(), source.entry.request_id.clone());
+    match deduped.by_exact_key.entry(exact_key) {
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+            if entry.get().entry.is_sidechain && !source.entry.is_sidechain {
+                entry.insert(source);
+            }
+        }
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(source);
+        }
+    }
+}
+
+fn counted_compaction_entries(deduped: CompactionDedupedEntries) -> Vec<CompactionSourceEntry> {
+    let mut counted = Vec::new();
+    for ((msg_id, _), source) in deduped.by_exact_key {
+        let is_sidechain_replay = source.entry.is_sidechain
+            && deduped
+                .msg_has_non_sidechain
+                .get(msg_id.as_str())
+                .copied()
+                .unwrap_or(false);
+        if !is_sidechain_replay {
+            counted.push(source);
+        }
+    }
+    counted.extend(deduped.free_entries);
+    counted
+}
+
+fn rolled_entry_from(entry: &CachedEntry) -> CachedEntry {
+    CachedEntry {
+        ts_secs: entry.ts_secs,
+        cost_usd: entry.cost_usd,
+        input: entry.input,
+        output: entry.output,
+        cache_write: entry.cache_write,
+        cache_read: entry.cache_read,
+        message_id: None,
+        request_id: None,
+        thread_id: entry.thread_id.clone(),
+        is_sidechain: false,
+        model: entry.model.clone(),
+        origin_path: entry.origin_path.clone(),
+        rolled: true,
+    }
+}
+
+fn merge_rollup(rollups: &mut BTreeMap<RollupKey, CachedEntry>, entry: CachedEntry) {
+    let key = RollupKey::from_entry(&entry);
+    rollups
+        .entry(key)
+        .and_modify(|rolled| {
+            rolled.ts_secs = rolled.ts_secs.max(entry.ts_secs);
+            rolled.cost_usd += entry.cost_usd;
+            rolled.input += entry.input;
+            rolled.output += entry.output;
+            rolled.cache_write += entry.cache_write;
+            rolled.cache_read += entry.cache_read;
+        })
+        .or_insert(entry);
 }
 
 struct DedupedCachedEntries {
@@ -1225,6 +1444,10 @@ fn within_widest_window(ts_secs: u64, now_secs: u64) -> bool {
     now_secs.saturating_sub(ts_secs) < WIDEST_SPEND_WINDOW_SECS
 }
 
+fn within_raw_retain_window(ts_secs: u64, now_secs: u64) -> bool {
+    now_secs.saturating_sub(ts_secs) < RAW_RETAIN_SECS
+}
+
 /// The thread a priced entry belongs to. Providers with native thread ids use
 /// those ids; otherwise the adapter's declared [`ThreadKey`] maps transcript
 /// paths to threads. A session-dir provider (Claude) spreads one session across
@@ -1291,7 +1514,7 @@ pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) {
         path,
         std::time::Duration::from_secs(3_600),
     );
-    let _ = crate::ledger::atomic::write_temp_then_rename_cache(path, cache);
+    let _ = crate::ledger::atomic::write_temp_then_rename_cache_compact(path, cache);
 }
 
 // ── Provider-spending cache ───────────────────────────────────────────────────

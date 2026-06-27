@@ -530,6 +530,7 @@ mod tests {
                     is_sidechain: false,
                     model: None,
                     origin_path: Some(project.clone()),
+                    rolled: false,
                 }],
                 unknown_models: BTreeMap::new(),
             },
@@ -583,6 +584,81 @@ mod tests {
         assert!(
             !runtime.workspace_spending_path(stale_hash).exists(),
             "producer publishing the current scope prunes old per-hash workspace caches"
+        );
+    }
+
+    #[test]
+    fn producer_publishes_compacted_shared_spending_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime paths");
+        runtime.ensure_dirs().expect("runtime dirs");
+        let transcript = dir.path().join("claude.jsonl");
+        std::fs::write(&transcript, b"").expect("transcript");
+        let metadata = std::fs::metadata(&transcript).expect("transcript metadata");
+        let mtime_secs = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let now_secs = unix_secs_now();
+        let old_a = CachedEntry {
+            ts_secs: now_secs - 40 * 86_400,
+            cost_usd: 1.0,
+            input: 10,
+            output: 5,
+            cache_write: 0,
+            cache_read: 0,
+            message_id: None,
+            request_id: None,
+            thread_id: Some("old".to_owned()),
+            is_sidechain: false,
+            model: Some("claude-opus-4-8".to_owned()),
+            origin_path: None,
+            rolled: false,
+        };
+        let old_b = CachedEntry {
+            cost_usd: 2.0,
+            ..old_a.clone()
+        };
+        let key = transcript.to_string_lossy().into_owned();
+        let mut raw = read_spending_cache(&runtime.shared_spending_cursor_path());
+        raw.files.insert(
+            key.clone(),
+            FileCacheEntry {
+                mtime_secs,
+                len: metadata.len(),
+                cursor: SpendCursor::default(),
+                origin_path: None,
+                entries: vec![old_a, old_b],
+                unknown_models: BTreeMap::new(),
+            },
+        );
+        write_spending_cache(&runtime.shared_spending_cursor_path(), &raw);
+        let before_len = std::fs::metadata(runtime.shared_spending_cursor_path())
+            .expect("seed spending cache")
+            .len();
+        let _discovered = override_discovered_spending_files_for_test(vec![(
+            &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+            transcript,
+        )]);
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+
+        let caches = compute_fleet_spending(&runtime, &snapshot, &HeadlineSpec::default());
+
+        assert_eq!(caches.provider.spending.total.year.usd, 3.0);
+        let compacted = read_spending_cache(&runtime.shared_spending_cursor_path());
+        let entries = &compacted.files[&key].entries;
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].rolled);
+        assert_eq!(entries[0].cost_usd, 3.0);
+        assert!(
+            std::fs::metadata(runtime.shared_spending_cursor_path())
+                .expect("compacted spending cache")
+                .len()
+                < before_len,
+            "producer writes back the compacted cursor cache"
         );
     }
 

@@ -115,7 +115,7 @@ impl Drop for TempFileGuard {
 /// the rename. Caller has already created `path.parent()`.
 #[must_use = "durability barrier; check the result"]
 pub fn write_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_temp_then_rename_with(path, value, Fsync::Durable)
+    write_temp_then_rename_with(path, value, Fsync::Durable, JsonStyle::Pretty)
 }
 
 /// Like [`write_temp_then_rename`] but skips the temp-file and parent-dir
@@ -128,10 +128,27 @@ pub fn write_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()
 /// files "survives a power cut" buys nothing — the rename is still atomic,
 /// so a reader never sees a torn file.
 pub fn write_temp_then_rename_cache<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_temp_then_rename_with(path, value, Fsync::Skip)
+    write_temp_then_rename_with(path, value, Fsync::Skip, JsonStyle::Pretty)
 }
 
-fn write_temp_then_rename_with<T: Serialize>(path: &Path, value: &T, fsync: Fsync) -> Result<()> {
+/// Like [`write_temp_then_rename_cache`] but emits compact JSON. Use for large
+/// rebuilt caches where human-readable formatting materially affects size.
+pub fn write_temp_then_rename_cache_compact<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_temp_then_rename_with(path, value, Fsync::Skip, JsonStyle::Compact)
+}
+
+#[derive(Clone, Copy)]
+enum JsonStyle {
+    Pretty,
+    Compact,
+}
+
+fn write_temp_then_rename_with<T: Serialize>(
+    path: &Path,
+    value: &T,
+    fsync: Fsync,
+    style: JsonStyle,
+) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| AtomicErr::Io {
             path: parent.to_path_buf(),
@@ -146,7 +163,10 @@ fn write_temp_then_rename_with<T: Serialize>(path: &Path, value: &T, fsync: Fsyn
             source: e,
         })?;
         let mut writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(&mut writer, value)?;
+        match style {
+            JsonStyle::Pretty => serde_json::to_writer_pretty(&mut writer, value)?,
+            JsonStyle::Compact => serde_json::to_writer(&mut writer, value)?,
+        }
         writer.write_all(b"\n").map_err(|e| AtomicErr::Io {
             path: tmp.clone(),
             source: e,
@@ -365,6 +385,24 @@ mod tests {
         assert!(read.ends_with('\n'));
         let parsed: serde_json::Value = serde_json::from_str(&read).unwrap();
         assert_eq!(parsed["a"], 1);
+    }
+
+    #[test]
+    fn temp_rename_cache_compact_writes_single_line_json() {
+        #[derive(Serialize)]
+        struct Sample {
+            a: u8,
+            b: &'static str,
+        }
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        write_temp_then_rename_cache_compact(&path, &Sample { a: 1, b: "two" }).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"a":1,"b":"two"}"#.to_owned() + "\n"
+        );
     }
 
     #[test]

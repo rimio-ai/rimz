@@ -207,6 +207,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
             is_sidechain: false,
             model: msg.model.clone(),
             origin_path: state.cwd.clone(),
+            rolled: false,
         });
     }
     SpendParse {

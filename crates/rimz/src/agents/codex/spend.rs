@@ -156,6 +156,7 @@ pub(crate) fn parse_codex_spend(
             // snapshot override (`codex_origin_overrides`) can still supersede it
             // for live or headless sessions whose rollout omits the header.
             origin_path: state.cwd.clone(),
+            rolled: false,
         });
     }
     SpendParse {

@@ -137,6 +137,7 @@ fn cached_entry(ts_secs: u64, cost_usd: f64, thread_id: &str) -> CachedEntry {
         is_sidechain: false,
         model: None,
         origin_path: None,
+        rolled: false,
     }
 }
 
@@ -205,6 +206,7 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
                     is_sidechain: false,
                     model: None,
                     origin_path: None,
+                    rolled: false,
                 }],
                 unknown_models: BTreeMap::new(),
             },
@@ -261,6 +263,7 @@ fn native_thread_ids_count_many_sessions_in_one_store() {
         is_sidechain: false,
         model: Some("gpt-5".to_owned()),
         origin_path: None,
+        rolled: false,
     };
     let cache = SpendingDiskCache {
         files: HashMap::from([(
@@ -974,67 +977,226 @@ fn codex_file_origin_survives_unknown_model_cold_reparse() {
 }
 
 #[test]
-fn cache_prune_keeps_existing_transcripts_missing_from_discovery() {
+fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
     let dir = TempDir::new().unwrap();
-    let existing = write_jsonl(dir.path(), "existing.jsonl", &[]);
-    let missing = dir.path().join("missing.jsonl");
-    let origin = dir.path().join("repo");
-    let entry = CachedEntry {
-        ts_secs: NOW_SECS,
+    let project = dir.path().join("repo");
+    let other = dir.path().join("other");
+    let file = dir.path().join("claude.jsonl");
+    let mut old_project = scoped_cached_entry(NOW_SECS - 40 * 86_400, 1.0, "old-project", &project);
+    old_project.model = Some("claude-opus-4-8".to_owned());
+    let mut old_project_same_bucket =
+        scoped_cached_entry(NOW_SECS - 40 * 86_400, 2.0, "old-project", &project);
+    old_project_same_bucket.model = Some("claude-opus-4-8".to_owned());
+    let mut old_other = scoped_cached_entry(NOW_SECS - 60 * 86_400, 3.0, "old-other", &other);
+    old_other.model = Some("claude-sonnet-4-6".to_owned());
+    let mut recent = scoped_cached_entry(NOW_SECS - 10 * 86_400, 4.0, "recent", &project);
+    recent.model = Some("claude-opus-4-8".to_owned());
+    let mut cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(
+            &file,
+            vec![
+                old_project,
+                old_project_same_bucket,
+                old_other,
+                recent.clone(),
+            ],
+        )]),
+        ..Default::default()
+    };
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+    let before_deduped = dedup_cached_entries(&files, &cache);
+    let before_spending = aggregate_spending(
+        &files,
+        &cache,
+        &before_deduped,
+        NOW_SECS,
+        &HeadlineSpec::default(),
+    );
+    let before_days = compute_daily_spend(&files, &cache);
+    let before_models = compute_model_breakdown(&files, &cache, NOW_SECS);
+    let before_scoped =
+        compute_scoped_tally(&files, &cache, &scope, NOW_SECS, &HeadlineSpec::default());
+
+    assert!(compact_spending_cache(&mut cache, &files, NOW_SECS));
+
+    let after_deduped = dedup_cached_entries(&files, &cache);
+    assert_eq!(
+        aggregate_spending(
+            &files,
+            &cache,
+            &after_deduped,
+            NOW_SECS,
+            &HeadlineSpec::default()
+        ),
+        before_spending
+    );
+    assert_eq!(compute_daily_spend(&files, &cache), before_days);
+    assert_eq!(
+        compute_model_breakdown(&files, &cache, NOW_SECS),
+        before_models
+    );
+    assert_eq!(
+        compute_scoped_tally(&files, &cache, &scope, NOW_SECS, &HeadlineSpec::default()),
+        before_scoped
+    );
+    let entries = &cache.files[&file.to_string_lossy().into_owned()].entries;
+    assert!(
+        entries
+            .iter()
+            .any(|entry| !entry.rolled && entry.ts_secs == recent.ts_secs)
+    );
+    assert_eq!(entries.iter().filter(|entry| entry.rolled).count(), 2);
+
+    let encoded = serde_json::to_value(entries).unwrap();
+    assert!(!compact_spending_cache(&mut cache, &files, NOW_SECS));
+    assert_eq!(
+        serde_json::to_value(&cache.files[&file.to_string_lossy().into_owned()].entries).unwrap(),
+        encoded
+    );
+}
+
+#[test]
+fn cache_compaction_dedups_replays_before_rollup() {
+    let session = PathBuf::from("/x/session");
+    let main = session.join("chat.jsonl");
+    let replay = session.join("subagents/worker.jsonl");
+    let ts = NOW_SECS - 40 * 86_400;
+    let main_entry = CachedEntry {
+        ts_secs: ts,
         cost_usd: 1.0,
         input: 10,
         output: 5,
         cache_write: 0,
         cache_read: 0,
-        message_id: None,
-        request_id: None,
+        message_id: Some("msg-1".to_owned()),
+        request_id: Some("req-1".to_owned()),
         thread_id: None,
         is_sidechain: false,
-        model: None,
-        origin_path: Some(origin.clone()),
+        model: Some("claude-opus-4-8".to_owned()),
+        origin_path: None,
+        rolled: false,
+    };
+    let replay_entry = CachedEntry {
+        cost_usd: 9.0,
+        input: 9_000,
+        is_sidechain: true,
+        ..main_entry.clone()
     };
     let mut cache = SpendingDiskCache {
         files: HashMap::from([
-            (
-                existing.to_string_lossy().into_owned(),
-                FileCacheEntry {
-                    mtime_secs: 1,
-                    len: 1,
-                    cursor: SpendCursor::default(),
-                    origin_path: Some(origin.clone()),
-                    entries: vec![entry.clone()],
-                    unknown_models: BTreeMap::new(),
-                },
-            ),
-            (
-                missing.to_string_lossy().into_owned(),
-                FileCacheEntry {
-                    mtime_secs: 1,
-                    len: 1,
-                    cursor: SpendCursor::default(),
-                    origin_path: Some(origin),
-                    entries: vec![entry],
-                    unknown_models: BTreeMap::new(),
-                },
-            ),
+            cached_file(&main, vec![main_entry]),
+            cached_file(&replay, vec![replay_entry]),
         ]),
         ..Default::default()
     };
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+        (claude_adapter(), main.clone()),
+        (claude_adapter(), replay.clone()),
+    ];
 
-    let _ = compute_spending(&[], &mut cache, &PriceBook::default(), NOW_SECS);
+    assert!(compact_spending_cache(&mut cache, &files, NOW_SECS));
+    let deduped = dedup_cached_entries(&files, &cache);
+    let spending = aggregate_spending(&files, &cache, &deduped, NOW_SECS, &HeadlineSpec::default());
 
-    assert!(
+    assert_eq!(spending.total.year.usd, 1.0);
+    assert_eq!(spending.total.year.tokens, 15);
+    assert_eq!(
         cache
             .files
-            .contains_key(&existing.to_string_lossy().into_owned()),
-        "an existing file survives a transient discovery miss"
+            .values()
+            .flat_map(|file| &file.entries)
+            .filter(|entry| entry.rolled)
+            .count(),
+        1
     );
+}
+
+#[test]
+fn cache_compaction_defers_message_ids_with_recent_replays() {
+    let file = PathBuf::from("/x/claude.jsonl");
+    let old_main = CachedEntry {
+        ts_secs: NOW_SECS - 40 * 86_400,
+        cost_usd: 1.0,
+        input: 10,
+        output: 5,
+        cache_write: 0,
+        cache_read: 0,
+        message_id: Some("msg-1".to_owned()),
+        request_id: Some("req-1".to_owned()),
+        thread_id: None,
+        is_sidechain: false,
+        model: Some("claude-opus-4-8".to_owned()),
+        origin_path: None,
+        rolled: false,
+    };
+    let recent_replay = CachedEntry {
+        ts_secs: NOW_SECS - 10 * 86_400,
+        cost_usd: 9.0,
+        input: 9_000,
+        is_sidechain: true,
+        ..old_main.clone()
+    };
+    let mut cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(&file, vec![old_main, recent_replay])]),
+        ..Default::default()
+    };
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+
+    assert!(!compact_spending_cache(&mut cache, &files, NOW_SECS));
+    let deduped = dedup_cached_entries(&files, &cache);
+    let spending = aggregate_spending(&files, &cache, &deduped, NOW_SECS, &HeadlineSpec::default());
+
+    assert_eq!(spending.total.year.usd, 1.0);
     assert!(
-        !cache
-            .files
-            .contains_key(&missing.to_string_lossy().into_owned()),
-        "a truly missing transcript is still pruned"
+        cache.files[&file.to_string_lossy().into_owned()]
+            .entries
+            .iter()
+            .all(|entry| !entry.rolled)
     );
+}
+
+#[test]
+fn cache_compaction_drops_expired_rollups() {
+    let file = PathBuf::from("/x/claude.jsonl");
+    let mut expired = cached_entry(NOW_SECS - 400 * 86_400, 1.0, "expired");
+    expired.rolled = true;
+    let mut cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(&file, vec![expired])]),
+        ..Default::default()
+    };
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+
+    assert!(compact_spending_cache(&mut cache, &files, NOW_SECS));
+
+    assert!(
+        cache.files[&file.to_string_lossy().into_owned()]
+            .entries
+            .is_empty()
+    );
+}
+
+#[test]
+fn cache_compaction_preserves_old_native_thread_sessions() {
+    let file = PathBuf::from("/x/opencode.db");
+    let mut cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(
+            &file,
+            vec![
+                cached_entry(NOW_SECS - 40 * 86_400, 1.0, "session-a"),
+                cached_entry(NOW_SECS - 40 * 86_400 + 60, 2.0, "session-b"),
+            ],
+        )]),
+        ..Default::default()
+    };
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(opencode_adapter(), file)];
+
+    assert!(compact_spending_cache(&mut cache, &files, NOW_SECS));
+    let deduped = dedup_cached_entries(&files, &cache);
+    let spending = aggregate_spending(&files, &cache, &deduped, NOW_SECS, &HeadlineSpec::default());
+
+    assert_eq!(spending.total.year.sessions, 2);
+    assert_eq!(spending.by_provider["opencode"].year.sessions, 2);
 }
 
 #[test]
@@ -1295,6 +1457,7 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
         is_sidechain: false,
         model: Some("claude-opus-4-8".to_owned()),
         origin_path: None,
+        rolled: false,
     };
     let replay = CachedEntry {
         is_sidechain: true,
@@ -1317,6 +1480,7 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
         is_sidechain: false,
         model: Some("gpt-5-codex".to_owned()),
         origin_path: None,
+        rolled: false,
     };
     // A model older than 30 days still lands in the year bucket, not month/week.
     let old = CachedEntry {
@@ -1332,6 +1496,7 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
         is_sidechain: false,
         model: Some("gpt-5-old".to_owned()),
         origin_path: None,
+        rolled: false,
     };
 
     let claude_file = PathBuf::from("/x/claude.jsonl");
