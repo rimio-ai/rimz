@@ -14,7 +14,7 @@
 //! ([`crate::mux::MuxBackend`]) seeds the resulting [`ResumeTab`]s at birth and
 //! stays ignorant of agents and the ledger.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::agents::AgentState;
@@ -55,6 +55,18 @@ pub struct ResumePlan {
     /// Candidates whose worktree disappeared; the caller records these as
     /// durable end traces so they leave the next resume candidate set.
     pub tombstone: Vec<(AgentKind, AgentSessionId)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ResumeTabIdentity {
+    Channel(String),
+    Cwd(PathBuf),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PlannedResumeTab {
+    identity: ResumeTabIdentity,
+    tab: ResumeTab,
 }
 
 impl ResumePlan {
@@ -120,6 +132,7 @@ pub fn plan_resume(
 
     let mut seen: HashSet<PaneId> = HashSet::new();
     let mut plan = ResumePlan::default();
+    let mut tabs: Vec<PlannedResumeTab> = Vec::new();
     for agent in candidates {
         // `pane` is `Some` and `worktree_path` is `Some(non-empty)` by the
         // filters above. The pane is the unit of identity: an older relaunch
@@ -158,7 +171,7 @@ pub fn plan_resume(
             });
             continue;
         }
-        let seeded = plan.tabs.iter().map(|tab| tab.panes.len()).sum::<usize>();
+        let seeded = tabs.iter().map(|tab| tab.tab.panes.len()).sum::<usize>();
         if seeded >= max {
             plan.skipped.push(ResumeSkip {
                 label,
@@ -173,17 +186,78 @@ pub fn plan_resume(
         // resume argv.
         let command = resume_command(rimz_bin, agent);
         let tab_label = channel_label(agent.channel.as_deref(), &cwd);
-        if let Some(tab) = plan.tabs.iter_mut().find(|tab| tab.label == tab_label) {
-            tab.panes.push(command);
+        let identity = resume_tab_identity(agent.channel.as_deref(), &cwd);
+        if let Some(tab) = tabs.iter_mut().find(|tab| tab.identity == identity) {
+            tab.tab.panes.push(command);
         } else {
-            plan.tabs.push(ResumeTab {
-                label: tab_label,
-                cwd,
-                panes: vec![command],
+            tabs.push(PlannedResumeTab {
+                identity,
+                tab: ResumeTab {
+                    label: tab_label,
+                    cwd,
+                    panes: vec![command],
+                },
             });
         }
     }
+    disambiguate_resume_tab_labels(&mut tabs);
+    plan.tabs = tabs.into_iter().map(|planned| planned.tab).collect();
     plan
+}
+
+fn resume_tab_identity(channel: Option<&str>, cwd: &Path) -> ResumeTabIdentity {
+    match channel.filter(|channel| !channel.is_empty()) {
+        Some(channel) => ResumeTabIdentity::Channel(channel.to_owned()),
+        None => ResumeTabIdentity::Cwd(cwd.to_path_buf()),
+    }
+}
+
+fn disambiguate_resume_tab_labels(tabs: &mut [PlannedResumeTab]) {
+    let mut label_counts = BTreeMap::new();
+    for planned in tabs.iter() {
+        *label_counts.entry(planned.tab.label.clone()).or_insert(0) += 1;
+    }
+    let relabel: BTreeSet<usize> = tabs
+        .iter()
+        .enumerate()
+        .filter(|(_, planned)| label_counts[&planned.tab.label] > 1)
+        .filter(|(_, planned)| matches!(planned.identity, ResumeTabIdentity::Cwd(_)))
+        .map(|(index, _)| index)
+        .collect();
+    if relabel.is_empty() {
+        return;
+    }
+
+    let mut used: HashSet<String> = tabs
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !relabel.contains(index))
+        .map(|(_, planned)| planned.tab.label.clone())
+        .collect();
+    for index in relabel {
+        let base = parent_prefixed_label(&tabs[index].tab.cwd)
+            .unwrap_or_else(|| tabs[index].tab.label.clone());
+        tabs[index].tab.label = unique_label(&base, &mut used);
+    }
+}
+
+fn parent_prefixed_label(cwd: &Path) -> Option<String> {
+    let child = cwd.file_name()?.to_string_lossy();
+    let parent = cwd.parent()?.file_name()?.to_string_lossy();
+    Some(format!("#{parent}/{child}"))
+}
+
+fn unique_label(base: &str, used: &mut HashSet<String>) -> String {
+    if used.insert(base.to_owned()) {
+        return base.to_owned();
+    }
+    for ordinal in 2.. {
+        let candidate = format!("{base}-{ordinal}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded ordinal search always yields a fresh label")
 }
 
 fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
@@ -397,6 +471,29 @@ mod tests {
         assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "a1")]);
         assert_eq!(plan.tabs[0].cwd, PathBuf::from("/code/qe-feature"));
         assert_eq!(plan.tabs[1].label, "#query-engine");
+        assert_eq!(plan.tabs[1].panes, vec![exec_resume("codex", "c1")]);
+    }
+
+    #[test]
+    fn disambiguates_reborn_tabs_with_the_same_basename() {
+        let agents = vec![
+            agent("claude", "a1", "/work/repoA/main", None, 5),
+            agent("codex", "c1", "/work/repoB/main", None, 9),
+        ];
+        let plan = plan_resume(
+            &agents,
+            &no_ended(),
+            DEFAULT_RESUME_MAX,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
+
+        assert_eq!(plan.tabs.len(), 2);
+        assert_eq!(plan.tabs[0].cwd, PathBuf::from("/work/repoA/main"));
+        assert_eq!(plan.tabs[0].label, "#repoA/main");
+        assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "a1")]);
+        assert_eq!(plan.tabs[1].cwd, PathBuf::from("/work/repoB/main"));
+        assert_eq!(plan.tabs[1].label, "#repoB/main");
         assert_eq!(plan.tabs[1].panes, vec![exec_resume("codex", "c1")]);
     }
 
