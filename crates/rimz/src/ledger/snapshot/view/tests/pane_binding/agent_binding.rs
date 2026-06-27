@@ -39,23 +39,16 @@ fn live_panes_overlay_only_matching_agent_rows() {
 }
 
 #[test]
-fn reaped_stamped_codex_returned_to_shell_renders_process_row() {
-    // Returning to a shell is handled by liveness, not by the foreground-command
-    // sniff. Once the dead in-pane owner is reaped, the same pane renders as the
-    // shell process instead of keeping the old Codex card attached.
-    let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000)
+fn stamped_codex_returned_to_shell_without_hosted_process_renders_process_row() {
+    // A stamped lazy agent holds through child foreground commands only while
+    // the producer confirms its in-pane CLI process is still present. Once the
+    // pane returns to a shell with no hosted agent process, the old Codex card
+    // demotes even though the stale session remains in the rollup.
+    let codex = agent("codex", "sess-1", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
         .in_pane("%1");
-    codex.agent_pid = Some(424_242);
-    codex.agent_process_start = Some("12345".to_owned());
-
-    let mut snapshot = room(Vec::new(), vec![codex]);
-    snapshot.drop_dead_agents_with(|pid, start| {
-        assert_eq!(pid, 424_242);
-        assert_eq!(start, Some("12345"));
-        false
-    });
-    let snapshot = snapshot.with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
+    let snapshot =
+        room(Vec::new(), vec![codex]).with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
 
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1);

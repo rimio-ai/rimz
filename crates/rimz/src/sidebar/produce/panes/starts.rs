@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::ids::PaneId;
+use crate::ids::{AgentKind, PaneId};
 use crate::sidebar::frame::{PaneFrame, PaneMetrics};
 use crate::sidebar::timing::PROCESS_START_MATCH_TOLERANCE;
 
@@ -118,6 +118,33 @@ pub(super) fn stamp_pane_process_starts(
     }
 }
 
+/// Stamp the lazy agent CLI process currently hosted under each pane root,
+/// independent of the mux-reported foreground command. A live Codex/OpenCode
+/// pane can report `git`, `rg`, or a build while the agent process remains the
+/// root's child; the row binder consumes this signal to keep the session card
+/// stable until the in-pane agent process actually exits.
+pub(super) fn stamp_hosted_agent_processes(
+    frame: &mut PaneFrame,
+    root_start: &dyn Fn(&str, u32) -> Option<jiff::Timestamp>,
+) {
+    for pane in frame.pane_states_mut() {
+        pane.current.hosted_agent_kind = None;
+        pane.current.hosted_agent_process_start = None;
+        let Some(pid) = pane.current.pid else {
+            continue;
+        };
+        let mut hosted = lazy_agent_kinds()
+            .filter_map(|kind| root_start(kind, pid).map(|start| (kind, start)))
+            .collect::<Vec<_>>();
+        hosted.sort_by_key(|(kind, start)| (*kind, *start));
+        hosted.dedup();
+        if let [(kind, start)] = hosted.as_slice() {
+            pane.current.hosted_agent_kind = Some(AgentKind::new_unchecked(*kind));
+            pane.current.hosted_agent_process_start = Some(*start);
+        }
+    }
+}
+
 /// Drop a pane's process binding when the live process no longer matches the
 /// published start stamp. Agent panes compare against the same root→agent-child
 /// derivation [`stamp_pane_process_starts`] uses; a shell-hosted Codex pane's
@@ -131,10 +158,20 @@ pub(super) fn drop_reused_pid_bindings(
         let Some(pid) = pane.current.pid else {
             continue;
         };
-        let Some(expected) = pane.current.started_at else {
+        let Some(expected) = pane
+            .current
+            .hosted_agent_process_start
+            .or(pane.current.started_at)
+        else {
             continue;
         };
         let live_start = pane_process_agent_kind(&pane.current)
+            .or_else(|| {
+                pane.current
+                    .hosted_agent_kind
+                    .as_ref()
+                    .map(|kind| kind.as_str())
+            })
             .and_then(|kind| root_start(kind, pid))
             .or_else(|| process_start(pid));
         let stale = match live_start {
@@ -144,11 +181,20 @@ pub(super) fn drop_reused_pid_bindings(
         if stale {
             pane.current.pid = None;
             pane.current.started_at = None;
+            pane.current.hosted_agent_kind = None;
+            pane.current.hosted_agent_process_start = None;
             pane.previous = None;
             pane.children.clear();
             pane.metrics = PaneMetrics::default();
         }
     }
+}
+
+fn lazy_agent_kinds() -> impl Iterator<Item = &'static str> {
+    crate::agents::known_kinds().filter(|kind| {
+        crate::agents::descriptor_by_kind(kind)
+            .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
+    })
 }
 
 fn process_start_diff_gt(left: jiff::Timestamp, right: jiff::Timestamp) -> bool {

@@ -117,9 +117,9 @@ pub(super) fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
 
 /// The agent that stamped this exact pane id, if one is still unbound. Non-lazy
 /// agents bind by stamped pane id alone — never by foreground command or cwd.
-/// Stamped lazy agents keep that pane across non-agent foreground commands; a
-/// positively different agent command rejects the bind, and liveness reaping
-/// owns genuine exits before the live-pane fold runs.
+/// Stamped lazy agents keep that pane while the producer sees their in-pane
+/// process alive under the pane root; a positively different agent command
+/// rejects the bind, and process absence demotes after the agent exits.
 pub(super) fn agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
@@ -131,7 +131,8 @@ pub(super) fn agent_for_pane<'a>(
 
 /// The root agent stamped on this exact live pane id, regardless of whether
 /// another row already bound it. For lazy-registering kinds, the stamp survives
-/// non-agent child foregrounds; only a positively different agent command
+/// non-agent child foregrounds only while the pane carries the hosted-process
+/// signal for that agent kind; a positively different agent command
 /// disqualifies it.
 pub fn stamped_agent_for_pane<'a>(
     pane: &PaneRef,
@@ -193,11 +194,30 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
     if !pane_start_allows_bind(agent.last_activity, pane) {
         return false;
     }
+    if pane
+        .hosted_agent_process_start
+        .is_some_and(|start| agent.last_activity < start)
+    {
+        return false;
+    }
+    if pane
+        .hosted_agent_kind
+        .as_ref()
+        .is_some_and(|kind| kind != &agent.kind)
+    {
+        return false;
+    }
     // A live foreground that positively names a different agent kind is not
-    // ours. A non-agent foreground is this session running a child command, or
-    // a brief shell foreground between commands; genuinely exited sessions are
-    // reaped by process liveness before this fold.
-    pane_agent_kind(pane).is_none_or(|kind| kind == agent.kind.as_str())
+    // ours. A foreground naming this agent still binds; otherwise a stamped
+    // lazy agent holds only when the producer confirmed its in-pane process is
+    // still alive under the pane root.
+    match pane_agent_kind(pane) {
+        Some(kind) => kind == agent.kind.as_str(),
+        None => pane
+            .hosted_agent_kind
+            .as_ref()
+            .is_some_and(|kind| kind == &agent.kind),
+    }
 }
 
 /// Defensive guard for read-time binds: when the pane's process start is known,
@@ -245,6 +265,8 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            hosted_agent_kind: None,
+            hosted_agent_process_start: None,
             resumed_session_id: None,
             elevated_agent: None,
             first_seen_at_ms: None,

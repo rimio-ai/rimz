@@ -62,6 +62,8 @@ fn resumed_codex_pane_binds_the_matching_session_and_heals_stale_stamp() {
     let resumed_pane = PaneRef {
         command: Some("codex resume sess-old".to_owned()),
         pane_process_start: Some(epoch()),
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
         resumed_session_id: Some("sess-old".into()),
         ..pane("term1", "codex", "/repo/main")
     };
@@ -81,6 +83,8 @@ fn resumed_codex_pane_binds_the_matching_session_and_heals_stale_stamp() {
     let resumed_pane = PaneRef {
         command: Some("codex".to_owned()),
         pane_process_start: Some(ago(1)),
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
         resumed_session_id: Some("sess-old".into()),
         ..pane("term1", "codex", "/repo/main")
     };

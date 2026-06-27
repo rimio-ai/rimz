@@ -827,6 +827,8 @@ fn process_pane(mux: MuxName, index: usize, command: &str, cwd: String) -> PaneR
         cwd: Some(cwd),
         pane_pid: None,
         pane_process_start: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
         resumed_session_id: None,
         elevated_agent: None,
         first_seen_at_ms: None,

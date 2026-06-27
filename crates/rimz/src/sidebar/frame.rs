@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{AgentSessionId, PaneId, ViewId, ViewKind};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, ViewId, ViewKind};
 use crate::ledger::snapshot::{SidebarOwnView, SidebarPresence};
 use crate::pane::{ElevatedAgent, PaneRef};
 use crate::schema::diag::DiagEvent;
@@ -104,6 +104,10 @@ pub struct PaneProcess {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosted_agent_kind: Option<AgentKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosted_agent_process_start: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_session_id: Option<AgentSessionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elevated_agent: Option<ElevatedAgent>,
@@ -190,6 +194,8 @@ impl PaneFrame {
             cwd: pane.current.cwd.clone(),
             pane_pid: pane.current.pid,
             pane_process_start: pane.current.started_at,
+            hosted_agent_kind: pane.current.hosted_agent_kind.clone(),
+            hosted_agent_process_start: pane.current.hosted_agent_process_start,
             resumed_session_id: pane.current.resumed_session_id.clone(),
             elevated_agent: pane.current.elevated_agent.clone(),
             first_seen_at_ms: pane.first_seen_at_ms,
@@ -420,6 +426,8 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
                 spawn_command: pane.spawn_command,
                 cwd: pane.cwd,
                 started_at: pane.pane_process_start,
+                hosted_agent_kind: pane.hosted_agent_kind,
+                hosted_agent_process_start: pane.hosted_agent_process_start,
                 resumed_session_id,
                 elevated_agent: pane.elevated_agent,
             },

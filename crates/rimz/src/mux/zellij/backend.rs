@@ -172,6 +172,8 @@ impl MuxBackend for ZellijBackend {
                 is_floating: p.is_floating,
                 pane_pid: p.pid(),
                 pane_process_start: p.process_start(),
+                hosted_agent_kind: None,
+                hosted_agent_process_start: None,
                 command,
                 spawn_command: p.spawn_command().map(str::to_owned),
                 cwd: p.reported_cwd().map(str::to_owned),

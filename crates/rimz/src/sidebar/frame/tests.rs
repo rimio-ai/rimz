@@ -15,6 +15,8 @@ fn pane(raw: &str, view: &str, command: Option<&str>, focused: bool) -> PaneRef 
         cwd: Some("/repo/main".to_owned()),
         pane_pid: None,
         pane_process_start: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
         resumed_session_id: None,
         elevated_agent: None,
         first_seen_at_ms: None,
@@ -678,6 +680,8 @@ fn unchanged_command_repairs_raced_nulls_and_keeps_previous() {
         spawn_command: None,
         cwd: Some("/repo/main".to_owned()),
         started_at: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
         resumed_session_id: None,
         elevated_agent: None,
     });

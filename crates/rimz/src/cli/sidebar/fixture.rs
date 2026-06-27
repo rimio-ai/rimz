@@ -1978,6 +1978,8 @@ fn pane_ref(raw: &str, command: &str, cwd: &str, focused: bool) -> rimz::pane::P
         cwd: Some(cwd.to_owned()),
         pane_pid: None,
         pane_process_start: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
         resumed_session_id: None,
         elevated_agent: None,
         first_seen_at_ms: None,

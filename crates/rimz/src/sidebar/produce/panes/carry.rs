@@ -566,6 +566,8 @@ mod tests {
                         spawn_command: None,
                         cwd: Some("/repo".to_owned()),
                         started_at: None,
+                        hosted_agent_kind: None,
+                        hosted_agent_process_start: None,
                         resumed_session_id: None,
                         elevated_agent: None,
                     },

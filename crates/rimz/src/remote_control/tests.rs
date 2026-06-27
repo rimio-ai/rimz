@@ -16,6 +16,8 @@ fn pane(command: Option<&str>, view_name: Option<&str>) -> PaneRef {
         cwd: None,
         pane_pid: None,
         pane_process_start: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
         resumed_session_id: None,
         elevated_agent: None,
         first_seen_at_ms: None,

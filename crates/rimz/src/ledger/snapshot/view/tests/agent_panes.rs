@@ -141,16 +141,26 @@ fn standalone_ask_is_not_an_agent_pane() {
 
 #[test]
 fn stamped_lazy_agent_holds_pane_across_non_agent_child_commands() {
-    for (label, command, expect_agent) in [
-        ("own foreground still binds", "codex", true),
-        ("child foreground still binds", "git status", true),
-        ("different agent foreground rejects", "claude", false),
+    for (label, command, hosted_kind, expect_agent) in [
+        ("own foreground still binds", "codex", Some("codex"), true),
+        (
+            "child foreground still binds",
+            "git status",
+            Some("codex"),
+            true,
+        ),
+        ("quit shell demotes", "zsh", None, false),
+        ("different agent foreground rejects", "claude", None, false),
     ] {
         let codex = agent("codex", "sess-1", AgentStatus::Running, 1_000)
             .worktree("/repo/main")
             .in_pane("term1");
-        let snapshot = room(Vec::new(), vec![codex])
-            .with_live_panes(vec![pane("term1", command, "/repo/main")], None);
+        let mut live = pane("term1", command, "/repo/main");
+        if let Some(kind) = hosted_kind {
+            live.hosted_agent_kind = Some(crate::ids::AgentKind::new_unchecked(kind));
+            live.hosted_agent_process_start = Some(ago(600));
+        }
+        let snapshot = room(Vec::new(), vec![codex]).with_live_panes(vec![live], None);
 
         let rows = rows(&snapshot);
         assert_eq!(rows.len(), 1, "{label}");
@@ -168,7 +178,11 @@ fn stamped_lazy_agent_holds_pane_across_non_agent_child_commands() {
             );
         } else {
             assert!(rows[0].is_process(), "{label}");
-            assert_eq!(rows[0].name, "claude", "{label}");
+            assert_eq!(
+                rows[0].name,
+                command.split_whitespace().next().unwrap(),
+                "{label}"
+            );
             assert!(
                 snapshot.agent_panes.is_empty(),
                 "rejected bind must not stay addressable: {label}",

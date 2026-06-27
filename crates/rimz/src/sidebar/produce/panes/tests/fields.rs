@@ -281,6 +281,31 @@ fn stamp_pane_process_starts_derives_from_command_or_spawn_command() {
 }
 
 #[test]
+fn stamp_hosted_agent_processes_ignores_foreground_command() {
+    let start: jiff::Timestamp = "2026-06-05T13:54:33Z".parse().unwrap();
+    let mut frame = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
+    first_mut(&mut frame).current.pid = Some(777);
+
+    stamp_hosted_agent_processes(&mut frame, &|kind, pid| {
+        assert_eq!(pid, 777);
+        (kind == "codex").then_some(start)
+    });
+
+    assert_eq!(
+        first(&frame)
+            .current
+            .hosted_agent_kind
+            .as_ref()
+            .map(|kind| kind.as_str()),
+        Some("codex")
+    );
+    assert_eq!(
+        first(&frame).current.hosted_agent_process_start,
+        Some(start)
+    );
+}
+
+#[test]
 fn stamp_pane_process_starts_never_touches_a_native_start() {
     // A pane the backend stamped natively (tmux) is outside the set captured
     // from the fresh read, so its start is authoritative — neither deriver is
@@ -425,6 +450,46 @@ fn stamp_pane_process_starts_skips_non_agent_and_cwdless_panes() {
             .pane_states()
             .all(|pane| pane.current.started_at.is_none())
     );
+}
+
+#[test]
+fn drop_reused_pid_bindings_keeps_hosted_agent_child_identity() {
+    let expected: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
+    let actual: jiff::Timestamp = "2026-06-05T12:00:02Z".parse().unwrap();
+    let mut frame = frame(vec![pane("terminal_1", Some("git status"), Some("/repo"))]);
+    first_mut(&mut frame).current.pid = Some(100);
+    first_mut(&mut frame).current.hosted_agent_kind =
+        Some(crate::ids::AgentKind::new_unchecked("codex"));
+    first_mut(&mut frame).current.hosted_agent_process_start = Some(expected);
+    first_mut(&mut frame).metrics = PaneMetrics {
+        process_state: None,
+        rss_kb: Some(1024),
+        cpu_pct: Some(250),
+        io_bps: Some(4096),
+    };
+
+    drop_reused_pid_bindings(
+        &mut frame,
+        &|kind, pid| {
+            assert_eq!(kind, "codex");
+            assert_eq!(pid, 100);
+            Some(actual)
+        },
+        &|pid| -> Option<jiff::Timestamp> {
+            panic!("hosted agent child owns the live identity: {pid}")
+        },
+    );
+
+    assert_eq!(first(&frame).current.pid, Some(100));
+    assert_eq!(
+        first(&frame)
+            .current
+            .hosted_agent_kind
+            .as_ref()
+            .map(|kind| kind.as_str()),
+        Some("codex")
+    );
+    assert_eq!(first(&frame).metrics.rss_kb, Some(1024));
 }
 
 #[test]

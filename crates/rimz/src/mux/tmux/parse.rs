@@ -51,6 +51,8 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
         // producer derives the stamp from `pane_pid` via `/proc`
         // (`sidebar::produce::panes::stamp_pane_process_starts`).
         pane_process_start: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
         resumed_session_id: None,
         elevated_agent: None,
         first_seen_at_ms: None,

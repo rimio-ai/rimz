@@ -60,7 +60,7 @@ pub(super) fn room_with_agent_panes(
         if agent.parent_agent_id.is_some() {
             continue;
         }
-        let pane = agent.pane.clone().unwrap_or_else(|| {
+        let mut pane = agent.pane.clone().unwrap_or_else(|| {
             let raw = format!("%agent-{idx}");
             pane(
                 &raw,
@@ -68,6 +68,18 @@ pub(super) fn room_with_agent_panes(
                 agent.worktree_path.as_deref().unwrap_or("/repo/main"),
             )
         });
+        if pane.command.is_none() {
+            pane.command = Some(agent.kind.as_str().to_owned());
+        }
+        if pane.cwd.is_none() {
+            pane.cwd = Some(
+                agent
+                    .worktree_path
+                    .as_deref()
+                    .unwrap_or("/repo/main")
+                    .to_owned(),
+            );
+        }
         agent.pane = Some(pane.clone());
         panes.push(pane);
     }
@@ -307,6 +319,8 @@ pub(super) fn pane(raw: &str, command: &str, cwd: &str) -> PaneRef {
         cwd: Some(cwd.to_owned()),
         pane_pid: None,
         pane_process_start: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
         resumed_session_id: None,
         elevated_agent: None,
         first_seen_at_ms: None,

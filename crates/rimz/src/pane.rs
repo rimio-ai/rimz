@@ -116,6 +116,14 @@ pub struct PaneRef {
     /// Used to detect reused pane IDs across mux restarts.
     #[serde(default)]
     pub pane_process_start: Option<Timestamp>,
+    /// Agent kind whose in-pane CLI process is live under this pane's root
+    /// process. Producer-derived process-tree truth; stamped lazy agents use it
+    /// to hold through child foreground commands and demote after the CLI exits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosted_agent_kind: Option<AgentKind>,
+    /// Start time of [`Self::hosted_agent_kind`]'s in-pane CLI process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosted_agent_process_start: Option<Timestamp>,
     /// Session id parsed from a resumed agent command such as
     /// `codex resume <session-id>`. Exact rebirth binding reads this before any
     /// cwd or process-start heuristic.
@@ -151,6 +159,8 @@ impl PaneRef {
             cwd: None,
             pane_pid: None,
             pane_process_start: None,
+            hosted_agent_kind: None,
+            hosted_agent_process_start: None,
             resumed_session_id: None,
             elevated_agent: None,
             first_seen_at_ms: None,

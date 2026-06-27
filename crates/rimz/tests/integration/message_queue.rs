@@ -1714,6 +1714,8 @@ fn agent_pane(env: &Env, command: &str) -> rimz::pane::PaneRef {
         cwd: Some(env.project_root.display().to_string()),
         pane_pid: None,
         pane_process_start: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
         resumed_session_id: None,
         elevated_agent: None,
         first_seen_at_ms: None,

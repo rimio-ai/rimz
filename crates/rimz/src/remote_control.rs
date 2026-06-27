@@ -563,13 +563,13 @@ pub fn in_pane_agent_start(kind: &str, pane_cwd: &str) -> Option<jiff::Timestamp
 /// `pane_cwd`. Callers that know other panes' exact starts subtract those before
 /// deciding whether one unaccounted process remains.
 pub fn in_pane_agent_starts(kind: &str, pane_cwd: &str) -> Vec<jiff::Timestamp> {
-    if kind != "codex" {
+    if !in_pane_agent_probe_supported(kind) {
         return Vec::new();
     }
     let pane_cwd = Path::new(pane_cwd);
     let mut starts = crate::proc::list_processes()
         .into_iter()
-        .filter(|process| is_codex_cli_cmdline(&process.cmdline))
+        .filter(|process| in_pane_agent_cmdline_matches(kind, &process.cmdline))
         .filter(|process| crate::proc::cwd(process.pid).as_deref() == Some(pane_cwd))
         .filter_map(|process| crate::proc::process_start(process.pid))
         .collect::<Vec<_>>();
@@ -578,30 +578,47 @@ pub fn in_pane_agent_starts(kind: &str, pane_cwd: &str) -> Vec<jiff::Timestamp> 
     starts
 }
 
-/// Start time of the in-pane agent CLI behind a pane's bound root process —
+/// Start time of the in-pane lazy-agent CLI behind a pane's bound root process —
 /// the per-pane exact signal the frame stamp prefers over the cwd scan above.
-/// The root is the CLI itself when its cmdline reads as the bare `codex` TUI
-/// (a pane running it directly); a shell-hosted CLI is the root's single
-/// child, since the mux reports the *foreground* command while the root stays
-/// the shell. The cmdline check is load-bearing twice over: a shell outlives
-/// the agents it hosts, so stamping its older start would re-admit the very
-/// sessions `pane_start_allows_bind` refuses, and a re-run CLI is a fresh
-/// child pid even when the hosting shell survives, so re-tenancy stays
-/// visible. `None` for a non-Codex kind or when neither process reads as the
-/// CLI, so the caller falls back rather than guesses.
+/// The root is the CLI itself when its cmdline reads as the agent TUI (a pane
+/// running it directly); a shell-hosted CLI is the root's single child, since
+/// the mux reports the *foreground* command while the root stays the shell. The
+/// cmdline check is load-bearing twice over: a shell outlives the agents it
+/// hosts, so stamping its older start would re-admit the very sessions
+/// `pane_start_allows_bind` refuses, and a re-run CLI is a fresh child pid even
+/// when the hosting shell survives, so re-tenancy stays visible. `None` for a
+/// non-lazy kind or when neither process reads as the CLI, so the caller falls
+/// back rather than guesses.
 pub fn in_pane_agent_start_for_root(kind: &str, root_pid: u32) -> Option<jiff::Timestamp> {
-    if kind != "codex" {
+    if !in_pane_agent_probe_supported(kind) {
         return None;
     }
-    if crate::proc::cmdline(root_pid).is_some_and(|cmdline| is_codex_cli_cmdline(&cmdline)) {
+    if crate::proc::cmdline(root_pid)
+        .as_deref()
+        .is_some_and(|cmdline| in_pane_agent_cmdline_matches(kind, cmdline))
+    {
         return crate::proc::process_start(root_pid);
     }
     if let &[child] = crate::proc::children(root_pid).as_slice()
-        && crate::proc::cmdline(child).is_some_and(|cmdline| is_codex_cli_cmdline(&cmdline))
+        && crate::proc::cmdline(child)
+            .as_deref()
+            .is_some_and(|cmdline| in_pane_agent_cmdline_matches(kind, cmdline))
     {
         return crate::proc::process_start(child);
     }
     None
+}
+
+fn in_pane_agent_cmdline_matches(kind: &str, cmdline: &str) -> bool {
+    if kind == "codex" {
+        return is_codex_cli_cmdline(cmdline);
+    }
+    crate::ledger::snapshot::command_agent_kind(cmdline) == Some(kind)
+}
+
+fn in_pane_agent_probe_supported(kind: &str) -> bool {
+    crate::agents::descriptor_by_kind(kind)
+        .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
 }
 
 /// Session id from the in-pane Codex CLI behind a pane's bound root process.
