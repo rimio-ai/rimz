@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime};
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use rimz::schema::heartbeat::ResolverHeartbeat;
+use rimz::sidebar::timing::{CODEX_PROBE_MARKER_PREFIX, CODEX_PROBE_MARKER_TTL};
 use rimz::{ResolverId, RuntimePaths, SidebarInstanceId, WorkspaceId};
 use serde_json::json;
 
@@ -186,13 +187,19 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
 
     let old_codex_marker = rt
         .shared_root
-        .join(format!("rate-limit-probe.codex.{nonce}"));
+        .join(format!("{CODEX_PROBE_MARKER_PREFIX}{nonce}"));
+    let recent_codex_marker = rt.shared_root.join(format!(
+        "{CODEX_PROBE_MARKER_PREFIX}11111111111111111111111111111111"
+    ));
     let old_usage_marker = rt.shared_root.join("usage-probe.opencode");
+    let recent_usage_marker = rt.shared_root.join("usage-probe.codex");
     let fresh_marker = rt.shared_root.join("usage-probe.pi");
     let accounts = rt.shared_root.join("accounts.json");
     for path in [
         &old_codex_marker,
+        &recent_codex_marker,
         &old_usage_marker,
+        &recent_usage_marker,
         &fresh_marker,
         &accounts,
     ] {
@@ -213,6 +220,13 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
             .set_modified(old)
             .unwrap();
     }
+    let recently_dead = SystemTime::now() - (CODEX_PROBE_MARKER_TTL + Duration::from_secs(1));
+    for path in [&recent_codex_marker, &recent_usage_marker] {
+        std::fs::File::open(path)
+            .unwrap()
+            .set_modified(recently_dead)
+            .unwrap();
+    }
 
     env.rimz()
         .args(["gc", "--older-than", "1h"])
@@ -226,7 +240,9 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
     assert!(!old_state_rollup.exists());
     assert!(!old_runtime_shared.exists());
     assert!(!old_codex_marker.exists());
+    assert!(!recent_codex_marker.exists());
     assert!(!old_usage_marker.exists());
+    assert!(recent_usage_marker.exists());
     assert!(fresh_temp.exists());
     assert!(fresh_marker.exists());
     assert!(accounts.exists());

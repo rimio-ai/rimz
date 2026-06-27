@@ -6,7 +6,9 @@ use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
 use crate::agents::codex;
-use crate::sidebar::timing::CODEX_RATE_LIMIT_REFRESH_INTERVAL;
+use crate::sidebar::timing::{
+    CODEX_PROBE_MARKER_PREFIX, CODEX_PROBE_MARKER_TTL, CODEX_RATE_LIMIT_REFRESH_INTERVAL,
+};
 
 use super::SidebarSnapshot;
 
@@ -31,6 +33,7 @@ pub(super) fn refresh_codex_sessions(snapshot: &SidebarSnapshot, runtime: &Runti
             );
         }
     }
+    reap_stale_codex_probe_markers(runtime);
 }
 
 /// Refresh one Codex session's transcript-derived tokens/cost into its context
@@ -127,7 +130,31 @@ pub(crate) fn codex_session_probe_marker(runtime: &RuntimePaths, session_id: &st
     let digest = hex::encode(hasher.finalize());
     runtime
         .shared_root
-        .join(format!("rate-limit-probe.codex.{}", &digest[..32]))
+        .join(format!("{CODEX_PROBE_MARKER_PREFIX}{}", &digest[..32]))
+}
+
+fn reap_stale_codex_probe_markers(runtime: &RuntimePaths) {
+    let Ok(entries) = std::fs::read_dir(&runtime.shared_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        if !name.starts_with(CODEX_PROBE_MARKER_PREFIX) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age >= CODEX_PROBE_MARKER_TTL);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Spawn the detached, fresh-stdio helper that refreshes one active Codex
@@ -272,6 +299,38 @@ mod tests {
             codex_session_probe_due(&runtime, "sess/one"),
             "the session becomes due again after the 60s interval"
         );
+    }
+
+    #[test]
+    fn reap_removes_stale_codex_probe_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+
+        let stale_codex = runtime.shared_root.join(format!(
+            "{CODEX_PROBE_MARKER_PREFIX}00000000000000000000000000000000"
+        ));
+        let fresh_codex = runtime.shared_root.join(format!(
+            "{CODEX_PROBE_MARKER_PREFIX}11111111111111111111111111111111"
+        ));
+        let accounts = runtime.shared_root.join("accounts.json");
+        for path in [&stale_codex, &fresh_codex, &accounts] {
+            std::fs::write(path, b"").unwrap();
+        }
+        let old = SystemTime::now()
+            .checked_sub(CODEX_PROBE_MARKER_TTL + Duration::from_secs(1))
+            .unwrap();
+        std::fs::File::open(&stale_codex)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+
+        reap_stale_codex_probe_markers(&runtime);
+
+        assert!(!stale_codex.exists());
+        assert!(fresh_codex.exists());
+        assert!(accounts.exists());
     }
 
     #[test]

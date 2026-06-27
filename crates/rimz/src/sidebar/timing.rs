@@ -170,6 +170,15 @@ pub const SPENDING_TTL: Duration = Duration::from_secs(15);
 /// data tick, but budget windows move on the scale of minutes.
 pub const CODEX_RATE_LIMIT_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Reap grace for the per-session Codex app-server throttle stamp. A live
+/// session re-touches its stamp within [`CODEX_RATE_LIMIT_REFRESH_INTERVAL`]
+/// plus the producer fold cadence, so a stamp older than this is dead.
+pub const CODEX_PROBE_MARKER_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// Runtime `shared/` filename prefix for per-session Codex app-server throttle
+/// stamps.
+pub const CODEX_PROBE_MARKER_PREFIX: &str = "rate-limit-probe.codex.";
+
 /// Minimum gap between auto-continue nudges to one rate-limit-parked agent. One
 /// nudge resumes the turn within a frame, so this mostly bounds the brief window
 /// before the agent's first hook lands; if a nudge fails to wake a still-parked
