@@ -90,6 +90,26 @@ fn stats_refresh_drains_input_without_echoing() {
     );
 }
 
+#[test]
+fn stats_refresh_reloads_on_sigusr1() {
+    let mut harness = StatsRefreshHarness::launch(NARROW_COLS);
+
+    let initial_col = wait_for_tagline_col(&harness.parser, |_| true, INITIAL_BUDGET);
+    let initial_screen = screen(&harness.parser);
+    initial_col.unwrap_or_else(|| panic!("stats never rendered the tagline:\n{initial_screen}"));
+
+    harness.signal_usr1().expect("signal stats reload");
+    std::thread::sleep(Duration::from_millis(250));
+    let after_signal = screen(&harness.parser);
+
+    assert!(
+        harness.is_alive(),
+        "stats exited after SIGUSR1 instead of catching the reload signal:\n{after_signal}",
+    );
+    wait_for_tagline_col(&harness.parser, |_| true, REDRAW_DEADLINE)
+        .unwrap_or_else(|| panic!("stats did not render after SIGUSR1 reload:\n{after_signal}"));
+}
+
 struct StatsRefreshHarness {
     parser: Arc<Mutex<vt100::Parser>>,
     master: Option<Box<dyn MasterPty + Send>>,
@@ -176,6 +196,19 @@ impl StatsRefreshHarness {
         let writer = self.writer.as_mut().expect("pty writer");
         writer.write_all(input)?;
         writer.flush()
+    }
+
+    fn signal_usr1(&self) -> anyhow::Result<()> {
+        let pid = self.child.process_id().expect("stats process id");
+        let status = std::process::Command::new("kill")
+            .args(["-USR1", &pid.to_string()])
+            .status()?;
+        anyhow::ensure!(status.success(), "kill -USR1 {pid} exited {status}");
+        Ok(())
+    }
+
+    fn is_alive(&mut self) -> bool {
+        self.child.try_wait().expect("poll stats child").is_none()
     }
 }
 

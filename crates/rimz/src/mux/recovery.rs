@@ -207,6 +207,61 @@ pub(crate) fn sweep_orphan_processes(
     Vec::new()
 }
 
+/// SIGUSR1 every `rimz stats --refresh` dashboard this user owns so each
+/// re-execs in place onto the freshly-installed binary. User-wide and unscoped:
+/// stats are account-global, so a reload refreshes the daemon-view pane and any
+/// standalone dashboard alike. Returns the pids signalled; empty off-Linux,
+/// where `/proc` is unavailable and the dashboard reloads via its own `r` key.
+#[cfg(target_os = "linux")]
+pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
+    let procs = crate::proc::list_processes();
+    let protected = protected_pids(&procs, std::process::id());
+    let my_uid = current_uid();
+    let targets: Vec<u32> = procs
+        .iter()
+        .filter(|proc| proc.real_uid == my_uid)
+        .filter(|proc| !protected.contains(&proc.pid))
+        .filter(|proc| is_stats_refresh(&proc.cmdline))
+        .map(|proc| proc.pid)
+        .collect();
+    for &pid in &targets {
+        let _ = kill(Pid::from_raw(pid as i32), Signal::SIGUSR1);
+    }
+    targets
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
+    Vec::new()
+}
+
+/// Whether `cmdline` is a held or standalone `rimz stats --refresh` dashboard.
+/// Token matching keeps the user-wide signal pass scoped to the Rimz stats
+/// subcommand and excludes one-shot reports and unrelated commands mentioning
+/// those words.
+#[cfg(target_os = "linux")]
+pub(crate) fn is_stats_refresh(cmdline: &str) -> bool {
+    let mut args = cmdline.split_whitespace();
+    let Some(program) = args.next() else {
+        return false;
+    };
+    if program != "rimz" && !program.ends_with("/rimz") {
+        return false;
+    }
+    let mut saw_stats = false;
+    for arg in args {
+        if arg == "stats" {
+            saw_stats = true;
+        } else if saw_stats && arg == "--refresh" {
+            return true;
+        }
+    }
+    false
+}
+
 /// Whether `cmdline` is one of `(workspace, session)`'s sidebar *serve* processes
 /// — `rimz sidebar serve` — and not the mux server or the agent app-server. The
 /// exact, path-derived session name plus the workspace id scope it; `sidebar` + `serve` selects the renderer
@@ -402,6 +457,26 @@ mod tests {
         assert!(protected.contains(&100));
         let got = select_sweep_targets(&procs, me, SESSION, WS, &protected, true);
         assert_eq!(got, vec![10]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn is_stats_refresh_matches_only_the_held_or_standalone_dashboard() {
+        assert!(is_stats_refresh("/usr/bin/rimz stats --refresh --hold"));
+        assert!(is_stats_refresh("rimz stats --refresh"));
+        assert!(is_stats_refresh(
+            "rimz --config /tmp/config.toml stats --refresh"
+        ));
+        assert!(!is_stats_refresh("/usr/bin/rimz stats"));
+        assert!(!is_stats_refresh("/usr/bin/rimz stats --json"));
+        assert!(!is_stats_refresh("cargo test -- stats --refresh"));
+        assert!(!is_stats_refresh("rimz reload"));
+        assert!(!is_stats_refresh(
+            "rimz daemon content --slot 0 --worktree-root /p"
+        ));
+        assert!(!is_stats_refresh(
+            "rimz sidebar serve --workspace ws --session rimz-x"
+        ));
     }
 
     #[test]

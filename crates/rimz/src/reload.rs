@@ -1,15 +1,17 @@
-//! `rimz reload` — pick up a freshly-installed build and converge every running
-//! sidebar to a healthy set, across all of this user's workspaces.
+//! `rimz reload` — pick up a freshly-installed build, converge every running
+//! sidebar to a healthy set, and refresh held stats dashboards.
 //!
 //! User-scoped and cwd-independent: it enumerates every known workspace
 //! ([`crate::workspace::known_workspaces`]), finds which have a live mux session,
 //! and reconciles each in place — one live sidebar per working view, running the
 //! current binary — closing duplicate or unresponsive sidebar panes and reaping
-//! orphaned sidebar processes whose pane is gone. A workspace whose session is
-//! gone has its stale runtime files and leftover daemons swept. Long-lived
-//! sidebars and `rimz stats --refresh` also self-reexec onto a changed on-disk
-//! binary on their own cadence, so this command is the low-latency nudge rather
-//! than the only convergence path. Every step is best-effort: a hiccup on one
+//! orphaned sidebar processes whose pane is gone. Held `rimz stats --refresh`
+//! dashboards are signalled to re-exec in place before workspace enumeration, so
+//! standalone dashboards reload even when no rooms exist. Long-lived sidebars
+//! and stats dashboards also self-reexec onto a changed on-disk binary on their
+//! own cadence, so this command is the low-latency nudge rather than the only
+//! convergence path. A workspace whose session is gone has its stale runtime
+//! files and leftover daemons swept. Every step is best-effort: a hiccup on one
 //! workspace is logged and never blocks the rest.
 
 use std::collections::HashSet;
@@ -109,6 +111,8 @@ pub struct ReloadOutcome {
     pub reaped: usize,
     /// Leftover processes swept from workspaces whose session is gone.
     pub dead_swept: usize,
+    /// `rimz stats --refresh` dashboards signalled to re-exec onto the new build.
+    pub stats_reloaded: usize,
     /// Views whose sidebar add or repair could not complete this pass.
     pub failed: usize,
     /// Views whose in-place add or geometry repair was deferred (no attached
@@ -124,7 +128,10 @@ pub struct ReloadOutcome {
 /// Reload and reconcile every running sidebar across all of this user's
 /// workspaces. Returns the aggregate outcome.
 pub fn reload_user_sidebars() -> ReloadOutcome {
-    let mut outcome = ReloadOutcome::default();
+    let mut outcome = ReloadOutcome {
+        stats_reloaded: recovery::reload_stats_dashboards().len(),
+        ..ReloadOutcome::default()
+    };
     let workspaces = match workspace::known_workspaces() {
         Ok(workspaces) => workspaces,
         Err(err) => {

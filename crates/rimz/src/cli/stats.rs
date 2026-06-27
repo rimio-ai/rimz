@@ -17,7 +17,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -170,6 +171,7 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
 }
 
 fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
+    install_reload_signal()?;
     let glyphs = resolve_panel_glyphs(&super::machine_config().theme);
     let paths = RuntimePaths::shared();
     ensure_shared_runtime(&paths)?;
@@ -206,6 +208,36 @@ fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
             CycleExit::Quit => return Ok(()),
         }
     }
+}
+
+fn reload_flag() -> &'static Arc<AtomicBool> {
+    static FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+    FLAG.get_or_init(|| Arc::new(AtomicBool::new(false)))
+}
+
+/// Register SIGUSR1 -> reload flag so `rimz reload` can drive the same in-place
+/// re-exec the `r` key runs. Registering replaces the default-terminate
+/// disposition, so the dashboard catches the signal instead of dying.
+#[cfg(unix)]
+fn install_reload_signal() -> std::io::Result<()> {
+    use signal_hook::consts::signal::SIGUSR1;
+
+    signal_hook::flag::register(SIGUSR1, reload_flag().clone()).map(|_| ())
+}
+
+#[cfg(not(unix))]
+fn install_reload_signal() -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Read-and-clear the reload request. Clearing on consume keeps a SIGUSR1 that
+/// lands when no re-exec target resolves from latching into a busy loop.
+fn take_reload_request() -> bool {
+    consume_reload_flag(reload_flag())
+}
+
+fn consume_reload_flag(flag: &AtomicBool) -> bool {
+    flag.swap(false, Ordering::SeqCst)
 }
 
 enum CycleExit {
@@ -262,6 +294,9 @@ fn hold_cycle(
     let deadline = Instant::now() + REFRESH_INTERVAL;
     let mut returned_walker: Option<SpendingWalker> = None;
     loop {
+        if take_reload_request() {
+            return Ok(CycleExit::Reload);
+        }
         match rx.try_recv() {
             Ok(event) => {
                 if let Some(stats) = event.stats {
@@ -316,10 +351,20 @@ fn hold_cycle(
                     }
                 }
                 Ok(_) => {}
-                Err(_) => return Ok(CycleExit::Quit),
+                Err(_) => {
+                    if take_reload_request() {
+                        return Ok(CycleExit::Reload);
+                    }
+                    return Ok(CycleExit::Quit);
+                }
             },
             Ok(false) => {}
-            Err(_) => return Ok(CycleExit::Quit),
+            Err(_) => {
+                if take_reload_request() {
+                    return Ok(CycleExit::Reload);
+                }
+                return Ok(CycleExit::Quit);
+            }
         }
     }
 }

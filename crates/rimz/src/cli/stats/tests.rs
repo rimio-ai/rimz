@@ -302,6 +302,21 @@ fn windows_wrap_forward_and_back() {
 }
 
 #[test]
+fn reload_flag_consumes_once() {
+    let flag = AtomicBool::new(false);
+    assert!(!consume_reload_flag(&flag));
+    flag.store(true, Ordering::SeqCst);
+    assert!(
+        consume_reload_flag(&flag),
+        "a set flag reads as a reload request"
+    );
+    assert!(
+        !consume_reload_flag(&flag),
+        "consuming clears it so it never latches"
+    );
+}
+
+#[test]
 fn refresh_key_outcome_reloads_on_r() {
     for hold in [false, true] {
         assert_eq!(

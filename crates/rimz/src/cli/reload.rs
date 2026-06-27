@@ -1,13 +1,14 @@
-//! `rimz reload` — pick up a freshly-installed build and restore every running
-//! sidebar to a healthy state, across all of this user's workspaces.
+//! `rimz reload` — pick up a freshly-installed build, restore every running
+//! sidebar to a healthy state, and refresh held stats dashboards.
 //!
 //! User-scoped and cwd-independent (it runs from anywhere, even outside a rimz
 //! session): the orchestration lives in [`rimz::reload`]. For each workspace with
 //! a live mux session it re-execs the live sidebars onto the current binary,
 //! reconciles to one live sidebar per working view — closing duplicates and
 //! unresponsive panes, reaping orphaned processes — and adds one to any working
-//! view left without. Workspaces whose session is gone have their leftovers
-//! swept. Every step is best-effort and run-once.
+//! view left without. Held `rimz stats --refresh` dashboards re-exec in place
+//! before room enumeration. Workspaces whose session is gone have their
+//! leftovers swept. Every step is best-effort and run-once.
 
 use anyhow::Result;
 use clap::Args;
@@ -30,7 +31,7 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
     let n = |count: usize, noun: &str| {
         render::paint(render::palette::ACCENT, &self::count(count, noun))
     };
-    if outcome.sessions == 0 && outcome.dead_swept == 0 {
+    if outcome.sessions == 0 && outcome.dead_swept == 0 && outcome.stats_reloaded == 0 {
         writeln!(out, "No running sidebars to reload.")?;
         writeln!(out, "Launch one with `rimz start` or `rimz attach`.")?;
         return Ok(());
@@ -41,6 +42,13 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
             "Reloaded {} across {}.",
             n(outcome.reexeced, "sidebar"),
             n(outcome.sessions, "session"),
+        )?;
+    }
+    if outcome.stats_reloaded > 0 {
+        writeln!(
+            out,
+            "Reloaded {}.",
+            n(outcome.stats_reloaded, "stats dashboard")
         )?;
     }
     if outcome.already_current > 0 {
