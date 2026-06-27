@@ -13,6 +13,10 @@ use rimz::ledger::event_log::RotationOutcome;
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, RuntimePaths, StatePaths};
 
+const MIB: u64 = 1024 * 1024;
+pub(crate) const DEFAULT_EVENT_LOG_ROTATE_BYTES: u64 = 64 * MIB;
+const DEFAULT_EVENT_LOG_ARCHIVE_RETENTION: &str = "14d";
+
 #[derive(Debug, Args)]
 pub struct WorkspaceArgs {
     #[command(subcommand)]
@@ -37,11 +41,11 @@ enum WorkspaceSubcmd {
 
 #[derive(Debug, Args)]
 pub struct RotateEventsArgs {
-    /// Rotate only if the active log is at least this big (`64MiB`, `512KB`).
-    #[arg(long, default_value = "64MiB", value_parser = parse_byte_size)]
+    /// Rotate only if the active log is at least this big. Accepts `64MiB`, `512KB`.
+    #[arg(long, default_value_t = DEFAULT_EVENT_LOG_ROTATE_BYTES, value_parser = parse_byte_size)]
     max_bytes: u64,
-    /// Remove archives older than this duration. Omit to keep all archives.
-    #[arg(long, value_parser = parse_retention_duration)]
+    /// Remove archives older than this duration.
+    #[arg(long, default_value = DEFAULT_EVENT_LOG_ARCHIVE_RETENTION, value_parser = parse_retention_duration)]
     archive_older_than: Option<Duration>,
 }
 
@@ -272,6 +276,14 @@ mod tests {
     }
 
     #[test]
+    fn default_rotation_threshold_matches_the_human_size() {
+        assert_eq!(
+            DEFAULT_EVENT_LOG_ROTATE_BYTES,
+            parse_byte_size("64MiB").unwrap()
+        );
+    }
+
+    #[test]
     fn retention_duration_accepts_days() {
         assert_eq!(
             parse_retention_duration("30d").unwrap(),
@@ -287,5 +299,13 @@ mod tests {
         );
         assert!(parse_retention_duration("30").is_err());
         assert!(parse_retention_duration("30y").is_err());
+    }
+
+    #[test]
+    fn default_archive_retention_is_fourteen_days() {
+        assert_eq!(
+            parse_retention_duration(DEFAULT_EVENT_LOG_ARCHIVE_RETENTION).unwrap(),
+            Duration::from_secs(14 * 86_400)
+        );
     }
 }

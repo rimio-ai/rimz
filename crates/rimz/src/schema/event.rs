@@ -485,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_lifecycle_constructor_keeps_the_existing_wire_shape() {
+    fn agent_lifecycle_constructor_serializes_compact_wire_shape() {
         let workspace = workspace();
         let observation = lifecycle_observation();
         let typed = EventEnvelope::agent_lifecycle(
@@ -516,12 +516,6 @@ mod tests {
                 },
                 "agent_pid": 42,
                 "agent_process_start": "12345",
-                "runtime_owner": {
-                    "kind": "agent",
-                    "subject_id": "sess-1",
-                    "pid": 42,
-                    "process_start": "12345",
-                },
                 "worktree_path": "/tmp/project",
                 "worktree_branch": "main",
                 "task": "Review",
@@ -546,18 +540,20 @@ mod tests {
         assert_eq!(
             serde_json::to_vec(&typed).unwrap(),
             serde_json::to_vec(&legacy).unwrap(),
-            "typed construction must not migrate event-log bytes"
+            "typed construction owns the compact lifecycle event shape"
         );
         let EventKind::AgentLifecycle(payload) = typed.kind() else {
             panic!("agent.lifecycle decodes to its typed kind");
         };
         let payload = *payload;
+        let mut expected_observation = observation;
+        expected_observation.runtime_owner = None;
         assert_eq!(payload.event_name.as_deref(), Some("Stop"));
-        assert_eq!(payload.observation, observation);
+        assert_eq!(payload.observation, expected_observation);
     }
 
     #[test]
-    fn agent_lifecycle_constructor_serializes_absent_fields_as_null() {
+    fn agent_lifecycle_constructor_omits_absent_fields() {
         let observation = AgentLifecycleObservation::new(
             Some(AgentSessionId::from("sess-null")),
             LifecycleSignal::Registered,
@@ -596,12 +592,67 @@ mod tests {
             "pane_id",
             "parent_agent_id",
         ] {
-            assert_eq!(
-                event.params.get(key),
-                Some(&Value::Null),
-                "{key} must stay present as null to preserve partial-event bytes",
+            assert!(
+                event.params.get(key).is_none(),
+                "{key} must be omitted when absent"
             );
         }
+    }
+
+    #[test]
+    fn old_shape_agent_lifecycle_params_still_decode() {
+        let params = json!({
+            "event_name": "Stop",
+            "agent_id": "sess-1",
+            "agent_name": "amber-atlas",
+            "role": null,
+            "team": null,
+            "profile": null,
+            "kind_ordinal": null,
+            "signal": {
+                "signal": "turn_ended",
+                "errored": false,
+                "parked_on_background": false,
+            },
+            "agent_pid": 42,
+            "agent_process_start": "12345",
+            "runtime_owner": {
+                "kind": "agent",
+                "subject_id": "sess-1",
+                "pid": 42,
+                "process_start": "12345",
+            },
+            "worktree_path": null,
+            "worktree_branch": null,
+            "task": null,
+            "prompt": null,
+            "transcript_path": null,
+            "model": null,
+            "effort": null,
+            "context_pct": null,
+            "context_window": null,
+            "total_tokens": null,
+            "cache_read_input_tokens": null,
+            "cache_write_input_tokens": null,
+            "fresh_input_tokens": null,
+            "output_tokens": null,
+            "pane_id": null,
+            "parent_agent_id": null,
+        });
+        let payload = AgentLifecyclePayload::from_params(&params).expect("decode");
+
+        assert_eq!(payload.event_name.as_deref(), Some("Stop"));
+        assert_eq!(
+            payload.observation.runtime_owner,
+            Some(RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "sess-1",
+                42,
+                Some("12345".to_owned()),
+            ))
+        );
+        assert_eq!(payload.observation.role, None);
+        assert_eq!(payload.observation.pane_id, None);
     }
 
     #[test]

@@ -193,14 +193,14 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
         ledger.append_event(&event).expect("append lifecycle");
     }
 
-    // A stale archive that the prune step should remove.
+    // A stale archive that the default 14d prune step should remove.
     let paths = env.state_path_for(&project);
     std::fs::create_dir_all(&paths.events_archive_dir).expect("mkdir archive");
     let stale_archive = paths
         .events_archive_dir
         .join("events.000000000000000000000000.jsonl");
     std::fs::write(&stale_archive, b"old\n").expect("write stale archive");
-    let old = SystemTime::now() - Duration::from_secs(7 * 86_400);
+    let old = SystemTime::now() - Duration::from_secs(21 * 86_400);
     std::fs::File::open(&stale_archive)
         .expect("open stale")
         .set_modified(old)
@@ -208,14 +208,7 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
 
     env.rimz()
         .current_dir(&project)
-        .args([
-            "workspace",
-            "rotate-events",
-            "--max-bytes",
-            "1",
-            "--archive-older-than",
-            "1d",
-        ])
+        .args(["workspace", "rotate-events", "--max-bytes", "1"])
         .assert()
         .success()
         .stdout(contains("event-log rotated"))

@@ -20,7 +20,7 @@ snapshots/rollup.json                           resumable agent-rollup fold base
 feed/<request_id>.json                          pending feed items — CAS coordination
 feed/terminal/<request_id>.json                 decided feed items, relocated on terminal status
 locks/workspace.lock                            the single-writer flock
-locks/{publish,abandon-sweep,log-sync}.stamp    debounce stamps for the off-lock write tail
+locks/{publish,abandon-sweep,log-sync,auto-rotate}.stamp    debounce stamps for the off-lock write tail
 ```
 
 `<workspace_id>` is `ws_` plus the first 24 hex of the SHA-256 of the canonical root path — the same derivation for every root class (repo, marker, directory), so introducing a class never re-keys a ledger. Every feed file carries `workspace_id`, `request_id`, nonce, resolver id, and timestamps.
@@ -29,7 +29,8 @@ The split of truth from cache is the organizing rule: **`events.log.jsonl` and t
 
 - `workspace.json` records the project root, root class, and session name for maintenance commands. A record predating `root_class` decodes as `repo` and self-heals on the next start. Launch reads it before overwriting: when the derived session name diverges from a still-live recorded session, launch rebirths the workspace under the new name rather than stranding the session ([`workspace_record.rs`](../../../crates/rimz/src/ledger/workspace_record.rs)).
 - `snapshots/latest.json` is the published view-model and `snapshots/rollup.json` the resumable fold base; writers publish both off-lock, debounced through stamps, stamped with the log `(generation, offset)` they reflect. A reader trusts a checkpoint exactly when its stamp matches the live log and folds the missing tail itself otherwise ([`snapshot/fold.rs`](../../../crates/rimz/src/ledger/snapshot/fold.rs), [`writer/publish.rs`](../../../crates/rimz/src/ledger/writer/publish.rs)).
-- `rimz workspace rotate-events` archives the active log once it crosses a byte threshold and prunes old archives. Rotation first merges the rotating log's agent rollup into `agents.carryover.json` and reseeds the rollup base, so the sidebar's agent panel stays correct across rotations without rescanning archives ([`event_log/rotation.rs`](../../../crates/rimz/src/ledger/event_log/rotation.rs)).
+- `rimz workspace rotate-events` archives the active log once it crosses a byte threshold and prunes archives older than the retention window. Lifecycle hooks trigger the same rotation path automatically at the default 64MiB threshold, debounced through `locks/auto-rotate.stamp`; manual rotation uses the same threshold unless `--max-bytes` overrides it, and archive pruning defaults to 14d. Rotation first merges the rotating log's agent rollup into `agents.carryover.json` and reseeds the rollup base, so the sidebar's agent panel stays correct across rotations without rescanning archives ([`event_log/rotation.rs`](../../../crates/rimz/src/ledger/event_log/rotation.rs)).
+- `agent.lifecycle` records use carry-forward fields to keep the hot log compact. Missing optional keys decode as absent, `runtime_owner` is reconstructed from the agent process identity, and high-cadence progress events carry `transcript_path`, worktree, and pane identity from the prior rollup instead of restamping them on every tool event.
 - `rimz reset` is a room boundary in the ledger: it abandons pending items with reason `workspace_reset`, cancels active runs, force-rotates the log, clears feed and diagnostic files, and removes the runtime directory. Soft reset keeps `agents.carryover.json` for audit; `--hard` also drops it ([`writer/reset.rs`](../../../crates/rimz/src/ledger/writer/reset.rs)).
 
 ### Write classes

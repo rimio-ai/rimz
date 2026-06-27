@@ -1,4 +1,5 @@
 use super::*;
+use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 
 #[test]
 fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
@@ -74,6 +75,139 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
     assert_eq!(agent.role.as_deref(), Some("coder"));
     assert_eq!(agent.team.as_deref(), Some("pcr"));
     assert_eq!(agent.worktree_branch.as_deref(), Some("main"));
+}
+
+#[test]
+fn lifecycle_progress_event_may_omit_carry_forward_constants() {
+    let start = raw_lifecycle_at(
+        "claude",
+        1,
+        serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-1",
+            "agent_name": "lucid-atlas",
+            "signal": { "signal": "registered" },
+            "transcript_path": "/tmp/transcript.jsonl",
+            "worktree_path": "/repo/main",
+            "worktree_branch": "main",
+            "pane_id": "tmux:%7",
+        }),
+    );
+    let full_progress = raw_lifecycle_at(
+        "claude",
+        2,
+        serde_json::json!({
+            "event_name": "PostToolUse",
+            "agent_id": "sess-1",
+            "agent_name": "lucid-atlas",
+            "signal": { "signal": "tool_used", "mutates": true, "edits": false },
+            "transcript_path": "/tmp/transcript.jsonl",
+            "worktree_path": "/repo/main",
+            "worktree_branch": "main",
+            "pane_id": "tmux:%7",
+        }),
+    );
+    let trimmed_progress = raw_lifecycle_at(
+        "claude",
+        2,
+        serde_json::json!({
+            "event_name": "PostToolUse",
+            "agent_id": "sess-1",
+            "agent_name": "lucid-atlas",
+            "signal": { "signal": "tool_used", "mutates": true, "edits": false },
+        }),
+    );
+
+    assert_eq!(
+        reduce_agent_states(&[start.clone(), full_progress]),
+        reduce_agent_states(&[start, trimmed_progress])
+    );
+}
+
+#[test]
+fn lifecycle_without_runtime_owner_reconstructs_it_from_agent_process_identity() {
+    let event = raw_lifecycle(
+        "claude",
+        serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-1",
+            "agent_name": "lucid-atlas",
+            "signal": { "signal": "registered" },
+            "agent_pid": 4242,
+            "agent_process_start": "12345",
+        }),
+    );
+
+    let agents = reduce_agent_states(&[event]);
+    assert_eq!(agents.len(), 1);
+    assert_eq!(
+        agents[0].runtime_owner,
+        Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "sess-1",
+            4242,
+            Some("12345".to_owned()),
+        ))
+    );
+}
+
+#[test]
+fn old_shape_lifecycle_with_nulls_and_runtime_owner_still_folds() {
+    let old_shape = raw_lifecycle_at(
+        "claude",
+        1,
+        serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-1",
+            "agent_name": "lucid-atlas",
+            "role": null,
+            "team": null,
+            "profile": null,
+            "kind_ordinal": null,
+            "signal": { "signal": "registered" },
+            "agent_pid": 4242,
+            "agent_process_start": "12345",
+            "runtime_owner": {
+                "kind": "agent",
+                "subject_id": "sess-1",
+                "pid": 4242,
+                "process_start": "12345",
+            },
+            "worktree_path": null,
+            "worktree_branch": null,
+            "task": null,
+            "prompt": null,
+            "transcript_path": null,
+            "model": null,
+            "effort": null,
+            "context_pct": null,
+            "context_window": null,
+            "total_tokens": null,
+            "cache_read_input_tokens": null,
+            "cache_write_input_tokens": null,
+            "fresh_input_tokens": null,
+            "output_tokens": null,
+            "pane_id": null,
+            "parent_agent_id": null,
+        }),
+    );
+    let compact_shape = raw_lifecycle_at(
+        "claude",
+        1,
+        serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-1",
+            "agent_name": "lucid-atlas",
+            "signal": { "signal": "registered" },
+            "agent_pid": 4242,
+            "agent_process_start": "12345",
+        }),
+    );
+
+    assert_eq!(
+        reduce_agent_states(&[old_shape]),
+        reduce_agent_states(&[compact_shape])
+    );
 }
 
 #[test]

@@ -47,7 +47,7 @@ rimz workspace migrate <OLD_ROOT> <NEW_ROOT>
 rimz workspace rotate-events [--max-bytes <SIZE>] [--archive-older-than <DURATION>]
 ```
 
-`resolve` prints the resolved workspace as JSON — scripts use it to capture stable fields (`workspace_id`, `project_root`, `root_class`, `worktree_root`, `worktree_branch`, `session_name`, `mux_hint`) before invoking other tools. `migrate` moves a workspace ledger after its project root moves on disk, rewriting feed items, queued messages, events, and metadata to the new identity. `rotate-events` archives the active event log when it reaches `--max-bytes` (default `64MiB`) and starts a fresh log while preserving the agent carryover the sidebar and rebirth flow need; `--archive-older-than` prunes older archives. The durability and rotation contract is in [ledger.md](../../internals/sidebar/ledger.md).
+`resolve` prints the resolved workspace as JSON — scripts use it to capture stable fields (`workspace_id`, `project_root`, `root_class`, `worktree_root`, `worktree_branch`, `session_name`, `mux_hint`) before invoking other tools. `migrate` moves a workspace ledger after its project root moves on disk, rewriting feed items, queued messages, events, and metadata to the new identity. `rotate-events` archives the active event log when it reaches `--max-bytes` (default `64MiB`) and starts a fresh log while preserving the agent carryover the sidebar and rebirth flow need; `--archive-older-than` prunes older archives and defaults to `14d`. The durability and rotation contract is in [ledger.md](../../internals/sidebar/ledger.md).
 
 ## Reload, reset, and GC
 

@@ -27,22 +27,28 @@ pub struct AgentLifecycleObservation {
     /// Agent-supplied session/process identifier (e.g. Claude `session_id`,
     /// Codex root `session_id`, or Codex subagent `agent_id`). The CLI uses
     /// this as the `agent_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentSessionId>,
     /// Rimz-minted durable card name. Launchers pass this through
     /// `RIMZ_AGENT_NAME`; hand-launched agents get a deterministic fallback
     /// during reduction.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
     /// The `[agents.teams]` role the launcher selected, passed through
     /// `RIMZ_AGENT_ROLE`. The reducer projects it to the card handle.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     /// The `[agents.teams]` team name the launcher selected, passed through
     /// `RIMZ_TEAM`. The reducer projects it to the routing channel.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     /// The `[agents.profiles]` profile the launcher selected, passed through
     /// `RIMZ_AGENT_PROFILE`. Used as the card handle when no role is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     /// Display ordinal within this kind for the current room incarnation.
     /// The reducer derives it when the event omits it.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub kind_ordinal: Option<u32>,
     /// The agent-agnostic lifecycle intent this event carries. The reducer and
     /// the ingestion path fold it onto the rollup through the one
@@ -52,37 +58,50 @@ pub struct AgentLifecycleObservation {
     /// Process identity observed by the hook runner. The sidebar uses this
     /// best-effort liveness marker to suppress stale ledger overlays when the
     /// process disappears.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_process_start: Option<String>,
+    #[serde(skip_serializing)]
     pub runtime_owner: Option<RuntimeOwner>,
     /// Optional absolute worktree path observed from the agent payload or
     /// filled by the CLI from the current Rimz workspace.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
     /// Optional worktree branch label observed from the payload, surfaced in
     /// the sidebar's worktree grouping.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree_branch: Option<String>,
     /// Display-only task descriptor. It never drives routing or decisions.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
     /// The user's latest prompt for this session, carried only by the
     /// prompt-bearing event. The reducer persists it (unlike the activity-bound
     /// `task`), so the sidebar can label an unnamed session by its prompt once
     /// the turn ends, until a real session name exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     /// The transcript path the agent names for this session, when the adapter
     /// has one. Carry-forward enrichment; readers use it for traceability and
     /// sidecar refresh hints, never as routing truth.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     /// Context-window utilization in percent reported by the agent (0..=100).
     /// Enrich-only / privacy-gated — the no-transcript-correctness rule.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context_pct: Option<u8>,
     /// The model's context window in tokens, as the adapter resolves it at hook
     /// time (Claude from the `[1m]`-marked payload model, Codex from the
     /// rollout's `model_context_window`). Carry-forward enrichment like
     /// `context_pct`; the sidebar's identity line renders it (`258k`, `1M`).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
     /// Cumulative token usage for this agent session.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
     /// Provider-native turn-death marker discovered while building this
     /// observation. The CLI merges it into the context sidecar; it is skipped in
@@ -94,20 +113,26 @@ pub struct AgentLifecycleObservation {
     /// composition line legends (`◌` cache-read, `◍` cache-write, `↘` fresh
     /// input, `↗` output). Carry-forward enrichment for an agent with no richer
     /// realtime source; Claude's statusline context supersedes it at render.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fresh_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
     /// Normalized multiplexer pane id the agent process is running inside,
     /// read from the per-pane env var the mux exports (`TMUX_PANE` or
     /// `ZELLIJ_PANE_ID`). Lets the sidebar bind each agent row to its actual
     /// pane when two agents of the same kind share one worktree.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
     /// The root session id this observation's agent is a *child* of, set only
     /// on `SubagentStart`/`SubagentStop` (the payload `session_id`, which both
     /// adapters report as the parent for a subagent event). `None` for root
     /// agents. Identity lifetime in the reducer, so a child row links to its
     /// parent row by `(kind, parent_agent_id)` for the whole child's life.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_agent_id: Option<AgentSessionId>,
 }
 

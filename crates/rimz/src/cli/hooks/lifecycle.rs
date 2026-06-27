@@ -1,5 +1,7 @@
 use super::*;
 
+use std::borrow::Cow;
+
 pub(super) fn handle_lifecycle_hook(
     workspace: &ResolvedWorkspace,
     ledger: &Ledger,
@@ -54,6 +56,9 @@ pub(super) fn handle_lifecycle_hook(
         record_run_lifecycle(ledger, agent, event_name, payload, recorded);
         confirm_sent_message_for_lifecycle(ledger, agent, recorded, &workspace.session_name);
         spawn_queue_delivery_if_checkpoint(workspace, ledger, agent, recorded);
+        if recorded.appended_lifecycle {
+            spawn_auto_rotation_if_due(workspace, ledger);
+        }
     }
     Ok(())
 }
@@ -61,7 +66,11 @@ pub(super) fn handle_lifecycle_hook(
 struct RecordedLifecycle {
     model_hint: Option<String>,
     observation: AgentLifecycleObservation,
+    appended_lifecycle: bool,
 }
+
+const AUTO_ROTATE_STAMP: &str = "auto-rotate.stamp";
+const AUTO_ROTATE_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(60);
 
 struct AgentContextHook<'a> {
     workspace: &'a ResolvedWorkspace,
@@ -147,13 +156,6 @@ fn record_lifecycle_observation(
                 "closed compaction bracket on a non-compaction signal",
             );
         }
-        let envelope = EventEnvelope::agent_lifecycle(
-            workspace.workspace_id.clone(),
-            &workspace.session_name,
-            agent.descriptor().kind,
-            event_name,
-            &observation,
-        );
         // `ToolUsed { false, false }` is reserved for non-blocking PreToolUse
         // proof-of-work. PostToolUse observations are emitted only from the
         // `tool_mutates` arm, so they always carry `mutates: true`; this gate
@@ -167,19 +169,34 @@ fn record_lifecycle_observation(
             .as_deref()
             .zip(expiry_scope_for_signal(&observation.signal))
             .map(|(agent_id, scope)| (agent.descriptor().kind, agent_id, scope));
-        if append_lifecycle
-            && let Err(err) = ledger.append_event_and_expire(&envelope, append_expiry)
-        {
-            warn!(
-                agent = agent.descriptor().kind,
-                event = %event_name,
-                error = %err,
-                "lifecycle: failed to record the agent.lifecycle event",
+        let appended_lifecycle = if append_lifecycle {
+            let event_observation = event_lifecycle_observation(&observation);
+            let envelope = EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                agent.descriptor().kind,
+                event_name,
+                &event_observation,
             );
-        }
+            match ledger.append_event_and_expire(&envelope, append_expiry) {
+                Ok(_) => true,
+                Err(err) => {
+                    warn!(
+                        agent = agent.descriptor().kind,
+                        event = %event_name,
+                        error = %err,
+                        "lifecycle: failed to record the agent.lifecycle event",
+                    );
+                    false
+                }
+            }
+        } else {
+            false
+        };
         return Some(RecordedLifecycle {
             model_hint,
             observation,
+            appended_lifecycle,
         });
     }
 
@@ -208,6 +225,59 @@ fn record_lifecycle_observation(
         }
     }
     None
+}
+
+fn event_lifecycle_observation(
+    observation: &AgentLifecycleObservation,
+) -> Cow<'_, AgentLifecycleObservation> {
+    if observation.signal.establishes_identity() {
+        return Cow::Borrowed(observation);
+    }
+    let mut trimmed = observation.clone();
+    // High-cadence progress events rely on the reducer's carry-forward
+    // projection for per-session constants. A cold first-seen progress event
+    // can miss this enrichment until the next identity-establishing event; the
+    // sidebar already treats these fields as optional.
+    trimmed.transcript_path = None;
+    trimmed.worktree_path = None;
+    trimmed.worktree_branch = None;
+    trimmed.pane_id = None;
+    Cow::Owned(trimmed)
+}
+
+fn spawn_auto_rotation_if_due(workspace: &ResolvedWorkspace, ledger: &Ledger) {
+    let Ok(meta) = std::fs::metadata(&ledger.paths().events_log) else {
+        return;
+    };
+    if !auto_rotation_due(meta.len(), auto_rotate_stamp_age(ledger)) {
+        return;
+    }
+    touch_auto_rotate_stamp(ledger);
+    spawn_refresh_detached(&rimz::agents::RefreshSpawn {
+        args: vec![
+            "--root".to_owned(),
+            workspace.project_root.display().to_string(),
+            "workspace".to_owned(),
+            "rotate-events".to_owned(),
+        ],
+    });
+}
+
+fn auto_rotation_due(log_len: u64, stamp_age: Option<std::time::Duration>) -> bool {
+    log_len >= crate::cli::workspace::DEFAULT_EVENT_LOG_ROTATE_BYTES
+        && stamp_age.is_none_or(|age| age >= AUTO_ROTATE_DEBOUNCE)
+}
+
+fn auto_rotate_stamp_age(ledger: &Ledger) -> Option<std::time::Duration> {
+    let modified = std::fs::metadata(ledger.paths().locks_dir.join(AUTO_ROTATE_STAMP))
+        .ok()?
+        .modified()
+        .ok()?;
+    std::time::SystemTime::now().duration_since(modified).ok()
+}
+
+fn touch_auto_rotate_stamp(ledger: &Ledger) {
+    let _ = std::fs::write(ledger.paths().locks_dir.join(AUTO_ROTATE_STAMP), b"");
 }
 
 fn expiry_scope_for_event_name(agent: &dyn AgentAdapter, event_name: &str) -> Option<AskExpiry> {
@@ -1077,6 +1147,51 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_event_observation_trims_carry_forward_fields_after_identity() {
+        let mut observation = AgentLifecycleObservation::new(
+            Some(rimz::ids::AgentSessionId::from("sess-1")),
+            LifecycleSignal::Registered,
+        );
+        observation.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
+        observation.worktree_path = Some("/tmp/project".to_owned());
+        observation.worktree_branch = Some("feature".to_owned());
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
+
+        let identity = event_lifecycle_observation(&observation);
+        assert_eq!(
+            identity.transcript_path.as_deref(),
+            Some("/tmp/transcript.jsonl")
+        );
+        assert_eq!(identity.worktree_path.as_deref(), Some("/tmp/project"));
+        assert_eq!(identity.worktree_branch.as_deref(), Some("feature"));
+        assert_eq!(identity.pane_id.as_ref().map(PaneId::raw), Some("%1"));
+
+        observation.signal = LifecycleSignal::TurnStarted;
+        let trimmed = event_lifecycle_observation(&observation);
+        assert!(trimmed.transcript_path.is_none());
+        assert!(trimmed.worktree_path.is_none());
+        assert!(trimmed.worktree_branch.is_none());
+        assert!(trimmed.pane_id.is_none());
+        assert_eq!(
+            observation.transcript_path.as_deref(),
+            Some("/tmp/transcript.jsonl"),
+            "downstream run-record/context paths keep the full observation"
+        );
+    }
+
+    #[test]
+    fn auto_rotation_decision_respects_threshold_and_debounce() {
+        let threshold = crate::cli::workspace::DEFAULT_EVENT_LOG_ROTATE_BYTES;
+        assert!(!auto_rotation_due(threshold - 1, None));
+        assert!(auto_rotation_due(threshold, None));
+        assert!(!auto_rotation_due(
+            threshold,
+            Some(AUTO_ROTATE_DEBOUNCE - std::time::Duration::from_secs(1))
+        ));
+        assert!(auto_rotation_due(threshold, Some(AUTO_ROTATE_DEBOUNCE)));
+    }
+
+    #[test]
     fn observed_context_merge_preserves_fields_and_keeps_cost_monotonic() {
         let (_dir, ledger) = test_ledger();
         let agent = rimz::agents::PiAdapter;
@@ -1253,6 +1368,7 @@ mod tests {
             &RecordedLifecycle {
                 model_hint: None,
                 observation: compact_observation,
+                appended_lifecycle: false,
             },
             "session",
         );
@@ -1286,6 +1402,7 @@ mod tests {
             &RecordedLifecycle {
                 model_hint: None,
                 observation: real_observation,
+                appended_lifecycle: false,
             },
             "session",
         );
