@@ -82,18 +82,17 @@ pub fn serve_gallery(
     let mut states = columns
         .into_iter()
         .enumerate()
-        .map(|(index, (snapshot, selected_index))| {
-            let mut ui = UiState::default();
-            ui.selected_index = selected_index;
-            GalleryState {
-                snapshot,
-                ui,
-                pets: PetAssets::default(),
-                pixel_painter: PixelPainter::with_id_base(
-                    id_base.wrapping_add((index as u32) << 12),
-                    mux == MuxName::Tmux,
-                ),
-            }
+        .map(|(index, (snapshot, selected_index))| GalleryState {
+            ui: UiState {
+                selected_index,
+                ..UiState::default()
+            },
+            snapshot,
+            pets: PetAssets::default(),
+            pixel_painter: PixelPainter::with_id_base(
+                id_base.wrapping_add((index as u32) << 12),
+                mux == MuxName::Tmux,
+            ),
         })
         .collect::<Vec<_>>();
     let anim_start = Instant::now();
