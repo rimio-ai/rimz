@@ -219,6 +219,12 @@ PipeMessage {
 - Plugin → plugin: `pipe_message_to_plugin(MessageToPlugin)`; destination `zellij:OWN_URL` expands to the caller's own URL (self-replication — guard against config-keyed message loops).
 - The CLI side (`zellij pipe`) blocks while a launched plugin's permission prompt is pending — bound the call and reap only the CLI client ([multiplexers.md](../../internals/sidebar/multiplexers.md#zellij-presence-channel)).
 
+### Keybind actions
+
+Plugin keybind KDL nodes parse to the same `Action::KeybindPipe` variant: the action shape carries `plugin: Option<String>`, `plugin_id: Option<u32>` (which supersedes `plugin`), `configuration`, `launch_new`, `skip_cache`, optional `cwd`, and pane launch hints ([`actions.rs`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/input/actions.rs#L513-L525)). `MessagePlugin "<url>" { … }` fills the URL destination, child configuration, optional `cwd`, and defaults `launch_new` and `skip_cache` to `false` unless child nodes set them ([`kdl/mod.rs`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/kdl/mod.rs#L2152-L2208)). `MessagePluginId <id> { … }` fills `plugin_id`, leaves URL/configuration/cwd unset, and hardcodes `launch_new` and `skip_cache` to `false` ([`kdl/mod.rs`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/kdl/mod.rs#L2211-L2248)).
+
+On Zellij 0.44.x, plugin keybinds that dispatch `KeybindPipe` can pause the UI for about one second before the action completes; upstream tracks this in [zellij #4635](https://github.com/zellij-org/zellij/issues/4635).
+
 ## CLI surface (0.44.3)
 
 From the installed binary's `--help`.

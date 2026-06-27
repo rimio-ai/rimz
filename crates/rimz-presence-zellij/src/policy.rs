@@ -54,6 +54,47 @@ impl FocusChord {
     }
 }
 
+/// Runtime keybind KDL binding `chord` to a pipe that targets this plugin
+/// instance by id, in normal and locked modes. Binding by `plugin_id`
+/// (`MessagePluginId`) reaches the exact loaded instance; a url+configuration
+/// bind would also have to match the instance's initial cwd, which a keypress
+/// from another pane does not.
+pub fn focus_keybind_kdl(chord: FocusChord, plugin_id: u32) -> String {
+    let key = kdl_string(&focus_key_label(chord));
+    let pipe = kdl_string(FOCUS_SIDEBAR_PIPE);
+    let bind = format!(
+        "bind {key} {{\n            MessagePluginId {plugin_id} {{\n                name {pipe}\n            }}\n        }}"
+    );
+    format!(
+        "keybinds {{\n    normal {{\n        {bind}\n    }}\n    locked {{\n        {bind}\n    }}\n}}\n"
+    )
+}
+
+fn focus_key_label(chord: FocusChord) -> String {
+    let modifier = match chord.modifier {
+        ChordModifier::Alt => "Alt",
+        ChordModifier::Ctrl => "Ctrl",
+    };
+    format!("{modifier} {}", chord.key)
+}
+
+fn kdl_string(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
 /// Floor between two `panes-changed` pokes — caps host forks under
 /// pathological manifest churn. A change that lands inside the floor is
 /// deferred, never dropped.

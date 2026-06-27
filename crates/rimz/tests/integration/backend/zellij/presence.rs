@@ -189,7 +189,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
 }
 
 #[test]
-fn focus_key_press_pipes_sidebar_focus_through_the_plugin() {
+fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
     require_zellij!();
     let Some(wasm) = presence_wasm_artifact() else {
         eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
@@ -228,6 +228,31 @@ fn focus_key_press_pipes_sidebar_focus_through_the_plugin() {
         .expect("pipe load against a live session");
 
     wait_for_poke_lines(&poke_log, 1);
+
+    // Regression shape: the plugin loads from the test process cwd, then the
+    // user presses the key from a pane with a different cwd. Url-targeted
+    // keybinds miss that running instance; id-targeted keybinds reach it.
+    let tab_id = tab_ids(session.xdg.path(), &name)
+        .into_iter()
+        .next()
+        .expect("session has a tab");
+    let before: BTreeSet<u64> = work_pane_geometry(session.xdg.path(), &name)
+        .into_iter()
+        .map(|pane| pane.id)
+        .collect();
+    let pane_cwd = TempDir::new().expect("different cwd tempdir");
+    spawn_sleep_pane(session.xdg.path(), &name, pane_cwd.path());
+    let work_pane = work_pane_geometry(session.xdg.path(), &name)
+        .into_iter()
+        .find(|pane| !before.contains(&pane.id))
+        .unwrap_or_else(|| panic!("new different-cwd pane not found; before ids were {before:?}"));
+    focus_nonplugin_pane_until(
+        session.xdg.path(),
+        &name,
+        tab_id,
+        work_pane.id,
+        "different-cwd focus-key source pane",
+    );
 
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     let focus_line = loop {

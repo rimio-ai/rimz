@@ -1120,3 +1120,36 @@ fn focus_chord_rejects_malformed_shapes() {
     assert_eq!(FocusChord::parse("alt+ "), None);
     assert_eq!(FocusChord::parse(""), None);
 }
+
+#[test]
+fn focus_keybind_kdl_targets_plugin_id_in_normal_and_locked_modes() {
+    let kdl = focus_keybind_kdl(
+        FocusChord {
+            modifier: ChordModifier::Alt,
+            key: 'p',
+        },
+        42,
+    );
+
+    assert_eq!(kdl.matches("bind \"Alt p\"").count(), 2);
+    assert_eq!(kdl.matches("MessagePluginId 42").count(), 2);
+    assert_eq!(kdl.matches("name \"rimz:focus_sidebar\"").count(), 2);
+    assert!(kdl.contains("normal {"));
+    assert!(kdl.contains("locked {"));
+    assert!(!kdl.contains("MessagePlugin \""));
+    assert!(!kdl.contains("plugin_url"));
+}
+
+#[test]
+fn focus_keybind_kdl_formats_ctrl_chords() {
+    let kdl = focus_keybind_kdl(
+        FocusChord {
+            modifier: ChordModifier::Ctrl,
+            key: 's',
+        },
+        7,
+    );
+
+    assert_eq!(kdl.matches("bind \"Ctrl s\"").count(), 2);
+    assert!(kdl.contains("MessagePluginId 7"));
+}
