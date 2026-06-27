@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -177,7 +178,8 @@ thread_local! {
 
 #[must_use = "atomicity barrier; check the result"]
 pub(super) fn write_rollup_cache(path: &Path, cache: &RollupCache) -> Result<()> {
-    atomic::write_temp_then_rename_cache(path, cache)?;
+    let _ = atomic::sweep_stale_temp_siblings(path, Duration::from_secs(3_600));
+    atomic::write_temp_then_rename_cache_compact(path, cache)?;
     Ok(())
 }
 

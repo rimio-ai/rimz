@@ -43,11 +43,18 @@ fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Res
     }
 
     let (cache, merged_agents) = snapshot::catch_up_rollup(paths)?;
-    let carryover_agents = merged_agents.len();
+    let live_agents = runtime::RuntimeProjection::from_parts(
+        Vec::new(),
+        Vec::new(),
+        merged_agents,
+        runtime::RuntimeScope::Runtime,
+    )
+    .agents;
+    let carryover_agents = live_agents.len();
     snapshot::write_carryover(
         &paths.agents_carryover,
         &snapshot::EventCarryover {
-            agents: merged_agents,
+            agents: live_agents,
             agent_identity: cache.agent_identity.without_consumed_launches(),
         },
     )?;
@@ -545,6 +552,72 @@ mod tests {
             .expect("rotate event log");
 
         assert!(rotate_called.get(), "test rotate hook should run");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rotation_carryover_prunes_dead_runtime_owner_agents() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+        let runtime_paths =
+            RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
+        let ledger = Ledger::open(paths.clone(), runtime_paths).expect("open ledger");
+        let kind = AgentKind::new_unchecked("claude");
+        let launch = |agent_id: &str, name: &str, pid| {
+            EventEnvelope::agent_launched(
+                workspace_id.clone(),
+                "rimz-test",
+                &kind,
+                AgentLaunchPayload {
+                    agent_id: AgentSessionId::from(agent_id),
+                    agent_name: name.to_owned(),
+                    profile: None,
+                    role: None,
+                    team: None,
+                    kind_ordinal: None,
+                    state: crate::schema::event::AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: None,
+                    runtime_owner: Some(runtime::process_owner(
+                        RuntimeOwnerKind::Agent,
+                        agent_id,
+                        pid,
+                    )),
+                    worktree_path: Some(dir.path().to_string_lossy().into_owned()),
+                    worktree_branch: Some("main".to_owned()),
+                    prompt: Some("boot".to_owned()),
+                    description: None,
+                },
+            )
+        };
+        event_log::append(
+            &paths.events_log,
+            &launch("sess-live", "lucid-atlas", std::process::id()),
+        )
+        .expect("append live launch");
+        event_log::append(
+            &paths.events_log,
+            &launch("sess-dead", "solid-lumen", u32::MAX),
+        )
+        .expect("append dead launch");
+
+        ledger.rotate_event_log(1, None).expect("rotate event log");
+
+        let carryover = snapshot::read_carryover(&paths.agents_carryover).expect("read carryover");
+        let ids: Vec<&str> = carryover
+            .agents
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect();
+        assert!(
+            ids.contains(&"sess-live"),
+            "live-owner agent must survive rotation carryover: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"sess-dead"),
+            "dead-owner agent must be pruned from rotation carryover: {ids:?}"
+        );
     }
 
     #[test]

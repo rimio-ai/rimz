@@ -1,4 +1,54 @@
+use std::time::{Duration, SystemTime};
+
 use super::*;
+
+#[test]
+fn write_rollup_cache_emits_compact_json_and_sweeps_stale_temp_siblings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollup.json");
+    let nonce = "00000000000000000000000000000000";
+    let stale = dir.path().join(format!("rollup.json.tmp.1.{nonce}"));
+    let other = dir.path().join(format!("other.json.tmp.1.{nonce}"));
+    std::fs::write(&stale, b"stale").unwrap();
+    std::fs::write(&other, b"other").unwrap();
+    let old = SystemTime::now() - Duration::from_secs(3_700);
+    std::fs::File::open(&stale)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    std::fs::File::open(&other)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+
+    write_rollup_cache(
+        &path,
+        &RollupCache {
+            version: ROLLUP_CACHE_VERSION,
+            extent: event_log::LogExtent {
+                generation: 0,
+                offset: 10,
+            },
+            raw_agents: vec![agent("claude", "real", AgentStatus::Running, 1_000)],
+            agent_identity: AgentIdentityState::default(),
+            saw_session_rebirth: false,
+            tombstones: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    let contents = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        contents.lines().count(),
+        1,
+        "rollup cache should be compact single-line JSON"
+    );
+    assert!(
+        !stale.exists(),
+        "rollup write should sweep stale temp siblings"
+    );
+    assert!(other.exists(), "sweep should not touch other cache temps");
+}
 
 #[test]
 fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
