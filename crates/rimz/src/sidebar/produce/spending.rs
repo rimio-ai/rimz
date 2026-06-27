@@ -40,6 +40,16 @@ pub(super) fn compute_fleet_spending(
     snapshot: &SidebarSnapshot,
     spec: &crate::agents::spending::HeadlineSpec,
 ) -> crate::agents::spending::SpendingCaches {
+    let mut walker = crate::agents::spending::SpendingWalker::new();
+    compute_fleet_spending_with_walker(&mut walker, runtime, snapshot, spec)
+}
+
+pub(super) fn compute_fleet_spending_with_walker(
+    walker: &mut crate::agents::spending::SpendingWalker,
+    runtime: &RuntimePaths,
+    snapshot: &SidebarSnapshot,
+    spec: &crate::agents::spending::HeadlineSpec,
+) -> crate::agents::spending::SpendingCaches {
     use crate::agents::spending::{SpendScope, read_provider_spending_cache};
 
     let now_ms = unix_now_ms();
@@ -112,15 +122,17 @@ pub(super) fn compute_fleet_spending(
     ) {
         crate::ledger::single_flight::Coalesced::Shared(cache) => cache,
         crate::ledger::single_flight::Coalesced::Produce(_guard) => {
-            walk_fleet_spending(runtime, snapshot, spec, true)
+            walk_fleet_spending(walker, runtime, snapshot, spec, true)
         }
         crate::ledger::single_flight::Coalesced::ProduceLocal => {
-            walk_fleet_spending(runtime, snapshot, spec, false)
+            let mut local_walker = crate::agents::spending::SpendingWalker::new();
+            walk_fleet_spending(&mut local_walker, runtime, snapshot, spec, false)
         }
     }
 }
 
 fn walk_fleet_spending(
+    walker: &mut crate::agents::spending::SpendingWalker,
     runtime: &RuntimePaths,
     snapshot: &SidebarSnapshot,
     spec: &crate::agents::spending::HeadlineSpec,
@@ -129,11 +141,9 @@ fn walk_fleet_spending(
     use crate::agents::pricing;
     use crate::agents::spending::{
         PROVIDER_SPENDING_VERSION, ProviderSpendingCache, SpendScope, Spending, SpendingCaches,
-        WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache, compute_daily_spend,
-        compute_model_breakdown, compute_spending_with_origins_and_scope,
-        read_provider_spending_cache, read_spending_cache, unix_secs_now,
-        write_provider_spending_cache, write_provider_spending_cache_with_rollups,
-        write_spending_cache, write_workspace_spending_cache,
+        WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache, read_provider_spending_cache,
+        unix_secs_now, write_provider_spending_cache, write_provider_spending_cache_with_rollups,
+        write_workspace_spending_cache,
     };
 
     let provider_path = runtime.shared_provider_spending_path();
@@ -192,52 +202,53 @@ fn walk_fleet_spending(
     }
 
     let cache_path = runtime.shared_spending_cursor_path();
-    let mut cache = if publish {
-        read_spending_cache(&cache_path)
-    } else {
-        Default::default()
-    };
     // The price book exists only to price the walk, so its load (and TTL-gated
     // remote refresh, including the unknown-model chase) rides the stale arm
     // with it. A local fallback uses the embedded table so it never writes the
     // shared pricing cache without the spending lock.
     let now_secs = unix_secs_now();
     let prices = if publish {
-        let unknowns = crate::agents::spending::recorded_unknown_models(&files, &cache, now_secs);
+        let unknowns = walker.recorded_unknown_models(&cache_path, &files, now_secs);
         pricing::load_for_spending(&runtime.shared_pricing_cache_path(), &unknowns)
     } else {
         pricing::PriceBook::embedded()
     };
     let origin_overrides = codex_origin_overrides(snapshot);
-    let (spending, workspace_tally) = compute_spending_with_origins_and_scope(
-        &files,
-        &mut cache,
-        &prices,
-        now_secs,
-        &origin_overrides,
-        Some(&scope),
-        spec,
-    );
-    let days = compute_daily_spend(&files, &cache);
-    let models = compute_model_breakdown(&files, &cache, now_secs);
+    let result = if publish {
+        walker.walk(
+            &cache_path,
+            &files,
+            &prices,
+            now_secs,
+            &origin_overrides,
+            Some(&scope),
+            spec,
+        )
+    } else {
+        walker.walk_in_memory(
+            &files,
+            &prices,
+            now_secs,
+            &origin_overrides,
+            Some(&scope),
+            spec,
+        )
+    };
     let refreshed_at_ms = unix_now_ms();
-    if publish && cache.dirty {
-        write_spending_cache(&cache_path, &cache);
-    }
     if publish {
         write_provider_spending_cache_with_rollups(
             &provider_path,
             refreshed_at_ms,
-            &spending,
-            &days,
-            &models,
+            &result.spending,
+            &result.days,
+            &result.models,
         );
         if let Some(scope_hash) = scope_hash.as_deref() {
             write_workspace_spending_cache(
                 &runtime.workspace_spending_path(scope_hash),
                 refreshed_at_ms,
                 scope_hash,
-                &workspace_tally,
+                &result.workspace_tally,
             );
             prune_workspace_spending_siblings(runtime, scope_hash);
         }
@@ -246,15 +257,15 @@ fn walk_fleet_spending(
         provider: ProviderSpendingCache {
             version: PROVIDER_SPENDING_VERSION,
             refreshed_at_ms,
-            days,
-            models,
-            spending,
+            days: result.days,
+            models: result.models,
+            spending: result.spending,
         },
         workspace: WorkspaceSpendingCache {
             version: WORKSPACE_SPENDING_VERSION,
             refreshed_at_ms,
             scope_hash: scope_hash.unwrap_or_default(),
-            tally: workspace_tally,
+            tally: result.workspace_tally,
         },
     }
 }

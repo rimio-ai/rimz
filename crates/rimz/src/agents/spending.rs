@@ -19,8 +19,9 @@
 
 #[cfg(test)]
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::DefaultHasher};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -165,6 +166,22 @@ pub struct SpendingCaches {
     pub workspace: WorkspaceSpendingCache,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SpendingWalkResult {
+    pub spending: Spending,
+    pub workspace_tally: SpendTally,
+    pub days: BTreeMap<i64, DaySpend>,
+    pub models: BTreeMap<String, SpendTally>,
+    pub stats: WalkStats,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WalkStats {
+    pub dedup_passes: u32,
+    pub cache_parsed: bool,
+    pub cache_written: bool,
+}
+
 /// One UTC day's deduplicated, account-global spend and token total — a cell of
 /// the [`compute_daily_spend`] contribution heatmap.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -186,9 +203,13 @@ pub fn compute_daily_spend(
     cache: &SpendingDiskCache,
 ) -> BTreeMap<i64, DaySpend> {
     let counted = dedup_cached_entries(files, cache).into_counted();
+    compute_daily_spend_from_counted(&counted)
+}
+
+fn compute_daily_spend_from_counted(counted: &[impl CountedPayload]) -> BTreeMap<i64, DaySpend> {
     let mut by_day: BTreeMap<i64, DaySpend> = BTreeMap::new();
     for counted in counted {
-        let entry = counted.entry;
+        let entry = counted.entry();
         let day = (entry.ts_secs / 86_400) as i64;
         let cell = by_day.entry(day).or_default();
         cell.usd += entry.cost_usd;
@@ -210,9 +231,16 @@ pub fn compute_model_breakdown(
     now_secs: u64,
 ) -> BTreeMap<String, SpendTally> {
     let counted = dedup_cached_entries(files, cache).into_counted();
+    compute_model_breakdown_from_counted(&counted, now_secs)
+}
+
+fn compute_model_breakdown_from_counted(
+    counted: &[impl CountedPayload],
+    now_secs: u64,
+) -> BTreeMap<String, SpendTally> {
     let mut by_model: BTreeMap<String, SpendTally> = BTreeMap::new();
     for counted in counted {
-        let entry = counted.entry;
+        let entry = counted.entry();
         accum(
             by_model
                 .entry(entry.model.clone().unwrap_or_default())
@@ -291,6 +319,15 @@ pub struct SpendingDiskCache {
     pub files: HashMap<String, FileCacheEntry>,
     #[serde(skip)]
     pub dirty: bool,
+    #[serde(skip)]
+    pub generation: u64,
+}
+
+impl SpendingDiskCache {
+    fn mark_changed(&mut self) {
+        self.dirty = true;
+        self.generation = self.generation.wrapping_add(1);
+    }
 }
 
 /// Cached parse of one JSONL file.
@@ -442,6 +479,208 @@ pub(crate) fn override_discovered_spending_files_for_test(
     DiscoverSpendingFilesOverride { prior }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CacheStamp {
+    mtime: SystemTime,
+    len: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct SpendingWalker {
+    cache: SpendingDiskCache,
+    cache_stamp: Option<CacheStamp>,
+    memo: Option<SpendingMemo>,
+}
+
+#[derive(Clone, Debug)]
+struct SpendingMemo {
+    key: SpendingMemoKey,
+    counted: Vec<OwnedCounted>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct SpendingMemoKey {
+    generation: u64,
+    files_signature: u64,
+}
+
+impl SpendingWalker {
+    pub fn new() -> Self {
+        Self {
+            cache: SpendingDiskCache {
+                version: SPENDING_CACHE_VERSION,
+                ..Default::default()
+            },
+            cache_stamp: None,
+            memo: None,
+        }
+    }
+
+    pub fn recorded_unknown_models(
+        &mut self,
+        cache_path: &Path,
+        files: &[(&'static dyn AgentAdapter, PathBuf)],
+        now_secs: u64,
+    ) -> BTreeSet<String> {
+        let mut stats = WalkStats::default();
+        self.sync_from_disk(cache_path, &mut stats);
+        recorded_unknown_models(files, &self.cache, now_secs)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn walk(
+        &mut self,
+        cache_path: &Path,
+        files: &[(&'static dyn AgentAdapter, PathBuf)],
+        prices: &PriceBook,
+        now_secs: u64,
+        origin_overrides: &HashMap<PathBuf, PathBuf>,
+        scope: Option<&SpendScope>,
+        spec: &HeadlineSpec,
+    ) -> SpendingWalkResult {
+        self.walk_inner(
+            Some(cache_path),
+            files,
+            prices,
+            now_secs,
+            origin_overrides,
+            scope,
+            spec,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn walk_with_progress(
+        &mut self,
+        cache_path: &Path,
+        files: &[(&'static dyn AgentAdapter, PathBuf)],
+        prices: &PriceBook,
+        now_secs: u64,
+        origin_overrides: &HashMap<PathBuf, PathBuf>,
+        scope: Option<&SpendScope>,
+        spec: &HeadlineSpec,
+        progress: &mut dyn FnMut(SpendProgress),
+    ) -> SpendingWalkResult {
+        self.walk_inner(
+            Some(cache_path),
+            files,
+            prices,
+            now_secs,
+            origin_overrides,
+            scope,
+            spec,
+            Some(progress),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn walk_in_memory(
+        &mut self,
+        files: &[(&'static dyn AgentAdapter, PathBuf)],
+        prices: &PriceBook,
+        now_secs: u64,
+        origin_overrides: &HashMap<PathBuf, PathBuf>,
+        scope: Option<&SpendScope>,
+        spec: &HeadlineSpec,
+    ) -> SpendingWalkResult {
+        self.walk_inner(
+            None,
+            files,
+            prices,
+            now_secs,
+            origin_overrides,
+            scope,
+            spec,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn walk_inner(
+        &mut self,
+        cache_path: Option<&Path>,
+        files: &[(&'static dyn AgentAdapter, PathBuf)],
+        prices: &PriceBook,
+        now_secs: u64,
+        origin_overrides: &HashMap<PathBuf, PathBuf>,
+        scope: Option<&SpendScope>,
+        spec: &HeadlineSpec,
+        progress: Option<&mut dyn FnMut(SpendProgress)>,
+    ) -> SpendingWalkResult {
+        let mut stats = WalkStats::default();
+        if let Some(cache_path) = cache_path {
+            self.sync_from_disk(cache_path, &mut stats);
+        }
+        let prior_generation = self.cache.generation;
+        refresh_spending_cache(
+            files,
+            &mut self.cache,
+            prices,
+            now_secs,
+            origin_overrides,
+            progress,
+        );
+        if self.cache.generation != prior_generation {
+            self.memo = None;
+        }
+
+        let key = SpendingMemoKey {
+            generation: self.cache.generation,
+            files_signature: spending_files_signature(files),
+        };
+        if self.memo.as_ref().is_none_or(|memo| memo.key != key) {
+            self.memo = Some(SpendingMemo {
+                key,
+                counted: dedup_cached_entries_owned(files, &self.cache).into_counted(),
+            });
+            stats.dedup_passes = 1;
+        }
+
+        let counted = &self.memo.as_ref().expect("memo seeded above").counted;
+        let spending = aggregate_spending(files, &self.cache, counted, now_secs, spec);
+        let workspace_tally = scope
+            .map(|scope| aggregate_scoped_tally(files, &self.cache, counted, scope, now_secs, spec))
+            .unwrap_or_default();
+        let days = compute_daily_spend_from_counted(counted);
+        let models = compute_model_breakdown_from_counted(counted, now_secs);
+
+        if let Some(cache_path) = cache_path
+            && self.cache.dirty
+        {
+            write_spending_cache(cache_path, &self.cache);
+            self.cache.dirty = false;
+            self.cache_stamp = cache_stamp(cache_path);
+            stats.cache_written = true;
+        }
+
+        SpendingWalkResult {
+            spending,
+            workspace_tally,
+            days,
+            models,
+            stats,
+        }
+    }
+
+    fn sync_from_disk(&mut self, cache_path: &Path, stats: &mut WalkStats) {
+        let stamp = cache_stamp(cache_path);
+        if self.cache_stamp == stamp {
+            return;
+        }
+        self.cache = read_spending_cache(cache_path);
+        self.cache_stamp = stamp;
+        self.memo = None;
+        stats.cache_parsed = stamp.is_some();
+    }
+}
+
+impl Default for SpendingWalker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── Spending computation ──────────────────────────────────────────────────────
 
 /// Every registered agent transcript file, tagged with the adapter that owns
@@ -536,29 +775,6 @@ pub fn compute_spending(
     compute_spending_with_origins(files, cache, prices, now_secs, &HashMap::new())
 }
 
-/// Compute fleet spending while reporting file-level progress for user-facing
-/// cold walks such as `rimz stats`.
-pub fn compute_spending_with_progress(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
-    cache: &mut SpendingDiskCache,
-    prices: &PriceBook,
-    now_secs: u64,
-    progress: &mut dyn FnMut(SpendProgress),
-) -> Spending {
-    let spec = HeadlineSpec::default();
-    compute_spending_with_origins_and_scope_progress(
-        files,
-        cache,
-        prices,
-        now_secs,
-        &HashMap::new(),
-        None,
-        &spec,
-        Some(progress),
-    )
-    .0
-}
-
 /// Compute fleet spending, applying trusted transcript-path → origin overrides
 /// before aggregation. The overrides are currently used for Codex rollout files,
 /// whose path does not encode the workspace; Claude and Pi parsers stamp their
@@ -615,8 +831,34 @@ fn compute_spending_with_origins_and_scope_progress(
     origin_overrides: &HashMap<PathBuf, PathBuf>,
     scope: Option<&SpendScope>,
     spec: &HeadlineSpec,
-    mut progress: Option<&mut dyn FnMut(SpendProgress)>,
+    progress: Option<&mut dyn FnMut(SpendProgress)>,
 ) -> (Spending, SpendTally) {
+    refresh_spending_cache(files, cache, prices, now_secs, origin_overrides, progress);
+
+    // Second pass: aggregate with cross-file Claude deduplication.
+    //
+    // Claude entries carry message IDs and dedup on exact_key = (message_id,
+    // request_id); msg_has_non_sidechain tracks whether each message_id has a
+    // main-chain entry anywhere across all files, so sidechain replays can be
+    // suppressed.  ID-free entries (Codex, Pi) carry their file's provider so
+    // they bucket under the right kind.
+    let counted = dedup_cached_entries(files, cache).into_counted();
+    let spending = aggregate_spending(files, cache, &counted, now_secs, spec);
+    let workspace = scope
+        .map(|scope| aggregate_scoped_tally(files, cache, &counted, scope, now_secs, spec))
+        .unwrap_or_default();
+
+    (spending, workspace)
+}
+
+fn refresh_spending_cache(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &mut SpendingDiskCache,
+    prices: &PriceBook,
+    now_secs: u64,
+    origin_overrides: &HashMap<PathBuf, PathBuf>,
+    mut progress: Option<&mut dyn FnMut(SpendProgress)>,
+) {
     // First pass: refresh stale cache entries — pure hit, suffix parse, or
     // cold parse, decided from one stat per file.
     let total_files = files.len();
@@ -635,13 +877,14 @@ fn compute_spending_with_origins_and_scope_progress(
             .files
             .get(&key)
             .is_some_and(|entry| has_healed_unknown(entry, prices, now_secs));
+        let mut changed = false;
         match cache.files.get_mut(&key) {
             // Unchanged: nothing to read.
             Some(entry) if !heals && entry.mtime_secs == mtime && entry.len == len => {
                 if let Some(origin) = parse_origin.as_deref()
                     && stamp_file_origin(entry, origin)
                 {
-                    cache.dirty = true;
+                    changed = true;
                 }
             }
             // Grown in place: parse only the appended suffix and extend.
@@ -657,7 +900,7 @@ fn compute_spending_with_origins_and_scope_progress(
                 if let Some(origin) = file_origin.as_deref() {
                     stamp_file_origin(entry, origin);
                 }
-                cache.dirty = true;
+                changed = true;
             }
             // New, truncated/rotated, or rewritten in place: parse cold.
             _ => {
@@ -675,8 +918,11 @@ fn compute_spending_with_origins_and_scope_progress(
                         unknown_models: parsed.unknown_models,
                     },
                 );
-                cache.dirty = true;
+                changed = true;
             }
+        }
+        if changed {
+            cache.mark_changed();
         }
         if let Some(progress) = progress.as_deref_mut() {
             progress(SpendProgress {
@@ -686,29 +932,14 @@ fn compute_spending_with_origins_and_scope_progress(
         }
     }
     if compact_spending_cache(cache, files, now_secs) {
-        cache.dirty = true;
+        cache.mark_changed();
     }
-
-    // Second pass: aggregate with cross-file Claude deduplication.
-    //
-    // Claude entries carry message IDs and dedup on exact_key = (message_id,
-    // request_id); msg_has_non_sidechain tracks whether each message_id has a
-    // main-chain entry anywhere across all files, so sidechain replays can be
-    // suppressed.  ID-free entries (Codex, Pi) carry their file's provider so
-    // they bucket under the right kind.
-    let counted = dedup_cached_entries(files, cache).into_counted();
-    let spending = aggregate_spending(files, cache, &counted, now_secs, spec);
-    let workspace = scope
-        .map(|scope| aggregate_scoped_tally(files, cache, &counted, scope, now_secs, spec))
-        .unwrap_or_default();
-
-    (spending, workspace)
 }
 
 fn aggregate_spending(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
-    counted: &[Counted<'_>],
+    counted: &[impl CountedPayload],
     now_secs: u64,
     spec: &HeadlineSpec,
 ) -> Spending {
@@ -716,7 +947,7 @@ fn aggregate_spending(
     let uniform = uniform_headline_cutoff(spec, now_secs);
     let all_timestamps: Vec<u64> = counted
         .iter()
-        .map(|counted| counted.entry.ts_secs)
+        .map(|counted| counted.entry().ts_secs)
         .collect();
     let total_cutoff =
         uniform.unwrap_or_else(|| session_cutoff_secs(all_timestamps.as_slice(), now_secs));
@@ -724,9 +955,9 @@ fn aggregate_spending(
         let mut timestamps: HashMap<&'static str, Vec<u64>> = HashMap::new();
         for counted in counted {
             timestamps
-                .entry(counted.kind)
+                .entry(counted.kind())
                 .or_default()
-                .push(counted.entry.ts_secs);
+                .push(counted.entry().ts_secs);
         }
         timestamps
             .into_iter()
@@ -757,7 +988,7 @@ fn aggregate_spending(
     };
 
     for counted in counted {
-        add(counted.kind, counted.entry);
+        add(counted.kind(), counted.entry());
     }
 
     // Session counts, keyed by provider-native thread id when one is available
@@ -877,7 +1108,7 @@ pub fn compute_scoped_tally(
 fn aggregate_scoped_tally(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
-    counted: &[Counted<'_>],
+    counted: &[impl CountedPayload],
     scope: &SpendScope,
     now_secs: u64,
     spec: &HeadlineSpec,
@@ -885,17 +1116,21 @@ fn aggregate_scoped_tally(
     let mut tally = SpendTally::default();
     let counted = counted
         .iter()
-        .filter(|counted| counted.origin.is_some_and(|origin| scope.contains(origin)))
+        .filter(|counted| {
+            counted
+                .origin()
+                .is_some_and(|origin| scope.contains(origin))
+        })
         .collect::<Vec<_>>();
     let timestamps: Vec<u64> = counted
         .iter()
-        .map(|counted| counted.entry.ts_secs)
+        .map(|counted| counted.entry().ts_secs)
         .collect();
     let headline_cutoff = uniform_headline_cutoff(spec, now_secs)
         .unwrap_or_else(|| session_cutoff_secs(timestamps.as_slice(), now_secs));
 
     for counted in counted {
-        accum(&mut tally, counted.entry, now_secs, headline_cutoff);
+        accum(&mut tally, counted.entry(), now_secs, headline_cutoff);
     }
 
     let mut threads: HashMap<String, u64> = HashMap::new();
@@ -1174,6 +1409,11 @@ trait DedupPayload {
     fn entry(&self) -> &CachedEntry;
 }
 
+trait CountedPayload: DedupPayload {
+    fn kind(&self) -> &'static str;
+    fn origin(&self) -> Option<&Path>;
+}
+
 struct SidechainDedup<P> {
     by_exact_key: HashMap<(String, Option<String>), P>,
     msg_has_non_sidechain: HashMap<String, bool>,
@@ -1248,6 +1488,39 @@ impl DedupPayload for Counted<'_> {
     }
 }
 
+impl CountedPayload for Counted<'_> {
+    fn kind(&self) -> &'static str {
+        self.kind
+    }
+
+    fn origin(&self) -> Option<&Path> {
+        self.origin
+    }
+}
+
+#[derive(Clone, Debug)]
+struct OwnedCounted {
+    kind: &'static str,
+    origin: Option<PathBuf>,
+    entry: CachedEntry,
+}
+
+impl DedupPayload for OwnedCounted {
+    fn entry(&self) -> &CachedEntry {
+        &self.entry
+    }
+}
+
+impl CountedPayload for OwnedCounted {
+    fn kind(&self) -> &'static str {
+        self.kind
+    }
+
+    fn origin(&self) -> Option<&Path> {
+        self.origin.as_deref()
+    }
+}
+
 impl DedupPayload for CompactionSourceEntry {
     fn entry(&self) -> &CachedEntry {
         &self.entry
@@ -1270,6 +1543,28 @@ fn dedup_cached_entries<'a>(
                 kind,
                 origin: cached_file.origin_path.as_deref(),
                 entry,
+            });
+        }
+    }
+    deduped
+}
+
+fn dedup_cached_entries_owned(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+) -> SidechainDedup<OwnedCounted> {
+    let mut deduped = SidechainDedup::default();
+    for (adapter, file) in files {
+        let kind = adapter.descriptor().kind;
+        let key = file.to_string_lossy().into_owned();
+        let Some(cached_file) = cache.files.get(&key) else {
+            continue;
+        };
+        for entry in &cached_file.entries {
+            deduped.insert(OwnedCounted {
+                kind,
+                origin: cached_file.origin_path.clone(),
+                entry: entry.clone(),
             });
         }
     }
@@ -1441,6 +1736,23 @@ fn file_stat(path: &Path) -> (u64, u64) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     (mtime, meta.len())
+}
+
+fn cache_stamp(path: &Path) -> Option<CacheStamp> {
+    let meta = fs::metadata(path).ok()?;
+    Some(CacheStamp {
+        mtime: meta.modified().ok()?,
+        len: meta.len(),
+    })
+}
+
+fn spending_files_signature(files: &[(&'static dyn AgentAdapter, PathBuf)]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for (adapter, file) in files {
+        adapter.descriptor().kind.hash(&mut hasher);
+        file.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 // ── Cache I/O ─────────────────────────────────────────────────────────────────

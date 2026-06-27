@@ -34,11 +34,9 @@ use rimz::RuntimePaths;
 use rimz::agents::AgentAdapter;
 use rimz::agents::pricing;
 use rimz::agents::spending::{
-    DaySpend, ProviderSpendingCache, SpendProgress, SpendTally, SpendWindow, Spending,
-    compute_daily_spend, compute_model_breakdown, compute_spending, compute_spending_with_progress,
-    discover_spending_files, read_provider_spending_cache, read_spending_cache,
-    recorded_unknown_models, unix_secs_now, utc_date, write_provider_spending_cache_with_rollups,
-    write_spending_cache,
+    DaySpend, HeadlineSpec, ProviderSpendingCache, SpendProgress, SpendTally, SpendWindow,
+    Spending, SpendingWalker, discover_spending_files, read_provider_spending_cache, unix_secs_now,
+    utc_date, write_provider_spending_cache_with_rollups,
 };
 use rimz::config::{GlyphRole, Semantic, ThemeConfig};
 use rimz::ledger::single_flight::{Coalesced, coalesce};
@@ -180,14 +178,24 @@ fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
     let _input = TerminalModeGuard::enable(MouseCapture::Off)?;
     let mut current: Option<Stats> = None;
     let mut active = Window::AllTime;
+    let mut walker = Some(SpendingWalker::new());
     loop {
         let (tx, rx) = mpsc::channel();
         let worker_paths = paths.clone();
+        let Some(mut worker_walker) = walker.take() else {
+            return Err(anyhow!("stats refresh walker unavailable"));
+        };
         thread::spawn(move || {
-            let _ = tx.send(load_or_refresh_stats(&worker_paths, None));
+            let stats = load_or_refresh_stats(&worker_paths, None, &mut worker_walker);
+            let _ = tx.send(RefreshEvent {
+                stats,
+                walker: worker_walker,
+            });
         });
         match hold_cycle(hold, &mut current, &rx, dollars, &glyphs, &mut active)? {
-            CycleExit::Refresh => {}
+            CycleExit::Refresh(next_walker) => {
+                walker = Some(*next_walker);
+            }
             CycleExit::Reload => {
                 if let Some(target) = rimz::reload::current_reexec_target() {
                     return Err(reexec(&target));
@@ -199,32 +207,52 @@ fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
 }
 
 enum CycleExit {
-    Refresh,
+    Refresh(Box<SpendingWalker>),
     Reload,
     Quit,
+}
+
+struct RefreshEvent {
+    stats: Result<Stats>,
+    walker: SpendingWalker,
 }
 
 fn hold_cycle(
     hold: bool,
     current: &mut Option<Stats>,
-    rx: &mpsc::Receiver<Result<Stats>>,
+    rx: &mpsc::Receiver<RefreshEvent>,
     dollars: bool,
     glyphs: &PanelGlyphs,
     active: &mut Window,
 ) -> Result<CycleExit> {
     let deadline = Instant::now() + REFRESH_INTERVAL;
+    let mut returned_walker: Option<SpendingWalker> = None;
     loop {
-        if let Ok(result) = rx.try_recv() {
-            *current = Some(result?);
-            if let Some(stats) = current.as_ref() {
-                repaint(stats, dollars, glyphs, *active)?;
+        match rx.try_recv() {
+            Ok(event) => {
+                *current = Some(event.stats?);
+                if let Some(stats) = current.as_ref() {
+                    repaint(stats, dollars, glyphs, *active)?;
+                }
+                returned_walker = Some(event.walker);
             }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) if returned_walker.is_none() => {
+                return Err(anyhow!("stats worker exited before sending a result"));
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
         }
         let now = Instant::now();
-        if now >= deadline {
-            return Ok(CycleExit::Refresh);
+        if now >= deadline
+            && let Some(walker) = returned_walker
+        {
+            return Ok(CycleExit::Refresh(Box::new(walker)));
         }
-        let timeout = (deadline - now).min(REFRESH_POLL_TICK);
+        let timeout = if now >= deadline {
+            REFRESH_POLL_TICK
+        } else {
+            (deadline - now).min(REFRESH_POLL_TICK)
+        };
         match event::poll(timeout) {
             Ok(true) => match event::read() {
                 Ok(Event::Resize(_, _)) => {
@@ -397,7 +425,8 @@ fn load_stats_from_paths(paths: &RuntimePaths, human: bool) -> Result<LoadedStat
         return load_cold_stats_with_spinner(paths);
     }
 
-    let stats = load_or_refresh_stats(paths, None)?;
+    let mut walker = SpendingWalker::new();
+    let stats = load_or_refresh_stats(paths, None, &mut walker)?;
     Ok(LoadedStats {
         stats,
         header_printed: false,
@@ -414,6 +443,7 @@ fn load_published_stats(paths: &RuntimePaths) -> Option<Stats> {
 fn load_or_refresh_stats(
     paths: &RuntimePaths,
     progress: Option<&mut dyn FnMut(SpendProgress)>,
+    walker: &mut SpendingWalker,
 ) -> Result<Stats> {
     if let Some(stats) = load_published_stats(paths) {
         return Ok(stats);
@@ -431,13 +461,18 @@ fn load_or_refresh_stats(
             discover_spending_files(),
             true,
             progress,
+            walker,
         )),
-        Coalesced::ProduceLocal => Ok(compute_stats_from_files(
-            paths,
-            discover_spending_files(),
-            false,
-            progress,
-        )),
+        Coalesced::ProduceLocal => {
+            let mut local_walker = SpendingWalker::new();
+            Ok(compute_stats_from_files(
+                paths,
+                discover_spending_files(),
+                false,
+                progress,
+                &mut local_walker,
+            ))
+        }
     }
 }
 
@@ -446,40 +481,58 @@ fn compute_stats_from_files(
     files: Vec<(&'static dyn AgentAdapter, PathBuf)>,
     publish: bool,
     progress: Option<&mut dyn FnMut(SpendProgress)>,
+    walker: &mut SpendingWalker,
 ) -> Stats {
     let cursor_path = paths.shared_spending_cursor_path();
-    let mut cache = read_spending_cache(&cursor_path);
     let now_secs = unix_secs_now();
     let prices = if publish {
-        let unknowns = recorded_unknown_models(&files, &cache, now_secs);
+        let unknowns = walker.recorded_unknown_models(&cursor_path, &files, now_secs);
         pricing::load_for_spending(&paths.shared_pricing_cache_path(), &unknowns)
     } else {
         pricing::load_cached_for_spending(&paths.shared_pricing_cache_path())
     };
-    let spending = match progress {
-        Some(progress) => {
-            compute_spending_with_progress(&files, &mut cache, &prices, now_secs, progress)
-        }
-        None => compute_spending(&files, &mut cache, &prices, now_secs),
+    let result = match (publish, progress) {
+        (true, Some(progress)) => walker.walk_with_progress(
+            &cursor_path,
+            &files,
+            &prices,
+            now_secs,
+            &Default::default(),
+            None,
+            &HeadlineSpec::default(),
+            progress,
+        ),
+        (true, None) => walker.walk(
+            &cursor_path,
+            &files,
+            &prices,
+            now_secs,
+            &Default::default(),
+            None,
+            &HeadlineSpec::default(),
+        ),
+        (false, _) => walker.walk_in_memory(
+            &files,
+            &prices,
+            now_secs,
+            &Default::default(),
+            None,
+            &HeadlineSpec::default(),
+        ),
     };
-    let by_day = compute_daily_spend(&files, &cache);
-    let by_model = compute_model_breakdown(&files, &cache, now_secs);
-    if publish && cache.dirty {
-        write_spending_cache(&cursor_path, &cache);
-    }
     if publish {
         write_provider_spending_cache_with_rollups(
             &paths.shared_provider_spending_path(),
             unix_millis_now(),
-            &spending,
-            &by_day,
-            &by_model,
+            &result.spending,
+            &result.days,
+            &result.models,
         );
     }
-    let Spending { total, by_provider } = spending;
+    let Spending { total, by_provider } = result.spending;
     Stats {
-        by_day,
-        by_model,
+        by_day: result.days,
+        by_model: result.models,
         by_agent: by_provider,
         total,
     }
@@ -518,7 +571,8 @@ fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<LoadedStats> {
         let mut progress = |progress| {
             let _ = progress_tx.send(ColdStatsEvent::Progress(progress));
         };
-        let stats = load_or_refresh_stats(&paths, Some(&mut progress));
+        let mut walker = SpendingWalker::new();
+        let stats = load_or_refresh_stats(&paths, Some(&mut progress), &mut walker);
         let _ = tx.send(ColdStatsEvent::Done(Box::new(stats)));
     });
 

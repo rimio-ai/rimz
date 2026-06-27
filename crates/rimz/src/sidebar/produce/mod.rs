@@ -151,6 +151,7 @@ pub fn produce_rollup_snapshot(
 /// time-driven refresh without re-running the full pane/enrich spine.
 pub fn refresh_producer_caches(
     cursor: &mut RollupCursor,
+    spending_walker: &mut crate::agents::spending::SpendingWalker,
     state: &StatePaths,
     runtime: &RuntimePaths,
     session: &str,
@@ -160,7 +161,12 @@ pub fn refresh_producer_caches(
     let config = crate::config::MachineConfig::load().unwrap_or_default();
     let trunk = config.sidebar.trunk.clone();
     let headline_spec = config.sidebar.headline_spec();
-    let spending = spending::compute_fleet_spending(runtime, &base, &headline_spec);
+    let spending = spending::compute_fleet_spending_with_walker(
+        spending_walker,
+        runtime,
+        &base,
+        &headline_spec,
+    );
     let _ = crate::sidebar::enrich::fold_machine_config_producing(
         base.clone(),
         runtime,

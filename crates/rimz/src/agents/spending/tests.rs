@@ -212,7 +212,7 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
                 unknown_models: BTreeMap::new(),
             },
         )]),
-        dirty: false,
+        ..Default::default()
     };
     write_spending_cache(&path, &stale);
 

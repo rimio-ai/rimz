@@ -9,6 +9,7 @@ use std::thread::JoinHandle;
 
 use tracing::debug;
 
+use crate::agents::spending::SpendingWalker;
 use crate::sidebar::consumer::RollupCursor;
 use crate::{RuntimePaths, StatePaths};
 
@@ -20,6 +21,7 @@ pub(super) fn spawn(config: ServeConfig, runtime: RuntimePaths) -> JoinHandle<()
 
 fn refresh_loop(config: ServeConfig, runtime: RuntimePaths) {
     let mut cursor = RollupCursor::new();
+    let mut spending_walker = SpendingWalker::new();
     loop {
         std::thread::sleep(tick_for(config.tick_seconds));
         if crate::sidebar::elder_sidebar_instance(&runtime, &config.instance_id).is_some() {
@@ -35,9 +37,10 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths) {
                 continue;
             }
         };
-        if let Err(err) = refresh_guarded(&mut cursor, |cursor| {
+        if let Err(err) = refresh_guarded(&mut cursor, &mut spending_walker, |cursor, walker| {
             crate::sidebar::produce::refresh_producer_caches(
                 cursor,
+                walker,
                 &state,
                 &runtime,
                 &config.session_name,
@@ -54,16 +57,20 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths) {
 
 fn refresh_guarded(
     cursor: &mut RollupCursor,
-    refresh: impl FnOnce(&mut RollupCursor) -> crate::sidebar::produce::Result<()>,
+    spending_walker: &mut SpendingWalker,
+    refresh: impl FnOnce(&mut RollupCursor, &mut SpendingWalker) -> crate::sidebar::produce::Result<()>,
 ) -> std::result::Result<(), String> {
     let result = super::with_produce_panic_diagnostic_suppressed(|| {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| refresh(cursor)))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            refresh(cursor, spending_walker)
+        }))
     });
     match result {
         Ok(Ok(())) => Ok(()),
         Ok(Err(err)) => Err(err.to_string()),
         Err(payload) => {
             *cursor = RollupCursor::new();
+            *spending_walker = SpendingWalker::new();
             Err(format!(
                 "sidebar cache refresh panicked: {}",
                 super::panic_payload_message(payload.as_ref())

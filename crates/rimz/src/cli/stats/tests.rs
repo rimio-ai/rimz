@@ -163,11 +163,13 @@ fn cold_refresh_publishes_sidebar_provider_rollups() {
         transcript.clone(),
     )];
 
-    let stats = compute_stats_from_files(&runtime, files, true, None);
+    let mut walker = SpendingWalker::new();
+    let stats = compute_stats_from_files(&runtime, files, true, None, &mut walker);
     let published = read_provider_spending_cache(&runtime.shared_provider_spending_path());
     let fresh = load_published_stats(&runtime)
         .expect("published stats are current after a stats-owned refresh");
-    let cursor = read_spending_cache(&runtime.shared_spending_cursor_path());
+    let cursor =
+        rimz::agents::spending::read_spending_cache(&runtime.shared_spending_cursor_path());
 
     assert!(published.is_fresh(unix_millis_now()));
     assert!((published.spending.total.month.usd - stats.total.month.usd).abs() < 1e-9);

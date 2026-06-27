@@ -1,4 +1,6 @@
+use std::collections::{BTreeMap, HashMap};
 use std::io;
+use std::path::PathBuf;
 
 use divan::Bencher;
 use tempfile::TempDir;
@@ -8,6 +10,9 @@ static ALLOC: divan::AllocProfiler = divan::AllocProfiler::system();
 
 const FLEET: usize = 40;
 const HISTORY_EVENTS: usize = 2_000;
+const SPENDING_FILES: usize = 4;
+const SPENDING_ENTRIES_PER_FILE: usize = 5_000;
+const SPENDING_NOW_SECS: u64 = 1_780_394_400;
 
 fn main() {
     divan::main();
@@ -71,6 +76,14 @@ struct FoldFixture {
     _workspace: BenchWorkspace,
     paths: rimz::StatePaths,
     cursor: rimz::sidebar::consumer::RollupCursor,
+}
+
+struct SpendingFixture {
+    _tempdir: TempDir,
+    cache_path: PathBuf,
+    files: Vec<(&'static dyn rimz::agents::AgentAdapter, PathBuf)>,
+    prices: rimz::agents::PriceBook,
+    walker: rimz::agents::spending::SpendingWalker,
 }
 
 fn publish_fresh_produce_inputs(runtime: &rimz::RuntimePaths, fleet: usize) {
@@ -195,6 +208,82 @@ fn fold_fixture() -> FoldFixture {
     }
 }
 
+fn spending_fixture(warm: bool) -> SpendingFixture {
+    let tempdir = TempDir::new().expect("tempdir");
+    let cache_path = tempdir.path().join("spending.json");
+    let mut cache = rimz::agents::spending::read_spending_cache(&cache_path);
+    cache.files = HashMap::new();
+    let mut files = Vec::new();
+    for file_index in 0..SPENDING_FILES {
+        let transcript = tempdir.path().join(format!("cached-{file_index}.jsonl"));
+        std::fs::write(&transcript, b"").expect("transcript");
+        let metadata = std::fs::metadata(&transcript).expect("metadata");
+        let mtime_secs = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let entries = (0..SPENDING_ENTRIES_PER_FILE)
+            .map(|offset| {
+                let index = file_index * SPENDING_ENTRIES_PER_FILE + offset;
+                rimz::agents::spending::CachedEntry {
+                    ts_secs: SPENDING_NOW_SECS - 86_400
+                        + u64::try_from(offset % 3_600).expect("offset fits u64"),
+                    cost_usd: 0.001,
+                    input: 1200,
+                    output: 80,
+                    cache_write: 0,
+                    cache_read: 800,
+                    message_id: Some(format!("msg-{index}")),
+                    request_id: Some(format!("req-{index}")),
+                    thread_id: Some(format!("thread-{index}")),
+                    is_sidechain: false,
+                    model: Some("claude-opus-4-8".to_owned()),
+                    origin_path: None,
+                    rolled: false,
+                }
+            })
+            .collect();
+        cache.files.insert(
+            transcript.to_string_lossy().into_owned(),
+            rimz::agents::spending::FileCacheEntry {
+                mtime_secs,
+                len: metadata.len(),
+                cursor: rimz::agents::spending::SpendCursor::default(),
+                origin_path: None,
+                entries,
+                unknown_models: BTreeMap::new(),
+            },
+        );
+        files.push((
+            &rimz::agents::ClaudeAdapter as &'static dyn rimz::agents::AgentAdapter,
+            transcript,
+        ));
+    }
+    rimz::agents::spending::write_spending_cache(&cache_path, &cache);
+    let prices = rimz::agents::PriceBook::default();
+    let mut walker = rimz::agents::spending::SpendingWalker::new();
+    if warm {
+        let _ = walker.walk(
+            &cache_path,
+            &files,
+            &prices,
+            SPENDING_NOW_SECS,
+            &Default::default(),
+            None,
+            &rimz::agents::spending::HeadlineSpec::default(),
+        );
+    }
+    SpendingFixture {
+        _tempdir: tempdir,
+        cache_path,
+        files,
+        prices,
+        walker,
+    }
+}
+
 #[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
 fn fuse(bencher: Bencher) {
     bencher
@@ -214,6 +303,40 @@ fn rollup_fold_warm(bencher: Bencher) {
         .with_inputs(fold_fixture)
         .bench_local_values(|mut fixture| {
             divan::black_box(fixture.cursor.fold(&fixture.paths).expect("warm fold"));
+        });
+}
+
+#[divan::bench(sample_count = 10, sample_size = 1, skip_ext_time)]
+fn spending_walk_cold(bencher: Bencher) {
+    bencher
+        .with_inputs(|| spending_fixture(false))
+        .bench_local_values(|mut fixture| {
+            divan::black_box(fixture.walker.walk(
+                &fixture.cache_path,
+                &fixture.files,
+                &fixture.prices,
+                SPENDING_NOW_SECS,
+                &Default::default(),
+                None,
+                &rimz::agents::spending::HeadlineSpec::default(),
+            ));
+        });
+}
+
+#[divan::bench(sample_count = 10, sample_size = 1, skip_ext_time)]
+fn spending_walk_warm_no_change(bencher: Bencher) {
+    bencher
+        .with_inputs(|| spending_fixture(true))
+        .bench_local_values(|mut fixture| {
+            divan::black_box(fixture.walker.walk(
+                &fixture.cache_path,
+                &fixture.files,
+                &fixture.prices,
+                SPENDING_NOW_SECS,
+                &Default::default(),
+                None,
+                &rimz::agents::spending::HeadlineSpec::default(),
+            ));
         });
 }
 

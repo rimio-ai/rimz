@@ -14,11 +14,15 @@
 //! `SPENDING_TTL` of the published stamp serves the cache verbatim and runs
 //! zero transcript IO — no discovery, no stat, no parse.
 
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
-use rimz::agents::spending::{SpendingDiskCache, compute_spending};
+use rimz::agents::spending::{
+    CachedEntry, FileCacheEntry, HeadlineSpec, SpendCursor, SpendingWalker, read_spending_cache,
+    write_spending_cache,
+};
 use rimz::agents::{AgentAdapter, ClaudeAdapter, PriceBook};
 
 use crate::common::Env;
@@ -48,17 +52,105 @@ fn seed_history(dir: &std::path::Path) -> PathBuf {
     path
 }
 
+fn file_cache_entry(path: &std::path::Path, entries: Vec<CachedEntry>) -> FileCacheEntry {
+    let metadata = std::fs::metadata(path).expect("transcript metadata");
+    let mtime_secs = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    FileCacheEntry {
+        mtime_secs,
+        len: metadata.len(),
+        cursor: SpendCursor::default(),
+        origin_path: None,
+        entries,
+        unknown_models: BTreeMap::new(),
+    }
+}
+
+fn cached_entries(count: usize) -> Vec<CachedEntry> {
+    (0..count)
+        .map(|index| CachedEntry {
+            ts_secs: NOW_SECS - 86_400 + u64::try_from(index % 3_600).expect("index fits u64"),
+            cost_usd: 0.001,
+            input: 1200,
+            output: 80,
+            cache_write: 0,
+            cache_read: 800,
+            message_id: Some(format!("msg-{index}")),
+            request_id: Some(format!("req-{index}")),
+            thread_id: Some(format!("thread-{index}")),
+            is_sidechain: false,
+            model: Some("claude-opus-4-8".to_owned()),
+            origin_path: None,
+            rolled: false,
+        })
+        .collect()
+}
+
+fn seed_spending_cache(
+    dir: &std::path::Path,
+    cache_path: &std::path::Path,
+    entries_per_file: usize,
+) -> Vec<(&'static dyn AgentAdapter, PathBuf)> {
+    let mut files = Vec::new();
+    let mut cache = read_spending_cache(cache_path);
+    cache.files = HashMap::new();
+    for file_index in 0..3 {
+        let transcript = dir.join(format!("cached-{file_index}.jsonl"));
+        std::fs::write(&transcript, b"").expect("transcript");
+        let start = file_index * entries_per_file;
+        let entries = cached_entries(entries_per_file)
+            .into_iter()
+            .enumerate()
+            .map(|(offset, mut entry)| {
+                let index = start + offset;
+                entry.message_id = Some(format!("msg-{index}"));
+                entry.request_id = Some(format!("req-{index}"));
+                entry.thread_id = Some(format!("thread-{index}"));
+                entry
+            })
+            .collect();
+        cache.files.insert(
+            transcript.to_string_lossy().into_owned(),
+            file_cache_entry(&transcript, entries),
+        );
+        files.push((claude_adapter(), transcript));
+    }
+    write_spending_cache(cache_path, &cache);
+    files
+}
+
+fn modified(path: &std::path::Path) -> SystemTime {
+    std::fs::metadata(path)
+        .expect("metadata")
+        .modified()
+        .expect("mtime")
+}
+
 #[test]
 fn spending_walk_io_is_history_independent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = seed_history(dir.path());
     let files = [(claude_adapter(), file.clone())];
     let prices = PriceBook::default();
+    let cache_path = dir.path().join("spending.json");
+    let mut walker = SpendingWalker::new();
 
-    let mut cache = SpendingDiskCache::default();
     let cold_start = Instant::now();
-    let cold = compute_spending(&files, &mut cache, &prices, NOW_SECS);
+    let cold = walker.walk(
+        &cache_path,
+        &files,
+        &prices,
+        NOW_SECS,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+    );
     let cold_elapsed = cold_start.elapsed();
+    let cache = read_spending_cache(&cache_path);
     let baseline_entries = cache
         .files
         .values()
@@ -80,11 +172,20 @@ fn spending_walk_io_is_history_independent() {
     drop(f);
 
     let warm_start = Instant::now();
-    let warm = compute_spending(&files, &mut cache, &prices, NOW_SECS);
+    let warm = walker.walk(
+        &cache_path,
+        &files,
+        &prices,
+        NOW_SECS,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+    );
     let warm_elapsed = warm_start.elapsed();
 
     // Work proxy: the cache grew by exactly the appended entry — the history
     // was never re-read, so nothing duplicated.
+    let cache = read_spending_cache(&cache_path);
     let refreshed = cache.files.values().next().expect("cached file");
     assert_eq!(
         refreshed.entries.len(),
@@ -92,8 +193,28 @@ fn spending_walk_io_is_history_independent() {
         "suffix parse appends exactly the new entry"
     );
     assert!(
-        warm.total.year.usd > cold.total.year.usd,
+        warm.spending.total.year.usd > cold.spending.total.year.usd,
         "the appended turn is counted"
+    );
+
+    let cache_mtime = modified(&cache_path);
+    let steady = walker.walk(
+        &cache_path,
+        &files,
+        &prices,
+        NOW_SECS,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+    );
+    assert!(
+        !steady.stats.cache_written,
+        "unchanged walk does not rewrite"
+    );
+    assert_eq!(
+        modified(&cache_path),
+        cache_mtime,
+        "unchanged walk leaves the spending cache mtime untouched"
     );
 
     // Wall-clock: the warm pass skips the parse entirely (one stat + a
@@ -103,6 +224,61 @@ fn spending_walk_io_is_history_independent() {
     assert!(
         warm_elapsed * 3 < cold_elapsed,
         "warm recompute {warm_elapsed:?} must stay well under cold parse {cold_elapsed:?}"
+    );
+}
+
+#[test]
+fn spending_walk_aggregation_is_history_independent() {
+    fn second_walk_stats(entries_per_file: usize) -> rimz::agents::spending::WalkStats {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache_path = dir.path().join("spending.json");
+        let files = seed_spending_cache(dir.path(), &cache_path, entries_per_file);
+        let prices = PriceBook::default();
+        let mut walker = SpendingWalker::new();
+
+        let first = walker.walk(
+            &cache_path,
+            &files,
+            &prices,
+            NOW_SECS,
+            &Default::default(),
+            None,
+            &HeadlineSpec::default(),
+        );
+        assert_eq!(first.stats.dedup_passes, 1);
+        assert!(
+            first.stats.aggregated_entries >= entries_per_file,
+            "first walk aggregates seeded history"
+        );
+        let cache_mtime = modified(&cache_path);
+
+        let second = walker.walk(
+            &cache_path,
+            &files,
+            &prices,
+            NOW_SECS,
+            &Default::default(),
+            None,
+            &HeadlineSpec::default(),
+        );
+        assert_eq!(
+            modified(&cache_path),
+            cache_mtime,
+            "memo hit leaves the shared spending cache untouched"
+        );
+        second.stats
+    }
+
+    let baseline = second_walk_stats(1_000);
+    assert_eq!(baseline.dedup_passes, 0);
+    assert_eq!(baseline.aggregated_entries, 0);
+    assert!(!baseline.cache_parsed);
+    assert!(!baseline.cache_written);
+
+    assert_eq!(
+        second_walk_stats(10_000),
+        baseline,
+        "unchanged warm work is independent of retained-entry count"
     );
 }
 
