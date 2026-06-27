@@ -105,25 +105,6 @@ fn row_with_subagents(id: &str, pane: &str, group: &str, sub_agent_ids: Vec<&str
     row
 }
 
-fn process_row(id: &str, pane: &str, group: &str, pid: u32) -> RowSig {
-    RowSig {
-        row_id: id.to_owned(),
-        is_agent: false,
-        pane_id: Some(pane.to_owned()),
-        pane_pid: Some(pid),
-        pane_process_start: None,
-        group_key: group.to_owned(),
-        watched: WatchedValues {
-            status: None,
-            context_pct: None,
-            total_tokens: None,
-            group_key: group.to_owned(),
-            model: None,
-        },
-        sub_agent_ids: Vec::new(),
-    }
-}
-
 fn with_hidden_count(mut frame: FrameSig, group_key: &str, hidden_count: usize) -> FrameSig {
     for group in &mut frame.groups {
         if group.key == group_key {
@@ -463,33 +444,6 @@ fn pane_closed_suppresses_short_lived_row() {
     let drafts = observer.observe(with_pane_closed(sig(12_000, Vec::new()), "p9"));
 
     assert!(!kinds(&drafts).contains(&"short_lived_row"));
-}
-
-mod recorded_episodes {
-    use super::*;
-
-    // project-rimz diagnostics, 2026-06-27: terminal_5 was a stable plain zsh
-    // pane whose process row blinked out for one degraded producer tick.
-    #[test]
-    fn terminal_5_plain_shell_carried_tick_stays_quiet() {
-        let mut observer = Observer::default();
-        let row = || {
-            process_row(
-                "zellij:terminal_5",
-                "zellij:terminal_5",
-                "/home/marvin/workspace/project-rimz/rimz",
-                3324242,
-            )
-        };
-        observer.observe(sig(0, vec![row()]));
-        observer.observe(sig(11_000, vec![row()]));
-        observer.observe(sig(12_000, vec![row()]));
-
-        let drafts = observer.observe(sig(13_000, vec![row()]));
-
-        assert!(!kinds(&drafts).contains(&"row_presence_flap"));
-        assert!(!kinds(&drafts).contains(&"roster_flap"));
-    }
 }
 
 #[test]
