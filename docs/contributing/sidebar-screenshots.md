@@ -31,7 +31,7 @@ The task fails at entry when `freeze`, `rsvg-convert`, or JetBrainsMono Nerd Fon
 
 `cargo xtask screenshot pane <id> [--lines N] [--output PATH]` captures any normalized pane id, for example `zellij:terminal_3` or `tmux:%3`.
 
-`cargo xtask screenshot state <empty|fleet|provider|cockpit|focus|economy|reach> [--width W] [--height H] [--output PATH]` renders deterministic fixture frames through the same headless sidebar renderer used by tests. `cockpit`, `focus`, `economy`, and `reach` are packed gallery states for reviewing fleet breadth, expanded team cards, provider spend with pets, and remote/AFK glyph contrast.
+`cargo xtask screenshot state <empty|fleet|provider|cockpit|focus|economy|reach> [--width W] [--height H] [--output PATH]` renders deterministic fixture frames through the same headless sidebar renderer used by tests. `cockpit` (fleet breadth and the remote/AFK footer), `focus` (expanded team cards), `economy` and `reach` (provider spend with pets) are packed gallery states for review.
 
 `rimz sidebar gallery` opens one frameless compositor pane in the current room with those packed states side by side, split by thin `│` delimiter rules and no real sidebar dock.
 

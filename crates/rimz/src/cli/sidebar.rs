@@ -674,25 +674,54 @@ fn gallery(globals: &GlobalFlags) -> Result<()> {
 fn gallery_render() -> Result<()> {
     let machine_config = super::machine_config();
     let refresh_ms = machine_config.theme.display.resolved_refresh_ms();
-    let mut snapshots = [
-        SidebarFixtureState::Cockpit,
-        SidebarFixtureState::Focus,
-        SidebarFixtureState::Economy,
-        SidebarFixtureState::Reach,
-    ]
-    .into_iter()
-    .map(sidebar_fixture_snapshot)
-    .collect::<Result<Vec<_>>>()?;
-    for snapshot in &mut snapshots {
-        snapshot.theme.mode = machine_config.theme.mode;
-        snapshot.theme.glyphs = machine_config.theme.glyphs.clone();
-        snapshot.theme.pets.glyphs = machine_config.theme.pets.glyphs;
-    }
+    let columns = gallery_fixture_columns()
+        .into_iter()
+        .map(|(state, selector)| {
+            let mut snapshot = sidebar_fixture_snapshot(state)?;
+            snapshot.theme.mode = machine_config.theme.mode;
+            snapshot.theme.glyphs = machine_config.theme.glyphs.clone();
+            snapshot.theme.pets.glyphs = machine_config.theme.pets.glyphs;
+            let selected_index = gallery_selected_index(&snapshot, selector);
+            Ok((snapshot, selected_index))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let workspace =
         WorkspaceResolver::resolve_participant(".", None).context("resolving gallery workspace")?;
     let mux = rimz::mux::auto_detect_backend(None)?;
-    rimz::sidebar_pane::app::serve_gallery(snapshots, refresh_ms, mux, &workspace.session_name)
+    rimz::sidebar_pane::app::serve_gallery(columns, refresh_ms, mux, &workspace.session_name)
         .context("serving sidebar gallery")
+}
+
+fn gallery_selected_index(
+    snapshot: &rimz::SidebarSnapshot,
+    selector: fn(&rimz::SidebarRow) -> bool,
+) -> usize {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .position(selector)
+        .unwrap_or(0)
+}
+
+type GallerySelector = fn(&rimz::SidebarRow) -> bool;
+
+fn gallery_fixture_columns() -> [(SidebarFixtureState, GallerySelector); 4] {
+    [
+        (
+            SidebarFixtureState::Cockpit,
+            (|row: &rimz::SidebarRow| row.id == "agent:claude:compacting") as GallerySelector,
+        ),
+        (SidebarFixtureState::Focus, |row: &rimz::SidebarRow| {
+            row.as_agent().and_then(|card| card.handle.as_deref()) == Some("planner")
+        }),
+        (SidebarFixtureState::Reach, |row: &rimz::SidebarRow| {
+            row.id == "agent:pi:reach"
+        }),
+        (SidebarFixtureState::Economy, |row: &rimz::SidebarRow| {
+            row.id == "agent:opencode:credits"
+        }),
+    ]
 }
 
 fn parse_fixture_theme_mode(value: &str) -> Result<rimz::config::ThemeMode> {

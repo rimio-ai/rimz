@@ -60,7 +60,7 @@ pub fn serve_fixture(
 }
 
 pub fn serve_gallery(
-    snapshots: Vec<SidebarSnapshot>,
+    columns: Vec<(SidebarSnapshot, usize)>,
     refresh_ms: u16,
     mux: MuxName,
     session_name: &str,
@@ -71,24 +71,29 @@ pub fn serve_gallery(
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let glyphs = snapshots
+    let glyphs = columns
         .iter()
+        .map(|(snapshot, _)| snapshot)
         .find(|snapshot| snapshot.theme.pets.enabled)
         .map(|snapshot| snapshot.theme.pets.glyphs)
         .unwrap_or_default();
     let caps = detect_pet_render_caps(mux, glyphs, session_name);
     let id_base = PixelPainter::runtime_id_base();
-    let mut states = snapshots
+    let mut states = columns
         .into_iter()
         .enumerate()
-        .map(|(index, snapshot)| GalleryState {
-            snapshot,
-            ui: UiState::default(),
-            pets: PetAssets::default(),
-            pixel_painter: PixelPainter::with_id_base(
-                id_base.wrapping_add((index as u32) << 12),
-                mux == MuxName::Tmux,
-            ),
+        .map(|(index, (snapshot, selected_index))| {
+            let mut ui = UiState::default();
+            ui.selected_index = selected_index;
+            GalleryState {
+                snapshot,
+                ui,
+                pets: PetAssets::default(),
+                pixel_painter: PixelPainter::with_id_base(
+                    id_base.wrapping_add((index as u32) << 12),
+                    mux == MuxName::Tmux,
+                ),
+            }
         })
         .collect::<Vec<_>>();
     let anim_start = Instant::now();
