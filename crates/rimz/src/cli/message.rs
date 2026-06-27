@@ -58,8 +58,10 @@ enum MessageSubcmd {
     /// Remove every queued message for an agent.
     Clear {
         target: String,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "channel")]
         worktree: Option<String>,
+        #[arg(long, value_name = "NAME", conflicts_with = "worktree")]
+        channel: Option<String>,
     },
     /// Deliver one queued message. Spawned by lifecycle hooks.
     #[command(hide = true)]
@@ -76,9 +78,11 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         Some(MessageSubcmd::List { json, target }) => list_messages(json, target, globals),
         Some(MessageSubcmd::Remove { message_id }) => remove_message(message_id, globals),
-        Some(MessageSubcmd::Clear { target, worktree }) => {
-            clear_messages(target, worktree, globals)
-        }
+        Some(MessageSubcmd::Clear {
+            target,
+            worktree,
+            channel,
+        }) => clear_messages(target, worktree, channel, globals),
         Some(MessageSubcmd::Deliver { message_id }) => deliver_message(message_id, globals),
         Some(MessageSubcmd::Sweep) => sweep_messages(globals),
         None => {
@@ -108,6 +112,7 @@ fn message_add(
 ) -> Result<()> {
     let SendFlags {
         worktree,
+        channel,
         no_enter,
         force,
         all,
@@ -132,6 +137,7 @@ fn message_add(
     add_message(
         target,
         worktree,
+        channel,
         text,
         MessageSpec {
             enter: !no_enter,
@@ -161,6 +167,7 @@ pub(crate) fn to_session(
     add_message(
         format!("@{session}"),
         None,
+        None,
         text,
         MessageSpec {
             enter: true,
@@ -189,6 +196,7 @@ fn steer_message(
     rimz::target::require_mention(&target)?;
     let SendFlags {
         worktree,
+        channel: channel_flag,
         no_enter,
         force,
         all,
@@ -216,7 +224,7 @@ fn steer_message(
     let targets = match super::resolve_pane_targets(
         &snapshot,
         &target,
-        worktree.as_deref(),
+        worktree.as_deref().or(channel_flag.as_deref()),
         channel.as_deref(),
     ) {
         Ok(targets) => targets,
@@ -224,6 +232,7 @@ fn steer_message(
             return super::agents_cmd::create_on_miss(
                 &target,
                 worktree.as_deref(),
+                channel_flag.as_deref(),
                 channel.as_deref(),
                 &text,
                 globals,
@@ -505,6 +514,7 @@ fn agent_kind_registers_lazily(agent: &AgentState) -> bool {
 fn add_message(
     target: String,
     worktree: Option<String>,
+    channel_flag: Option<String>,
     text: String,
     spec: MessageSpec,
     flags: FanoutFlags,
@@ -521,7 +531,7 @@ fn add_message(
     let rollup_only = rollup_targets_all_park_without_live(
         &snapshot,
         &target,
-        worktree.as_deref(),
+        worktree.as_deref().or(channel_flag.as_deref()),
         channel.as_deref(),
         &pending,
         spec.gate,
@@ -539,16 +549,24 @@ fn add_message(
         }
     }
     let targets = if rollup_only {
-        let agents =
-            super::resolve_agent_many(&snapshot, &target, worktree.as_deref(), channel.as_deref())?;
+        let agents = super::resolve_agent_many(
+            &snapshot,
+            &target,
+            worktree.as_deref().or(channel_flag.as_deref()),
+            channel.as_deref(),
+        )?;
         combine_queue_targets(&snapshot, agents, Vec::new())
     } else {
-        let agent_result =
-            super::resolve_agent_many(&snapshot, &target, worktree.as_deref(), channel.as_deref());
+        let agent_result = super::resolve_agent_many(
+            &snapshot,
+            &target,
+            worktree.as_deref().or(channel_flag.as_deref()),
+            channel.as_deref(),
+        );
         let pane_result = super::resolve_pane_targets(
             &snapshot,
             &target,
-            worktree.as_deref(),
+            worktree.as_deref().or(channel_flag.as_deref()),
             channel.as_deref(),
         );
         match (agent_result, pane_result) {
@@ -562,6 +580,7 @@ fn add_message(
                     return super::agents_cmd::create_on_miss(
                         &target,
                         worktree.as_deref(),
+                        channel_flag.as_deref(),
                         channel.as_deref(),
                         &text,
                         globals,
@@ -764,12 +783,21 @@ fn remove_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-fn clear_messages(target: String, worktree: Option<String>, globals: &GlobalFlags) -> Result<()> {
+fn clear_messages(
+    target: String,
+    worktree: Option<String>,
+    channel_flag: Option<String>,
+    globals: &GlobalFlags,
+) -> Result<()> {
     rimz::target::require_mention(&target)?;
     let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
     let channel = current_channel(&workspace);
-    let agent =
-        super::resolve_agent_one(&snapshot, &target, worktree.as_deref(), channel.as_deref())?;
+    let agent = super::resolve_agent_one(
+        &snapshot,
+        &target,
+        worktree.as_deref().or(channel_flag.as_deref()),
+        channel.as_deref(),
+    )?;
     let count = ledger.clear_messages_for(
         &agent.kind,
         &agent.agent_id,

@@ -48,6 +48,7 @@ type LaunchIdentity = AgentLaunchIdentity;
 struct LaunchEventParams<'a> {
     cwd: &'a Path,
     worktree_name: Option<&'a str>,
+    channel: Option<&'a str>,
     prompt: Option<&'a str>,
     state: rimz::schema::event::AgentLaunchState,
     pane_id: Option<rimz::ids::PaneId>,
@@ -68,10 +69,20 @@ pub struct AgentsArgs {
     #[arg(long, value_name = "TEXT")]
     description: Option<String>,
     /// Use a Rimz-owned worktree. Bare flag creates one fresh worktree; NAME reuses or creates it.
-    #[arg(long, short = 'w', value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
+    #[arg(
+        long,
+        short = 'w',
+        value_name = "NAME",
+        num_args = 0..=1,
+        default_missing_value = "",
+        conflicts_with = "channel"
+    )]
     worktree: Option<String>,
+    /// Launch into a durable named channel.
+    #[arg(long, value_name = "NAME", conflicts_with = "worktree")]
+    channel: Option<String>,
     /// Create or reuse a Rimz-owned worktree from a pull request number or URL.
-    #[arg(long = "from-pr", value_name = "PR", value_parser = parse_pr)]
+    #[arg(long = "from-pr", value_name = "PR", value_parser = parse_pr, conflicts_with = "channel")]
     from_pr: Option<rimz::forge::PrTarget>,
     /// Durable name for a single launched agent.
     #[arg(long, short = 'n')]
@@ -230,6 +241,9 @@ struct ExecArgs {
     /// makes in-place members resolve inside `<dir>/<team>`.
     #[arg(long)]
     agent_team: Option<String>,
+    /// The named channel this agent launched under.
+    #[arg(long)]
+    agent_channel: Option<String>,
     /// The profile/CLI-selected model to stamp into lifecycle observations.
     #[arg(long)]
     agent_model: Option<String>,
@@ -302,13 +316,19 @@ impl AgentsArgs {
     /// profile `spec`, the message as the first `prompt`, and the channel
     /// `worktree`. Everything else defaults so the launch lands where the
     /// address pointed, under the per-machine tab policy.
-    fn for_create(spec: String, prompt: Option<String>, worktree: Option<String>) -> Self {
+    fn for_create(
+        spec: String,
+        prompt: Option<String>,
+        worktree: Option<String>,
+        channel: Option<String>,
+    ) -> Self {
         Self {
             command: None,
             spec: Some(spec),
             prompt,
             description: None,
             worktree,
+            channel,
             from_pr: None,
             name: None,
             bg: false,
@@ -343,6 +363,7 @@ impl AgentsArgs {
             prompt: task.prompt,
             description: None,
             worktree: task.worktree,
+            channel: None,
             from_pr: None,
             name: None,
             bg: false,
@@ -399,11 +420,14 @@ pub(crate) fn run_blocking_task(args: AgentsArgs, globals: &GlobalFlags) -> Resu
 pub(crate) fn create_on_miss(
     target: &str,
     worktree_flag: Option<&str>,
+    channel_flag: Option<&str>,
     current_channel: Option<&str>,
     text: &str,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let Some(create) = rimz::target::create_mention(target, worktree_flag, current_channel)? else {
+    let channel_filter = worktree_flag.or(channel_flag);
+    let Some(create) = rimz::target::create_mention(target, channel_filter, current_channel)?
+    else {
         bail!(
             "`{target}` cannot create an agent; address a kind or profile like `@codex` or `@planner`"
         );
@@ -426,14 +450,31 @@ pub(crate) fn create_on_miss(
             "`{target}` names a specific agent that is not running; create one with `@<kind>` or a profile from [agents.profiles]"
         );
     }
-    // A channel other than the current one names (or creates) its worktree; the
-    // current channel uses the caller's tab.
-    let worktree = create
-        .channel
-        .filter(|channel| Some(channel.as_str()) != current_channel);
+    // `--worktree` keeps the historical worktree create-on-miss path. `--channel`
+    // and inline `#name` create durable named lanes.
+    let inline_named_channel = target
+        .split_once('#')
+        .is_some_and(|(_, channel)| rimz::channel::valid_name(channel));
+    let current_named = std::env::var(rimz::run::ENV_CHANNEL).ok();
+    let named = channel_flag.is_some()
+        || (worktree_flag.is_none() && inline_named_channel)
+        || create
+            .channel
+            .as_deref()
+            .is_some_and(|channel| current_named.as_deref() == Some(channel));
+    let (worktree, channel) = if named {
+        (None, create.channel)
+    } else {
+        (
+            create
+                .channel
+                .filter(|channel| Some(channel.as_str()) != current_channel),
+            None,
+        )
+    };
     let prompt = (!text.trim().is_empty()).then(|| text.to_owned());
     launch_layout(
-        AgentsArgs::for_create(create.selector, prompt, worktree),
+        AgentsArgs::for_create(create.selector, prompt, worktree, channel),
         globals,
         false,
     )

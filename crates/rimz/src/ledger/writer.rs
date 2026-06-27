@@ -427,6 +427,7 @@ fn allocate_agent_launch_identities(
             profile: request.profile.clone(),
             role: request.role.clone(),
             team: request.team.clone(),
+            channel: request.channel.clone(),
             run_id: request.run_id.clone(),
         });
     }
@@ -475,6 +476,7 @@ fn agent_launch_event(append: &AgentLaunchAppend, identity: &AgentLaunchIdentity
             profile: identity.profile.clone(),
             role: identity.role.clone(),
             team: identity.team.clone(),
+            channel: identity.channel.clone().or_else(|| append.channel.clone()),
             kind_ordinal: None,
             state: append.state,
             run_id: identity.run_id.clone(),
@@ -565,6 +567,7 @@ mod tests {
                     profile: None,
                     role: None,
                     team: None,
+                    channel: None,
                     kind_ordinal: None,
                     state: crate::schema::event::AgentLaunchState::Bound,
                     run_id: None,
@@ -618,6 +621,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             run_id: None,
         };
         let prefix = AgentLaunchRequest {
@@ -627,6 +631,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             run_id: None,
         };
 
@@ -648,6 +653,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             run_id: None,
         };
 
@@ -668,6 +674,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: None,

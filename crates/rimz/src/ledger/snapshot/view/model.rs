@@ -60,6 +60,8 @@ impl SidebarProviderPanel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarWorktreeKind {
+    /// A durable named cooperation lane with no git backing.
+    Channel,
     /// A group root with a git story: a repo room's worktree checkout or a
     /// directory room's child repo.
     Worktree,

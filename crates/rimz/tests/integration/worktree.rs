@@ -980,6 +980,7 @@ fn seed_agent_launch(
             profile: None,
             role: None,
             team: None,
+            channel: None,
             kind_ordinal: None,
             state,
             run_id: None,

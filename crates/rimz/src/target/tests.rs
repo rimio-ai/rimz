@@ -254,6 +254,19 @@ fn branch_channel_wins_over_team() {
 }
 
 #[test]
+fn explicit_named_channel_wins_over_worktree_and_team() {
+    let mut agent = agent("claude", "session-design", Some("feat/auth"), "terminal_1");
+    agent.worktree_path = Some("/code/repo".to_owned());
+    agent.team = Some("pcr".to_owned());
+    agent.channel = Some("design".to_owned());
+
+    assert_eq!(agent_channel(&agent).as_deref(), Some("design"));
+    assert_eq!((&agent).channel_label(), "design");
+    assert!((&agent).in_worktree("design"));
+    assert!(!(&agent).in_worktree("feat/auth"));
+}
+
+#[test]
 fn zero_in_channel_but_matches_elsewhere() {
     let mut snapshot = empty_snapshot();
     let main_codex = agent("codex", "session-codex", Some("main"), "terminal_1");
@@ -276,7 +289,7 @@ fn rejects_conflicting_channels() {
     let snapshot = empty_snapshot();
     assert!(matches!(
         resolve_one(&snapshot, "@claude#main", Some("docs"), None),
-        Err(TargetErr::WorktreeMismatch { .. })
+        Err(TargetErr::ChannelMismatch { .. })
     ));
 }
 
@@ -762,6 +775,7 @@ fn agent(kind: &str, id: &str, branch: Option<&str>, raw_pane: &str) -> AgentSta
         profile: None,
         role: None,
         team: None,
+        channel: None,
         status: AgentStatus::Idle,
         phase: crate::agents::TurnPhase::Idle,
         pane: Some(PaneRef::from_id(PaneId::from_parts(
@@ -810,6 +824,7 @@ fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
         profile: None,
         role: None,
         team: None,
+        channel: None,
         agent_id: None,
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
         worktree_path: Some(worktree_path.to_owned()),
@@ -834,6 +849,7 @@ fn bound_pane(
         profile: None,
         role: None,
         team: None,
+        channel: None,
         agent_id: Some(AgentSessionId::from(session)),
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
         worktree_path: Some(format!("/repo/{branch}")),

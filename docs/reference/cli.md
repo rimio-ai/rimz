@@ -26,7 +26,7 @@ rimz
 | Group | Commands | Reference |
 | --- | --- | --- |
 | **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `list`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) |
-| **Work with agents** | `agents`, `message`, `transcript`, `pane`, `worktree`, `loop` | [Agent control](./cli/agents.md) |
+| **Work with agents** | `agents`, `message`, `transcript`, `pane`, `channel`, `worktree`, `loop` | [Agent control](./cli/agents.md) · [Channels](./cli/channel.md) |
 | **Decisions, hooks, and trust** | `feed`, `event`, `resolver`, `hooks`, `trust` | [Feed, resolvers, hooks, and trust](./cli/feed.md) |
 | **Configure and maintain** | `config`, `coverage`, `list-pets`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, `ping` | [Maintenance](./cli/maintenance.md) |
 
@@ -58,7 +58,7 @@ These hold across the whole CLI, so each command page assumes them rather than r
 
 **`--help` is the flag reference.** Every command and subcommand prints its full flags and defaults with `--help`. These pages teach the model and the forms worth knowing; they leave the exhaustive switch list to `--help`, which never drifts from the binary.
 
-**Addressing agents.** `message`, `transcript`, and the `agents` management verbs all name agents the same way — `@<handle>` for who, `#<channel>` for which worktree or in-place team, or a raw pane id. The one canonical explanation is [Addressing agents](./cli/agents.md#addressing-agents).
+**Addressing agents.** `message`, `transcript`, and the `agents` management verbs all name agents the same way — `@<handle>` for who, `#<channel>` for which named lane, worktree, or in-place team, or a raw pane id. The one canonical explanation is [Addressing agents](./cli/agents.md#addressing-agents).
 
 **Pick the backend with `--mux`.** When both Zellij and tmux are installed, `--mux zellij` or `--mux tmux` chooses the backend for that invocation. With one installed, Rimz uses it.
 

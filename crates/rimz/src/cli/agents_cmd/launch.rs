@@ -51,12 +51,13 @@ pub(super) fn launch_layout(
         .sum::<usize>()
         == 1;
     let worktree_launch = args.worktree.is_some() || args.from_pr.is_some();
+    let channel_launch = args.channel.is_some();
     let placement = apply_in_place_downgrade(
         resolve_placement(
             args.new_tab,
             args.new_pane,
             machine_config.agents.placement,
-            worktree_launch,
+            worktree_launch || channel_launch,
             single_cell,
             rimz::mux::ambient_pane_id().is_some(),
         )?,
@@ -80,11 +81,16 @@ pub(super) fn launch_layout(
         args.from_pr.as_ref(),
     )?;
     let ledger = open_ledger(&workspace)?;
+    if let Some(channel) = args.channel.as_deref() {
+        crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
+        rimz::channel::register(ledger.paths(), channel)?;
+    }
     let launch_requests = launch_identity_requests(
         &layout,
         args.name.as_deref(),
         generated_worktree_name(&launch),
         team_name,
+        args.channel.as_deref(),
     )?;
     let launch_identities = ledger.append_agent_launches_allocating(
         &launch_requests,
@@ -93,6 +99,7 @@ pub(super) fn launch_layout(
             session_name: workspace.session_name.clone(),
             cwd: launch.cwd.clone(),
             worktree_name: launch.worktree_name.clone(),
+            channel: args.channel.clone(),
             prompt: args.prompt.clone(),
             description: args.description.clone(),
             state: rimz::schema::event::AgentLaunchState::Starting,
@@ -101,8 +108,10 @@ pub(super) fn launch_layout(
     )?;
     let worktree_name = launch.worktree_name.clone();
     let cwd = launch.cwd;
-    let title =
-        rimz::agents_spec::default_tab_title(&layout, &cwd, worktree_name.as_deref(), team_name);
+    let title = args.channel.as_deref().map_or_else(
+        || rimz::agents_spec::default_tab_title(&layout, &cwd, worktree_name.as_deref(), team_name),
+        |channel| format!("#{channel}"),
+    );
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
@@ -121,6 +130,7 @@ pub(super) fn launch_layout(
         worktree_launch,
         in_place,
         team_name,
+        args.channel.as_deref(),
         &launch_identities,
     )?;
     let (open_result, what): (Result<()>, &str) = match placement {
@@ -144,7 +154,11 @@ pub(super) fn launch_layout(
                     target_pane_id: own_pane_id(mux),
                     cwd: Some(cwd.to_string_lossy().into_owned()),
                     command: Some(single_pane_argv(&panes)?),
-                    env: agents_launch::launch_identity_env(&workspace),
+                    env: agents_launch::launch_identity_env(
+                        &workspace,
+                        args.channel.as_deref(),
+                        !worktree_launch,
+                    ),
                     focus: !args.bg,
                 })
                 .map_err(Into::into),
@@ -154,8 +168,15 @@ pub(super) fn launch_layout(
             // exec replaces this process with the wrapper, which binds the pane
             // and direct-execs the agent in place; returns only on failure.
             let argv = single_pane_argv(&panes)?;
-            let err =
-                exec_wrapper_in_place(&argv, agents_launch::launch_identity_env(&workspace), &cwd);
+            let err = exec_wrapper_in_place(
+                &argv,
+                agents_launch::launch_identity_env(
+                    &workspace,
+                    args.channel.as_deref(),
+                    !worktree_launch,
+                ),
+                &cwd,
+            );
             (Err(err), "running the agent in the current pane")
         }
     };
@@ -166,6 +187,7 @@ pub(super) fn launch_layout(
             &launch_identities,
             &cwd,
             worktree_name.as_deref(),
+            args.channel.as_deref(),
             args.prompt.as_deref(),
             rimz::schema::event::AgentLaunchState::Failed,
         );
@@ -324,6 +346,7 @@ pub(super) struct AgentLaunchEnvIdentity<'a> {
     pub(super) agent_profile: Option<&'a str>,
     pub(super) agent_role: Option<&'a str>,
     pub(super) agent_team: Option<&'a str>,
+    pub(super) agent_channel: Option<&'a str>,
     pub(super) agent_model: Option<&'a str>,
     pub(super) agent_effort: Option<&'a str>,
 }
@@ -357,6 +380,9 @@ pub(super) fn full_agent_launch_env(
     }
     if let Some(agent_team) = identity.agent_team {
         env.insert(rimz::run::ENV_TEAM.to_owned(), agent_team.to_owned());
+    }
+    if let Some(agent_channel) = identity.agent_channel {
+        env.insert(rimz::run::ENV_CHANNEL.to_owned(), agent_channel.to_owned());
     }
     if let Some(agent_model) = identity.agent_model {
         env.insert(
@@ -425,6 +451,9 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         bail!(
             "--worktree requires an agent spec; use `rimz agents list --worktree <name>` to filter cards"
         );
+    }
+    if args.channel.is_some() {
+        bail!("--channel requires an agent spec; use `rimz channel list` to inspect channels");
     }
     if args.from_pr.is_some() {
         bail!("--from-pr requires an agent spec");
@@ -746,6 +775,7 @@ pub(super) fn launch_identity_requests(
     explicit_name: Option<&str>,
     generated_worktree_name: Option<&str>,
     team: Option<&str>,
+    channel: Option<&str>,
 ) -> Result<Vec<AgentLaunchRequest>> {
     let agent_cells: Vec<&Cell> = layout.agent_cells().collect();
     let agent_count = agent_cells.len();
@@ -780,6 +810,7 @@ pub(super) fn launch_identity_requests(
             profile: profile.clone(),
             role: role.clone(),
             team: team.map(ToOwned::to_owned),
+            channel: channel.map(ToOwned::to_owned),
             run_id: None,
         });
     }
@@ -798,6 +829,7 @@ pub(super) fn append_launch_events(
     identities: &[LaunchIdentity],
     cwd: &Path,
     worktree_name: Option<&str>,
+    channel: Option<&str>,
     prompt: Option<&str>,
     state: rimz::schema::event::AgentLaunchState,
 ) -> Result<()> {
@@ -809,6 +841,7 @@ pub(super) fn append_launch_events(
             LaunchEventParams {
                 cwd,
                 worktree_name,
+                channel,
                 prompt,
                 state,
                 pane_id: None,
@@ -840,6 +873,10 @@ pub(super) fn append_launch_event(
             profile: identity.profile.clone(),
             role: identity.role.clone(),
             team: identity.team.clone(),
+            channel: identity
+                .channel
+                .clone()
+                .or_else(|| params.channel.map(ToOwned::to_owned)),
             kind_ordinal: None,
             state: params.state,
             run_id: identity.run_id.clone(),
@@ -865,6 +902,7 @@ pub(super) fn layout_panes_with_names(
     cleanup_worktree: bool,
     in_place: bool,
     team: Option<&str>,
+    channel: Option<&str>,
     launch_identities: &[LaunchIdentity],
 ) -> Result<LayoutPanes> {
     let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
@@ -893,6 +931,7 @@ pub(super) fn layout_panes_with_names(
                             cleanup_worktree,
                             in_place,
                             team,
+                            channel,
                             launch,
                         },
                     )
@@ -914,6 +953,7 @@ pub(super) struct PaneCmdOptions<'a> {
     pub cleanup_worktree: bool,
     pub in_place: bool,
     pub team: Option<&'a str>,
+    pub channel: Option<&'a str>,
     pub launch: Option<&'a LaunchIdentity>,
 }
 
@@ -949,6 +989,9 @@ pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Re
             }
             if let Some(team) = options.team {
                 argv.extend(["--agent-team".to_owned(), team.to_owned()]);
+            }
+            if let Some(channel) = options.channel {
+                argv.extend(["--agent-channel".to_owned(), channel.to_owned()]);
             }
             if let Some(model) = model {
                 argv.extend(["--agent-model".to_owned(), model.clone()]);

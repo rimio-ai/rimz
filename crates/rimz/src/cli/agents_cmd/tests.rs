@@ -192,6 +192,7 @@ fn pane_command_stamps_agent_role_and_team() {
             cleanup_worktree: false,
             in_place: false,
             team: Some("pcr"),
+            channel: None,
             launch: None,
         },
     )
@@ -258,7 +259,7 @@ fn team_role_spec_stamps_launch_identity_and_pane_command() {
     .expect("team role spec");
     let team_name = rimz::agents_spec::spec_team("pcr.planner", &teams);
 
-    let requests = launch_identity_requests(&layout, None, None, team_name).unwrap();
+    let requests = launch_identity_requests(&layout, None, None, team_name, None).unwrap();
 
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].kind.as_str(), "codex");
@@ -275,6 +276,7 @@ fn team_role_spec_stamps_launch_identity_and_pane_command() {
             cleanup_worktree: false,
             in_place: false,
             team: team_name,
+            channel: None,
             launch: None,
         },
     )
@@ -314,6 +316,7 @@ fn in_place_pane_command_leaves_user_pane_open() {
             cleanup_worktree: false,
             in_place: true,
             team: None,
+            channel: None,
             launch: None,
         },
     )
@@ -1077,14 +1080,15 @@ fn explicit_mode_skips_cells_with_virtual_or_profile_mode() {
 fn generated_worktree_name_is_soft_agent_name_candidate() {
     let layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
 
-    let requests = launch_identity_requests(&layout, None, Some("docs"), Some("pcr")).unwrap();
+    let requests =
+        launch_identity_requests(&layout, None, Some("docs"), Some("pcr"), None).unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].name, AgentLaunchName::Soft("docs".to_owned()));
     assert_eq!(requests[0].profile, None);
     assert_eq!(requests[0].role, None);
     assert_eq!(requests[0].team.as_deref(), Some("pcr"));
 
-    let requests = launch_identity_requests(&layout, None, Some("my_feature"), None).unwrap();
+    let requests = launch_identity_requests(&layout, None, Some("my_feature"), None, None).unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].name,
@@ -1106,7 +1110,7 @@ fn launch_identity_requests_carry_cell_profile_role_and_team() {
         effort: Some("high".to_owned()),
     });
 
-    let requests = launch_identity_requests(&layout, None, None, Some("pcr")).unwrap();
+    let requests = launch_identity_requests(&layout, None, None, Some("pcr"), None).unwrap();
 
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].kind.as_str(), "codex");
@@ -1120,7 +1124,7 @@ fn explicit_agent_name_still_hard_fails_on_invalid() {
     let layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
 
     assert!(
-        launch_identity_requests(&layout, Some("my_feature"), None, None)
+        launch_identity_requests(&layout, Some("my_feature"), None, None, None)
             .unwrap_err()
             .to_string()
             .contains("invalid agent name")
@@ -1211,6 +1215,7 @@ fn bare_exec_args() -> ExecArgs {
         agent_profile: None,
         agent_role: None,
         agent_team: None,
+        agent_channel: None,
         agent_model: None,
         agent_effort: None,
         launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),

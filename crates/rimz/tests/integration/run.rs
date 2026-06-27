@@ -334,6 +334,7 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         agent_name: Some("lucid-atlas".to_owned()),
         role: None,
         team: None,
+        channel: None,
         profile: None,
         kind_ordinal: None,
         signal: rimz::agents::LifecycleSignal::Registered,

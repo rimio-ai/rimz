@@ -42,6 +42,8 @@ pub struct AgentLaunchPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_ordinal: Option<u32>,
     #[serde(default)]
     pub state: AgentLaunchState,
@@ -173,6 +175,7 @@ impl AgentLifecyclePayload {
                 agent_name: optional_string(params, "agent_name"),
                 role: optional_string(params, "role"),
                 team: optional_string(params, "team"),
+                channel: optional_string(params, "channel"),
                 profile: optional_string(params, "profile"),
                 kind_ordinal: optional_u64(params, "kind_ordinal").map(clamp_u32),
                 signal,
@@ -450,6 +453,7 @@ mod tests {
             agent_name: Some("amber-atlas".to_owned()),
             role: Some("reviewer".to_owned()),
             team: Some("pcr".to_owned()),
+            channel: None,
             profile: Some("claude-reviewer".to_owned()),
             kind_ordinal: Some(2),
             signal: LifecycleSignal::TurnEnded {
@@ -656,17 +660,21 @@ mod tests {
     }
 
     #[test]
-    fn agent_launch_payload_round_trips_team() {
+    fn agent_launch_payload_round_trips_channel_identity() {
         let payload: AgentLaunchPayload = serde_json::from_value(json!({
             "agent_id": "launch-1",
             "agent_name": "swift-otter",
             "role": "coder",
             "team": "pcr",
+            "channel": "design",
         }))
         .unwrap();
 
         assert_eq!(payload.team.as_deref(), Some("pcr"));
-        assert_eq!(serde_json::to_value(payload).unwrap()["team"], "pcr");
+        assert_eq!(payload.channel.as_deref(), Some("design"));
+        let encoded = serde_json::to_value(&payload).unwrap();
+        assert_eq!(encoded["team"], "pcr");
+        assert_eq!(encoded["channel"], "design");
     }
 
     #[test]

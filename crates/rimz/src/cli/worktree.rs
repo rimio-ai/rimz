@@ -566,6 +566,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: raw_pane.map(|raw| pane(raw, Some("codex"), None)),

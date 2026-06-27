@@ -111,6 +111,7 @@ fn record_lifecycle_observation(
         }
         if observation.parent_agent_id.is_none()
             && (observation.role.is_none()
+                || observation.channel.is_none()
                 || observation.profile.is_none()
                 || observation.model.is_none()
                 || observation.effort.is_none())
@@ -482,6 +483,9 @@ pub(super) fn fill_root_launch_identity(
     }
     if observation.team.is_none() {
         observation.team = identity_env(observation, rimz::run::ENV_TEAM);
+    }
+    if observation.channel.is_none() {
+        observation.channel = identity_env(observation, rimz::run::ENV_CHANNEL);
     }
     if observation.profile.is_none() {
         observation.profile = identity_env(observation, rimz::run::ENV_AGENT_PROFILE);
@@ -1533,6 +1537,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             status: rimz::agents::AgentStatus::Idle,
             phase: rimz::agents::TurnPhase::Idle,
             pane: None,

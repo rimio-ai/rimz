@@ -616,6 +616,7 @@ fn agent_row(kind: &str) -> SidebarRow {
         pane: None,
         worktree_path: None,
         worktree_branch: None,
+        channel: None,
         unread: false,
         inactive: false,
         last_activity: Timestamp::from_second(1).unwrap(),

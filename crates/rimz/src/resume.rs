@@ -138,7 +138,12 @@ pub fn plan_resume(
         }
         let worktree = agent.worktree_path.clone().unwrap_or_default();
         let cwd = PathBuf::from(&worktree);
-        let label = build_label(&agent.kind, agent.worktree_branch.as_deref(), &cwd);
+        let label = build_label(
+            &agent.kind,
+            agent.channel.as_deref(),
+            agent.worktree_branch.as_deref(),
+            &cwd,
+        );
         if !worktree_exists(&cwd) {
             plan.tombstone
                 .push((agent.kind.clone(), agent.agent_id.clone()));
@@ -167,11 +172,12 @@ pub fn plan_resume(
         // `[[agents]]` env and the adapter's launch pins before spawning the
         // resume argv.
         let command = resume_command(rimz_bin, agent);
-        if let Some(tab) = plan.tabs.iter_mut().find(|tab| tab.cwd == cwd) {
+        let tab_label = channel_label(agent.channel.as_deref(), &cwd);
+        if let Some(tab) = plan.tabs.iter_mut().find(|tab| tab.label == tab_label) {
             tab.panes.push(command);
         } else {
             plan.tabs.push(ResumeTab {
-                label: channel_label(&cwd),
+                label: tab_label,
                 cwd,
                 panes: vec![command],
             });
@@ -202,22 +208,35 @@ fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
     if let Some(team) = agent.team.as_deref() {
         command.extend(["--agent-team".to_owned(), team.to_owned()]);
     }
+    if let Some(channel) = agent.channel.as_deref() {
+        command.extend(["--agent-channel".to_owned(), channel.to_owned()]);
+    }
     command
 }
 
 /// A short, view-safe label for a resumed agent: `kind:branch`, falling back to
 /// the worktree directory name, then `kind:agent`. Used in skip reports and
 /// legacy per-agent tab title fallbacks.
-pub fn build_label(kind: &str, branch: Option<&str>, worktree: &Path) -> String {
-    format!("{kind}:{}", channel_short(branch, worktree))
+pub fn build_label(
+    kind: &str,
+    channel: Option<&str>,
+    branch: Option<&str>,
+    worktree: &Path,
+) -> String {
+    format!("{kind}:{}", channel_short(channel, branch, worktree))
 }
 
 /// A short, view-safe channel name: branch, then worktree directory, then
 /// `agent`.
-pub fn channel_short(branch: Option<&str>, worktree: &Path) -> String {
-    branch
-        .filter(|branch| !branch.is_empty())
+pub fn channel_short(channel: Option<&str>, branch: Option<&str>, worktree: &Path) -> String {
+    channel
+        .filter(|channel| !channel.is_empty())
         .map(ToOwned::to_owned)
+        .or_else(|| {
+            branch
+                .filter(|branch| !branch.is_empty())
+                .map(ToOwned::to_owned)
+        })
         .or_else(|| {
             worktree
                 .file_name()
@@ -230,14 +249,8 @@ pub fn channel_short(branch: Option<&str>, worktree: &Path) -> String {
 /// worktree-launch tabs. A main-repo non-worktree agent falls back to
 /// `#<repo-name>` rather than the live `kind:repo` title because resume groups by
 /// cwd.
-pub fn channel_label(worktree: &Path) -> String {
-    format!(
-        "#{}",
-        worktree
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "agent".to_owned())
-    )
+pub fn channel_label(channel: Option<&str>, worktree: &Path) -> String {
+    format!("#{}", channel_short(channel, None, worktree))
 }
 
 #[cfg(test)]
@@ -288,6 +301,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: Some(pane(&format!("terminal_{id}"))),
@@ -648,8 +662,39 @@ mod tests {
         );
         assert_eq!(plan.tabs[0].label, "#query-engine");
         assert_eq!(
-            build_label("codex", None, Path::new("/code/query-engine")),
+            build_label("codex", None, None, Path::new("/code/query-engine")),
             "codex:query-engine"
+        );
+    }
+
+    #[test]
+    fn named_channel_groups_by_explicit_channel_and_replays_identity() {
+        let mut design = agent("codex", "c1", "/code/query-engine", Some("main"), 1);
+        design.channel = Some("design".to_owned());
+        let plan = plan_resume(
+            &[design],
+            &no_ended(),
+            DEFAULT_RESUME_MAX,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
+
+        assert_eq!(plan.tabs[0].label, "#design");
+        assert_eq!(
+            build_label(
+                "codex",
+                Some("design"),
+                Some("main"),
+                Path::new("/code/query-engine")
+            ),
+            "codex:design"
+        );
+        assert!(
+            plan.tabs[0].panes[0].windows(2).any(|pair| {
+                pair[0].as_str() == "--agent-channel" && pair[1].as_str() == "design"
+            }),
+            "resume argv re-stamps the named channel: {:?}",
+            plan.tabs[0].panes[0]
         );
     }
 }

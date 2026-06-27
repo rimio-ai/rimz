@@ -62,6 +62,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
         }),
         worktree_path: Some(format!("/repo/wt{group}")),
         worktree_branch: Some(format!("feature-{group}")),
+        channel: None,
         unread: false,
         inactive: false,
         last_activity: super::fixed_now(),

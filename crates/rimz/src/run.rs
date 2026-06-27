@@ -28,6 +28,12 @@ pub const ENV_AGENT_ROLE: &str = "RIMZ_AGENT_ROLE";
 /// The `[agents.teams]` team name an agent launched under. Set by the launch
 /// wrapper; read by member CLI calls so in-place teams scope to their channel.
 pub const ENV_TEAM: &str = "RIMZ_TEAM";
+/// Named cooperation lane an agent launched under. Set by the launch wrapper;
+/// read by lifecycle hooks and peer-message commands as the routing channel.
+pub const ENV_CHANNEL: &str = "RIMZ_CHANNEL";
+/// The cwd backing a launched pane. Set with the room pin so split panes can
+/// still report the worktree path they were opened for.
+pub const ENV_WORKTREE_PATH: &str = "RIMZ_WORKTREE_PATH";
 /// The model selected by launch flags or profile presets. Set by the launch
 /// wrapper; read into the lifecycle observation as card identity fallback.
 pub const ENV_AGENT_MODEL: &str = "RIMZ_AGENT_MODEL";
@@ -774,6 +780,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             status,
             phase: TurnPhase::Idle,
             pane: None,

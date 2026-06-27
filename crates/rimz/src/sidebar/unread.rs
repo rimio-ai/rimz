@@ -389,6 +389,7 @@ mod tests {
             pane: Some(PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%1"))),
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
+            channel: None,
             unread: false,
             inactive: false,
             last_activity: jiff::Timestamp::from_millisecond(last_activity).expect("timestamp"),

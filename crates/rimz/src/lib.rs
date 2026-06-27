@@ -14,6 +14,7 @@ pub mod agents_spec;
 pub mod binding_log;
 pub mod bridge;
 pub mod build_id;
+pub mod channel;
 pub mod child_process;
 pub mod config;
 pub mod daemon_content;

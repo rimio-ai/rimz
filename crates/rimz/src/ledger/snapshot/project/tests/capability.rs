@@ -13,6 +13,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
             profile: Some("codex-coder".to_owned()),
             role: Some("coder".to_owned()),
             team: Some("pcr".to_owned()),
+            channel: None,
             kind_ordinal: None,
             state: AgentLaunchState::Starting,
             run_id: None,

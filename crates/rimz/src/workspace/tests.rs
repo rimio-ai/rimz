@@ -363,30 +363,17 @@ fn bare_directory_resolves_as_a_directory_workspace() {
 }
 
 #[test]
-fn create_mode_refuses_home_as_a_directory_root() {
+fn create_mode_accepts_home_like_directory_root() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).expect("mkdir home");
     let home_env = |key: &str| (key == "HOME").then(|| home.clone().into_os_string());
 
-    let err = WorkspaceResolver::resolve_with(ResolveMode::Create, &home, None, &home_env, NO_SCAN)
-        .expect_err("refused");
-    assert!(
-        matches!(err, WorkspaceErr::RefusedRoot { .. }),
-        "expected RefusedRoot, got: {err}",
-    );
-    assert!(err.to_string().contains("--root"), "error names the fix");
-
-    // `--root` selects the override tier, which never refuses.
-    let forced = WorkspaceResolver::resolve_with(
-        ResolveMode::Create,
-        &home,
-        Some(home.clone()),
-        &home_env,
-        NO_SCAN,
-    )
-    .expect("forced via --root");
-    assert_eq!(forced.root_class, RootClass::Directory);
+    let resolved =
+        WorkspaceResolver::resolve_with(ResolveMode::Create, &home, None, &home_env, NO_SCAN)
+            .expect("resolve");
+    assert_eq!(resolved.root_class, RootClass::Directory);
+    assert_eq!(resolved.project_root, home.canonicalize().expect("home"));
 }
 
 #[test]
@@ -402,12 +389,6 @@ fn participants_never_refuse_a_pathological_root() {
         WorkspaceResolver::resolve_with(ResolveMode::Participate, &home, None, &home_env, NO_SCAN)
             .expect("resolve");
     assert_eq!(resolved.root_class, RootClass::Directory);
-}
-
-#[test]
-fn refuses_the_filesystem_root() {
-    let err = refuse_pathological_root(Path::new("/"), &no_env).expect_err("refused");
-    assert!(matches!(err, WorkspaceErr::RefusedRoot { .. }));
 }
 
 #[test]

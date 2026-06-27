@@ -443,6 +443,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         AgentLaunchEnvIdentity {
             agent_profile: agent_cell.profile,
             agent_role: agent_cell.role,
+            agent_channel: args.channel.as_deref(),
             agent_model: agent_cell.model,
             agent_effort: agent_cell.effort,
             ..AgentLaunchEnvIdentity::default()
@@ -463,6 +464,10 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
     let detected_size = rimz::mux::detect_terminal_size();
     let ledger = crate::cli::open_ledger(&workspace)?;
+    if let Some(channel) = args.channel.as_deref() {
+        crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
+        rimz::channel::register(ledger.paths(), channel)?;
+    }
     backend.ensure_session(&rimz::mux::SessionOptions {
         session_name: workspace.session_name.clone(),
         workspace_id: workspace.workspace_id.clone(),
@@ -511,6 +516,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         args.name.as_deref(),
         generated_worktree_name(&launch),
         None,
+        args.channel.as_deref(),
     )?;
     let launch_requests = launch_requests
         .into_iter()
@@ -526,6 +532,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             session_name: workspace.session_name.clone(),
             cwd: launch.cwd.clone(),
             worktree_name: launch.worktree_name.clone(),
+            channel: args.channel.clone(),
             prompt: Some(prompt.clone()),
             description: args.description.clone(),
             state: rimz::schema::event::AgentLaunchState::Starting,
@@ -566,7 +573,11 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             target_pane_id: target,
             cwd: Some(launch.cwd.to_string_lossy().into_owned()),
             command: Some(pane.argv.clone()),
-            env: crate::cli::agents_launch::launch_identity_env(&workspace),
+            env: crate::cli::agents_launch::launch_identity_env(
+                &workspace,
+                args.channel.as_deref(),
+                args.worktree.is_none() && args.from_pr.is_none(),
+            ),
             focus: false,
         }),
         RunPlacement::Tab => backend.open_tab(&TabOptions {
@@ -593,6 +604,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             LaunchEventParams {
                 cwd: &launch.cwd,
                 worktree_name: launch.worktree_name.as_deref(),
+                channel: args.channel.as_deref(),
                 prompt: Some(&prompt),
                 state: rimz::schema::event::AgentLaunchState::Failed,
                 pane_id: None,

@@ -1,6 +1,6 @@
 # The agent harness
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent *model* — the rollup, state machine, turn phase, liveness, and adapter boundary — is [agent.md](./agent.md); the worktrees that back its channels are [worktree.md](./worktree.md); the user-facing commands are [cli/agents.md](../../reference/cli/agents.md). This doc owns the machinery between them: spawning the fleet, addressing it, driving it with `message`, the supervised runs automation drives, and the cleanup that reclaims its panes.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent *model* — the rollup, state machine, turn phase, liveness, and adapter boundary — is [agent.md](./agent.md); channels are [channels.md](./channels.md); Git worktree backing is [worktree.md](./worktree.md); the user-facing commands are [cli/agents.md](../../reference/cli/agents.md). This doc owns the machinery between them: spawning the fleet, addressing it, driving it with `message`, the supervised runs automation drives, and the cleanup that reclaims its panes.
 
 One agent in one thread is a conversation; tens of agents across a dozen worktrees is a team. The harness runs that team. It spawns agents into panes, reaches any one by name, drives it live or leaves it a task for when it is free, and reclaims its pane when it exits — the same machinery whether a human, a cron job, a CI gate, or a PR hook is doing the driving.
 
@@ -8,20 +8,21 @@ Everything here rides primitives both backends share: a layout compiles to backe
 
 ## The model
 
-Spawning the fleet separates three independent choices, so any combination is one command: **agents** choose which tools run, **layout** chooses the shape on screen, and **worktree** chooses which channel they run in. `claude,codex` plus `--worktree=feat/x` puts a planner and a reviewer side by side in one channel; the same agents with a different layout or worktree is the same three knobs turned differently.
+Spawning the fleet separates three independent choices, so any combination is one command: **agents** choose which tools run, **layout** chooses the shape on screen, and **channel** chooses the cooperation lane they run in. `claude,codex` plus `--channel=design` or `--worktree=feat/x` puts a planner and a reviewer side by side in one channel; the same agents with a different layout or channel is the same three knobs turned differently.
 
 Three words name the parts:
 
-- A **channel** is a [worktree](./worktree.md), or an in-place named team as `<dir>/<team>` — one cooperation lane where a few members work together. The sidebar groups the room by it, and an address narrows to it with `#<channel>`.
+- A **channel** is one cooperation lane where a few members work together, backed by a durable bare name, a [worktree](./worktree.md), an in-place named team as `<dir>/<team>`, or the directory room. The sidebar groups the room by it, and an address narrows to it with `#<channel>`.
 - A **member** is an agent, named by a **handle**: `@claude` the kind, `@planner` the profile, `@swift-otter` the one running instance.
 - An **address** joins them — `@handle#channel` — and is how every command names who it is reaching.
 
 You reach a member through `message`. `--steer` talks to a live pane now; the default talks now when the member can receive and parks a task when the member needs a later turn boundary; `--schedule` sets an earliest delivery time before that boundary can open. Every mode names its target with the same address and rides the same pane-send primitive.
 
 ```text
-one room, grouped into channels — one per worktree
+one room, grouped into channels — named lanes, worktrees, teams, directories
 
   #feat-auth   @claude    planning       @codex  reviewing
+  #design      @planner   outlining
   #deps        @codex     -p run (from CI)
   #docs        @planner   queued: "draft the API"
 
@@ -54,15 +55,15 @@ The compile target is the seam the whole harness hangs off. Each cell becomes a 
 
 ### Backend shape and placement
 
-Each backend renders the same compiled layout into a tab, and a single non-worktree agent can run in the current pane instead. Both backends receive the same `TabOptions` — session, title, cwd, focus flag, sidebar options, and the pre-built pane argv — and dock the global sidebar once before adding the layout cells; the per-backend split commands live in [`mux/`](../../../crates/rimz/src/mux/AGENTS.md). A worktree launch names its tab `#<NAME>`, matching the channel suffix in agent addresses; a named team launch names it `team:<name>`, and its in-place channel is `<dir>/<team>`; any other non-worktree launch names it `<kind>:<dir>`. `--bg` keeps focus on the launching pane wherever the backend can.
+Each backend renders the same compiled layout into a tab, and a single non-worktree agent can run in the current pane instead. Both backends receive the same `TabOptions` — session, title, cwd, focus flag, sidebar options, and the pre-built pane argv — and dock the global sidebar once before adding the layout cells; the per-backend split commands live in [`mux/`](../../../crates/rimz/src/mux/AGENTS.md). A named-channel or worktree launch names its tab `#<NAME>`, matching the channel suffix in agent addresses; a named team launch names it `team:<name>`, and its in-place channel is `<dir>/<team>`; any other non-worktree launch names it `<kind>:<dir>`. `--bg` keeps focus on the launching pane wherever the backend can.
 
-**Placement resolves before the launch touches the ledger or creates a worktree**, so a rejected placement leaves no provisional rows or worktree behind. Under the `auto` default a single non-worktree agent launches *in the current pane*: the CLI execs the wrapper argv in place, the wrapper binds the pane and direct-execs the agent, and the pane returns to its shell on exit with liveness resolved from the pane rather than an end trace. A team, multi-cell layout, or worktree launch opens its own tab. `--new-pane` splits the current tab, `--new-tab` opens a tab, and the per-machine [`[agents] placement`](../../reference/configuration.md#agent-profiles-commands-and-teams) default chooses when no flag is given. `--bg` and create-on-miss downgrade an in-place launch to a split, because the caller's pane stays available; the split carries the launch-identity env on both backends and honors the same focus flag.
+**Placement resolves before the launch touches the ledger or creates a worktree**, so a rejected placement leaves no provisional rows or worktree behind. Under the `auto` default a single non-worktree agent launches *in the current pane*: the CLI execs the wrapper argv in place, the wrapper binds the pane and direct-execs the agent, and the pane returns to its shell on exit with liveness resolved from the pane rather than an end trace. A named-channel launch, team, multi-cell layout, or worktree launch opens its own tab. `--new-pane` splits the current tab, `--new-tab` opens a tab, and the per-machine [`[agents] placement`](../../reference/configuration.md#agent-profiles-commands-and-teams) default chooses when no flag is given. `--bg` and create-on-miss downgrade an in-place launch to a split, because the caller's pane stays available; the split carries the launch-identity env on both backends and honors the same focus flag.
 
 ## The address
 
 Every member has an address you type like an @-mention: `@<handle>#<channel>`. The handle names who, the channel names where, and both read from context — `@claude` uses the channel you are in, `#auth` alone filters a listing to that channel. [cli/agents.md → Addressing agents](../../reference/cli/agents.md#addressing-agents) is the handle catalog; this section owns how an address resolves.
 
-The **channel** is the workspace segment the room already groups by: a worktree branch, else a child repo's directory name, else the directory itself; an in-place named team appends its team name as `<dir>/<team>` ([sidebar.md → Worktree groups](../sidebar/sidebar.md#worktree-groups)). It matches by branch, path basename, full path, or team channel, and defaults to the channel the command runs in; an inline `#<name>` or `--worktree` overrides it. A bare directory workspace has no current channel for humans, so an address there reaches *every* channel rather than silently narrowing to one; team member panes carry `RIMZ_TEAM`, so their own `rimz` calls default to `<dir>/<team>`. Mux tab names stay display-only — they are mutable and live outside the ledger, so they never form an address.
+The **channel** is the workspace segment the room already groups by: an explicit named channel, else a worktree branch, else a child repo's directory name with any in-place team appended as `<dir>/<team>`, else the directory itself ([channels.md](./channels.md)). It matches by explicit name, branch, path basename, full path, or team channel, and defaults to the channel the command runs in; an inline `#<name>`, `--channel`, or `--worktree` overrides it. A bare directory workspace has no current channel for humans, so an address there reaches *every* channel rather than silently narrowing to one; named-channel panes carry `RIMZ_CHANNEL`, and team member panes carry `RIMZ_TEAM`. Mux tab names stay display-only — they are mutable and live outside the ledger, so they never form an address.
 
 A **handle** falls into three classes, narrowing from group to instance:
 
@@ -80,7 +81,7 @@ An address resolves to zero, one, or many agents against a fresh snapshot, and a
 | many | an ambiguity error listing the handles to pick one, unless `--all` (or `@all`) opts into the fan-out — which confirms before sending unless `-y`, and skips a blocked agent while the rest send |
 | zero | a miss that names where the agent runs in another channel, or — with `--create` — launches it |
 
-`--create` launches a missing agent straight from its address: `rimz message --steer @planner#feat/x --create "draft the API"` opens a `planner` in `#feat/x`, creating the worktree when the channel is new, with the text as its first prompt. Only a type handle creates, because only a kind or profile carries what a launch needs; an instance handle names something that must already exist and refuses with the fix. Create-on-miss is exactly the launch `rimz agents <kind|profile> --worktree=<channel> "<prompt>"` would run, reached from the address.
+`--create` launches a missing agent straight from its address: `rimz message --steer @planner#design --create "draft the API"` opens a `planner` in `#design`, registering the named channel, with the text as its first prompt. With `--worktree feat/x`, create-on-miss creates or reuses the worktree instead. Only a type handle creates, because only a kind or profile carries what a launch needs; an instance handle names something that must already exist and refuses with the fix.
 
 ## Talk and queue
 

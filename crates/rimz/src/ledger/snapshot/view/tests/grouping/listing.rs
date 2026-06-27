@@ -165,3 +165,19 @@ fn branch_named_unmatched_path_keeps_pre_enumeration_worktree_group() {
     assert_eq!(group.key, "branch:feature-x");
     assert_eq!(group.label, "feature-x");
 }
+
+#[test]
+fn named_channel_groups_a_live_agent_ahead_of_worktree_identity() {
+    let mut design = agent("claude", "design", AgentStatus::Running, 20)
+        .worktree("/repo/main")
+        .branch("main");
+    design.channel = Some("design".to_owned());
+    let snapshot = room(Vec::new(), vec![design]);
+    let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
+
+    let groups = group_live_agents_by_worktree(&refs, &snapshot);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].kind, SidebarWorktreeKind::Channel);
+    assert_eq!(groups[0].label, "#design");
+}

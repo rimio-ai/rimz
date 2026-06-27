@@ -67,6 +67,7 @@ fn raw_launch_with_description(
             profile: None,
             role: None,
             team: None,
+            channel: None,
             kind_ordinal: None,
             state,
             run_id: None,
@@ -258,6 +259,7 @@ fn launch_description_without_prompt_creates_idle_card() {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             kind_ordinal: None,
             state: AgentLaunchState::Bound,
             run_id: None,
@@ -288,6 +290,7 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
             profile: Some("codex-coder".to_owned()),
             role: Some("coder".to_owned()),
             team: Some("pcr".to_owned()),
+            channel: None,
             kind_ordinal: None,
             state: AgentLaunchState::Starting,
             run_id: None,
@@ -329,6 +332,7 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
             profile: Some("codex-coder".to_owned()),
             role: Some("coder".to_owned()),
             team: Some("pcr".to_owned()),
+            channel: None,
             kind_ordinal: None,
             state: AgentLaunchState::Bound,
             run_id: None,
@@ -370,6 +374,7 @@ fn lifecycle_role_and_profile_project_without_launch_placeholder() {
             "agent_id": "sess-1",
             "agent_name": "lucid-atlas",
             "role": "reviewer",
+            "channel": "design",
             "profile": "claude-reviewer",
             "signal": { "signal": "registered" },
         }),
@@ -381,6 +386,7 @@ fn lifecycle_role_and_profile_project_without_launch_placeholder() {
     assert_eq!(agents[0].agent_id.as_str(), "sess-1");
     assert_eq!(agents[0].profile.as_deref(), Some("claude-reviewer"));
     assert_eq!(agents[0].role.as_deref(), Some("reviewer"));
+    assert_eq!(agents[0].channel.as_deref(), Some("design"));
 }
 
 #[test]

@@ -294,6 +294,7 @@ fn rows_by_pane(snapshot: &crate::SidebarSnapshot) -> HashMap<PaneId, RowLocatio
 
 fn worktree_kind_name(kind: crate::SidebarWorktreeKind) -> &'static str {
     match kind {
+        crate::SidebarWorktreeKind::Channel => "channel",
         crate::SidebarWorktreeKind::Worktree => "worktree",
         crate::SidebarWorktreeKind::Root => "root",
         crate::SidebarWorktreeKind::External => "external",
@@ -535,6 +536,7 @@ mod tests {
             pane: Some(pane_ref),
             worktree_path: None,
             worktree_branch: None,
+            channel: None,
             unread: false,
             inactive: false,
             last_activity: jiff::Timestamp::from_second(1_000).unwrap(),

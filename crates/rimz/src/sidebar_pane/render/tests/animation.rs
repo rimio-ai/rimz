@@ -432,6 +432,7 @@ fn selected_pet_action_follows_process_cards() {
         pane: None,
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
+        channel: None,
         unread: false,
         inactive: false,
         last_activity: fixed_now(),

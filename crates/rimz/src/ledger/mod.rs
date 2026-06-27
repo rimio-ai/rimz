@@ -207,6 +207,7 @@ pub struct AgentLaunchRequest {
     pub profile: Option<String>,
     pub role: Option<String>,
     pub team: Option<String>,
+    pub channel: Option<String>,
     pub run_id: Option<RunId>,
 }
 
@@ -218,6 +219,7 @@ pub struct AgentLaunchIdentity {
     pub profile: Option<String>,
     pub role: Option<String>,
     pub team: Option<String>,
+    pub channel: Option<String>,
     pub run_id: Option<RunId>,
 }
 
@@ -227,6 +229,7 @@ pub struct AgentLaunchAppend {
     pub session_name: String,
     pub cwd: PathBuf,
     pub worktree_name: Option<String>,
+    pub channel: Option<String>,
     pub prompt: Option<String>,
     pub description: Option<String>,
     pub state: AgentLaunchState,

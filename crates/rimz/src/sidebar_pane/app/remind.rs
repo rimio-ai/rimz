@@ -232,6 +232,7 @@ mod tests {
             pane: Some(pane(raw, "tab_0", false)),
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
+            channel: None,
             unread,
             inactive: false,
             last_activity: Timestamp::now(),

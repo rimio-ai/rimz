@@ -721,6 +721,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             status: AgentStatus::Running,
             phase: TurnPhase::Idle,
             pane: None,

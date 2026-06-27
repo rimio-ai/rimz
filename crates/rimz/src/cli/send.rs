@@ -24,9 +24,12 @@ use rimz::{PaneAgent, SidebarSnapshot};
 /// The flags shared by immediate and parked message delivery.
 #[derive(Debug, Args)]
 pub(crate) struct SendFlags {
-    /// Restrict matches to one worktree branch, name, or path (the channel).
-    #[arg(long)]
+    /// Restrict matches to one worktree branch, name, or path.
+    #[arg(long, conflicts_with = "channel")]
     pub(crate) worktree: Option<String>,
+    /// Restrict matches to one named channel.
+    #[arg(long, value_name = "NAME", conflicts_with = "worktree")]
+    pub(crate) channel: Option<String>,
     /// Type the text but leave it unsubmitted — no Enter after it lands.
     #[arg(long)]
     pub(crate) no_enter: bool,

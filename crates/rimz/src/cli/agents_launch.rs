@@ -13,8 +13,12 @@ use rimz::workspace::RootClass;
 /// room's worktree root). Splits inherit the session env already; setting these
 /// explicitly keeps a freshly split pane pinned to the same room as the
 /// new-tab launch path. The pane's own working directory is set separately.
-pub(crate) fn launch_identity_env(workspace: &ResolvedWorkspace) -> BTreeMap<String, String> {
-    BTreeMap::from([
+pub(crate) fn launch_identity_env(
+    workspace: &ResolvedWorkspace,
+    channel: Option<&str>,
+    inherit_channel: bool,
+) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::from([
         ("RIMZ".to_owned(), "1".to_owned()),
         (
             "RIMZ_WORKSPACE_ID".to_owned(),
@@ -25,10 +29,22 @@ pub(crate) fn launch_identity_env(workspace: &ResolvedWorkspace) -> BTreeMap<Str
             workspace.project_root.display().to_string(),
         ),
         (
-            "RIMZ_WORKTREE_PATH".to_owned(),
+            rimz::run::ENV_WORKTREE_PATH.to_owned(),
             workspace.worktree_root.display().to_string(),
         ),
-    ])
+    ]);
+    let channel = channel
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            inherit_channel
+                .then(|| std::env::var(rimz::run::ENV_CHANNEL).ok())
+                .flatten()
+        })
+        .filter(|value| !value.is_empty());
+    if let Some(channel) = channel {
+        env.insert(rimz::run::ENV_CHANNEL.to_owned(), channel);
+    }
+    env
 }
 
 pub(crate) fn resolve_cwd(

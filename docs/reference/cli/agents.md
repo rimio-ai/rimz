@@ -1,6 +1,6 @@
 # Agent control CLI
 
-These commands are how you run the fleet: list the room's agents, launch laid-out panes and supervised script turns, talk to live agents by name, read their transcripts, and manage the worktrees they work in. Run them from inside the room or anywhere that resolves to the same workspace.
+These commands are how you run the fleet: list the room's agents, launch laid-out panes and supervised script turns, talk to live agents by name, read their transcripts, and manage the channels they work in. Run them from inside the room or anywhere that resolves to the same workspace.
 
 A typical session threads the whole surface together:
 
@@ -15,7 +15,7 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 
 ## Addressing agents
 
-`message`, `transcript`, and the `agents show`/`focus`/`wait`/`stop` verbs share one address grammar: **`@<handle>` names who, an optional `#<channel>` names the worktree or in-place team channel,** and a raw pane id is the precise fallback. This is the one place it is spelled out; every command below assumes it.
+`message`, `transcript`, and the `agents show`/`focus`/`wait`/`stop` verbs share one address grammar: **`@<handle>` names who, an optional `#<channel>` names the named lane, worktree, or in-place team channel,** and a raw pane id is the precise fallback. This is the one place it is spelled out; every command below assumes it.
 
 **Handles that name one agent:**
 
@@ -29,11 +29,12 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 - `@planner` — a [profile](../configuration.md#agent-profiles-commands-and-teams) you defined; every agent launched under it.
 - `@all` — everyone in the channel.
 
-**Channels** scope the lookup to a worktree or in-place team:
+**Channels** scope the lookup to a named lane, worktree, or in-place team:
 
-- `#auth-refresh` matches by branch, generated worktree name, or directory basename; `--worktree auth-refresh` is the flag spelling.
+- `#design` matches a named channel created by [`rimz channel`](./channel.md); `--channel design` is the flag spelling.
+- `#auth-refresh` matches by branch, generated worktree name, or directory basename; `--worktree auth-refresh` is the worktree flag spelling.
 - `#query-engine/pcr` matches the named team `pcr` launched in-place from the `query-engine` directory.
-- The default channel is the worktree you run the command in.
+- The default channel is the named-channel tab or worktree you run the command in.
 - A team member pane launched in-place carries its team channel, so its own `rimz` commands default to `<dir>/<team>`.
 - A pane id (`tmux:%12`, `zellij:terminal_3`) addresses one pane directly and ignores channels.
 
@@ -56,6 +57,7 @@ A `<SPEC>` is a shape, and the optional `PROMPT` broadcasts to every agent cell 
 rimz agents peer                                    # built-in claude,codex side by side
 rimz agents claude,codex+term                       # Claude | Codex tiled over a shell
 rimz agents claude/codex/term                       # one Zellij stack; tmux tiles rows
+rimz agents claude,codex --channel=design "Draft the API shape."
 rimz agents claude,codex --worktree=cli-docs "Review the CLI docs."
 rimz agents codex --from-pr 42 "Review this pull request."
 rimz agents 'vim,codex+term' "Review the CLI docs."  # a raw command cell beside an agent
@@ -72,11 +74,13 @@ Permission-mode cells exist where the adapter supports them: `-auto`, `-ask`, `-
 
 These broadcast to every agent cell, and each adapter renders them into its own native flags. `--model`, `--effort`, `--system-prompt-file`, and `--append-system-prompt-file` carry the same meaning and resolution rules as the [profile fields](../configuration.md#profiles) of the same names — a command-line flag renders after any profile and wins. `--effort` levels are provider-specific: Claude `low|medium|high|xhigh|max`, Codex `minimal|low|medium|high|xhigh`, Pi `off|minimal|low|medium|high|xhigh`. `--description <TEXT>` is a card label only: it seeds the card's second line, never enters the agent's argv or environment, and the agent's own session preview replaces it.
 
-### Worktree and placement
+### Channel, worktree, and placement
 
 `-w`/`--worktree` reuses or creates a named worktree (`--worktree=docs` or `--worktree docs`); bare `--worktree` creates a fresh generated one. `--from-pr <number|url>` creates the worktree from a pull request head and implies a worktree launch — pair it with `--worktree <NAME>` to name the local worktree, or accept `pr-<N>`. A worktree launch names its backend tab `#<NAME>`, matching the channel in agent addresses.
 
-Placement follows intent under the default `auto` policy: a worktree launch, a named team, or a multi-cell spec opens its own tab, a single team role splits beside the current pane, and a single non-worktree agent takes over the current pane and returns to the shell when it exits. `--new-pane` forces a split (rejected for a multi-cell spec), `--new-tab` forces a tab, and `--bg` downgrades an in-place launch to a split so focus stays put. The per-machine [`[agents] placement`](../configuration.md#agent-profiles-commands-and-teams) default sets the policy when no flag is given. The split-versus-tab mechanics are in [harness.md → Backend shape and placement](../../internals/agents/harness.md#backend-shape-and-placement).
+`--channel <NAME>` launches into a durable named channel, registering it when missing and naming the backend tab `#<NAME>`. Named channels run in the room root and are managed with [`rimz channel`](./channel.md).
+
+Placement follows intent under the default `auto` policy: a named-channel launch, a worktree launch, a named team, or a multi-cell spec opens its own tab, a single team role splits beside the current pane, and a single non-worktree agent takes over the current pane and returns to the shell when it exits. `--new-pane` forces a split (rejected for a multi-cell spec), `--new-tab` forces a tab, and `--bg` downgrades an in-place launch to a split so focus stays put. The per-machine [`[agents] placement`](../configuration.md#agent-profiles-commands-and-teams) default sets the policy when no flag is given. The split-versus-tab mechanics are in [harness.md → Backend shape and placement](../../internals/agents/harness.md#backend-shape-and-placement).
 
 ### Supervised runs (`-p`)
 
@@ -143,7 +147,8 @@ The flags worth knowing tune delivery (run `rimz message --help` for the full su
 - `--on done|any` chooses which turn-boundary statuses release parked records; `done` is the default.
 - `--no-enter` pastes the text without submitting; otherwise the text rides as a bracketed paste and Enter lands as a discrete keystroke, so a `\n` in the text stays a soft composer newline and a multi-line prompt lands multi-line (write `\\` for a literal backslash).
 - `--file <PATH>` reads the prompt from a file and sends it byte-for-byte — real newlines stay soft breaks and backslashes stay literal, so code and regex paste unchanged. It conflicts with inline text.
-- `--create` launches a missing agent from a kind or profile address (opening the worktree when the channel is new) with the text as its first prompt; scheduled messages require an existing durable agent card.
+- `--channel <NAME>` scopes the target to a named channel; inline `#NAME` is the address form. `--worktree <NAME>` scopes to a worktree/branch/path.
+- `--create` launches a missing agent from a kind or profile address with the text as its first prompt; inline `#NAME` or `--channel NAME` registers a named channel, while `--worktree NAME` creates or reuses Git backing.
 - `--force` sends over a pending native ask; without it the ask keeps the next input reserved.
 - `--smart-compact <PCT|TOKENS>` sends a tracked `/compact` command first when the agent's context window has reached the threshold (a percentage like `70%` or an occupied-token count like `120000`), then sends the prompt one message interval later so it lands against a fresh window. Unset, [`[harness] smart_compact`](../configuration.md#smart-compaction) supplies the threshold; a window below it sends untouched.
 - `--no-from` sends the bytes exactly. By default a Rimz-launched agent's send arrives as `from @sender: text`, gaining `#channel` when it crosses channels.
@@ -222,4 +227,4 @@ rimz worktree remove experiment --force                  # remove anyway
 
 `new` creates a marked worktree under the configured [`[agents.worktree] dir`](../configuration.md#worktrees). `--base head` branches from `HEAD`, `--base fresh` from the configured fresh base, and any other value is a git ref. `--from-pr <number|url>` fetches the pull request head through `origin` and creates a `pr-<N>` branch unless `--branch` names it (GitHub/Gitea/Forgejo use `refs/pull/<N>/head`, GitLab `refs/merge-requests/<N>/head`). `list` shows Rimz-owned worktrees as the channels they are — name, branch, the `@kind` handles working there, a dirty marker, the landed signal, and the path. `remove` refuses a dirty worktree or one whose content is not proven landed on its base; `--force` removes anyway.
 
-Rimz marks only worktrees it creates, so it manages agent workspaces without claiming arbitrary checkouts. The marker, `.worktreeinclude` seeding, `.worktreelink` symlinks, and the `rimz gc` sweep are in [worktree.md](../../internals/agents/worktree.md).
+Rimz marks only worktrees it creates, so it manages agent workspaces without claiming arbitrary checkouts. Named channels are covered in [channel.md](./channel.md); the marker, `.worktreeinclude` seeding, `.worktreelink` symlinks, and the `rimz gc` sweep are in [worktree.md](../../internals/agents/worktree.md).

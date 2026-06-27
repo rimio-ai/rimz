@@ -632,7 +632,7 @@ pub fn default_tab_title(
         return format!("team:{team}");
     }
     let kind = spec.first_agent_kind().unwrap_or("term");
-    crate::resume::build_label(kind, None, cwd)
+    crate::resume::build_label(kind, None, None, cwd)
 }
 
 pub fn is_known_spec_token(

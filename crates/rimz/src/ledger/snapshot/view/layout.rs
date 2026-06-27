@@ -44,6 +44,7 @@ pub(super) fn multi_branch_paths<'a>(
 }
 
 pub(super) fn worktree_group_key(
+    explicit_channel: Option<&str>,
     path: Option<&str>,
     branch: Option<&str>,
     split_by_branch: bool,
@@ -51,6 +52,13 @@ pub(super) fn worktree_group_key(
     worktree_roots: &[PathBuf],
     root_class: RootClass,
 ) -> (SidebarWorktreeKind, String, String) {
+    if let Some(channel) = explicit_channel.filter(|channel| !channel.is_empty()) {
+        return (
+            SidebarWorktreeKind::Channel,
+            format!("channel:{channel}"),
+            format!("#{channel}"),
+        );
+    }
     let branch = branch.filter(|branch| !branch.is_empty());
     if let Some(path) = path.filter(|path| !path.is_empty()) {
         // A cwd belongs to the *deepest* group root that contains it: the room
@@ -472,6 +480,7 @@ pub fn group_live_agents_by_worktree<'a>(
             .as_deref()
             .is_some_and(|path| multi_branch.contains(path));
         let (kind, key, label) = worktree_group_key(
+            agent.channel.as_deref(),
             agent.worktree_path.as_deref(),
             agent.worktree_branch.as_deref(),
             split_by_branch,

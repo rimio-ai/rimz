@@ -150,13 +150,13 @@ fn group_header(
     // A non-repo room's root pod is name-only: a plain directory has no fork
     // and no git story, so it drops the `⑂` prefix and pins nothing right.
     let right = match group.kind {
-        SidebarWorktreeKind::Root => Vec::new(),
+        SidebarWorktreeKind::Root | SidebarWorktreeKind::Channel => Vec::new(),
         _ => group_git_spans(theme, group),
     };
     let right_width: usize = right.iter().map(|span| span.content.chars().count()).sum();
     let label_width = cw.saturating_sub(right_width + 1).max(1);
     let label_with_prefix = match group.kind {
-        SidebarWorktreeKind::Root => group.label.clone(),
+        SidebarWorktreeKind::Root | SidebarWorktreeKind::Channel => group.label.clone(),
         _ => {
             let role = if group.trunk_sync == Some(WorktreeTrunkSync::Merged) {
                 GlyphRole::WorktreeMerge

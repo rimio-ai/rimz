@@ -21,6 +21,8 @@ pub struct SidebarRow {
     pub pane: Option<PaneRef>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
     /// Shared pending-look state: the row has an open unread episode not reached
     /// by any read receipt. The producer opens/prunes episodes in `unread.json`;
     /// every snapshot fold derives this bit from that file plus read marks.
@@ -185,6 +187,9 @@ pub struct PaneAgent {
     /// the rollup so in-place team panes resolve within their team channel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    /// Named channel copied from the bound session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
     /// The bound session, or `None` for a lazy pane with no session yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentSessionId>,
@@ -212,6 +217,7 @@ impl PaneAgent {
     /// known worktree and team.
     pub fn channel(&self) -> Option<String> {
         compose_channel(
+            self.channel.as_deref(),
             self.worktree_branch.as_deref(),
             self.worktree_path
                 .as_deref()
@@ -222,10 +228,14 @@ impl PaneAgent {
 }
 
 fn compose_channel(
+    explicit: Option<&str>,
     branch: Option<&str>,
     dir_basename: Option<&str>,
     team: Option<&str>,
 ) -> Option<String> {
+    if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
+        return Some(channel.to_owned());
+    }
     if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
         return Some(branch.to_owned());
     }

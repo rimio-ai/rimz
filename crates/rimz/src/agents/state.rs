@@ -431,6 +431,11 @@ pub struct AgentState {
     /// it as the channel suffix when no worktree branch exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    /// A named cooperation lane, stamped by `RIMZ_CHANNEL` and carried forward
+    /// like `team`. When present it is the routing channel ahead of worktree
+    /// branch, team, and directory fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
     pub status: AgentStatus,
     /// The running turn's shape (reasoning / acting / parked on background
     /// work), written verbatim from the lifecycle machine's output. Always

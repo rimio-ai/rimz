@@ -97,6 +97,7 @@ fn launch_allocation_reserves_names_owned_by_reaped_rollup_agents() {
         profile: Some("codex-coder".to_owned()),
         role: Some("coder".to_owned()),
         team: Some("pcr".to_owned()),
+        channel: None,
         run_id: None,
     };
     let append = AgentLaunchAppend {
@@ -104,6 +105,7 @@ fn launch_allocation_reserves_names_owned_by_reaped_rollup_agents() {
         session_name: "rimz-test".to_owned(),
         cwd: h.ledger.paths().root.clone(),
         worktree_name: Some("main".to_owned()),
+        channel: None,
         prompt: Some("boot".to_owned()),
         description: None,
         state: AgentLaunchState::Bound,

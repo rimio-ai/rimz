@@ -40,17 +40,18 @@ pub(super) fn plan_room_resume(
     let planned = (|| -> Result<rimz::resume::ResumePlan> {
         let paths = StatePaths::for_workspace(workspace_id.clone())?;
         let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
-        let ledger = Ledger::open(paths, runtime)?;
+        let ledger = Ledger::open(paths.clone(), runtime)?;
         let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
         let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
         let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
-        let plan = rimz::resume::plan_resume(
+        let mut plan = rimz::resume::plan_resume(
             &projection.agents,
             &ended,
             resume_cfg.max,
             |path| path.is_dir(),
             &rimz_bin,
         );
+        add_empty_named_channel_tabs(&paths, &mut plan);
         record_worktree_gone_tombstones(&ledger, workspace_id, session_name, &plan);
         Ok(plan)
     })();
@@ -58,6 +59,26 @@ pub(super) fn plan_room_resume(
         tracing::warn!(workspace = %workspace_id, error = %err, "resume planning skipped");
         rimz::resume::ResumePlan::default()
     })
+}
+
+fn add_empty_named_channel_tabs(paths: &StatePaths, plan: &mut rimz::resume::ResumePlan) {
+    let Ok(record) = rimz::ledger::workspace_record::read(&paths.workspace_record) else {
+        return;
+    };
+    let Ok(channels) = rimz::channel::list(&paths.channels_record) else {
+        return;
+    };
+    for channel in channels {
+        let label = format!("#{}", channel.name);
+        if plan.tabs.iter().any(|tab| tab.label == label) {
+            continue;
+        }
+        plan.tabs.push(rimz::mux::ResumeTab {
+            label,
+            cwd: record.project_root.clone(),
+            panes: Vec::new(),
+        });
+    }
 }
 
 /// Draw the rebirth boundary in the ledger: a reborn mux session renumbers
@@ -94,12 +115,16 @@ pub(super) fn report_resume(plan: &rimz::resume::ResumePlan) {
             .map(|tab| tab.label.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        let _ = writeln!(
-            std::io::stderr(),
-            "resumed {} agent{}: {labels}",
-            agents,
-            if agents == 1 { "" } else { "s" },
-        );
+        if agents == 0 {
+            let _ = writeln!(std::io::stderr(), "restored channel tab(s): {labels}");
+        } else {
+            let _ = writeln!(
+                std::io::stderr(),
+                "resumed {} agent{}: {labels}",
+                agents,
+                if agents == 1 { "" } else { "s" },
+            );
+        }
     }
     if !plan.skipped.is_empty() {
         let detail = plan

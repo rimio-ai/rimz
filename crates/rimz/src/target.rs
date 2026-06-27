@@ -12,10 +12,11 @@
 //! profile, then the kind, then an ordinal, then the petname, so a handle always round-trips to its
 //! agent.
 //!
-//! The channel is the workspace segment the room groups by — a worktree branch,
-//! else a directory basename, with an in-place named team appended as
-//! `<dir>/<team>`. Callers pass the *current* channel; an explicit `#name` or
-//! `--worktree name` overrides it. A `None` current channel means **all
+//! The channel is the workspace segment the room groups by — an explicit named
+//! lane, else a worktree branch, else a directory basename, with an in-place
+//! named team appended as `<dir>/<team>`. Callers pass the *current* channel; an
+//! explicit `#name`, `--channel name`, or `--worktree name` overrides it. A
+//! `None` current channel means **all
 //! channels** — it never silently narrows to "only worktree-less agents", so
 //! addressing the room from a bare directory workspace still reaches every
 //! agent.
@@ -33,8 +34,8 @@ pub enum TargetErr {
         "agent target `{target}` must start with `@` (try `@{target}`); pane ids like `tmux:%1` are the exception"
     )]
     MissingSigil { target: String },
-    #[error("target `{target}` names channel `#{channel}` but --worktree names `{flag}`")]
-    WorktreeMismatch {
+    #[error("target `{target}` names channel `#{channel}` but channel flag names `{flag}`")]
+    ChannelMismatch {
         target: String,
         channel: String,
         flag: String,
@@ -93,15 +94,17 @@ trait Candidate<'a>: Copy {
     fn profile(self) -> Option<&'a str>;
     fn role(self) -> Option<&'a str>;
     fn team(self) -> Option<&'a str>;
+    fn channel(self) -> Option<&'a str>;
     fn session_id(self) -> Option<&'a str>;
     fn worktree_branch(self) -> Option<&'a str>;
     fn worktree_path(self) -> Option<&'a str>;
     fn pane_id(self) -> Option<&'a PaneId>;
 
-    /// The channel label: branch, else worktree-directory basename plus team
-    /// when present, else a placeholder.
+    /// The channel label: explicit named lane, else branch, else
+    /// worktree-directory basename plus team when present, else a placeholder.
     fn channel_label(self) -> String {
         compose_channel(
+            self.channel(),
             self.worktree_branch(),
             self.worktree_path()
                 .and_then(|path| path.rsplit('/').next()),
@@ -111,7 +114,11 @@ trait Candidate<'a>: Copy {
     }
 
     fn in_worktree(self, filter: &str) -> bool {
+        if let Some(channel) = self.channel().filter(|channel| !channel.is_empty()) {
+            return channel == filter;
+        }
         let channel = compose_channel(
+            self.channel(),
             self.worktree_branch(),
             self.worktree_path()
                 .and_then(|path| path.rsplit('/').next()),
@@ -143,6 +150,9 @@ impl<'a> Candidate<'a> for &'a AgentState {
     }
     fn team(self) -> Option<&'a str> {
         self.team.as_deref()
+    }
+    fn channel(self) -> Option<&'a str> {
+        self.channel.as_deref()
     }
     fn session_id(self) -> Option<&'a str> {
         (!self.agent_id.is_provisional()).then(|| self.agent_id.as_str())
@@ -176,6 +186,9 @@ impl<'a> Candidate<'a> for &'a PaneAgent {
     }
     fn team(self) -> Option<&'a str> {
         self.team.as_deref()
+    }
+    fn channel(self) -> Option<&'a str> {
+        self.channel.as_deref()
     }
     fn session_id(self) -> Option<&'a str> {
         self.agent_id.as_ref().map(|id| id.as_str())
@@ -490,9 +503,10 @@ fn resolve_by_pane<'a, C: Candidate<'a>>(
     }
 }
 
-/// Reconcile the inline `#channel` with the `--worktree` flag (mismatch is an
-/// error), then fall back to the current channel when neither is given. Returns
-/// an owned channel so it can outlive the parsed target's borrow.
+/// Reconcile the inline `#channel` with the channel flag (`--channel` or
+/// `--worktree`; mismatch is an error), then fall back to the current channel
+/// when neither is given. Returns an owned channel so it can outlive the parsed
+/// target's borrow.
 fn effective_channel(
     raw: &str,
     inline: Option<&str>,
@@ -501,7 +515,7 @@ fn effective_channel(
 ) -> Result<Option<String>, TargetErr> {
     let reconciled = match (inline, flag) {
         (Some(channel), Some(flag)) if channel != flag => {
-            return Err(TargetErr::WorktreeMismatch {
+            return Err(TargetErr::ChannelMismatch {
                 target: raw.to_owned(),
                 channel: channel.to_owned(),
                 flag: flag.to_owned(),
@@ -564,13 +578,18 @@ fn no_match_error<'a, C: Candidate<'a>>(
     }
 }
 
-/// Compose a routing channel from launch identity. Branch wins; otherwise an
-/// in-place named team extends the directory channel as `<dir>/<team>`.
+/// Compose a routing channel from launch identity. An explicit named lane wins,
+/// then branch, then an in-place named team extends the directory channel as
+/// `<dir>/<team>`.
 pub fn compose_channel(
+    explicit: Option<&str>,
     branch: Option<&str>,
     dir_basename: Option<&str>,
     team: Option<&str>,
 ) -> Option<String> {
+    if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
+        return Some(channel.to_owned());
+    }
     if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
         return Some(branch.to_owned());
     }
@@ -585,12 +604,13 @@ pub fn compose_channel(
     }
 }
 
-/// The agent's channel — the worktree/team it cooperates in: its branch, else
-/// its worktree directory basename plus in-place team when present. `None` when
-/// the agent runs outside any worktree or team.
+/// The agent's channel — the lane it cooperates in: explicit named lane, else
+/// branch, else worktree directory basename plus in-place team when present.
+/// `None` when the agent runs outside any channel context.
 /// The display-side `Option` peer of the resolver's [`Candidate::channel_label`].
 pub fn agent_channel(agent: &AgentState) -> Option<String> {
     compose_channel(
+        agent.channel.as_deref(),
         agent.worktree_branch.as_deref(),
         agent
             .worktree_path

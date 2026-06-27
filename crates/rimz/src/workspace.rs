@@ -38,10 +38,6 @@ use crate::ledger::workspace_record::{self, WorkspaceRecord};
 pub enum WorkspaceErr {
     #[error("could not resolve workspace from {path}: {reason}")]
     Resolve { path: PathBuf, reason: String },
-    #[error(
-        "refusing a directory workspace rooted at {root} ({why}); cd into a project, or force it with --root {root}"
-    )]
-    RefusedRoot { root: PathBuf, why: &'static str },
     #[error("git probe failed: {0}")]
     GitProbe(#[from] io::Error),
 }
@@ -284,7 +280,7 @@ pub struct WorkspaceResolver;
 enum ResolveMode {
     /// Room choice (`rimz start`/`attach`, maintenance): the static ladder
     /// only, so a deliberate per-repo room can be created from inside a
-    /// parent room. The directory tier refuses pathological roots here.
+    /// parent room. The directory tier accepts any directory.
     Create,
     /// Room participation (hooks, `rimz event`/`feed`, statusline): the
     /// session's env pin wins over the static ladder, so a pane's writes land
@@ -390,9 +386,6 @@ impl WorkspaceResolver {
         } else if let Some(marker) = resolve_marker(&start) {
             (marker.clone(), marker, RootClass::Marker)
         } else {
-            if mode == ResolveMode::Create {
-                refuse_pathological_root(&start, env)?;
-            }
             (start.clone(), start.clone(), RootClass::Directory)
         };
 
@@ -473,29 +466,6 @@ fn classify_root(root: &Path) -> Result<RootClass> {
         return Ok(RootClass::Marker);
     }
     Ok(RootClass::Directory)
-}
-
-/// The directory tier refuses the two roots that are almost certainly an
-/// accident — `$HOME` and the filesystem root — with the fix in the error;
-/// `--root` bypasses by selecting a different ladder tier.
-fn refuse_pathological_root(start: &Path, env: EnvReader) -> Result<()> {
-    if start == Path::new("/") {
-        return Err(WorkspaceErr::RefusedRoot {
-            root: start.to_path_buf(),
-            why: "the filesystem root",
-        });
-    }
-    if let Some(home) = env("HOME") {
-        let home = PathBuf::from(home);
-        let home = home.canonicalize().unwrap_or(home);
-        if start == home {
-            return Err(WorkspaceErr::RefusedRoot {
-                root: start.to_path_buf(),
-                why: "your home directory",
-            });
-        }
-    }
-    Ok(())
 }
 
 fn resolve_git(start: &Path) -> Result<Option<(PathBuf, PathBuf)>> {

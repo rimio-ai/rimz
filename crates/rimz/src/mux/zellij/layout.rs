@@ -158,14 +158,17 @@ pub(super) fn render_session_layout(
     let mut agent_tabs = String::new();
     for (index, tab) in resume.iter().enumerate() {
         let tab_name = kdl_string(&tab.label)?;
-        let agent_panes = tab
-            .panes
-            .iter()
-            .enumerate()
-            .map(|(pane_index, argv)| {
-                render_command_pane(argv, &tab.cwd, pane_index == 0, 16, None)
-            })
-            .collect::<Result<String>>()?;
+        let agent_panes = if tab.panes.is_empty() {
+            render_command_pane(&empty_channel_shell(&tab.label), &tab.cwd, true, 16, None)?
+        } else {
+            tab.panes
+                .iter()
+                .enumerate()
+                .map(|(pane_index, argv)| {
+                    render_command_pane(argv, &tab.cwd, pane_index == 0, 16, None)
+                })
+                .collect::<Result<String>>()?
+        };
         let body = render_sidebar_work_area(&sidebar, &agent_panes, 8);
         let focus_attr = if index == 0 { " focus=true" } else { "" };
         agent_tabs.push_str(&format!(
@@ -481,6 +484,17 @@ fn render_sidebar_work_area(sidebar: &str, work_panes: &str, indent: usize) -> S
 
 fn render_plain_terminal_pane(indent: usize) -> String {
     format!("{}pane focus=true\n", " ".repeat(indent))
+}
+
+fn empty_channel_shell(label: &str) -> Vec<String> {
+    let Some(channel) = label.strip_prefix('#').filter(|value| !value.is_empty()) else {
+        return vec![crate::launch::user_shell_program()];
+    };
+    vec![
+        "env".to_owned(),
+        format!("{}={channel}", crate::run::ENV_CHANNEL),
+        crate::launch::user_shell_program(),
+    ]
 }
 
 fn render_tab_column(

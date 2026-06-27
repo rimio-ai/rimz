@@ -41,6 +41,7 @@ fn registered_observation(agent_id: &str) -> AgentLifecycleObservation {
         agent_name: None,
         role: None,
         team: None,
+        channel: None,
         profile: None,
         kind_ordinal: None,
         signal: LifecycleSignal::Registered,

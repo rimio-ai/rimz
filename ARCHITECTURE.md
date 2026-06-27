@@ -63,6 +63,7 @@ State is three tiers of plain files. The path constants and their exact filename
 workspace ledger   ~/.local/state/rimz/workspaces/<id>/
   events.log.jsonl · snapshots/latest.json · feed/<request_id>.json
   runs/<run_id>.json · queue/<msg_id>.json · locks/workspace.lock
+  workspace.json · channels.json
   diag.log.jsonl · diag-frames/                      durable truth
 
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/<id>/   (or /tmp/rimz-<uid>/… )
@@ -108,7 +109,7 @@ The crate splits into subtree modules (each with a local contract or detail doc)
 
 | Subtree | Owns | Detail |
 | --- | --- | --- |
-| `cli/` | command parsing and one `run(...)` per subcommand; oversized commands split under matching leaves (`cli/agents_cmd/`, `cli/remote/`, …); human-facing output flows through the shared `cli/render/` presentation layer | [cli.md](./docs/reference/cli.md) |
+| `cli/` | command parsing and one `run(...)` per subcommand; oversized commands split under matching leaves (`cli/agents_cmd/`, `cli/channel.rs`, `cli/remote/`, …); human-facing output flows through the shared `cli/render/` presentation layer | [cli.md](./docs/reference/cli.md) |
 | `agents/` | the agent integration layer: the `AgentAdapter` trait, the `state.rs` agent rollup model, registry, per-provider adapters, provider-agnostic transcript fusion, and spend/pricing/account | [contract](./crates/rimz/src/agents/AGENTS.md) · [agent.md](./docs/internals/agents/agent.md) · [provider.md](./docs/internals/agents/provider.md) |
 | `ledger/` | durable state: atomic helpers, framed event log, feed store, snapshot rebuild and staged view projection, wakeups, GC | [contract](./crates/rimz/src/ledger/AGENTS.md) · [ledger.md](./docs/internals/sidebar/ledger.md) |
 | `mux/` | the Zellij/tmux seam: `MuxBackend`, the bounded subprocess engine, the reconcile planner, recovery | [contract](./crates/rimz/src/mux/AGENTS.md) · [multiplexers.md](./docs/internals/sidebar/multiplexers.md) |
@@ -123,7 +124,7 @@ The crate splits into subtree modules (each with a local contract or detail doc)
 
 Each keeps its `//!` header as the entry point; grouped here by what they serve.
 
-- **Project identity** — `workspace` (root/worktree resolution and env pinning), `worktree` with `worktree_include`/`worktree_link` (Rimz-owned Git worktrees and seeding; [worktree.md](./docs/internals/agents/worktree.md)), `storage` (symlink-safe Rimz-owned disk measurement), `forge` (pure PR-number/URL/remote-host parsing).
+- **Project identity** — `workspace` (root/worktree resolution and env pinning), `channel` (durable named lanes; [channels.md](./docs/internals/agents/channels.md)), `worktree` with `worktree_include`/`worktree_link` (Rimz-owned Git worktrees and seeding; [worktree.md](./docs/internals/agents/worktree.md)), `storage` (symlink-safe Rimz-owned disk measurement), `forge` (pure PR-number/URL/remote-host parsing).
 - **Agent orchestration** — `agents_spec` (the inline layout DSL/IR and team/profile resolution; [harness.md](./docs/internals/agents/harness.md#the-layout-ir)), `target` (the `@handle#channel` address grammar and its inverse renderer; [harness.md](./docs/internals/agents/harness.md#the-address)), `launch` (default-shell, startup-argv, and PATH resolution), `message`/`run`/`schedule` (deferred queue, supervised runs, and pure loop schedule parsing/due evaluation; [harness.md](./docs/internals/agents/harness.md), [loop.md](./docs/internals/agents/loop.md)), `resume`/`remote_control` (resume-on-rebirth, agent remote-control launch), `petname` (stable human-friendly handles).
 - **Feed, panes, and the decision seam** — `feed` (item lifecycle, surfaces, statuses), `pane` (shared pane references and runtime owner metadata), `bridge` (per-request and per-run sockets, nonce validation), `sock` (the shared AF_UNIX budget and remedy), `ids` (typed identifier newtypes), `trust` (the executable-surface hash and grant state; [trust.md](./docs/internals/sidebar/trust.md)).
 - **Process and config infrastructure** — `config` (per-machine settings mirrored from `config.toml`/`theme.toml`/`agents.toml`, with the config-family leaves under `src/config/`), `daemon_content` (rimzd middle-column content resolution and the live-reload supervisor), `observability` (off-box error reporting; [observability.md](./docs/internals/health/observability.md)), `agent_activity` (liveness hints), `proc` (the `/proc` reader plus the spawn-count testkit seam), `reload` (binary-upgrade convergence and re-exec), `osc` (terminal notification bytes), `build_id`/`child_process`/`tui` (executable identity, detached-child helpers, shared TUI mode lifecycle), `testkit` (feature-gated synthetic-fleet builders for tests and benches).

@@ -1,8 +1,8 @@
 # Rimz-owned worktrees
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. [harness.md](./harness.md) launches agents into worktrees and triggers their cleanup; this doc owns the worktree itself — creation, the ownership marker, file seeding, and the cleanup that proves work landed before reclaiming.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. [channels.md](./channels.md) owns the room channel model, and [harness.md](./harness.md) launches agents into channels and triggers worktree cleanup; this doc owns the worktree itself — creation, the ownership marker, file seeding, and the cleanup that proves work landed before reclaiming.
 
-A worktree is one checkout of the repository on its own branch, and Rimz runs the full lifecycle for the ones it creates: spin one up for a line of work, seed it with the untracked files an agent needs, and reclaim it once its work has landed. In the agent room a worktree is a **channel** — where a few members cooperate, the unit the sidebar groups by, the segment an [address](./harness.md#the-address) narrows to with `#<channel>`. The feature stands on its own: `rimz worktree new`, `list`, `remove`, and `gc` work whether or not an agent ever launches into the tree.
+A worktree is one checkout of the repository on its own branch, and one backing for a Rimz channel. Rimz runs the full lifecycle for the ones it creates: spin one up for a line of work, seed it with the untracked files an agent needs, and reclaim it once its work has landed. The feature stands on its own: `rimz worktree new`, `list`, `remove`, and `gc` work whether or not an agent ever launches into the tree.
 
 Rimz touches only worktrees it owns. A marker file inside each one records that ownership, and every managed operation — cleanup, `remove`, `gc` — checks for it first, so a hand-made checkout is never disturbed.
 
@@ -48,4 +48,4 @@ Branch deletion follows the same proof. The automatic path tries `git branch -d`
 
 ## `rimz gc`
 
-`rimz gc` sweeps every clean, marked, content-landed worktree in the current repo that no live user pane occupies, measures the checkout bytes it reclaims, then runs `git worktree prune`. Routine deliberate agent closes already launch the same cleanup path, so `gc` primarily reclaims crash residue and trees that became safe only after later Git or pane state changed. A `fresh`-based worktree compares against `origin/…`, so an unfetched merge keeps the tree until a fetch updates the remote-tracking base.
+`rimz gc` sweeps every clean, marked, content-landed worktree in the current repo that no live user pane occupies, measures the checkout bytes it reclaims, then runs `git worktree prune`. Routine deliberate agent closes already launch the same cleanup path, so `gc` primarily reclaims crash residue and trees that became safe only after later Git or pane state changed. A `fresh`-based worktree compares against `origin/…`, so an unfetched merge keeps the tree until a fetch updates the remote-tracking base. Named-channel records stay until `rimz channel rm`; `gc` acts on worktrees only.

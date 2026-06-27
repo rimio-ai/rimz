@@ -42,6 +42,10 @@ pub struct AgentLifecycleObservation {
     /// `RIMZ_TEAM`. The reducer projects it to the routing channel.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    /// The named channel the launcher selected, passed through `RIMZ_CHANNEL`.
+    /// The reducer projects it to the routing channel ahead of worktree/team.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
     /// The `[agents.profiles]` profile the launcher selected, passed through
     /// `RIMZ_AGENT_PROFILE`. Used as the card handle when no role is present.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,6 +147,7 @@ impl AgentLifecycleObservation {
             agent_name: None,
             role: None,
             team: None,
+            channel: None,
             profile: None,
             kind_ordinal: None,
             signal,

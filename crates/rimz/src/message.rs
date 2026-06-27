@@ -906,6 +906,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             status: AgentStatus::Idle,
             phase: crate::agents::TurnPhase::Idle,
             pane: None,

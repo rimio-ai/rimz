@@ -4,6 +4,7 @@
 mod agents_cmd;
 mod agents_launch;
 mod attach_exec;
+mod channel;
 mod codex;
 mod config;
 mod coverage;
@@ -47,7 +48,7 @@ use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
 use rimz::agents::AgentState;
@@ -89,6 +90,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Event(args)) => event::run(args, &globals),
         Some(Subcmd::Feed(args)) => feed::run(args, &globals),
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
+        Some(Subcmd::Channel(args)) => channel::run(args, &globals),
         Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
         Some(Subcmd::Agents(args)) => agents_cmd::run(*args, &globals),
         Some(Subcmd::Loop(args)) => loop_cmd::run(args, &globals),
@@ -186,6 +188,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::Event(_)) => ("event", None, None),
         Some(Subcmd::Feed(_)) => ("feed", None, None),
         Some(Subcmd::Gc(_)) => ("gc", None, None),
+        Some(Subcmd::Channel(_)) => ("channel", None, None),
         Some(Subcmd::Worktree(_)) => ("worktree", None, None),
         Some(Subcmd::Agents(_)) => ("agents", None, None),
         Some(Subcmd::Loop(_)) => ("loop", None, None),
@@ -224,12 +227,17 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
     }
 }
 
-/// The current channel a command runs in: the worktree's branch, else its
-/// directory basename when we are genuinely inside a separate worktree. A bare
-/// directory workspace (root == worktree) yields `None` for humans, but a
-/// Rimz-launched in-place team member carries `RIMZ_TEAM`, so its calls scope
-/// to `<dir>/<team>`.
+/// The current channel a command runs in: an explicit named lane from
+/// `RIMZ_CHANNEL`, else the worktree's branch, else its directory basename when
+/// we are genuinely inside a separate worktree. A bare directory workspace
+/// (root == worktree) yields `None` for humans, but Rimz-launched members carry
+/// `RIMZ_CHANNEL` or `RIMZ_TEAM`, so their calls scope to that lane.
 pub(crate) fn current_channel(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
+    if let Ok(channel) = std::env::var(rimz::run::ENV_CHANNEL)
+        && !channel.is_empty()
+    {
+        return Some(channel);
+    }
     let team = std::env::var(rimz::run::ENV_TEAM).ok();
     current_channel_for_team(workspace, team.as_deref())
 }
@@ -421,6 +429,7 @@ fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<rimz::SidebarSnapshot> 
                 profile: agent.profile.clone(),
                 role: agent.role.clone(),
                 team: agent.team.clone(),
+                channel: agent.channel.clone(),
                 agent_id: Some(agent.agent_id.clone()),
                 pane_id: pane.pane_id.clone(),
                 worktree_path: agent.worktree_path.clone(),
@@ -556,6 +565,8 @@ enum Subcmd {
     Feed(feed::FeedArgs),
     /// Remove stale runtime liveness hints.
     Gc(gc::GcArgs),
+    /// Create, list, and remove named channels.
+    Channel(channel::ChannelArgs),
     /// Create, list, and remove Rimz-owned git worktrees.
     Worktree(worktree::WorktreeArgs),
     /// Launch agent tabs, optionally in Rimz-owned worktrees.
@@ -707,9 +718,6 @@ fn rimz_socket_environment_preflight(workspace_id: &WorkspaceId) -> Result<()> {
 fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = match WorkspaceResolver::resolve(&args.path, globals.root.clone()) {
         Ok(workspace) => workspace,
-        Err(rimz::workspace::WorkspaceErr::RefusedRoot { root, why }) => {
-            return Err(roomless_guidance(&root, why));
-        }
         Err(err) => {
             return Err(anyhow::Error::new(err))
                 .with_context(|| format!("resolving workspace at {}", args.path.display()));
@@ -1104,16 +1112,6 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
     Ok(())
 }
 
-fn roomless_guidance(root: &Path, why: &str) -> anyhow::Error {
-    let root = render::home_relative(&root.display().to_string());
-    anyhow!(
-        "Rimz opens a control room for one project, but {root} is {why}.\n\n\
-Start one inside a project:\n  cd path/to/your-project   # a git repo works best\n  rimz\n\n\
-New project? Initialize git first:\n  git init && rimz\n\n\
-Or use this exact directory as a room:\n  rimz --root {root}"
-    )
-}
-
 fn finish_attach(
     backend: &dyn MuxBackend,
     session_name: &str,
@@ -1343,14 +1341,5 @@ mod tests {
             ])
             .is_ok()
         );
-    }
-
-    #[test]
-    fn roomless_guidance_names_project_and_escape_hatches() {
-        let message = roomless_guidance(Path::new("/tmp"), "the filesystem root").to_string();
-
-        assert!(message.contains("cd path/to/your-project"));
-        assert!(message.contains("git init && rimz"));
-        assert!(message.contains("rimz --root /tmp"));
     }
 }

@@ -67,6 +67,7 @@ pub struct StatePaths {
     pub workspace_lock: PathBuf,
     pub publish_lock: PathBuf,
     pub workspace_record: PathBuf,
+    pub channels_record: PathBuf,
 }
 
 impl StatePaths {
@@ -101,6 +102,7 @@ impl StatePaths {
             workspace_lock: locks_dir.join("workspace.lock"),
             publish_lock: locks_dir.join("publish.lock"),
             workspace_record: root.join("workspace.json"),
+            channels_record: root.join("channels.json"),
             locks_dir,
             root,
         })

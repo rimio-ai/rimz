@@ -72,6 +72,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 
 **Reference** — `docs/reference/`
 - [cli.md](./docs/reference/cli.md) — CLI entry point and command map; grouped command details live under `docs/reference/cli/`.
+- [channel.md](./docs/reference/cli/channel.md) — durable named-channel commands and the `--channel` launch/send flag.
 - [configuration.md](./docs/reference/configuration.md) — config tiers, generated per-machine template, project trust shape, privacy.
 - [theme.md](./docs/reference/theme.md) — sidebar theming: built-in and Ghostty-derived palettes, color depth and slot overrides, custom theme files, status-head animations, provider brand styling, and provider-dashboard pets.
 
@@ -87,8 +88,9 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
   - [provider.md](./docs/internals/agents/provider.md) — provider accounts, balances, spend, and pricing: the plan/metered model, the out-of-band account probe, the provider-dashboard aggregation, the full-history cost/spending walk, and the three-layer token price table (embedded snapshot, remote refresh, builtins).
   - [resolvers.md](./docs/internals/agents/resolvers.md) — resolver protocol, chain, pane primitives.
   - [harness.md](./docs/internals/agents/harness.md) — the agent harness end to end: the layout IR and backend tab/split placement, the agent-address grammar, supervised `rimz agents -p` runs (records, wakeups, output/input formats, posture, shared launch params), the `rimz agents exec` wrapper and run-pane cleanup, and the in-tab `message` path (targets, gates, delivery, attempts, hazards).
+  - [channels.md](./docs/internals/agents/channels.md) — room channel model: named lanes, worktree/team/directory backings, label precedence, registry, launch identity, and recovery.
   - [loop.md](./docs/internals/agents/loop.md) — scheduled loop tasks: one supervised agent turn on an OS schedule, with calendar, interval, cron, one-shot, posture, and window-priming ping tasks.
-  - [worktree.md](./docs/internals/agents/worktree.md) — Rimz-owned Git worktrees as the room's channels: creation and the `[worktree] dir`/base template, the `rimz-worktree.json` ownership marker, `.worktreeinclude` file seeding, and the landed-work cleanup decision plus the `rimz gc` sweep.
+  - [worktree.md](./docs/internals/agents/worktree.md) — Rimz-owned Git worktrees as one channel backing: creation and the `[worktree] dir`/base template, the `rimz-worktree.json` ownership marker, `.worktreeinclude` file seeding, and the landed-work cleanup decision plus the `rimz gc` sweep.
 - **`sidebar/`** — the room and the substrate beneath it.
   - [sidebar.md](./docs/internals/sidebar/sidebar.md) — sidebar mechanics: presence, ranking, launch, reload recovery, and view-model behaviour (the on-screen look lives in [interface/sidebar.md](./docs/interface/sidebar.md)).
   - [state.md](./docs/internals/sidebar/state.md) — sidebar pulled truth, typed realtime events, fusion, process roles, and timing cadences.

@@ -167,6 +167,7 @@ fn agent(
         profile: None,
         role: None,
         team: None,
+        channel: None,
         status,
         phase: crate::agents::TurnPhase::Idle,
         pane: None,

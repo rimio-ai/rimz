@@ -2049,6 +2049,7 @@ fn seed_provisional_codex_launch_with_prompt(
             profile: None,
             role: role.map(ToOwned::to_owned),
             team: None,
+            channel: None,
             kind_ordinal: Some(1),
             state: AgentLaunchState::Starting,
             run_id: None,

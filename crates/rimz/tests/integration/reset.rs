@@ -322,6 +322,7 @@ fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
         agent_name: None,
         role: None,
         team: None,
+        channel: None,
         profile: None,
         kind_ordinal: None,
         signal: LifecycleSignal::Registered,

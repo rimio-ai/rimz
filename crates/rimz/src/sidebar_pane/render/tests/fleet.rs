@@ -621,6 +621,7 @@ fn render_make_up_filter_narrows_the_body() {
         pane: Some(pane("%9", "zsh", "/home/me/query-engine")),
         worktree_path: Some("/home/me/query-engine".to_owned()),
         worktree_branch: Some("main".to_owned()),
+        channel: None,
         unread: false,
         inactive: false,
         last_activity: fixed_now(),

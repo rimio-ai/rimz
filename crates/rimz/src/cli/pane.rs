@@ -425,7 +425,7 @@ fn split(backend: &dyn MuxBackend, globals: &GlobalFlags) -> Result<()> {
             target_pane_id: rimz::mux::own_pane_id(backend.name()),
             cwd: Some(workspace.worktree_root.display().to_string()),
             command: None,
-            env: crate::cli::agents_launch::launch_identity_env(&workspace),
+            env: crate::cli::agents_launch::launch_identity_env(&workspace, None, true),
             focus: true,
         })
         .map_err(Into::into)
@@ -544,6 +544,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             status: AgentStatus::Running,
             phase: rimz::agents::TurnPhase::Reasoning,
             pane: Some(PaneRef::from_id(PaneId::from_parts(

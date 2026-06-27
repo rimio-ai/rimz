@@ -66,6 +66,7 @@ pub(super) fn build_worktree_groups_from_rows(
             .as_deref()
             .is_some_and(|path| multi_branch.contains(path));
         let (kind, key, label) = worktree_group_key(
+            row.channel.as_deref(),
             row.worktree_path.as_deref(),
             row.worktree_branch.as_deref(),
             split_by_branch,
@@ -150,6 +151,7 @@ mod tests {
             pane: None,
             worktree_path: None,
             worktree_branch: None,
+            channel: None,
             unread: false,
             inactive: false,
             last_activity: now() - std::time::Duration::from_secs(age_secs as u64),
@@ -194,6 +196,7 @@ mod tests {
                 pane: None,
                 worktree_path: None,
                 worktree_branch: None,
+                channel: None,
                 unread: false,
                 inactive: false,
                 last_activity: aged,
@@ -208,6 +211,7 @@ mod tests {
                 pane: None,
                 worktree_path: None,
                 worktree_branch: None,
+                channel: None,
                 unread: false,
                 inactive: false,
                 last_activity: aged,

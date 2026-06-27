@@ -26,6 +26,7 @@ fn inject_lifecycle(
         agent_name: None,
         role: None,
         team: None,
+        channel: None,
         profile: None,
         kind_ordinal: None,
         signal,
@@ -436,7 +437,7 @@ fn doctor_json_reports_protocol_version_mismatches() {
     );
     let protocols = &report["protocols"];
     assert_eq!(protocols["event"], "rimz.event.v2");
-    assert_eq!(protocols["sidebar"], "rimz.plugin.v4");
+    assert_eq!(protocols["sidebar"], "rimz.plugin.v5");
     assert_eq!(protocols["resolver"], "rimz.resolver.v1");
 
     let warnings = protocols["warnings"]
@@ -452,7 +453,7 @@ fn doctor_json_reports_protocol_version_mismatches() {
     );
     assert!(
         warnings.contains(
-            "sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v4)"
+            "sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v5)"
         ),
         "{warnings}"
     );

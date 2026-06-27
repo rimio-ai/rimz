@@ -36,6 +36,7 @@ fn registered(
         agent_name: Some(name.to_owned()),
         role: None,
         team: None,
+        channel: None,
         profile: None,
         kind_ordinal: None,
         signal: LifecycleSignal::Registered,
