@@ -140,6 +140,45 @@ fn standalone_ask_is_not_an_agent_pane() {
 }
 
 #[test]
+fn stamped_lazy_agent_holds_pane_across_non_agent_child_commands() {
+    for (label, command, expect_agent) in [
+        ("own foreground still binds", "codex", true),
+        ("child foreground still binds", "git status", true),
+        ("different agent foreground rejects", "claude", false),
+    ] {
+        let codex = agent("codex", "sess-1", AgentStatus::Running, 1_000)
+            .worktree("/repo/main")
+            .in_pane("term1");
+        let snapshot = room(Vec::new(), vec![codex])
+            .with_live_panes(vec![pane("term1", command, "/repo/main")], None);
+
+        let rows = rows(&snapshot);
+        assert_eq!(rows.len(), 1, "{label}");
+        assert_eq!(rows[0].is_agent(), expect_agent, "{label}");
+        if expect_agent {
+            assert_eq!(rows[0].id, "sess-1", "{label}");
+            assert_eq!(snapshot.agent_panes.len(), 1, "{label}");
+            assert_eq!(
+                snapshot.agent_panes[0]
+                    .agent_id
+                    .as_ref()
+                    .map(|id| id.as_str()),
+                Some("sess-1"),
+                "{label}",
+            );
+        } else {
+            assert!(rows[0].is_process(), "{label}");
+            assert_eq!(rows[0].name, "claude", "{label}");
+            assert!(
+                snapshot.agent_panes.is_empty(),
+                "rejected bind must not stay addressable: {label}",
+            );
+        }
+        assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
+    }
+}
+
+#[test]
 fn plain_shell_pane_is_not_an_agent_pane() {
     // Expanded mux listings may admit more visible terminal panes, including
     // floating shells. Only panes running a known agent command enter

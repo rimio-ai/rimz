@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use super::process::{pane_agent_kind, pane_command_is_known};
+use super::process::pane_agent_kind;
 use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
@@ -116,8 +116,10 @@ pub(super) fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
 }
 
 /// The agent that stamped this exact pane id, if one is still unbound. Non-lazy
-/// agents bind by stamped pane id alone — never by foreground command or cwd —
-/// so a pane can only ever host the agent that ran in it.
+/// agents bind by stamped pane id alone — never by foreground command or cwd.
+/// Stamped lazy agents keep that pane across non-agent foreground commands; a
+/// positively different agent command rejects the bind, and liveness reaping
+/// owns genuine exits before the live-pane fold runs.
 pub(super) fn agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
@@ -128,7 +130,9 @@ pub(super) fn agent_for_pane<'a>(
 }
 
 /// The root agent stamped on this exact live pane id, regardless of whether
-/// another row already bound it.
+/// another row already bound it. For lazy-registering kinds, the stamp survives
+/// non-agent child foregrounds; only a positively different agent command
+/// disqualifies it.
 pub fn stamped_agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
@@ -189,10 +193,11 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
     if !pane_start_allows_bind(agent.last_activity, pane) {
         return false;
     }
-    match pane_agent_kind(pane) {
-        Some(kind) => kind == agent.kind.as_str(),
-        None => !pane_command_is_known(pane),
-    }
+    // A live foreground that positively names a different agent kind is not
+    // ours. A non-agent foreground is this session running a child command, or
+    // a brief shell foreground between commands; genuinely exited sessions are
+    // reaped by process liveness before this fold.
+    pane_agent_kind(pane).is_none_or(|kind| kind == agent.kind.as_str())
 }
 
 /// Defensive guard for read-time binds: when the pane's process start is known,
