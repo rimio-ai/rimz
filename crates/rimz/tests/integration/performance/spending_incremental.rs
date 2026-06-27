@@ -228,7 +228,7 @@ fn spending_walk_io_is_history_independent() {
 }
 
 #[test]
-fn spending_walk_aggregation_is_history_independent() {
+fn spending_walk_warm_skips_parse_dedup_and_write() {
     fn second_walk_stats(entries_per_file: usize) -> rimz::agents::spending::WalkStats {
         let dir = tempfile::tempdir().expect("tempdir");
         let cache_path = dir.path().join("spending.json");
@@ -246,10 +246,6 @@ fn spending_walk_aggregation_is_history_independent() {
             &HeadlineSpec::default(),
         );
         assert_eq!(first.stats.dedup_passes, 1);
-        assert!(
-            first.stats.aggregated_entries >= entries_per_file,
-            "first walk aggregates seeded history"
-        );
         let cache_mtime = modified(&cache_path);
 
         let second = walker.walk(
@@ -271,7 +267,6 @@ fn spending_walk_aggregation_is_history_independent() {
 
     let baseline = second_walk_stats(1_000);
     assert_eq!(baseline.dedup_passes, 0);
-    assert_eq!(baseline.aggregated_entries, 0);
     assert!(!baseline.cache_parsed);
     assert!(!baseline.cache_written);
 
@@ -279,6 +274,73 @@ fn spending_walk_aggregation_is_history_independent() {
         second_walk_stats(10_000),
         baseline,
         "unchanged warm work is independent of retained-entry count"
+    );
+}
+
+#[test]
+fn spending_walk_warm_keeps_trailing_windows_fresh() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache_path = dir.path().join("spending.json");
+    let transcript = dir.path().join("edge.jsonl");
+    std::fs::write(&transcript, b"").expect("transcript");
+    let mut cache = read_spending_cache(&cache_path);
+    cache.files = HashMap::new();
+    let cost_usd = 2.5;
+    cache.files.insert(
+        transcript.to_string_lossy().into_owned(),
+        file_cache_entry(
+            &transcript,
+            vec![CachedEntry {
+                ts_secs: NOW_SECS - (7 * 86_400) + 1,
+                cost_usd,
+                input: 1200,
+                output: 80,
+                cache_write: 0,
+                cache_read: 800,
+                message_id: Some("msg-edge".to_owned()),
+                request_id: Some("req-edge".to_owned()),
+                thread_id: Some("thread-edge".to_owned()),
+                is_sidechain: false,
+                model: Some("claude-opus-4-8".to_owned()),
+                origin_path: None,
+                rolled: false,
+            }],
+        ),
+    );
+    write_spending_cache(&cache_path, &cache);
+    let files = vec![(claude_adapter(), transcript)];
+    let prices = PriceBook::default();
+    let mut walker = SpendingWalker::new();
+
+    let first = walker.walk(
+        &cache_path,
+        &files,
+        &prices,
+        NOW_SECS,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+    );
+    let second = walker.walk(
+        &cache_path,
+        &files,
+        &prices,
+        NOW_SECS + 2,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+    );
+
+    assert_eq!(first.stats.dedup_passes, 1);
+    assert_eq!(second.stats.dedup_passes, 0);
+    assert!((first.spending.total.week.usd - cost_usd).abs() < 1e-9);
+    assert!(
+        second.spending.total.week.usd.abs() < 1e-9,
+        "warm memo must not freeze the rolling week window"
+    );
+    assert!(
+        (second.spending.total.year.usd - cost_usd).abs() < 1e-9,
+        "the entry still counts in wider windows"
     );
 }
 
