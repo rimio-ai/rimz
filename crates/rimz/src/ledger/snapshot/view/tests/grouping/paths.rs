@@ -94,4 +94,4 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
     }
 }
 
-// ── Fleet rooms: directory/marker roots, child-repo pods, the root pod ───────
+// ── Fleet rooms: directory/marker roots, row-derived git pods, root pod ──────

@@ -58,9 +58,9 @@ fn render_worktree_attention_map() {
 }
 #[test]
 fn render_directory_room_root_pod_is_name_only() {
-    // A directory room: the child repo keeps the full `⑂` pod header with its
-    // git cluster, while the room's own pod renders name-only — no fork
-    // glyph, no git story — and still anchors its rows.
+    // A directory room: a git-backed row's resolved worktree keeps the full
+    // `⑂` pod header with its git cluster, while the room's own pod renders
+    // name-only — no fork glyph, no git story — and still anchors its rows.
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -75,13 +75,12 @@ fn render_directory_room_root_pod_is_name_only() {
     let mut snapshot = snapshot_with(Vec::new(), vec![claude])
         .with_root_class(crate::workspace::RootClass::Directory)
         .with_project_root(Some("/srv/agents".into()))
-        .with_worktree_roots(vec!["/srv/agents/query-engine".into()])
         .with_live_panes(vec![stamped, shell], None);
     let child = snapshot
         .worktree_groups
         .iter_mut()
         .find(|group| group.kind == crate::SidebarWorktreeKind::Worktree)
-        .expect("the child repo pod");
+        .expect("the git-backed worktree pod");
     child.diff_added = Some(12);
     child.diff_removed = Some(3);
     child.commits_ahead = Some(2);
@@ -90,7 +89,7 @@ fn render_directory_room_root_pod_is_name_only() {
 
     assert!(
         rendered.contains("⑂ main"),
-        "the child repo keeps the fork-glyph pod header:\n{rendered}"
+        "the git-backed row keeps the fork-glyph pod header:\n{rendered}"
     );
     assert!(
         rendered.contains("agents") && !rendered.contains("⑂ agents"),
@@ -98,6 +97,30 @@ fn render_directory_room_root_pod_is_name_only() {
     );
     assert_snapshot("directory_room_root_pod", rendered);
 }
+
+#[test]
+fn render_named_channel_header_uses_hash_glyph_and_bare_label() {
+    let mut design = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("design API"),
+    );
+    design.channel = Some("design".to_owned());
+    let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![design]), 36, 18);
+
+    assert!(
+        rendered.contains("# design"),
+        "channel header uses the hash glyph and bare label:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("##design"),
+        "channel label must not include its address sigil twice:\n{rendered}"
+    );
+}
+
 #[test]
 fn render_worktree_equal_to_trunk() {
     // A worktree that IS the trunk tip — zero ahead, zero behind, zero diff,

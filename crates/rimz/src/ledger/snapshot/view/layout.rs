@@ -43,6 +43,22 @@ pub(super) fn multi_branch_paths<'a>(
         .collect()
 }
 
+pub(super) fn effective_worktree_roots<'a>(
+    worktree_roots: &[PathBuf],
+    entries: impl Iterator<Item = (Option<&'a str>, Option<&'a str>)>,
+) -> Vec<PathBuf> {
+    let mut roots: BTreeSet<PathBuf> = worktree_roots.iter().cloned().collect();
+    for (path, branch) in entries {
+        let Some(path) = path.filter(|path| !path.is_empty()) else {
+            continue;
+        };
+        if branch.is_some_and(|branch| !branch.is_empty()) {
+            roots.insert(PathBuf::from(path));
+        }
+    }
+    roots.into_iter().collect()
+}
+
 pub(super) fn worktree_group_key(
     explicit_channel: Option<&str>,
     path: Option<&str>,
@@ -56,19 +72,18 @@ pub(super) fn worktree_group_key(
         return (
             SidebarWorktreeKind::Channel,
             format!("channel:{channel}"),
-            format!("#{channel}"),
+            channel.to_owned(),
         );
     }
     let branch = branch.filter(|branch| !branch.is_empty());
     if let Some(path) = path.filter(|path| !path.is_empty()) {
         // A cwd belongs to the *deepest* group root that contains it: the room
-        // root or any enumerated group root — a repo room's worktree checkouts
-        // (`git worktree list`, including one parked outside `project_root`)
-        // or a directory room's child repos. Keying on the matched root is
-        // what folds every pane of one checkout into one pod. Two cases keep
-        // per-path pods: a repo room's own checkout (so a nested worktree the
-        // enumeration hasn't caught up with never folds into the main pod),
-        // and a snapshot with no known root and no enumerated roots. A cwd
+        // root or any group root — a repo room's `git worktree list` checkouts
+        // plus every git-backed row's own resolved toplevel. Keying on the
+        // matched root is what folds every pane of one checkout into one pod.
+        // Two cases keep per-path pods: a repo room's own checkout (so a nested
+        // worktree the enumeration hasn't caught up with never folds into the
+        // main pod), and a snapshot with no known root and no known roots. A cwd
         // outside every root (a home shell, `/tmp`, CI) falls through to the
         // `external` catch-all unless its path still carries the reported branch
         // name — the short pre-enumeration window for a real worktree checkout.
@@ -473,6 +488,15 @@ pub fn group_live_agents_by_worktree<'a>(
             agent.worktree_branch.as_deref(),
         )
     }));
+    let effective_roots = effective_worktree_roots(
+        &snapshot.worktree_roots,
+        agents.iter().map(|agent| {
+            (
+                agent.worktree_path.as_deref(),
+                agent.worktree_branch.as_deref(),
+            )
+        }),
+    );
     let mut by_key: BTreeMap<String, AgentWorktreeGroup<'a>> = BTreeMap::new();
     for &agent in agents {
         let split_by_branch = agent
@@ -485,7 +509,7 @@ pub fn group_live_agents_by_worktree<'a>(
             agent.worktree_branch.as_deref(),
             split_by_branch,
             project_root,
-            &snapshot.worktree_roots,
+            &effective_roots,
             snapshot.root_class,
         );
         by_key

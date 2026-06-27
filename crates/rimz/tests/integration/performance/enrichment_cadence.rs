@@ -23,9 +23,8 @@ use super::sidebar_diff_stats::Fixture;
 /// floor — refuses the cached enumeration even inside the TTL, so a brand-new
 /// checkout groups correctly on its first agent's first snapshot. The fork
 /// under witness is the repo room's enumeration, so the room root must be a
-/// repo: a bare root records as a directory room, whose enumeration is one
-/// `read_dir` and forks no git (pinned by
-/// `directory_room_enumeration_forks_no_git`).
+/// repo: a bare root records as a directory room, whose enumeration forks no
+/// git (pinned by `directory_room_without_git_backed_rows_forks_no_git`).
 #[test]
 fn worktree_roots_reenumerate_on_session_boundary_only() {
     let Some(fixture) = Fixture::new() else {
@@ -214,13 +213,11 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     }
 }
 
-/// A directory room's group-root enumeration is one `read_dir`: the cold
-/// produce discovers the depth-1 child repo and pays its diff-stats chain,
-/// but never forks `git worktree list` — the fixture's bare room root records
-/// as a directory room, and the child repo at `<root>/worktree` is its one
-/// depth-1 child.
+/// A directory room does not enumerate child repos. The fixture's bare room root
+/// records as a directory room; its process pane lives inside a child checkout,
+/// but no git-backed agent row reports a branch, so the produce forks no git.
 #[test]
-fn directory_room_enumeration_forks_no_git() {
+fn directory_room_without_git_backed_rows_forks_no_git() {
     let Some(fixture) = Fixture::new() else {
         return;
     };
@@ -235,12 +232,13 @@ fn directory_room_enumeration_forks_no_git() {
     assert_eq!(
         fixture.git_forks("worktree\tlist"),
         0,
-        "a directory room enumerates by read_dir, never `git worktree list`:\n{}",
+        "a directory room never runs `git worktree list`:\n{}",
         fixture.git_log_contents(),
     );
-    assert!(
-        fixture.git_forks("rev-parse") >= 1,
-        "the child-repo pod still pays its diff-stats probes:\n{}",
+    assert_eq!(
+        fixture.git_forks("rev-parse"),
+        0,
+        "no git-backed row means no diff-stats probes:\n{}",
         cadence_debug(&fixture, &cold.stdout),
     );
 }

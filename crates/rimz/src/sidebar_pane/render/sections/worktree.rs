@@ -156,7 +156,10 @@ fn group_header(
     let right_width: usize = right.iter().map(|span| span.content.chars().count()).sum();
     let label_width = cw.saturating_sub(right_width + 1).max(1);
     let label_with_prefix = match group.kind {
-        SidebarWorktreeKind::Root | SidebarWorktreeKind::Channel => group.label.clone(),
+        SidebarWorktreeKind::Root => group.label.clone(),
+        SidebarWorktreeKind::Channel => {
+            format!("{} {}", theme.glyph(GlyphRole::ChannelHash), group.label)
+        }
         _ => {
             let role = if group.trunk_sync == Some(WorktreeTrunkSync::Merged) {
                 GlyphRole::WorktreeMerge

@@ -155,8 +155,8 @@ impl Fixture {
     /// Make the room root itself a git repo, so a subsequent
     /// [`Env::record`](crate::common::Env::record) classifies the workspace as
     /// a repo room and the produce enumerates checkouts with `git worktree
-    /// list`. The bare root records as a directory room, whose enumeration is
-    /// one `read_dir` and forks no git at all.
+    /// list`. The bare root records as a directory room, whose enumeration
+    /// forks no git at all.
     pub(crate) fn init_repo_room(&self) -> bool {
         Command::new(&self.real_git)
             .arg("-C")

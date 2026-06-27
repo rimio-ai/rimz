@@ -171,14 +171,16 @@ pub struct SidebarSnapshot {
     /// per-path grouping) and the `rimz sidebar snapshot` CLI fills it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_root: Option<PathBuf>,
-    /// The repo's worktree checkout roots, as `git worktree list` reports them.
-    /// A pane whose cwd is inside any of these is one of the project's
-    /// worktrees and earns its own pod — *including a worktree parked outside
-    /// `project_root`*, which the `project_root` prefix test alone would miss.
-    /// Like `project_root`, this is workspace identity the reducer can't read
-    /// from the ledger, so the pure path leaves it empty (the `project_root`
-    /// prefix test then stands alone) and the `rimz sidebar snapshot` CLI fills
-    /// it.
+    /// The repo's enumerated worktree checkout roots, as `git worktree list`
+    /// reports them. A pane whose cwd is inside any of these is one of the
+    /// project's worktrees and earns its own pod — *including a worktree parked
+    /// outside `project_root`*, which the `project_root` prefix test alone would
+    /// miss. Git-backed rows also contribute their own resolved worktree root
+    /// during grouping, so directory rooms do not scan children. Like
+    /// `project_root`, this is workspace identity the reducer can't read from
+    /// the ledger, so the pure path leaves it empty (row-derived roots and the
+    /// `project_root` prefix test then stand alone) and the `rimz sidebar
+    /// snapshot` CLI fills it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub worktree_roots: Vec<PathBuf>,
     /// The repo's durable worktree-home directory — the resolved `[agents.worktree]
@@ -370,11 +372,11 @@ impl SidebarSnapshot {
         self
     }
 
-    /// Record the repo's worktree checkout roots so a
-    /// worktree parked *outside* `project_root` still earns its own pod rather
-    /// than folding into `external`. Like `with_project_root`, the
-    /// `rimz sidebar snapshot` CLI fills this from `git worktree list` after
-    /// construction; the pure path leaves it empty.
+    /// Record the repo's worktree checkout roots so a worktree parked *outside*
+    /// `project_root` still earns its own pod rather than folding into
+    /// `external`. Like `with_project_root`, the `rimz sidebar snapshot` CLI
+    /// fills this from `git worktree list` after construction; git-backed rows
+    /// add their own roots during grouping, and the pure path leaves this empty.
     pub fn with_worktree_roots(mut self, worktree_roots: Vec<PathBuf>) -> Self {
         self.worktree_roots = worktree_roots;
         self

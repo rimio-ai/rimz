@@ -247,10 +247,11 @@ fn pane_list_fixture() -> Result<Option<Vec<crate::pane::PaneRef>>> {
 /// ([`crate::sidebar::enrich::enrich`]) in [`EnrichMode::Producing`]. This owns
 /// only what forks or walks; the spine owns the fold order.
 ///
-/// - Group roots: a repo room's worktree checkouts, a directory room's
-///   depth-1 child repos — cached under `WORKTREE_ROOTS_TTL`, refused below
-///   the session-boundary freshness floor (`min_pane_cache_ms`) so a new
-///   checkout's first agent re-enumerates immediately.
+/// - Group roots: a repo room's worktree checkouts — cached under
+///   `WORKTREE_ROOTS_TTL`, refused below the session-boundary freshness floor
+///   (`min_pane_cache_ms`) so a new checkout's first agent re-enumerates
+///   immediately. Directory rooms get git roots from each git-backed row's
+///   resolved worktree during the row fold.
 /// - In `Refresh` mode, the fleet spending walk runs before the config fold so
 ///   the dashboard panels are built, ranked, and capped with each provider's
 ///   spend known; in `Project` mode, the published heavy caches are folded

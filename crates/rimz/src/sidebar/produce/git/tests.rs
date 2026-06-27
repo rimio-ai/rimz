@@ -589,39 +589,13 @@ fn list_worktree_roots_includes_a_checkout_outside_the_project() {
 }
 
 #[test]
-fn child_repo_enumeration_accepts_git_dir_and_git_file_children() {
-    // `.git` may be a directory (a normal clone) or a pointer file (a linked
-    // worktree or submodule checkout); both mint pods. Non-repo children and
-    // plain files never qualify, and the result is sorted so the cache and
-    // the reducer see a stable set.
-    let room = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(room.path().join("clone/.git")).unwrap();
-    std::fs::create_dir_all(room.path().join("linked-wt")).unwrap();
-    std::fs::write(room.path().join("linked-wt/.git"), "gitdir: /elsewhere").unwrap();
-    std::fs::create_dir_all(room.path().join("notes")).unwrap();
-    std::fs::write(room.path().join("README.md"), "hi").unwrap();
-
-    let roots = list_child_repo_roots(room.path());
-    assert_eq!(
-        roots,
-        vec![room.path().join("clone"), room.path().join("linked-wt")]
-    );
-    // Best-effort: an unreadable room root yields no child pods.
-    assert!(list_child_repo_roots(Path::new("/nonexistent-rimz-room")).is_empty());
-}
-
-#[test]
 fn group_roots_dispatch_follows_the_root_class() {
-    // A directory room scans its children; a marker room without `.git` at
-    // the root does the same (repo semantics need `.git` at the root).
+    // Directory and non-git marker rooms do not scan children. A marker room
+    // with `.git` at the root keeps repo semantics.
     let room = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(room.path().join("app/.git")).unwrap();
     std::fs::write(room.path().join("Cargo.toml"), "[workspace]").unwrap();
 
-    let expected = vec![room.path().join("app")];
-    assert_eq!(
-        list_group_roots(room.path(), RootClass::Directory),
-        expected
-    );
-    assert_eq!(list_group_roots(room.path(), RootClass::Marker), expected);
+    assert!(list_group_roots(room.path(), RootClass::Directory).is_empty());
+    assert!(list_group_roots(room.path(), RootClass::Marker).is_empty());
 }

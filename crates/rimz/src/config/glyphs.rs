@@ -63,6 +63,7 @@ pub enum GlyphRole {
     WorktreePrClosed,
     WorktreeReconciling,
     WorktreeDotted,
+    ChannelHash,
     // card — the agent card body.
     CardSubagents,
     CardParkedBg,
@@ -146,6 +147,7 @@ impl GlyphRole {
         Self::WorktreePrClosed,
         Self::WorktreeReconciling,
         Self::WorktreeDotted,
+        Self::ChannelHash,
         Self::CardSubagents,
         Self::CardParkedBg,
         Self::ProcessCpu,
@@ -220,7 +222,8 @@ impl GlyphRole {
             | Self::WorktreePrOpen
             | Self::WorktreePrClosed
             | Self::WorktreeReconciling
-            | Self::WorktreeDotted => "worktree",
+            | Self::WorktreeDotted
+            | Self::ChannelHash => "worktree",
             Self::CardSubagents | Self::CardParkedBg => "card",
             Self::ProcessCpu | Self::ProcessMem | Self::ProcessIo => "process",
             Self::KeysMove
@@ -298,6 +301,7 @@ impl GlyphRole {
             Self::WorktreePrClosed => "pr_closed",
             Self::WorktreeReconciling => "reconciling",
             Self::WorktreeDotted => "dotted",
+            Self::ChannelHash => "channel_hash",
             Self::CardSubagents => "subagents",
             Self::CardParkedBg => "parked_bg",
             Self::ProcessCpu => "cpu",

@@ -546,25 +546,25 @@ fn frame_fold_carries_presence_onto_snapshot() {
 #[test]
 fn root_pod_is_excluded_from_git_reads() {
     // The root pod of a non-repo room is a known non-repo: it never enters
-    // the producer's git fan-out, while child-repo pods do.
+    // the producer's git fan-out, while a git-backed row's resolved worktree
+    // pod does.
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let child = dir.path().join("query-engine");
     std::fs::create_dir_all(&child).unwrap();
     let root_cwd = dir.path().to_string_lossy().into_owned();
     let child_cwd = child.to_string_lossy().into_owned();
+    let child_pane = pane("terminal_1", "claude", &child_cwd);
+    let mut agent = root_agent("claude", "child", None);
+    agent.pane = Some(child_pane.clone());
+    agent.worktree_path = Some(child_cwd.clone());
+    agent.worktree_branch = Some("main".to_owned());
 
-    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now())
-        .with_root_class(crate::workspace::RootClass::Directory)
-        .with_project_root(Some(dir.path().to_path_buf()))
-        .with_worktree_roots(vec![child.clone()])
-        .with_live_panes(
-            vec![
-                pane("terminal_0", "zsh", &root_cwd),
-                pane("terminal_1", "claude", &child_cwd),
-            ],
-            None,
-        );
+    let snapshot =
+        SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![agent], Timestamp::now())
+            .with_root_class(crate::workspace::RootClass::Directory)
+            .with_project_root(Some(dir.path().to_path_buf()))
+            .with_live_panes(vec![pane("terminal_0", "zsh", &root_cwd), child_pane], None);
 
     let kinds: Vec<SidebarWorktreeKind> = snapshot
         .worktree_groups
@@ -573,7 +573,7 @@ fn root_pod_is_excluded_from_git_reads() {
         .collect();
     assert_eq!(
         kinds,
-        vec![SidebarWorktreeKind::Root, SidebarWorktreeKind::Worktree]
+        vec![SidebarWorktreeKind::Worktree, SidebarWorktreeKind::Root]
     );
     assert_eq!(needed_worktree_paths(&snapshot), vec![child_cwd]);
 }

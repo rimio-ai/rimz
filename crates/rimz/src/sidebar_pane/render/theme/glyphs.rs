@@ -141,6 +141,7 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::WorktreePrClosed => "✕",
         GlyphRole::WorktreeReconciling => "⟳",
         GlyphRole::WorktreeDotted => "┄",
+        GlyphRole::ChannelHash => "#",
         GlyphRole::CardSubagents => "⧉",
         GlyphRole::CardParkedBg => "⋯",
         GlyphRole::ProcessCpu => "C",
@@ -231,6 +232,7 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         // worktree header: branch/merge and trunk state markers iconify.
         GlyphRole::WorktreeBranch => "\u{f126}", // nf-fa-code_branch
         GlyphRole::WorktreeMerge => "\u{f17f}",  // nf-fa-code_merge
+        GlyphRole::ChannelHash => "\u{f292}",    // nf-fa-hashtag
         GlyphRole::WorktreeTrunkBranch => "\u{f418}", // nf-oct-git_branch
         GlyphRole::WorktreeTrunkMerge => "\u{f419}", // nf-oct-git_merge
         GlyphRole::WorktreePrOpen => "\u{f407}", // nf-oct-git_pull_request
@@ -364,6 +366,7 @@ mod tests {
             GlyphRole::StatusIdle,
             GlyphRole::WorktreeBranch,
             GlyphRole::WorktreeMerge,
+            GlyphRole::ChannelHash,
             GlyphRole::WorktreeTrunkBranch,
             GlyphRole::WorktreeTrunkMerge,
             GlyphRole::WorktreePrOpen,
@@ -394,6 +397,12 @@ mod tests {
                 role.namespaced_name()
             );
         }
+    }
+
+    #[test]
+    fn channel_hash_has_unicode_and_nerd_font_glyphs() {
+        assert_eq!(unicode_glyph(GlyphRole::ChannelHash), "#");
+        assert_eq!(nerd_font_glyph(GlyphRole::ChannelHash), Some("\u{f292}"));
     }
 
     #[test]

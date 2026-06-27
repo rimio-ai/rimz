@@ -108,7 +108,7 @@ Cleanup is supervised. When a worktree's agent exits, Rimz inspects the tree: wo
 
 ## Many repos, one room
 
-A room doesn't need a repo. Run `rimz start` in any directory (`~/code` holding a dozen clones, or a headless server with agents and no source control at all) and that directory is the room ([directory workspace](../reference/cli.md#start-and-attach-a-workspace)). Each child repo renders as its own pod with its own branch label and per-repo churn, exactly like a worktree pod; panes at the root sit under a name-only header; a scratch directory with no repos is one flat group.
+A room doesn't need a repo. Run `rimz start` in any directory (`~/code` holding a dozen clones, or a headless server with agents and no source control at all) and that directory is the room ([directory workspace](../reference/cli.md#start-and-attach-a-workspace)). Each git-backed agent groups by the checkout it is working in, even when nested deep under the room; panes at the root sit under a name-only header; a scratch directory with no repos is one flat group.
 
 One sidebar triages the whole machine: an agent blocking in `~/code/query-engine` surfaces in the `~/code` room's feed, and the jump takes you to its pane.
 

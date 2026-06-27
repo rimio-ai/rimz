@@ -1,7 +1,7 @@
 //! The per-worktree git facts: the activity-tiered, single-flighted diff-stats
 //! refresh (trunk ref → merge-base → numstat + rev-list ×2 + status → landed
 //! verdict → marker/merge state → branch), the group-root enumeration
-//! (worktree checkouts / child repos), and their parsers.
+//! (repo worktree checkouts), and their parsers.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -32,7 +32,7 @@ mod roots;
 use crate::workspace::RootClass;
 pub(super) use roots::project_group_roots;
 #[cfg(test)]
-use roots::{list_child_repo_roots, list_group_roots, list_worktree_roots};
+use roots::{list_group_roots, list_worktree_roots};
 
 /// Refresh the producer's per-worktree git facts, then project them onto the
 /// snapshot's worktree groups. The git forks are the producer's job — a

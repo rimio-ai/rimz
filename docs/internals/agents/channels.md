@@ -2,7 +2,7 @@
 
 > See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. [harness.md](./harness.md) launches agents into channels and drives them by address; [worktree.md](./worktree.md) owns the Git worktree backing. This doc owns the channel model: labels, backings, durable named lanes, and recovery.
 
-A channel is a cooperation lane inside one room. It is the label the sidebar groups by, the suffix an address uses as `#channel`, and the tab name Rimz recovers on rebirth.
+A channel is a cooperation lane inside one room. It is the identity the sidebar groups by, the suffix an address uses as `#channel`, and the tab name Rimz recovers on rebirth.
 
 ## Backings and labels
 
@@ -14,6 +14,10 @@ Four backings can produce a channel:
 - **Directory channel** — the directory basename used when a live agent has no named, worktree, or team identity.
 
 Label precedence is explicit named channel, then worktree branch, then `<dir>/<team>`, then directory basename. This single rule feeds target resolution, rendered handles, sidebar grouping, `agents list`, pane overlays, and recovery.
+
+Sidebar pods keep identity and kind separate: a named-channel pod stores `label = design` and renders the channel hash glyph plus that bare name; a worktree pod stores the branch label and renders the branch or merge glyph; a non-repo room root stores the directory basename and renders no glyph.
+
+Git isolation follows the agent's own resolved worktree, not the room tree. Hooks run `git rev-parse --show-toplevel` from the agent cwd at any depth, and a git-backed row contributes that toplevel as its grouping root. Directory rooms do not scan child repos; non-git agents at the room root or in non-git subdirs fold into the room's root pod, while a nested checkout that an agent is actually working in earns its own worktree pod.
 
 ## Named-channel registry
 

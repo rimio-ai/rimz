@@ -8,7 +8,7 @@ The lobby is one renderer over data Rimz already keeps: `rimz list`'s joined vie
 
 The lobby is the entry path's behaviour outside a workspace; it carries no command of its own. The fast path stays exactly as it is: `cd ~/code/query-engine && rimz` resolves that room and enters it directly. The lobby is what `rimz` opens when there is no room to enter, in place of refusing.
 
-- `rimz` at a directory with no enclosing room — `$HOME` or `/`, which Rimz refuses today — opens the local lobby. The fast path never reaches it, so inside a project `rimz` still goes straight to the room and no second way in competes with it. `--root` still forces a deliberate directory room.
+- `rimz` at a directory with no enclosing room can start that directory as a room; the lobby remains the room picker when the entry path chooses room selection instead of direct entry. The fast path never reaches it, so inside a project `rimz` still goes straight to the room and no second way in competes with it. `--root` still forces a deliberate directory room.
 - `rimz remote connect <host>`, where the target is a bare host with no `:session-or-path`, opens the remote lobby for that host. `rimz remote connect pluto-xterm` lists `pluto-xterm`'s rooms; `rimz remote connect pluto-xterm:edgelord` and saved aliases still connect to that one room directly.
 
 The wordmark and the pace heatmap the lobby renders also stand alone as [`rimz stats`](#rimz-stats), so you can read your pace from inside a room where the lobby never appears.

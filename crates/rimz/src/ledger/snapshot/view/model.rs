@@ -63,7 +63,7 @@ pub enum SidebarWorktreeKind {
     /// A durable named cooperation lane with no git backing.
     Channel,
     /// A group root with a git story: a repo room's worktree checkout or a
-    /// directory room's child repo.
+    /// git-backed row's own resolved worktree.
     Worktree,
     /// A non-repo room's own pod — panes at the root and in non-repo subdirs.
     Root,

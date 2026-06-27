@@ -8,8 +8,8 @@ use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
 use super::layout::{
-    capped_rows, compare_groups, compare_rows, group_branch_label, multi_branch_paths,
-    status_counts, worktree_group_key,
+    capped_rows, compare_groups, compare_rows, effective_worktree_roots, group_branch_label,
+    multi_branch_paths, status_counts, worktree_group_key,
 };
 use super::{SidebarWorktreeGroup, SidebarWorktreeKind};
 
@@ -57,6 +57,11 @@ pub(super) fn build_worktree_groups_from_rows(
         rows.iter()
             .map(|row| (row.worktree_path.as_deref(), row.worktree_branch.as_deref())),
     );
+    let effective_roots = effective_worktree_roots(
+        worktree_roots,
+        rows.iter()
+            .map(|row| (row.worktree_path.as_deref(), row.worktree_branch.as_deref())),
+    );
 
     let mut by_group: BTreeMap<String, (String, SidebarWorktreeKind, Vec<SidebarRow>)> =
         BTreeMap::new();
@@ -71,7 +76,7 @@ pub(super) fn build_worktree_groups_from_rows(
             row.worktree_branch.as_deref(),
             split_by_branch,
             project_root,
-            worktree_roots,
+            &effective_roots,
             root_class,
         );
         by_group

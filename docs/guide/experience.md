@@ -208,7 +208,7 @@ The power move is going straight to the blocked pane. A single session-scoped Sp
 
 The grouping matches the reader's mental model. Groups are keyed on worktree isolation, since only same-worktree agents share files: a header marks each one, and the worktree the reader has selected reads as one bracketed lane, a thin spine down its full height with a faint dotted seal capping its header and the selected card inside it bolder.
 
-The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider and always sorts last, below every project group. The room scales past one repo too: `rimz start` in `~/code` makes each child repo a pod with the same cockpit, ranking, and jump triage ([the fleet room](./product.md#many-repos-one-room)).
+The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider and always sorts last, below every project group. The room scales past one repo too: `rimz start` in `~/code` lets each git-backed agent group by its own checkout, with the same cockpit, ranking, and jump triage ([the fleet room](./product.md#many-repos-one-room)).
 
 The footer advertises `?`, and pressing it replaces the card body with a centered legend and key block, so the glyph vocabulary is learnable in place without leaving the room.
 

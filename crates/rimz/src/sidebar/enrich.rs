@@ -519,10 +519,11 @@ pub fn enrich(
     snapshot.attention = machine_config.agents.attention;
     fold_link_stats(&mut snapshot, runtime, crate::sidebar::cache::unix_now_ms());
 
-    // The room's group roots — a repo room's worktree checkouts (so one parked
-    // outside the project root still earns its own pod instead of folding into
-    // `external`), a directory room's depth-1 child repos. The producer passes
-    // its fresh enumeration in; a consumer reads the cached one back.
+    // The room's enumerated group roots — a repo room's worktree checkouts, so
+    // one parked outside the project root still earns its own pod instead of
+    // folding into `external`. Directory rooms get git roots from each
+    // git-backed row's resolved worktree during the row fold. The producer
+    // passes its fresh enumeration in; a consumer reads the cached one back.
     match &mut mode {
         EnrichMode::Cached => {
             if snapshot.project_root.is_some() {

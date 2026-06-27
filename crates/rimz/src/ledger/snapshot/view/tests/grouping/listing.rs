@@ -111,7 +111,7 @@ fn out_of_project_agent_tails_into_external_when_root_is_known() {
 }
 
 #[test]
-fn out_of_project_cwd_stays_external_when_branch_flaps() {
+fn git_backed_out_of_project_agent_gets_own_worktree_pod() {
     let with_branch = agent("claude", "out", AgentStatus::Failed, 20)
         .worktree("/home/user/.agents/teams")
         .branch("main");
@@ -129,15 +129,17 @@ fn out_of_project_cwd_stays_external_when_branch_flaps() {
     };
 
     let external = (SidebarWorktreeKind::External, "external".to_owned());
-    assert_eq!(grouped(with_branch), external);
+    assert_eq!(
+        grouped(with_branch),
+        (SidebarWorktreeKind::Worktree, "main".to_owned())
+    );
     assert_eq!(grouped(without_branch), external);
 }
 
 #[test]
-fn sidebar_external_group_label_ignores_stray_branch() {
-    let outside = agent("claude", "out", AgentStatus::Failed, 20)
-        .worktree("/home/user/.agents/teams")
-        .branch("main");
+fn sidebar_external_group_label_is_stable_for_non_git_cwd() {
+    let outside =
+        agent("claude", "out", AgentStatus::Failed, 20).worktree("/home/user/.agents/teams");
     let snapshot = room(Vec::new(), vec![outside])
         .with_project_root(Some(std::path::PathBuf::from("/repo/main")))
         .with_live_panes(vec![pane("%1", "claude", "/home/user/.agents/teams")], None);
@@ -162,7 +164,7 @@ fn branch_named_unmatched_path_keeps_pre_enumeration_worktree_group() {
 
     let group = snapshot.worktree_groups.first().expect("a group");
     assert_eq!(group.kind, SidebarWorktreeKind::Worktree);
-    assert_eq!(group.key, "branch:feature-x");
+    assert_eq!(group.key, "/work/query-engine-feature-x/src");
     assert_eq!(group.label, "feature-x");
 }
 
@@ -179,5 +181,5 @@ fn named_channel_groups_a_live_agent_ahead_of_worktree_identity() {
 
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].kind, SidebarWorktreeKind::Channel);
-    assert_eq!(groups[0].label, "#design");
+    assert_eq!(groups[0].label, "design");
 }
