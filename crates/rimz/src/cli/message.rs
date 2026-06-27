@@ -1,6 +1,6 @@
 //! `rimz message` — immediate or parked per-agent text delivery.
 
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -117,7 +117,6 @@ fn message_add(
         force,
         all,
         create,
-        yes,
         smart_compact,
         file,
         no_from,
@@ -148,7 +147,7 @@ fn message_add(
             wait,
             not_before,
         },
-        FanoutFlags { all, create, yes },
+        FanoutFlags { all, create },
         globals,
     )
 }
@@ -181,7 +180,6 @@ pub(crate) fn to_session(
         FanoutFlags {
             all: false,
             create: false,
-            yes: true,
         },
         &globals,
     )
@@ -201,7 +199,6 @@ fn steer_message(
         force,
         all,
         create,
-        yes,
         smart_compact,
         file,
         no_from,
@@ -238,19 +235,18 @@ fn steer_message(
                 globals,
             );
         }
-        Err(err) => return Err(err),
+        Err(err) => return message_miss(&snapshot, channel.as_deref(), &err),
     };
 
-    if targets.len() > 1 {
+    if targets.len() > 1 && !all && !rimz::target::is_broadcast(&target) {
         let labels: Vec<String> = targets.iter().map(|target| target.label()).collect();
-        if !all && !rimz::target::is_broadcast(&target) {
-            return Err(super::ambiguous_fanout("message --steer", &target, &labels));
-        }
-        if !yes {
-            super::confirm_fanout("Steer", &target, &labels)?;
-        }
+        return Err(super::ambiguous_fanout("message --steer", &target, &labels));
     }
-
+    let text = if targets.len() > 1 || rimz::target::is_broadcast(&target) {
+        rimz::target::group_prefixed(&target, &text)
+    } else {
+        text
+    };
     let mut live_send = send::LiveSend {
         force,
         pacer: send::Pacer::new(message_interval_from_env()),
@@ -305,11 +301,33 @@ fn steer_message(
     )
 }
 
-/// The fan-out / create / confirm flags shared by parked message delivery.
+/// The fan-out / create flags shared by parked message delivery.
 struct FanoutFlags {
     all: bool,
     create: bool,
-    yes: bool,
+}
+
+fn message_miss(
+    snapshot: &SidebarSnapshot,
+    channel: Option<&str>,
+    err: &anyhow::Error,
+) -> Result<()> {
+    let mut out = render::err();
+    writeln!(out, "{err:#}")?;
+    let agents: Vec<&AgentState> = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| channel.is_none_or(|filter| rimz::target::agent_in_worktree(agent, filter)))
+        .collect();
+    if agents.is_empty() {
+        writeln!(out, "no agents are running")?;
+    } else {
+        writeln!(out, "available agents:")?;
+        super::agents_cmd::render_agents_table(&mut out, snapshot, &agents, Timestamp::now())?;
+    }
+    out.flush().ok();
+    std::process::exit(1);
 }
 
 /// How a queued message delivers: submit with Enter, the turn-boundary gate,
@@ -586,19 +604,19 @@ fn add_message(
                         globals,
                     );
                 }
-                return Err(err);
+                return message_miss(&snapshot, channel.as_deref(), &err);
             }
         }
     };
-    if targets.len() > 1 {
+    if targets.len() > 1 && !flags.all && !rimz::target::is_broadcast(&target) {
         let labels: Vec<String> = targets.iter().map(QueueTarget::label).collect();
-        if !flags.all && !rimz::target::is_broadcast(&target) {
-            return Err(super::ambiguous_fanout("deliver to", &target, &labels));
-        }
-        if !flags.yes {
-            super::confirm_fanout("Deliver to", &target, &labels)?;
-        }
+        return Err(super::ambiguous_fanout("deliver to", &target, &labels));
     }
+    let text = if targets.len() > 1 || rimz::target::is_broadcast(&target) {
+        rimz::target::group_prefixed(&target, &text)
+    } else {
+        text
+    };
     let mut live_send = send::LiveSend {
         force: spec.force,
         pacer: send::Pacer::new(message_interval_from_env()),

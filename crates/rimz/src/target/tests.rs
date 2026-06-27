@@ -86,6 +86,14 @@ fn require_mention_demands_the_sigil() {
 }
 
 #[test]
+fn group_prefixed_uses_the_addressed_selector() {
+    assert_eq!(group_prefixed("@all", "hi"), "@all, hi");
+    assert_eq!(group_prefixed("@all#main", "hi"), "@all, hi");
+    assert_eq!(group_prefixed("@claude", "go"), "@claude, go");
+    assert_eq!(group_prefixed("@claude#design", "go"), "@claude, go");
+}
+
+#[test]
 fn old_infix_no_longer_scopes_by_worktree() {
     let mut snapshot = empty_snapshot();
     let agent = agent("claude", "session-alpha", Some("main"), "terminal_1");

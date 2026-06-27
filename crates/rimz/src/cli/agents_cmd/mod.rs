@@ -32,7 +32,10 @@ use rimz::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::workspace::WorkspaceResolver;
 
 use auto_continue::{AutoContinueArgs, run_auto_continue};
-use commands::*;
+pub(crate) use commands::render_agents_table;
+#[cfg(test)]
+use commands::{RunPlacement, run_placement, run_stop_should_cancel};
+use commands::{focus_agent, list_agents, run_print, show_agent, stop_agent, wait_agent};
 use exec::run_exec;
 use launch::*;
 use refresh_usage::{RefreshUsageArgs, run_refresh_usage};

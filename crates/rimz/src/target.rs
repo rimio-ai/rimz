@@ -326,6 +326,12 @@ pub fn is_broadcast(raw: &str) -> bool {
     !raw.contains(':') && selector_of(raw) == "all"
 }
 
+/// Prefix a group send with the addressed selector so receivers read it as a
+/// group message, not a private one. The marker drops any `#channel` suffix.
+pub fn group_prefixed(raw: &str, text: &str) -> String {
+    format!("@{}, {text}", selector_of(raw))
+}
+
 /// The selector and resolved channel a `--create` launch needs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreateMention {

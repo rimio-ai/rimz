@@ -78,8 +78,8 @@ An address resolves to zero, one, or many agents against a fresh snapshot, and a
 | Matches | Outcome |
 | --- | --- |
 | one | delivered |
-| many | an ambiguity error listing the handles to pick one, unless `--all` (or `@all`) opts into the fan-out — which confirms before sending unless `-y`, and skips a blocked agent while the rest send |
-| zero | a miss that names where the agent runs in another channel, or — with `--create` — launches it |
+| many | an ambiguity error listing the handles to pick one, unless `--all` or `@all` opts into fan-out; fan-out delivers to every match, prefixes each delivery with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message, and skips a blocked agent while the rest send |
+| zero | a miss that names where the agent runs in another channel and lists live agents, or — with `--create` — launches it |
 
 `--create` launches a missing agent straight from its address: `rimz message --steer @planner#design --create "draft the API"` opens a `planner` in `#design`, registering the named channel, with the text as its first prompt. With `--worktree feat/x`, create-on-miss creates or reuses the worktree instead. Only a type handle creates, because only a kind or profile carries what a launch needs; an instance handle names something that must already exist and refuses with the fix.
 
@@ -95,7 +95,7 @@ The `@` sigil is required — a bare selector fails with a `did you mean @…?` 
 
 ### Send now
 
-`rimz message --steer <target> <text>` injects into each resolved pane immediately as a [bracketed paste](#bracketed-paste-submit), writes a durable message record, then presses Enter as a discrete keystroke *outside* the paste — the submit — while any `\n` inside the text rides the paste as a soft composer newline, so a multi-line prompt lands multi-line. By default a Rimz-launched agent's send arrives prefixed `from @sender: `, gaining `#channel` when it crosses channels; `--no-from` delivers the bytes exact. A pending feed ask attached to a bound agent skips that agent unless `--force` records the override and sends anyway. The `message.sent` event records metadata — message id, kind, session, pane, force flag, sender, text length, and status — never the message content.
+`rimz message --steer <target> <text>` injects into each resolved pane immediately as a [bracketed paste](#bracketed-paste-submit), writes a durable message record, then presses Enter as a discrete keystroke *outside* the paste — the submit — while any `\n` inside the text rides the paste as a soft composer newline, so a multi-line prompt lands multi-line. By default a Rimz-launched agent's send arrives prefixed `from @sender: `, gaining `#channel` when it crosses channels; a fan-out also prefixes the text with the addressed handle (`@all,`, `@claude,`). `--no-from` delivers without the sender prefix. A pending feed ask attached to a bound agent skips that agent unless `--force` records the override and sends anyway. The `message.sent` event records metadata — message id, kind, session, pane, force flag, sender, text length, and status — never the message content.
 
 ### Bracketed-paste submit
 

@@ -44,13 +44,22 @@ pub(super) fn list_agents(
         return Ok(());
     }
 
-    let groups = rimz::ledger::snapshot::group_live_agents_by_worktree(&agents, &snapshot);
+    let mut out = render::out();
+    render_agents_table(&mut out, &snapshot, &agents, jiff::Timestamp::now())?;
+    Ok(())
+}
+
+pub(crate) fn render_agents_table(
+    w: &mut impl std::io::Write,
+    snapshot: &rimz::SidebarSnapshot,
+    agents: &[&AgentState],
+    now: jiff::Timestamp,
+) -> std::io::Result<()> {
+    let groups = rimz::ledger::snapshot::group_live_agents_by_worktree(agents, snapshot);
     let ordered_agents: Vec<&AgentState> = groups
         .iter()
         .flat_map(|group| group.agents.iter().copied())
         .collect();
-    let now = jiff::Timestamp::now();
-    let mut out = render::out();
     let mut table = render::Table::new([
         "AGENT", "STATUS", "CHANNEL", "MODEL", "CTX", "TOKENS", "AGE",
     ])
@@ -58,8 +67,7 @@ pub(super) fn list_agents(
     for &agent in &ordered_agents {
         table.row(agent_row(agent, &ordered_agents, now));
     }
-    table.render(&mut out)?;
-    Ok(())
+    table.render(w)
 }
 
 fn list_channel_filter(

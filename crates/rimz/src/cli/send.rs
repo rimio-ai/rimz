@@ -45,9 +45,6 @@ pub(crate) struct SendFlags {
     /// prompt. An instance handle (pet name, ordinal) cannot create.
     #[arg(long)]
     pub(crate) create: bool,
-    /// Skip the fan-out confirmation prompt when broadcasting (`@all` or --all).
-    #[arg(long, short = 'y')]
-    pub(crate) yes: bool,
     /// Use Rimz's smart compact-first send when the agent's context window is at
     /// least this full: a percentage (`70%`) or an occupied-token count
     /// (`120000`). Defaults from `[harness] smart_compact` when omitted.

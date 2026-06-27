@@ -41,7 +41,7 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 **One agent or many:**
 
 - The management verbs (`show`, `focus`, `wait`, `stop`) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from.
-- `message` fan-outs are explicit: a multi-match is ambiguous until you opt in with `--all` (or address `@all`), and a fan-out confirms past the first match unless `--yes` — off a TTY it refuses without it.
+- `message` fan-outs are explicit: a multi-match is ambiguous until you opt in with `--all` or address `@all`; a fan-out delivers to every match with no confirmation and prefixes each delivery with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message.
 
 The `@` sigil is required for `message` (it also keeps a target from being read as a launch spec); `show`, `wait`, and `stop` also accept a bare selector (`swift-otter`) or a run id. The deeper resolution rules are in [harness.md → The address](../../internals/agents/harness.md#the-address).
 
@@ -128,7 +128,7 @@ rimz message --schedule 14:30 --on any @planner "Restart the review."
 rimz message --steer @claude "Inspect the failing test now."
 rimz message --steer @codex --no-enter "Use the docs branch only."              # paste, don't submit
 rimz message --steer @planner --create "Draft the new endpoint."                # launch if missing
-rimz message @all --yes "When you reach a boundary, summarize what changed."
+rimz message @all "When you reach a boundary, summarize what changed."
 rimz message list --json
 rimz message remove msg_01J…
 rimz message clear @claude-2#cli-docs
@@ -136,7 +136,7 @@ rimz message clear @claude-2#cli-docs
 
 The message is one bare quoted argument, so no `--` separates ordinary prose from flags. A message that starts with `-` still uses clap's universal terminator (`--`) before the text. Value-optional flags such as bare `--wait` belong after the message, or use `--wait=<duration>`, so the flag does not capture the next token.
 
-Address the target with the [agent-address grammar](#addressing-agents). `message --steer` delivers to live panes immediately, writes a durable prompt record, and prints `sent @handle`; smart compaction adds a durable command record and `compacted @handle` before the prompt line. Broadcasts summarize sent and skipped agents, so one blocked agent never stops the rest. The `message.sent` audit event records message id, receiver, pane, force flag, sender, body, and text length; message content stays in the message record.
+Address the target with the [agent-address grammar](#addressing-agents). `message --steer` delivers to live panes immediately, writes a durable prompt record, and prints `sent @handle`; smart compaction adds a durable command record and `compacted @handle` before the prompt line. Broadcasts summarize sent and skipped agents, so one blocked agent never stops the rest. A fan-out tags each delivery with the addressed handle, and an unmatched address prints the live-agent list. The `message.sent` audit event records message id, receiver, pane, force flag, sender, body, and text length; message content stays in the message record.
 
 The default mode uses the same live path when the addressed agent can receive now: a live pane exists, the `--on` gate is open, no pending ask reserves input unless `--force`, and no older ready message owns that card's FIFO head. Otherwise it parks a `queued` prompt record until `--on done` (idle or success) or `--on any` (idle, success, or failed) opens. `--schedule <DUR|HH:MM>` always parks and sets a `not_before` time floor; examples include `90s`, `60m`, `2h`, `1d`, and local 24-hour times such as `14:30`. A scheduled message becomes eligible only after that floor, then the normal gate and pending-ask checks still apply.
 

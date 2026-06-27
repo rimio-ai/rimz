@@ -1582,8 +1582,8 @@ fn queue_force_delivers_past_a_pending_ask() {
     assert_text_then_enter(&trace_log, "go");
 }
 
-/// `queue @claude --all -y` fans out to every claude in the room: one queued
-/// message per agent, all carrying the same text.
+/// `queue @claude --all` fans out to every claude in the room: one queued
+/// message per agent, all tagged with the addressed group.
 #[test]
 fn queue_fanout_two_agents() {
     let env = Env::new();
@@ -1595,7 +1595,7 @@ fn queue_fanout_two_agents() {
 
     let out = env
         .rimz()
-        .args(["message", "@claude", "--all", "--yes", "--", "shared task"])
+        .args(["message", "@claude", "--all", "--", "shared task"])
         .output()
         .expect("queue fanout");
     assert!(
@@ -1611,8 +1611,76 @@ fn queue_fanout_two_agents() {
         "one queued message per agent: {pending:?}"
     );
     assert!(
-        pending.iter().all(|message| message.text == "shared task"),
-        "every fan-out message carries the same text: {pending:?}"
+        pending
+            .iter()
+            .all(|message| message.text == "@claude, shared task"),
+        "every fan-out message carries the group marker: {pending:?}"
+    );
+}
+
+#[test]
+fn broadcast_at_all_sends_without_yes() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-at-all",
+        "feature-at-all",
+        &[("ZELLIJ_PANE_ID", "5")],
+    );
+
+    let out = env
+        .rimz()
+        .args(["message", "@all", "--", "heads up"])
+        .output()
+        .expect("queue broadcast");
+    assert!(
+        out.status.success(),
+        "broadcast failed without a confirmation flag: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].text, "@all, heads up");
+}
+
+#[test]
+fn message_miss_lists_available_agents() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-miss-list", "feature-miss-list", &[]);
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "sess-miss-list",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("swift-otter".to_owned());
+            observation.role = Some("helper".to_owned());
+            observation.worktree_branch = Some("feature-miss-list".to_owned());
+        },
+    );
+
+    let out = env
+        .rimz()
+        .args(["message", "@ghost", "--", "hi"])
+        .output()
+        .expect("message miss");
+    assert!(!out.status.success(), "miss should fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no agent matches target `@ghost`"),
+        "miss header missing: {stderr}"
+    );
+    assert!(
+        stderr.contains("AGENT") && stderr.contains("STATUS"),
+        "agent table header missing: {stderr}"
+    );
+    assert!(
+        stderr.contains("@helper"),
+        "running agent handle missing from miss table: {stderr}"
     );
 }
 
@@ -1650,7 +1718,7 @@ fn steer_multi_match_without_all_is_ambiguous() {
     );
 }
 
-/// `steer @claude --all -y` broadcasts to every claude with a bound pane and
+/// `steer @claude --all` broadcasts to every claude with a bound pane and
 /// prints a summary naming the count.
 #[test]
 fn steer_fanout_summary() {
@@ -1666,9 +1734,7 @@ fn steer_fanout_summary() {
         .env("RIMZ_MESSAGE_INTERVAL_MS", interval.as_millis().to_string())
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args([
-            "message", "--steer", "@claude", "--all", "--yes", "--", "hello",
-        ])
+        .args(["message", "--steer", "@claude", "--all", "--", "hello"])
         .output()
         .expect("steer fanout");
     let elapsed = started.elapsed();
@@ -1688,7 +1754,7 @@ fn steer_fanout_summary() {
     );
     let pasted = trace_lines(&trace_log)
         .into_iter()
-        .filter(|line| is_paste_to_any_pane(line, "hello"))
+        .filter(|line| is_paste_to_any_pane(line, "@claude, hello"))
         .count();
     assert_eq!(pasted, 2, "fan-out should paste once per live pane");
 }
@@ -1720,9 +1786,7 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
         .rimz()
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args([
-            "message", "--steer", "@claude", "--all", "--yes", "--", "go",
-        ])
+        .args(["message", "--steer", "@claude", "--all", "--", "go"])
         .output()
         .expect("steer partial skip");
     assert!(

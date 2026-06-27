@@ -279,34 +279,11 @@ pub(crate) fn agent_label(agent: &AgentState) -> String {
         })
 }
 
-/// Gate a fan-out (more than one target) behind explicit confirmation. On a TTY,
-/// prompt `<verb> N agents (…)? [y/N]`; off a TTY, refuse and point at `--yes`
-/// so a script never broadcasts by surprise. Message callers pass the
-/// per-target labels so live panes and durable sessions share one prompt.
-pub(crate) fn confirm_fanout(verb: &str, target: &str, labels: &[String]) -> Result<()> {
-    let list = labels.join(", ");
-    if !std::io::stdin().is_terminal() {
-        anyhow::bail!(
-            "`{target}` fans out to {} agents ({list}); re-run with --yes to broadcast",
-            labels.len()
-        );
-    }
-    let mut stderr = std::io::stderr();
-    write!(stderr, "{verb} {} agents ({list})? [y/N] ", labels.len())?;
-    stderr.flush().ok();
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer)?;
-    if !matches!(answer.trim(), "y" | "Y" | "yes" | "Yes") {
-        anyhow::bail!("aborted");
-    }
-    Ok(())
-}
-
 /// Refuse a plain selector that matched several agents. A bare `@<kind>`/`@<profile>`
 /// names a profile, not "everyone", so several matches is a "pick one" error: it
 /// lists the disambiguating handles to retype and names `--all` as the opt-in to
-/// reach every match. The explicit broadcast `@all` (and the `--all` flag) skip
-/// this and go through [`confirm_fanout`] instead.
+/// reach every match. The explicit broadcast `@all` and `--all` fan out directly;
+/// each delivery carries the addressed handle as a prefix.
 pub(crate) fn ambiguous_fanout(verb: &str, target: &str, labels: &[String]) -> anyhow::Error {
     let list = labels
         .iter()
