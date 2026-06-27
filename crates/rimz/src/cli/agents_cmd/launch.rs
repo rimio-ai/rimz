@@ -125,12 +125,14 @@ pub(super) fn launch_layout(
     let sidebar = build_sidebar_opts(&room, Vec::new())?;
     let panes = layout_panes_with_names(
         &layout,
-        &cwd,
-        args.prompt.as_deref(),
-        worktree_launch,
-        in_place,
-        team_name,
-        args.channel.as_deref(),
+        LayoutPaneParams {
+            cwd: &cwd,
+            prompt: args.prompt.as_deref(),
+            cleanup_worktree: worktree_launch,
+            in_place,
+            team: team_name,
+            channel: args.channel.as_deref(),
+        },
         &launch_identities,
     )?;
     let (open_result, what): (Result<()>, &str) = match placement {
@@ -185,11 +187,14 @@ pub(super) fn launch_layout(
             &ledger,
             &workspace,
             &launch_identities,
-            &cwd,
-            worktree_name.as_deref(),
-            args.channel.as_deref(),
-            args.prompt.as_deref(),
-            rimz::schema::event::AgentLaunchState::Failed,
+            LaunchEventParams {
+                cwd: &cwd,
+                worktree_name: worktree_name.as_deref(),
+                channel: args.channel.as_deref(),
+                prompt: args.prompt.as_deref(),
+                state: rimz::schema::event::AgentLaunchState::Failed,
+                pane_id: None,
+            },
         );
         return Err(err).context(what);
     }
@@ -827,26 +832,10 @@ pub(super) fn append_launch_events(
     ledger: &rimz::Ledger,
     workspace: &rimz::ResolvedWorkspace,
     identities: &[LaunchIdentity],
-    cwd: &Path,
-    worktree_name: Option<&str>,
-    channel: Option<&str>,
-    prompt: Option<&str>,
-    state: rimz::schema::event::AgentLaunchState,
+    params: LaunchEventParams<'_>,
 ) -> Result<()> {
     for identity in identities {
-        append_launch_event(
-            ledger,
-            workspace,
-            identity,
-            LaunchEventParams {
-                cwd,
-                worktree_name,
-                channel,
-                prompt,
-                state,
-                pane_id: None,
-            },
-        )?;
+        append_launch_event(ledger, workspace, identity, params.clone())?;
     }
     Ok(())
 }
@@ -897,12 +886,7 @@ pub(super) fn append_launch_event(
 
 pub(super) fn layout_panes_with_names(
     layout: &LayoutSpec,
-    cwd: &Path,
-    prompt: Option<&str>,
-    cleanup_worktree: bool,
-    in_place: bool,
-    team: Option<&str>,
-    channel: Option<&str>,
+    params: LayoutPaneParams<'_>,
     launch_identities: &[LaunchIdentity],
 ) -> Result<LayoutPanes> {
     let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
@@ -926,12 +910,12 @@ pub(super) fn layout_panes_with_names(
                         cell,
                         PaneCmdOptions {
                             rimz_bin: &rimz_bin,
-                            cwd,
-                            prompt,
-                            cleanup_worktree,
-                            in_place,
-                            team,
-                            channel,
+                            cwd: params.cwd,
+                            prompt: params.prompt,
+                            cleanup_worktree: params.cleanup_worktree,
+                            in_place: params.in_place,
+                            team: params.team,
+                            channel: params.channel,
                             launch,
                         },
                     )
@@ -944,6 +928,16 @@ pub(super) fn layout_panes_with_names(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(LayoutPanes { columns })
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct LayoutPaneParams<'a> {
+    pub cwd: &'a Path,
+    pub prompt: Option<&'a str>,
+    pub cleanup_worktree: bool,
+    pub in_place: bool,
+    pub team: Option<&'a str>,
+    pub channel: Option<&'a str>,
 }
 
 pub(super) struct PaneCmdOptions<'a> {

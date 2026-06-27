@@ -8,6 +8,8 @@ use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::ids::WorkspaceId;
+
 const ENV_BIN: &str = "/usr/bin/env";
 const POSIX_LOGIN_SHELL_SCRIPT: &str = r#"exec /usr/bin/env "$@""#;
 const FISH_LOGIN_SHELL_SCRIPT: &str = "exec /usr/bin/env $argv";
@@ -72,6 +74,45 @@ pub fn user_shell_program() -> String {
         .unwrap_or_else(|| PathBuf::from("sh"))
         .to_string_lossy()
         .into_owned()
+}
+
+/// Shell pane argv for an empty named channel, pinned to the room identity.
+pub fn channel_shell_argv(
+    workspace_id: &WorkspaceId,
+    project_root: &Path,
+    worktree_path: &Path,
+    channel: &str,
+) -> Vec<String> {
+    vec![
+        "env".to_owned(),
+        "RIMZ=1".to_owned(),
+        format!("{}={workspace_id}", crate::workspace::ENV_WORKSPACE_ID),
+        format!(
+            "{}={}",
+            crate::workspace::ENV_PROJECT_ROOT,
+            project_root.display()
+        ),
+        format!(
+            "{}={}",
+            crate::run::ENV_WORKTREE_PATH,
+            worktree_path.display()
+        ),
+        format!("{}={channel}", crate::run::ENV_CHANNEL),
+        user_shell_program(),
+    ]
+}
+
+/// Shell pane argv for a resume tab label, falling back to a plain shell.
+pub fn channel_label_shell_argv(
+    workspace_id: &WorkspaceId,
+    project_root: &Path,
+    worktree_path: &Path,
+    label: &str,
+) -> Vec<String> {
+    let Some(channel) = label.strip_prefix('#').filter(|value| !value.is_empty()) else {
+        return vec![user_shell_program()];
+    };
+    channel_shell_argv(workspace_id, project_root, worktree_path, channel)
 }
 
 /// Wrap an agent command in the user's default shell startup path so shell rc

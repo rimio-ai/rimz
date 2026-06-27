@@ -4,7 +4,7 @@
 //! This file stores only bare named lanes so an empty cooperation tab survives
 //! room rebirth.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -96,15 +96,18 @@ pub fn register(paths: &StatePaths, name: &str) -> Result<ChannelRecord> {
     validate_name(name)?;
     let _lock = WorkspaceLock::acquire(&paths.workspace_lock)?;
     let mut channels = read(&paths.channels_record)?;
-    let record = channels
-        .0
-        .entry(name.to_owned())
-        .or_insert_with(|| ChannelRecord {
-            name: name.to_owned(),
-            created_at: Timestamp::now(),
-        })
-        .clone();
-    write_temp_then_rename(&paths.channels_record, &channels)?;
+    let record = match channels.0.entry(name.to_owned()) {
+        Entry::Occupied(entry) => entry.get().clone(),
+        Entry::Vacant(entry) => {
+            let record = ChannelRecord {
+                name: name.to_owned(),
+                created_at: Timestamp::now(),
+            };
+            entry.insert(record.clone());
+            write_temp_then_rename(&paths.channels_record, &channels)?;
+            record
+        }
+    };
     Ok(record)
 }
 
@@ -114,7 +117,9 @@ pub fn remove(paths: &StatePaths, name: &str) -> Result<Option<ChannelRecord>> {
     let _lock = WorkspaceLock::acquire(&paths.workspace_lock)?;
     let mut channels = read(&paths.channels_record)?;
     let removed = channels.0.remove(name);
-    write_temp_then_rename(&paths.channels_record, &channels)?;
+    if removed.is_some() {
+        write_temp_then_rename(&paths.channels_record, &channels)?;
+    }
     Ok(removed)
 }
 
@@ -153,6 +158,16 @@ mod tests {
 
         assert_eq!(removed.map(|record| record.name), Some("ops".to_owned()));
         assert!(records.is_empty());
+    }
+
+    #[test]
+    fn absent_remove_does_not_create_registry_file() {
+        let paths = paths();
+
+        let removed = remove(&paths, "ops").expect("remove");
+
+        assert!(removed.is_none());
+        assert!(!paths.channels_record.exists());
     }
 
     #[test]

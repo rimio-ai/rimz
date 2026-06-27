@@ -8,17 +8,6 @@ use crate::mux::{MuxErr, PaneCmd, Result, SidebarPaneOptions, TabOptions, ensure
 use super::TmuxBackend;
 use super::options::sidebar_serve_command;
 
-fn empty_channel_shell(label: &str) -> Vec<String> {
-    let Some(channel) = label.strip_prefix('#').filter(|value| !value.is_empty()) else {
-        return vec![crate::launch::user_shell_program()];
-    };
-    vec![
-        "env".to_owned(),
-        format!("{}={channel}", crate::run::ENV_CHANNEL),
-        crate::launch::user_shell_program(),
-    ]
-}
-
 impl TmuxBackend {
     /// Close a single pane by id (`kill-pane -t %N`), terminating its process.
     /// Reconcile uses this to drop a duplicate or unresponsive sidebar pane
@@ -373,7 +362,12 @@ impl TmuxBackend {
             let first = if let Some(first) = tab.panes.first() {
                 first
             } else {
-                fallback_shell = empty_channel_shell(&tab.label);
+                fallback_shell = crate::launch::channel_label_shell_argv(
+                    &opts.workspace_id,
+                    &opts.project_root,
+                    &tab.cwd,
+                    &tab.label,
+                );
                 &fallback_shell
             };
             // `-d` keeps the user on the working window; `-P -F` prints the new

@@ -253,7 +253,12 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
         panes: LayoutPanes {
             columns: vec![LayoutColumn {
                 panes: vec![PaneCmd {
-                    argv: channel_shell_argv(workspace, channel),
+                    argv: rimz::launch::channel_shell_argv(
+                        &workspace.workspace_id,
+                        &workspace.project_root,
+                        &workspace.worktree_root,
+                        channel,
+                    ),
                 }],
                 stacked: false,
             }],
@@ -262,28 +267,4 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
         dock_sidebar: true,
         sidebar,
     });
-}
-
-fn channel_shell_argv(workspace: &rimz::ResolvedWorkspace, channel: &str) -> Vec<String> {
-    vec![
-        "env".to_owned(),
-        "RIMZ=1".to_owned(),
-        format!(
-            "{}={}",
-            rimz::workspace::ENV_WORKSPACE_ID,
-            workspace.workspace_id
-        ),
-        format!(
-            "{}={}",
-            rimz::workspace::ENV_PROJECT_ROOT,
-            workspace.project_root.display()
-        ),
-        format!(
-            "{}={}",
-            rimz::run::ENV_WORKTREE_PATH,
-            workspace.worktree_root.display()
-        ),
-        format!("{}={channel}", rimz::run::ENV_CHANNEL),
-        rimz::launch::user_shell_program(),
-    ]
 }

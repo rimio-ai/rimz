@@ -45,6 +45,7 @@ static CLEANUP_SIGNAL_RECEIVED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
 type LaunchIdentity = AgentLaunchIdentity;
 
+#[derive(Clone)]
 struct LaunchEventParams<'a> {
     cwd: &'a Path,
     worktree_name: Option<&'a str>,
