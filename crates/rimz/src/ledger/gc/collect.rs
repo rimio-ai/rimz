@@ -43,6 +43,7 @@ pub(crate) fn collect_runtime_under(runtime_root: &Path, older_than: Duration) -
         report.runtime_roots_scanned += 1;
         collect_workspace_runtime(&root, older_than, &mut report)?;
     }
+    collect_stale_probe_markers(&runtime_root.join("shared"), older_than, &mut report)?;
 
     Ok(report)
 }
@@ -105,6 +106,64 @@ fn collect_stale_sidecars(dir: &Path, older_than: Duration, report: &mut GcRepor
         )?;
     }
     Ok(())
+}
+
+/// Reap stale provider probe-throttle markers in the runtime `shared/` dir.
+///
+/// Live sessions re-touch these stamps within their throttle interval. Once a
+/// marker ages past `older_than`, removing it only lets the next due-check probe
+/// again.
+fn collect_stale_probe_markers(
+    shared_dir: &Path,
+    older_than: Duration,
+    report: &mut GcReport,
+) -> Result<()> {
+    let entries = match fs::read_dir(shared_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(GcErr::ReadDir {
+                path: shared_dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+
+    for entry in entries {
+        let entry = entry.map_err(|source| GcErr::ReadDir {
+            path: shared_dir.to_path_buf(),
+            source,
+        })?;
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        let path = entry.path();
+        if !is_probe_marker(name) || !is_older_than(&path, older_than)? {
+            continue;
+        }
+        remove_file_if_exists(
+            &path,
+            |report| {
+                report.probe_markers_removed += 1;
+            },
+            report,
+        )?;
+    }
+    Ok(())
+}
+
+fn is_probe_marker(name: &str) -> bool {
+    name.contains("-probe.")
+        && !name.ends_with(".json")
+        && !name.ends_with(".jsonl")
+        && !name.ends_with(".lock")
 }
 
 fn collect_stale_read_marks(
@@ -507,6 +566,38 @@ mod tests {
 
         assert_eq!(report.sidecar_files_removed, 0);
         assert!(read_marks.exists(), "live owner's read marks are kept");
+    }
+
+    #[test]
+    fn runtime_gc_reaps_stale_probe_markers() {
+        let temp = tempdir().unwrap();
+        let shared = temp.path().join("rimz").join("shared");
+        fs::create_dir_all(&shared).unwrap();
+        let nonce = "00000000000000000000000000000000";
+        let stale_codex = shared.join(format!("rate-limit-probe.codex.{nonce}"));
+        let stale_usage = shared.join("usage-probe.opencode");
+        let fresh = shared.join("usage-probe.pi");
+        let accounts = shared.join("accounts.json");
+        let lock = shared.join("accounts.lock");
+        let trace = shared.join("rate_limits_trace.jsonl");
+        for path in [&stale_codex, &stale_usage, &fresh, &accounts, &lock, &trace] {
+            fs::write(path, b"probe").unwrap();
+        }
+        let old = SystemTime::now() - Duration::from_secs(7200);
+        for path in [&stale_codex, &stale_usage, &accounts, &lock, &trace] {
+            fs::File::open(path).unwrap().set_modified(old).unwrap();
+        }
+
+        let report =
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600)).unwrap();
+
+        assert_eq!(report.probe_markers_removed, 2);
+        assert!(!stale_codex.exists());
+        assert!(!stale_usage.exists());
+        assert!(fresh.exists());
+        assert!(accounts.exists());
+        assert!(lock.exists());
+        assert!(trace.exists());
     }
 
     fn write_json<T: serde::Serialize>(path: &Path, value: &T) {

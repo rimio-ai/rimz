@@ -157,6 +157,82 @@ fn gc_reaps_dead_loop_delivery_schedule() {
 }
 
 #[test]
+fn gc_sweeps_orphan_temps_and_probe_markers() {
+    let env = Env::new();
+    let rt = RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root).expect("runtime");
+    rt.ensure_dirs().expect("runtime dirs");
+    let state = env.state_path_for(&env.project_root);
+    std::fs::create_dir_all(&state.snapshots_dir).expect("mkdir snapshots");
+    let state_shared = env.state_root().join("rimz").join("shared");
+    std::fs::create_dir_all(&state_shared).expect("mkdir state shared");
+
+    let nonce = "00000000000000000000000000000000";
+    let old_state_shared = state_shared.join(format!("spending.json.tmp.1.{nonce}"));
+    let old_state_rollup = state
+        .snapshots_dir
+        .join(format!("rollup.json.tmp.1.{nonce}"));
+    let old_runtime_shared = rt
+        .shared_root
+        .join(format!("rate_limits.json.tmp.1.{nonce}"));
+    let fresh_temp = state_shared.join(format!("fresh.json.tmp.1.{nonce}"));
+    for path in [
+        &old_state_shared,
+        &old_state_rollup,
+        &old_runtime_shared,
+        &fresh_temp,
+    ] {
+        std::fs::write(path, b"temp").expect("write temp");
+    }
+
+    let old_codex_marker = rt
+        .shared_root
+        .join(format!("rate-limit-probe.codex.{nonce}"));
+    let old_usage_marker = rt.shared_root.join("usage-probe.opencode");
+    let fresh_marker = rt.shared_root.join("usage-probe.pi");
+    let accounts = rt.shared_root.join("accounts.json");
+    for path in [
+        &old_codex_marker,
+        &old_usage_marker,
+        &fresh_marker,
+        &accounts,
+    ] {
+        std::fs::write(path, b"probe").expect("write probe marker");
+    }
+
+    let old = SystemTime::now() - Duration::from_secs(7200);
+    for path in [
+        &old_state_shared,
+        &old_state_rollup,
+        &old_runtime_shared,
+        &old_codex_marker,
+        &old_usage_marker,
+        &accounts,
+    ] {
+        std::fs::File::open(path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("reclaimed"))
+        .stdout(contains("temp"))
+        .stdout(contains("probe"));
+
+    assert!(!old_state_shared.exists());
+    assert!(!old_state_rollup.exists());
+    assert!(!old_runtime_shared.exists());
+    assert!(!old_codex_marker.exists());
+    assert!(!old_usage_marker.exists());
+    assert!(fresh_temp.exists());
+    assert!(fresh_marker.exists());
+    assert!(accounts.exists());
+}
+
+#[test]
 fn gc_keeps_spawn_and_live_loop_schedules() {
     let env = Env::new();
     env.install_agent_hooks("claude");

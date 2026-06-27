@@ -1,4 +1,4 @@
-//! `rimz gc` — remove stale runtime liveness hints.
+//! `rimz gc` — reclaim stale maintenance state.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -76,10 +76,13 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         super::loop_cmd::reap_dead_delivery_schedules().context("reaping dead loop schedules")?;
     spinner.set("pruning dead workspaces…");
     let prune = gc::prune_dead_workspaces().context("pruning dead workspaces")?;
+    spinner.set("sweeping orphan temps…");
+    let temps = gc::collect_orphan_temps(args.older_than);
     let worktrees = sweep_worktrees(globals, &spinner);
     let outcome = GcOutcome {
         older_than: args.older_than,
         runtime: report,
+        temps,
         repaired,
         feed_abandoned: abandoned,
         queue_abandoned: messages_abandoned,
@@ -98,6 +101,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
 struct GcOutcome {
     older_than: Duration,
     runtime: gc::GcReport,
+    temps: gc::TempSweepReport,
     repaired: Option<RepairOutcome>,
     feed_abandoned: usize,
     queue_abandoned: usize,
@@ -203,10 +207,12 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     let reclaimed = out
         .runtime
         .bytes_removed
+        .saturating_add(out.temps.bytes_removed)
         .saturating_add(out.prune.bytes_removed())
         .saturating_add(out.worktrees.bytes);
     let active = reclaimed > 0
         || runtime_items(&out.runtime) > 0
+        || out.temps.files_removed > 0
         || out.feed_abandoned > 0
         || out.queue_abandoned > 0
         || out.queue_timed_out > 0
@@ -258,6 +264,14 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             cell("dead ledgers"),
         ]);
     }
+    if out.temps.files_removed > 0 {
+        table.row([
+            cell("temp"),
+            cell(plural(out.temps.files_removed, "orphan", "orphans")),
+            cell(fmt_bytes(out.temps.bytes_removed)),
+            cell("interrupted writes"),
+        ]);
+    }
     let runtime_items = runtime_items(&out.runtime);
     if runtime_items > 0 {
         table.row([
@@ -267,7 +281,11 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             cell(runtime_breakdown(&out.runtime)),
         ]);
     }
-    if out.worktrees.swept > 0 || !out.prune.removed.is_empty() || runtime_items > 0 {
+    if out.worktrees.swept > 0
+        || !out.prune.removed.is_empty()
+        || out.temps.files_removed > 0
+        || runtime_items > 0
+    {
         writeln!(w)?;
         table.render(w)?;
     }
@@ -344,6 +362,7 @@ fn runtime_items(report: &gc::GcReport) -> usize {
     report.heartbeat_files_removed
         + report.sidebar_sockets_removed
         + report.sidecar_files_removed
+        + report.probe_markers_removed
         + report.dirs_removed
 }
 
@@ -352,6 +371,7 @@ fn runtime_breakdown(report: &gc::GcReport) -> String {
         (report.heartbeat_files_removed, "heartbeat", "heartbeats"),
         (report.sidebar_sockets_removed, "socket", "sockets"),
         (report.sidecar_files_removed, "sidecar", "sidecars"),
+        (report.probe_markers_removed, "probe", "probes"),
         (report.dirs_removed, "dir", "dirs"),
     ]
     .into_iter()
@@ -416,8 +436,13 @@ mod tests {
                 heartbeat_files_removed: 1,
                 sidecar_files_removed: 2,
                 sidebar_sockets_removed: 0,
+                probe_markers_removed: 1,
                 dirs_removed: 1,
                 bytes_removed: 13_018,
+            },
+            temps: gc::TempSweepReport {
+                files_removed: 2,
+                bytes_removed: 68,
             },
             repaired: None,
             feed_abandoned: 3,
@@ -445,8 +470,11 @@ mod tests {
         assert!(out.contains("worktrees"));
         assert!(out.contains("workspaces"));
         assert!(out.contains("runtime"));
+        assert!(out.contains("temp"));
+        assert!(out.contains("orphans"));
         assert!(out.contains("heartbeat"));
         assert!(out.contains("sidecars"));
+        assert!(out.contains("probe"));
         assert!(out.contains("1.4 GB"));
     }
 
