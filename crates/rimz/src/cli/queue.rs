@@ -440,10 +440,10 @@ fn add_message(
     if targets.len() > 1 {
         let labels: Vec<String> = targets.iter().map(QueueTarget::label).collect();
         if !flags.all && !rimz::target::is_broadcast(&target) {
-            return Err(super::ambiguous_fanout("queue for", &target, &labels));
+            return Err(super::ambiguous_fanout("deliver to", &target, &labels));
         }
         if !flags.yes {
-            super::confirm_fanout("Queue for", &target, &labels)?;
+            super::confirm_fanout("Deliver to", &target, &labels)?;
         }
     }
     let mut live_send = send::LiveSend {
@@ -846,7 +846,7 @@ fn preflight_queue_hooks(agent: &AgentState) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     if !adapter.hooks_installed() {
         bail!(
-            "`rimz queue` requires {} hooks so queued messages can deliver at turn boundaries; run `rimz hooks install {}`",
+            "queued delivery requires {} hooks so messages can deliver at turn boundaries; run `rimz hooks install {}`",
             agent.kind,
             agent.kind
         );
