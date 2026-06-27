@@ -553,7 +553,7 @@ impl SpendingWalker {
         spec: &HeadlineSpec,
     ) -> SpendingWalkResult {
         self.walk_inner(
-            Some(cache_path),
+            cache_path,
             true,
             files,
             prices,
@@ -578,7 +578,7 @@ impl SpendingWalker {
         progress: &mut dyn FnMut(SpendProgress),
     ) -> SpendingWalkResult {
         self.walk_inner(
-            Some(cache_path),
+            cache_path,
             true,
             files,
             prices,
@@ -602,7 +602,7 @@ impl SpendingWalker {
         spec: &HeadlineSpec,
     ) -> SpendingWalkResult {
         self.walk_inner(
-            Some(cache_path),
+            cache_path,
             false,
             files,
             prices,
@@ -617,7 +617,7 @@ impl SpendingWalker {
     #[allow(clippy::too_many_arguments)]
     fn walk_inner(
         &mut self,
-        cache_path: Option<&Path>,
+        cache_path: &Path,
         persist: bool,
         files: &[(&'static dyn AgentAdapter, PathBuf)],
         prices: &PriceBook,
@@ -628,9 +628,7 @@ impl SpendingWalker {
         progress: Option<&mut dyn FnMut(SpendProgress)>,
     ) -> SpendingWalkResult {
         let mut stats = WalkStats::default();
-        if let Some(cache_path) = cache_path {
-            self.sync_from_disk(cache_path, &mut stats);
-        }
+        self.sync_from_disk(cache_path, &mut stats);
         let prior_generation = self.cache.generation;
         refresh_spending_cache(
             files,
@@ -640,11 +638,7 @@ impl SpendingWalker {
             origin_overrides,
             progress,
         );
-        if let Some(cache_path) = cache_path
-            && persist
-            && self.cache.dirty
-            && write_spending_cache(cache_path, &self.cache)
-        {
+        if persist && self.cache.dirty && write_spending_cache(cache_path, &self.cache) {
             self.cache.dirty = false;
             self.cache_stamp = cache_stamp(cache_path);
             stats.cache_written = true;
