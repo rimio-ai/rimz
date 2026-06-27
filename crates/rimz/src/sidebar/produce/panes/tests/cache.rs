@@ -312,6 +312,64 @@ fn verified_shrink_repull_result_is_published() {
 }
 
 #[test]
+fn ambiguous_loss_repull_result_is_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id =
+        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/ambiguous-loss"));
+    let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let cache_path = runtime.root.join("snapshot.json");
+    let prior = frame(vec![
+        pane("terminal_1", Some("zsh"), Some("/repo")),
+        pane("terminal_2", Some("zsh"), Some("/repo")),
+        pane("terminal_3", Some("zsh"), Some("/repo")),
+    ]);
+    let raced = frame(vec![
+        pane("terminal_1", Some("zsh"), Some("/repo")),
+        pane("terminal_2", Some("zsh"), Some("/repo")),
+    ]);
+    let verified = prior.clone();
+    let calls = std::cell::Cell::new(0);
+
+    let repulled = confirm_and_carry(
+        raced,
+        Some(&prior),
+        None,
+        &|enrich_metrics, min_topology_produced_at_ms| {
+            assert!(enrich_metrics);
+            assert!(min_topology_produced_at_ms.is_some());
+            calls.set(calls.get() + 1);
+            Ok(verified.clone())
+        },
+        None,
+        true,
+        &runtime,
+    )
+    .expect("ambiguous loss re-pull succeeds");
+
+    assert_eq!(calls.get(), 1);
+    assert_eq!(pane_count(&repulled), 3);
+    assert!(repulled.carried_panes.is_empty());
+    let published = validate_frame_for_publish(
+        repulled,
+        Some(prior),
+        None,
+        None,
+        true,
+        &runtime,
+        &cache_path,
+    )
+    .expect("verified frame publishes");
+    assert_eq!(pane_count(&published), 3);
+    let cached = read_snapshot_cache(&cache_path, "s").expect("published frame");
+    assert_eq!(
+        pane_count(&cached),
+        3,
+        "the verified re-pull, not the first ambiguous loss, is published"
+    );
+}
+
+#[test]
 fn refuted_initial_carry_records_diagnostic() {
     if crate::proc::stat_metrics(std::process::id()).is_none() {
         return;

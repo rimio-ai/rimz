@@ -676,8 +676,9 @@ fn confirm_and_carry(
         &read_start_ticks,
         initial_now_ms,
     );
-    let needs_confirm =
-        !initial.carried.is_empty() || shrink_needs_verification(&initial.frame, prior);
+    let needs_confirm = !initial.carried.is_empty()
+        || initial.ambiguous_loss
+        || shrink_needs_verification(&initial.frame, prior);
     if !needs_confirm {
         emit_carry_expired(diag, &initial);
         return Ok(initial.frame);

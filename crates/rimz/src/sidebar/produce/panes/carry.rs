@@ -10,6 +10,7 @@ pub(super) struct CarryOutcome {
     pub(super) frame: PaneFrame,
     pub(super) carried: Vec<CarriedPane>,
     pub(super) expired: Vec<ExpiredCarry>,
+    pub(super) ambiguous_loss: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,6 +40,7 @@ pub(super) fn apply_carry_forward(
             frame: fresh,
             carried: Vec::new(),
             expired: Vec::new(),
+            ambiguous_loss: false,
         };
     };
     // A fully empty frame is already held by the publish verdict. Carrying here
@@ -49,6 +51,7 @@ pub(super) fn apply_carry_forward(
             frame: fresh,
             carried: Vec::new(),
             expired: Vec::new(),
+            ambiguous_loss: false,
         };
     }
 
@@ -116,6 +119,19 @@ pub(super) fn apply_carry_forward(
         decisions.insert(pane.pane_id.clone(), CarryDecision { tab, pane, carried });
     }
 
+    let ambiguous_loss = missing.iter().any(|(_, pane)| {
+        !decisions.contains_key(&pane.pane_id)
+            && !expired
+                .iter()
+                .any(|expired| expired.pane_id == pane.pane_id)
+            && !has_dead_liveness_evidence(
+                pane,
+                prior_carried.get(&pane.pane_id).copied(),
+                bindings,
+                read_start_ticks,
+            )
+    });
+
     let mut decisions = decisions.into_values().collect::<Vec<_>>();
     decisions.sort_by_key(|decision| {
         (
@@ -141,6 +157,7 @@ pub(super) fn apply_carry_forward(
         frame: fresh,
         carried,
         expired,
+        ambiguous_loss,
     }
 }
 
@@ -341,6 +358,7 @@ mod tests {
         assert_eq!(outcome.carried[0].pane_id, pane_id("terminal_2"));
         assert_eq!(outcome.carried[0].pid, Some(202));
         assert_eq!(outcome.carried[0].start_ticks, Some(9));
+        assert!(!outcome.ambiguous_loss);
     }
 
     #[test]
@@ -352,6 +370,44 @@ mod tests {
 
         assert_eq!(outcome.frame.pane_states().count(), 1);
         assert!(outcome.carried.is_empty());
+        assert!(!outcome.ambiguous_loss);
+    }
+
+    #[test]
+    fn pidless_drop_without_liveness_evidence_is_ambiguous() {
+        let prior = frame(&["terminal_1", "terminal_2"], 1);
+        let fresh = frame(&["terminal_1"], 2);
+
+        let outcome = apply_carry_forward(fresh, Some(&prior), None, &HashMap::new(), &|_| None, 2);
+
+        assert_eq!(outcome.frame.pane_states().count(), 1);
+        assert!(outcome.carried.is_empty());
+        assert!(outcome.ambiguous_loss);
+    }
+
+    #[test]
+    fn dead_prior_carried_pid_is_not_ambiguous() {
+        let mut prior = frame(&["terminal_1", "terminal_2"], 1);
+        prior.carried_panes = vec![CarriedPane {
+            pane_id: pane_id("terminal_2"),
+            pid: Some(202),
+            start_ticks: Some(9),
+            carried_since_ms: 1,
+        }];
+        let fresh = frame(&["terminal_1"], 2);
+
+        let outcome = apply_carry_forward(
+            fresh,
+            Some(&prior),
+            None,
+            &HashMap::new(),
+            &|pid| (pid == 202).then_some(10),
+            2,
+        );
+
+        assert_eq!(outcome.frame.pane_states().count(), 1);
+        assert!(outcome.carried.is_empty());
+        assert!(!outcome.ambiguous_loss);
     }
 
     #[test]
@@ -377,6 +433,7 @@ mod tests {
 
         assert_eq!(outcome.frame.pane_states().count(), 2);
         assert_eq!(outcome.carried[0].pid, Some(202));
+        assert!(!outcome.ambiguous_loss);
     }
 
     #[test]
@@ -402,6 +459,7 @@ mod tests {
 
         assert_eq!(outcome.frame.pane_states().count(), 1);
         assert!(outcome.carried.is_empty());
+        assert!(!outcome.ambiguous_loss);
     }
 
     #[test]
@@ -426,6 +484,7 @@ mod tests {
 
         assert_eq!(outcome.carried[0].carried_since_ms, 1);
         assert!(outcome.expired.is_empty());
+        assert!(!outcome.ambiguous_loss);
     }
 
     #[test]
@@ -451,6 +510,7 @@ mod tests {
         assert_eq!(outcome.frame.pane_states().count(), 1);
         assert!(outcome.carried.is_empty());
         assert_eq!(outcome.expired[0].pane_id, pane_id("terminal_2"));
+        assert!(!outcome.ambiguous_loss);
     }
 
     #[test]
@@ -494,6 +554,7 @@ mod tests {
                 .and_then(|carried| carried.pid),
             None
         );
+        assert!(!outcome.ambiguous_loss);
     }
 
     #[test]
@@ -523,6 +584,7 @@ mod tests {
             .map(|carried| carried.pane_id.raw().to_owned())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["terminal_2"]);
+        assert!(!outcome.ambiguous_loss);
     }
 
     #[test]
@@ -541,6 +603,20 @@ mod tests {
 
         assert_eq!(outcome.frame.pane_states().count(), 2);
         assert_eq!(outcome.carried[0].pane_id, pane_id("terminal_1"));
+        assert!(!outcome.ambiguous_loss);
+    }
+
+    #[test]
+    fn no_prior_and_empty_fresh_are_not_ambiguous() {
+        let fresh = frame(&["terminal_1"], 1);
+        let no_prior = apply_carry_forward(fresh, None, None, &HashMap::new(), &|_| None, 1);
+        assert!(!no_prior.ambiguous_loss);
+
+        let prior = frame(&["terminal_1"], 1);
+        let empty = frame(&[], 2);
+        let empty_fresh =
+            apply_carry_forward(empty, Some(&prior), None, &HashMap::new(), &|_| None, 2);
+        assert!(!empty_fresh.ambiguous_loss);
     }
 
     #[test]
