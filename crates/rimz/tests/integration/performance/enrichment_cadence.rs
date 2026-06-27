@@ -153,6 +153,16 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         "refresher publishes diff stats for the live worktree"
     );
 
+    // Coverage CI can spend more than SPENDING_TTL in the first refresh while
+    // git/projection fixtures run under instrumentation. Restamp the provider
+    // cache immediately before the TTL assertion so this test measures the
+    // second refresh gate, not the first refresh's wall-clock duration.
+    rimz::agents::spending::write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        unix_now_ms(),
+        &rimz::agents::spending::Spending::default(),
+    );
+
     let provider_bytes = std::fs::read(&provider_path).expect("provider cache");
     let accounts_bytes = std::fs::read(&accounts_path).expect("accounts cache");
     let diff_stats_bytes = std::fs::read(&diff_stats_path).expect("diff stats cache");

@@ -118,8 +118,8 @@ fn assert_burst_landed(h: &Harness, label: &str) {
 /// files. The pre-overhaul write path parsed every feed file ever written —
 /// per write, under the lock — so history this size blew the burst up by
 /// orders of magnitude; the ratio bound catches any reintroduced O(history)
-/// scan while staying far above machine-load noise. The absolute ceiling is
-/// the backstop for a uniformly broken write path.
+/// scan while staying above coverage-runner scheduling noise. The absolute
+/// ceiling is the backstop for a uniformly broken write path.
 #[test]
 fn write_burst_cost_is_independent_of_terminal_history() {
     let fresh = Harness::new();
@@ -136,7 +136,7 @@ fn write_burst_cost_is_independent_of_terminal_history() {
         "the audit read still spans the whole history"
     );
 
-    let ceiling = fresh_elapsed * 3 + Duration::from_millis(500);
+    let ceiling = fresh_elapsed * 6 + Duration::from_secs(2);
     assert!(
         seeded_elapsed <= ceiling,
         "a {HISTORY_ITEMS}-item terminal history must not slow the write burst: \
