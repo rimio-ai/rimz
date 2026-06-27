@@ -31,6 +31,29 @@ fn relative_install_paths_report_as_absolute() {
 }
 
 #[test]
+fn dev_install_builds_debug_with_the_sentry_feature() {
+    let args = host_build_args(false, &["sentry"]);
+
+    assert!(
+        !args.iter().any(|arg| arg == "--release"),
+        "dev install must stay a debug build so reporting defaults to development: {args:?}"
+    );
+    let features = args
+        .windows(2)
+        .find(|pair| pair[0] == "--features")
+        .map(|pair| pair[1].as_str());
+    assert_eq!(features, Some("sentry"));
+}
+
+#[test]
+fn release_install_adds_no_extra_features() {
+    let args = host_build_args(true, &[]);
+
+    assert!(args.iter().any(|arg| arg == "--release"));
+    assert!(!args.iter().any(|arg| arg == "--features"));
+}
+
+#[test]
 fn macos_sdkroot_acceptance_matches_rustc_shape() {
     let cwd = env::current_dir().unwrap();
 

@@ -269,7 +269,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 ### Contributor command surface
 
-`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `hooks`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `invariants`, `docs-links`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
+`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `hooks`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `invariants`, `docs-links`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. `install-dev` is the contributor opt-in to [off-box reporting](../internals/health/observability.md): a debug host `rimz` built `--features sentry`, so its reporting defaults to the `development` environment. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
 
 ## Reading order for new contributors
 

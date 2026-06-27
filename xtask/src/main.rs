@@ -53,6 +53,11 @@ const TASKS: &[TaskInfo] = &[
         runs: "cargo xtask stage-install, then atomically installs host rimz",
     },
     TaskInfo {
+        name: "install-dev",
+        summary: "Build and install host rimz with off-box reporting (sentry) for dev.",
+        runs: "build-plugin, debug host rimz with --features sentry, then atomically installs",
+    },
+    TaskInfo {
         name: "stage-install",
         summary: "Build host install artifacts.",
         runs: "build-plugin, host rimz release",
@@ -235,6 +240,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "build-plugin" => build::build_plugin(root),
         "plugin-refresh" => build::plugin_refresh(root),
         "install" => build::install(root),
+        "install-dev" => build::install_dev(root),
         "stage-install" => build::stage_install(root).map(|_| ()),
         "dist" => build::dist(root),
         "brew-formula" => brew::brew_formula(root),

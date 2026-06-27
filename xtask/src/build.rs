@@ -216,7 +216,13 @@ fn rust_target_std_available(root: &Path, target: &str) -> Result<bool> {
 }
 
 fn release_artifact(root: &Path, bin: &str) -> PathBuf {
-    let mut artifact = target_dir(root).join("release").join(bin);
+    profile_artifact(root, "release", bin)
+}
+
+/// The built host binary for a cargo profile directory (`release` or `debug`),
+/// honoring a `CARGO_TARGET_DIR` override.
+fn profile_artifact(root: &Path, profile_dir: &str, bin: &str) -> PathBuf {
+    let mut artifact = target_dir(root).join(profile_dir).join(bin);
     if !env::consts::EXE_EXTENSION.is_empty() {
         artifact.set_extension(env::consts::EXE_EXTENSION);
     }
@@ -251,7 +257,20 @@ fn cargo_install_bin_dir() -> PathBuf {
 }
 
 pub(crate) fn install(root: &Path) -> Result<()> {
-    let stage = stage_install(root)?;
+    install_from_stage(stage_install(root)?)
+}
+
+/// Build host `rimz` with the dev-only `sentry` feature and install it. A debug
+/// build, so its off-box reporting defaults to the `development` environment and
+/// contributor telemetry stays off the production dashboard; opt in by resolving
+/// a DSN at runtime. See [observability](../../docs/internals/health/observability.md).
+pub(crate) fn install_dev(root: &Path) -> Result<()> {
+    install_from_stage(stage_dev_install(root)?)
+}
+
+/// Copy the staged install artifacts onto the `cargo install` ladder and report
+/// the version the way `rimz --version` does.
+fn install_from_stage(stage: PathBuf) -> Result<()> {
     let dest_dir = cargo_install_bin_dir();
     fs::create_dir_all(&dest_dir).with_context(|| format!("creating {}", dest_dir.display()))?;
     for artifact in INSTALL_ARTIFACTS {
@@ -303,26 +322,51 @@ fn report_install(version: &str, path: &Path) {
 }
 
 pub(crate) fn stage_install(root: &Path) -> Result<PathBuf> {
+    stage_host_rimz(root, true, &[])
+}
+
+/// Stage a dev host `rimz`: a debug build with the `sentry` feature compiled in.
+fn stage_dev_install(root: &Path) -> Result<PathBuf> {
+    stage_host_rimz(root, false, &["sentry"])
+}
+
+/// Build the host `rimz` binary for the given profile and feature set, then copy
+/// it into the install staging directory.
+fn stage_host_rimz(root: &Path, release: bool, features: &[&str]) -> Result<PathBuf> {
     build_plugin(root)?;
     let envs = presence_plugin_embed_env(root);
-    run_with_env(
-        root,
-        "cargo",
-        [
-            "build",
-            "-p",
-            "rimz",
-            "--bin",
-            "rimz",
-            "--release",
-            "--locked",
-        ],
-        &envs,
-    )?;
+    run_with_env(root, "cargo", host_build_args(release, features), &envs)?;
+    let profile_dir = if release { "release" } else { "debug" };
     let stage = stage_bin_dir(root);
     fs::create_dir_all(&stage).with_context(|| format!("creating {}", stage.display()))?;
-    copy_atomically(&release_artifact(root, "rimz"), &stage.join("rimz"))?;
+    copy_atomically(
+        &profile_artifact(root, profile_dir, "rimz"),
+        &stage.join("rimz"),
+    )?;
     Ok(stage)
+}
+
+/// Cargo args to build the host `rimz` binary. A release build optimizes the
+/// shipped binary; a debug build makes the installed binary's off-box reporting
+/// default to the `development` environment. `features` opts dev-only cargo
+/// features (`sentry`) in.
+fn host_build_args(release: bool, features: &[&str]) -> Vec<String> {
+    let mut args = vec![
+        "build".to_owned(),
+        "-p".to_owned(),
+        "rimz".to_owned(),
+        "--bin".to_owned(),
+        "rimz".to_owned(),
+        "--locked".to_owned(),
+    ];
+    if release {
+        args.push("--release".to_owned());
+    }
+    if !features.is_empty() {
+        args.push("--features".to_owned());
+        args.push(features.join(","));
+    }
+    args
 }
 
 fn presence_plugin_embed_env(root: &Path) -> Vec<(&'static str, PathBuf)> {
@@ -349,20 +393,7 @@ fn rustc_host_target(root: &Path) -> Result<String> {
 
 fn build_host_release(root: &Path) -> Result<()> {
     let envs = presence_plugin_embed_env(root);
-    run_with_env(
-        root,
-        "cargo",
-        [
-            "build",
-            "-p",
-            "rimz",
-            "--bin",
-            "rimz",
-            "--release",
-            "--locked",
-        ],
-        &envs,
-    )
+    run_with_env(root, "cargo", host_build_args(true, &[]), &envs)
 }
 
 fn build_darwin_artifacts(root: &Path) -> Result<()> {
