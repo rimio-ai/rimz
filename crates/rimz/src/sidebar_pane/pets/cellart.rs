@@ -1,3 +1,6 @@
+//! Downsamples a decoded WebP frame into sextant or octant terminal cells,
+//! choosing each cell's best two-color split in linear light.
+
 use ratatui::style::Color;
 
 use super::frames::RgbaImage;

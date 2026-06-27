@@ -1,3 +1,5 @@
+//! Maps sidebar attention states to pet actions, tracks, and animation timing.
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 

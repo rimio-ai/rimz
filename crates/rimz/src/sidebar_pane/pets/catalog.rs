@@ -1,3 +1,5 @@
+//! Built-in pet catalog and fixed sheet geometry shared by every source.
+
 pub(crate) const FRAME_WIDTH: u32 = 192;
 pub(crate) const FRAME_HEIGHT: u32 = 208;
 pub(crate) const SHEET_COLS: u32 = 8;

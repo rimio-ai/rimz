@@ -142,15 +142,63 @@ red = 10
 
 ## Pets
 
-`[theme.pets]` toggles and selects the provider-dashboard companion: `enabled`, `pet`, `glyphs`, and `voice` live with the rest of the display layer. `glyphs = "auto"` tries pixels, then sextant cell art; `pixel` explicitly opts past the terminal-name allowlist while keeping the hard pixel gates; `octant` pins the sharper cell-art tier, and `sextant` pins the portable cell tier. Asset sources, cache behavior, and fixed per-tier geometry are in [pets.md](../internals/sidebar/pets.md).
+Pets add a small animated companion to the provider dashboard. The pet follows the selected row's state, giving the bottom panel a little motion while the cards stay steady.
+
+Enable pets in your per-machine theme:
+
+```toml
+[theme.pets]
+enabled = true
+```
+
+### Choosing a pet
+
+`pet` selects the sheet Rimz loads. Run `rimz list-pets` in a terminal to preview the built-ins and any petdex pets installed locally.
+
+Built-in catalog ids are `codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, and `null-signal`.
+
+Bring-your-own sources use the same key:
+
+- `pet = "https://example.com/my-pet.webp"` fetches an HTTPS WebP sheet and caches it.
+- `pet = "~/art/my-pet.webp"` reads a local WebP sheet.
+- `pet = "wall-e"` selects a petdex slug under `~/.codex/pets/wall-e/`.
+- `pet = "~/.codex/pets/wall-e/"` reads a petdex directory by path.
+
+### Crisp pixels vs cell art
+
+`glyphs` controls the render tier. Crisp pixels need a Ghostty or kitty terminal; inside tmux they also need tmux 3.6 or newer with `allow-passthrough on` or `allow-passthrough all`. Zellij renders cell art.
+
+| `glyphs` | effect |
+| --- | --- |
+| `auto` | Use pixels when the runtime is ready, then fall back to sextant cell art. |
+| `pixel` | Opt past the terminal-name allowlist for newer kitty-compatible terminals while keeping hard gates such as tmux passthrough. |
+| `octant` | Use sharper cell art with more vertical detail. |
+| `sextant` | Use the most portable cell art. |
+
+| key | value |
+| --- | --- |
+| `enabled` | Turns the dashboard pet on or off. |
+| `pet` | Chooses a built-in id, HTTPS URL, local sheet path, petdex slug, or petdex directory. |
+| `glyphs` | Chooses `auto`, `pixel`, `octant`, or `sextant`. |
+| `voice` | Shows canned captions on pet-action changes when true. |
 
 ```toml
 [theme.pets]
 enabled = true
 pet = "rocky"
+glyphs = "auto"
+voice = true
 ```
 
-Run `rimz list-pets` to preview the bundled pets before setting `pet`.
+`voice = false` keeps the animation and hides the captions.
+
+### Offline and privacy
+
+Built-in and URL sheets fetch once into the per-machine cache. `RIMZ_PETS_OFFLINE=1` serves the cache only. Petdex and local sheets read from disk and make no network request.
+
+Pets run no commands and stay outside the project trust hash. Asset loading sends only the configured asset request; prompts, transcripts, pane text, workspace paths, and provider credentials stay local.
+
+The render pipeline, sheet geometry, cache layout, and pixel gates live in [pets.md](../internals/sidebar/pets.md).
 
 ## Animations
 

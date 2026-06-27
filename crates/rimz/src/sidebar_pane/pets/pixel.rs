@@ -1,3 +1,6 @@
+//! Emits kitty graphics payloads for pixel pets and tracks pane-local image
+//! placement so stale sprites are deleted before redraw.
+
 pub(crate) mod probe;
 
 use std::collections::BTreeSet;

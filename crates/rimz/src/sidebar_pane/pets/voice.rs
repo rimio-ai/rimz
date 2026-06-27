@@ -1,3 +1,5 @@
+//! Canned pet captions keyed by attention-action transitions.
+
 use super::model::PetAction;
 
 /// A canned line for the pet to "say" when the selected-card action changes,

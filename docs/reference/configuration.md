@@ -336,7 +336,7 @@ glyphs = "auto"
 voice = true
 ```
 
-An opt-in animated companion in the provider dashboard. `rocky` is the default pet; run `rimz list-pets` to preview the built-ins and any pets installed under `~/.codex/pets/`. `pet` selects a source in priority order: a built-in catalog id (`codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, `null-signal`); an `https://` URL to your own WebP spritesheet; a path-like value (containing `/`, `.`, or a leading `~`) for a local sheet or petdex directory; or a bare slug for a petdex pet under `~/.codex/pets/<slug>/`. `glyphs` accepts `auto`, `pixel`, `octant`, or `sextant`; `voice = false` disables canned captions. `glyphs = "auto"` tries pixels, then sextant cell art; `pixel` skips only the terminal-name allowlist for explicit pixel opt-in and falls back to sextant; `octant` is the explicit sharper cell tier, and `sextant` forces the portable cell tier. The sidebar, gallery, and `list-pets` share fixed footprints: `15×9` for pixels and `18×9` for cell art; the dashboard adds one empty row beneath either tier. A built-in or URL sheet is fetched once into the per-machine cache (`RIMZ_PETS_OFFLINE=1` uses the cache only); pets run no commands and stay outside the trust hash. The geometry and cache contracts are in [pets.md](../internals/sidebar/pets.md).
+An opt-in animated companion in the provider dashboard. Full setup is in [theme.md → Pets](./theme.md#pets); render mechanics, cache layout, and sheet geometry are in [pets.md](../internals/sidebar/pets.md).
 
 ### Sidebar Bands
 

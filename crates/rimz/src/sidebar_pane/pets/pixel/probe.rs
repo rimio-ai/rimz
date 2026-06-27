@@ -1,3 +1,5 @@
+//! Probes terminal and tmux capabilities for kitty graphics support.
+
 use std::io;
 use std::time::Duration;
 

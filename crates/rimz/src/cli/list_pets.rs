@@ -93,7 +93,7 @@ enum PreviewBranch {
 }
 
 fn preview_branch(glyphs: PetsGlyphMode, caps: pets::PetRenderCaps) -> PreviewBranch {
-    if matches!(glyphs, PetsGlyphMode::Auto | PetsGlyphMode::Pixel) && caps.pixel {
+    if pets::previews_use_pixels(glyphs, caps) {
         PreviewBranch::Pixel
     } else {
         PreviewBranch::Cell

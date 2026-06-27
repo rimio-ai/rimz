@@ -73,7 +73,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 **Reference** — `docs/reference/`
 - [cli.md](./docs/reference/cli.md) — CLI entry point and command map; grouped command details live under `docs/reference/cli/`.
 - [configuration.md](./docs/reference/configuration.md) — config tiers, generated per-machine template, project trust shape, privacy.
-- [theme.md](./docs/reference/theme.md) — sidebar theming: built-in and Ghostty-derived palettes, color depth and slot overrides, custom theme files, status-head animations, provider brand styling.
+- [theme.md](./docs/reference/theme.md) — sidebar theming: built-in and Ghostty-derived palettes, color depth and slot overrides, custom theme files, status-head animations, provider brand styling, and provider-dashboard pets.
 
 **Internals** — `docs/internals/`, grouped into four leaves by subsystem.
 

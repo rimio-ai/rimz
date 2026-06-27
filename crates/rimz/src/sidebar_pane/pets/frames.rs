@@ -1,3 +1,5 @@
+//! Decodes pet WebP sheets and slices them into fixed-size animation frames.
+
 use std::io::{BufReader, Cursor};
 
 use super::catalog::{

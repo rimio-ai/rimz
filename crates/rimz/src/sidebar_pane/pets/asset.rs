@@ -1,3 +1,6 @@
+//! Resolves pet selectors into bytes from the built-in CDN, HTTPS URLs,
+//! petdex installs, local sheets, and the per-machine cache.
+
 use std::borrow::Cow;
 use std::env;
 use std::fs::File;

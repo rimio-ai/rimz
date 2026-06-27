@@ -1,3 +1,6 @@
+//! Builds `rimz list-pets` previews from the same catalog, cache, and render
+//! tier resolver as the live dashboard.
+
 use std::thread;
 
 use ratatui::style::Color;
@@ -63,10 +66,17 @@ pub fn load_previews_with_caps(
     caps: PetRenderCaps,
 ) -> impl Iterator<Item = PetPreview> {
     let tier = match resolve_render_tier(glyphs, caps) {
-        PetRenderTier::Pixel | PetRenderTier::Sextant => GlyphTier::Sextant,
-        PetRenderTier::Octant => GlyphTier::Octant,
+        PetRenderTier::Pixel => GlyphTier::Sextant,
+        PetRenderTier::Cell(glyph) => glyph,
     };
     load_previews_for_tier(cols, rows, tier)
+}
+
+/// Whether CLI previews should render the pixel branch, mirroring the live
+/// dashboard resolver. Previews have no provider block, so they use the pure
+/// resolver without the live dashboard paintability gate.
+pub fn previews_use_pixels(glyphs: PetsGlyphMode, caps: PetRenderCaps) -> bool {
+    matches!(resolve_render_tier(glyphs, caps), PetRenderTier::Pixel)
 }
 
 fn load_previews_for_tier(

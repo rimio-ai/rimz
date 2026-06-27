@@ -26,8 +26,8 @@ use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL};
 use crate::sidebar_pane::osc;
 use crate::sidebar_pane::pets::{
-    PetAssets, PetPixelView, PetRenderCaps, PetRenderTier, PetViewFrame, PixelPainter,
-    dashboard_pet_size, detect_pet_render_caps, resolve_render_tier,
+    PetAssets, PetPixelView, PetRenderCaps, PetViewFrame, PixelPainter, dashboard_pet_size,
+    detect_pet_render_caps, effective_render_tier,
 };
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
@@ -473,12 +473,11 @@ fn refresh_pet_view(
     alert_active: bool,
 ) {
     let action = render::selected_pet_action(snapshot, ui);
-    let resolved_tier = resolve_render_tier(snapshot.theme.pets.glyphs, caps);
-    let tier = if resolved_tier == PetRenderTier::Pixel && !pet_pixel_enabled(snapshot, caps) {
-        PetRenderTier::Sextant
-    } else {
-        resolved_tier
-    };
+    let tier = effective_render_tier(
+        snapshot.theme.pets.glyphs,
+        caps,
+        !snapshot.providers.is_empty() && render::pet_body_enabled(snapshot),
+    );
     let size = (snapshot.theme.pets.enabled
         && render::dashboard_present(snapshot, alert_active)
         && render::pet_body_enabled(snapshot))
@@ -500,14 +499,6 @@ fn refresh_pet_view(
             tier,
         },
     );
-}
-
-fn pet_pixel_enabled(snapshot: &SidebarSnapshot, caps: PetRenderCaps) -> bool {
-    matches!(
-        resolve_render_tier(snapshot.theme.pets.glyphs, caps),
-        PetRenderTier::Pixel
-    ) && !snapshot.providers.is_empty()
-        && render::pet_body_enabled(snapshot)
 }
 
 fn draw_frame_and_paint_pet_pixel<W: Write>(

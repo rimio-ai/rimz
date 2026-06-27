@@ -30,7 +30,7 @@ pub use pixel::probe::{PetRenderCaps, detect_env as detect_pet_render_env};
 pub use pixel::{inline_placeholder_row, transmit_rgba_chunks, virtual_place, wrap_pixel_payload};
 pub use preview::{
     PetPixelPreview, PetPreview, PixelPreviewFrame, PreviewCell, listable_ids, load_pixel_previews,
-    load_previews_with_caps,
+    load_previews_with_caps, previews_use_pixels,
 };
 
 use asset::PetSource;
@@ -80,24 +80,29 @@ pub(crate) struct PetViewFrame {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PetRenderTier {
     Pixel,
-    Octant,
-    Sextant,
+    Cell(GlyphTier),
 }
 
 pub(crate) fn resolve_render_tier(mode: PetsGlyphMode, caps: PetRenderCaps) -> PetRenderTier {
     match mode {
-        PetsGlyphMode::Sextant => PetRenderTier::Sextant,
-        PetsGlyphMode::Octant => PetRenderTier::Octant,
+        PetsGlyphMode::Sextant => PetRenderTier::Cell(GlyphTier::Sextant),
+        PetsGlyphMode::Octant => PetRenderTier::Cell(GlyphTier::Octant),
         PetsGlyphMode::Auto | PetsGlyphMode::Pixel if caps.pixel => PetRenderTier::Pixel,
-        PetsGlyphMode::Auto | PetsGlyphMode::Pixel => PetRenderTier::Sextant,
+        PetsGlyphMode::Auto | PetsGlyphMode::Pixel => PetRenderTier::Cell(GlyphTier::Sextant),
     }
 }
 
-fn cell_tier(tier: PetRenderTier) -> Option<GlyphTier> {
-    match tier {
-        PetRenderTier::Pixel => None,
-        PetRenderTier::Octant => Some(GlyphTier::Octant),
-        PetRenderTier::Sextant => Some(GlyphTier::Sextant),
+/// The tier actually painted this frame: `resolve_render_tier` downgraded to
+/// sextant cell art when pixels resolve but cannot paint here — no provider
+/// block to ride, or a suppressed body. Cell tiers pass through untouched.
+pub(crate) fn effective_render_tier(
+    mode: PetsGlyphMode,
+    caps: PetRenderCaps,
+    pixel_paintable: bool,
+) -> PetRenderTier {
+    match resolve_render_tier(mode, caps) {
+        PetRenderTier::Pixel if !pixel_paintable => PetRenderTier::Cell(GlyphTier::Sextant),
+        tier => tier,
     }
 }
 
@@ -107,7 +112,7 @@ pub const DASHBOARD_CELL_PET: PetGridSize = PetGridSize { cols: 18, rows: 9 };
 pub(crate) fn dashboard_pet_size(tier: PetRenderTier) -> PetGridSize {
     match tier {
         PetRenderTier::Pixel => DASHBOARD_PIXEL_PET,
-        PetRenderTier::Octant | PetRenderTier::Sextant => DASHBOARD_CELL_PET,
+        PetRenderTier::Cell(_) => DASHBOARD_CELL_PET,
     }
 }
 
@@ -302,8 +307,8 @@ impl PetAssets {
             .filter(|failed| failed.id == id)
             .map(|failed| failed.caption.clone());
         let mut pixel_view = None;
-        let grid = size.and_then(|size| {
-            if tier == PetRenderTier::Pixel {
+        let grid = size.and_then(|size| match tier {
+            PetRenderTier::Pixel => {
                 if let Some((sprite_index, track)) = self.loaded_sprite(LoadedSpriteRequest {
                     pet_id: id,
                     previous_action,
@@ -316,20 +321,20 @@ impl PetAssets {
                         size,
                     });
                 }
-                return None;
+                None
             }
-            let cell_tier = cell_tier(tier).expect("non-pixel pet view uses a cell tier");
-            self.loaded_grid(LoadedGridRequest {
-                pet_id: id,
-                previous_action,
-                frame,
-                size,
-                tier: cell_tier,
-            })
-            .map(|(grid, track)| {
-                active_track = track;
-                grid
-            })
+            PetRenderTier::Cell(glyph) => self
+                .loaded_grid(LoadedGridRequest {
+                    pet_id: id,
+                    previous_action,
+                    frame,
+                    size,
+                    tier: glyph,
+                })
+                .map(|(grid, track)| {
+                    active_track = track;
+                    grid
+                }),
         });
         Some(PetView {
             grid,
