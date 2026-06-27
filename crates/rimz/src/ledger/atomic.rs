@@ -15,7 +15,7 @@
 //! module owns the syscall discipline alone.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -141,14 +141,19 @@ fn write_temp_then_rename_with<T: Serialize>(path: &Path, value: &T, fsync: Fsyn
     let tmp = temp_sibling(path);
     let mut temp_guard = TempFileGuard::new(tmp.clone());
     {
-        let mut file = File::create(&tmp).map_err(|e| AtomicErr::Io {
+        let file = File::create(&tmp).map_err(|e| AtomicErr::Io {
             path: tmp.clone(),
             source: e,
         })?;
-        serde_json::to_writer_pretty(&mut file, value)?;
-        file.write_all(b"\n").map_err(|e| AtomicErr::Io {
+        let mut writer = BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut writer, value)?;
+        writer.write_all(b"\n").map_err(|e| AtomicErr::Io {
             path: tmp.clone(),
             source: e,
+        })?;
+        let file = writer.into_inner().map_err(|e| AtomicErr::Io {
+            path: tmp.clone(),
+            source: e.into_error(),
         })?;
         if fsync == Fsync::Durable {
             testkit::count_fsync();
