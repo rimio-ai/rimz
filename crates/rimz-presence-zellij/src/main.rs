@@ -881,6 +881,10 @@ use zellij_tile::prelude::*;
 #[cfg(target_family = "wasm")]
 zellij_tile::register_plugin!(shell::State);
 
+/// Host-target stub: the plugin entrypoint exists only on wasm.
+#[cfg(not(target_family = "wasm"))]
+fn main() {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -945,7 +949,3 @@ mod tests {
         );
     }
 }
-
-/// Host-target stub: the plugin entrypoint exists only on wasm.
-#[cfg(not(target_family = "wasm"))]
-fn main() {}
