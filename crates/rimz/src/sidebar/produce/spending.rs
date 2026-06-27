@@ -219,7 +219,7 @@ fn walk_fleet_spending(
         spec,
     );
     let days = compute_daily_spend(&files, &cache);
-    let models = compute_model_breakdown(&files, &cache);
+    let models = compute_model_breakdown(&files, &cache, now_secs);
     let refreshed_at_ms = unix_now_ms();
     if publish && cache.dirty {
         write_spending_cache(&cache_path, &cache);

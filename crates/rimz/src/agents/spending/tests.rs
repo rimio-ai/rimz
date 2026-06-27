@@ -27,6 +27,19 @@ fn compute_total(files: &[PathBuf], cache: &mut SpendingDiskCache) -> SpendTally
     compute_spending(&tagged, cache, &PriceBook::default(), NOW_SECS).total
 }
 
+fn model_tally(tokens: u64, usd: f64, input: u64, output: u64, cache_read: u64) -> SpendTally {
+    let mut tally = SpendTally::default();
+    tally.year = SpendWindow {
+        usd,
+        tokens,
+        input,
+        output,
+        cache_read,
+        ..Default::default()
+    };
+    tally
+}
+
 fn iso_at(secs: u64) -> String {
     let date = utc_date(secs);
     let tod = secs % 86_400;
@@ -1126,13 +1139,7 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
     )]);
     let models = BTreeMap::from([(
         "claude-opus-4-8".to_owned(),
-        ModelSpend {
-            usd: 1.25,
-            input: 3_000,
-            output: 1_200,
-            cache_read: 0,
-            tokens: 4_200,
-        },
+        model_tally(4_200, 1.25, 3_000, 1_200, 0),
     )]);
     write_provider_spending_cache_with_rollups(&path, 12_346, &spending, &days, &models);
     let cache = read_provider_spending_cache(&path);
@@ -1161,6 +1168,17 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
     let version_mismatch = read_provider_spending_cache(&path);
     assert_eq!(version_mismatch.spending, spending);
     assert!(!version_mismatch.is_fresh(now_ms));
+
+    let v7_shape = ProviderSpendingCache {
+        version: 7,
+        refreshed_at_ms: now_ms,
+        spending: spending.clone(),
+        ..ProviderSpendingCache::default()
+    };
+    std::fs::write(&path, serde_json::to_vec(&v7_shape).unwrap()).unwrap();
+    let stale_v7 = read_provider_spending_cache(&path);
+    assert_eq!(stale_v7.spending, spending);
+    assert!(!stale_v7.is_current_version());
 
     std::fs::write(&path, b"not json").unwrap();
     let corrupt = read_provider_spending_cache(&path);
@@ -1258,6 +1276,7 @@ fn live_baselines_and_overlay_cases_stay_bounded() {
 fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
     let day_a = NOW_SECS;
     let day_b = NOW_SECS - 2 * 86_400;
+    let day_c = NOW_SECS - 40 * 86_400;
 
     // A Claude main-chain turn and its sidechain replay share
     // `(message_id, request_id)`; only the main-chain turn must count, so the
@@ -1298,6 +1317,21 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
         model: Some("gpt-5-codex".to_owned()),
         origin_path: None,
     };
+    // A model older than 30 days still lands in the year bucket, not month/week.
+    let old = CachedEntry {
+        ts_secs: day_c,
+        cost_usd: 3.0,
+        input: 300,
+        output: 30,
+        cache_write: 0,
+        cache_read: 60,
+        message_id: None,
+        request_id: None,
+        thread_id: None,
+        is_sidechain: false,
+        model: Some("gpt-5-old".to_owned()),
+        origin_path: None,
+    };
 
     let claude_file = PathBuf::from("/x/claude.jsonl");
     let codex_file = PathBuf::from("/x/codex.jsonl");
@@ -1321,7 +1355,7 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
                     len: 1,
                     cursor: SpendCursor::default(),
                     origin_path: None,
-                    entries: vec![codex],
+                    entries: vec![codex, old],
                     unknown_models: BTreeMap::new(),
                 },
             ),
@@ -1337,27 +1371,56 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
 
     let key_a = (day_a / 86_400) as i64;
     let key_b = (day_b / 86_400) as i64;
-    assert_eq!(daily.len(), 2);
+    let key_c = (day_c / 86_400) as i64;
+    assert_eq!(daily.len(), 3);
     // input + cache_write + output, the main-chain turn alone.
     assert_eq!(daily[&key_a].tokens, 160);
     assert!((daily[&key_a].usd - 1.0).abs() < 1e-9);
     assert_eq!(daily[&key_b].tokens, 220);
     assert!((daily[&key_b].usd - 2.0).abs() < 1e-9);
+    assert_eq!(daily[&key_c].tokens, 330);
+    assert!((daily[&key_c].usd - 3.0).abs() < 1e-9);
 
     // The per-model breakdown rides the same dedup: the sidechain replay is
     // suppressed, so Opus keeps the main-chain turn's `input + cache_write`
     // (110) and output (50), and Codex buckets under its own model.
-    let by_model = compute_model_breakdown(&files, &cache);
-    assert_eq!(by_model.len(), 2);
-    let opus = by_model["claude-opus-4-8"];
+    let by_model = compute_model_breakdown(&files, &cache, NOW_SECS);
+    assert_eq!(by_model.len(), 3);
+    let opus = &by_model["claude-opus-4-8"];
     assert_eq!(
-        (opus.input, opus.output, opus.cache_read, opus.tokens),
+        (
+            opus.year.input,
+            opus.year.output,
+            opus.year.cache_read,
+            opus.year.tokens
+        ),
         (110, 50, 70, 160)
     );
-    assert!((opus.usd - 1.0).abs() < 1e-9);
-    let codex = by_model["gpt-5-codex"];
+    assert_eq!(opus.week.tokens, 160);
+    assert_eq!(opus.month.tokens, 160);
+    assert!((opus.year.usd - 1.0).abs() < 1e-9);
+    let codex = &by_model["gpt-5-codex"];
     assert_eq!(
-        (codex.input, codex.output, codex.cache_read, codex.tokens),
+        (
+            codex.year.input,
+            codex.year.output,
+            codex.year.cache_read,
+            codex.year.tokens
+        ),
         (200, 20, 40, 220)
     );
+    assert_eq!(codex.week.tokens, 220);
+    assert_eq!(codex.month.tokens, 220);
+    let old = &by_model["gpt-5-old"];
+    assert_eq!(
+        (
+            old.year.input,
+            old.year.output,
+            old.year.cache_read,
+            old.year.tokens
+        ),
+        (300, 30, 60, 330)
+    );
+    assert_eq!(old.week.tokens, 0);
+    assert_eq!(old.month.tokens, 0);
 }

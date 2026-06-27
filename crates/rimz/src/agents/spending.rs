@@ -189,40 +189,29 @@ pub fn compute_daily_spend(
     by_day
 }
 
-/// One model's deduplicated, account-global throughput across the full history —
-/// a row of the `rimz stats` model breakdown. `input` folds cache-write in to
-/// match the `◇` convention, so `tokens` stays `input + output`; cache-read rides
-/// alongside for the model detail split and all-time cached total.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct ModelSpend {
-    pub usd: f64,
-    pub input: u64,
-    pub output: u64,
-    #[serde(default)]
-    pub cache_read: u64,
-    pub tokens: u64,
-}
-
-/// Bucket the full spend history by model id, account-global, reusing the same
+/// Bucket the spend history by model id and trailing window, account-global,
+/// reusing the same
 /// cross-file Claude dedup and sidechain-replay suppression as
-/// [`compute_daily_spend`] so a model's tokens agree with the trailing windows.
+/// [`compute_daily_spend`] so a model's tokens agree with the provider windows.
 /// An entry whose transcript named no model buckets under the empty key, which
-/// the caller folds into an "Other" row. Pure over an already-refreshed cache.
+/// the caller folds into an "Other" row. Pure over an already-refreshed cache;
+/// session counts and the configured headline window are intentionally empty.
 pub fn compute_model_breakdown(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
-) -> BTreeMap<String, ModelSpend> {
+    now_secs: u64,
+) -> BTreeMap<String, SpendTally> {
     let deduped = dedup_cached_entries(files, cache);
-    let mut by_model: BTreeMap<String, ModelSpend> = BTreeMap::new();
+    let mut by_model: BTreeMap<String, SpendTally> = BTreeMap::new();
     for_each_counted_entry(&deduped, |entry| {
-        let cell = by_model
-            .entry(entry.model.clone().unwrap_or_default())
-            .or_default();
-        cell.usd += entry.cost_usd;
-        cell.input += entry.input + entry.cache_write;
-        cell.output += entry.output;
-        cell.cache_read += entry.cache_read;
-        cell.tokens += entry.input + entry.cache_write + entry.output;
+        accum(
+            by_model
+                .entry(entry.model.clone().unwrap_or_default())
+                .or_default(),
+            entry,
+            now_secs,
+            u64::MAX,
+        );
     });
     by_model
 }
@@ -286,8 +275,10 @@ const SPENDING_CACHE_VERSION: u32 = 10;
 /// built-in prices heal previously zero-dollar token rows. v6: per-model
 /// cache-read is published for `rimz stats`.
 /// v7: the default headline window changed from trailing 24 hours to session,
-/// so cached headline aggregates need a cheap re-aggregate.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 7;
+/// so cached headline aggregates need a cheap re-aggregate. v8: the published
+/// model rollup became per-window so the stats dashboard can scope tabs without
+/// walking transcripts.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 8;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -1324,10 +1315,10 @@ pub struct ProviderSpendingCache {
     /// command can render its heatmap without walking transcripts.
     #[serde(default)]
     pub days: BTreeMap<i64, DaySpend>,
-    /// Account-global model buckets, published so `rimz stats` can render its
-    /// model breakdown without walking transcripts.
+    /// Account-global model buckets by trailing window, published so
+    /// `rimz stats` can scope its model breakdown without walking transcripts.
     #[serde(default)]
-    pub models: BTreeMap<String, ModelSpend>,
+    pub models: BTreeMap<String, SpendTally>,
     #[serde(flatten)]
     pub spending: Spending,
 }
@@ -1365,7 +1356,7 @@ pub fn write_provider_spending_cache_with_rollups(
     refreshed_at_ms: u64,
     spending: &Spending,
     days: &BTreeMap<i64, DaySpend>,
-    models: &BTreeMap<String, ModelSpend>,
+    models: &BTreeMap<String, SpendTally>,
 ) {
     let cache = ProviderSpendingCache {
         version: PROVIDER_SPENDING_VERSION,

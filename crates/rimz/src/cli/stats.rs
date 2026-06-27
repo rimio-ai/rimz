@@ -8,12 +8,11 @@
 //! as the sidebar producer, publishes the same provider-spending rollups, and
 //! then subsequent runs return from the cache.
 //!
-//! Windows: the heatmap, model breakdown, and agent breakdown read the full
-//! available history (the cache spans the trailing year); "Active days" reports
-//! the trailing four weeks; the Week/Month/Year totals are the trailing 7/30/365
-//! days. `--refresh` holds the panel open, recomputes on a background thread,
-//! repaints the held frame in place every minute, and re-centres promptly after
-//! a width change.
+//! Windows: the heatmap always reads the full available history (the cache spans
+//! the trailing year). In the held dashboard, the windows row is a tab bar that
+//! scopes the model breakdown, agent breakdown, and insights below it.
+//! `--refresh` recomputes on a background thread, repaints the held frame in
+//! place every minute, and re-centres promptly after a width change.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
@@ -35,7 +34,7 @@ use rimz::RuntimePaths;
 use rimz::agents::AgentAdapter;
 use rimz::agents::pricing;
 use rimz::agents::spending::{
-    DaySpend, ModelSpend, ProviderSpendingCache, SpendProgress, SpendTally, Spending,
+    DaySpend, ProviderSpendingCache, SpendProgress, SpendTally, SpendWindow, Spending,
     compute_daily_spend, compute_model_breakdown, compute_spending, compute_spending_with_progress,
     discover_spending_files, read_provider_spending_cache, read_spending_cache,
     recorded_unknown_models, unix_secs_now, utc_date, write_provider_spending_cache_with_rollups,
@@ -97,6 +96,60 @@ pub struct StatsArgs {
     pub hold: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Window {
+    AllTime,
+    Week,
+    Month,
+    Year,
+}
+
+impl Window {
+    const TABS: [Self; 4] = [Self::AllTime, Self::Week, Self::Month, Self::Year];
+
+    fn next(self) -> Self {
+        let index = Self::TABS
+            .iter()
+            .position(|window| *window == self)
+            .unwrap_or(0);
+        Self::TABS[(index + 1) % Self::TABS.len()]
+    }
+
+    fn prev(self) -> Self {
+        let index = Self::TABS
+            .iter()
+            .position(|window| *window == self)
+            .unwrap_or(0);
+        Self::TABS[(index + Self::TABS.len() - 1) % Self::TABS.len()]
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::AllTime => "All time",
+            Self::Week => "Week",
+            Self::Month => "Month",
+            Self::Year => "Year",
+        }
+    }
+
+    fn select(self, tally: &SpendTally) -> SpendWindow {
+        match self {
+            Self::AllTime | Self::Year => tally.year,
+            Self::Week => tally.week,
+            Self::Month => tally.month,
+        }
+    }
+
+    fn span_days(self) -> u32 {
+        match self {
+            Self::AllTime => 28,
+            Self::Week => 7,
+            Self::Month => 30,
+            Self::Year => 365,
+        }
+    }
+}
+
 pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     if args.refresh {
         return run_refresh(args.dollars, args.hold);
@@ -114,6 +167,7 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
         &glyphs,
         !loaded.header_printed,
         "\n",
+        None,
     )
 }
 
@@ -125,13 +179,14 @@ fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
     // mouse reports from a sibling sidebar pane are drained below.
     let _input = TerminalModeGuard::enable(MouseCapture::Off)?;
     let mut current: Option<Stats> = None;
+    let mut active = Window::AllTime;
     loop {
         let (tx, rx) = mpsc::channel();
         let worker_paths = paths.clone();
         thread::spawn(move || {
             let _ = tx.send(load_or_refresh_stats(&worker_paths, None));
         });
-        match hold_cycle(hold, &mut current, &rx, dollars, &glyphs)? {
+        match hold_cycle(hold, &mut current, &rx, dollars, &glyphs, &mut active)? {
             CycleExit::Refresh => {}
             CycleExit::Reload => {
                 if let Some(target) = rimz::reload::current_reexec_target() {
@@ -155,13 +210,14 @@ fn hold_cycle(
     rx: &mpsc::Receiver<Result<Stats>>,
     dollars: bool,
     glyphs: &PanelGlyphs,
+    active: &mut Window,
 ) -> Result<CycleExit> {
     let deadline = Instant::now() + REFRESH_INTERVAL;
     loop {
         if let Ok(result) = rx.try_recv() {
             *current = Some(result?);
             if let Some(stats) = current.as_ref() {
-                repaint(stats, dollars, glyphs)?;
+                repaint(stats, dollars, glyphs, *active)?;
             }
         }
         let now = Instant::now();
@@ -173,13 +229,25 @@ fn hold_cycle(
             Ok(true) => match event::read() {
                 Ok(Event::Resize(_, _)) => {
                     if let Some(stats) = current.as_ref() {
-                        repaint(stats, dollars, glyphs)?;
+                        repaint(stats, dollars, glyphs, *active)?;
                     }
                 }
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                     match key_outcome(key, hold) {
                         KeyOutcome::Reload => return Ok(CycleExit::Reload),
                         KeyOutcome::Quit => return Ok(CycleExit::Quit),
+                        KeyOutcome::NextWindow => {
+                            *active = active.next();
+                            if let Some(stats) = current.as_ref() {
+                                repaint(stats, dollars, glyphs, *active)?;
+                            }
+                        }
+                        KeyOutcome::PrevWindow => {
+                            *active = active.prev();
+                            if let Some(stats) = current.as_ref() {
+                                repaint(stats, dollars, glyphs, *active)?;
+                            }
+                        }
                         KeyOutcome::Ignore => {}
                     }
                 }
@@ -196,11 +264,15 @@ fn hold_cycle(
 enum KeyOutcome {
     Reload,
     Quit,
+    NextWindow,
+    PrevWindow,
     Ignore,
 }
 
 fn key_outcome(key: KeyEvent, hold: bool) -> KeyOutcome {
     match key.code {
+        KeyCode::Tab => KeyOutcome::NextWindow,
+        KeyCode::BackTab => KeyOutcome::PrevWindow,
         KeyCode::Char('r') | KeyCode::Char('R') => KeyOutcome::Reload,
         KeyCode::Char('c') | KeyCode::Char('C') => {
             if key.modifiers.contains(KeyModifiers::CONTROL) && !hold {
@@ -226,7 +298,7 @@ fn reexec(target: &Path) -> anyhow::Error {
 
 /// Repaint the held panel in place: home the cursor, overwrite each line
 /// (clearing to its end), then clear anything below without a whole-screen blank.
-fn repaint(stats: &Stats, dollars: bool, glyphs: &PanelGlyphs) -> Result<()> {
+fn repaint(stats: &Stats, dollars: bool, glyphs: &PanelGlyphs, active: Window) -> Result<()> {
     use ratatui::crossterm::{
         cursor::MoveTo,
         execute,
@@ -235,7 +307,15 @@ fn repaint(stats: &Stats, dollars: bool, glyphs: &PanelGlyphs) -> Result<()> {
 
     execute!(std::io::stdout(), MoveTo(0, 0))?;
     let today_day = unix_secs_now() as i64 / DAY_SECS;
-    render_panel(stats, today_day, dollars, glyphs, true, REFRESH_NL)?;
+    render_panel(
+        stats,
+        today_day,
+        dollars,
+        glyphs,
+        true,
+        REFRESH_NL,
+        Some(active),
+    )?;
     execute!(std::io::stdout(), Clear(ClearType::FromCursorDown))?;
     Ok(())
 }
@@ -249,7 +329,7 @@ struct LoadedStats {
 /// the per-model and per-agent breakdowns, and producer-priced trailing windows.
 struct Stats {
     by_day: BTreeMap<i64, DaySpend>,
-    by_model: BTreeMap<String, ModelSpend>,
+    by_model: BTreeMap<String, SpendTally>,
     by_agent: BTreeMap<String, SpendTally>,
     total: SpendTally,
 }
@@ -383,7 +463,7 @@ fn compute_stats_from_files(
         None => compute_spending(&files, &mut cache, &prices, now_secs),
     };
     let by_day = compute_daily_spend(&files, &cache);
-    let by_model = compute_model_breakdown(&files, &cache);
+    let by_model = compute_model_breakdown(&files, &cache, now_secs);
     if publish && cache.dirty {
         write_spending_cache(&cursor_path, &cache);
     }
@@ -652,6 +732,7 @@ fn render_panel(
     glyphs: &PanelGlyphs,
     include_header: bool,
     nl: &str,
+    active: Option<Window>,
 ) -> Result<()> {
     let geometry = PanelGeometry::current();
     let mut lines: Vec<String> = Vec::new();
@@ -670,8 +751,9 @@ fn render_panel(
     }
 
     heatmap_lines(&mut lines, stats, today_day, geometry.weeks, dollars);
-    let models = model_breakdown(stats);
-    let agents = agent_year_breakdown(stats);
+    let selected = active.unwrap_or(Window::AllTime);
+    let models = model_breakdown(stats, selected);
+    let agents = agent_breakdown(stats, selected);
     let name_w = models
         .iter()
         .map(|(name, _)| display_width(name))
@@ -680,7 +762,7 @@ fn render_panel(
         .unwrap_or(0);
 
     lines.push(String::new());
-    windows_lines(&mut lines, stats);
+    windows_lines(&mut lines, stats, active);
     let model_rows = model_cells(&models, name_w, glyphs);
     let agent_rows = agent_cells(&agents, name_w, glyphs);
     let pct_w = stat_pct_width(&model_rows, &agent_rows);
@@ -694,7 +776,7 @@ fn render_panel(
         emit_stat_section(&mut lines, "Agents", &agent_rows, layout, glyphs);
     }
     lines.push(String::new());
-    insights_lines(&mut lines, stats, today_day, geometry.panel_width);
+    insights_lines(&mut lines, stats, today_day, geometry.panel_width, selected);
 
     emit(&lines, geometry.outer, nl)
 }
@@ -788,28 +870,57 @@ fn ramp_key(styles: &[anstyle::Style; 5]) -> String {
     s
 }
 
-/// The full-history cached total plus trailing Week / Month / Year token totals.
-fn windows_lines(lines: &mut Vec<String>, stats: &Stats) {
+/// The windows row: a static totals row in reports, a tab bar in held dashboards.
+fn windows_lines(lines: &mut Vec<String>, stats: &Stats, active: Option<Window>) {
     let all_time: u64 = stats
         .by_model
         .values()
-        .map(|model| model.tokens + model.cache_read)
+        .map(|model| model.year.tokens + model.year.cache_read)
         .sum();
-    let cells = [
-        ("All time", all_time),
-        ("Week", stats.total.week.tokens),
-        ("Month", stats.total.month.tokens),
-        ("Year", stats.total.year.tokens),
-    ];
+    let cells = Window::TABS.map(|window| {
+        let tokens = match window {
+            Window::AllTime => all_time,
+            Window::Week => stats.total.week.tokens,
+            Window::Month => stats.total.month.tokens,
+            Window::Year => stats.total.year.tokens,
+        };
+        (window, window.label(), fmt_tokens(tokens))
+    });
     let sep = render::paint(muted(), "  ·  ");
+    let Some(active) = active else {
+        let row = cells
+            .into_iter()
+            .map(|(_, label, tokens)| {
+                format!(
+                    "{} {}",
+                    render::paint(muted(), label),
+                    render::paint(cool(), &tokens)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(&sep);
+        lines.push(format!("  {row}"));
+        return;
+    };
+
+    let inner_w = cells
+        .iter()
+        .map(|(_, label, tokens)| label.chars().count() + 1 + tokens.chars().count())
+        .max()
+        .unwrap_or(0);
     let row = cells
         .into_iter()
-        .map(|(label, tokens)| {
-            format!(
-                "{} {}",
-                render::paint(muted(), label),
-                render::paint(cool(), &fmt_tokens(tokens))
-            )
+        .map(|(window, label, tokens)| {
+            let pad = " ".repeat(inner_w.saturating_sub(label.chars().count() + 1 + tokens.len()));
+            if window == active {
+                render::paint(active_tab(), &format!(" {label} {tokens}{pad} "))
+            } else {
+                format!(
+                    " {} {}{pad} ",
+                    render::paint(muted(), label),
+                    render::paint(cool(), &tokens)
+                )
+            }
         })
         .collect::<Vec<_>>()
         .join(&sep);
@@ -842,7 +953,7 @@ struct StatSectionLayout {
 
 /// The per-model token breakdown, before the shared share column is appended.
 fn model_cells(
-    models: &[(String, ModelSpend)],
+    models: &[(String, SpendWindow)],
     name_w: usize,
     glyphs: &PanelGlyphs,
 ) -> Vec<StatCell> {
@@ -924,25 +1035,33 @@ fn model_cells(
         .collect()
 }
 
-fn model_breakdown(stats: &Stats) -> Vec<(String, ModelSpend)> {
-    let total: u64 = stats.by_model.values().map(|m| m.tokens).sum();
+fn model_breakdown(stats: &Stats, active: Window) -> Vec<(String, SpendWindow)> {
+    let total: u64 = stats
+        .by_model
+        .values()
+        .map(|tally| active.select(tally).tokens)
+        .sum();
     if total == 0 {
         return Vec::new();
     }
 
-    let mut named: Vec<(String, ModelSpend)> = Vec::new();
-    let mut other = ModelSpend::default();
-    for (id, spend) in &stats.by_model {
+    let mut named: Vec<(String, SpendWindow)> = Vec::new();
+    let mut other = SpendWindow::default();
+    for (id, tally) in &stats.by_model {
+        let spend = active.select(tally);
+        if spend.tokens == 0 {
+            continue;
+        }
         if id.is_empty() {
-            fold_model(&mut other, spend);
+            fold_window(&mut other, &spend);
         } else {
-            named.push((friendly_model(id), *spend));
+            named.push((friendly_model(id), spend));
         }
     }
     named.sort_by_key(|model| std::cmp::Reverse(model.1.tokens));
     if named.len() > MAX_MODELS {
         for (_, spend) in named.split_off(MAX_MODELS) {
-            fold_model(&mut other, &spend);
+            fold_window(&mut other, &spend);
         }
     }
     if other.tokens > 0 {
@@ -951,23 +1070,29 @@ fn model_breakdown(stats: &Stats) -> Vec<(String, ModelSpend)> {
     named
 }
 
-fn fold_model(acc: &mut ModelSpend, add: &ModelSpend) {
+fn fold_window(acc: &mut SpendWindow, add: &SpendWindow) {
     acc.usd += add.usd;
+    acc.tokens += add.tokens;
     acc.input += add.input;
     acc.output += add.output;
+    acc.cache_write += add.cache_write;
     acc.cache_read += add.cache_read;
-    acc.tokens += add.tokens;
+    acc.sessions += add.sessions;
 }
 
-struct AgentYearBreakdown<'a> {
+struct AgentBreakdown<'a> {
     kind: &'a str,
     name: String,
-    tally: &'a SpendTally,
+    window: SpendWindow,
     share: f64,
 }
 
-fn agent_year_breakdown(stats: &Stats) -> Vec<AgentYearBreakdown<'_>> {
-    let total: u64 = stats.by_agent.values().map(|tally| tally.year.tokens).sum();
+fn agent_breakdown(stats: &Stats, active: Window) -> Vec<AgentBreakdown<'_>> {
+    let total: u64 = stats
+        .by_agent
+        .values()
+        .map(|tally| active.select(tally).tokens)
+        .sum();
     if total == 0 {
         return Vec::new();
     }
@@ -975,20 +1100,22 @@ fn agent_year_breakdown(stats: &Stats) -> Vec<AgentYearBreakdown<'_>> {
     let mut agents: Vec<_> = stats
         .by_agent
         .iter()
-        .filter(|(_, tally)| tally.year.tokens > 0)
-        .map(|(kind, tally)| AgentYearBreakdown {
-            kind: kind.as_str(),
-            name: agent_display_name(kind),
-            tally,
-            share: tally.year.tokens as f64 / total as f64,
+        .filter_map(|(kind, tally)| {
+            let window = active.select(tally);
+            (window.tokens > 0).then(|| AgentBreakdown {
+                kind: kind.as_str(),
+                name: agent_display_name(kind),
+                window,
+                share: window.tokens as f64 / total as f64,
+            })
         })
         .collect();
-    agents.sort_by_key(|agent| std::cmp::Reverse(agent.tally.year.tokens));
+    agents.sort_by_key(|agent| std::cmp::Reverse(agent.window.tokens));
     agents
 }
 
 fn agent_cells(
-    agents: &[AgentYearBreakdown<'_>],
+    agents: &[AgentBreakdown<'_>],
     name_w: usize,
     glyphs: &PanelGlyphs,
 ) -> Vec<StatCell> {
@@ -1008,9 +1135,9 @@ fn agent_cells(
         .iter()
         .map(|agent| AgentRow {
             name: agent.name.clone(),
-            sessions: agent.tally.year.sessions.to_string(),
-            tokens: fmt_tokens(agent.tally.year.tokens),
-            usd: fmt_usd(agent.tally.year.usd),
+            sessions: agent.window.sessions.to_string(),
+            tokens: fmt_tokens(agent.window.tokens),
+            usd: fmt_usd(agent.window.usd),
             share_pct: agent.share * 100.0,
         })
         .collect::<Vec<_>>();
@@ -1157,12 +1284,19 @@ fn agent_display_name(kind: &str) -> String {
 }
 
 /// Sessions, active-day ratio, most active day, and longest / current streak.
-fn insights_lines(lines: &mut Vec<String>, stats: &Stats, today_day: i64, panel_width: usize) {
-    let activity = Activity::of(&stats.by_day, today_day);
+fn insights_lines(
+    lines: &mut Vec<String>,
+    stats: &Stats,
+    today_day: i64,
+    panel_width: usize,
+    active: Window,
+) {
+    let activity = Activity::of(&stats.by_day, today_day, active);
+    let selected = active.select(&stats.total);
     lines.push(format!(
         "  {} {}",
         render::paint(muted(), "Sessions:"),
-        group_thousands(stats.total.year.sessions as u64)
+        group_thousands(selected.sessions as u64)
     ));
 
     let most = activity
@@ -1170,7 +1304,10 @@ fn insights_lines(lines: &mut Vec<String>, stats: &Stats, today_day: i64, panel_
         .map(fmt_day)
         .unwrap_or_else(|| "—".to_string());
     let left = [
-        kv("Active days:", &format!("{}/28", activity.active_28)),
+        kv(
+            "Active days:",
+            &format!("{}/{}", activity.active_count, activity.window_days),
+        ),
         kv("Most active day:", &most),
     ];
     let right = [
@@ -1287,58 +1424,61 @@ fn display_width(s: &str) -> usize {
 
 // ── Trailing windows and activity ──────────────────────────────────────────────
 
-/// Cadence read from the per-day history: the trailing-four-week active ratio,
-/// the heaviest single day, and the longest and current active-day streaks.
+/// Cadence read from the per-day history: the selected-window active ratio, the
+/// heaviest single day, and the longest and current active-day streaks.
 struct Activity {
-    active_28: u32,
+    active_count: u32,
+    window_days: u32,
     most_active: Option<i64>,
     longest_streak: u32,
     current_streak: u32,
 }
 
 impl Activity {
-    fn of(by_day: &BTreeMap<i64, DaySpend>, today_day: i64) -> Self {
+    fn of(by_day: &BTreeMap<i64, DaySpend>, today_day: i64, window: Window) -> Self {
         let active: BTreeSet<i64> = by_day
             .iter()
             .filter(|(_, d)| d.tokens > 0)
             .map(|(&day, _)| day)
             .collect();
 
-        let active_28 = (today_day - 27..=today_day)
-            .filter(|day| active.contains(day))
-            .count() as u32;
+        if window == Window::AllTime {
+            let active_count = (today_day - 27..=today_day)
+                .filter(|day| active.contains(day))
+                .count() as u32;
+            let most_active = by_day
+                .iter()
+                .filter(|(_, d)| d.tokens > 0)
+                .max_by_key(|(_, d)| d.tokens)
+                .map(|(&day, _)| day);
+            let (longest_streak, current_streak) = streaks(&active, today_day);
+            return Activity {
+                active_count,
+                window_days: window.span_days(),
+                most_active,
+                longest_streak,
+                current_streak,
+            };
+        }
+
+        let span = window.span_days();
+        let cutoff = today_day - (span as i64 - 1);
+        let scoped_active: BTreeSet<i64> = active
+            .into_iter()
+            .filter(|day| *day >= cutoff && *day <= today_day)
+            .collect();
+        let active_count = scoped_active.len() as u32;
 
         let most_active = by_day
             .iter()
-            .filter(|(_, d)| d.tokens > 0)
+            .filter(|(day, d)| **day >= cutoff && **day <= today_day && d.tokens > 0)
             .max_by_key(|(_, d)| d.tokens)
             .map(|(&day, _)| day);
+        let (longest_streak, current_streak) = streaks(&scoped_active, today_day);
 
-        // Longest run of consecutive active days anywhere in the history.
-        let mut longest_streak = 0;
-        let mut run = 0;
-        let mut prev: Option<i64> = None;
-        for &day in &active {
-            run = if prev == Some(day - 1) { run + 1 } else { 1 };
-            longest_streak = longest_streak.max(run);
-            prev = Some(day);
-        }
-
-        // Current run ending at today; a today with no activity yet does not
-        // break a streak that ran through yesterday.
-        let mut cursor = if active.contains(&today_day) {
-            today_day
-        } else {
-            today_day - 1
-        };
-        let mut current_streak = 0;
-        while active.contains(&cursor) {
-            current_streak += 1;
-            cursor -= 1;
-        }
-
-        Activity {
-            active_28,
+        Self {
+            active_count,
+            window_days: span,
             most_active,
             longest_streak,
             current_streak,
@@ -1346,12 +1486,41 @@ impl Activity {
     }
 }
 
+fn streaks(active: &BTreeSet<i64>, today_day: i64) -> (u32, u32) {
+    // Longest run of consecutive active days in the selected set.
+    let mut longest_streak = 0;
+    let mut run = 0;
+    let mut prev: Option<i64> = None;
+    for &day in active {
+        run = if prev == Some(day - 1) { run + 1 } else { 1 };
+        longest_streak = longest_streak.max(run);
+        prev = Some(day);
+    }
+
+    // Current run ending at today; a today with no activity yet does not break
+    // a streak that ran through yesterday.
+    let mut cursor = if active.contains(&today_day) {
+        today_day
+    } else {
+        today_day - 1
+    };
+    let mut current_streak = 0;
+    while active.contains(&cursor) {
+        current_streak += 1;
+        cursor -= 1;
+    }
+
+    (longest_streak, current_streak)
+}
+
 // ── Styling ────────────────────────────────────────────────────────────────────
 
 fn rgb(rgb: (u8, u8, u8)) -> anstyle::Style {
-    anstyle::Style::new().fg_color(Some(anstyle::Color::Rgb(anstyle::RgbColor(
-        rgb.0, rgb.1, rgb.2,
-    ))))
+    anstyle::Style::new().fg_color(Some(rgb_color(rgb)))
+}
+
+fn rgb_color(rgb: (u8, u8, u8)) -> anstyle::Color {
+    anstyle::Color::Rgb(anstyle::RgbColor(rgb.0, rgb.1, rgb.2))
 }
 
 fn brand() -> anstyle::Style {
@@ -1368,6 +1537,13 @@ fn meta() -> anstyle::Style {
 
 fn cool() -> anstyle::Style {
     rgb(Semantic::DEFAULT.cool)
+}
+
+fn active_tab() -> anstyle::Style {
+    anstyle::Style::new()
+        .fg_color(Some(rgb_color(Semantic::DEFAULT.selection_bg)))
+        .bg_color(Some(rgb_color(Semantic::DEFAULT.cool)))
+        .bold()
 }
 
 /// One cool ramp, lightness-varying, held distinct from the status reds and
@@ -1571,41 +1747,49 @@ struct DayJson {
 }
 
 fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
-    let activity = Activity::of(&stats.by_day, today_day);
-    let total: u64 = stats.by_model.values().map(|m| m.tokens).sum();
+    let active = Window::AllTime;
+    let activity = Activity::of(&stats.by_day, today_day, active);
+    let total: u64 = stats
+        .by_model
+        .values()
+        .map(|tally| active.select(tally).tokens)
+        .sum();
 
     let mut models: Vec<ModelJson> = stats
         .by_model
         .iter()
-        .map(|(id, spend)| ModelJson {
-            model: id.clone(),
-            name: if id.is_empty() {
-                "Other".to_string()
-            } else {
-                friendly_model(id)
-            },
-            tokens: spend.tokens,
-            input: spend.input,
-            output: spend.output,
-            cache_read: spend.cache_read,
-            usd: spend.usd,
-            share: if total > 0 {
-                spend.tokens as f64 / total as f64
-            } else {
-                0.0
-            },
+        .map(|(id, tally)| {
+            let spend = active.select(tally);
+            ModelJson {
+                model: id.clone(),
+                name: if id.is_empty() {
+                    "Other".to_string()
+                } else {
+                    friendly_model(id)
+                },
+                tokens: spend.tokens,
+                input: spend.input,
+                output: spend.output,
+                cache_read: spend.cache_read,
+                usd: spend.usd,
+                share: if total > 0 {
+                    spend.tokens as f64 / total as f64
+                } else {
+                    0.0
+                },
+            }
         })
         .collect();
     models.sort_by_key(|model| std::cmp::Reverse(model.tokens));
 
-    let agents = agent_year_breakdown(stats)
+    let agents = agent_breakdown(stats, active)
         .into_iter()
         .map(|agent| AgentJson {
             kind: agent.kind.to_owned(),
             name: agent.name,
-            tokens: agent.tally.year.tokens,
-            usd: agent.tally.year.usd,
-            sessions: agent.tally.year.sessions,
+            tokens: agent.window.tokens,
+            usd: agent.window.usd,
+            sessions: agent.window.sessions,
             share: agent.share,
         })
         .collect();
@@ -1623,7 +1807,7 @@ fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
     let doc = StatsJson {
         unit: if dollars { "usd" } else { "tokens" },
         sessions: stats.total.year.sessions,
-        active_days_28: activity.active_28,
+        active_days_28: activity.active_count,
         longest_streak: activity.longest_streak,
         current_streak: activity.current_streak,
         most_active_day: activity
