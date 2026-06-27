@@ -1523,6 +1523,96 @@ fn workspace_spending_cache_is_scope_keyed_and_ttl_gated() {
 }
 
 #[test]
+fn peek_cache_version_round_trips_each_cache() {
+    let dir = TempDir::new().unwrap();
+    let cursor_path = dir.path().join("spending.json");
+    let provider_path = dir.path().join("provider-spending.json");
+    let workspace_path = dir.path().join("workspace-spending.json");
+
+    let cursor = SpendingDiskCache {
+        version: SPENDING_CACHE_VERSION,
+        ..SpendingDiskCache::default()
+    };
+    assert!(write_spending_cache(&cursor_path, &cursor));
+    assert_eq!(
+        peek_cache_version(&cursor_path),
+        Some(SPENDING_CACHE_VERSION)
+    );
+
+    write_provider_spending_cache(&provider_path, 12_345, &sample_spending());
+    assert_eq!(
+        peek_cache_version(&provider_path),
+        Some(PROVIDER_SPENDING_VERSION)
+    );
+
+    write_workspace_spending_cache(&workspace_path, 12_345, "scope", &SpendTally::default());
+    assert_eq!(
+        peek_cache_version(&workspace_path),
+        Some(WORKSPACE_SPENDING_VERSION)
+    );
+
+    assert_eq!(peek_cache_version(&dir.path().join("missing.json")), None);
+    let no_version = dir.path().join("no-version.json");
+    std::fs::write(&no_version, br#"{"refreshed_at_ms":123,"version":9999}"#).unwrap();
+    assert_eq!(peek_cache_version(&no_version), None);
+}
+
+#[test]
+fn write_skips_version_downgrade() {
+    let dir = TempDir::new().unwrap();
+    let cursor_path = dir.path().join("spending.json");
+    let provider_path = dir.path().join("provider-spending.json");
+    let workspace_path = dir.path().join("workspace-spending.json");
+    let newer = br#"{"version":9999,"sentinel":true}"#.to_vec();
+
+    std::fs::write(&cursor_path, &newer).unwrap();
+    let cursor = SpendingDiskCache {
+        version: SPENDING_CACHE_VERSION,
+        ..SpendingDiskCache::default()
+    };
+    assert!(write_spending_cache(&cursor_path, &cursor));
+    assert_eq!(std::fs::read(&cursor_path).unwrap(), newer);
+
+    std::fs::write(&provider_path, &newer).unwrap();
+    write_provider_spending_cache(&provider_path, 12_345, &sample_spending());
+    assert_eq!(std::fs::read(&provider_path).unwrap(), newer);
+
+    std::fs::write(&workspace_path, &newer).unwrap();
+    write_workspace_spending_cache(&workspace_path, 12_345, "scope", &SpendTally::default());
+    assert_eq!(std::fs::read(&workspace_path).unwrap(), newer);
+
+    let current_cursor =
+        format!(r#"{{"version":{SPENDING_CACHE_VERSION},"sentinel":true}}"#).into_bytes();
+    std::fs::write(&cursor_path, &current_cursor).unwrap();
+    assert!(write_spending_cache(&cursor_path, &cursor));
+    assert_ne!(std::fs::read(&cursor_path).unwrap(), current_cursor);
+    assert_eq!(
+        peek_cache_version(&cursor_path),
+        Some(SPENDING_CACHE_VERSION)
+    );
+
+    let current_provider =
+        format!(r#"{{"version":{PROVIDER_SPENDING_VERSION},"sentinel":true}}"#).into_bytes();
+    std::fs::write(&provider_path, &current_provider).unwrap();
+    write_provider_spending_cache(&provider_path, 12_345, &sample_spending());
+    assert_eq!(
+        peek_cache_version(&provider_path),
+        Some(PROVIDER_SPENDING_VERSION)
+    );
+    assert_ne!(std::fs::read(&provider_path).unwrap(), current_provider);
+
+    let current_workspace =
+        format!(r#"{{"version":{WORKSPACE_SPENDING_VERSION},"sentinel":true}}"#).into_bytes();
+    std::fs::write(&workspace_path, &current_workspace).unwrap();
+    write_workspace_spending_cache(&workspace_path, 12_345, "scope", &SpendTally::default());
+    assert_eq!(
+        peek_cache_version(&workspace_path),
+        Some(WORKSPACE_SPENDING_VERSION)
+    );
+    assert_ne!(std::fs::read(&workspace_path).unwrap(), current_workspace);
+}
+
+#[test]
 fn live_baselines_and_overlay_cases_stay_bounded() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("live-spend-baselines.json");

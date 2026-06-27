@@ -6,8 +6,11 @@
 //! and reconciles each in place — one live sidebar per working view, running the
 //! current binary — closing duplicate or unresponsive sidebar panes and reaping
 //! orphaned sidebar processes whose pane is gone. A workspace whose session is
-//! gone has its stale runtime files and leftover daemons swept. Every step is
-//! best-effort: a hiccup on one workspace is logged and never blocks the rest.
+//! gone has its stale runtime files and leftover daemons swept. Long-lived
+//! sidebars and `rimz stats --refresh` also self-reexec onto a changed on-disk
+//! binary on their own cadence, so this command is the low-latency nudge rather
+//! than the only convergence path. Every step is best-effort: a hiccup on one
+//! workspace is logged and never blocks the rest.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -29,6 +32,24 @@ use crate::workspace::{self, KnownWorkspace};
 /// may have been replaced by an atomic install.
 pub fn current_reexec_target() -> Option<PathBuf> {
     resolve_reexec_target(std::env::current_exe().ok()?)
+}
+
+/// The on-disk binary to re-exec onto when it is a different build than this
+/// running image.
+///
+/// This is the self-heal backstop for long-lived Rimz processes after an
+/// install or reload. `None` means no binary resolves on disk, the running
+/// build cannot be identified, the on-disk build cannot be identified, or the
+/// builds already match.
+pub fn reexec_target_if_build_changed() -> Option<PathBuf> {
+    let target = current_reexec_target()?;
+    let on_disk = crate::build_id::of_file(&target).ok();
+    reexec_decision(crate::build_id::current(), on_disk.as_deref()).then_some(target)
+}
+
+/// Pure verdict: re-exec only when both build ids are known and differ.
+fn reexec_decision(running: Option<&str>, on_disk: Option<&str>) -> bool {
+    matches!((running, on_disk), (Some(running), Some(on_disk)) if running != on_disk)
 }
 
 /// Pick the live binary behind a `current_exe()` reading.
@@ -545,6 +566,15 @@ mod tests {
         let deleted = PathBuf::from(format!("{} (deleted)", missing.display()));
         assert_eq!(resolve_reexec_target(deleted), None);
         assert_eq!(resolve_reexec_target(missing), None);
+    }
+
+    #[test]
+    fn reexec_decision_reexecs_only_when_known_builds_differ() {
+        assert!(!reexec_decision(None, None));
+        assert!(!reexec_decision(Some("running"), None));
+        assert!(!reexec_decision(None, Some("on-disk")));
+        assert!(!reexec_decision(Some("same"), Some("same")));
+        assert!(reexec_decision(Some("running"), Some("on-disk")));
     }
 
     #[test]

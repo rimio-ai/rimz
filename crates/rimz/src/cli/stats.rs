@@ -180,6 +180,9 @@ fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
     let mut active = Window::AllTime;
     let mut walker = Some(SpendingWalker::new());
     loop {
+        if let Some(target) = rimz::reload::reexec_target_if_build_changed() {
+            return Err(reexec(&target));
+        }
         let (tx, rx) = mpsc::channel();
         let worker_paths = paths.clone();
         let Some(worker_walker) = walker.take() else {

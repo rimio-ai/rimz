@@ -22,6 +22,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,7 +30,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::descriptor::ThreadKey;
 use super::pricing::PriceBook;
@@ -314,6 +315,8 @@ pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 3;
 /// the current version, so a write always carries it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SpendingDiskCache {
+    /// Version must stay the first field; `peek_cache_version` reads it from
+    /// the file prefix before large cache writes.
     #[serde(default)]
     pub version: u32,
     #[serde(default)]
@@ -1785,9 +1788,58 @@ pub fn read_spending_cache(path: &Path) -> SpendingDiskCache {
     cache
 }
 
+/// The leading `version` of an on-disk cache without parsing the body.
+///
+/// Every shared-cache struct serializes `version` first, so a short prefix read
+/// settles it even for the multi-megabyte cursor cache. `None` means the file
+/// is absent, empty, or carries no readable leading version.
+fn peek_cache_version(path: &Path) -> Option<u32> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut buf = [0_u8; 512];
+    let read = file.read(&mut buf).ok()?;
+    parse_cache_version_prefix(&buf[..read])
+}
+
+fn parse_cache_version_prefix(bytes: &[u8]) -> Option<u32> {
+    let key = b"\"version\"";
+    let mut rest = skip_json_ws(bytes);
+    rest = rest.strip_prefix(b"{")?;
+    rest = skip_json_ws(rest);
+    rest = rest.strip_prefix(key)?;
+    rest = rest.strip_prefix(b":")?;
+    rest = skip_json_ws(rest);
+    let end = rest
+        .iter()
+        .position(|byte| !byte.is_ascii_digit())
+        .unwrap_or(rest.len());
+    if end == 0 {
+        return None;
+    }
+    std::str::from_utf8(&rest[..end]).ok()?.parse().ok()
+}
+
+fn skip_json_ws(bytes: &[u8]) -> &[u8] {
+    let skipped = bytes
+        .iter()
+        .position(|byte| !matches!(byte, b' ' | b'\n' | b'\r' | b'\t'))
+        .unwrap_or(bytes.len());
+    &bytes[skipped..]
+}
+
 /// Atomic write: temp file + rename, matching the project's ledger durability
 /// contract.
 pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) -> bool {
+    if let Some(on_disk) = peek_cache_version(path)
+        && on_disk > cache.version
+    {
+        debug!(
+            path = %path.display(),
+            on_disk,
+            ours = cache.version,
+            "skip spending cursor downgrade"
+        );
+        return true;
+    }
     let _ = crate::ledger::atomic::sweep_stale_temp_siblings(
         path,
         std::time::Duration::from_secs(3_600),
@@ -1816,7 +1868,8 @@ pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) -> bool {
 /// semantic change bumps `version` without forcing raw JSONL re-parse.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProviderSpendingCache {
-    /// Aggregate semantic version for the TTL gate.
+    /// Aggregate semantic version for the TTL gate. Version must stay the
+    /// first field; `peek_cache_version` reads it from the file prefix.
     #[serde(default)]
     pub version: u32,
     /// When the producer last walked and published, for the TTL gate.
@@ -1880,6 +1933,17 @@ pub fn write_provider_spending_cache_with_rollups(
         models: models.clone(),
         spending: spending.clone(),
     };
+    if let Some(on_disk) = peek_cache_version(path)
+        && on_disk > cache.version
+    {
+        debug!(
+            path = %path.display(),
+            on_disk,
+            ours = cache.version,
+            "skip provider spending cache downgrade"
+        );
+        return true;
+    }
     let _ = crate::ledger::atomic::sweep_stale_temp_siblings(
         path,
         std::time::Duration::from_secs(3_600),
@@ -1913,6 +1977,8 @@ pub fn read_provider_spending_cache(path: &Path) -> ProviderSpendingCache {
 /// cannot satisfy a different scope.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceSpendingCache {
+    /// Version must stay the first field; `peek_cache_version` reads it from
+    /// the file prefix before cache writes.
     #[serde(default)]
     pub version: u32,
     #[serde(default)]
@@ -1943,6 +2009,17 @@ pub fn write_workspace_spending_cache(
         scope_hash: scope_hash.to_owned(),
         tally: tally.clone(),
     };
+    if let Some(on_disk) = peek_cache_version(path)
+        && on_disk > cache.version
+    {
+        debug!(
+            path = %path.display(),
+            on_disk,
+            ours = cache.version,
+            "skip workspace spending cache downgrade"
+        );
+        return;
+    }
     let _ = crate::ledger::atomic::write_temp_then_rename_cache(path, &cache);
 }
 
