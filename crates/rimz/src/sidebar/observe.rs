@@ -10,11 +10,11 @@ mod detect;
 mod sig;
 pub mod writer;
 
-pub use crate::schema::diag::{AnomalyKind, FrameStamp, ObserveRole, WatchedField};
+pub use crate::schema::diag::{AggregateKey, AnomalyKind, FrameStamp, ObserveRole, WatchedField};
 pub use detect::Observer;
 pub use sig::{
-    EventsSig, FrameSig, GroupSig, OwnViewSig, RosterRowSig, RosterSig, RowSig, StatusCountSig,
-    WatchedValues, extract_sig,
+    AggregateSig, EventsSig, FrameSig, GroupSig, OwnViewSig, RosterRowSig, RosterSig, RowSig,
+    StatusCountSig, WatchedValues, extract_sig,
 };
 
 const EVIDENCE_LIMIT: usize = 32;

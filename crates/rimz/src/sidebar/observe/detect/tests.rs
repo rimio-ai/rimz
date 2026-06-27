@@ -1,7 +1,12 @@
-use super::super::sig::{EventPaneSig, EventsSig, GroupSig, OwnViewSig, WatchedValues};
+use super::super::sig::{
+    AggregateKey, AggregateSig, EventPaneSig, EventsSig, GroupSig, OwnViewSig, WatchedValues,
+    extract_sig,
+};
 use super::*;
 use crate::SidebarWorktreeKind;
+use crate::sidebar::events::EventStore;
 use crate::sidebar::timing::OBSERVE_WARMUP;
+use crate::{SpendTally, SpendWindow, WorkspaceId};
 
 fn sig(at_ms: u64, rows: Vec<RowSig>) -> FrameSig {
     let mut by_group = BTreeMap::<String, (Vec<String>, BTreeMap<String, usize>)>::new();
@@ -21,11 +26,13 @@ fn sig(at_ms: u64, rows: Vec<RowSig>) -> FrameSig {
         groups: by_group
             .into_iter()
             .map(|(key, (mut row_ids, status_counts))| {
+                let render_order = row_ids.clone();
                 row_ids.sort();
                 GroupSig {
                     key,
                     kind: SidebarWorktreeKind::Worktree,
                     row_ids,
+                    render_order,
                     hidden_count: 0,
                     status_counts: status_counts
                         .into_iter()
@@ -34,6 +41,7 @@ fn sig(at_ms: u64, rows: Vec<RowSig>) -> FrameSig {
                 }
             })
             .collect(),
+        aggregates: Vec::new(),
         own_view: Some(OwnViewSig {
             sibling_count: 1,
             active_pane_id: Some("zellij:terminal_1".to_owned()),
@@ -119,6 +127,52 @@ fn with_sibling_count(mut frame: FrameSig, sibling_count: usize) -> FrameSig {
         view.sibling_count = sibling_count;
     }
     frame
+}
+
+fn with_aggregate(
+    mut frame: FrameSig,
+    key: AggregateKey,
+    committed: Option<&str>,
+    pulled: Option<&str>,
+) -> FrameSig {
+    frame.aggregates = vec![AggregateSig {
+        key,
+        committed: committed.map(str::to_owned),
+        pulled: pulled.map(str::to_owned),
+    }];
+    frame
+}
+
+fn spend_tally(year_usd: f64) -> SpendTally {
+    SpendTally {
+        year: SpendWindow {
+            usd: year_usd,
+            ..SpendWindow::default()
+        },
+        ..SpendTally::default()
+    }
+}
+
+fn snapshot_with_spend(year_usd: Option<f64>) -> crate::SidebarSnapshot {
+    let mut snapshot = crate::SidebarSnapshot::build(
+        WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        Vec::new(),
+        Vec::new(),
+        jiff::Timestamp::now(),
+    );
+    snapshot.value_tally = year_usd.map(spend_tally);
+    snapshot
+}
+
+fn extracted_spend_sig(at_ms: u64, committed_usd: f64, pulled_usd: f64) -> FrameSig {
+    extract_sig(
+        &snapshot_with_spend(Some(committed_usd)),
+        &snapshot_with_spend(Some(pulled_usd)),
+        &EventStore::default(),
+        0,
+        0,
+        at_ms,
+    )
 }
 
 fn kinds(drafts: &[AnomalyDraft]) -> Vec<&'static str> {
@@ -501,6 +555,232 @@ fn value_oscillation_reports_established_value_bounces() {
             )),
             "missing {field:?} oscillation"
         );
+    }
+}
+
+#[test]
+fn aggregate_oscillation_reports_spend_blink_with_pulled_evidence() {
+    for (name, pulled_via) in [
+        ("producer published zero", None),
+        ("consumer zeroed", Some("1234")),
+    ] {
+        let mut observer = Observer::default();
+        observer.observe(with_aggregate(
+            sig(0, Vec::new()),
+            AggregateKey::CockpitTally,
+            Some("1234"),
+            Some("1234"),
+        ));
+        observer.observe(with_aggregate(
+            sig(11_000, Vec::new()),
+            AggregateKey::CockpitTally,
+            Some("1234"),
+            Some("1234"),
+        ));
+        observer.observe(with_aggregate(
+            sig(12_000, Vec::new()),
+            AggregateKey::CockpitTally,
+            None,
+            pulled_via,
+        ));
+
+        let drafts = observer.observe(with_aggregate(
+            sig(13_000, Vec::new()),
+            AggregateKey::CockpitTally,
+            Some("1234"),
+            Some("1234"),
+        ));
+
+        assert!(
+            drafts.iter().any(|draft| matches!(
+                &draft.kind,
+                AnomalyKind::AggregateOscillation {
+                    aggregate: AggregateKey::CockpitTally,
+                    from,
+                    via,
+                    back,
+                    pulled_via,
+                    ..
+                } if from == "1234"
+                    && via == "0"
+                    && back == "1234"
+                    && pulled_via.as_deref()
+                        == Some(if name == "consumer zeroed" { "1234" } else { "0" })
+            )),
+            "missing aggregate oscillation for {name}"
+        );
+    }
+}
+
+#[test]
+fn aggregate_first_appearance_and_warmup_stay_quiet() {
+    let mut first_appearance = Observer::default();
+    first_appearance.observe(with_aggregate(
+        sig(0, Vec::new()),
+        AggregateKey::WorkspaceTally,
+        None,
+        None,
+    ));
+    first_appearance.observe(with_aggregate(
+        sig(11_000, Vec::new()),
+        AggregateKey::WorkspaceTally,
+        None,
+        None,
+    ));
+    first_appearance.observe(with_aggregate(
+        sig(12_000, Vec::new()),
+        AggregateKey::WorkspaceTally,
+        Some("7"),
+        Some("7"),
+    ));
+    let drafts = first_appearance.observe(with_aggregate(
+        sig(13_000, Vec::new()),
+        AggregateKey::WorkspaceTally,
+        None,
+        None,
+    ));
+    assert!(!kinds(&drafts).contains(&"aggregate_oscillation"));
+
+    let mut warmup = Observer::default();
+    warmup.observe(with_aggregate(
+        sig(0, Vec::new()),
+        AggregateKey::CockpitTally,
+        Some("7"),
+        Some("7"),
+    ));
+    warmup.observe(with_aggregate(
+        sig(1_000, Vec::new()),
+        AggregateKey::CockpitTally,
+        None,
+        None,
+    ));
+    let drafts = warmup.observe(with_aggregate(
+        sig(2_000, Vec::new()),
+        AggregateKey::CockpitTally,
+        Some("7"),
+        Some("7"),
+    ));
+    assert!(!kinds(&drafts).contains(&"aggregate_oscillation"));
+}
+
+#[test]
+fn aggregate_oscillation_reports_mana_bounce() {
+    let key = AggregateKey::ProviderMana {
+        kind: "codex".to_owned(),
+        duration_mins: Some(300),
+    };
+    let mut observer = Observer::default();
+    observer.observe(with_aggregate(
+        sig(0, Vec::new()),
+        key.clone(),
+        Some("88"),
+        Some("88"),
+    ));
+    observer.observe(with_aggregate(
+        sig(11_000, Vec::new()),
+        key.clone(),
+        Some("88"),
+        Some("88"),
+    ));
+    observer.observe(with_aggregate(
+        sig(12_000, Vec::new()),
+        key.clone(),
+        Some("0"),
+        Some("0"),
+    ));
+
+    let drafts = observer.observe(with_aggregate(
+        sig(13_000, Vec::new()),
+        key.clone(),
+        Some("88"),
+        Some("88"),
+    ));
+
+    assert!(drafts.iter().any(|draft| matches!(
+        &draft.kind,
+        AnomalyKind::AggregateOscillation {
+            aggregate,
+            from,
+            via,
+            back,
+            ..
+        } if aggregate == &key && from == "88" && via == "0" && back == "88"
+    )));
+}
+
+#[test]
+fn aggregate_spend_signature_quantizes_to_cents() {
+    let frame = extracted_spend_sig(0, 1.234, 1.236);
+    let cockpit = frame
+        .aggregates
+        .iter()
+        .find(|aggregate| aggregate.key == AggregateKey::CockpitTally)
+        .expect("cockpit aggregate");
+    assert_eq!(cockpit.committed.as_deref(), Some("123"));
+    assert_eq!(cockpit.pulled.as_deref(), Some("124"));
+
+    let mut observer = Observer::default();
+    observer.observe(extracted_spend_sig(0, 1.2340, 1.2340));
+    observer.observe(extracted_spend_sig(11_000, 1.2344, 1.2344));
+    let drafts = observer.observe(extracted_spend_sig(12_000, 1.2340, 1.2340));
+    assert!(!kinds(&drafts).contains(&"aggregate_oscillation"));
+}
+
+#[test]
+fn order_flap_reports_membership_stable_reorder() {
+    let mut observer = Observer::default();
+    observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+    observer.observe(sig(
+        11_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    observer.observe(sig(
+        12_000,
+        vec![row("b", "p2", "main"), row("a", "p1", "main")],
+    ));
+
+    let drafts = observer.observe(sig(
+        13_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+
+    assert!(drafts.iter().any(|draft| matches!(
+        &draft.kind,
+        AnomalyKind::OrderFlap {
+            group_key,
+            order,
+            via_order,
+            ..
+        } if group_key == "main"
+            && order == &vec!["a".to_owned(), "b".to_owned()]
+            && via_order == &vec!["b".to_owned(), "a".to_owned()]
+    )));
+}
+
+#[test]
+fn order_flap_stays_quiet_when_visible_membership_changes() {
+    for (name, via) in [
+        (
+            "membership changes under same stable edge",
+            vec![row("a", "p1", "main"), row("c", "p3", "main")],
+        ),
+        (
+            "capped tail rotation changes visible set",
+            vec![row("b", "p2", "main"), row("c", "p3", "main")],
+        ),
+    ] {
+        let mut observer = Observer::default();
+        observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+        observer.observe(sig(
+            11_000,
+            vec![row("a", "p1", "main"), row("b", "p2", "main")],
+        ));
+        observer.observe(sig(12_000, via));
+        let drafts = observer.observe(sig(
+            13_000,
+            vec![row("a", "p1", "main"), row("b", "p2", "main")],
+        ));
+        assert!(!kinds(&drafts).contains(&"order_flap"), "{name}");
     }
 }
 

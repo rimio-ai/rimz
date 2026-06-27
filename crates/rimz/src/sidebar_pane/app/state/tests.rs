@@ -664,6 +664,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
     let held_gate = GateState {
         reject_streak: 2,
         rejecting_since: Some(fixed_time(1_700_000_000)),
+        spend_carry_since: None,
         rule: Some(GateRule::EmptyStampedFrame),
     };
 

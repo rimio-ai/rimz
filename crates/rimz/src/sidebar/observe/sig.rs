@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
-pub use crate::schema::diag::{EventPaneSig, EventsSig, StatusCountSig};
+pub use crate::schema::diag::{AggregateKey, EventPaneSig, EventsSig, StatusCountSig};
 use crate::schema::sidebar_event::SidebarEvent;
 use crate::sidebar::events::EventStore;
 use crate::{SidebarSnapshot, SidebarWorktreeKind};
@@ -13,6 +15,7 @@ pub struct FrameSig {
     pub panes_produced_at_ms: Option<u64>,
     pub rows: Vec<RowSig>,
     pub groups: Vec<GroupSig>,
+    pub aggregates: Vec<AggregateSig>,
     pub own_view: Option<OwnViewSig>,
     pub events: EventsSig,
     pub pulled_rows: usize,
@@ -65,8 +68,16 @@ pub struct GroupSig {
     pub key: String,
     pub kind: SidebarWorktreeKind,
     pub row_ids: Vec<String>,
+    pub render_order: Vec<String>,
     pub hidden_count: usize,
     pub status_counts: Vec<StatusCountSig>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AggregateSig {
+    pub key: AggregateKey,
+    pub committed: Option<String>,
+    pub pulled: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,6 +146,11 @@ pub fn extract_sig(
         .worktree_groups
         .iter()
         .map(|group| {
+            let render_order = group
+                .rows
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>();
             let mut row_ids = group
                 .rows
                 .iter()
@@ -154,6 +170,7 @@ pub fn extract_sig(
                 key: group.key.clone(),
                 kind: group.kind,
                 row_ids,
+                render_order,
                 hidden_count: group.hidden_count,
                 status_counts,
             }
@@ -166,6 +183,7 @@ pub fn extract_sig(
         panes_produced_at_ms: current.panes_produced_at_ms,
         rows,
         groups,
+        aggregates: extract_aggregates(current, last_pulled),
         own_view: current.own_view.as_ref().map(|view| OwnViewSig {
             sibling_count: view.sibling_count,
             active_pane_id: view.active_pane_id.as_ref().map(ToString::to_string),
@@ -185,6 +203,68 @@ pub fn extract_sig(
         gate_reject_streak,
         health_failure_streak,
     }
+}
+
+fn extract_aggregates(
+    current: &SidebarSnapshot,
+    last_pulled: &SidebarSnapshot,
+) -> Vec<AggregateSig> {
+    let pulled_providers = last_pulled
+        .providers
+        .iter()
+        .map(|panel| (panel.kind.as_str(), panel))
+        .collect::<BTreeMap<_, _>>();
+    let mut aggregates = vec![
+        AggregateSig {
+            key: AggregateKey::CockpitTally,
+            committed: spend_cents(current.value_tally.as_ref()),
+            pulled: spend_cents(last_pulled.value_tally.as_ref()),
+        },
+        AggregateSig {
+            key: AggregateKey::WorkspaceTally,
+            committed: spend_cents(current.workspace_value_tally.as_ref()),
+            pulled: spend_cents(last_pulled.workspace_value_tally.as_ref()),
+        },
+    ];
+    for panel in &current.providers {
+        let pulled_panel = pulled_providers.get(panel.kind.as_str()).copied();
+        aggregates.push(AggregateSig {
+            key: AggregateKey::ProviderSpend {
+                kind: panel.kind.clone(),
+            },
+            committed: spend_cents(panel.spending.as_ref()),
+            pulled: pulled_panel.and_then(|panel| spend_cents(panel.spending.as_ref())),
+        });
+        let pulled_windows = pulled_panel
+            .map(|panel| {
+                panel
+                    .windows
+                    .iter()
+                    .map(|window| (window.duration_mins, window.used_percentage))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        for window in &panel.windows {
+            aggregates.push(AggregateSig {
+                key: AggregateKey::ProviderMana {
+                    kind: panel.kind.clone(),
+                    duration_mins: window.duration_mins,
+                },
+                committed: window.used_percentage.map(|pct| pct.to_string()),
+                pulled: pulled_windows
+                    .get(&window.duration_mins)
+                    .copied()
+                    .flatten()
+                    .map(|pct| pct.to_string()),
+            });
+        }
+    }
+    aggregates.sort_by_key(|aggregate| aggregate.key.identity());
+    aggregates
+}
+
+fn spend_cents(tally: Option<&crate::SpendTally>) -> Option<String> {
+    tally.map(|tally| format!("{}", (tally.year.usd * 100.0).round() as i64))
 }
 
 impl RosterSig {

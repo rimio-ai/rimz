@@ -3,6 +3,8 @@
 //! Diagnostics are evidence, not correctness input. Records are anomaly-only
 //! JSONL entries under the workspace state directory.
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{AgentKind, AgentSessionId, PaneId, SidebarInstanceId, ViewId, WorkspaceId};
@@ -450,6 +452,39 @@ pub struct EventPaneSig {
     pub sent_at_ms: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "aggregate", rename_all = "snake_case")]
+pub enum AggregateKey {
+    CockpitTally,
+    WorkspaceTally,
+    ProviderSpend {
+        kind: String,
+    },
+    ProviderMana {
+        kind: String,
+        duration_mins: Option<u32>,
+    },
+}
+
+impl AggregateKey {
+    pub fn identity(&self) -> String {
+        match self {
+            Self::CockpitTally => "cockpit_tally".to_owned(),
+            Self::WorkspaceTally => "workspace_tally".to_owned(),
+            Self::ProviderSpend { kind } => format!("provider_spend:{kind}"),
+            Self::ProviderMana {
+                kind,
+                duration_mins,
+            } => {
+                let duration = duration_mins
+                    .map(|mins| mins.to_string())
+                    .unwrap_or_else(|| "unknown".to_owned());
+                format!("provider_mana:{kind}:{duration}")
+            }
+        }
+    }
+}
+
 /// What the frame-stream observer judged anomalous; the detectors live in
 /// [`crate::sidebar::observe`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -479,6 +514,20 @@ pub enum AnomalyKind {
         field: WatchedField,
         from: String,
         via: String,
+        span_ms: u64,
+    },
+    AggregateOscillation {
+        aggregate: AggregateKey,
+        from: String,
+        via: String,
+        back: String,
+        span_ms: u64,
+        pulled_via: Option<String>,
+    },
+    OrderFlap {
+        group_key: String,
+        order: Vec<String>,
+        via_order: Vec<String>,
         span_ms: u64,
     },
     StatusChurn {
@@ -536,6 +585,8 @@ impl AnomalyKind {
             Self::RowPresenceFlap { .. } => "row_presence_flap",
             Self::ShortLivedRow { .. } => "short_lived_row",
             Self::ValueOscillation { .. } => "value_oscillation",
+            Self::AggregateOscillation { .. } => "aggregate_oscillation",
+            Self::OrderFlap { .. } => "order_flap",
             Self::StatusChurn { .. } => "status_churn",
             Self::DuplicateRowId { .. } => "duplicate_row_id",
             Self::DuplicatePaneRows { .. } => "duplicate_pane_rows",
@@ -552,7 +603,7 @@ impl AnomalyKind {
 
     /// The row/pane/group identity an anomaly is about, for rate-limit
     /// identity; detectors with whole-frame scope have no subject.
-    pub fn subject(&self) -> Option<&str> {
+    pub fn subject(&self) -> Option<Cow<'_, str>> {
         match self {
             Self::RowPresenceFlap { row_id, .. }
             | Self::ShortLivedRow { row_id, .. }
@@ -560,12 +611,15 @@ impl AnomalyKind {
             | Self::StatusChurn { row_id, .. }
             | Self::DuplicateRowId { row_id, .. }
             | Self::RowPaneMissingFromFrame { row_id, .. }
-            | Self::DeadPid { row_id, .. } => Some(row_id),
-            Self::DuplicatePaneRows { pane_id, .. } => Some(pane_id),
-            Self::StatusCountMismatch { group_key, .. } => Some(group_key),
-            Self::OwnViewIncoherent { active_pane_id, .. } => Some(active_pane_id),
-            Self::SubagentTopLevelLeak { agent_id } => Some(agent_id),
-            Self::SubagentDoubleRender { id } => Some(id),
+            | Self::DeadPid { row_id, .. } => Some(Cow::Borrowed(row_id)),
+            Self::DuplicatePaneRows { pane_id, .. } => Some(Cow::Borrowed(pane_id)),
+            Self::StatusCountMismatch { group_key, .. } | Self::OrderFlap { group_key, .. } => {
+                Some(Cow::Borrowed(group_key))
+            }
+            Self::OwnViewIncoherent { active_pane_id, .. } => Some(Cow::Borrowed(active_pane_id)),
+            Self::SubagentTopLevelLeak { agent_id } => Some(Cow::Borrowed(agent_id)),
+            Self::SubagentDoubleRender { id } => Some(Cow::Borrowed(id)),
+            Self::AggregateOscillation { aggregate, .. } => Some(Cow::Owned(aggregate.identity())),
             Self::RosterFlap { .. }
             | Self::FramelessRows { .. }
             | Self::CardsExceedPanes { .. } => None,

@@ -265,6 +265,14 @@ pub const OBSERVE_ROW_FLAP_WINDOW: Duration = Duration::from_secs(7);
 /// Observer window for exact A→B→A value oscillations.
 pub const OBSERVE_VALUE_OSC_WINDOW: Duration = Duration::from_secs(5);
 
+/// Observer window for dashboard aggregate A→B→A oscillations. Spend cache
+/// refills can lag one producer walk tick, so this is wider than per-row
+/// value oscillation.
+pub const OBSERVE_AGGREGATE_OSC_WINDOW: Duration = Duration::from_secs(12);
+
+/// Observer window for rendered row order A→B→A flaps inside one stable group.
+pub const OBSERVE_ORDER_FLAP_WINDOW: Duration = Duration::from_secs(7);
+
 /// Observer window for sustained status transition churn.
 pub const OBSERVE_STATUS_CHURN_WINDOW: Duration = Duration::from_secs(30);
 

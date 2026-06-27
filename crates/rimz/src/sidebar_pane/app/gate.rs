@@ -27,6 +27,7 @@ use crate::sidebar::timing::{ACCEPT_REGRESSION_AFTER, ACCEPT_REGRESSION_AFTER_RE
 pub struct GateState {
     pub reject_streak: u32,
     pub rejecting_since: Option<Timestamp>,
+    pub spend_carry_since: Option<Timestamp>,
     pub rule: Option<GateRule>,
 }
 
@@ -170,13 +171,85 @@ pub(super) fn apply_gate(
             let next = GateState {
                 reject_streak: gate.reject_streak.saturating_add(1),
                 rejecting_since: gate.rejecting_since.or(Some(now)),
+                spend_carry_since: gate.spend_carry_since,
                 rule: Some(rule),
             };
             (state, next, true, false)
         }
-        CommitDecision::AcceptViaEscapeHatch => (state, GateState::default(), false, true),
-        CommitDecision::Accept => (state, GateState::default(), false, false),
+        CommitDecision::AcceptViaEscapeHatch => {
+            let spend_carry_since =
+                repair_collapsed_spend(prev_good, &mut state.snapshot, gate, now);
+            state.last_snapshot = Some(state.snapshot.clone());
+            (
+                state,
+                GateState {
+                    spend_carry_since,
+                    ..GateState::default()
+                },
+                false,
+                true,
+            )
+        }
+        CommitDecision::Accept => {
+            let spend_carry_since =
+                repair_collapsed_spend(prev_good, &mut state.snapshot, gate, now);
+            state.last_snapshot = Some(state.snapshot.clone());
+            (
+                state,
+                GateState {
+                    spend_carry_since,
+                    ..GateState::default()
+                },
+                false,
+                false,
+            )
+        }
     }
+}
+
+fn repair_collapsed_spend(
+    prev_good: &SidebarSnapshot,
+    incoming: &mut SidebarSnapshot,
+    gate: &GateState,
+    now: Timestamp,
+) -> Option<Timestamp> {
+    if has_nonzero_tally(&incoming.value_tally) {
+        return None;
+    }
+    if !has_nonzero_tally(&prev_good.value_tally) {
+        return None;
+    }
+    let since = gate.spend_carry_since.unwrap_or(now);
+    if now.duration_since(since).as_secs() >= ACCEPT_REGRESSION_AFTER.as_secs() as i64 {
+        return None;
+    }
+    incoming.value_tally.clone_from(&prev_good.value_tally);
+    incoming
+        .workspace_value_tally
+        .clone_from(&prev_good.workspace_value_tally);
+    incoming
+        .today_spend_live_usd
+        .clone_from(&prev_good.today_spend_live_usd);
+    let prior_spending = prev_good
+        .providers
+        .iter()
+        .filter_map(|panel| {
+            panel
+                .spending
+                .as_ref()
+                .map(|spending| (&panel.kind, spending))
+        })
+        .collect::<HashMap<_, _>>();
+    for panel in &mut incoming.providers {
+        if let Some(spending) = prior_spending.get(&panel.kind) {
+            panel.spending = Some((*spending).clone());
+        }
+    }
+    Some(since)
+}
+
+fn has_nonzero_tally(tally: &Option<crate::SpendTally>) -> bool {
+    tally.as_ref().is_some_and(|tally| !tally.is_zero())
 }
 
 #[cfg(test)]

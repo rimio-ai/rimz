@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::sidebar::timing::{
-    OBSERVE_ROSTER_FLAP_WINDOW, OBSERVE_ROW_FLAP_WINDOW, OBSERVE_STATUS_CHURN_WINDOW,
-    OBSERVE_VALUE_OSC_WINDOW, OBSERVE_WARMUP,
+    OBSERVE_AGGREGATE_OSC_WINDOW, OBSERVE_ORDER_FLAP_WINDOW, OBSERVE_ROSTER_FLAP_WINDOW,
+    OBSERVE_ROW_FLAP_WINDOW, OBSERVE_STATUS_CHURN_WINDOW, OBSERVE_VALUE_OSC_WINDOW, OBSERVE_WARMUP,
 };
 
 use super::sig::{FrameSig, RosterRowSig, RosterSig, RowSig, StatusCountSig};
@@ -15,6 +15,8 @@ pub struct Observer {
     roster_empty: Option<RosterEmpty>,
     presence: BTreeMap<String, RowPresence>,
     values: BTreeMap<(String, WatchedField), ValueRing>,
+    aggregates: BTreeMap<String, AggregateRing>,
+    orders: BTreeMap<String, ValueRing>,
     last_status: BTreeMap<String, String>,
     status_transitions: BTreeMap<String, VecDeque<u64>>,
     last_roster_rows: Vec<RosterRowSig>,
@@ -39,9 +41,12 @@ impl Observer {
             self.detect_presence(&sig, &mut drafts);
             self.detect_values(&sig, &mut drafts);
             self.detect_status_churn(&sig, &mut drafts);
+            self.detect_aggregates(&sig, &mut drafts);
+            self.detect_order_flap(&sig, &mut drafts);
         } else {
             self.reset_transient_family_a_edges(&sig);
         }
+        self.prune_frame_scoped_detector_state(&sig);
 
         self.prev = Some(sig);
         if let Some(first) = drafts.first_mut() {
@@ -483,6 +488,77 @@ impl Observer {
         }
     }
 
+    fn detect_aggregates(&mut self, sig: &FrameSig, drafts: &mut Vec<AnomalyDraft>) {
+        let window = millis(OBSERVE_AGGREGATE_OSC_WINDOW);
+        for aggregate in &sig.aggregates {
+            let identity = aggregate.key.identity();
+            let ring = self.aggregates.entry(identity).or_default();
+            if let Some(last) = ring.samples.back()
+                && last.committed == aggregate.committed
+            {
+                continue;
+            }
+            ring.samples.push_back(AggregateSample {
+                at_ms: sig.at_ms,
+                committed: aggregate.committed.clone(),
+                pulled: aggregate.pulled.clone(),
+            });
+            while ring.samples.len() > 3 {
+                ring.samples.pop_front();
+            }
+            let Some((from, via, back)) = ring.oscillation(window) else {
+                continue;
+            };
+            drafts.push(AnomalyDraft::from_sig(
+                sig,
+                AnomalyKind::AggregateOscillation {
+                    aggregate: aggregate.key.clone(),
+                    from: aggregate_label(&from.committed),
+                    via: aggregate_label(&via.committed),
+                    back: aggregate_label(&back.committed),
+                    span_ms: back.at_ms.saturating_sub(from.at_ms),
+                    pulled_via: Some(aggregate_label(&via.pulled)),
+                },
+                Some(window),
+            ));
+        }
+    }
+
+    fn detect_order_flap(&mut self, sig: &FrameSig, drafts: &mut Vec<AnomalyDraft>) {
+        let window = millis(OBSERVE_ORDER_FLAP_WINDOW);
+        for group in &sig.groups {
+            let order = serialize_order(&group.render_order);
+            let ring = self.orders.entry(group.key.clone()).or_default();
+            if let Some((_, last)) = ring.samples.back()
+                && last.as_deref() == Some(order.as_str())
+            {
+                continue;
+            }
+            ring.samples.push_back((sig.at_ms, Some(order)));
+            while ring.samples.len() > 3 {
+                ring.samples.pop_front();
+            }
+            let Some((from, via, back)) = ring.oscillation(window) else {
+                continue;
+            };
+            let order = deserialize_order(&from.1);
+            let via_order = deserialize_order(&via.1);
+            if order_set(&order) != order_set(&via_order) {
+                continue;
+            }
+            drafts.push(AnomalyDraft::from_sig(
+                sig,
+                AnomalyKind::OrderFlap {
+                    group_key: group.key.clone(),
+                    order,
+                    via_order,
+                    span_ms: back.0.saturating_sub(from.0),
+                },
+                Some(window),
+            ));
+        }
+    }
+
     fn reset_transient_family_a_edges(&mut self, sig: &FrameSig) {
         self.roster_empty = None;
         for row in &sig.rows {
@@ -500,6 +576,23 @@ impl Observer {
                     short_lived_emitted: false,
                 });
         }
+    }
+
+    fn prune_frame_scoped_detector_state(&mut self, sig: &FrameSig) {
+        let aggregates = sig
+            .aggregates
+            .iter()
+            .map(|aggregate| aggregate.key.identity())
+            .collect::<BTreeSet<_>>();
+        self.aggregates
+            .retain(|identity, _| aggregates.contains(identity));
+        let groups = sig
+            .groups
+            .iter()
+            .map(|group| group.key.as_str())
+            .collect::<BTreeSet<_>>();
+        self.orders
+            .retain(|group_key, _| groups.contains(group_key.as_str()));
     }
 }
 
@@ -527,6 +620,18 @@ struct ValueRing {
     samples: VecDeque<(u64, Option<String>)>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct AggregateRing {
+    samples: VecDeque<AggregateSample>,
+}
+
+#[derive(Clone, Debug)]
+struct AggregateSample {
+    at_ms: u64,
+    committed: Option<String>,
+    pulled: Option<String>,
+}
+
 type ValueSample = (u64, Option<String>);
 type Oscillation<'a> = (&'a ValueSample, &'a ValueSample, &'a ValueSample);
 
@@ -552,8 +657,61 @@ impl ValueRing {
     }
 }
 
+type AggregateOscillation<'a> = (
+    &'a AggregateSample,
+    &'a AggregateSample,
+    &'a AggregateSample,
+);
+
+impl AggregateRing {
+    fn oscillation(&self, window_ms: u64) -> Option<AggregateOscillation<'_>> {
+        if self.samples.len() != 3 {
+            return None;
+        }
+        let from = &self.samples[0];
+        let via = &self.samples[1];
+        let back = &self.samples[2];
+        if back.at_ms.saturating_sub(from.at_ms) > window_ms {
+            return None;
+        }
+        match (&from.committed, &via.committed, &back.committed) {
+            (Some(from), via, Some(back))
+                if from == back && via.as_deref() != Some(from.as_str()) =>
+            {
+                Some((&self.samples[0], &self.samples[1], &self.samples[2]))
+            }
+            _ => None,
+        }
+    }
+}
+
 fn value_label(value: &Option<String>) -> String {
     value.clone().unwrap_or_else(|| "<none>".to_owned())
+}
+
+fn aggregate_label(value: &Option<String>) -> String {
+    value.clone().unwrap_or_else(|| "0".to_owned())
+}
+
+fn serialize_order(order: &[String]) -> String {
+    order.join("\u{1f}")
+}
+
+fn deserialize_order(value: &Option<String>) -> Vec<String> {
+    value
+        .as_deref()
+        .map(|value| {
+            if value.is_empty() {
+                Vec::new()
+            } else {
+                value.split('\u{1f}').map(str::to_owned).collect()
+            }
+        })
+        .unwrap_or_default()
+}
+
+fn order_set(order: &[String]) -> BTreeSet<&str> {
+    order.iter().map(String::as_str).collect()
 }
 
 fn pane_closed_covers_rows(rows: &[RowSig], sig: &FrameSig) -> bool {
