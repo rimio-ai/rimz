@@ -583,3 +583,21 @@ fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
         None,
     );
 }
+
+#[test]
+fn focus_stranded_skips_when_client_focus_is_ambiguous() {
+    let (mut snapshot, sidebar, _first_work, second_work) = focus_fixture();
+    snapshot.viewed_panes = vec![
+        sidebar.clone(),
+        PaneId::from_parts(MuxName::Zellij, "terminal_42"),
+    ];
+    let ui = UiState {
+        baseline_pane: Some(second_work),
+        ..UiState::default()
+    };
+
+    assert_eq!(
+        focus_stranded_target(&snapshot, &ui, &sidebar, Some(&sidebar), 1_000, 1_050),
+        None,
+    );
+}

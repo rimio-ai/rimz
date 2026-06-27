@@ -77,7 +77,7 @@ The receive path drops an event for another workspace or session before it reach
 | `PaneClosed` | `pane_id` | Delete every row bound to the pane (highest precedence) | Zellij plugin, tmux control-mode watch |
 | `CommandChanged` | `pane_id`, `command` | Overlay the command until a pull verifies the pane's row shape | Zellij plugin, tmux watch |
 | `FocusChanged` | focused / unfocused pane ids | Mirror focus bits onto every row; retarget the own-view baseline only onto one of the view's own working panes | Zellij plugin, tmux watch, renderer jumps |
-| `FocusStranded` | sidebar `pane_id` | Renderer action only: the matching sidebar pane refocuses its held or own-view working sibling | Zellij plugin |
+| `FocusStranded` | sidebar `pane_id` | Renderer action only: the matching sidebar pane refocuses its held or own-view working sibling; when attached clients are viewing distinct panes, the renderer leaves focus alone because `focus-pane-id` is session-global | Zellij plugin |
 | `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull; never admits a card on its own | Zellij plugin, tmux watch |
 | `PanesChanged` | none | Nudge a producer pull — topology moved, identity unknown | tmux watch fallback, the Zellij manifest fold |
 | `LedgerDelta` | optional event method and lifecycle signal | Refetch the rollup; a session start/end also requests fresh panes | ledger and context-sidecar writers |

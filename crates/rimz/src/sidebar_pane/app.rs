@@ -606,6 +606,13 @@ fn focus_stranded_target(
     if now_ms.saturating_sub(sent_at_ms) > duration_millis(FOCUS_STRANDED_EVENT_TTL) {
         return None;
     }
+    // `focus-pane-id` is session-global: with clients viewing distinct panes it
+    // would yank a client looking elsewhere, switching tabs when the target
+    // lives in another tab. Leave the sidebar stranded while focus ownership is
+    // ambiguous.
+    if snapshot.viewed_panes.len() > 1 {
+        return None;
+    }
     let view = snapshot.own_view.as_ref()?;
     if let Some(baseline) = ui.baseline_pane.as_ref()
         && view.working_pane_ids.contains(baseline)
