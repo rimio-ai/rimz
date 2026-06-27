@@ -24,8 +24,9 @@ pub(super) fn self_close_decision(
 
 /// A resize that grows the pane width is the necessary precondition for the
 /// self-close full-width flash: the mux handed the sidebar a freed sibling's
-/// space. An unknown previous width (the first resize) counts as a grow so the
-/// cautious held path is taken.
+/// space. An unknown previous width (the first resize) counts as a grow; the
+/// loop decides whether a prior sibling observation makes that grow eligible
+/// for the cautious held path.
 pub(super) fn resize_grew(prev: Option<u16>, new: u16) -> bool {
     prev.is_none_or(|p| new > p)
 }

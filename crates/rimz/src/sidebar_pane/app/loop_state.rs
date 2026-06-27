@@ -282,9 +282,11 @@ impl LoopState {
         anim_start: Instant,
     ) -> Result<()> {
         self.refresh_pet_render_caps(config.mux, &config.session_name);
-        // A grow is the mux handing the sidebar a freed sibling's space — the
-        // precondition for the self-close full-width flash. Hold the paint until
-        // the next fresh pane-frame fold carries the sibling count.
+        // Once a sibling has been seen, a grow is the mux handing the sidebar
+        // freed sibling space — the precondition for the self-close full-width
+        // flash. Hold the paint until the next fresh pane-frame fold carries
+        // the sibling count. Before that first sibling observation, the grow is
+        // startup sizing and the first frame should paint immediately.
         let grew = match terminal.size().map(|s| s.width).ok() {
             Some(width) => {
                 let grew = resize_grew(self.prev_width, width);
@@ -293,12 +295,15 @@ impl LoopState {
             }
             None => false,
         };
-        if grew {
+        if grew && self.self_close.seen_sibling {
             self.dirty = true;
             self.paint_hold
                 .engage(Instant::now(), crate::sidebar::cache::unix_now_ms());
             self.clear_pixel(terminal);
         } else {
+            if grew {
+                self.clear_pixel(terminal);
+            }
             if apply_input(
                 Wakeup::Resize,
                 &mut self.ui,
@@ -600,7 +605,10 @@ impl LoopState {
     }
 
     fn arm_paint_hold_on_grow(&mut self, width: u16, now: Instant) -> bool {
-        if !self.paint_hold.is_engaged() && resize_grew(self.prev_width, width) {
+        if !self.paint_hold.is_engaged()
+            && self.self_close.seen_sibling
+            && resize_grew(self.prev_width, width)
+        {
             self.paint_hold
                 .engage(now, crate::sidebar::cache::unix_now_ms());
             return true;
@@ -890,6 +898,7 @@ mod tests {
         let ws = workspace();
         let (_dir, mut state) = loop_state(&ws);
         state.prev_width = Some(60);
+        state.self_close.seen_sibling = true;
 
         assert!(state.arm_paint_hold_on_grow(120, Instant::now()));
         assert!(state.paint_hold.is_engaged(), "grow arms the paint hold");
@@ -905,6 +914,7 @@ mod tests {
         let ws = workspace();
         let (_dir, mut state) = loop_state(&ws);
         state.prev_width = Some(120);
+        state.self_close.seen_sibling = true;
 
         assert!(!state.arm_paint_hold_on_grow(120, Instant::now()));
         assert!(
@@ -915,6 +925,19 @@ mod tests {
         assert!(
             !state.paint_hold.is_engaged(),
             "shrink paint does not arm the hold"
+        );
+    }
+
+    #[test]
+    fn arm_paint_hold_does_not_engage_before_a_sibling_is_seen() {
+        let ws = workspace();
+        let (_dir, mut state) = loop_state(&ws);
+        state.prev_width = Some(60);
+
+        assert!(!state.arm_paint_hold_on_grow(120, Instant::now()));
+        assert!(
+            !state.paint_hold.is_engaged(),
+            "startup grow paints immediately before any sibling has been observed"
         );
     }
 
