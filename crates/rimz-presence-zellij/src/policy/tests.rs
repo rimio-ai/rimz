@@ -27,6 +27,14 @@ fn tabs_by_index(entries: Vec<(usize, Vec<PaneFields>)>) -> BTreeMap<usize, Vec<
     entries.into_iter().collect()
 }
 
+fn raw_hash_from_tabs(tabs: &BTreeMap<usize, Vec<PaneFields>>) -> u64 {
+    raw_stable_hash(tabs.iter().flat_map(|(tab, panes)| {
+        panes
+            .iter()
+            .map(move |pane| (*tab, RawStablePaneFields::from_projected(pane)))
+    }))
+}
+
 fn pane_in_tab(id: u32, tab: usize) -> PaneFields {
     PaneFields {
         tab_position: tab as u64,
@@ -122,6 +130,34 @@ fn excluded_fields_and_navigation_hold_the_hash() {
         base,
         manifest_hash(&tabs(vec![foreground]), Some(0)),
         "pane_command is excluded by projection",
+    );
+}
+
+#[test]
+fn raw_stable_hash_ignores_titles_but_tracks_stable_fields() {
+    let base = tabs(vec![pane(1)]);
+    let mut renamed = pane(1);
+    renamed.title = "line-mutated agent title".to_owned();
+    assert_eq!(
+        raw_hash_from_tabs(&base),
+        raw_hash_from_tabs(&tabs(vec![renamed])),
+        "title-only PaneUpdate events must stay on the cheap path",
+    );
+
+    let mut focused = pane(1);
+    focused.is_focused = true;
+    assert_ne!(
+        raw_hash_from_tabs(&base),
+        raw_hash_from_tabs(&tabs(vec![focused])),
+        "focus changes are stable pane state",
+    );
+
+    let mut resized = pane(1);
+    resized.pane_columns = Some(120);
+    assert_ne!(
+        raw_hash_from_tabs(&base),
+        raw_hash_from_tabs(&tabs(vec![resized])),
+        "geometry changes are stable pane state",
     );
 }
 
@@ -967,6 +1003,46 @@ fn optimistic_signal_skips_immediate_poke_but_still_settles() {
     assert_eq!(policy.due(10), Vec::<Poke>::new());
     assert_eq!(policy.next_wake_at(), 10 + SETTLE_POKE_MS);
     assert_eq!(policy.due(10 + SETTLE_POKE_MS), vec![Poke::Changed]);
+}
+
+#[test]
+fn same_pane_optimistic_pokes_are_floored_and_settle() {
+    let mut policy = PokePolicy::new(0);
+
+    assert!(policy.optimistic_pane_poke_allowed(7, 10));
+    policy.accept_optimistic_pane_poke(7, 10);
+    assert_eq!(
+        policy.due(10),
+        Vec::<Poke>::new(),
+        "the immediate command-changed poke is emitted outside the policy",
+    );
+
+    assert!(!policy.optimistic_pane_poke_allowed(7, 50));
+    policy.on_signal(50);
+    assert_eq!(policy.due(10 + POKE_FLOOR_MS - 1), Vec::<Poke>::new());
+    assert_eq!(
+        policy.due(10 + POKE_FLOOR_MS),
+        vec![Poke::Changed],
+        "same-pane duplicates collapse into one floored verifying pull",
+    );
+    assert_eq!(
+        policy.due(10 + POKE_FLOOR_MS + SETTLE_POKE_MS),
+        vec![Poke::Changed],
+        "the floored pull keeps the normal settled read",
+    );
+}
+
+#[test]
+fn optimistic_poke_floor_is_per_pane() {
+    let mut policy = PokePolicy::new(0);
+
+    policy.accept_optimistic_pane_poke(7, 10);
+
+    assert!(
+        policy.optimistic_pane_poke_allowed(8, 50),
+        "one pane's command churn does not throttle another pane's first change",
+    );
+    assert!(!policy.optimistic_pane_poke_allowed(7, 50));
 }
 
 #[test]

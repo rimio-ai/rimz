@@ -150,6 +150,46 @@ pub struct PaneFields {
     pub terminal_command: Option<String>,
 }
 
+/// Stable pane fields folded before the wasm shell allocates projected
+/// [`PaneFields`]. This mirrors [`manifest_hash`]'s per-pane field set:
+/// title and foreground `pane_command` stay out because they churn without
+/// changing the sidebar roster.
+#[derive(Debug, Clone, Copy)]
+pub struct RawStablePaneFields<'a> {
+    pub id: u32,
+    pub is_plugin: bool,
+    pub is_focused: bool,
+    pub is_suppressed: bool,
+    pub is_floating: bool,
+    pub exited: bool,
+    pub is_held: bool,
+    pub tab_position: u64,
+    pub tab_name: Option<&'a str>,
+    pub pane_x: Option<u64>,
+    pub pane_columns: Option<u64>,
+    pub terminal_command: Option<&'a str>,
+}
+
+impl<'a> RawStablePaneFields<'a> {
+    #[cfg(test)]
+    fn from_projected(pane: &'a PaneFields) -> Self {
+        Self {
+            id: pane.id,
+            is_plugin: pane.is_plugin,
+            is_focused: pane.is_focused,
+            is_suppressed: pane.is_suppressed,
+            is_floating: pane.is_floating,
+            exited: pane.exited,
+            is_held: pane.is_held,
+            tab_position: pane.tab_position,
+            tab_name: pane.tab_name.as_deref(),
+            pane_x: pane.pane_x,
+            pane_columns: pane.pane_columns,
+            terminal_command: pane.terminal_command.as_deref(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FocusPatch {
     pub id: u32,
@@ -259,21 +299,57 @@ pub fn manifest_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>, _active_tab: Optio
     for (tab, panes) in tabs {
         tab.hash(&mut hasher);
         for pane in panes {
-            pane.id.hash(&mut hasher);
-            pane.is_plugin.hash(&mut hasher);
-            pane.is_focused.hash(&mut hasher);
-            pane.is_suppressed.hash(&mut hasher);
-            pane.is_floating.hash(&mut hasher);
-            pane.exited.hash(&mut hasher);
-            pane.is_held.hash(&mut hasher);
-            pane.tab_position.hash(&mut hasher);
-            pane.tab_name.hash(&mut hasher);
-            pane.pane_x.hash(&mut hasher);
-            pane.pane_columns.hash(&mut hasher);
-            pane.terminal_command.hash(&mut hasher);
+            hash_stable_pane_fields(
+                &mut hasher,
+                &RawStablePaneFields {
+                    id: pane.id,
+                    is_plugin: pane.is_plugin,
+                    is_focused: pane.is_focused,
+                    is_suppressed: pane.is_suppressed,
+                    is_floating: pane.is_floating,
+                    exited: pane.exited,
+                    is_held: pane.is_held,
+                    tab_position: pane.tab_position,
+                    tab_name: pane.tab_name.as_deref(),
+                    pane_x: pane.pane_x,
+                    pane_columns: pane.pane_columns,
+                    terminal_command: pane.terminal_command.as_deref(),
+                },
+            );
         }
     }
     hasher.finish()
+}
+
+/// Fold raw stable pane fields without allocating projected [`PaneFields`].
+/// The caller may feed raw host order; an order-only difference costs one full
+/// fold, while a title-only event stays cheap because title is absent from
+/// [`RawStablePaneFields`].
+pub fn raw_stable_hash<'a, I>(panes: I) -> u64
+where
+    I: IntoIterator<Item = (usize, RawStablePaneFields<'a>)>,
+{
+    let mut hasher = std::hash::DefaultHasher::new();
+    for (tab, pane) in panes {
+        tab.hash(&mut hasher);
+        hash_stable_pane_fields(&mut hasher, &pane);
+    }
+    hasher.finish()
+}
+
+fn hash_stable_pane_fields(hasher: &mut impl Hasher, pane: &RawStablePaneFields<'_>) {
+    pane.id.hash(hasher);
+    pane.is_plugin.hash(hasher);
+    pane.is_focused.hash(hasher);
+    pane.is_suppressed.hash(hasher);
+    pane.is_floating.hash(hasher);
+    pane.exited.hash(hasher);
+    pane.is_held.hash(hasher);
+    pane.tab_position.hash(hasher);
+    pane.tab_name.hash(hasher);
+    pane.pane_x.hash(hasher);
+    pane.pane_columns.hash(hasher);
+    pane.terminal_command.hash(hasher);
 }
 
 /// The focus transitions to publish when the only sidebar-relevant manifest
@@ -844,6 +920,7 @@ pub enum Poke {
 #[derive(Debug)]
 pub struct PokePolicy {
     last_hash: Option<u64>,
+    last_optimistic_poke_by_pane: BTreeMap<u32, u64>,
     /// First change of the current duplicate burst. The first change pokes
     /// immediately; a later change inside [`POKE_FLOOR_MS`] is held until the
     /// floor lifts and then pokes once for the burst.
@@ -859,6 +936,7 @@ impl PokePolicy {
     pub fn new(now_ms: u64) -> Self {
         Self {
             last_hash: None,
+            last_optimistic_poke_by_pane: BTreeMap::new(),
             pending_since: None,
             last_changed_poke: None,
             settle_due_at: None,
@@ -901,6 +979,23 @@ impl PokePolicy {
         self.pending_since = None;
         self.last_changed_poke = Some(now_ms);
         self.settle_due_at = Some(now_ms + SETTLE_POKE_MS);
+    }
+
+    /// Whether a same-pane optimistic command patch may fork the host now.
+    /// Repeated command churn for one pane uses the normal floored change path;
+    /// distinct panes keep their own fast lane so a burst in one pane does not
+    /// hide another pane's first foreground change.
+    pub fn optimistic_pane_poke_allowed(&self, pane_id: u32, now_ms: u64) -> bool {
+        self.last_optimistic_poke_by_pane
+            .get(&pane_id)
+            .is_none_or(|last| now_ms >= last.saturating_add(POKE_FLOOR_MS))
+    }
+
+    /// Record an emitted same-pane optimistic command patch and arm its settled
+    /// verification read.
+    pub fn accept_optimistic_pane_poke(&mut self, pane_id: u32, now_ms: u64) {
+        self.last_optimistic_poke_by_pane.insert(pane_id, now_ms);
+        self.on_optimistic_signal(now_ms);
     }
 
     fn queue_change(&mut self, now_ms: u64) {
