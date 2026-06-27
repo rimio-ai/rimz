@@ -1,0 +1,80 @@
+//! Durable Zellij presence-plugin telemetry log.
+//!
+//! The presence plugin runs inside the Zellij server process, so samples written
+//! by its keepalive distinguish plugin WASM linear-memory growth from
+//! Zellij-native RSS growth. The log is diagnostic state: append-only within a
+//! size cap, never read by correctness code.
+
+use std::path::{Path, PathBuf};
+
+use serde::Serialize;
+
+const PLUGIN_PRESENCE_LOG_NAME: &str = "plugin-presence.log.jsonl";
+const PLUGIN_PRESENCE_LOG_MAX_BYTES: u64 = 1_048_576;
+const WASM_PAGE_BYTES: u64 = 65_536;
+
+#[derive(Serialize)]
+pub struct PluginPresenceSample {
+    pub at_ms: u64,
+    pub session_name: Option<String>,
+    pub pages: u64,
+    pub bytes: u64,
+    pub uptime_ms: u64,
+    pub commands: u64,
+    pub zellij_version: Option<String>,
+}
+
+impl PluginPresenceSample {
+    pub fn new(
+        at_ms: u64,
+        session_name: Option<String>,
+        pages: u64,
+        uptime_ms: u64,
+        commands: u64,
+        zellij_version: Option<String>,
+    ) -> Self {
+        Self {
+            at_ms,
+            session_name,
+            pages,
+            bytes: pages.saturating_mul(WASM_PAGE_BYTES),
+            uptime_ms,
+            commands,
+            zellij_version,
+        }
+    }
+}
+
+pub fn path(state_root: &Path) -> PathBuf {
+    state_root.join(PLUGIN_PRESENCE_LOG_NAME)
+}
+
+pub fn append<T: Serialize>(state_root: &Path, record: &T) {
+    let path = path(state_root);
+    if let Err(err) =
+        crate::rotating_log::append_rotating_jsonl(&path, PLUGIN_PRESENCE_LOG_MAX_BYTES, record)
+    {
+        tracing::debug!(path = %path.display(), error = %err, "presence plugin telemetry append failed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_writes_jsonl_record() {
+        let dir = tempfile::tempdir().unwrap();
+        append(dir.path(), &serde_json::json!({ "pages": 42 }));
+
+        let bytes = std::fs::read_to_string(path(dir.path())).unwrap();
+        assert_eq!(bytes, "{\"pages\":42}\n");
+    }
+
+    #[test]
+    fn sample_derives_bytes_from_wasm_pages() {
+        let sample = PluginPresenceSample::new(1, None, 42, 1_000, 5, None);
+
+        assert_eq!(sample.bytes, 42 * WASM_PAGE_BYTES);
+    }
+}

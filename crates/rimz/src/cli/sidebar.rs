@@ -131,6 +131,14 @@ enum SidebarSubcmd {
         unfocused_pane_ids: Vec<String>,
         #[arg(long = "topology", hide = true)]
         topology: Option<String>,
+        #[arg(long, hide = true)]
+        plugin_mem_pages: Option<u64>,
+        #[arg(long, hide = true)]
+        plugin_uptime_ms: Option<u64>,
+        #[arg(long, hide = true)]
+        plugin_commands: Option<u64>,
+        #[arg(long, hide = true)]
+        plugin_zellij_version: Option<String>,
     },
     /// Write a read receipt for a sidebar row. Hidden — test/API machinery.
     #[command(hide = true)]
@@ -285,6 +293,10 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             focused_pane_ids,
             unfocused_pane_ids,
             topology,
+            plugin_mem_pages,
+            plugin_uptime_ms,
+            plugin_commands,
+            plugin_zellij_version,
         } => wake(
             globals,
             WakeCommand {
@@ -296,6 +308,10 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 focused_pane_ids,
                 unfocused_pane_ids,
                 topology,
+                plugin_mem_pages,
+                plugin_uptime_ms,
+                plugin_commands,
+                plugin_zellij_version,
             },
         ),
         SidebarSubcmd::MarkRead { target, worktree } => mark_read(globals, target, worktree),
@@ -697,6 +713,10 @@ struct WakeCommand {
     focused_pane_ids: Vec<String>,
     unfocused_pane_ids: Vec<String>,
     topology: Option<String>,
+    plugin_mem_pages: Option<u64>,
+    plugin_uptime_ms: Option<u64>,
+    plugin_commands: Option<u64>,
+    plugin_zellij_version: Option<String>,
 }
 
 fn wake(globals: &GlobalFlags, command: WakeCommand) -> Result<()> {
@@ -704,8 +724,10 @@ fn wake(globals: &GlobalFlags, command: WakeCommand) -> Result<()> {
         Some(raw) => raw.parse::<WorkspaceId>()?,
         None => WorkspaceResolver::resolve_participant(".", globals.root.clone())?.workspace_id,
     };
-    let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
+    let runtime =
+        RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
     write_presence_stamp(&runtime);
+    write_plugin_presence_sample(&workspace_id, &command)?;
     write_topology_cache(&runtime, command.topology.as_deref());
     let Some(event) = wake_event(
         command.reason,
@@ -717,6 +739,26 @@ fn wake(globals: &GlobalFlags, command: WakeCommand) -> Result<()> {
         return Ok(());
     };
     broadcast_wake_event(&runtime, command.session_name.as_deref(), event);
+    Ok(())
+}
+
+fn write_plugin_presence_sample(workspace_id: &WorkspaceId, command: &WakeCommand) -> Result<()> {
+    let Some(pages) = command.plugin_mem_pages else {
+        return Ok(());
+    };
+    let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
+    let _ = state.ensure_dirs();
+    rimz::plugin_presence_log::append(
+        &state.root,
+        &rimz::plugin_presence_log::PluginPresenceSample::new(
+            rimz::sidebar::cache::unix_now_ms(),
+            command.session_name.clone(),
+            pages,
+            command.plugin_uptime_ms.unwrap_or_default(),
+            command.plugin_commands.unwrap_or_default(),
+            command.plugin_zellij_version.clone(),
+        ),
+    );
     Ok(())
 }
 

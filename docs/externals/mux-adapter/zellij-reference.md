@@ -45,7 +45,7 @@ Events arrive asynchronously with no ordering guarantee. `render` runs after an 
 
 ### Events
 
-Full `Event` catalog as defined in `zellij-utils 0.44.3 src/data.rs` (46 variants). ✓ marks what `rimz-presence-zellij` subscribes to. The permission column is the *event-delivery* gate as documented upstream; an ungated event still requires `subscribe`.
+Full `Event` catalog as defined in `zellij-utils 0.44.3 src/data.rs` (46 variants). ✓ marks what `rimz-presence-zellij` subscribes to. The permission column is the *event-delivery* gate as documented upstream; an ungated event still requires `subscribe`. `RunCommandResult` is subscribed so the plugin drains replies to its `run_command` pokes.
 
 | Event | Payload | Permission | ✓ |
 | --- | --- | --- | :---: |
@@ -63,7 +63,7 @@ Full `Event` catalog as defined in `zellij-utils 0.44.3 src/data.rs` (46 variant
 | `FileSystemCreate` / `FileSystemRead` / `FileSystemUpdate` / `FileSystemDelete` | `Vec<(PathBuf, Option<FileMetadata>)>` | — (after `watch_filesystem()`) | |
 | `PermissionRequestResult` | `PermissionStatus` (`Granted` \| `Denied`) | — | ✓ |
 | `SessionUpdate` | `Vec<SessionInfo>`, `Vec<(String, Duration)>` resurrectable sessions | ReadApplicationState | |
-| `RunCommandResult` | `Option<i32>` exit code, `Vec<u8>` stdout, `Vec<u8>` stderr, `Context` | — (reply to `run_command`) | |
+| `RunCommandResult` | `Option<i32>` exit code, `Vec<u8>` stdout, `Vec<u8>` stderr, `Context` | — (reply to `run_command`) | ✓ |
 | `WebRequestResult` | `u16` status, `BTreeMap` headers, `Vec<u8>` body, `Context` | — (reply to `web_request`) | |
 | `CommandPaneOpened` | `u32` terminal pane id, `Context` | ReadApplicationState | |
 | `CommandPaneExited` | `u32`, `Option<i32>` exit code, `Context` — pane stays open | ReadApplicationState | |

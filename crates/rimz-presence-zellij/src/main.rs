@@ -54,6 +54,8 @@ mod shell {
         /// of events arms one timer, not one per event, and a superseded
         /// timer's late fire never arms a duplicate chain.
         timer_gate: TimerGate,
+        loaded_at_ms: u64,
+        commands_completed: u64,
     }
 
     impl ZellijPlugin for State {
@@ -81,8 +83,10 @@ mod shell {
                 EventType::PaneClosed,
                 EventType::Timer,
                 EventType::PermissionRequestResult,
+                EventType::RunCommandResult,
             ]);
             let now = now_ms();
+            self.loaded_at_ms = now;
             self.policy = Some(PokePolicy::new(now));
             self.rearm(now);
         }
@@ -222,6 +226,10 @@ mod shell {
                 }
                 Event::Timer(_) => {
                     self.timer_gate.on_fire(now);
+                }
+                Event::RunCommandResult(..) => {
+                    self.commands_completed = self.commands_completed.saturating_add(1);
+                    return false;
                 }
                 _ => {}
             }
@@ -364,6 +372,16 @@ mod shell {
             if let Some(workspace_id) = self.workspace_id.as_deref() {
                 argv.push("--workspace-id".to_owned());
                 argv.push(workspace_id.to_owned());
+            }
+            if poke == Poke::Alive {
+                argv.push("--plugin-mem-pages".to_owned());
+                argv.push(wasm_pages().to_string());
+                argv.push("--plugin-uptime-ms".to_owned());
+                argv.push(now.saturating_sub(self.loaded_at_ms).to_string());
+                argv.push("--plugin-commands".to_owned());
+                argv.push(self.commands_completed.to_string());
+                argv.push("--plugin-zellij-version".to_owned());
+                argv.push(get_zellij_version());
             }
             self.append_topology_arg(&mut argv, now);
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
@@ -766,6 +784,10 @@ mod shell {
             .unwrap_or_default()
             .as_millis()
             .min(u128::from(u64::MAX)) as u64
+    }
+
+    fn wasm_pages() -> u64 {
+        core::arch::wasm32::memory_size(0) as u64
     }
 }
 

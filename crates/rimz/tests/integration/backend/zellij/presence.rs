@@ -72,6 +72,16 @@ fn poke_lines(log: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn logged_arg<'a>(line: &'a str, flag: &str) -> Option<&'a str> {
+    let mut args = line.split_whitespace();
+    while let Some(arg) = args.next() {
+        if arg == flag {
+            return args.next();
+        }
+    }
+    None
+}
+
 /// End to end against a live Zellij: the pipe verb loads the presence plugin
 /// headlessly, the seeded grant (the test's scoped cache, never the user's)
 /// covers it, the load-time configuration reaches the plugin, and its first
@@ -127,10 +137,36 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         .expect("pipe load against a live session");
 
     let lines = wait_for_poke_lines(&poke_log, 1);
-    assert_eq!(
-        lines[0], "sidebar wake --reason alive --workspace-id ws_0123456789abcdef01234567",
+    assert!(
+        lines[0]
+            .starts_with("sidebar wake --reason alive --workspace-id ws_0123456789abcdef01234567"),
         "the first poke is the granted plugin's immediate keepalive, with the \
-         load-time configuration threaded through",
+         load-time configuration threaded through: {:?}",
+        lines[0],
+    );
+    assert!(
+        logged_arg(&lines[0], "--plugin-mem-pages")
+            .expect("telemetry carries WASM pages")
+            .parse::<u64>()
+            .expect("pages parse")
+            > 0,
+        "the first poke carries WASM page telemetry: {:?}",
+        lines[0],
+    );
+    logged_arg(&lines[0], "--plugin-uptime-ms")
+        .expect("telemetry carries uptime")
+        .parse::<u64>()
+        .expect("uptime parses");
+    assert_eq!(
+        logged_arg(&lines[0], "--plugin-commands"),
+        Some("0"),
+        "the first poke has not yet completed a run_command reply: {:?}",
+        lines[0],
+    );
+    assert!(
+        logged_arg(&lines[0], "--plugin-zellij-version").is_some_and(|version| !version.is_empty()),
+        "the first poke carries the Zellij version: {:?}",
+        lines[0],
     );
 
     // Converge — `rimz reload`'s upgrade verb — reloads the instance in

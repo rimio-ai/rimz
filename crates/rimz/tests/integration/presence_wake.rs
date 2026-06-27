@@ -148,6 +148,12 @@ impl WakeEnv {
         serde_json::from_slice(&bytes).ok()
     }
 
+    fn plugin_presence_log(&self) -> PathBuf {
+        let state = rimz::StatePaths::under(self.workspace_id.clone(), &self.state_root)
+            .expect("state paths");
+        rimz::plugin_presence_log::path(&state.root)
+    }
+
     /// Seed the shared pane cache with a publishable shell frame produced
     /// `age` ago — fresh under the event-mode TTL, stale under the poll TTL.
     fn seed_pane_cache(&self, age: Duration) {
@@ -459,6 +465,62 @@ fn wake_alive_stamps_without_a_datagram() {
     assert_no_datagram(&recv_eldest, "a keepalive poke");
     let stamp = env.read_stamp().expect("alive writes the stamp");
     assert!(stamp.written_at_ms > 0);
+    env.assert_no_mux_fork();
+}
+
+#[test]
+fn wake_alive_with_plugin_telemetry_records_a_sample() {
+    let env = WakeEnv::new();
+    let output = env.wake_with(
+        "alive",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--plugin-mem-pages",
+            "42",
+            "--plugin-uptime-ms",
+            "1000",
+            "--plugin-commands",
+            "5",
+            "--plugin-zellij-version",
+            "0.44.3",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "wake failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let bytes = std::fs::read_to_string(env.plugin_presence_log()).expect("presence log exists");
+    let lines = bytes.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1);
+    let sample: serde_json::Value = serde_json::from_str(lines[0]).expect("sample is JSON");
+    assert_eq!(sample["session_name"], SESSION_NAME);
+    assert!(sample["at_ms"].as_u64().is_some());
+    assert_eq!(sample["pages"], 42);
+    assert_eq!(sample["bytes"], 42 * 65_536);
+    assert_eq!(sample["uptime_ms"], 1_000);
+    assert_eq!(sample["commands"], 5);
+    assert_eq!(sample["zellij_version"], "0.44.3");
+    env.assert_no_mux_fork();
+}
+
+#[test]
+fn wake_alive_without_telemetry_writes_no_sample() {
+    let env = WakeEnv::new();
+    let output = env.wake("alive", true);
+    assert!(
+        output.status.success(),
+        "wake failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    assert!(
+        !env.plugin_presence_log().exists(),
+        "older plugins that omit telemetry args must not create a presence log"
+    );
     env.assert_no_mux_fork();
 }
 

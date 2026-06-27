@@ -31,6 +31,7 @@ pub mod observability;
 pub mod osc;
 pub mod pane;
 pub mod petname;
+pub mod plugin_presence_log;
 pub mod proc;
 pub mod reload;
 pub mod remote;
