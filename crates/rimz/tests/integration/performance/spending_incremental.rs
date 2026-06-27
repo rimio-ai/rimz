@@ -84,7 +84,6 @@ fn cached_entries(count: usize) -> Vec<CachedEntry> {
             thread_id: Some(format!("thread-{index}")),
             is_sidechain: false,
             model: Some("claude-opus-4-8".to_owned()),
-            origin_path: None,
             rolled: false,
         })
         .collect()
@@ -302,7 +301,6 @@ fn spending_walk_warm_keeps_trailing_windows_fresh() {
                 thread_id: Some("thread-edge".to_owned()),
                 is_sidechain: false,
                 model: Some("claude-opus-4-8".to_owned()),
-                origin_path: None,
                 rolled: false,
             }],
         ),

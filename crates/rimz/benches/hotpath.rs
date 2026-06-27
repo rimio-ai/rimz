@@ -240,7 +240,6 @@ fn spending_fixture(warm: bool) -> SpendingFixture {
                     thread_id: Some(format!("thread-{index}")),
                     is_sidechain: false,
                     model: Some("claude-opus-4-8".to_owned()),
-                    origin_path: None,
                     rolled: false,
                 }
             })
