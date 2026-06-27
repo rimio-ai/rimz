@@ -118,14 +118,12 @@ pub fn run_supervisor(slot: usize, worktree_root: &Path) -> io::Result<ExitStatu
             if let Some(daemon) = load_daemon_config(&config_path) {
                 let next = resolve_slot(&daemon, slot, &rimz_bin, worktree_root);
                 if needs_restart(&current, &next) {
-                    match reload_child(&mut child, &current, &next)? {
+                    match reload_child(&mut child, &next)? {
                         ReloadedChild::Next(next_child) => {
                             child = next_child;
                             current = next;
                         }
-                        ReloadedChild::Current(current_child) => {
-                            child = current_child;
-                        }
+                        ReloadedChild::Current => {}
                     }
                 }
             }
@@ -182,34 +180,26 @@ fn needs_restart(current: &ResolvedPane, next: &ResolvedPane) -> bool {
 
 enum ReloadedChild {
     Next(Child),
-    Current(Child),
+    Current,
 }
 
-fn reload_child(
-    child: &mut Child,
-    current: &ResolvedPane,
-    next: &ResolvedPane,
-) -> io::Result<ReloadedChild> {
-    terminate_child(child)?;
+fn reload_child(child: &mut Child, next: &ResolvedPane) -> io::Result<ReloadedChild> {
     match spawn_child(next) {
-        Ok(child) => Ok(ReloadedChild::Next(child)),
+        Ok(mut next_child) => {
+            if let Err(err) = terminate_child(child) {
+                let _ = terminate_child(&mut next_child);
+                return Err(err);
+            }
+            Ok(ReloadedChild::Next(next_child))
+        }
         Err(err) => {
             tracing::warn!(
                 argv = ?next.argv,
                 cwd = %next.cwd.display(),
                 error = %err,
-                "daemon content reload command failed; restarting previous child",
+                "daemon content reload command failed; keeping current child",
             );
-            spawn_child(current)
-                .map(ReloadedChild::Current)
-                .inspect_err(|restart_err| {
-                    tracing::warn!(
-                        argv = ?current.argv,
-                        cwd = %current.cwd.display(),
-                        error = %restart_err,
-                        "daemon content previous command could not restart",
-                    );
-                })
+            Ok(ReloadedChild::Current)
         }
     }
 }
