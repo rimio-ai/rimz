@@ -516,7 +516,7 @@ mod tests {
                 mtime_secs: 1,
                 len: 1,
                 cursor: SpendCursor::default(),
-                origin_path: None,
+                origin_path: Some(project.clone()),
                 entries: vec![CachedEntry {
                     ts_secs: now_secs,
                     cost_usd: 1.25,
@@ -529,7 +529,6 @@ mod tests {
                     thread_id: None,
                     is_sidechain: false,
                     model: None,
-                    origin_path: Some(project.clone()),
                     rolled: false,
                 }],
                 unknown_models: BTreeMap::new(),
@@ -615,7 +614,6 @@ mod tests {
             thread_id: Some("old".to_owned()),
             is_sidechain: false,
             model: Some("claude-opus-4-8".to_owned()),
-            origin_path: None,
             rolled: false,
         };
         let old_b = CachedEntry {

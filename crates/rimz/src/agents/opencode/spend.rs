@@ -171,6 +171,7 @@ pub(crate) fn parse_opencode_spend(
     };
 
     let mut entries = Vec::new();
+    let mut origin = None;
     let mut unknown_models = BTreeMap::new();
     let mut max_rowid = from_offset;
     loop {
@@ -192,13 +193,19 @@ pub(crate) fn parse_opencode_spend(
         let Ok(data) = row.get::<_, String>(2) else {
             continue;
         };
-        if let Some(entry) = parse_message_entry(&data, thread_id, prices, &mut unknown_models) {
+        if let Some((entry, entry_origin)) =
+            parse_message_entry(&data, thread_id, prices, &mut unknown_models)
+        {
+            if origin.is_none() {
+                origin = entry_origin;
+            }
             entries.push(entry);
         }
     }
 
     SpendParse {
         entries,
+        origin,
         cursor: SpendCursor {
             offset: max_rowid,
             state: None,
@@ -210,6 +217,7 @@ pub(crate) fn parse_opencode_spend(
 fn empty_parse(offset: u64) -> SpendParse {
     SpendParse {
         entries: Vec::new(),
+        origin: None,
         cursor: SpendCursor {
             offset,
             state: None,
@@ -223,7 +231,7 @@ fn parse_message_entry(
     thread_id: Option<String>,
     prices: &PriceBook,
     unknown_models: &mut BTreeMap<String, u64>,
-) -> Option<CachedEntry> {
+) -> Option<(CachedEntry, Option<PathBuf>)> {
     let message: MessageData = serde_json::from_str(data).ok()?;
     let tokens = message.tokens.as_ref()?;
     let model = non_empty(message.model_id.as_deref())?;
@@ -279,21 +287,23 @@ fn parse_message_entry(
         .as_ref()
         .and_then(|path| origin_path(path.cwd.as_deref().or(path.root.as_deref())));
 
-    Some(CachedEntry {
-        ts_secs,
-        cost_usd: cost,
-        input,
-        output,
-        cache_write,
-        cache_read,
-        message_id: None,
-        request_id: None,
-        thread_id,
-        is_sidechain: false,
-        model: Some(model.to_owned()),
-        origin_path: origin,
-        rolled: false,
-    })
+    Some((
+        CachedEntry {
+            ts_secs,
+            cost_usd: cost,
+            input,
+            output,
+            cache_write,
+            cache_read,
+            message_id: None,
+            request_id: None,
+            thread_id,
+            is_sidechain: false,
+            model: Some(model.to_owned()),
+            rolled: false,
+        },
+        origin,
+    ))
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
@@ -505,7 +515,7 @@ mod tests {
         assert_eq!(entry.cache_write, 40);
         assert_eq!(entry.ts_secs, 1_780_590_149);
         assert_eq!(entry.thread_id.as_deref(), Some("ses"));
-        assert_eq!(entry.origin_path.as_deref(), Some(cwd.as_path()));
+        assert_eq!(parsed.origin.as_deref(), Some(cwd.as_path()));
         assert_eq!(parsed.cursor.offset, 1);
     }
 

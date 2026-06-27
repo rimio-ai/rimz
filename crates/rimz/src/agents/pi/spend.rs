@@ -147,6 +147,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
     let Some((content, next_offset)) = read_spend_lines(path, from_offset) else {
         return SpendParse {
             entries: Vec::new(),
+            origin: state.cwd.clone(),
             cursor: SpendCursor {
                 offset: from_offset,
                 state: serde_json::to_value(&state).ok(),
@@ -206,12 +207,12 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
             thread_id: None,
             is_sidechain: false,
             model: msg.model.clone(),
-            origin_path: state.cwd.clone(),
             rolled: false,
         });
     }
     SpendParse {
         entries: out,
+        origin: state.cwd.clone(),
         cursor: SpendCursor {
             offset: next_offset,
             state: serde_json::to_value(&state).ok(),
@@ -272,7 +273,7 @@ mod tests {
 
         let first = parse_pi_spend(&path, None);
         assert_eq!(first.entries.len(), 1);
-        assert_eq!(first.entries[0].origin_path.as_deref(), Some(cwd.as_path()));
+        assert_eq!(first.origin.as_deref(), Some(cwd.as_path()));
 
         let mut f = std::fs::OpenOptions::new()
             .append(true)
@@ -287,10 +288,7 @@ mod tests {
         let second = parse_pi_spend(&path, Some(&first.cursor));
         assert_eq!(second.entries.len(), 1);
         assert!((second.entries[0].cost_usd - 0.84).abs() < 1e-9);
-        assert_eq!(
-            second.entries[0].origin_path.as_deref(),
-            Some(cwd.as_path())
-        );
+        assert_eq!(second.origin.as_deref(), Some(cwd.as_path()));
     }
 
     #[test]

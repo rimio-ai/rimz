@@ -228,6 +228,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
     let Some((content, next_offset)) = read_spend_lines(path, from_offset) else {
         return SpendParse {
             entries: Vec::new(),
+            origin: None,
             cursor: crate::agents::spending::SpendCursor {
                 offset: from_offset,
                 state: None,
@@ -238,6 +239,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
     const USAGE_MARKER: &[u8] = br#""usage":{"#;
 
     let mut entries: Vec<CachedEntry> = Vec::new();
+    let mut origin = None;
     let mut unknown_models = BTreeMap::new();
 
     for line in content.split(|&b| b == b'\n') {
@@ -302,6 +304,9 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
         // Claude reports the four token components separately; `input_tokens` is
         // already the fresh (uncached) slice. Window aggregation folds cache
         // creation into input/total, while cache reads ride their own field.
+        if origin.is_none() {
+            origin = origin_path(entry.cwd.as_deref());
+        }
         entries.push(CachedEntry {
             ts_secs,
             cost_usd: cost,
@@ -314,13 +319,13 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             thread_id: None,
             is_sidechain: entry.is_sidechain == Some(true),
             model: entry.message.model.clone(),
-            origin_path: origin_path(entry.cwd.as_deref()),
             rolled: false,
         });
     }
 
     SpendParse {
         entries,
+        origin,
         cursor: crate::agents::spending::SpendCursor {
             offset: next_offset,
             state: None,
@@ -403,7 +408,8 @@ mod tests {
                 ),
             ],
         );
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
+        let parsed = parse_claude_spend(&file, 0, &no_prices());
+        let entries = parsed.entries;
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
         // The components are kept apart here; window aggregation folds
@@ -412,7 +418,7 @@ mod tests {
         assert_eq!(entries[0].output, 5);
         assert_eq!(entries[0].cache_write, 3);
         assert_eq!(entries[0].cache_read, 7);
-        assert_eq!(entries[0].origin_path.as_deref(), Some(cwd.as_path()));
+        assert_eq!(parsed.origin.as_deref(), Some(cwd.as_path()));
     }
 
     #[test]
@@ -426,11 +432,12 @@ mod tests {
             ],
         );
 
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
+        let parsed = parse_claude_spend(&file, 0, &no_prices());
+        let entries = parsed.entries;
 
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
-        assert_eq!(entries[0].origin_path, None);
+        assert_eq!(parsed.origin, None);
     }
 
     #[test]

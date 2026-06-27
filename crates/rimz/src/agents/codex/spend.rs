@@ -150,17 +150,17 @@ pub(crate) fn parse_codex_spend(
             thread_id: None,
             is_sidechain: false,
             model: Some(model.to_owned()),
-            // The session's durable origin, parsed from the rollout's
-            // `session_meta` cwd and carried in `state` across resume cursors,
-            // so a closed Codex session still scopes to its workspace. A trusted
-            // snapshot override (`codex_origin_overrides`) can still supersede it
-            // for live or headless sessions whose rollout omits the header.
-            origin_path: state.cwd.clone(),
             rolled: false,
         });
     }
     SpendParse {
         entries: out,
+        // The session's durable origin, parsed from the rollout's
+        // `session_meta` cwd and carried in `state` across resume cursors, so a
+        // closed Codex session still scopes to its workspace. A trusted snapshot
+        // override (`codex_origin_overrides`) can still supersede it for live or
+        // headless sessions whose rollout omits the header.
+        origin: state.cwd.clone(),
         cursor: SpendCursor {
             offset: next_offset,
             state: serde_json::to_value(&state).ok(),

@@ -814,7 +814,7 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
             mtime_secs: 1,
             len: 1,
             cursor: crate::agents::spending::SpendCursor::default(),
-            origin_path: None,
+            origin_path: Some(project.join("src")),
             entries: vec![crate::agents::spending::CachedEntry {
                 ts_secs: now_secs,
                 cost_usd: 3.75,
@@ -827,7 +827,6 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
                 thread_id: None,
                 is_sidechain: false,
                 model: None,
-                origin_path: Some(project.join("src")),
                 rolled: false,
             }],
             unknown_models: BTreeMap::new(),

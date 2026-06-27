@@ -2,13 +2,15 @@
 //!
 //! Per-provider typed parsers live in each adapter's `spend.rs`; this module
 //! owns the on-disk cache types and the [`compute_spending`] aggregation loop
-//! with cross-file Claude dedup. Discovery and parsing dispatch through the
+//! with store-time chunk dedup plus cross-file Claude dedup. Discovery and
+//! parsing dispatch through the
 //! adapter ([`AgentAdapter::transcript_files`] /
 //! [`AgentAdapter::parse_spend`]): a dollar-logging provider (Claude's legacy
 //! `costUSD`, Pi) reads its figures verbatim, a token-only provider (Codex,
 //! current Claude) multiplies counts through the
 //! [`PriceBook`](super::pricing) — either way every file yields
-//! [`CachedEntry`] values and buckets under its adapter's kind.
+//! [`CachedEntry`] values with one per-file origin and buckets under its
+//! adapter's kind.
 //!
 //! [`compute_spending`] returns a [`Spending`]: one fleet-wide headline / 7d /
 //! 30d / 365d [`SpendTally`] plus a per-provider breakdown, so the fleet ledger
@@ -80,9 +82,9 @@ impl SpendWindow {
 const WIDEST_SPEND_WINDOW_SECS: u64 = 365 * 86_400;
 
 /// Raw rows newer than this stay verbatim; older rows fold into
-/// day/model/origin/thread rollups so the shared cache stays bounded by recent
+/// day/model/thread rollups so the shared cache stays bounded by recent
 /// activity instead of lifetime history.
-const RAW_RETAIN_SECS: u64 = 35 * 86_400;
+const RAW_RETAIN_SECS: u64 = 14 * 86_400;
 
 /// The headline spend window shown in the cockpit and provider dashboard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,14 +185,15 @@ pub fn compute_daily_spend(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
 ) -> BTreeMap<i64, DaySpend> {
-    let deduped = dedup_cached_entries(files, cache);
+    let counted = dedup_cached_entries(files, cache).into_counted();
     let mut by_day: BTreeMap<i64, DaySpend> = BTreeMap::new();
-    for_each_counted_entry(&deduped, |entry| {
+    for counted in counted {
+        let entry = counted.entry;
         let day = (entry.ts_secs / 86_400) as i64;
         let cell = by_day.entry(day).or_default();
         cell.usd += entry.cost_usd;
         cell.tokens += entry.input + entry.cache_write + entry.output;
-    });
+    }
     by_day
 }
 
@@ -206,9 +209,10 @@ pub fn compute_model_breakdown(
     cache: &SpendingDiskCache,
     now_secs: u64,
 ) -> BTreeMap<String, SpendTally> {
-    let deduped = dedup_cached_entries(files, cache);
+    let counted = dedup_cached_entries(files, cache).into_counted();
     let mut by_model: BTreeMap<String, SpendTally> = BTreeMap::new();
-    for_each_counted_entry(&deduped, |entry| {
+    for counted in counted {
+        let entry = counted.entry;
         accum(
             by_model
                 .entry(entry.model.clone().unwrap_or_default())
@@ -217,29 +221,8 @@ pub fn compute_model_breakdown(
             now_secs,
             u64::MAX,
         );
-    });
+    }
     by_model
-}
-
-/// Visit every deduplicated entry that counts toward totals: each kept
-/// message-ID entry that is not a suppressed sidechain replay, then every ID-free
-/// entry. The shared spine of [`compute_daily_spend`] and
-/// [`compute_model_breakdown`].
-fn for_each_counted_entry(deduped: &DedupedCachedEntries, mut visit: impl FnMut(&CachedEntry)) {
-    for ((msg_id, _), (_, entry)) in &deduped.by_exact_key {
-        let is_sidechain_replay = entry.is_sidechain
-            && deduped
-                .msg_has_non_sidechain
-                .get(msg_id.as_str())
-                .copied()
-                .unwrap_or(false);
-        if !is_sidechain_replay {
-            visit(entry);
-        }
-    }
-    for (_, entry) in &deduped.free_entries {
-        visit(entry);
-    }
 }
 
 /// Bumped whenever the cached parse shape *or values* change, so an upgrade
@@ -266,8 +249,10 @@ fn for_each_counted_entry(deduped: &DedupedCachedEntries, mut visit: impl FnMut(
 /// dollars. A cache
 /// stamped with an older version is discarded on read, forcing a clean re-parse
 /// under the current shape. `0` is the implicit pre-versioning shape (no
-/// `version` field).
-const SPENDING_CACHE_VERSION: u32 = 10;
+/// `version` field). v11 drops per-entry origin in favour of per-file origin,
+/// dedups retry writes within each parsed chunk before storing, and reshapes
+/// compaction rollup keys around that per-file origin.
+const SPENDING_CACHE_VERSION: u32 = 11;
 
 /// Gates the aggregate meaning in provider-spending.json, independent of the
 /// raw per-file [`SPENDING_CACHE_VERSION`]. An older stamp reads as stale, so
@@ -289,7 +274,8 @@ pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 8;
 /// independent of the shared raw-entry cache version: a semantic change here
 /// can force a cheap re-aggregate without re-reading transcripts.
 /// v2: the default headline window changed from trailing 24 hours to session.
-pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 2;
+/// v3: scoped tallies read per-file origin instead of per-entry origin.
+pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 3;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///
@@ -320,14 +306,15 @@ pub struct FileCacheEntry {
     /// Where the last parse left off — the next incremental parse resumes here.
     #[serde(default)]
     pub cursor: SpendCursor,
-    /// Durable per-file origin learned outside the parser. Codex rollout paths
-    /// do not encode a workspace, so Rimz stamps the file once from live
-    /// snapshot metadata and reuses that origin across cold re-parses.
+    /// Durable per-file origin learned from the parser or a trusted override.
+    /// Codex rollout paths do not encode a workspace, so Rimz can stamp the
+    /// file once from live snapshot metadata and reuse that origin across cold
+    /// re-parses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_path: Option<PathBuf>,
-    /// One nonzero token-usage entry per parsed transcript record. Duplicates
-    /// within a file (retry writes) are kept raw here; the aggregation pass owns
-    /// all dedup.
+    /// One nonzero token-usage entry per parsed transcript record. Retry-write
+    /// duplicates within each parsed chunk collapse before storage; aggregation
+    /// still owns cross-file dedup.
     pub entries: Vec<CachedEntry>,
     /// Price lookup misses observed while parsing this file, keyed by model and
     /// carrying the youngest timestamp seen for that model. The pricing refresh
@@ -350,11 +337,13 @@ pub struct SpendCursor {
     pub state: Option<serde_json::Value>,
 }
 
-/// One spend parse: the entries read past the resume point and the cursor the
-/// cache stores for the next pass.
+/// One spend parse: the entries read past the resume point, the single
+/// workspace origin observed for that parsed slice, and the cursor the cache
+/// stores for the next pass.
 #[derive(Debug, Default)]
 pub struct SpendParse {
     pub entries: Vec<CachedEntry>,
+    pub origin: Option<PathBuf>,
     pub cursor: SpendCursor,
     pub unknown_models: BTreeMap<String, u64>,
 }
@@ -409,11 +398,6 @@ pub struct CachedEntry {
     /// model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Working-directory origin for workspace-scoped tallies. `None` means the
-    /// parser could not prove the transcript's workspace; scoped aggregation
-    /// omits it rather than guessing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin_path: Option<PathBuf>,
     /// Synthetic per-day rollup produced by recency compaction. Rolled rows
     /// carry no dedup IDs because compaction runs after cross-file dedup.
     /// Native thread ids are retained so old multi-session stores keep session
@@ -645,8 +629,8 @@ fn compute_spending_with_origins_and_scope_progress(
         let prior_origin = cache
             .files
             .get(&key)
-            .and_then(|entry| file_cache_origin(entry, adapter.descriptor().kind == "codex"));
-        let file_origin = override_origin.or(prior_origin);
+            .and_then(|entry| entry.origin_path.clone());
+        let parse_origin = override_origin.or(prior_origin);
         let heals = cache
             .files
             .get(&key)
@@ -654,7 +638,7 @@ fn compute_spending_with_origins_and_scope_progress(
         match cache.files.get_mut(&key) {
             // Unchanged: nothing to read.
             Some(entry) if !heals && entry.mtime_secs == mtime && entry.len == len => {
-                if let Some(origin) = file_origin.as_deref()
+                if let Some(origin) = parse_origin.as_deref()
                     && stamp_file_origin(entry, origin)
                 {
                     cache.dirty = true;
@@ -663,9 +647,8 @@ fn compute_spending_with_origins_and_scope_progress(
             // Grown in place: parse only the appended suffix and extend.
             Some(entry) if !heals && len > entry.len => {
                 let mut parsed = adapter.parse_spend(file, Some(&entry.cursor), prices);
-                if let Some(origin) = file_origin.as_deref() {
-                    stamp_entries_origin(&mut parsed.entries, origin);
-                }
+                dedup_chunk(&mut parsed.entries);
+                let file_origin = parse_origin.or(parsed.origin);
                 entry.entries.extend(parsed.entries);
                 entry.unknown_models.extend(parsed.unknown_models);
                 entry.cursor = parsed.cursor;
@@ -679,9 +662,8 @@ fn compute_spending_with_origins_and_scope_progress(
             // New, truncated/rotated, or rewritten in place: parse cold.
             _ => {
                 let mut parsed = adapter.parse_spend(file, None, prices);
-                if let Some(origin) = file_origin.as_deref() {
-                    stamp_entries_origin(&mut parsed.entries, origin);
-                }
+                dedup_chunk(&mut parsed.entries);
+                let file_origin = parse_origin.or(parsed.origin);
                 cache.files.insert(
                     key.clone(),
                     FileCacheEntry {
@@ -714,10 +696,10 @@ fn compute_spending_with_origins_and_scope_progress(
     // main-chain entry anywhere across all files, so sidechain replays can be
     // suppressed.  ID-free entries (Codex, Pi) carry their file's provider so
     // they bucket under the right kind.
-    let deduped = dedup_cached_entries(files, cache);
-    let spending = aggregate_spending(files, cache, &deduped, now_secs, spec);
+    let counted = dedup_cached_entries(files, cache).into_counted();
+    let spending = aggregate_spending(files, cache, &counted, now_secs, spec);
     let workspace = scope
-        .map(|scope| aggregate_scoped_tally(files, cache, &deduped, scope, now_secs, spec))
+        .map(|scope| aggregate_scoped_tally(files, cache, &counted, scope, now_secs, spec))
         .unwrap_or_default();
 
     (spending, workspace)
@@ -726,20 +708,25 @@ fn compute_spending_with_origins_and_scope_progress(
 fn aggregate_spending(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
-    deduped: &DedupedCachedEntries,
+    counted: &[Counted<'_>],
     now_secs: u64,
     spec: &HeadlineSpec,
 ) -> Spending {
     let mut spending = Spending::default();
-    let counted = counted_entries(deduped);
     let uniform = uniform_headline_cutoff(spec, now_secs);
-    let all_timestamps: Vec<u64> = counted.iter().map(|(_, entry)| entry.ts_secs).collect();
+    let all_timestamps: Vec<u64> = counted
+        .iter()
+        .map(|counted| counted.entry.ts_secs)
+        .collect();
     let total_cutoff =
         uniform.unwrap_or_else(|| session_cutoff_secs(all_timestamps.as_slice(), now_secs));
     let provider_cutoffs = if uniform.is_none() {
         let mut timestamps: HashMap<&'static str, Vec<u64>> = HashMap::new();
-        for (provider, entry) in &counted {
-            timestamps.entry(*provider).or_default().push(entry.ts_secs);
+        for counted in counted {
+            timestamps
+                .entry(counted.kind)
+                .or_default()
+                .push(counted.entry.ts_secs);
         }
         timestamps
             .into_iter()
@@ -769,8 +756,8 @@ fn aggregate_spending(
         );
     };
 
-    for (provider, entry) in counted {
-        add(provider, entry);
+    for counted in counted {
+        add(counted.kind, counted.entry);
     }
 
     // Session counts, keyed by provider-native thread id when one is available
@@ -871,7 +858,7 @@ impl SpendScope {
 }
 
 /// Compute the cockpit's workspace-scoped tally from an already-refreshed
-/// spending cache. Unknown-origin entries are skipped.
+/// spending cache. Unknown-origin files are skipped.
 pub fn compute_scoped_tally(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
@@ -883,28 +870,32 @@ pub fn compute_scoped_tally(
         return SpendTally::default();
     }
     let deduped = dedup_cached_entries(files, cache);
-    aggregate_scoped_tally(files, cache, &deduped, scope, now_secs, spec)
+    let counted = deduped.into_counted();
+    aggregate_scoped_tally(files, cache, &counted, scope, now_secs, spec)
 }
 
 fn aggregate_scoped_tally(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
-    deduped: &DedupedCachedEntries,
+    counted: &[Counted<'_>],
     scope: &SpendScope,
     now_secs: u64,
     spec: &HeadlineSpec,
 ) -> SpendTally {
     let mut tally = SpendTally::default();
-    let counted = counted_entries(deduped)
-        .into_iter()
-        .filter(|(_, entry)| entry_in_scope(entry, scope))
+    let counted = counted
+        .iter()
+        .filter(|counted| counted.origin.is_some_and(|origin| scope.contains(origin)))
         .collect::<Vec<_>>();
-    let timestamps: Vec<u64> = counted.iter().map(|(_, entry)| entry.ts_secs).collect();
+    let timestamps: Vec<u64> = counted
+        .iter()
+        .map(|counted| counted.entry.ts_secs)
+        .collect();
     let headline_cutoff = uniform_headline_cutoff(spec, now_secs)
         .unwrap_or_else(|| session_cutoff_secs(timestamps.as_slice(), now_secs));
 
-    for (_, entry) in counted {
-        accum(&mut tally, entry, now_secs, headline_cutoff);
+    for counted in counted {
+        accum(&mut tally, counted.entry, now_secs, headline_cutoff);
     }
 
     let mut threads: HashMap<String, u64> = HashMap::new();
@@ -913,11 +904,14 @@ fn aggregate_scoped_tally(
         let Some(cached_file) = cache.files.get(&cache_key) else {
             continue;
         };
-        for entry in cached_file
-            .entries
-            .iter()
-            .filter(|entry| entry_in_scope(entry, scope))
+        if !cached_file
+            .origin_path
+            .as_deref()
+            .is_some_and(|origin| scope.contains(origin))
         {
+            continue;
+        }
+        for entry in &cached_file.entries {
             threads
                 .entry(session_key(*adapter, file, entry))
                 .and_modify(|ts| *ts = (*ts).max(entry.ts_secs))
@@ -933,50 +927,11 @@ fn aggregate_scoped_tally(
 
 fn stamp_file_origin(entry: &mut FileCacheEntry, origin: &Path) -> bool {
     let origin = crate::worktree::normalize_path_lexical(origin);
-    let mut changed = false;
     if entry.origin_path.as_ref() != Some(&origin) {
         entry.origin_path = Some(origin.clone());
-        changed = true;
+        return true;
     }
-    changed | stamp_entries_origin(&mut entry.entries, &origin)
-}
-
-fn stamp_entries_origin(entries: &mut [CachedEntry], origin: &Path) -> bool {
-    let origin = crate::worktree::normalize_path_lexical(origin);
-    let mut changed = false;
-    for cached in entries {
-        if cached.origin_path.as_ref() != Some(&origin) {
-            cached.origin_path = Some(origin.clone());
-            changed = true;
-        }
-    }
-    changed
-}
-
-fn file_cache_origin(entry: &FileCacheEntry, infer_from_entries: bool) -> Option<PathBuf> {
-    entry.origin_path.clone().or_else(|| {
-        infer_from_entries
-            .then(|| single_cached_origin(entry))
-            .flatten()
-    })
-}
-
-fn single_cached_origin(entry: &FileCacheEntry) -> Option<PathBuf> {
-    let mut origins = entry
-        .entries
-        .iter()
-        .filter_map(|entry| entry.origin_path.as_deref());
-    let first = origins.next()?;
-    origins
-        .all(|origin| origin == first)
-        .then(|| first.to_path_buf())
-}
-
-fn entry_in_scope(entry: &CachedEntry, scope: &SpendScope) -> bool {
-    entry
-        .origin_path
-        .as_deref()
-        .is_some_and(|origin| scope.contains(origin))
+    false
 }
 
 pub(crate) fn origin_path(raw: Option<&str>) -> Option<PathBuf> {
@@ -1044,7 +999,7 @@ fn has_healed_unknown(entry: &FileCacheEntry, prices: &PriceBook, now_secs: u64)
 }
 
 /// Fold finalized raw rows older than [`RAW_RETAIN_SECS`] into
-/// day/model/origin/thread rollups after cross-file deduplication. Recent rows
+/// day/model/thread rollups after cross-file deduplication. Recent rows
 /// stay verbatim so the month/week/headline surfaces keep exact timestamps; old
 /// rows keep year, daily, model, scope, and session aggregates bounded by
 /// rendered history.
@@ -1138,7 +1093,6 @@ fn raw_entry_ready_for_compaction(
 struct RollupKey {
     day: u64,
     model: Option<String>,
-    origin_path: Option<PathBuf>,
     thread_id: Option<String>,
 }
 
@@ -1147,7 +1101,6 @@ impl RollupKey {
         Self {
             day: entry.ts_secs / 86_400,
             model: entry.model.clone(),
-            origin_path: entry.origin_path.clone(),
             thread_id: entry.thread_id.clone(),
         }
     }
@@ -1165,11 +1118,7 @@ fn old_counted_entries_for_compaction(
     now_secs: u64,
     retained_message_ids: &BTreeSet<String>,
 ) -> Vec<CompactionSourceEntry> {
-    let mut deduped = CompactionDedupedEntries {
-        by_exact_key: HashMap::new(),
-        msg_has_non_sidechain: HashMap::new(),
-        free_entries: Vec::new(),
-    };
+    let mut deduped = SidechainDedup::default();
     for (_, file) in files {
         let file_key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&file_key) else {
@@ -1180,67 +1129,13 @@ fn old_counted_entries_for_compaction(
             .iter()
             .filter(|entry| raw_entry_ready_for_compaction(entry, now_secs, retained_message_ids))
         {
-            insert_compaction_dedup_entry(
-                &mut deduped,
-                CompactionSourceEntry {
-                    file_key: file_key.clone(),
-                    entry: entry.clone(),
-                },
-            );
+            deduped.insert(CompactionSourceEntry {
+                file_key: file_key.clone(),
+                entry: entry.clone(),
+            });
         }
     }
-    counted_compaction_entries(deduped)
-}
-
-struct CompactionDedupedEntries {
-    by_exact_key: HashMap<(String, Option<String>), CompactionSourceEntry>,
-    msg_has_non_sidechain: HashMap<String, bool>,
-    free_entries: Vec<CompactionSourceEntry>,
-}
-
-fn insert_compaction_dedup_entry(
-    deduped: &mut CompactionDedupedEntries,
-    source: CompactionSourceEntry,
-) {
-    let Some(ref msg_id) = source.entry.message_id else {
-        deduped.free_entries.push(source);
-        return;
-    };
-    let has_non_sidechain = deduped
-        .msg_has_non_sidechain
-        .entry(msg_id.clone())
-        .or_insert(false);
-    if !source.entry.is_sidechain {
-        *has_non_sidechain = true;
-    }
-    let exact_key = (msg_id.clone(), source.entry.request_id.clone());
-    match deduped.by_exact_key.entry(exact_key) {
-        std::collections::hash_map::Entry::Occupied(mut entry) => {
-            if entry.get().entry.is_sidechain && !source.entry.is_sidechain {
-                entry.insert(source);
-            }
-        }
-        std::collections::hash_map::Entry::Vacant(entry) => {
-            entry.insert(source);
-        }
-    }
-}
-
-fn counted_compaction_entries(deduped: CompactionDedupedEntries) -> Vec<CompactionSourceEntry> {
-    let mut counted = Vec::new();
-    for ((msg_id, _), source) in deduped.by_exact_key {
-        let is_sidechain_replay = source.entry.is_sidechain
-            && deduped
-                .msg_has_non_sidechain
-                .get(msg_id.as_str())
-                .copied()
-                .unwrap_or(false);
-        if !is_sidechain_replay {
-            counted.push(source);
-        }
-    }
-    counted.extend(deduped.free_entries);
-    counted
+    deduped.into_counted()
 }
 
 fn rolled_entry_from(entry: &CachedEntry) -> CachedEntry {
@@ -1256,7 +1151,6 @@ fn rolled_entry_from(entry: &CachedEntry) -> CachedEntry {
         thread_id: entry.thread_id.clone(),
         is_sidechain: false,
         model: entry.model.clone(),
-        origin_path: entry.origin_path.clone(),
         rolled: true,
     }
 }
@@ -1276,21 +1170,95 @@ fn merge_rollup(rollups: &mut BTreeMap<RollupKey, CachedEntry>, entry: CachedEnt
         .or_insert(entry);
 }
 
-struct DedupedCachedEntries {
-    by_exact_key: HashMap<(String, Option<String>), (&'static str, CachedEntry)>,
-    msg_has_non_sidechain: HashMap<String, bool>,
-    free_entries: Vec<(&'static str, CachedEntry)>,
+trait DedupPayload {
+    fn entry(&self) -> &CachedEntry;
 }
 
-fn dedup_cached_entries(
+struct SidechainDedup<P> {
+    by_exact_key: HashMap<(String, Option<String>), P>,
+    msg_has_non_sidechain: HashMap<String, bool>,
+    free: Vec<P>,
+}
+
+impl<P> Default for SidechainDedup<P> {
+    fn default() -> Self {
+        Self {
+            by_exact_key: HashMap::new(),
+            msg_has_non_sidechain: HashMap::new(),
+            free: Vec::new(),
+        }
+    }
+}
+
+impl<P: DedupPayload> SidechainDedup<P> {
+    fn insert(&mut self, payload: P) {
+        let Some(msg_id) = payload.entry().message_id.clone() else {
+            self.free.push(payload);
+            return;
+        };
+        let request_id = payload.entry().request_id.clone();
+        let is_sidechain = payload.entry().is_sidechain;
+        let has_non_sidechain = self
+            .msg_has_non_sidechain
+            .entry(msg_id.clone())
+            .or_insert(false);
+        if !is_sidechain {
+            *has_non_sidechain = true;
+        }
+        let exact_key = (msg_id, request_id);
+        match self.by_exact_key.entry(exact_key) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if entry.get().entry().is_sidechain && !is_sidechain {
+                    entry.insert(payload);
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(payload);
+            }
+        }
+    }
+
+    fn into_counted(self) -> Vec<P> {
+        let mut counted = Vec::new();
+        for ((msg_id, _), payload) in self.by_exact_key {
+            let is_sidechain_replay = payload.entry().is_sidechain
+                && self
+                    .msg_has_non_sidechain
+                    .get(msg_id.as_str())
+                    .copied()
+                    .unwrap_or(false);
+            if !is_sidechain_replay {
+                counted.push(payload);
+            }
+        }
+        counted.extend(self.free);
+        counted
+    }
+}
+
+struct Counted<'a> {
+    kind: &'static str,
+    origin: Option<&'a Path>,
+    entry: &'a CachedEntry,
+}
+
+impl DedupPayload for Counted<'_> {
+    fn entry(&self) -> &CachedEntry {
+        self.entry
+    }
+}
+
+impl DedupPayload for CompactionSourceEntry {
+    fn entry(&self) -> &CachedEntry {
+        &self.entry
+    }
+}
+
+fn dedup_cached_entries<'a>(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
-    cache: &SpendingDiskCache,
-) -> DedupedCachedEntries {
-    let mut deduped = DedupedCachedEntries {
-        by_exact_key: HashMap::new(),
-        msg_has_non_sidechain: HashMap::new(),
-        free_entries: Vec::new(),
-    };
+    cache: &'a SpendingDiskCache,
+) -> SidechainDedup<Counted<'a>> {
+    let mut deduped = SidechainDedup::default();
     for (adapter, file) in files {
         let kind = adapter.descriptor().kind;
         let key = file.to_string_lossy().into_owned();
@@ -1298,56 +1266,39 @@ fn dedup_cached_entries(
             continue;
         };
         for entry in &cached_file.entries {
-            insert_dedup_entry(&mut deduped, kind, entry);
+            deduped.insert(Counted {
+                kind,
+                origin: cached_file.origin_path.as_deref(),
+                entry,
+            });
         }
     }
     deduped
 }
 
-fn insert_dedup_entry(deduped: &mut DedupedCachedEntries, kind: &'static str, entry: &CachedEntry) {
-    let Some(ref msg_id) = entry.message_id else {
-        deduped.free_entries.push((kind, entry.clone()));
-        return;
-    };
-    let has_non_sidechain = deduped
-        .msg_has_non_sidechain
-        .entry(msg_id.clone())
-        .or_insert(false);
-    if !entry.is_sidechain {
-        *has_non_sidechain = true;
-    }
-    let exact_key = (msg_id.clone(), entry.request_id.clone());
-    deduped
-        .by_exact_key
-        .entry(exact_key)
-        .and_modify(|(_, existing)| {
-            if existing.is_sidechain && !entry.is_sidechain {
-                *existing = entry.clone();
+fn dedup_chunk(entries: &mut Vec<CachedEntry>) {
+    let mut deduped = Vec::with_capacity(entries.len());
+    let mut by_exact_key = HashMap::<(String, Option<String>), usize>::new();
+    for entry in entries.drain(..) {
+        let Some(msg_id) = entry.message_id.clone() else {
+            deduped.push(entry);
+            continue;
+        };
+        let exact_key = (msg_id, entry.request_id.clone());
+        match by_exact_key.entry(exact_key) {
+            std::collections::hash_map::Entry::Occupied(slot) => {
+                let existing = &mut deduped[*slot.get()];
+                if existing.is_sidechain && !entry.is_sidechain {
+                    *existing = entry;
+                }
             }
-        })
-        .or_insert_with(|| (kind, entry.clone()));
-}
-
-fn counted_entries(deduped: &DedupedCachedEntries) -> Vec<(&'static str, &CachedEntry)> {
-    let mut counted = Vec::new();
-    for ((msg_id, _), (kind, entry)) in &deduped.by_exact_key {
-        let is_sidechain_replay = entry.is_sidechain
-            && deduped
-                .msg_has_non_sidechain
-                .get(msg_id.as_str())
-                .copied()
-                .unwrap_or(false);
-        if !is_sidechain_replay {
-            counted.push((*kind, entry));
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(deduped.len());
+                deduped.push(entry);
+            }
         }
     }
-    counted.extend(
-        deduped
-            .free_entries
-            .iter()
-            .map(|(provider, entry)| (*provider, entry)),
-    );
-    counted
+    *entries = deduped;
 }
 
 fn uniform_headline_cutoff(spec: &HeadlineSpec, now_secs: u64) -> Option<u64> {

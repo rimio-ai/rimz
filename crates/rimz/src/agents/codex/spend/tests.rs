@@ -184,10 +184,7 @@ fn session_meta_cwd_stamps_origin_survives_resume_and_is_none_when_absent() {
     );
     let parsed = parse_codex_spend(&path, None, &gpt5_book());
     assert_eq!(parsed.entries.len(), 1);
-    assert_eq!(
-        parsed.entries[0].origin_path.as_deref(),
-        Some(Path::new(cwd))
-    );
+    assert_eq!(parsed.origin.as_deref(), Some(Path::new(cwd)));
 
     // The cwd rides the resume cursor's state: a first parse over the header-only
     // prefix prices nothing yet, but a turn appended afterwards is still stamped
@@ -210,7 +207,7 @@ fn session_meta_cwd_stamps_origin_survives_resume_and_is_none_when_absent() {
     let second = parse_codex_spend(&path, Some(&first.cursor), &gpt5_book());
     assert_eq!(second.entries.len(), 1);
     assert_eq!(
-        second.entries[0].origin_path.as_deref(),
+        second.origin.as_deref(),
         Some(Path::new(cwd)),
         "the resume cursor carries the session cwd to entries appended after the header"
     );
@@ -226,5 +223,5 @@ fn session_meta_cwd_stamps_origin_survives_resume_and_is_none_when_absent() {
     );
     let parsed = parse_codex_spend(&path, None, &gpt5_book());
     assert_eq!(parsed.entries.len(), 1);
-    assert_eq!(parsed.entries[0].origin_path, None);
+    assert_eq!(parsed.origin, None);
 }
