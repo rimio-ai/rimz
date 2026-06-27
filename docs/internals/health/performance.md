@@ -131,6 +131,8 @@ The rules every performance change here follows, ordered — an earlier rule out
 
 The mechanisms in place, by the structure each creates — each described once, with its code home. The chronology lives in git; the lessons that prevent re-introduction are below in [Anti-patterns we removed](#anti-patterns-we-removed).
 
+Build identity stamps read the linker-provided `.note.gnu.build-id` or Mach-O `LC_UUID` from the image prefix ([`build_id::of_file`](../../../crates/rimz/src/build_id.rs)); the whole-binary SHA-256 remains only the fallback for images without a supported note.
+
 ### Decouple the frame from the fetch
 
 The snapshot fetch runs on the background worker; the loop blocks only in `recv` and folds results via a `snapshot` wakeup ([`app::serve`](../../../crates/rimz/src/sidebar_pane/app.rs), `spawn_fetch_worker`, `request_fetch`, `apply_fetch_outcome`). The animation tick redraws the spinner from the *cached* snapshot and never fetches, so a missed push degrades only to the backstop tick, not a per-frame poll storm. Animation cadence is classified ([`render::animation_cadence`](../../../crates/rimz/src/sidebar_pane/render/mod.rs), `app::frame_interval`): fast work stays on the base grid, row animations redraw at `BREATH_ANIMATION_FRAME`, and a dirty data fold clamps back to the base budget so freshness never waits on cosmetic motion. Smaller cuts on the same hot path: the `NO_COLOR` lookup caches in a `OnceLock`, and pane `command`/`cwd` move out of the owned `RawPane` instead of cloning per pane per tick.
