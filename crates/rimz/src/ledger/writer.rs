@@ -575,6 +575,7 @@ mod tests {
                     profile: None,
                     role: None,
                     team: None,
+                    channel: None,
                     kind_ordinal: None,
                     state: crate::schema::event::AgentLaunchState::Bound,
                     run_id: None,
