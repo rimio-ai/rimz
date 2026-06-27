@@ -8,11 +8,14 @@
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Hex digest prefix of the digest of the running executable's bytes.
 const BUILD_ID_BYTES: usize = 6;
+const BUILD_ID_CACHE_FILE: &str = "build-id.json";
 static BUILD_ID: OnceLock<Option<String>> = OnceLock::new();
 
 /// Build id of this process, computed once from the executable's bytes;
@@ -45,6 +48,21 @@ fn compute() -> Option<String> {
 /// Digest the bytes at `path` into the short build id Rimz stamps into runtime
 /// artifacts.
 pub fn of_file(path: &Path) -> io::Result<String> {
+    let path = resolve_on_disk_binary(path).unwrap_or_else(|| path.to_path_buf());
+    of_file_with_cache_path(&path, &cache_path())
+}
+
+fn of_file_with_cache_path(path: &Path, cache_path: &Path) -> io::Result<String> {
+    let key = cache_key(path)?;
+    if let Some(id) = read_cached_id(cache_path, &key) {
+        return Ok(id);
+    }
+    let id = hash_file(path)?;
+    write_cached_id(cache_path, key, &id);
+    Ok(id)
+}
+
+fn hash_file(path: &Path) -> io::Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = [0_u8; 8192];
@@ -57,6 +75,73 @@ pub fn of_file(path: &Path) -> io::Result<String> {
     }
     let digest = hasher.finalize();
     Ok(hex::encode(&digest[..BUILD_ID_BYTES]))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BuildIdCacheKey {
+    path: PathBuf,
+    mtime_ns: Option<u128>,
+    len: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct BuildIdCacheRecord {
+    path: PathBuf,
+    mtime_ns: Option<u128>,
+    len: u64,
+    id: String,
+}
+
+impl BuildIdCacheRecord {
+    fn key(&self) -> BuildIdCacheKey {
+        BuildIdCacheKey {
+            path: self.path.clone(),
+            mtime_ns: self.mtime_ns,
+            len: self.len,
+        }
+    }
+}
+
+fn cache_key(path: &Path) -> io::Result<BuildIdCacheKey> {
+    let metadata = std::fs::metadata(path)?;
+    Ok(BuildIdCacheKey {
+        path: path.to_path_buf(),
+        mtime_ns: metadata.modified().ok().and_then(system_time_ns),
+        len: metadata.len(),
+    })
+}
+
+fn system_time_ns(time: SystemTime) -> Option<u128> {
+    let duration = time.duration_since(UNIX_EPOCH).ok()?;
+    Some(duration.as_nanos())
+}
+
+fn read_cached_id(path: &Path, key: &BuildIdCacheKey) -> Option<String> {
+    let record: BuildIdCacheRecord = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    (record.key() == *key && valid_build_id(&record.id)).then_some(record.id)
+}
+
+fn write_cached_id(path: &Path, key: BuildIdCacheKey, id: &str) {
+    let record = BuildIdCacheRecord {
+        path: key.path,
+        mtime_ns: key.mtime_ns,
+        len: key.len,
+        id: id.to_owned(),
+    };
+    let _ = crate::ledger::atomic::write_temp_then_rename_cache(path, &record);
+}
+
+fn valid_build_id(id: &str) -> bool {
+    id.len() == BUILD_ID_BYTES * 2
+        && id
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+
+fn cache_path() -> PathBuf {
+    crate::ledger::paths::cache_home()
+        .join("rimz")
+        .join(BUILD_ID_CACHE_FILE)
 }
 
 /// Resolve an executable path reported by the OS to the replacement binary on
@@ -104,12 +189,39 @@ mod tests {
         let second = current().expect("the second call serves the cached id");
 
         assert_eq!(first, second);
-        assert_eq!(first.len(), BUILD_ID_BYTES * 2);
-        assert!(
-            first
-                .chars()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        assert!(valid_build_id(first));
+    }
+
+    #[test]
+    fn matching_file_cache_returns_cached_id_without_hashing() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("rimz");
+        let cache = dir.path().join("cache/build-id.json");
+        std::fs::write(&binary, b"not the cached digest").unwrap();
+        let key = cache_key(&binary).unwrap();
+        let cached = "abcdef123456";
+        write_cached_id(&cache, key, cached);
+
+        assert_eq!(
+            of_file_with_cache_path(&binary, &cache).unwrap(),
+            cached,
+            "matching path/mtime/len serves the cached SHA prefix even when file bytes differ",
         );
+    }
+
+    #[test]
+    fn changed_file_cache_key_recomputes_and_rewrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("rimz");
+        let cache = dir.path().join("cache/build-id.json");
+        std::fs::write(&binary, b"old").unwrap();
+        let key = cache_key(&binary).unwrap();
+        write_cached_id(&cache, key, "abcdef123456");
+
+        std::fs::write(&binary, b"new bytes").unwrap();
+        let expected = hash_file(&binary).unwrap();
+
+        assert_eq!(of_file_with_cache_path(&binary, &cache).unwrap(), expected);
     }
 
     #[test]
