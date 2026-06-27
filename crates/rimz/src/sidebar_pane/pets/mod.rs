@@ -26,7 +26,10 @@ pub(crate) use model::PetAction;
 pub(crate) use pixel::PixelPainter;
 pub(crate) use pixel::probe::detect as detect_pet_render_caps;
 pub use pixel::probe::{PetRenderCaps, detect_env as detect_pet_render_env};
-pub use pixel::{inline_placeholder_row, transmit_rgba_chunks, virtual_place, wrap_pixel_payload};
+pub use pixel::{
+    inline_placeholder_row, transmit_rgba_chunks, virtual_place, wrap_pixel_payload,
+    write_synchronized_pixel_output,
+};
 pub use preview::{
     PetPixelPreview, PetPreview, PixelPreviewFrame, PreviewCell, listable_ids, load_pixel_previews,
     load_previews_with_caps, previews_use_pixels,

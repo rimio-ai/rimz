@@ -13,6 +13,7 @@ Two groups. The first — **true color** — sets your terminal type and RGB pas
 set -g default-terminal "tmux-256color"
 set -ga terminal-overrides ",*256col*:RGB,alacritty:RGB,wezterm:RGB"
 set -ga terminal-features ",*:RGB,*:usstyle,*:clipboard"
+set -ga terminal-features ",*:sync"   # atomic redraws: flicker-free pixel pets and TUIs
 
 # Behaviors a modern TUI agent relies on.
 set -g  mouse on                 # scroll, select panes, resize
@@ -28,7 +29,7 @@ bind-key -n M-Enter send-keys Escape "[13;3u"
 set -g  set-clipboard on         # yank into the host clipboard over OSC52
 ```
 
-`escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. `extended-keys`, `extended-keys-format csi-u`, and `terminal-features … extkeys` let an agent's composer receive Shift+Enter and Alt+Enter as CSI-u soft newlines while plain Enter still submits; the explicit `S-Enter` / `M-Enter` binds make those keys reach agents that do not request modifyOtherKeys themselves. On tmux 3.5.x, this trades clean multiline clipboard paste while extended keys are active; use Ctrl+J, `\`+Enter, or tmux 3.6+ for both modified-Enter newlines and clean paste. `set-clipboard on` carries a yank out through OSC52, so you can copy agent output to your local clipboard even over SSH. `allow-passthrough on` lets the desktop-notification bytes Rimz emits reach your terminal ([notifications](../internals/sidebar/notifications.md)).
+`escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. Synchronized output (DECSET 2026), paired with `escape-time 0`, lets tmux buffer a frame's writes and forward them to your terminal as one atomic redraw, so rapid repaints such as Rimz's animated pixel pets and full-screen TUIs never show a half-painted frame. `extended-keys`, `extended-keys-format csi-u`, and `terminal-features … extkeys` let an agent's composer receive Shift+Enter and Alt+Enter as CSI-u soft newlines while plain Enter still submits; the explicit `S-Enter` / `M-Enter` binds make those keys reach agents that do not request modifyOtherKeys themselves. On tmux 3.5.x, this trades clean multiline clipboard paste while extended keys are active; use Ctrl+J, `\`+Enter, or tmux 3.6+ for both modified-Enter newlines and clean paste. `set-clipboard on` carries a yank out through OSC52, so you can copy agent output to your local clipboard even over SSH. `allow-passthrough on` lets the desktop-notification bytes Rimz emits reach your terminal ([notifications](../internals/sidebar/notifications.md)).
 
 ## Recommended
 

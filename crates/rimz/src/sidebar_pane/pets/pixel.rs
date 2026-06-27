@@ -13,6 +13,8 @@ use super::PetPixelView;
 use super::frames::RgbaImage;
 
 const ESC: u8 = 0x1b;
+const BEGIN_SYNC: &[u8] = b"\x1b[?2026h";
+const END_SYNC: &[u8] = b"\x1b[?2026l";
 const CHUNK_SIZE: usize = 4096;
 const IMAGE_ID_COLOR_MASK: u32 = 0x00ff_ffff;
 const PLACEHOLDER: char = '\u{10eeee}';
@@ -79,21 +81,27 @@ impl PixelPainter {
     ) -> io::Result<()> {
         let pet_changed = self.pet_id.as_deref() != Some(pixel.pet_id.as_str());
         let rect_changed = self.last_rect.is_some_and(|last| last != rect);
-        if pet_changed || rect_changed {
-            self.delete_transmitted(writer)?;
-        }
-        if pet_changed {
-            self.pet_id = Some(pixel.pet_id.clone());
-        }
-
-        let image_id = self.image_id(pixel.sprite_index);
-        if self.transmitted.insert(pixel.sprite_index) {
-            for chunk in transmit_chunks(image_id, frame) {
-                writer.write_all(&self.wrap_payload(&chunk))?;
+        write_synchronized_pixel_output(writer, |writer| {
+            if pet_changed || rect_changed {
+                self.delete_transmitted(writer)?;
             }
-        }
-        writer.write_all(&self.wrap_payload(&virtual_place(image_id, rect.width, rect.height)))?;
-        writer.write_all(&placeholder_grid(image_id, rect))?;
+            if pet_changed {
+                self.pet_id = Some(pixel.pet_id.clone());
+            }
+
+            let image_id = self.image_id(pixel.sprite_index);
+            if self.transmitted.insert(pixel.sprite_index) {
+                for chunk in transmit_chunks(image_id, frame) {
+                    writer.write_all(&self.wrap_payload(&chunk))?;
+                }
+            }
+            writer.write_all(&self.wrap_payload(&virtual_place(
+                image_id,
+                rect.width,
+                rect.height,
+            )))?;
+            writer.write_all(&placeholder_grid(image_id, rect))
+        })?;
         writer.flush()?;
         self.last_rect = Some(rect);
         Ok(())
@@ -103,16 +111,18 @@ impl PixelPainter {
         // This runs after ratatui draws the frame. Delete only kitty images here;
         // blanking cells would desync ratatui's diff buffer from the terminal.
         self.last_rect = None;
-        self.delete_transmitted(writer)?;
+        write_synchronized_pixel_output(writer, |writer| self.delete_transmitted(writer))?;
         self.pet_id = None;
         writer.flush()
     }
 
     pub(crate) fn clear<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        if let Some(rect) = self.last_rect.take() {
-            clear_rect(writer, rect)?;
-        }
-        self.delete_transmitted(writer)?;
+        write_synchronized_pixel_output(writer, |writer| {
+            if let Some(rect) = self.last_rect.take() {
+                clear_rect(writer, rect)?;
+            }
+            self.delete_transmitted(writer)
+        })?;
         self.pet_id = None;
         writer.flush()
     }
@@ -133,6 +143,16 @@ impl PixelPainter {
     fn wrap_payload(&self, payload: &[u8]) -> Vec<u8> {
         wrap_pixel_payload(payload, self.wrap)
     }
+}
+
+pub fn write_synchronized_pixel_output<W: Write>(
+    writer: &mut W,
+    body: impl FnOnce(&mut W) -> io::Result<()>,
+) -> io::Result<()> {
+    writer.write_all(BEGIN_SYNC)?;
+    let body_result = body(writer);
+    let end_result = writer.write_all(END_SYNC);
+    body_result.and(end_result)
 }
 
 fn runtime_image_id_base() -> u32 {
@@ -308,6 +328,19 @@ mod tests {
         }
     }
 
+    fn assert_sync_bracketed(bytes: &[u8]) {
+        assert!(bytes.starts_with(BEGIN_SYNC));
+        assert!(bytes.ends_with(END_SYNC));
+        assert!(!bytes_contains(bytes, b"\x1bPtmux;\x1b\x1b[?2026h"));
+        assert!(!bytes_contains(bytes, b"\x1bPtmux;\x1b\x1b[?2026l"));
+    }
+
+    fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+    }
+
     #[test]
     fn transmit_encodes_rgba_image() {
         let bytes = transmit_chunks(42, &image(vec![0, 1, 2, 3])).concat();
@@ -393,6 +426,7 @@ mod tests {
         let mut bytes = Vec::new();
 
         painter.clear(&mut bytes).expect("clear");
+        assert_sync_bracketed(&bytes);
         let text = String::from_utf8(bytes).expect("utf8 clear");
 
         assert!(text.contains("\x1b[3;2H  "));
@@ -434,6 +468,7 @@ mod tests {
         let mut bytes = Vec::new();
 
         painter.hide_after_draw(&mut bytes).expect("hide");
+        assert_sync_bracketed(&bytes);
         let text = String::from_utf8(bytes).expect("utf8 hide");
 
         assert!(!text.contains("\x1b[3;2H  "));
@@ -498,6 +533,28 @@ mod tests {
     }
 
     #[test]
+    fn paint_brackets_frame_in_synchronized_output() {
+        let mut painter = PixelPainter::with_id_base(0x120000, true);
+        let pixel = PetPixelView {
+            pet_id: "codex".to_owned(),
+            sprite_index: 0,
+            size: super::super::PetGridSize { cols: 2, rows: 1 },
+        };
+        let mut bytes = Vec::new();
+
+        painter
+            .paint(
+                &mut bytes,
+                Rect::new(0, 0, 2, 1),
+                &pixel,
+                &image(vec![0, 1, 2, 3]),
+            )
+            .expect("paint");
+
+        assert_sync_bracketed(&bytes);
+    }
+
+    #[test]
     fn paint_can_emit_unwrapped_native_kitty_graphics() {
         let mut painter = PixelPainter::with_id_base(0x120000, false);
         let pixel = PetPixelView {
@@ -515,6 +572,7 @@ mod tests {
                 &image(vec![0, 1, 2, 3]),
             )
             .expect("paint");
+        assert_sync_bracketed(&bytes);
         let text = String::from_utf8(bytes).expect("utf8 paint");
 
         assert!(!text.contains("\x1bPtmux;"));

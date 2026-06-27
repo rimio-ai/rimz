@@ -181,57 +181,60 @@ fn write_pixel_pet_row(
     chunk: &[(u32, PetPixelPreview)],
     wrap: bool,
 ) -> std::io::Result<()> {
-    for (image_id, preview) in chunk {
-        let Ok(frame) = &preview.frame else {
-            continue;
-        };
-        for packet in pets::transmit_rgba_chunks(*image_id, frame.width, frame.height, &frame.data)
-        {
-            out.write_all(&pets::wrap_pixel_payload(&packet, wrap))?;
+    pets::write_synchronized_pixel_output(out, |out| {
+        for (image_id, preview) in chunk {
+            let Ok(frame) = &preview.frame else {
+                continue;
+            };
+            for packet in
+                pets::transmit_rgba_chunks(*image_id, frame.width, frame.height, &frame.data)
+            {
+                out.write_all(&pets::wrap_pixel_payload(&packet, wrap))?;
+            }
+            out.write_all(&pets::wrap_pixel_payload(
+                &pets::virtual_place(
+                    *image_id,
+                    pets::DASHBOARD_PIXEL_PET.cols,
+                    pets::DASHBOARD_PIXEL_PET.rows,
+                ),
+                wrap,
+            ))?;
         }
-        out.write_all(&pets::wrap_pixel_payload(
-            &pets::virtual_place(
-                *image_id,
-                pets::DASHBOARD_PIXEL_PET.cols,
-                pets::DASHBOARD_PIXEL_PET.rows,
-            ),
-            wrap,
-        ))?;
-    }
-    for row in 0..pets::DASHBOARD_PIXEL_PET.rows {
-        for (index, (image_id, preview)) in chunk.iter().enumerate() {
+        for row in 0..pets::DASHBOARD_PIXEL_PET.rows {
+            for (index, (image_id, preview)) in chunk.iter().enumerate() {
+                if index > 0 {
+                    write!(out, "{:gap$}", "", gap = usize::from(GAP))?;
+                }
+                if preview.frame.is_ok() {
+                    out.write_all(&pets::inline_placeholder_row(
+                        *image_id,
+                        row,
+                        pets::DASHBOARD_PIXEL_PET.cols,
+                    ))?;
+                } else {
+                    write!(
+                        out,
+                        "{:width$}",
+                        "",
+                        width = usize::from(pets::DASHBOARD_PIXEL_PET.cols)
+                    )?;
+                }
+            }
+            writeln!(out)?;
+        }
+        for (index, (_image_id, preview)) in chunk.iter().enumerate() {
             if index > 0 {
                 write!(out, "{:gap$}", "", gap = usize::from(GAP))?;
             }
-            if preview.frame.is_ok() {
-                out.write_all(&pets::inline_placeholder_row(
-                    *image_id,
-                    row,
-                    pets::DASHBOARD_PIXEL_PET.cols,
-                ))?;
-            } else {
-                write!(
-                    out,
-                    "{:width$}",
-                    "",
-                    width = usize::from(pets::DASHBOARD_PIXEL_PET.cols)
-                )?;
-            }
+            let centered = center(&preview.id, usize::from(pets::DASHBOARD_PIXEL_PET.cols));
+            write!(
+                out,
+                "{}",
+                render::paint(render::palette::ACCENT.bold(), &centered)
+            )?;
         }
-        writeln!(out)?;
-    }
-    for (index, (_image_id, preview)) in chunk.iter().enumerate() {
-        if index > 0 {
-            write!(out, "{:gap$}", "", gap = usize::from(GAP))?;
-        }
-        let centered = center(&preview.id, usize::from(pets::DASHBOARD_PIXEL_PET.cols));
-        write!(
-            out,
-            "{}",
-            render::paint(render::palette::ACCENT.bold(), &centered)
-        )?;
-    }
-    writeln!(out)
+        writeln!(out)
+    })
 }
 
 fn sprite_row(preview: &PetPreview, row: usize, slot: pets::PetGridSize) -> String {
@@ -365,6 +368,37 @@ mod tests {
         assert_eq!(
             lines[usize::from(pets::DASHBOARD_PIXEL_PET.rows)],
             "     codex     "
+        );
+    }
+
+    #[test]
+    fn pixel_preview_row_brackets_output_in_synchronized_output() {
+        let preview = [(
+            42,
+            PetPixelPreview {
+                id: "codex".to_owned(),
+                frame: Ok(pets::PixelPreviewFrame {
+                    width: 1,
+                    height: 1,
+                    data: vec![0, 1, 2, 3],
+                }),
+            },
+        )];
+        let mut bytes = Vec::new();
+
+        write_pixel_pet_row(&mut bytes, &preview, true).expect("render pixel row");
+
+        assert!(bytes.starts_with(b"\x1b[?2026h"));
+        assert!(bytes.ends_with(b"\x1b[?2026l"));
+        assert!(
+            !bytes
+                .windows(b"\x1bPtmux;\x1b\x1b[?2026h".len())
+                .any(|window| window == b"\x1bPtmux;\x1b\x1b[?2026h")
+        );
+        assert!(
+            !bytes
+                .windows(b"\x1bPtmux;\x1b\x1b[?2026l".len())
+                .any(|window| window == b"\x1bPtmux;\x1b\x1b[?2026l")
         );
     }
 }
