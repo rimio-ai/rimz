@@ -225,10 +225,26 @@ fn refresh_event(
             stats: Some(stats),
             walker,
         },
-        Err(_) => RefreshEvent {
-            stats: None,
-            walker: SpendingWalker::new(),
-        },
+        Err(payload) => {
+            tracing::warn!(
+                panic = %panic_payload_message(payload.as_ref()),
+                "stats refresh panicked"
+            );
+            RefreshEvent {
+                stats: None,
+                walker: SpendingWalker::new(),
+            }
+        }
+    }
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_owned()
     }
 }
 
@@ -480,16 +496,13 @@ fn load_or_refresh_stats(
             progress,
             walker,
         )),
-        Coalesced::ProduceLocal => {
-            let mut local_walker = SpendingWalker::new();
-            Ok(compute_stats_from_files(
-                paths,
-                discover_spending_files(),
-                false,
-                progress,
-                &mut local_walker,
-            ))
-        }
+        Coalesced::ProduceLocal => Ok(compute_stats_from_files(
+            paths,
+            discover_spending_files(),
+            false,
+            progress,
+            walker,
+        )),
     }
 }
 
@@ -528,7 +541,8 @@ fn compute_stats_from_files(
             None,
             &HeadlineSpec::default(),
         ),
-        (false, _) => walker.walk_in_memory(
+        (false, _) => walker.walk_local(
+            &cursor_path,
             &files,
             &prices,
             now_secs,

@@ -7,7 +7,7 @@
 
 use std::thread::JoinHandle;
 
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::agents::spending::SpendingWalker;
 use crate::sidebar::consumer::RollupCursor;
@@ -69,6 +69,10 @@ fn refresh_guarded(
         Ok(Ok(())) => Ok(()),
         Ok(Err(err)) => Err(err.to_string()),
         Err(payload) => {
+            error!(
+                panic = %super::panic_payload_message(payload.as_ref()),
+                "sidebar spending cache refresh panicked"
+            );
             *cursor = RollupCursor::new();
             *spending_walker = SpendingWalker::new();
             Err(format!(

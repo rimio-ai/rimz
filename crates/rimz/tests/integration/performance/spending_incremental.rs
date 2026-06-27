@@ -342,6 +342,68 @@ fn spending_walk_warm_keeps_trailing_windows_fresh() {
     );
 }
 
+#[test]
+fn spending_walk_local_seeds_from_disk() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache_path = dir.path().join("spending.json");
+    let transcript = dir.path().join("local.jsonl");
+    std::fs::write(&transcript, claude_line(999)).expect("transcript");
+    let cached_cost = 1.25;
+    let actual_cost = 0.001;
+    let mut cache = read_spending_cache(&cache_path);
+    cache.files = HashMap::new();
+    cache.files.insert(
+        transcript.to_string_lossy().into_owned(),
+        file_cache_entry(
+            &transcript,
+            vec![CachedEntry {
+                cost_usd: cached_cost,
+                ..cached_entries(1).remove(0)
+            }],
+        ),
+    );
+    write_spending_cache(&cache_path, &cache);
+    let files = vec![(claude_adapter(), transcript.clone())];
+    let prices = PriceBook::default();
+    let mut local_walker = SpendingWalker::new();
+
+    let local = local_walker.walk_local(
+        &cache_path,
+        &files,
+        &prices,
+        NOW_SECS,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+    );
+
+    assert!(local.stats.cache_parsed);
+    assert!(
+        !local.stats.cache_written,
+        "local fallback reads the cursor cache but never writes it"
+    );
+    assert!(
+        (local.spending.total.year.usd - cached_cost).abs() < 1e-9,
+        "matching on-disk mtime/len must serve the seeded cached entry"
+    );
+
+    let cold_cache_path = dir.path().join("cold-spending.json");
+    let mut cold_walker = SpendingWalker::new();
+    let cold = cold_walker.walk(
+        &cold_cache_path,
+        &files,
+        &prices,
+        NOW_SECS,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+    );
+    assert!(
+        (cold.spending.total.year.usd - actual_cost).abs() < 1e-9,
+        "an unseeded cold walk parses the transcript content"
+    );
+}
+
 /// Within `SPENDING_TTL`, a produce serves the published `provider-spending.json`
 /// verbatim and never touches the transcripts. Witnessed behaviorally through
 /// the real CLI: the fixture transcripts are deleted between two produces — a

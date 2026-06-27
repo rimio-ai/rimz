@@ -540,6 +540,7 @@ impl SpendingWalker {
     ) -> SpendingWalkResult {
         self.walk_inner(
             Some(cache_path),
+            true,
             files,
             prices,
             now_secs,
@@ -564,6 +565,7 @@ impl SpendingWalker {
     ) -> SpendingWalkResult {
         self.walk_inner(
             Some(cache_path),
+            true,
             files,
             prices,
             now_secs,
@@ -575,8 +577,9 @@ impl SpendingWalker {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn walk_in_memory(
+    pub fn walk_local(
         &mut self,
+        cache_path: &Path,
         files: &[(&'static dyn AgentAdapter, PathBuf)],
         prices: &PriceBook,
         now_secs: u64,
@@ -585,7 +588,8 @@ impl SpendingWalker {
         spec: &HeadlineSpec,
     ) -> SpendingWalkResult {
         self.walk_inner(
-            None,
+            Some(cache_path),
+            false,
             files,
             prices,
             now_secs,
@@ -600,6 +604,7 @@ impl SpendingWalker {
     fn walk_inner(
         &mut self,
         cache_path: Option<&Path>,
+        persist: bool,
         files: &[(&'static dyn AgentAdapter, PathBuf)],
         prices: &PriceBook,
         now_secs: u64,
@@ -646,6 +651,7 @@ impl SpendingWalker {
         let models = compute_model_breakdown_from_counted(counted, now_secs);
 
         if let Some(cache_path) = cache_path
+            && persist
             && self.cache.dirty
         {
             write_spending_cache(cache_path, &self.cache);

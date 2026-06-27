@@ -165,6 +165,10 @@ pub const METRICS_BACKGROUND_SAMPLE_TTL: Duration = Duration::from_secs(3);
 /// smaller-than-true figure that heals on the next due walk.
 pub const SPENDING_TTL: Duration = Duration::from_secs(15);
 
+/// How long a spending-lock loser may serve the last published provider cache
+/// before falling back to an incremental local walk.
+pub const SPENDING_STALE_GRACE: Duration = Duration::from_secs(90);
+
 /// Minimum gap between out-of-band Codex rate-limit refreshes for one target
 /// (active session sidecar or idle account cache). The producer checks every
 /// data tick, but budget windows move on the scale of minutes.
