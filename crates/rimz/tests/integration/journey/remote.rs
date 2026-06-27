@@ -23,6 +23,12 @@ fn remote_link_badge_renders_with_reconstructed_agents() {
             Some("main"),
         ),
     );
+    let screen = room.wait_for(|s| s.contains("coder"), SETTLE);
+    assert!(
+        screen.contains("coder"),
+        "rendered remote room should reconstruct agent rows from the ledger:\n{screen}"
+    );
+
     room.publish_link_stats(&LinkStatsFile::new(
         unix_now_ms(),
         "client".to_owned(),
@@ -37,10 +43,6 @@ fn remote_link_badge_renders_with_reconstructed_agents() {
     let screen = room.wait_for(
         |s| s.contains("coder") && s.contains("⇄ remote 210ms"),
         SETTLE,
-    );
-    assert!(
-        screen.contains("coder"),
-        "rendered remote room should reconstruct agent rows from the ledger:\n{screen}"
     );
     assert!(
         screen.contains("⇄ remote 210ms"),
