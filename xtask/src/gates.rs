@@ -5,39 +5,66 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::build::build_plugin;
 use crate::docs_links::docs_links;
 use crate::invariants::invariants;
-use crate::runner::{ensure_success, run, run_with_env_removed};
+use crate::runner::{ensure_success, run, run_captured, run_with_env_removed};
+
+const LINT_ARGS: &[&str] = &[
+    "clippy",
+    "--workspace",
+    "--all-targets",
+    "--all-features",
+    "--locked",
+    "--",
+    "-D",
+    "warnings",
+];
+const DOCTEST_ARGS: &[&str] = &["test", "--workspace", "--doc", "--all-features", "--locked"];
+const DOCTEST_REMOVED_ENVS: &[&str] = &["RUSTC_WRAPPER"];
+const GATE_TEST_ARGS: &[&str] = &[
+    "nextest",
+    "run",
+    "--profile",
+    "gate",
+    "--workspace",
+    "--all-features",
+    "--locked",
+];
+const CARGO_PROGRESS_VERBS: &[&str] = &[
+    "Compiling",
+    "Checking",
+    "Finished",
+    "Building",
+    "Downloading",
+    "Downloaded",
+    "Updating",
+    "Locking",
+    "Blocking",
+    "Running",
+];
+const TRIMMED_OUTPUT_MAX_CHARS: usize = 12_000;
 
 pub(crate) fn fmt(root: &Path) -> Result<()> {
     run(root, "cargo", ["fmt", "--all", "--", "--check"])
 }
 
 pub(crate) fn lint(root: &Path) -> Result<()> {
-    run(
-        root,
-        "cargo",
-        [
-            "clippy",
-            "--workspace",
-            "--all-targets",
-            "--all-features",
-            "--locked",
-            "--",
-            "-D",
-            "warnings",
-        ],
-    )
+    run(root, "cargo", LINT_ARGS.iter().copied())
 }
 
 pub(crate) fn doctest(root: &Path) -> Result<()> {
-    run(
+    // rustdoc doctest compilation can ask for transitive deps in rlib form
+    // immediately after clippy refreshed sccache artifacts. The doctest target
+    // is tiny; run it through rustc directly so local wrappers do not make the
+    // gate order flaky.
+    run_with_env_removed(
         root,
         "cargo",
-        ["test", "--workspace", "--doc", "--all-features", "--locked"],
+        DOCTEST_ARGS.iter().copied(),
+        DOCTEST_REMOVED_ENVS,
     )
 }
 
@@ -130,6 +157,98 @@ fn workspace_version(root: &Path) -> Result<String> {
 //      compile failures land before the expensive instrumented build.
 type Gate = fn(&Path) -> Result<()>;
 
+type CompactGate = fn(&Path) -> Result<GateResult>;
+
+enum GateResult {
+    Pass { note: Option<String> },
+    Fail { detail: String },
+}
+
+pub(crate) fn gate(root: &Path) -> Result<()> {
+    for (name, step) in [
+        ("fmt", gate_fmt as CompactGate),
+        ("invariants", gate_invariants),
+        ("docs-links", gate_docs_links),
+        ("lint", gate_lint),
+        ("doctest", gate_doctest),
+        ("test", gate_test),
+    ] {
+        match step(root)? {
+            GateResult::Pass { note } => report_gate_pass(name, note.as_deref()),
+            GateResult::Fail { detail } => {
+                report_gate_failure(name, &detail);
+                bail!("gate failed at {name}");
+            }
+        }
+    }
+    report_gate_complete();
+    Ok(())
+}
+
+fn gate_fmt(root: &Path) -> Result<GateResult> {
+    captured_cargo_gate(root, ["fmt", "--all"], &[], None)
+}
+
+fn gate_invariants(root: &Path) -> Result<GateResult> {
+    Ok(in_process_gate(|| invariants(root)))
+}
+
+fn gate_docs_links(root: &Path) -> Result<GateResult> {
+    Ok(in_process_gate(|| docs_links(root)))
+}
+
+fn gate_lint(root: &Path) -> Result<GateResult> {
+    captured_cargo_gate(root, LINT_ARGS.iter().copied(), &[], None)
+}
+
+fn gate_doctest(root: &Path) -> Result<GateResult> {
+    captured_cargo_gate(
+        root,
+        DOCTEST_ARGS.iter().copied(),
+        DOCTEST_REMOVED_ENVS,
+        None,
+    )
+}
+
+fn gate_test(root: &Path) -> Result<GateResult> {
+    captured_cargo_gate(
+        root,
+        GATE_TEST_ARGS.iter().copied(),
+        &["NO_COLOR"],
+        Some(extract_test_summary),
+    )
+}
+
+fn captured_cargo_gate<I, S>(
+    root: &Path,
+    args: I,
+    removed_envs: &[&str],
+    note: Option<fn(&str) -> Option<String>>,
+) -> Result<GateResult>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let captured = run_captured(root, "cargo", args, removed_envs)?;
+    if captured.status.success() {
+        return Ok(GateResult::Pass {
+            note: note.and_then(|extract| extract(&captured.output)),
+        });
+    }
+    Ok(GateResult::Fail {
+        detail: failure_detail(&captured.output),
+    })
+}
+
+fn in_process_gate(gate: impl FnOnce() -> Result<()>) -> GateResult {
+    match gate() {
+        Ok(()) => GateResult::Pass { note: None },
+        Err(err) => GateResult::Fail {
+            detail: format!("{err:#}"),
+        },
+    }
+}
+
 pub(crate) fn ci(root: &Path) -> Result<()> {
     let ci_start = Instant::now();
     let mut timings: Vec<(String, Duration)> = Vec::new();
@@ -218,6 +337,89 @@ fn report_timings(wall_clock: Duration, timings: &[(String, Duration)]) {
     eprintln!("  {:>8}  ci wall clock", secs(wall_clock));
 }
 
+#[expect(
+    clippy::print_stderr,
+    reason = "xtask prints compact gate progress to the operator's stderr"
+)]
+fn report_gate_pass(name: &str, note: Option<&str>) {
+    if let Some(note) = note {
+        eprintln!("✓ {name} ({note})");
+    } else {
+        eprintln!("✓ {name}");
+    }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "xtask prints compact gate failures and the next action to stderr"
+)]
+fn report_gate_failure(name: &str, detail: &str) {
+    eprintln!("gate: fail at {name}");
+    eprintln!("{detail}");
+    eprintln!("NEXT: fix the {name} errors above, then rerun `cargo xtask gate`");
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "xtask prints compact gate completion to the operator's stderr"
+)]
+fn report_gate_complete() {
+    eprintln!("gate: pass");
+}
+
+fn failure_detail(output: &str) -> String {
+    let detail = trim_cargo_noise(output);
+    if detail.is_empty() {
+        "command failed without output".to_owned()
+    } else {
+        detail
+    }
+}
+
+fn trim_cargo_noise(output: &str) -> String {
+    let mut lines = Vec::new();
+    let mut previous_blank = true;
+    for line in output.lines().filter(|line| !is_cargo_progress(line)) {
+        let line = line.trim_end();
+        if line.trim().is_empty() {
+            if !previous_blank {
+                lines.push(String::new());
+                previous_blank = true;
+            }
+        } else {
+            lines.push(line.to_owned());
+            previous_blank = false;
+        }
+    }
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    bound_trimmed_output(lines.join("\n"))
+}
+
+fn is_cargo_progress(line: &str) -> bool {
+    let line = line.trim_start();
+    CARGO_PROGRESS_VERBS
+        .iter()
+        .any(|verb| line.starts_with(verb))
+}
+
+fn bound_trimmed_output(output: String) -> String {
+    if output.chars().count() <= TRIMMED_OUTPUT_MAX_CHARS {
+        return output;
+    }
+    let mut truncated: String = output.chars().take(TRIMMED_OUTPUT_MAX_CHARS).collect();
+    truncated.push_str("\n... output truncated ...");
+    truncated
+}
+
+fn extract_test_summary(output: &str) -> Option<String> {
+    output
+        .lines()
+        .find(|line| line.contains("tests run:"))
+        .map(|line| line.trim().to_owned())
+}
+
 // cargo-machete decides "I'm running under cargo" with
 // `CARGO is set AND CARGO_PKG_NAME is unset`; since xtask is itself a cargo
 // crate, `CARGO_PKG_NAME=xtask` is inherited and machete treats argv[1]
@@ -289,5 +491,44 @@ mod tests {
         assert!(!deny_offline(Some("0")));
         assert!(!deny_offline(Some("")));
         assert!(!deny_offline(None));
+    }
+
+    #[test]
+    fn trim_cargo_noise_drops_progress_and_keeps_diagnostics() {
+        let output = "\
+   Compiling foo v1.2.3
+    Finished `dev` profile
+     Running `cargo clippy`
+
+
+error[E0599]: no method named `run`
+
+
+warning: unused variable
+  --> src/x.rs:3:1
+";
+
+        assert_eq!(
+            trim_cargo_noise(output),
+            "\
+error[E0599]: no method named `run`
+
+warning: unused variable
+  --> src/x.rs:3:1"
+        );
+    }
+
+    #[test]
+    fn extract_test_summary_reads_nextest_summary_line() {
+        let output = "\
+some setup line
+Summary [   12.3s] 2611 tests run: 2611 passed, 42 skipped
+";
+
+        assert_eq!(
+            extract_test_summary(output).as_deref(),
+            Some("Summary [   12.3s] 2611 tests run: 2611 passed, 42 skipped")
+        );
+        assert_eq!(extract_test_summary("no summary here"), None);
     }
 }

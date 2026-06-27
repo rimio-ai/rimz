@@ -2,9 +2,14 @@ use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Stdio};
 
 use anyhow::{Context, Result, bail};
+
+pub(crate) struct Captured {
+    pub(crate) status: ExitStatus,
+    pub(crate) output: String,
+}
 
 pub(crate) fn run<I, S>(root: &Path, program: &str, args: I) -> Result<()>
 where
@@ -52,7 +57,45 @@ where
     S: AsRef<OsStr>,
 {
     let args: Vec<_> = args.into_iter().collect();
-    let mut command = if crate::rtk::wrap_cargo(program, &args) {
+    let mut command = build_command(root, program, &args, envs, removed_envs);
+    let status = command
+        .status()
+        .with_context(|| format!("running `{program}`"))?;
+    ensure_success(program, &args, status)
+}
+
+pub(crate) fn run_captured<I, S>(
+    root: &Path,
+    program: &str,
+    args: I,
+    removed_envs: &[&str],
+) -> Result<Captured>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let args: Vec<_> = args.into_iter().collect();
+    let output = build_command(root, program, &args, &[], removed_envs)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("running `{program}`"))?;
+    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    Ok(Captured {
+        status: output.status,
+        output: combined,
+    })
+}
+
+fn build_command<S: AsRef<OsStr>>(
+    root: &Path,
+    program: &str,
+    args: &[S],
+    envs: &[(&str, PathBuf)],
+    removed_envs: &[&str],
+) -> Command {
+    let mut command = if crate::rtk::wrap_cargo(program, args) {
         let mut command = Command::new("rtk");
         command.arg(program);
         command
@@ -66,10 +109,7 @@ where
     for key in removed_envs {
         command.env_remove(key);
     }
-    let status = command
-        .status()
-        .with_context(|| format!("running `{program}`"))?;
-    ensure_success(program, &args, status)
+    command
 }
 
 pub(crate) fn ensure_success<S: AsRef<OsStr>>(

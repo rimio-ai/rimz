@@ -174,7 +174,7 @@ Both helpers live next to the durability contract they enforce. No module hand-r
 
 ## Tests
 
-Local runner: `cargo xtask test` (wraps `cargo nextest run`; trailing args forward as nextest filters, for example `cargo xtask test auth`). nextest is the only suite runner — install it with `cargo install cargo-nextest --locked`. Doctests, which nextest does not run, go through `cargo xtask doctest`.
+Local runner: `cargo xtask test` (wraps `cargo nextest run`; trailing args forward as nextest filters, for example `cargo xtask test auth`). The everyday pre-PR composite is `cargo xtask gate`, which layers formatting, invariants, docs-links, lint, doctests, and the fast nextest subset over that runner. nextest is the only suite runner — install it with `cargo install cargo-nextest --locked`. Doctests, which nextest does not run, go through `cargo xtask doctest`.
 
 Core test shapes keep their own discipline:
 
@@ -245,7 +245,7 @@ rcodesign --version
 
 ### Quality gates
 
-Every gate runs in CI with warnings treated as errors. Local equivalents are `cargo xtask <task>`; `cargo xtask ci` composes the full stack when a change calls for full validation.
+Every gate runs in CI with warnings treated as errors. Local equivalents are `cargo xtask <task>`; `cargo xtask gate` is the pre-PR default, and `cargo xtask ci` composes the full stack when a change calls for full validation.
 
 - `cargo fmt --all -- --check` — formatting.
 - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` — lint.
@@ -259,6 +259,8 @@ Every gate runs in CI with warnings treated as errors. Local equivalents are `ca
 - `cargo semver-checks` — release-time API check; skipped while the workspace version is the unpublished pre-release `0.0.0`.
 - `cargo xtask perf` — non-gating divan benchmarks for the measured performance model; accepts cargo bench filters such as `cargo xtask perf fleet`.
 
+`cargo xtask gate` runs `cargo fmt --all` in fix mode, then invariants, docs-links, lint, doctests, and `cargo nextest run --profile gate --workspace --all-features --locked`. The `gate` nextest profile excludes live-backend and journey tiers, keeps deterministic performance tests, captures each step's output, prints one compact success line per step, and fails fast with a trimmed excerpt plus a `NEXT:` hint. Use `ci` when a change needs audits, plugin build, coverage, semver, live-backend, or journey coverage.
+
 Inside `ci` the gates are ordered for speed, not listed order: the instant text gates (`fmt`, `invariants`, `docs-links`) run first and fail fast; the metadata-only audits (`deny`, `deps`, `vet`) overlap the compile gates on their own threads; the compile gates run sequentially (`build-plugin → lint → coverage → doctest → semver`) because concurrent cargo builds only serialize on the target-dir lock. `ci` prints a per-gate timing summary to stderr.
 
 Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it points `core.hooksPath` at `.githooks/`). The committed `pre-commit` shim routes git's call to `cargo xtask fmt`, so a commit that would fail the CI formatting gate is caught locally before it lands; `git commit --no-verify` bypasses it for a single commit. CI stays the authoritative gate — the hook is fast local feedback, not a substitute.
@@ -269,7 +271,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 ### Contributor command surface
 
-`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `hooks`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `invariants`, `docs-links`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. `install-dev` is the contributor opt-in to [off-box reporting](../internals/health/observability.md): a debug host `rimz` built `--features sentry`, so its reporting defaults to the `development` environment. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
+`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `hooks`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `invariants`, `docs-links`, `gate`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. `install-dev` is the contributor opt-in to [off-box reporting](../internals/health/observability.md): a debug host `rimz` built `--features sentry`, so its reporting defaults to the `development` environment. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
 
 ## Reading order for new contributors
 

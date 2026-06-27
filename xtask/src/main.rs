@@ -153,6 +153,11 @@ const TASKS: &[TaskInfo] = &[
         runs: "list, live, pane <id>, or state <empty|fleet|provider>",
     },
     TaskInfo {
+        name: "gate",
+        summary: "Run the fast pre-PR gate stack.",
+        runs: "fmt --all (fix), invariants, docs-links, lint, doctest, test (nextest -P gate)",
+    },
+    TaskInfo {
         name: "ci",
         summary: "Run the full local CI gate stack.",
         runs: "fmt, invariants, docs-links, audits, build-plugin, lint, doctest, coverage, semver",
@@ -257,6 +262,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "perf" => gates::perf(root, args),
         "invariants" => invariants::invariants(root),
         "docs-links" => docs_links::docs_links(root),
+        "gate" => gates::gate(root),
         "pricing-refresh" => pricing::pricing_refresh(root),
         "theme-refresh" => theme::theme_refresh(root),
         "screenshot" => screenshot::screenshot(root, args),

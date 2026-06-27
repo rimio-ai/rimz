@@ -77,6 +77,13 @@ retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s",
 filter = 'package(rimz) & test(/^journey::/) & not test(/^journey::deep::/)'
 test-group = 'rendered-journey'
 
+# `gate` is the fast pre-PR subset: everything except the live-backend and
+# journey tiers. The perf tier stays in this profile because it is deterministic
+# and fast. Escalate to the full suite (`cargo xtask ci` / explicit filters)
+# when a change touches the excluded surfaces.
+[profile.gate]
+default-filter = 'not (package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^journey::/)))'
+
 # CI runs under coverage instrumentation on a shared runner; `coverage` selects
 # this profile with `-P ci`. It inherits everything from `default` and remaps
 # only the Zellij live group onto the cap-1 `live-zellij-ci` group so concurrent
