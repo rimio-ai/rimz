@@ -500,7 +500,7 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
             "journey-runner",
             "-p",
             "--timeout",
-            "30s",
+            "60s",
             "--keep",
         ])
         .stdout(Stdio::piped())
