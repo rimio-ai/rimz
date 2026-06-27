@@ -148,6 +148,50 @@ fn published_stats_reads_rollups_and_windows() {
 }
 
 #[test]
+fn stats_serves_published_cache_without_walking() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(rimz::WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    ensure_shared_runtime(&runtime).unwrap();
+    let by_day = BTreeMap::from([(20_000, day(40, 4.0))]);
+    let by_model = BTreeMap::from([(
+        "claude-opus-4-8".to_owned(),
+        model_tally(100, 7.0, 70, 30, 5),
+    )]);
+    let mut spending = rimz::agents::spending::Spending::default();
+    spending.total.week.tokens = 7;
+    spending.total.week.usd = 0.7;
+    spending.total.month.tokens = 30;
+    spending.total.month.usd = 3.0;
+    spending.total.year.tokens = 365;
+    spending.total.year.usd = 36.5;
+    spending
+        .by_provider
+        .insert("claude".to_owned(), tally(120, 12.0, 3));
+    rimz::agents::spending::write_provider_spending_cache_with_rollups(
+        &runtime.shared_provider_spending_path(),
+        unix_millis_now(),
+        &spending,
+        &by_day,
+        &by_model,
+    );
+    let cursor_path = runtime.shared_spending_cursor_path();
+    assert!(!cursor_path.exists());
+    let mut walker = SpendingWalker::new();
+
+    let stats = load_or_refresh_stats(&runtime, None, &mut walker).unwrap();
+
+    assert_eq!(stats.by_day, by_day);
+    assert_eq!(stats.by_model, by_model);
+    assert_eq!(stats.total.year.tokens, 365);
+    assert_eq!(stats.by_agent["claude"].year.sessions, 3);
+    assert!(
+        !cursor_path.exists(),
+        "published stats are served before transcript discovery or cursor writes"
+    );
+}
+
+#[test]
 fn cold_refresh_publishes_sidebar_provider_rollups() {
     let dir = tempfile::tempdir().unwrap();
     let runtime =

@@ -1156,6 +1156,46 @@ fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
 }
 
 #[test]
+fn spending_walk_persists_cursor_before_aggregate() {
+    let dir = TempDir::new().unwrap();
+    let cache_path = dir.path().join("spending.json");
+    let transcript = write_jsonl(dir.path(), "claude.jsonl", &[]);
+    let mut old_a = cached_entry(NOW_SECS - 40 * 86_400, 1.0, "old");
+    old_a.model = Some("claude-opus-4-8".to_owned());
+    let mut old_b = cached_entry(NOW_SECS - 40 * 86_400, 2.0, "old");
+    old_b.model = Some("claude-opus-4-8".to_owned());
+    let mut cache = read_spending_cache(&cache_path);
+    cache.files = HashMap::from([cached_file(&transcript, vec![old_a, old_b])]);
+    write_spending_cache(&cache_path, &cache);
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> =
+        vec![(claude_adapter(), transcript.clone())];
+    let mut walker = SpendingWalker::new();
+
+    panic_after_next_refresh_for_test();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        walker.walk(
+            &cache_path,
+            &files,
+            &PriceBook::default(),
+            NOW_SECS,
+            &Default::default(),
+            None,
+            &HeadlineSpec::default(),
+        )
+    }));
+
+    assert!(
+        result.is_err(),
+        "test panic fires after refresh, before aggregation"
+    );
+    let persisted = read_spending_cache(&cache_path);
+    let entries = &persisted.files[&transcript.to_string_lossy().into_owned()].entries;
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].rolled);
+    assert_eq!(entries[0].cost_usd, 3.0);
+}
+
+#[test]
 fn cache_compaction_dedups_replays_before_rollup() {
     let session = PathBuf::from("/x/session");
     let main = session.join("chat.jsonl");

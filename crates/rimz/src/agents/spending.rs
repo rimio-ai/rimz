@@ -18,7 +18,7 @@
 //! workspace-scoped [`SpendTally`] derived from the same cached entries.
 
 #[cfg(test)]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -29,6 +29,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tracing::warn;
 
 use super::descriptor::ThreadKey;
 use super::pricing::PriceBook;
@@ -454,6 +455,7 @@ type DiscoveredSpendingFiles = Vec<(&'static dyn AgentAdapter, PathBuf)>;
 thread_local! {
     static DISCOVER_SPENDING_FILES_OVERRIDE: RefCell<Option<DiscoveredSpendingFiles>> =
         const { RefCell::new(None) };
+    static PANIC_AFTER_REFRESH_FOR_TEST: Cell<bool> = const { Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -477,6 +479,18 @@ pub(crate) fn override_discovered_spending_files_for_test(
 ) -> DiscoverSpendingFilesOverride {
     let prior = DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| slot.replace(Some(files)));
     DiscoverSpendingFilesOverride { prior }
+}
+
+#[cfg(test)]
+fn panic_after_refresh_for_test() {
+    if PANIC_AFTER_REFRESH_FOR_TEST.with(|slot| slot.replace(false)) {
+        panic!("spending walk aggregate test panic");
+    }
+}
+
+#[cfg(test)]
+fn panic_after_next_refresh_for_test() {
+    PANIC_AFTER_REFRESH_FOR_TEST.with(|slot| slot.set(true));
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -626,6 +640,17 @@ impl SpendingWalker {
             origin_overrides,
             progress,
         );
+        if let Some(cache_path) = cache_path
+            && persist
+            && self.cache.dirty
+            && write_spending_cache(cache_path, &self.cache)
+        {
+            self.cache.dirty = false;
+            self.cache_stamp = cache_stamp(cache_path);
+            stats.cache_written = true;
+        }
+        #[cfg(test)]
+        panic_after_refresh_for_test();
         if self.cache.generation != prior_generation {
             self.memo = None;
         }
@@ -649,16 +674,6 @@ impl SpendingWalker {
             .unwrap_or_default();
         let days = compute_daily_spend_from_counted(counted);
         let models = compute_model_breakdown_from_counted(counted, now_secs);
-
-        if let Some(cache_path) = cache_path
-            && persist
-            && self.cache.dirty
-        {
-            write_spending_cache(cache_path, &self.cache);
-            self.cache.dirty = false;
-            self.cache_stamp = cache_stamp(cache_path);
-            stats.cache_written = true;
-        }
 
         SpendingWalkResult {
             spending,
@@ -1778,12 +1793,22 @@ pub fn read_spending_cache(path: &Path) -> SpendingDiskCache {
 
 /// Atomic write: temp file + rename, matching the project's ledger durability
 /// contract.
-pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) {
+pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) -> bool {
     let _ = crate::ledger::atomic::sweep_stale_temp_siblings(
         path,
         std::time::Duration::from_secs(3_600),
     );
-    let _ = crate::ledger::atomic::write_temp_then_rename_cache_compact(path, cache);
+    match crate::ledger::atomic::write_temp_then_rename_cache_compact(path, cache) {
+        Ok(()) => true,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "spending cursor cache write failed"
+            );
+            false
+        }
+    }
 }
 
 // ── Provider-spending cache ───────────────────────────────────────────────────
@@ -1835,10 +1860,14 @@ impl ProviderSpendingCache {
 /// producer its own [`SPENDING_TTL`] gate — without re-walking the JSONL
 /// transcript history. Follows the same temp-then-rename durability contract
 /// as [`write_spending_cache`].
-pub fn write_provider_spending_cache(path: &Path, refreshed_at_ms: u64, spending: &Spending) {
+pub fn write_provider_spending_cache(
+    path: &Path,
+    refreshed_at_ms: u64,
+    spending: &Spending,
+) -> bool {
     let days = BTreeMap::new();
     let models = BTreeMap::new();
-    write_provider_spending_cache_with_rollups(path, refreshed_at_ms, spending, &days, &models);
+    write_provider_spending_cache_with_rollups(path, refreshed_at_ms, spending, &days, &models)
 }
 
 /// Atomic write of the provider aggregate plus the rollups consumed by
@@ -1849,7 +1878,7 @@ pub fn write_provider_spending_cache_with_rollups(
     spending: &Spending,
     days: &BTreeMap<i64, DaySpend>,
     models: &BTreeMap<String, SpendTally>,
-) {
+) -> bool {
     let cache = ProviderSpendingCache {
         version: PROVIDER_SPENDING_VERSION,
         refreshed_at_ms,
@@ -1861,7 +1890,17 @@ pub fn write_provider_spending_cache_with_rollups(
         path,
         std::time::Duration::from_secs(3_600),
     );
-    let _ = crate::ledger::atomic::write_temp_then_rename_cache(path, &cache);
+    match crate::ledger::atomic::write_temp_then_rename_cache(path, &cache) {
+        Ok(()) => true,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "provider spending cache write failed"
+            );
+            false
+        }
+    }
 }
 
 /// Read the provider-spending cache written by [`write_provider_spending_cache`].
