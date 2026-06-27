@@ -83,7 +83,7 @@ An address resolves to zero, one, or many agents against a fresh snapshot, and a
 
 ## Talk and queue
 
-`steer` and `queue` both deliver text to a member, ride the same pane-send primitive humans and resolvers share, resolve the [address](#the-address) above against a fresh snapshot, and take their state decisions from the ledger and the hook lifecycle. They mirror each other on flags ([cli/agents.md](../../reference/cli/agents.md#steer-live-agents) is the surface) and diverge on one thing: timing. `queue` sends through the steer path when the target can receive now; otherwise it parks a durable record, and `--on` picks the later boundary that opens that record.
+`message`, `steer`, and `queue` deliver text to a member, ride the same pane-send primitive humans and resolvers share, resolve the [address](#the-address) above against a fresh snapshot, and take their state decisions from the ledger and the hook lifecycle. `message` is the front-door spelling for the queue path: send now when possible, park for the next turn boundary otherwise. `steer` and `queue` mirror each other on flags ([cli/agents.md](../../reference/cli/agents.md#steer-live-agents) is the surface) and diverge on one thing: timing. `queue` sends through the steer path when the target can receive now; otherwise it parks a durable record, and `--on` picks the later boundary that opens that record.
 
 ### Targets
 

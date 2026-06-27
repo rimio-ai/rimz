@@ -17,7 +17,7 @@ rimz
 
 `rimz` resolves the workspace, creates or reattaches the Zellij or tmux session, opens the sidebar, and drops you in. From there you work three ways, each with its own entry point:
 
-- **Drive agents live.** Launch them into panes and tabs with [`rimz agents`](./cli/agents.md#agents), then [`steer`](./cli/agents.md#steer-live-agents) and [`queue`](./cli/agents.md#queue-the-next-message) text to them by name.
+- **Drive agents live.** Launch them into panes and tabs with [`rimz agents`](./cli/agents.md#agents), use [`rimz message`](./cli/agents.md#message-an-agent) as the one-liner front door, and reach for [`steer`](./cli/agents.md#steer-live-agents) or [`queue`](./cli/agents.md#queue-the-next-message) when you need their explicit forms.
 - **Script the fleet.** Run one supervised agent turn with [`rimz agents … -p`](./cli/agents.md#supervised-runs--p) and branch on its exit code, or block on a human decision with [`rimz feed ask`](./cli/feed.md#feed-items-and-decisions).
 - **Reach a room anywhere.** Attach over SSH with [`rimz remote`](./cli/getting-started.md#remote-rooms).
 
@@ -26,7 +26,7 @@ rimz
 | Group | Commands | Reference |
 | --- | --- | --- |
 | **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `list`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) |
-| **Work with agents** | `agents`, `transcript`, `steer`, `queue`, `pane`, `worktree`, `loop` | [Agent control](./cli/agents.md) |
+| **Work with agents** | `agents`, `message`, `transcript`, `steer`, `queue`, `pane`, `worktree`, `loop` | [Agent control](./cli/agents.md) |
 | **Decisions, hooks, and trust** | `feed`, `event`, `resolver`, `hooks`, `trust` | [Feed, resolvers, hooks, and trust](./cli/feed.md) |
 | **Configure and maintain** | `config`, `coverage`, `list-pets`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, `ping` | [Maintenance](./cli/maintenance.md) |
 
@@ -58,7 +58,7 @@ These hold across the whole CLI, so each command page assumes them rather than r
 
 **`--help` is the flag reference.** Every command and subcommand prints its full flags and defaults with `--help`. These pages teach the model and the forms worth knowing; they leave the exhaustive switch list to `--help`, which never drifts from the binary.
 
-**Addressing agents.** `steer`, `queue`, `transcript`, and the `agents` management verbs all name agents the same way — `@<handle>` for who, `#<channel>` for which worktree or in-place team, or a raw pane id. The one canonical explanation is [Addressing agents](./cli/agents.md#addressing-agents).
+**Addressing agents.** `message`, `steer`, `queue`, `transcript`, and the `agents` management verbs all name agents the same way — `@<handle>` for who, `#<channel>` for which worktree or in-place team, or a raw pane id. The one canonical explanation is [Addressing agents](./cli/agents.md#addressing-agents).
 
 **Pick the backend with `--mux`.** When both Zellij and tmux are installed, `--mux zellij` or `--mux tmux` chooses the backend for that invocation. With one installed, Rimz uses it.
 

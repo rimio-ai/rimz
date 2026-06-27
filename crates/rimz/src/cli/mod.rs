@@ -19,6 +19,7 @@ mod list;
 mod list_pets;
 mod list_themes;
 mod loop_cmd;
+mod message;
 mod opencode;
 mod pane;
 mod parse;
@@ -98,6 +99,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
         Some(Subcmd::Steer(args)) => steer::run(args, &globals),
         Some(Subcmd::Queue(args)) => queue::run(args, &globals),
+        Some(Subcmd::Message(args)) => message::run(args, &globals),
         Some(Subcmd::Resolver(args)) => resolver::run(args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
@@ -196,6 +198,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::Pane(_)) => ("pane", None, None),
         Some(Subcmd::Steer(_)) => ("steer", None, None),
         Some(Subcmd::Queue(_)) => ("queue", None, None),
+        Some(Subcmd::Message(_)) => ("message", None, None),
         Some(Subcmd::Resolver(_)) => ("resolver", None, None),
         Some(Subcmd::Sidebar(args)) => (args.command_label(), None, None),
         Some(Subcmd::Statusline(_)) => ("statusline", None, None),
@@ -577,6 +580,9 @@ enum Subcmd {
     Steer(steer::SteerArgs),
     /// Queue text for delivery when an agent finishes a turn.
     Queue(queue::QueueArgs),
+    /// Message an agent: queue text, sent now if possible, parked for the next
+    /// turn boundary otherwise. Front door over `steer`/`queue`.
+    Message(message::MessageArgs),
     /// Manage the per-machine resolver allowlist.
     Resolver(resolver::ResolverArgs),
     /// Sidebar helper API. The sidebar calls these; humans usually do not.

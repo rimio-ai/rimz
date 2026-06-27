@@ -88,6 +88,52 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
 }
 
 #[test]
+fn message_parks_like_queue_without_separator() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-message", "feature-message", &[]);
+
+    let out = env
+        .rimz()
+        .args(["message", "@claude", "next task"])
+        .output()
+        .expect("message add");
+    assert!(
+        out.status.success(),
+        "message failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].status, MessageStatus::Queued);
+    assert_eq!(pending[0].text, "next task");
+}
+
+#[test]
+fn message_accepts_double_dash_escape() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-message-dash", "feature-message-dash", &[]);
+
+    let out = env
+        .rimz()
+        .args(["message", "@claude", "--", "-x literal"])
+        .output()
+        .expect("message add");
+    assert!(
+        out.status.success(),
+        "message failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].status, MessageStatus::Queued);
+    assert_eq!(pending[0].text, "-x literal");
+}
+
+#[test]
 fn queue_add_for_bound_agent_does_not_enumerate_panes() {
     let env = Env::new();
     env.install_agent_hooks("claude");

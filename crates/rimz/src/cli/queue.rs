@@ -97,7 +97,7 @@ pub fn run(args: QueueArgs, globals: &GlobalFlags) -> Result<()> {
 /// Shared enqueue for the `queue add` and bare `queue` forms: resolve the prompt
 /// from inline argv or `--file`, then split the mirrored `SendFlags` into the
 /// delivery spec and the fan-out controls and hand off.
-fn queue_add(
+pub(crate) fn queue_add(
     target: String,
     gate: DeliveryGate,
     send: SendFlags,
@@ -863,7 +863,7 @@ fn preflight_queue_hooks(agent: &AgentState) -> Result<()> {
     Ok(())
 }
 
-fn parse_gate(raw: &str) -> std::result::Result<DeliveryGate, String> {
+pub(crate) fn parse_gate(raw: &str) -> std::result::Result<DeliveryGate, String> {
     match raw {
         "done" => Ok(DeliveryGate::Done),
         "any" => Ok(DeliveryGate::Any),

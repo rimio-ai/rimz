@@ -51,9 +51,9 @@ pub(crate) struct SendFlags {
     /// (`120000`). Defaults from `[harness] smart_compact` when omitted.
     #[arg(long, value_name = "PCT|TOKENS", value_parser = AutoCompact::parse)]
     pub(crate) smart_compact: Option<AutoCompact>,
-    /// Read the prompt verbatim from a file instead of the `-- text` argv. A file
-    /// already carries real newlines and literal backslashes, so it is sent as-is
-    /// with no `\n`/`\\` interpretation. Conflicts with inline `-- text`.
+    /// Read the prompt verbatim from a file instead of inline argv. A file already
+    /// carries real newlines and literal backslashes, so it is sent as-is with no
+    /// `\n`/`\\` interpretation. Conflicts with inline text.
     #[arg(long, value_name = "PATH")]
     pub(crate) file: Option<PathBuf>,
     /// Deliver the text verbatim with no `from @sender:` prefix, even for an agent
@@ -66,15 +66,15 @@ pub(crate) struct SendFlags {
     pub(crate) wait: Option<Option<Duration>>,
 }
 
-/// Resolve the prompt a `steer`/`queue` invocation carries from its two sources:
-/// the trailing `-- text…` argv, or a `--file` path. Exactly one applies — a file
-/// is read verbatim (it already holds real newlines and literal backslashes),
-/// while inline argv goes through `\n`/`\\` interpretation.
+/// Resolve the prompt a send-style invocation carries from its two sources:
+/// inline argv, or a `--file` path. Exactly one applies — a file is read verbatim
+/// (it already holds real newlines and literal backslashes), while inline argv
+/// goes through `\n`/`\\` interpretation.
 pub(crate) fn resolve_message(parts: &[String], file: Option<&Path>) -> Result<String> {
     match file {
         Some(path) => {
             if !parts.is_empty() {
-                bail!("pass a prompt as `-- text` or `--file`, not both");
+                bail!("pass a prompt inline or with `--file`, not both");
             }
             read_prompt_file(path)
         }
@@ -452,7 +452,7 @@ fn read_prompt_file(path: &Path) -> Result<String> {
     Ok(text.to_owned())
 }
 
-/// Join `-- text…` argv into one message, interpreting `\n` as a soft newline and
+/// Join inline argv into one message, interpreting `\n` as a soft newline and
 /// `\\` as a literal backslash, so a multi-line prompt can be typed inline. The
 /// bracketed-paste send path delivers each `\n` as a composer line break rather
 /// than a submit. Every other escape keeps its backslash, so a regex or a

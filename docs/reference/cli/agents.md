@@ -7,7 +7,7 @@ A typical session threads the whole surface together:
 ```sh
 rimz agents claude,codex --worktree=auth-refresh "Refactor token refresh; keep the public API stable."
 rimz steer @claude#auth-refresh -- "Start with the refresh-token rotation path."
-rimz queue @codex#auth-refresh -- "After your turn, add coverage for the expiry edge cases."
+rimz message @codex#auth-refresh "After your turn, add coverage for the expiry edge cases."
 rimz agents focus @claude#auth-refresh        # jump to the pane when it needs you
 ```
 
@@ -15,7 +15,7 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 
 ## Addressing agents
 
-`steer`, `queue`, `transcript`, and the `agents show`/`focus`/`wait`/`stop` verbs share one address grammar: **`@<handle>` names who, an optional `#<channel>` names the worktree or in-place team channel,** and a raw pane id is the precise fallback. This is the one place it is spelled out; every command below assumes it.
+`message`, `steer`, `queue`, `transcript`, and the `agents show`/`focus`/`wait`/`stop` verbs share one address grammar: **`@<handle>` names who, an optional `#<channel>` names the worktree or in-place team channel,** and a raw pane id is the precise fallback. This is the one place it is spelled out; every command below assumes it.
 
 **Handles that name one agent:**
 
@@ -40,9 +40,9 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 **One agent or many:**
 
 - The management verbs (`show`, `focus`, `wait`, `stop`) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from.
-- `steer` and `queue` fan out: a multi-match is ambiguous until you opt in with `--all` (or address `@all`), and a fan-out confirms past the first match unless `--yes` — off a TTY it refuses without it.
+- `message`, `steer`, and `queue` fan out: a multi-match is ambiguous until you opt in with `--all` (or address `@all`), and a fan-out confirms past the first match unless `--yes` — off a TTY it refuses without it.
 
-The `@` sigil is required for `steer` and `queue` (it also keeps a target from being read as a launch spec); `show`, `wait`, and `stop` also accept a bare selector (`swift-otter`) or a run id. The deeper resolution rules are in [harness.md → The address](../../internals/agents/harness.md#the-address).
+The `@` sigil is required for `message`, `steer`, and `queue` (it also keeps a target from being read as a launch spec); `show`, `wait`, and `stop` also accept a bare selector (`swift-otter`) or a run id. The deeper resolution rules are in [harness.md → The address](../../internals/agents/harness.md#the-address).
 
 ## Agents
 
@@ -111,6 +111,23 @@ rimz agents stop run_0123…               # cancel a run or close a pane
 Bare `rimz agents` lists live root-agent cards in attention order, scoped to the current channel and widened with `list --all`. The `AGENT` column is the shortest handle you can type back — its role (`@coder`), else its profile (`@planner`), else `@<kind>`, growing an ordinal only when two of a kind share one worktree. `show` prints one card and its newest attached run record, plus an `ask` line when the agent is waiting on a native prompt. `--json` selects JSON for `list` and bare `agents` (supervised `-p` uses `--output-format` instead).
 
 `focus` jumps to an agent's pane. `wait` blocks on a supervised run (by run id or pet name) or an interactive agent reaching an idle/success gate; `--stream` tails the transcript and `--from-start` replays from the top. `stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. All four resolve to exactly one agent, so a fan-out match is an error here (see [Addressing agents](#addressing-agents)).
+
+## Message an agent
+
+`rimz message` is the front door for teammate chat: it queues text for an agent, sends now when the agent can receive it, and parks it for the next turn boundary otherwise.
+
+```sh
+rimz message @swift-otter "Add focused tests for the parser."
+rimz message @codex#cli-docs --on any "If the run failed, capture the error first."
+rimz message @claude "Confirm this prompt reached the agent." --wait
+rimz message @all --yes "When you reach a boundary, summarize what changed."
+rimz message @claude -- "-rf literal"
+rimz message @claude --file ./review-notes.md
+```
+
+The message is one bare quoted argument, so no `--` separates ordinary prose from flags. A message that starts with `-` still uses clap's universal terminator (`--`) before the text. Value-optional flags such as bare `--wait` belong after the message, or use `--wait=<duration>`, so the flag does not capture the next token.
+
+`message` mirrors `queue` for delivery: same address grammar, same `--worktree`, `--no-enter`, `--force`, `--all`, `--create`, `--yes`, `--smart-compact`, `--file`, `--no-from`, `--wait`, and `--on`. Use [`steer`](#steer-live-agents) when you need an explicit live-turn interrupt, and use [`queue`](#queue-the-next-message) for the explicit add/list/remove/clear forms.
 
 ## Steer live agents
 
