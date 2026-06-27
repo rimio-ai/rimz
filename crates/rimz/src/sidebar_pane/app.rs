@@ -172,6 +172,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let read_marks = ReadMarkStore::new(runtime.clone(), config.instance_id.clone());
     let mut state = LoopState::new(
         config.workspace_id.clone(),
+        config.own_pane.clone(),
         initial_width,
         observe_tx,
         read_marks,

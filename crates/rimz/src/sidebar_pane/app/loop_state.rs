@@ -11,6 +11,7 @@ pub(super) struct LoopState {
     last_snapshot: Option<SidebarSnapshot>,
     current: SidebarSnapshot,
     last_pulled: SidebarSnapshot,
+    own_pane: Option<PaneId>,
     event_store: EventStore,
     observer: observe::Observer,
     observe_tx: SyncSender<ObserveMsg>,
@@ -40,6 +41,7 @@ pub(super) struct LoopState {
 impl LoopState {
     pub(super) fn new(
         workspace_id: WorkspaceId,
+        own_pane: Option<PaneId>,
         initial_width: Option<u16>,
         observe_tx: SyncSender<ObserveMsg>,
         read_marks: ReadMarkStore,
@@ -52,6 +54,7 @@ impl LoopState {
             last_snapshot: None,
             last_pulled: current.clone(),
             current,
+            own_pane,
             event_store: EventStore::default(),
             observer: observe::Observer::default(),
             observe_tx,
@@ -88,7 +91,8 @@ impl LoopState {
             .alert
             .as_ref()
             .is_some_and(render::Alert::is_active);
-        let active = is_animating(&self.current, &self.ui, phase, alert_active) || self.dirty;
+        let animating = is_animating(&self.current, &self.ui, phase, alert_active);
+        let active = (animating && self.watched()) || self.dirty;
         let timeout = if active {
             self.next_frame
                 .saturating_duration_since(Instant::now())
@@ -101,6 +105,20 @@ impl LoopState {
             tick.min(watchdog_due).max(FRAME_MIN_TIMEOUT)
         };
         (active, timeout)
+    }
+
+    /// Whether an attached client's focus currently lands in this sidebar's tab.
+    /// Unknown ownership or own-view state reads as watched so uncertainty never
+    /// suppresses motion.
+    fn watched(&self) -> bool {
+        let Some(own_pane) = self.own_pane.as_ref() else {
+            return true;
+        };
+        let Some(view) = self.current.own_view.as_ref() else {
+            return true;
+        };
+        view.active_pane_is_viewed
+            || (view.own_is_active && self.current.viewed_panes.contains(own_pane))
     }
 
     pub(super) fn on_snapshot(
@@ -795,11 +813,26 @@ mod tests {
     }
 
     fn loop_state(ws: &WorkspaceId) -> (tempfile::TempDir, LoopState) {
+        loop_state_with_own_pane(ws, None)
+    }
+
+    fn loop_state_with_own_pane(
+        ws: &WorkspaceId,
+        own_pane: Option<PaneId>,
+    ) -> (tempfile::TempDir, LoopState) {
         let (tx, _rx) = std::sync::mpsc::sync_channel(64);
         let (dir, store) = read_marks(ws);
         (
             dir,
-            LoopState::new(ws.clone(), None, tx, store, PetRenderCaps::default(), true),
+            LoopState::new(
+                ws.clone(),
+                own_pane,
+                None,
+                tx,
+                store,
+                PetRenderCaps::default(),
+                true,
+            ),
         )
     }
 
@@ -813,6 +846,29 @@ mod tests {
         let mut snapshot = agent_snapshot(ws);
         snapshot.panes_observed_at_ms = Some(observed_at_ms);
         snapshot
+    }
+
+    fn animating_agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
+        let mut snapshot = agent_snapshot(ws);
+        let row = &mut snapshot.worktree_groups[0].rows[0];
+        let crate::RowCard::Agent(card) = &mut row.card else {
+            panic!("fixture row is an agent");
+        };
+        card.status = Some(crate::agents::AgentStatus::Running);
+        card.phase = crate::agents::TurnPhase::Acting;
+        snapshot
+    }
+
+    fn own_view(own_is_active: bool, active_pane_is_viewed: bool) -> crate::SidebarOwnView {
+        crate::SidebarOwnView {
+            sibling_count: 1,
+            own_is_active,
+            active_pane_id: Some(pane("terminal_9", "tab_0", false).pane_id),
+            active_pane_is_viewed,
+            working_pane_ids: vec![pane("terminal_9", "tab_0", false).pane_id],
+            focus_contested: false,
+            own_view_is_daemon: false,
+        }
     }
 
     fn fold_snapshot(
@@ -838,6 +894,53 @@ mod tests {
     fn fetch_dispatcher() -> (FetchDispatcher, std::sync::mpsc::Receiver<FetchRequest>) {
         let (request_tx, request_rx) = std::sync::mpsc::channel();
         (FetchDispatcher::new(request_tx), request_rx)
+    }
+
+    fn frame_active(state: &LoopState) -> bool {
+        state
+            .frame_timing(Duration::from_secs(10), Instant::now())
+            .0
+    }
+
+    #[test]
+    fn frame_timing_suspends_unwatched_animation() {
+        let ws = workspace();
+        let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+        let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
+        state.current = animating_agent_snapshot(&ws);
+        state.current.own_view = Some(own_view(false, false));
+        state.current.viewed_panes.clear();
+        state.dirty = false;
+
+        assert!(!frame_active(&state));
+
+        state.current.own_view = Some(own_view(false, true));
+        assert!(frame_active(&state));
+
+        state.current.own_view = Some(own_view(true, false));
+        state.current.viewed_panes = vec![own_pane];
+        assert!(frame_active(&state));
+    }
+
+    #[test]
+    fn frame_timing_keeps_animation_when_visibility_is_unknown_or_dirty() {
+        let ws = workspace();
+        let (_dir, mut state) = loop_state_with_own_pane(&ws, None);
+        state.current = animating_agent_snapshot(&ws);
+        state.dirty = false;
+        assert!(frame_active(&state));
+
+        let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+        let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane));
+        state.current = animating_agent_snapshot(&ws);
+        state.current.own_view = None;
+        state.dirty = false;
+        assert!(frame_active(&state));
+
+        state.current.own_view = Some(own_view(false, false));
+        state.current.viewed_panes.clear();
+        state.dirty = true;
+        assert!(frame_active(&state));
     }
 
     #[test]
@@ -1088,7 +1191,15 @@ mod tests {
         let ws = workspace();
         let (tx, _rx) = std::sync::mpsc::sync_channel(0);
         let (_dir, store) = read_marks(&ws);
-        let mut state = LoopState::new(ws.clone(), None, tx, store, PetRenderCaps::default(), true);
+        let mut state = LoopState::new(
+            ws.clone(),
+            None,
+            None,
+            tx,
+            store,
+            PetRenderCaps::default(),
+            true,
+        );
         let mut current = agent_snapshot(&ws);
         let mut duplicate = current.worktree_groups[0].rows[0].clone();
         duplicate.pane = duplicate.pane.map(|mut pane| {

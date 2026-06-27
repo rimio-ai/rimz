@@ -74,9 +74,17 @@ fn event_mode_serves_a_cache_poll_mode_would_reject() {
     assert!(presence_event_mode(Some(fresh_edge)));
     assert!(!presence_event_mode(Some(fresh_edge + 1)));
     assert!(!presence_event_mode(None), "absent stamp is poll mode");
-    assert_eq!(effective_pane_ttl(Some(0)), EVENT_PANE_TTL);
-    assert_eq!(effective_pane_ttl(Some(fresh_edge + 1)), SNAPSHOT_CACHE_TTL);
-    assert_eq!(effective_pane_ttl(None), SNAPSHOT_CACHE_TTL);
+    assert_eq!(effective_pane_ttl(Some(0), false), EVENT_PANE_TTL);
+    assert_eq!(
+        effective_pane_ttl(Some(fresh_edge + 1), false),
+        SNAPSHOT_CACHE_TTL
+    );
+    assert_eq!(effective_pane_ttl(None, false), SNAPSHOT_CACHE_TTL);
+    assert_eq!(effective_pane_ttl(None, true), EVENT_PANE_TTL);
+    assert_eq!(
+        effective_pane_ttl(Some(fresh_edge + 1), true),
+        EVENT_PANE_TTL
+    );
 
     let now = unix_now_ms();
     let five_seconds_old = cache_produced_at(now - 5_000);
@@ -162,6 +170,25 @@ fn published_frame_age_is_session_scoped_and_saturating() {
         published_frame_age_ms(&empty_rt, "rimz-test", produced_at_ms),
         None
     );
+}
+
+#[test]
+fn published_frame_unwatched_is_session_scoped() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+
+    assert!(!published_frame_unwatched(&runtime, "rimz-test"));
+
+    let mut cache = assemble_frame(Vec::new(), 1_700_000_000_000, "rimz-test");
+    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &cache).unwrap();
+    assert!(published_frame_unwatched(&runtime, "rimz-test"));
+    assert!(!published_frame_unwatched(&runtime, "other-session"));
+
+    cache.viewed_panes = vec![pane("terminal_9", "zsh", "/tmp").pane_id];
+    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &cache).unwrap();
+    assert!(!published_frame_unwatched(&runtime, "rimz-test"));
 }
 
 #[test]

@@ -145,6 +145,14 @@ pub fn published_frame_observed_at_ms(runtime: &RuntimePaths, session: &str) -> 
     read_snapshot_cache(&cache_path, session).map(|cache| cache.observed_or_produced_at_ms())
 }
 
+/// Whether the published same-session frame shows no attached client viewing any
+/// pane. An absent frame reads as watched so cold starts keep the responsive
+/// poll-mode cadence until a producer publishes real focus state.
+pub fn published_frame_unwatched(runtime: &RuntimePaths, session: &str) -> bool {
+    let cache_path = runtime.root.join("snapshot.json");
+    read_snapshot_cache(&cache_path, session).is_some_and(|cache| cache.viewed_panes.is_empty())
+}
+
 /// The presence liveness stamp refreshed by the Zellij presence plugin through
 /// `rimz sidebar wake` and by the tmux control-mode watch. Its freshness gates
 /// the producer's pane TTL: fresh → event mode ([`EVENT_PANE_TTL`]), stale or absent → poll mode
@@ -193,13 +201,14 @@ pub fn presence_event_mode(stamp_age_ms: Option<u64>) -> bool {
 }
 
 /// The effective pane-cache TTL for one produce: the event-mode TTL while the
-/// presence channel is alive, else the poll-mode TTL. Computed once per
-/// `cached_panes_or_produce` call and threaded through every freshness check —
-/// the fast path, the single-flight `fresh` closure, and the loser re-check —
-/// so they agree on one verdict and a loser never produces what the winner
-/// skipped (the diff-stats "one shared stale() closure" rule).
-pub fn effective_pane_ttl(stamp_age_ms: Option<u64>) -> Duration {
-    if presence_event_mode(stamp_age_ms) {
+/// presence channel is alive or the published frame is unwatched, else the
+/// poll-mode TTL. Computed once per `cached_panes_or_produce` call and threaded
+/// through every freshness check — the fast path, the single-flight `fresh`
+/// closure, and the loser re-check — so they agree on one verdict and a loser
+/// never produces what the winner skipped (the diff-stats "one shared stale()
+/// closure" rule).
+pub fn effective_pane_ttl(stamp_age_ms: Option<u64>, unwatched: bool) -> Duration {
+    if unwatched || presence_event_mode(stamp_age_ms) {
         EVENT_PANE_TTL
     } else {
         SNAPSHOT_CACHE_TTL

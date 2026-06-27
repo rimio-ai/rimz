@@ -14,8 +14,8 @@ use crate::ledger::snapshot::SidebarPresence;
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing};
 use crate::schema::diag::{DiagEvent, FrameRejectReason};
 use crate::sidebar::cache::{
-    SNAPSHOT_CACHE_TTL, effective_pane_ttl, presence_stamp_age_ms, read_snapshot_cache,
-    snapshot_cache_is_fresh, unix_now_ms,
+    SNAPSHOT_CACHE_TTL, effective_pane_ttl, presence_stamp_age_ms, published_frame_unwatched,
+    read_snapshot_cache, snapshot_cache_is_fresh, unix_now_ms,
 };
 use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics};
 
@@ -35,8 +35,9 @@ const SNAPSHOT_CACHE_WAIT_STEPS: u32 = 10;
 /// Return a same-session cache entry younger than `ttl`, or `None` when it is
 /// absent, stale, for another session, or unreadable. The caller picks the TTL
 /// once per produce ([`effective_pane_ttl`]) — `SNAPSHOT_CACHE_TTL` in poll
-/// mode, the stretched event-mode TTL while the presence stamp is fresh — and
-/// the freshness verdict itself is the library's
+/// mode, the stretched event-mode TTL while the presence stamp is fresh or no
+/// client is watching the published frame — and the freshness verdict itself is
+/// the library's
 /// ([`snapshot_cache_is_fresh`]), so the forced-freshness floor keeps
 /// overriding in both modes.
 fn fresh_snapshot_cache(
@@ -464,14 +465,18 @@ pub(super) fn cached_panes_or_produce(
 ) -> Result<PaneFrame> {
     let cache_path = runtime.root.join("snapshot.json");
 
-    // Select the pane TTL once per call from the presence stamp: event mode
-    // (EVENT_PANE_TTL) while a presence push channel is alive, else poll-mode
-    // SNAPSHOT_CACHE_TTL. Zellij's plugin and tmux's control-mode watch both
-    // write the stamp; tmux lapses to poll mode while the watch is absent or
-    // idle. One small stamp read per produce; the fast path, the single-flight
-    // `fresh` closure, and the loser re-check all read this one Duration, so a
-    // loser never produces what the winner skipped.
-    let pane_ttl = effective_pane_ttl(presence_stamp_age_ms(runtime));
+    // Select the pane TTL once per call: event mode (EVENT_PANE_TTL) while a
+    // presence push channel is alive or the published frame is unwatched, else
+    // poll-mode SNAPSHOT_CACHE_TTL. Zellij's plugin and tmux's control-mode
+    // watch both write the stamp; tmux lapses to poll mode while the watch is
+    // absent or idle. Unwatched poll mode stretches to the event-mode cadence so
+    // detached/backgrounded sessions stop paying responsive pane polls. The
+    // fast path, the single-flight `fresh` closure, and the loser re-check all
+    // read this one Duration, so a loser never produces what the winner skipped.
+    let pane_ttl = effective_pane_ttl(
+        presence_stamp_age_ms(runtime),
+        published_frame_unwatched(runtime, session),
+    );
 
     // One single-flight lock covers both arms: the slow path's full produce
     // and the fast path's metrics-only refresh, so only one elected producer
