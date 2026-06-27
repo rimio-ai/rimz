@@ -493,6 +493,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         backend.as_ref(),
         &workspace.session_name,
         &workspace.workspace_id,
+        &mux_config.zellij,
         machine_config.sidebar.focus_key_label(),
     );
 

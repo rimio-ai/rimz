@@ -13,14 +13,13 @@ fn presence_wasm_artifact() -> Option<PathBuf> {
     wasm.canonicalize().ok().filter(|wasm| wasm.is_file())
 }
 
-fn seed_presence_permissions(xdg: &Path, wasm: &Path, reconfigure: bool) {
+fn seed_presence_permissions(xdg: &Path, wasm: &Path) {
     let cache_dir = xdg.join("zellij");
     std::fs::create_dir_all(&cache_dir).expect("zellij cache dir");
-    let reconfigure_grant = if reconfigure { "    Reconfigure\n" } else { "" };
     std::fs::write(
         cache_dir.join("permissions.kdl"),
         format!(
-            "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n{reconfigure_grant}}}\n",
+            "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n    Reconfigure\n}}\n",
             wasm.display(),
         ),
     )
@@ -109,7 +108,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
     // Seed the grant before the server is born so its permission cache read —
     // whenever it happens — sees it. Grants key on the wasm's absolute path.
     let xdg = scoped_runtime_dir();
-    seed_presence_permissions(xdg.path(), &wasm, false);
+    seed_presence_permissions(xdg.path(), &wasm);
 
     // A `rimz` stand-in that logs its argv: the poke's whole host surface.
     let poke_log = xdg.path().join("poke.log");
@@ -131,6 +130,8 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         rimz_bin: rimz_shim,
         converge: false,
         focus_key: None,
+        focus_follows_mouse: false,
+        mouse_click_through: true,
     };
     backend
         .ensure_presence_plugin(&opts)
@@ -206,7 +207,7 @@ fn focus_key_press_pipes_sidebar_focus_through_the_plugin() {
     }
 
     let xdg = scoped_runtime_dir();
-    seed_presence_permissions(xdg.path(), &wasm, true);
+    seed_presence_permissions(xdg.path(), &wasm);
     let poke_log = xdg.path().join("poke.log");
     let rimz_shim = write_poke_shim(xdg.path(), &poke_log);
     let name = unique_session_name("focuskey");
@@ -221,6 +222,8 @@ fn focus_key_press_pipes_sidebar_focus_through_the_plugin() {
             rimz_bin: rimz_shim,
             converge: false,
             focus_key: Some("Alt+p".to_owned()),
+            focus_follows_mouse: false,
+            mouse_click_through: true,
         })
         .expect("pipe load against a live session");
 

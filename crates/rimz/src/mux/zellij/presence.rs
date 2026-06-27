@@ -113,6 +113,18 @@ pub(super) fn presence_plugin_configuration(opts: &super::super::PresencePluginO
         configuration.push_str(",rimz_bin=");
         configuration.push_str(&bin);
     }
+    configuration.push_str(",focus_follows_mouse=");
+    configuration.push_str(if opts.focus_follows_mouse {
+        "true"
+    } else {
+        "false"
+    });
+    configuration.push_str(",mouse_click_through=");
+    configuration.push_str(if opts.mouse_click_through {
+        "true"
+    } else {
+        "false"
+    });
     // The focus chord the plugin binds at load. Grammar validation and the
     // user-facing warning live in `cli::register_focus_key` (it runs for both
     // backends); here we only guard the plugin-config separators and let the
@@ -219,6 +231,8 @@ mod tests {
             rimz_bin: std::path::PathBuf::from(rimz_bin),
             converge: false,
             focus_key: None,
+            focus_follows_mouse: false,
+            mouse_click_through: true,
         }
     }
 
@@ -245,7 +259,18 @@ mod tests {
         ));
         assert_eq!(
             configuration,
-            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
+            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
+        );
+    }
+
+    #[test]
+    fn presence_plugin_configuration_pins_mouse_options() {
+        let mut opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+        opts.focus_follows_mouse = true;
+        opts.mouse_click_through = false;
+        assert_eq!(
+            presence_plugin_configuration(&opts),
+            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=true,mouse_click_through=false",
         );
     }
 
@@ -255,7 +280,7 @@ mod tests {
             let configuration = presence_plugin_configuration(&presence_opts("rimz-test", weird));
             assert_eq!(
                 configuration,
-                "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test",
+                "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,focus_follows_mouse=false,mouse_click_through=true",
                 "{weird} must be omitted, not shipped mis-parsable",
             );
         }
@@ -264,7 +289,7 @@ mod tests {
                 presence_plugin_configuration(&presence_opts(weird, "/home/user/.cargo/bin/rimz"));
             assert_eq!(
                 configuration,
-                "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,rimz_bin=/home/user/.cargo/bin/rimz",
+                "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
                 "{weird} must be omitted, not shipped mis-parsable",
             );
         }
@@ -276,7 +301,7 @@ mod tests {
         opts.focus_key = Some("Alt+p".to_owned());
         assert_eq!(
             presence_plugin_configuration(&opts),
-            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_key=Alt+p",
+            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true,focus_key=Alt+p",
         );
 
         // A chord carrying a plugin-config separator is dropped rather than
@@ -284,7 +309,7 @@ mod tests {
         opts.focus_key = Some("Alt=p".to_owned());
         assert_eq!(
             presence_plugin_configuration(&opts),
-            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
+            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
         );
     }
 

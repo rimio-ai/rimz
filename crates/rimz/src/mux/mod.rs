@@ -375,6 +375,11 @@ pub struct PresencePluginOptions {
     /// instead — the Zellij key has to route through the plugin because a plain
     /// keybind cannot focus a pane by id.
     pub focus_key: Option<String>,
+    /// Runtime mouse options the Zellij presence plugin re-applies through
+    /// `reconfigure`, where booleans are absolute instead of CLI-XORed with the
+    /// user's `config.kdl`.
+    pub focus_follows_mouse: bool,
+    pub mouse_click_through: bool,
 }
 
 /// One long-lived process hosted by the daemon view. The view is born as three

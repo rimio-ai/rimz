@@ -231,6 +231,7 @@ fn reconcile_live(
     // 2. Reconcile panes: keep each view's live sidebar, close duplicates and
     //    unresponsive ones, add to any working view left without one.
     let width = SidebarWidth::from_config(&machine_config.theme.display);
+    let mux_config = MultiplexerConfig::from(machine_config);
     let opts = SidebarPaneOptions {
         session_name: ws.session_name.clone(),
         workspace_id: ws.workspace_id.clone(),
@@ -244,7 +245,7 @@ fn reconcile_live(
         birth_size: width.birth_size(None),
         rimz_bin: rimz_bin.to_path_buf(),
         replace_existing: false,
-        config: MultiplexerConfig::from(machine_config),
+        config: mux_config.clone(),
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
@@ -278,6 +279,8 @@ fn reconcile_live(
             rimz_bin: rimz_bin.to_path_buf(),
             converge: true,
             focus_key: machine_config.sidebar.focus_key_label().map(str::to_owned),
+            focus_follows_mouse: mux_config.zellij.focus_follows_mouse,
+            mouse_click_through: mux_config.zellij.mouse_click_through,
         };
         if let Err(err) = backend.ensure_presence_plugin(&presence) {
             tracing::warn!(session = %ws.session_name, error = %err, "reload: presence plugin convergence failed");

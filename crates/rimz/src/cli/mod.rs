@@ -818,6 +818,7 @@ fn ensure_presence_plugin(
     backend: &dyn MuxBackend,
     session_name: &str,
     workspace_id: &WorkspaceId,
+    zellij_config: &rimz::config::ZellijConfig,
     focus_key: Option<&str>,
 ) {
     let Some(wasm) = rimz::mux::zellij::presence_plugin_path() else {
@@ -834,6 +835,8 @@ fn ensure_presence_plugin(
         rimz_bin: sidebar::rimz_cli_program(),
         converge: false,
         focus_key: focus_key.map(str::to_owned),
+        focus_follows_mouse: zellij_config.focus_follows_mouse,
+        mouse_click_through: zellij_config.mouse_click_through,
     };
     if let Err(err) = backend.ensure_presence_plugin(&opts) {
         tracing::debug!(
@@ -1099,6 +1102,7 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
         birth.backend,
         room.session_name,
         room.workspace_id,
+        &room.mux_config.zellij,
         machine_config.sidebar.focus_key_label(),
     );
     Ok(())

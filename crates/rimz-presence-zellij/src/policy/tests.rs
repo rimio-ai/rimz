@@ -1120,15 +1120,3 @@ fn focus_chord_rejects_malformed_shapes() {
     assert_eq!(FocusChord::parse("alt+ "), None);
     assert_eq!(FocusChord::parse(""), None);
 }
-
-#[test]
-fn reconfigure_requested_only_for_a_parseable_focus_key() {
-    // The plugin asks for `Reconfigure` only to bind the focus key, so an absent
-    // or disabled chord raises no prompt for a keybind it would never install.
-    assert!(reconfigure_requested(Some("Alt+p")));
-    assert!(reconfigure_requested(Some("ctrl-s")));
-    assert!(!reconfigure_requested(None));
-    assert!(!reconfigure_requested(Some("off")));
-    assert!(!reconfigure_requested(Some("")));
-    assert!(!reconfigure_requested(Some("super+p")));
-}

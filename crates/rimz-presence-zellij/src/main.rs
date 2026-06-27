@@ -5,17 +5,142 @@
 //! targets build a stub so `--workspace` builds, lints, and the policy unit
 //! tests run without the wasm toolchain.
 
+#[cfg(any(test, target_family = "wasm"))]
+use rimz_presence_zellij::policy::{ChordModifier, FOCUS_SIDEBAR_PIPE, FocusChord};
+
+#[cfg(any(test, target_family = "wasm"))]
+#[derive(Default)]
+struct RuntimeReconfigure<'a> {
+    workspace_id: Option<&'a str>,
+    session_name: Option<&'a str>,
+    rimz_bin: Option<&'a str>,
+    plugin_url: Option<&'a str>,
+    focus_key: Option<&'a str>,
+    focus_follows_mouse: Option<bool>,
+    mouse_click_through: Option<bool>,
+}
+
+#[cfg(any(test, target_family = "wasm"))]
+fn parse_configuration_bool(value: Option<&str>) -> Option<bool> {
+    match value {
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(any(test, target_family = "wasm"))]
+fn runtime_reconfigure_kdl(config: &RuntimeReconfigure<'_>) -> Option<String> {
+    let mut kdl = String::new();
+    if let Some(value) = config.focus_follows_mouse {
+        push_bool_option_kdl(&mut kdl, "focus_follows_mouse", value);
+    }
+    if let Some(value) = config.mouse_click_through {
+        push_bool_option_kdl(&mut kdl, "mouse_click_through", value);
+    }
+    if let Some(keybinds) = focus_keybind_kdl(config) {
+        kdl.push_str(&keybinds);
+    }
+    (!kdl.is_empty()).then_some(kdl)
+}
+
+#[cfg(any(test, target_family = "wasm"))]
+fn push_bool_option_kdl(kdl: &mut String, key: &str, value: bool) {
+    kdl.push_str(key);
+    kdl.push(' ');
+    kdl.push_str(bool_kdl(value));
+    kdl.push('\n');
+}
+
+#[cfg(any(test, target_family = "wasm"))]
+fn focus_keybind_kdl(config: &RuntimeReconfigure<'_>) -> Option<String> {
+    let chord = config.focus_key.and_then(FocusChord::parse)?;
+    let plugin_url = config.plugin_url?;
+    let key = kdl_string(&focus_key_kdl_label(chord));
+    let pipe_name = kdl_string(FOCUS_SIDEBAR_PIPE);
+    let plugin_url = kdl_string(plugin_url);
+    let configuration = plugin_configuration_kdl(config);
+    Some(format!(
+        "keybinds {{\n    normal {{\n        bind {key} {{\n            MessagePlugin {plugin_url} {{\n                name {pipe_name}\n{configuration}            }}\n        }}\n    }}\n    locked {{\n        bind {key} {{\n            MessagePlugin {plugin_url} {{\n                name {pipe_name}\n{configuration}            }}\n        }}\n    }}\n}}\n"
+    ))
+}
+
+#[cfg(any(test, target_family = "wasm"))]
+fn plugin_configuration_kdl(config: &RuntimeReconfigure<'_>) -> String {
+    let mut kdl = String::new();
+    for (key, value) in [
+        ("workspace_id", config.workspace_id),
+        ("session_name", config.session_name),
+        ("rimz_bin", config.rimz_bin),
+        ("plugin_url", config.plugin_url),
+        ("focus_key", config.focus_key),
+    ] {
+        if let Some(value) = value {
+            push_plugin_configuration_line(&mut kdl, key, value);
+        }
+    }
+    if let Some(value) = config.focus_follows_mouse {
+        push_plugin_configuration_line(&mut kdl, "focus_follows_mouse", bool_kdl(value));
+    }
+    if let Some(value) = config.mouse_click_through {
+        push_plugin_configuration_line(&mut kdl, "mouse_click_through", bool_kdl(value));
+    }
+    kdl
+}
+
+#[cfg(any(test, target_family = "wasm"))]
+fn push_plugin_configuration_line(kdl: &mut String, key: &str, value: &str) {
+    kdl.push_str("                ");
+    kdl.push_str(key);
+    kdl.push(' ');
+    kdl.push_str(&kdl_string(value));
+    kdl.push('\n');
+}
+
+#[cfg(any(test, target_family = "wasm"))]
+fn focus_key_kdl_label(chord: FocusChord) -> String {
+    let modifier = match chord.modifier {
+        ChordModifier::Alt => "Alt",
+        ChordModifier::Ctrl => "Ctrl",
+    };
+    format!("{modifier} {}", chord.key)
+}
+
+#[cfg(any(test, target_family = "wasm"))]
+fn bool_kdl(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
+#[cfg(any(test, target_family = "wasm"))]
+fn kdl_string(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
 #[cfg(target_family = "wasm")]
 mod shell {
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use rimz_presence_zellij::policy::{
-        self, ChordModifier, CorrectionAction, FOCUS_SIDEBAR_PIPE, FocusChord, FocusCorrection,
-        FocusPatch, FocusResolution, FocusShortcut, ForegroundCommandUpdate, PaneFields, Poke,
-        PokePolicy, TimerGate,
+        self, CorrectionAction, FOCUS_SIDEBAR_PIPE, FocusCorrection, FocusPatch, FocusResolution,
+        FocusShortcut, ForegroundCommandUpdate, PaneFields, Poke, PokePolicy, TimerGate,
     };
     use zellij_tile::prelude::*;
+
+    use super::{RuntimeReconfigure, parse_configuration_bool, runtime_reconfigure_kdl};
 
     #[derive(Default)]
     pub struct State {
@@ -42,6 +167,10 @@ mod shell {
         /// the Reconfigure grant lands so the key reaches the sidebar from any
         /// pane. Absent when the user disabled it or runs a hand-loaded plugin.
         focus_key: Option<String>,
+        /// Runtime mouse options rimz injects at load, applied through
+        /// `reconfigure()` so they override the user's config.kdl absolutely.
+        focus_follows_mouse: Option<bool>,
+        mouse_click_through: Option<bool>,
         /// Pokes are gated until a grant is observed — either the explicit
         /// permission result or any application-state event arriving, which
         /// proves the cached grant already covers us.
@@ -65,16 +194,17 @@ mod shell {
             self.rimz_bin = configuration.get("rimz_bin").cloned();
             self.plugin_url = configuration.get("plugin_url").cloned();
             self.focus_key = configuration.get("focus_key").cloned();
-            let mut permissions = vec![
+            self.focus_follows_mouse = parse_configuration_bool(
+                configuration.get("focus_follows_mouse").map(String::as_str),
+            );
+            self.mouse_click_through = parse_configuration_bool(
+                configuration.get("mouse_click_through").map(String::as_str),
+            );
+            let permissions = vec![
                 PermissionType::ReadApplicationState,
                 PermissionType::RunCommands,
+                PermissionType::Reconfigure,
             ];
-            if policy::reconfigure_requested(self.focus_key.as_deref()) {
-                // Bind the focus chord at runtime (never written to disk); see
-                // `register_focus_keybind`. Requested only when a focus key is
-                // set and parses, so `focus_key = off` raises no extra prompt.
-                permissions.push(PermissionType::Reconfigure);
-            }
             request_permission(&permissions);
             subscribe(&[
                 EventType::PaneUpdate,
@@ -98,10 +228,11 @@ mod shell {
                     self.mark_granted(now);
                     // The explicit grant is the authoritative moment every
                     // requested permission — Reconfigure included — is live.
-                    // Re-issue the (idempotent) focus bind here so an upgrade
-                    // that proved an older two-permission cache via an app-state
-                    // event before answering the new prompt still binds.
-                    self.register_focus_keybind();
+                    // Re-issue the idempotent runtime reconfigure here so an
+                    // upgrade that proved an older two-permission cache via an
+                    // app-state event before answering the new prompt still
+                    // applies it.
+                    self.apply_runtime_reconfigure();
                 }
                 Event::PermissionRequestResult(PermissionStatus::Denied) => {
                     self.granted = false;
@@ -274,7 +405,7 @@ mod shell {
             }
             self.granted = true;
             hide_self();
-            self.register_focus_keybind();
+            self.apply_runtime_reconfigure();
             if self.pending_pregrant_change {
                 self.flush_pregrant_change(now);
             } else {
@@ -388,52 +519,27 @@ mod shell {
             run_command(&refs, BTreeMap::new());
         }
 
-        /// Bind the rimz-injected focus chord (e.g. `Alt+p`) to a keybind that
-        /// pipes [`FOCUS_SIDEBAR_PIPE`] to this plugin, so the key reaches the
-        /// sidebar from any pane in normal or locked mode. Runtime-only:
-        /// `reconfigure(..., false)` never touches the user's `config.kdl` and
-        /// resets when the session ends. The keybind targets this loaded plugin by
-        /// URL and load configuration, which survives the runtime config
-        /// round-trip. Re-applying it on reload refreshes that destination.
+        /// Apply rimz-owned runtime config in one `reconfigure(..., false)`:
+        /// the mouse booleans are top-level options, and the focus chord (when
+        /// configured and parseable) pipes [`FOCUS_SIDEBAR_PIPE`] to this
+        /// plugin from any pane in normal or locked mode. Runtime-only: it never
+        /// touches the user's `config.kdl` and resets when the session ends.
         /// Requires the Reconfigure grant; a refused call is a harmless no-op
-        /// with the documented manual bind as the fallback.
-        fn register_focus_keybind(&self) {
-            let Some(chord) = self.focus_key.as_deref().and_then(FocusChord::parse) else {
-                return;
+        /// that leaves birth-time options and any hand-written keybind as the
+        /// fallback.
+        fn apply_runtime_reconfigure(&self) {
+            let config = RuntimeReconfigure {
+                workspace_id: self.workspace_id.as_deref(),
+                session_name: self.session_name.as_deref(),
+                rimz_bin: self.rimz_bin.as_deref(),
+                plugin_url: self.plugin_url.as_deref(),
+                focus_key: self.focus_key.as_deref(),
+                focus_follows_mouse: self.focus_follows_mouse,
+                mouse_click_through: self.mouse_click_through,
             };
-            let Some(plugin_url) = self.plugin_url.as_deref() else {
-                return;
-            };
-            let key = kdl_string(&focus_key_kdl_label(chord));
-            let pipe_name = kdl_string(FOCUS_SIDEBAR_PIPE);
-            let plugin_url = kdl_string(plugin_url);
-            let configuration = self.plugin_configuration_kdl();
-            reconfigure(
-                format!(
-                    "keybinds {{\n    normal {{\n        bind {key} {{\n            MessagePlugin {plugin_url} {{\n                name {pipe_name}\n{configuration}            }}\n        }}\n    }}\n    locked {{\n        bind {key} {{\n            MessagePlugin {plugin_url} {{\n                name {pipe_name}\n{configuration}            }}\n        }}\n    }}\n}}\n"
-                ),
-                false,
-            );
-        }
-
-        fn plugin_configuration_kdl(&self) -> String {
-            let mut kdl = String::new();
-            for (key, value) in [
-                ("workspace_id", self.workspace_id.as_deref()),
-                ("session_name", self.session_name.as_deref()),
-                ("rimz_bin", self.rimz_bin.as_deref()),
-                ("plugin_url", self.plugin_url.as_deref()),
-                ("focus_key", self.focus_key.as_deref()),
-            ] {
-                if let Some(value) = value {
-                    kdl.push_str("                ");
-                    kdl.push_str(key);
-                    kdl.push(' ');
-                    kdl.push_str(&kdl_string(value));
-                    kdl.push('\n');
-                }
+            if let Some(kdl) = runtime_reconfigure_kdl(&config) {
+                reconfigure(kdl, false);
             }
-            kdl
         }
 
         /// Run `rimz sidebar focus --toggle` for the focus-key pipe. The command
@@ -751,31 +857,6 @@ mod shell {
             .collect()
     }
 
-    fn focus_key_kdl_label(chord: FocusChord) -> String {
-        let modifier = match chord.modifier {
-            ChordModifier::Alt => "Alt",
-            ChordModifier::Ctrl => "Ctrl",
-        };
-        format!("{modifier} {}", chord.key)
-    }
-
-    fn kdl_string(value: &str) -> String {
-        let mut quoted = String::with_capacity(value.len() + 2);
-        quoted.push('"');
-        for ch in value.chars() {
-            match ch {
-                '\\' => quoted.push_str("\\\\"),
-                '"' => quoted.push_str("\\\""),
-                '\n' => quoted.push_str("\\n"),
-                '\r' => quoted.push_str("\\r"),
-                '\t' => quoted.push_str("\\t"),
-                _ => quoted.push(ch),
-            }
-        }
-        quoted.push('"');
-        quoted
-    }
-
     /// Unix milliseconds via the WASI clock. The policy only compares
     /// relative instants, so coarse wall-clock is plenty.
     fn now_ms() -> u64 {
@@ -799,6 +880,71 @@ use zellij_tile::prelude::*;
 
 #[cfg(target_family = "wasm")]
 zellij_tile::register_plugin!(shell::State);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_boolean_load_configuration() {
+        assert_eq!(parse_configuration_bool(Some("true")), Some(true));
+        assert_eq!(parse_configuration_bool(Some("false")), Some(false));
+        assert_eq!(parse_configuration_bool(Some("TRUE")), None);
+        assert_eq!(parse_configuration_bool(None), None);
+    }
+
+    #[test]
+    fn runtime_reconfigure_kdl_emits_mouse_options_without_focus_key() {
+        let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
+            focus_follows_mouse: Some(false),
+            mouse_click_through: Some(true),
+            ..RuntimeReconfigure::default()
+        })
+        .expect("mouse options produce a reconfigure payload");
+
+        assert_eq!(kdl, "focus_follows_mouse false\nmouse_click_through true\n");
+    }
+
+    #[test]
+    fn runtime_reconfigure_kdl_combines_mouse_options_and_focus_keybind() {
+        let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
+            workspace_id: Some("ws_0123456789abcdef01234567"),
+            session_name: Some("rimz-test"),
+            rimz_bin: Some("/tmp/rimz"),
+            plugin_url: Some("file:/tmp/rimz-presence-zellij.wasm"),
+            focus_key: Some("Alt+p"),
+            focus_follows_mouse: Some(false),
+            mouse_click_through: Some(true),
+        })
+        .expect("focus key and mouse options produce a reconfigure payload");
+
+        assert!(
+            kdl.starts_with("focus_follows_mouse false\nmouse_click_through true\nkeybinds {\n")
+        );
+        assert!(kdl.contains("bind \"Alt p\""));
+        assert!(kdl.contains("name \"rimz:focus_sidebar\""));
+        assert!(kdl.contains("focus_follows_mouse \"false\""));
+        assert!(kdl.contains("mouse_click_through \"true\""));
+        assert_eq!(
+            kdl.matches("MessagePlugin \"file:/tmp/rimz-presence-zellij.wasm\"")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn runtime_reconfigure_kdl_skips_empty_payload() {
+        assert!(runtime_reconfigure_kdl(&RuntimeReconfigure::default()).is_none());
+        assert!(
+            runtime_reconfigure_kdl(&RuntimeReconfigure {
+                plugin_url: Some("file:/tmp/rimz-presence-zellij.wasm"),
+                focus_key: Some("off"),
+                ..RuntimeReconfigure::default()
+            })
+            .is_none()
+        );
+    }
+}
 
 /// Host-target stub: the plugin entrypoint exists only on wasm.
 #[cfg(not(target_family = "wasm"))]

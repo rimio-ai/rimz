@@ -54,15 +54,6 @@ impl FocusChord {
     }
 }
 
-/// Whether the plugin should request the `Reconfigure` permission, which it
-/// needs only to bind the focus key at runtime. Gated on a configured,
-/// parseable chord so a disabled or absent `focus_key` raises no permission
-/// prompt for a keybind that would never be installed — and matches the same
-/// grammar gate `register_focus_keybind` uses before binding.
-pub fn reconfigure_requested(focus_key: Option<&str>) -> bool {
-    focus_key.and_then(FocusChord::parse).is_some()
-}
-
 /// Floor between two `panes-changed` pokes — caps host forks under
 /// pathological manifest churn. A change that lands inside the floor is
 /// deferred, never dropped.
