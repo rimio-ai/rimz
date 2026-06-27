@@ -22,6 +22,26 @@ fn rotate_from_cache_repairs_raced_nulls_from_disk() {
 }
 
 #[test]
+fn rotate_from_cache_repairs_plain_shell_empty_command_before_row_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_path = dir.path().join("snapshot.json");
+    let mut prior = frame(vec![pane("terminal_5", Some("zsh"), Some("/repo"))]);
+    first_mut(&mut prior).current.pid = Some(3324242);
+    atomic::write_temp_then_rename_cache(&cache_path, &prior).unwrap();
+    let mut fresh_pane = pane("terminal_5", None, Some("/repo"));
+    fresh_pane.pane_pid = Some(3324242);
+    let mut fresh = frame(vec![fresh_pane]);
+
+    rotate_from_cache(&mut fresh, &cache_path, "s");
+
+    assert_eq!(first(&fresh).current.command.as_deref(), Some("zsh"));
+    assert!(
+        live_row_ids(&fresh).contains(&"zellij:terminal_5".to_owned()),
+        "the repaired command admits the process row"
+    );
+}
+
+#[test]
 fn backfill_pane_cwds_repairs_missing_or_empty_cwd_from_proc() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().to_path_buf();

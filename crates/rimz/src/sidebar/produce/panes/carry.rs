@@ -119,17 +119,24 @@ pub(super) fn apply_carry_forward(
         decisions.insert(pane.pane_id.clone(), CarryDecision { tab, pane, carried });
     }
 
-    let ambiguous_loss = missing.iter().any(|(_, pane)| {
+    let ambiguous_loss = missing.iter().any(|(tab, pane)| {
         !decisions.contains_key(&pane.pane_id)
             && !expired
                 .iter()
                 .any(|expired| expired.pane_id == pane.pane_id)
-            && !has_dead_liveness_evidence(
+            && !has_authoritative_dead_liveness_evidence(
                 pane,
                 prior_carried.get(&pane.pane_id).copied(),
                 bindings,
                 read_start_ticks,
             )
+            && !(confirmed_tabs.contains(&tab.view_id)
+                && has_dead_liveness_evidence(
+                    pane,
+                    prior_carried.get(&pane.pane_id).copied(),
+                    bindings,
+                    read_start_ticks,
+                ))
     });
 
     let mut decisions = decisions.into_values().collect::<Vec<_>>();
@@ -251,6 +258,30 @@ fn has_dead_liveness_evidence(
         .is_some_and(|pid| read_start_ticks(pid).is_none())
 }
 
+// Only pid-reuse proof explains a missing pane strongly enough to publish the
+// loss without the confirmation pull. A plain prior pid that cannot be read may
+// be a real exit or a transient `/proc` miss; the carry path still refuses to
+// ghost it, but the publish path verifies the omission once before committing.
+fn has_authoritative_dead_liveness_evidence(
+    pane: &PaneState,
+    prior_meta: Option<&CarriedPane>,
+    bindings: &HashMap<PaneId, PaneRootBinding>,
+    read_start_ticks: &dyn Fn(u32) -> Option<u64>,
+) -> bool {
+    if let Some(meta) = prior_meta
+        && let (Some(pid), Some(start_ticks)) = (meta.pid, meta.start_ticks)
+        && read_start_ticks(pid).is_some_and(|live| live != start_ticks)
+    {
+        return true;
+    }
+    if let Some(binding) = bindings.get(&pane.pane_id)
+        && read_start_ticks(binding.pid).is_some_and(|live| live != binding.start_ticks)
+    {
+        return true;
+    }
+    false
+}
+
 fn expired_carry(
     pane_id: &PaneId,
     prior_meta: Option<&CarriedPane>,
@@ -362,7 +393,7 @@ mod tests {
     }
 
     #[test]
-    fn dead_prior_pid_drops_the_pane() {
+    fn unreadable_prior_pid_drops_the_pane_as_ambiguous() {
         let prior = pidded_frame(&[("terminal_1", 101), ("terminal_2", 202)], 1);
         let fresh = frame(&["terminal_1"], 2);
 
@@ -370,7 +401,7 @@ mod tests {
 
         assert_eq!(outcome.frame.pane_states().count(), 1);
         assert!(outcome.carried.is_empty());
-        assert!(!outcome.ambiguous_loss);
+        assert!(outcome.ambiguous_loss);
     }
 
     #[test]

@@ -370,6 +370,98 @@ fn ambiguous_loss_repull_result_is_published() {
 }
 
 #[test]
+fn ambiguous_plain_process_absence_repull_keeps_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
+        "/tmp/plain-process-absence",
+    ));
+    let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut prior = frame(vec![
+        pane("terminal_1", Some("zsh"), Some("/repo")),
+        pane("terminal_5", Some("zsh"), Some("/repo")),
+    ]);
+    prior
+        .pane_states_mut()
+        .find(|pane| pane.pane_id.raw() == "terminal_5")
+        .expect("terminal_5 present")
+        .current
+        .pid = Some(u32::MAX);
+    let fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
+    let verified = prior.clone();
+    let calls = std::cell::Cell::new(0);
+
+    let repulled = confirm_and_carry(
+        fresh,
+        Some(&prior),
+        None,
+        &|enrich_metrics, min_topology_produced_at_ms| {
+            assert!(enrich_metrics);
+            assert!(min_topology_produced_at_ms.is_some());
+            calls.set(calls.get() + 1);
+            Ok(verified.clone())
+        },
+        None,
+        true,
+        &runtime,
+    )
+    .expect("ambiguous process loss re-pulls");
+
+    assert_eq!(calls.get(), 1);
+    assert!(repulled.carried_panes.is_empty());
+    assert!(
+        live_row_ids(&repulled).contains(&"zellij:terminal_5".to_owned()),
+        "the verified pane row survives the degraded read"
+    );
+}
+
+#[test]
+fn ambiguous_plain_process_absence_still_drops_when_verified_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
+        "/tmp/plain-process-closed",
+    ));
+    let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut prior = frame(vec![
+        pane("terminal_1", Some("zsh"), Some("/repo")),
+        pane("terminal_5", Some("zsh"), Some("/repo")),
+    ]);
+    prior
+        .pane_states_mut()
+        .find(|pane| pane.pane_id.raw() == "terminal_5")
+        .expect("terminal_5 present")
+        .current
+        .pid = Some(u32::MAX);
+    let fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
+    let verified = fresh.clone();
+    let calls = std::cell::Cell::new(0);
+
+    let repulled = confirm_and_carry(
+        fresh,
+        Some(&prior),
+        None,
+        &|enrich_metrics, min_topology_produced_at_ms| {
+            assert!(enrich_metrics);
+            assert!(min_topology_produced_at_ms.is_some());
+            calls.set(calls.get() + 1);
+            Ok(verified.clone())
+        },
+        None,
+        true,
+        &runtime,
+    )
+    .expect("ambiguous process loss re-pulls");
+
+    assert_eq!(calls.get(), 1);
+    assert!(repulled.carried_panes.is_empty());
+    assert!(
+        !live_row_ids(&repulled).contains(&"zellij:terminal_5".to_owned()),
+        "a verified missing pane still drops rather than ghosting"
+    );
+}
+
+#[test]
 fn refuted_initial_carry_records_diagnostic() {
     if crate::proc::stat_metrics(std::process::id()).is_none() {
         return;
