@@ -182,15 +182,14 @@ fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
     loop {
         let (tx, rx) = mpsc::channel();
         let worker_paths = paths.clone();
-        let Some(mut worker_walker) = walker.take() else {
+        let Some(worker_walker) = walker.take() else {
             return Err(anyhow!("stats refresh walker unavailable"));
         };
         thread::spawn(move || {
-            let stats = load_or_refresh_stats(&worker_paths, None, &mut worker_walker);
-            let _ = tx.send(RefreshEvent {
-                stats,
-                walker: worker_walker,
+            let event = refresh_event(worker_walker, |walker| {
+                load_or_refresh_stats(&worker_paths, None, walker)
             });
+            let _ = tx.send(event);
         });
         match hold_cycle(hold, &mut current, &rx, dollars, &glyphs, &mut active)? {
             CycleExit::Refresh(next_walker) => {
@@ -213,8 +212,24 @@ enum CycleExit {
 }
 
 struct RefreshEvent {
-    stats: Result<Stats>,
+    stats: Option<Result<Stats>>,
     walker: SpendingWalker,
+}
+
+fn refresh_event(
+    mut walker: SpendingWalker,
+    load: impl FnOnce(&mut SpendingWalker) -> Result<Stats>,
+) -> RefreshEvent {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load(&mut walker))) {
+        Ok(stats) => RefreshEvent {
+            stats: Some(stats),
+            walker,
+        },
+        Err(_) => RefreshEvent {
+            stats: None,
+            walker: SpendingWalker::new(),
+        },
+    }
 }
 
 fn hold_cycle(
@@ -230,15 +245,17 @@ fn hold_cycle(
     loop {
         match rx.try_recv() {
             Ok(event) => {
-                *current = Some(event.stats?);
-                if let Some(stats) = current.as_ref() {
-                    repaint(stats, dollars, glyphs, *active)?;
+                if let Some(stats) = event.stats {
+                    *current = Some(stats?);
+                    if let Some(stats) = current.as_ref() {
+                        repaint(stats, dollars, glyphs, *active)?;
+                    }
                 }
                 returned_walker = Some(event.walker);
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) if returned_walker.is_none() => {
-                return Err(anyhow!("stats worker exited before sending a result"));
+                return Ok(CycleExit::Refresh(Box::new(SpendingWalker::new())));
             }
             Err(mpsc::TryRecvError::Disconnected) => {}
         }
