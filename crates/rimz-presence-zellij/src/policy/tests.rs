@@ -1046,6 +1046,21 @@ fn optimistic_poke_floor_is_per_pane() {
 }
 
 #[test]
+fn closed_pane_clears_its_optimistic_poke_floor() {
+    let mut policy = PokePolicy::new(0);
+
+    policy.accept_optimistic_pane_poke(7, 10);
+    assert!(!policy.optimistic_pane_poke_allowed(7, 50));
+
+    policy.forget_pane(7);
+
+    assert!(
+        policy.optimistic_pane_poke_allowed(7, 50),
+        "a reused pane id starts with a clean command-poke floor",
+    );
+}
+
+#[test]
 fn duplicate_changes_inside_the_floor_defer_once_and_never_drop() {
     let mut policy = PokePolicy::new(0);
     policy.on_signal(100);

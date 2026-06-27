@@ -998,6 +998,10 @@ impl PokePolicy {
         self.on_optimistic_signal(now_ms);
     }
 
+    pub fn forget_pane(&mut self, pane_id: u32) {
+        self.last_optimistic_poke_by_pane.remove(&pane_id);
+    }
+
     fn queue_change(&mut self, now_ms: u64) {
         if self.pending_since.is_none() {
             self.pending_since = Some(now_ms);

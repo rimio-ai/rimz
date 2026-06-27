@@ -574,6 +574,9 @@ mod shell {
             policy::remove_pane_from_tabs(&mut self.tabs, is_plugin, id);
             if !is_plugin {
                 self.foreground.remove(&id);
+                if let Some(policy) = self.policy.as_mut() {
+                    policy.forget_pane(id);
+                }
             }
         }
 
