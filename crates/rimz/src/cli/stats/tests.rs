@@ -25,15 +25,17 @@ fn spend_window(
 }
 
 fn tally(tokens: u64, usd: f64, sessions: u32) -> SpendTally {
-    let mut tally = SpendTally::default();
-    tally.year = spend_window(tokens, usd, 0, 0, 0, sessions);
-    tally
+    SpendTally {
+        year: spend_window(tokens, usd, 0, 0, 0, sessions),
+        ..Default::default()
+    }
 }
 
 fn model_tally(tokens: u64, usd: f64, input: u64, output: u64, cache_read: u64) -> SpendTally {
-    let mut tally = SpendTally::default();
-    tally.year = spend_window(tokens, usd, input, output, cache_read, 0);
-    tally
+    SpendTally {
+        year: spend_window(tokens, usd, input, output, cache_read, 0),
+        ..Default::default()
+    }
 }
 
 fn panel_glyphs() -> PanelGlyphs {

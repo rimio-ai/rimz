@@ -28,16 +28,17 @@ fn compute_total(files: &[PathBuf], cache: &mut SpendingDiskCache) -> SpendTally
 }
 
 fn model_tally(tokens: u64, usd: f64, input: u64, output: u64, cache_read: u64) -> SpendTally {
-    let mut tally = SpendTally::default();
-    tally.year = SpendWindow {
-        usd,
-        tokens,
-        input,
-        output,
-        cache_read,
+    SpendTally {
+        year: SpendWindow {
+            usd,
+            tokens,
+            input,
+            output,
+            cache_read,
+            ..Default::default()
+        },
         ..Default::default()
-    };
-    tally
+    }
 }
 
 fn iso_at(secs: u64) -> String {
