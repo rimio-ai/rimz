@@ -179,7 +179,9 @@ pub(super) fn apply_gate(
         CommitDecision::AcceptViaEscapeHatch => {
             let spend_carry_since =
                 repair_collapsed_spend(prev_good, &mut state.snapshot, gate, now);
-            state.last_snapshot = Some(state.snapshot.clone());
+            if spend_carry_since.is_some() {
+                state.last_snapshot = Some(state.snapshot.clone());
+            }
             (
                 state,
                 GateState {
@@ -193,7 +195,9 @@ pub(super) fn apply_gate(
         CommitDecision::Accept => {
             let spend_carry_since =
                 repair_collapsed_spend(prev_good, &mut state.snapshot, gate, now);
-            state.last_snapshot = Some(state.snapshot.clone());
+            if spend_carry_since.is_some() {
+                state.last_snapshot = Some(state.snapshot.clone());
+            }
             (
                 state,
                 GateState {
