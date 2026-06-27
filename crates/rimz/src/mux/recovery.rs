@@ -244,15 +244,14 @@ pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
 /// those words.
 #[cfg(target_os = "linux")]
 pub(crate) fn is_stats_refresh(cmdline: &str) -> bool {
-    let mut args = cmdline.split_whitespace();
-    let Some(program) = args.next() else {
+    let Some(args) = cmdline
+        .strip_prefix("rimz ")
+        .or_else(|| cmdline.rsplit_once("/rimz ").map(|(_, args)| args))
+    else {
         return false;
     };
-    if program != "rimz" && !program.ends_with("/rimz") {
-        return false;
-    }
     let mut saw_stats = false;
-    for arg in args {
+    for arg in args.split_whitespace() {
         if arg == "stats" {
             saw_stats = true;
         } else if saw_stats && arg == "--refresh" {
@@ -464,6 +463,7 @@ mod tests {
     fn is_stats_refresh_matches_only_the_held_or_standalone_dashboard() {
         assert!(is_stats_refresh("/usr/bin/rimz stats --refresh --hold"));
         assert!(is_stats_refresh("rimz stats --refresh"));
+        assert!(is_stats_refresh("/tmp/Rimz Dev/rimz stats --refresh"));
         assert!(is_stats_refresh(
             "rimz --config /tmp/config.toml stats --refresh"
         ));
