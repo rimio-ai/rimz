@@ -241,7 +241,8 @@ fn event_lifecycle_observation(
     trimmed.transcript_path = None;
     trimmed.worktree_path = None;
     trimmed.worktree_branch = None;
-    trimmed.pane_id = None;
+    // Lazy adapters can first recover their pane binding on TurnStarted, so the
+    // reducer needs every event pane stamp that focus recovery supplies.
     Cow::Owned(trimmed)
 }
 
@@ -249,7 +250,10 @@ fn spawn_auto_rotation_if_due(workspace: &ResolvedWorkspace, ledger: &Ledger) {
     let Ok(meta) = std::fs::metadata(&ledger.paths().events_log) else {
         return;
     };
-    if !auto_rotation_due(meta.len(), auto_rotate_stamp_age(ledger)) {
+    if !auto_rotation_size_due(meta.len()) {
+        return;
+    }
+    if !auto_rotation_stamp_due(auto_rotate_stamp_age(ledger)) {
         return;
     }
     touch_auto_rotate_stamp(ledger);
@@ -263,9 +267,12 @@ fn spawn_auto_rotation_if_due(workspace: &ResolvedWorkspace, ledger: &Ledger) {
     });
 }
 
-fn auto_rotation_due(log_len: u64, stamp_age: Option<std::time::Duration>) -> bool {
+fn auto_rotation_size_due(log_len: u64) -> bool {
     log_len >= crate::cli::workspace::DEFAULT_EVENT_LOG_ROTATE_BYTES
-        && stamp_age.is_none_or(|age| age >= AUTO_ROTATE_DEBOUNCE)
+}
+
+fn auto_rotation_stamp_due(stamp_age: Option<std::time::Duration>) -> bool {
+    stamp_age.is_none_or(|age| age >= AUTO_ROTATE_DEBOUNCE)
 }
 
 fn auto_rotate_stamp_age(ledger: &Ledger) -> Option<std::time::Duration> {
@@ -1171,7 +1178,7 @@ mod tests {
         assert!(trimmed.transcript_path.is_none());
         assert!(trimmed.worktree_path.is_none());
         assert!(trimmed.worktree_branch.is_none());
-        assert!(trimmed.pane_id.is_none());
+        assert_eq!(trimmed.pane_id.as_ref().map(PaneId::raw), Some("%1"));
         assert_eq!(
             observation.transcript_path.as_deref(),
             Some("/tmp/transcript.jsonl"),
@@ -1182,13 +1189,13 @@ mod tests {
     #[test]
     fn auto_rotation_decision_respects_threshold_and_debounce() {
         let threshold = crate::cli::workspace::DEFAULT_EVENT_LOG_ROTATE_BYTES;
-        assert!(!auto_rotation_due(threshold - 1, None));
-        assert!(auto_rotation_due(threshold, None));
-        assert!(!auto_rotation_due(
-            threshold,
-            Some(AUTO_ROTATE_DEBOUNCE - std::time::Duration::from_secs(1))
-        ));
-        assert!(auto_rotation_due(threshold, Some(AUTO_ROTATE_DEBOUNCE)));
+        assert!(!auto_rotation_size_due(threshold - 1));
+        assert!(auto_rotation_size_due(threshold));
+        assert!(auto_rotation_stamp_due(None));
+        assert!(!auto_rotation_stamp_due(Some(
+            AUTO_ROTATE_DEBOUNCE - std::time::Duration::from_secs(1)
+        )));
+        assert!(auto_rotation_stamp_due(Some(AUTO_ROTATE_DEBOUNCE)));
     }
 
     #[test]
