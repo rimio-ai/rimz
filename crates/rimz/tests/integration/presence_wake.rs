@@ -164,9 +164,10 @@ impl WakeEnv {
     }
 
     fn seed_pane_cache_with_shell(&self, pane_id: &str, produced_at_ms: u64) {
-        let cache = assemble_frame(
+        let pane = PaneId::from_parts(MuxName::Zellij, pane_id);
+        let mut cache = assemble_frame(
             vec![PaneRef {
-                pane_id: PaneId::from_parts(MuxName::Zellij, pane_id),
+                pane_id: pane.clone(),
                 session_name: SESSION_NAME.to_owned(),
                 view_id: Some("tab_0".to_owned()),
                 view_kind: Some(rimz::ids::ViewKind::Tab),
@@ -187,6 +188,7 @@ impl WakeEnv {
             produced_at_ms,
             SESSION_NAME,
         );
+        cache.viewed_panes = vec![pane];
         std::fs::write(
             self.runtime.root.join("snapshot.json"),
             serde_json::to_vec(&cache).expect("serialize pane cache"),
