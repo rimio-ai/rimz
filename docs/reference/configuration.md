@@ -144,7 +144,7 @@ Profiles and roles become addressable handles, so they must not shadow `@all`, a
 placement = "auto"   # "auto" | "pane" | "tab"
 ```
 
-`placement` sets where a launch lands when neither `--new-pane` nor `--new-tab` is passed. `auto` (the default) runs a single non-worktree agent in the current pane and opens a new tab for a worktree launch, team, or multi-cell layout; `pane` splits a new pane for a single non-worktree agent and otherwise opens a tab; `tab` always opens a tab. The CLI side of placement is in [agents.md → Worktree and placement](./cli/agents.md#worktree-and-placement).
+`placement` sets where a launch lands when neither `--new-pane` nor `--new-tab` is passed. `auto` (the default) runs a single non-worktree agent in the current pane and opens a new tab for a worktree launch, team, or multi-cell layout; `pane` splits a new pane for a single non-worktree agent and otherwise opens a tab; `tab` always opens a tab. The CLI side of placement is in [agents.md → Channel, worktree, and placement](./cli/agents.md#channel-worktree-and-placement).
 
 ## Worktrees
 
