@@ -101,6 +101,7 @@ impl Ledger {
             &message.kind,
             &message.agent_id,
             message.agent_name.as_deref(),
+            now,
         ) else {
             return Ok(None);
         };

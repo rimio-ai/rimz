@@ -27,7 +27,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - **Ledger first.** Correctness lives in the ledger, CAS rules, nonces, and per-request sockets. Sidebar wakeups are latency, not truth.
 - **Hook stdout is the decision channel.** Logs go to stderr or Rimz state logs. Hook helper children get fresh stdio.
 - **Cross-backend parity.** Zellij and tmux are first-class. Core behaviour never depends on a backend-only feature.
-- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives; `steer` and `queue` route human-authored text through the same send path, while pane reads stay in rendering and resolver-owned inspection.
+- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives; `message` routes human-authored text through the same send path, while pane reads stay in rendering and resolver-owned inspection.
 - **Sidebar is read-only on the ledger.** Sidebar code reads via `rimz sidebar snapshot`; ledger-write modules stay out of the sidebar's import graph.
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
 - **Security surfaces stay visible.** Project trust, resolver allowlists, hook install diffs, and privacy settings are product behaviour, not implementation details.
@@ -86,7 +86,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
     - [opencode.md](./docs/internals/agents/adapter/opencode.md) — OpenCode.
   - [provider.md](./docs/internals/agents/provider.md) — provider accounts, balances, spend, and pricing: the plan/metered model, the out-of-band account probe, the provider-dashboard aggregation, the full-history cost/spending walk, and the three-layer token price table (embedded snapshot, remote refresh, builtins).
   - [resolvers.md](./docs/internals/agents/resolvers.md) — resolver protocol, chain, pane primitives.
-  - [harness.md](./docs/internals/agents/harness.md) — the agent harness end to end: the layout IR and backend tab/split placement, the agent-address grammar, supervised `rimz agents -p` runs (records, wakeups, output/input formats, posture, shared launch params), the `rimz agents exec` wrapper and run-pane cleanup, and the in-tab `steer`/`queue` message path (targets, gates, delivery, attempts, hazards).
+  - [harness.md](./docs/internals/agents/harness.md) — the agent harness end to end: the layout IR and backend tab/split placement, the agent-address grammar, supervised `rimz agents -p` runs (records, wakeups, output/input formats, posture, shared launch params), the `rimz agents exec` wrapper and run-pane cleanup, and the in-tab `message` path (targets, gates, delivery, attempts, hazards).
   - [loop.md](./docs/internals/agents/loop.md) — scheduled loop tasks: one supervised agent turn on an OS schedule, with calendar, interval, cron, one-shot, posture, and window-priming ping tasks.
   - [worktree.md](./docs/internals/agents/worktree.md) — Rimz-owned Git worktrees as the room's channels: creation and the `[worktree] dir`/base template, the `rimz-worktree.json` ownership marker, `.worktreeinclude` file seeding, and the landed-work cleanup decision plus the `rimz gc` sweep.
 - **`sidebar/`** — the room and the substrate beneath it.

@@ -6,28 +6,7 @@ use std::time::Duration;
 /// `(unit_str, multiplier_in_seconds)`. Returns a human-readable error string
 /// suitable for `clap`'s `value_parser`.
 pub(crate) fn parse_duration_units(raw: &str, allowed: &[(&str, u64)]) -> Result<Duration, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err("duration is empty".to_owned());
-    }
-    let (digits, unit) = trimmed
-        .split_at_checked(trimmed.len() - 1)
-        .ok_or_else(|| format!("unrecognised duration `{raw}`"))?;
-    let factor = allowed
-        .iter()
-        .find_map(|(name, mult)| (*name == unit).then_some(*mult))
-        .ok_or_else(|| {
-            let units = allowed
-                .iter()
-                .map(|(n, _)| *n)
-                .collect::<Vec<_>>()
-                .join("/");
-            format!("unknown duration unit `{unit}`; use {units}")
-        })?;
-    let n: u64 = digits
-        .parse()
-        .map_err(|e| format!("duration `{raw}` is not an integer: {e}"))?;
-    Ok(Duration::from_secs(n.saturating_mul(factor)))
+    rimz::schedule::parse_duration_units(raw, allowed)
 }
 
 #[cfg(test)]

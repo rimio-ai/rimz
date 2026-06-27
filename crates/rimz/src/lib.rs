@@ -25,6 +25,7 @@ pub mod launch;
 pub mod ledger;
 pub(crate) mod loop_fire;
 pub mod message;
+pub(crate) mod message_fire;
 pub mod mux;
 pub mod notify_log;
 pub mod observability;

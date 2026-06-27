@@ -29,7 +29,9 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths) {
             Ok(state) => state,
             Err(err) => {
                 debug!(error = %err, "sidebar cache refresh state paths unavailable");
-                crate::loop_fire::fire_due_tasks(&runtime, &jiff::Zoned::now());
+                let now = jiff::Zoned::now();
+                crate::loop_fire::fire_due_tasks(&runtime, &now);
+                crate::message_fire::wake_due_messages(&runtime, &now);
                 continue;
             }
         };
@@ -44,7 +46,9 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths) {
         }) {
             debug!(error = %err, "sidebar cache refresh failed");
         }
-        crate::loop_fire::fire_due_tasks(&runtime, &jiff::Zoned::now());
+        let now = jiff::Zoned::now();
+        crate::loop_fire::fire_due_tasks(&runtime, &now);
+        crate::message_fire::wake_due_messages(&runtime, &now);
     }
 }
 

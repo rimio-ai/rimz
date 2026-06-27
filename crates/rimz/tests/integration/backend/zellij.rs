@@ -2947,7 +2947,7 @@ fn native_new_tab_reopens_work_panes_evenly_after_closing_to_one() {
 }
 
 /// `paste_text` writes one bracketed paste (`ESC[200~` … `ESC[201~`) wrapping
-/// the payload as a raw decimal byte list — the steer/queue delivery path. A
+/// the payload as a raw decimal byte list — the message delivery path. A
 /// bare shell renders the markers literally, so the inner text still lands in
 /// the pane; assert it arrives byte-for-byte. A leading dash is the regression
 /// guard: the byte-write path must never re-read the payload as a flag or key.

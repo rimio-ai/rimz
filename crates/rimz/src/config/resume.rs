@@ -52,7 +52,7 @@ pub struct ResumeConfig {
     pub auto_continue_max_retries: u32,
     /// The text the producer nudges a parked agent with when `auto_continue` is
     /// on. Sent as a bracketed paste plus a submit Enter, the same pane-send path
-    /// `steer` uses.
+    /// `message --steer` uses.
     pub auto_continue_text: String,
 }
 

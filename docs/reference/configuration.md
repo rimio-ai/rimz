@@ -179,7 +179,7 @@ root = "/home/you/code/app"
 at = "09:30"
 ```
 
-Each task chooses either `spec` or `bind`. `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. A `<kind>-ping` spec is the window-primer: it defaults the prompt to `ping` and skips when that provider's budget window is already counting down. Bind-mode pins delivery to one live agent session and sends the prompt through the queue path; `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only. The config records the intent; a running room for the task's project fires it from the sidebar elder. Each task carries an absolute `root` so the elder scopes firing to its room. The full model is in [loop.md](../internals/agents/loop.md), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
+Each task chooses either `spec` or `bind`. `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. A `<kind>-ping` spec is the window-primer: it defaults the prompt to `ping` and skips when that provider's budget window is already counting down. Bind-mode pins delivery to one live agent session and sends the prompt through the message path; `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only. The config records the intent; a running room for the task's project fires it from the sidebar elder. Each task carries an absolute `root` so the elder scopes firing to its room. The full model is in [loop.md](../internals/agents/loop.md), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
 
 ## Behavior settings
 
@@ -255,7 +255,7 @@ auto_continue_max_retries = 13
 auto_continue_text = "continue"
 ```
 
-Resume covers two tenses. On a **rebirth** (reboot, multiplexer crash, or a clean Rimz rebirth of a stuck room), Rimz offers to recover prior agents from the durable rollup — the prompt defaults yes, non-interactive starts recover, and each restored agent starts idle in its worktree tab. `on_rebirth = false`, `--no-resume`, and `rimz reset` come up empty; `max` bounds how many agents one birth relaunches. While the room is **live**, `auto_continue` picks any parked turn back up by typing `auto_continue_text` through the same path as `steer`: rate-limit parks fire when the spent window resets, while overload and transient server-error parks fire on the bounded retry ramp (`auto_continue_backoff_secs`, `auto_continue_max_retries`). The default backoff sends attempts at 1, 4, 9, 14, … 59 minutes, then leaves the row parked. It is off by default. The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth) and the live path in [provider.md](../internals/agents/provider.md#spent-windows-and-paused-rows).
+Resume covers two tenses. On a **rebirth** (reboot, multiplexer crash, or a clean Rimz rebirth of a stuck room), Rimz offers to recover prior agents from the durable rollup — the prompt defaults yes, non-interactive starts recover, and each restored agent starts idle in its worktree tab. `on_rebirth = false`, `--no-resume`, and `rimz reset` come up empty; `max` bounds how many agents one birth relaunches. While the room is **live**, `auto_continue` picks any parked turn back up by typing `auto_continue_text` through the same path as `message --steer`: rate-limit parks fire when the spent window resets, while overload and transient server-error parks fire on the bounded retry ramp (`auto_continue_backoff_secs`, `auto_continue_max_retries`). The default backoff sends attempts at 1, 4, 9, 14, … 59 minutes, then leaves the row parked. It is off by default. The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth) and the live path in [provider.md](../internals/agents/provider.md#spent-windows-and-paused-rows).
 
 ### Smart compaction
 
@@ -264,7 +264,7 @@ Resume covers two tenses. On a **rebirth** (reboot, multiplexer crash, or a clea
 smart_compact = "70%"
 ```
 
-`smart_compact` sets the default threshold for compact-first `steer` and `queue` sends — a percentage (`"70%"`) or an occupied-token count (`"120000"`). When an agent's context window has reached the threshold, Rimz submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [harness.md](../internals/agents/harness.md#compact-before-sending).
+`smart_compact` sets the default threshold for compact-first `message` sends — a percentage (`"70%"`) or an occupied-token count (`"120000"`). When an agent's context window has reached the threshold, Rimz submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [harness.md](../internals/agents/harness.md#compact-before-sending).
 
 ### rtk output compression
 

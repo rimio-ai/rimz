@@ -332,7 +332,7 @@ fn spawn_queue_delivery_if_checkpoint(
                 agent = agent.descriptor().kind,
                 agent_id = %agent_id,
                 error = %err,
-                "queue delivery skipped; queued messages unreadable",
+                "message delivery skipped; queued messages unreadable",
             );
             return;
         }
@@ -345,6 +345,7 @@ fn spawn_queue_delivery_if_checkpoint(
         &kind,
         agent_id,
         recorded.observation.agent_name.as_deref(),
+        jiff::Timestamp::now(),
     ) else {
         return;
     };
@@ -352,7 +353,7 @@ fn spawn_queue_delivery_if_checkpoint(
         args: vec![
             "--root".to_owned(),
             workspace.project_root.display().to_string(),
-            "queue".to_owned(),
+            "message".to_owned(),
             "deliver".to_owned(),
             "--message-id".to_owned(),
             head.message_id.to_string(),

@@ -2,14 +2,14 @@
 //!
 //! The elected sidebar elder keeps time while a room for the task's project is
 //! open and fires `rimz loop run <name>`, which drives one configured prompt
-//! through either the supervised `agents -p` seam or the queue path to a pinned
+//! through either the supervised `agents -p` seam or the message path to a pinned
 //! live session. A `<kind>-ping` virtual cell is the window-priming special case
 //! and gets the budget-window skip optimization.
 //!
 //! This handler parses and edits the per-machine config, lists room-open state,
 //! and owns the hidden runner the elder spawns. The pure schedule parsing and
 //! due evaluation live in [`rimz::schedule`]; delivery mode reuses the shared
-//! queue seam.
+//! message seam.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -61,7 +61,7 @@ struct AddArgs {
     /// Single agent cell to drive: a kind, profile, or virtual cell.
     #[arg(long, conflicts_with = "bind")]
     spec: Option<String>,
-    /// Live agent instance to wake through the queue path.
+    /// Live agent instance to wake through the message path.
     #[arg(long, value_name = "ADDRESS", conflicts_with = "spec")]
     bind: Option<String>,
     /// Inline prompt for the scheduled turn.
@@ -348,7 +348,7 @@ fn run_delivery_task(
     if entry.once {
         let _ = config_remove(name)?;
     }
-    match super::queue::queue_to_session(
+    match super::message::to_session(
         &entry.root,
         &target.kind,
         &target.session,

@@ -711,7 +711,7 @@ fn real_agent_room(env: &Env, agent_session: &str) -> (PathBuf, String, String, 
 fn run_steer(env: &Env, socket: &Path, args: &[&str]) -> std::process::Output {
     let mut cmd = env.rimz();
     cmd.env("TMUX", tmux_env(socket))
-        .args(["--mux", "tmux", "steer"]);
+        .args(["--mux", "tmux", "message", "--steer"]);
     cmd.args(args).output().expect("spawn steer")
 }
 

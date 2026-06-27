@@ -2006,7 +2006,7 @@ fn capture_send_keys_and_named_key_round_trip() {
 }
 
 /// `paste_text` injects one bracketed paste (`ESC[200~` … `ESC[201~`) wrapping
-/// the literal payload — the steer/queue delivery path. A bare shell renders
+/// the literal payload — the message delivery path. A bare shell renders
 /// the markers literally, so the inner text still lands in the pane; assert the
 /// payload arrives byte-for-byte. A leading dash is the regression guard: the
 /// `send-keys -l --` spelling must never re-read the bytes as flags or key names.

@@ -76,7 +76,7 @@ fn provisional_launch_id_is_not_a_session_prefix() {
 
 #[test]
 fn require_mention_demands_the_sigil() {
-    // steer/queue enforce `@`; pane ids are exempt.
+    // message enforces `@`; pane ids are exempt.
     assert!(require_mention("claude").is_err());
     assert!(require_mention("@claude").is_ok());
     assert!(require_mention("@all").is_ok());

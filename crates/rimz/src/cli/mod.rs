@@ -23,7 +23,6 @@ mod message;
 mod opencode;
 mod pane;
 mod parse;
-mod queue;
 mod reload;
 mod remote;
 mod render;
@@ -39,7 +38,6 @@ mod spinner;
 mod start_notice;
 mod stats;
 mod statusline;
-mod steer;
 mod transcript;
 mod trust;
 mod version;
@@ -97,8 +95,6 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
-        Some(Subcmd::Steer(args)) => steer::run(args, &globals),
-        Some(Subcmd::Queue(args)) => queue::run(args, &globals),
         Some(Subcmd::Message(args)) => message::run(args, &globals),
         Some(Subcmd::Resolver(args)) => resolver::run(args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
@@ -196,8 +192,6 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::Reload(_)) => ("reload", None, None),
         Some(Subcmd::Reset(_)) => ("reset", None, None),
         Some(Subcmd::Pane(_)) => ("pane", None, None),
-        Some(Subcmd::Steer(_)) => ("steer", None, None),
-        Some(Subcmd::Queue(_)) => ("queue", None, None),
         Some(Subcmd::Message(_)) => ("message", None, None),
         Some(Subcmd::Resolver(_)) => ("resolver", None, None),
         Some(Subcmd::Sidebar(args)) => (args.command_label(), None, None),
@@ -279,8 +273,8 @@ pub(crate) fn agent_label(agent: &AgentState) -> String {
 
 /// Gate a fan-out (more than one target) behind explicit confirmation. On a TTY,
 /// prompt `<verb> N agents (…)? [y/N]`; off a TTY, refuse and point at `--yes`
-/// so a script never broadcasts by surprise. Callers pass the per-target labels
-/// so steer (panes) and queue (sessions) share one prompt.
+/// so a script never broadcasts by surprise. Message callers pass the
+/// per-target labels so live panes and durable sessions share one prompt.
 pub(crate) fn confirm_fanout(verb: &str, target: &str, labels: &[String]) -> Result<()> {
     let list = labels.join(", ");
     if !std::io::stdin().is_terminal() {
@@ -318,7 +312,7 @@ pub(crate) fn ambiguous_fanout(verb: &str, target: &str, labels: &[String]) -> a
 }
 
 /// Resolve a ref to exactly one agent (`show`/`focus`/`wait`/`stop`,
-/// `queue clear`/`list`). `@all` or a fan-out kind is an explicit ambiguity.
+/// `message clear`/`list`). `@all` or a fan-out kind is an explicit ambiguity.
 pub(crate) fn resolve_agent_one<'a>(
     snapshot: &'a rimz::SidebarSnapshot,
     raw: &str,
@@ -332,7 +326,7 @@ pub(crate) fn resolve_agent_one<'a>(
 }
 
 /// Resolve a ref to every matching rollup agent for a broadcast or the durable
-/// identity side of `queue add`.
+/// identity side of parked messages.
 pub(crate) fn resolve_agent_many<'a>(
     snapshot: &'a rimz::SidebarSnapshot,
     raw: &str,
@@ -345,8 +339,8 @@ pub(crate) fn resolve_agent_many<'a>(
     )
 }
 
-/// Resolve a ref to every matching live agent pane for `steer` and send-now
-/// `queue`: the producer's bound panes, so a target reaches exactly the agent
+/// Resolve a ref to every matching live agent pane for `message --steer` and
+/// send-now messages: the producer's bound panes, so a target reaches exactly the agent
 /// panes the producer saw — bound sessions (at their live pane) and lazy panes
 /// with no session yet.
 pub(crate) fn resolve_pane_targets<'a>(
@@ -361,7 +355,7 @@ pub(crate) fn resolve_pane_targets<'a>(
     )
 }
 
-/// The snapshot the talk commands (`steer`, `queue`) resolve against. Unlike the
+/// The snapshot the `message` command resolves against. Unlike the
 /// rollup-only `snapshot_cached`, this folds a *fresh* live pane frame onto the
 /// rollup without the render spine, so a just-started sessionless pane is
 /// addressable without paying group-root, spending, account, dashboard, or git
@@ -410,7 +404,7 @@ pub(crate) fn resolution_snapshot(
 
 /// The no-frame fallback: the rollup, with `agent_panes` synthesized from each
 /// stamped session's pane. Without a live frame there is nothing to cwd-bind, so
-/// only sessions that already carry a pane are reachable — the pre-fold steer
+/// only sessions that already carry a pane are reachable — the pre-fold message
 /// behaviour.
 fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<rimz::SidebarSnapshot> {
     let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
@@ -576,12 +570,8 @@ enum Subcmd {
     Reset(reset::ResetArgs),
     /// Pane primitives backed by the selected mux backend.
     Pane(pane::PaneArgs),
-    /// Send state-gated text to a live agent pane.
-    Steer(steer::SteerArgs),
-    /// Queue text for delivery when an agent finishes a turn.
-    Queue(queue::QueueArgs),
-    /// Message an agent: queue text, sent now if possible, parked for the next
-    /// turn boundary otherwise. Front door over `steer`/`queue`.
+    /// Message an agent: `--steer` interrupts now; the default parks for the
+    /// next safe turn boundary, optionally after `--schedule`.
     Message(message::MessageArgs),
     /// Manage the per-machine resolver allowlist.
     Resolver(resolver::ResolverArgs),

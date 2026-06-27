@@ -688,6 +688,7 @@ mod tests {
             last_attempt_at: None,
             last_error: None,
             delivered_at: None,
+            not_before: None,
             auto_compact: None,
             compacted_context_tokens: None,
         };

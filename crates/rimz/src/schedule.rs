@@ -10,6 +10,8 @@
 //! CLI, and evaluates whether a schedule is due at a given local wall-clock
 //! instant. The side-effecting elder tick lives in the sidebar pane.
 
+use std::time::Duration;
+
 use crate::config::TaskEntry;
 use jiff::{Timestamp, Zoned};
 
@@ -194,6 +196,33 @@ pub fn validate_name(name: &str) -> Result<(), ScheduleErr> {
             name: name.to_owned(),
         })
     }
+}
+
+/// Parse `<n><unit>` against an allowed-units slice. Each entry is
+/// `(unit_str, multiplier_in_seconds)`.
+pub fn parse_duration_units(raw: &str, allowed: &[(&str, u64)]) -> Result<Duration, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("duration is empty".to_owned());
+    }
+    let (digits, unit) = trimmed
+        .split_at_checked(trimmed.len() - 1)
+        .ok_or_else(|| format!("unrecognised duration `{raw}`"))?;
+    let factor = allowed
+        .iter()
+        .find_map(|(name, mult)| (*name == unit).then_some(*mult))
+        .ok_or_else(|| {
+            let units = allowed
+                .iter()
+                .map(|(n, _)| *n)
+                .collect::<Vec<_>>()
+                .join("/");
+            format!("unknown duration unit `{unit}`; use {units}")
+        })?;
+    let n: u64 = digits
+        .parse()
+        .map_err(|e| format!("duration `{raw}` is not an integer: {e}"))?;
+    Ok(Duration::from_secs(n.saturating_mul(factor)))
 }
 
 /// Parse and validate an entry's firing time into a [`ParsedSchedule`]. Agent

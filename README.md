@@ -44,7 +44,7 @@ Rimz is a realtime dashboard for harnessing agentic coding: one human and tens o
 - **Extremely Lightweight:** a single binary that wraps the harnesses you already run (Claude Code, Codex, Pi) inside your familiar zellij or tmux: same keybinds, same terminal, and the official web, desktop, and mobile apps all keep working
 - **Local or Remote, Continuously:** start the room on your macbook or a server, close the laptop, and reattach from anywhere; the link heals itself, and even a reboot brings the room back with layout and agents resumed
 - **Worktrees, for every Agent:** open agents together, side by side in the same worktree with dynamic layout. For example use `claude,codex` to start Claude planning and Codex reviewing for agentic peer programming, or use `vim,codex+term` to start editor, agent and terminal side by side.
-- **Scriptable and Steerable:** the `claude -p` you missed, brought back as `rimz agents -p`. Plus `steer` and `queue` which add dynamic control over agent harness, easily integrate agents into your scripts, your CI, your workflow with observability
+- **Scriptable and Steerable:** the `claude -p` you missed, brought back as `rimz agents -p`. Plus `rimz message`, which adds dynamic control over the agent harness and integrates agents into scripts, CI, and workflows with observability
 - **Auto Recover, while you're Away:** agents keep working after you step away. A rate-limit park resumes the moment the window resets, API hiccups recover on their own, context compacts along the way, and routine questions fall to a resolver chain that always ends with you
 
 ## How it works
@@ -108,15 +108,15 @@ rimz agents peer --worktree=feat/x                # launch a saved layout in a w
 rimz agents 'vim,codex+term' --worktree=feat/y    # or gen dynamically
 ```
 
-**Steering agents by handle** Every agent automatically get a handle, like `@codex#feat-a`, namespaced by worktree, steer the agents like talking to your colleages on Slack.
+**Message agents by handle** Every agent automatically gets a handle, like `@codex#feat-a`, namespaced by worktree, so you message agents like teammates in Slack.
 
 ```sh
-# steer agent inside workspace
-rimz steer @claude#feat-a -- "focus on the failing parser test"        # talk to it now
-rimz queue @codex#feat-b --on done -- "open a PR summary"              # send if free, otherwise park
+# message an agent inside workspace
+rimz message --steer @claude#feat-a "focus on the failing parser test" # talk to it now
+rimz message --on done @codex#feat-b "open a PR summary"               # send if free, otherwise park
 
 # or when you are inside the same worktree/team channel
-rimz steer @claude -- "have you checked the code at xxx"        # talk to it now
+rimz message --steer @claude "have you checked the code at xxx"         # talk to it now
 ```
 
 → [the four scenarios, in full](./docs/guide/product.md)

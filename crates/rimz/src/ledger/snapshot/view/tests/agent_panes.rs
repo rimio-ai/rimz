@@ -1,5 +1,5 @@
 //! `SidebarSnapshot::agent_panes` — the uncapped, binding-site source that
-//! command resolution (`steer`) reads. It lists every live agent pane (bound and
+//! command resolution (`message --steer`) reads. It lists every live agent pane (bound and
 //! lazy), carries the producer-bound pane for a cwd-bound session, survives row
 //! capping, and never admits a standalone ask that merely shares the agent-card
 //! shape.
@@ -9,7 +9,7 @@ use super::*;
 #[test]
 fn cwd_bound_session_lists_its_producer_bound_pane() {
     // A daemon-routed codex carries no stamped pane; the fold binds it to the live
-    // pane by cwd, and agent_panes carries that pane so steer can reach it — even
+    // pane by cwd, and agent_panes carries that pane so message can reach it — even
     // though the rollup session itself still has no pane of its own.
     let mut snapshot = room(
         Vec::new(),
@@ -105,7 +105,7 @@ fn agent_panes_are_uncapped() {
 fn standalone_ask_is_not_an_agent_pane() {
     // A pending ask on a shell pane renders an agent-shaped attention row whose
     // name is its source — but it is not a live agent, so it never enters
-    // agent_panes and `@codex` can never steer that shell pane.
+    // agent_panes and `@codex` can never message that shell pane.
     let shell = pane("%shell", "zsh", "/repo/main");
     let mut item = FeedItem::new(
         workspace(),

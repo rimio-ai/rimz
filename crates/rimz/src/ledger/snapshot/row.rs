@@ -160,7 +160,7 @@ impl SidebarRow {
 
 /// A live agent pane the producer bound during the pane fold: a running agent
 /// CLI and the pane it occupies. Built uncapped at the binding site, so command
-/// resolution (`steer`) addresses exactly the live agent panes the producer saw
+/// resolution (`message --steer`) addresses exactly the live agent panes the producer saw
 /// — not the capped, display-shaped [`SidebarRow`]s. A bound session carries its
 /// `agent_id`, pet name, and ordinal; a lazy-registering agent before its first
 /// turn carries only its kind and pane.

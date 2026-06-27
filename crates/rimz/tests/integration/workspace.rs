@@ -65,7 +65,7 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
     let delivered_message_id = delivered_message.message_id.clone();
     old_ledger
         .queue_message(&delivered_message, "old-session")
-        .expect("queue delivered message");
+        .expect("message delivered message");
     old_ledger
         .settle_message(
             &delivered_message_id,

@@ -283,7 +283,7 @@ Rimz wraps this command like the session `statusLine` and harvests each task's `
 
 A bare `claude` launch (≥ 2.1.173) opens the agents dashboard — a background-session supervisor, not the interactive REPL. The `disableAgentView` settings key turns the surface off (`claude agents`, `--bg`, `/background`, and the on-demand supervisor), and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` is its documented environment equivalent (settings page above).
 
-Rimz pins that variable on every Claude spawn ([`ClaudeAdapter::launch_env`](../../../crates/rimz/src/agents/claude/mod.rs)): the pane contract — hooks, transcript tail, steer/queue sends — drives the classic REPL, and multi-agent supervision is Rimz's own job.
+Rimz pins that variable on every Claude spawn ([`ClaudeAdapter::launch_env`](../../../crates/rimz/src/agents/claude/mod.rs)): the pane contract — hooks, transcript tail, message sends — drives the classic REPL, and multi-agent supervision is Rimz's own job.
 
 ## Remote control
 

@@ -54,14 +54,14 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
     let ledger = Ledger::open(paths, runtime).context("opening ledger")?;
 
     // Type the nudge into the live pane, then submit — the same bracketed-paste
-    // path `steer` uses, so the agent composer takes the text and the discrete
+    // path `message --steer` uses, so the agent composer takes the text and the discrete
     // Enter submits it rather than folding a newline into the composer.
     let backend = rimz::mux::backend_for(pane_id.mux());
     crate::cli::pane::submit_message(backend.as_ref(), &pane_id, text, true)
         .context("sending auto-continue nudge")?;
 
     // Audit only after a successful send, so a vanished pane leaves no false
-    // `resumed` record. The nudge text never enters the log, mirroring `steer`.
+    // `resumed` record. The nudge text never enters the log, mirroring message sends.
     let event = EventEnvelope::agent_resumed(
         workspace_id,
         session_name,

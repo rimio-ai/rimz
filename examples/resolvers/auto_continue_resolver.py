@@ -3,7 +3,7 @@
 
 Polls ``rimz sidebar snapshot --json`` for rows whose enriched context says
 the turn paused on provider overload. It then waits with bounded exponential
-backoff and sends a human-authored recovery prompt through ``rimz steer``.
+backoff and sends a human-authored recovery prompt through ``rimz message --steer``.
 
 This is a reference artifact, not product. It proves the recovery loop can be
 written outside Rimz using public commands.
@@ -81,7 +81,7 @@ def write_heartbeat(workspace_id: str, resolver_id: str, display_name: str | Non
             "workspace_id": workspace_id,
             "resolver_id": resolver_id,
             "display_name": display_name,
-            "capabilities": ["sidebar.snapshot", "steer", "pane.capture", "pane.send"],
+            "capabilities": ["sidebar.snapshot", "message.steer", "pane.capture", "pane.send"],
             "last_seen": _iso_now(),
             "version": RESOLVER_VERSION,
             "pid": os.getpid(),
@@ -229,7 +229,7 @@ def continue_row(args: argparse.Namespace, row: dict) -> bool:
     if args.mode == "replay" and pane_id:
         result = run_rimz(args.rimz_bin, ["pane", "send", pane_id, "--key", "up", "--key", "enter"])
     else:
-        result = run_rimz(args.rimz_bin, ["steer", target, "--", args.message])
+        result = run_rimz(args.rimz_bin, ["message", "--steer", target, args.message])
     if result.returncode != 0:
         print(
             f"[auto_continue_resolver] continue {target} failed: {result.stderr.decode(errors='replace').strip()}",

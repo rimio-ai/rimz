@@ -495,7 +495,7 @@ fn send(
 ) -> Result<()> {
     // The generic primitive types raw — a target may be a bare shell where
     // bracketed-paste markers would echo literally. Agent-composer submits
-    // (steer, queue) take the bracketed `submit_message` path instead.
+    // (`message`) take the bracketed `submit_message` path instead.
     if text.is_none_or(str::is_empty) && keys.is_empty() && !enter {
         bail!("expected text, --key, or --enter");
     }

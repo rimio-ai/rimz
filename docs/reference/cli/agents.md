@@ -6,7 +6,7 @@ A typical session threads the whole surface together:
 
 ```sh
 rimz agents claude,codex --worktree=auth-refresh "Refactor token refresh; keep the public API stable."
-rimz steer @claude#auth-refresh -- "Start with the refresh-token rotation path."
+rimz message --steer @claude#auth-refresh "Start with the refresh-token rotation path."
 rimz message @codex#auth-refresh "After your turn, add coverage for the expiry edge cases."
 rimz agents focus @claude#auth-refresh        # jump to the pane when it needs you
 ```
@@ -15,7 +15,7 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 
 ## Addressing agents
 
-`message`, `steer`, `queue`, `transcript`, and the `agents show`/`focus`/`wait`/`stop` verbs share one address grammar: **`@<handle>` names who, an optional `#<channel>` names the worktree or in-place team channel,** and a raw pane id is the precise fallback. This is the one place it is spelled out; every command below assumes it.
+`message`, `transcript`, and the `agents show`/`focus`/`wait`/`stop` verbs share one address grammar: **`@<handle>` names who, an optional `#<channel>` names the worktree or in-place team channel,** and a raw pane id is the precise fallback. This is the one place it is spelled out; every command below assumes it.
 
 **Handles that name one agent:**
 
@@ -40,9 +40,9 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 **One agent or many:**
 
 - The management verbs (`show`, `focus`, `wait`, `stop`) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from.
-- `message`, `steer`, and `queue` fan out: a multi-match is ambiguous until you opt in with `--all` (or address `@all`), and a fan-out confirms past the first match unless `--yes` — off a TTY it refuses without it.
+- `message` fan-outs are explicit: a multi-match is ambiguous until you opt in with `--all` (or address `@all`), and a fan-out confirms past the first match unless `--yes` — off a TTY it refuses without it.
 
-The `@` sigil is required for `message`, `steer`, and `queue` (it also keeps a target from being read as a launch spec); `show`, `wait`, and `stop` also accept a bare selector (`swift-otter`) or a run id. The deeper resolution rules are in [harness.md → The address](../../internals/agents/harness.md#the-address).
+The `@` sigil is required for `message` (it also keeps a target from being read as a launch spec); `show`, `wait`, and `stop` also accept a bare selector (`swift-otter`) or a run id. The deeper resolution rules are in [harness.md → The address](../../internals/agents/harness.md#the-address).
 
 ## Agents
 
@@ -89,7 +89,7 @@ rimz agents claude "Review the diff." -p --effort high --system-prompt-file ./re
 cat build-error.txt | rimz agents claude -p 'explain the root cause' > out.txt
 ```
 
-- `--detach` prints the pet name and returns immediately; use that name with `steer`, `agents wait`, `agents show`, or `agents stop`.
+- `--detach` prints the pet name and returns immediately; use that name with `message --steer`, `agents wait`, `agents show`, or `agents stop`.
 - `--output-format` shapes the print: `text` (default) prints the final assistant message, `json` prints the full run record, `stream-json` emits run events as NDJSON while the turn runs (incompatible with `--detach`).
 - `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT` and folds in piped stdin after it; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt.
 - `--max-turns <N>` caps the agentic turn count where the adapter exposes a native limit (Claude today); an agent without one refuses the run.
@@ -114,69 +114,44 @@ Bare `rimz agents` lists live root-agent cards in attention order, scoped to the
 
 ## Message an agent
 
-`rimz message` is the front door for teammate chat: it queues text for an agent, sends now when the agent can receive it, and parks it for the next turn boundary otherwise.
+`rimz message` is the teammate chat surface. The default parks text for the next safe turn boundary, sending immediately only when the agent is already open to receive; `--steer` interrupts the live pane now; `--schedule` sets the earliest delivery time before the usual `--on` gate opens.
 
 ```sh
-rimz message @swift-otter "Add focused tests for the parser."
-rimz message @codex#cli-docs --on any "If the run failed, capture the error first."
-rimz message @claude "Confirm this prompt reached the agent." --wait
+rimz message @swift-otter "Add focused tests for the parser."                   # park or send now if open
+rimz message --on any @codex#cli-docs "If the run failed, capture the error first."
+rimz message --schedule 60m @claude "Run the smoke test after lunch."
+rimz message --schedule 14:30 --on any @planner "Restart the review."
+rimz message --steer @claude "Inspect the failing test now."
+rimz message --steer @codex --no-enter "Use the docs branch only."              # paste, don't submit
+rimz message --steer @planner --create "Draft the new endpoint."                # launch if missing
 rimz message @all --yes "When you reach a boundary, summarize what changed."
-rimz message @claude -- "-rf literal"
-rimz message @claude --file ./review-notes.md
+rimz message list --json
+rimz message remove msg_01J…
+rimz message clear @claude-2#cli-docs
 ```
 
 The message is one bare quoted argument, so no `--` separates ordinary prose from flags. A message that starts with `-` still uses clap's universal terminator (`--`) before the text. Value-optional flags such as bare `--wait` belong after the message, or use `--wait=<duration>`, so the flag does not capture the next token.
 
-`message` mirrors `queue` for delivery: same address grammar, same `--worktree`, `--no-enter`, `--force`, `--all`, `--create`, `--yes`, `--smart-compact`, `--file`, `--no-from`, `--wait`, and `--on`. Use [`steer`](#steer-live-agents) when you need an explicit live-turn interrupt, and use [`queue`](#queue-the-next-message) for the explicit add/list/remove/clear forms.
+Address the target with the [agent-address grammar](#addressing-agents). `message --steer` delivers to live panes immediately, writes a durable prompt record, and prints `sent @handle`; smart compaction adds a durable command record and `compacted @handle` before the prompt line. Broadcasts summarize sent and skipped agents, so one blocked agent never stops the rest. The `message.sent` audit event records message id, receiver, pane, force flag, sender, body, and text length; message content stays in the message record.
 
-## Steer live agents
+The default mode uses the same live path when the addressed agent can receive now: a live pane exists, the `--on` gate is open, no pending ask reserves input unless `--force`, and no older ready message owns that card's FIFO head. Otherwise it parks a `queued` prompt record until `--on done` (idle or success) or `--on any` (idle, success, or failed) opens. `--schedule <DUR|HH:MM>` always parks and sets a `not_before` time floor; examples include `90s`, `60m`, `2h`, `1d`, and local 24-hour times such as `14:30`. A scheduled message becomes eligible only after that floor, then the normal gate and pending-ask checks still apply.
 
-`rimz steer` sends text to live agent panes **right now.**
+The flags worth knowing tune delivery (run `rimz message --help` for the full surface):
 
-```sh
-rimz steer @swift-otter -- "Inspect the failing test and propose the smallest fix."
-rimz steer @claude-2#cli-docs --no-enter -- "Use the docs branch only."   # paste, don't submit
-rimz steer @planner -- "Rebase on main when the run lands."                # address a profile
-rimz steer @codex --all -y -- "Pause and report status."                  # fan out to every codex
-rimz steer @planner#feat/x --create -- "Draft the new endpoint."          # launch it if not running
-rimz steer @codex --smart-compact 70% -- "Continue the refactor."         # /compact first past 70% full
-rimz steer @claude --wait=10s -- "Run the smoke test and report back."     # wait for agent acknowledgement
-rimz steer @claude --file ./review-notes.md                               # send a file verbatim
-```
-
-Address the target with the [agent-address grammar](#addressing-agents). Steer delivers to every reachable agent, writes a durable prompt record, and prints `sent @handle`; smart compaction adds a durable command record and `compacted @handle` before the prompt line. Broadcasts summarize sent and skipped agents, so one blocked agent never stops the rest. The `message.sent` audit event records message id, receiver, pane, force flag, sender, body, and text length; message content stays in the message record.
-
-The flags worth knowing tune delivery (run `rimz steer --help` for the rest):
-
+- `--steer` interrupts the live pane now and conflicts with `--schedule` and `--on`, because it has no later boundary.
+- `--schedule <DUR|HH:MM>` sets the earliest delivery time for parked records; the room must be open so the sidebar elder can spawn `message sweep` when the wake stamp comes due.
+- `--on done|any` chooses which turn-boundary statuses release parked records; `done` is the default.
 - `--no-enter` pastes the text without submitting; otherwise the text rides as a bracketed paste and Enter lands as a discrete keystroke, so a `\n` in the text stays a soft composer newline and a multi-line prompt lands multi-line (write `\\` for a literal backslash).
 - `--file <PATH>` reads the prompt from a file and sends it byte-for-byte — real newlines stay soft breaks and backslashes stay literal, so code and regex paste unchanged. It conflicts with inline text.
-- `--create` launches a missing agent from a kind or profile address (opening the worktree when the channel is new) with the text as its first prompt; an instance handle like a pet name cannot create.
-- `--force` types over a pending native ask, which `steer` otherwise skips to avoid clobbering the reserved input.
+- `--create` launches a missing agent from a kind or profile address (opening the worktree when the channel is new) with the text as its first prompt; scheduled messages require an existing durable agent card.
+- `--force` sends over a pending native ask; without it the ask keeps the next input reserved.
 - `--smart-compact <PCT|TOKENS>` sends a tracked `/compact` command first when the agent's context window has reached the threshold (a percentage like `70%` or an occupied-token count like `120000`), then sends the prompt one message interval later so it lands against a fresh window. Unset, [`[harness] smart_compact`](../configuration.md#smart-compaction) supplies the threshold; a window below it sends untouched.
 - `--no-from` sends the bytes exactly. By default a Rimz-launched agent's send arrives as `from @sender: text`, gaining `#channel` when it crosses channels.
-- `--wait[=DURATION]` waits after send-now delivery until the agent's next `TurnStarted` hook confirms the prompt, the delivery window elapses, or the send errors. Bare `--wait` uses `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` or the default window. It conflicts with `--no-enter`, because an unsubmitted paste cannot be confirmed. A sessionless lazy pane still receives the prompt immediately; confirmation starts once a real session or name can match the durable record, so `--wait` can time out on that first prompt even after a successful paste.
+- `--wait[=DURATION]` waits after send-now delivery until the agent's next `TurnStarted` hook confirms the prompt, the delivery window elapses, or the send errors. Bare `--wait` uses `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` or the default window. It conflicts with `--no-enter`, because an unsubmitted paste cannot be confirmed.
 
-A bare `@<kind>`, `@<profile>`, or `@all` also reaches an agent you just started in a fresh pane, before its first turn — `steer` addresses the pane it types into, so a just-launched agent is steerable without waiting for it to register a session. The bracketed-paste mechanism and pane-answering resolver behavior are in [harness.md → Talk and queue](../../internals/agents/harness.md#talk-and-queue).
+A bare `@<kind>`, `@<profile>`, or `@all` in `--steer` mode also reaches an agent you just started in a fresh pane, before its first turn, because the live-pane side addresses the pane it types into. Parked records key on the bound session or launch placeholder card so FIFO survives registration. Message statuses are `created` (transient), `queued`, `claimed`, `sent`, `delivered`, `timed_out`, `errored`, `removed`, and `abandoned`. `sent` means Rimz wrote the bytes to the pane; `delivered` means the agent acknowledged a prompt through `TurnStarted` or a command through `Compacting`. `message list` and `message list --json` show both parked and recently sent terminal records, so scripts that need ids use JSON rather than stdout parsing.
 
-## Queue the next message
-
-`rimz queue` sends text now when the addressed agent can receive it, and stores text only when the agent needs a later safe turn boundary. It mirrors `steer` — same address grammar, same `--worktree`, `--no-enter`, `--force`, `--all`, `--create`, `--yes`, `--smart-compact`, `--file`, `--no-from`, and `--wait` — and adds `--on`, the delivery gate for parked messages.
-
-```sh
-rimz queue @swift-otter -- "Add focused tests for the parser."             # prints sent/queued status
-rimz queue add @codex#cli-docs --on any -- "If the run failed, capture the error first."
-rimz queue @claude --wait -- "Confirm this prompt reached the agent."
-rimz queue @all --yes -- "When you reach a boundary, summarize what changed."
-rimz queue list --json
-rimz queue remove msg_01J…
-rimz queue clear @claude-2#cli-docs
-```
-
-The bare form and `queue add` do the same work. A target with a live pane, an open gate, no pending ask unless `--force`, and an empty FIFO head receives the text immediately through the steer path; `queue` prints `sent @handle`, writes a `sent` record, and appends `message.sent`. When smart compaction triggers, it also prints `compacted @handle` for the tracked `/compact` command; `--wait` still waits on the prompt record only. Otherwise `--on done` (the default) parks a `queued` prompt record until the agent is `idle` or `success`; `--on any` also opens after `failed`; `running`, `waiting`, and `paused` keep the message queued. Parked delivery is FIFO per agent, one message per unparked turn end; a failed pre-send attempt returns to `queued` and is abandoned after the retry cap, while a written message waits for confirmation. A freshly started lazy pane can receive a send-now queue message against a pane-derived placeholder record, while parked records key on a bound session or launch placeholder card.
-
-Message statuses are `created` (transient), `queued`, `claimed`, `sent`, `delivered`, `timed_out`, `errored`, `removed`, and `abandoned`. `sent` means Rimz wrote the bytes to the pane; `delivered` means the agent acknowledged a prompt through `TurnStarted` or a command through `Compacting`. `queue list` and `queue list --json` show both parked and recently sent terminal records, so scripts that need ids use JSON rather than stdout parsing.
-
-Parked delivery needs installed and trusted hooks, because turn-end hooks trigger the delivery helper. The record layout, gates, and delivery walk are in [harness.md → Talk and queue](../../internals/agents/harness.md#talk-and-queue).
+Parked delivery needs installed and trusted hooks, because turn-end hooks trigger the hidden `message deliver` helper. Scheduled wakeups use `message-wake.json` in the runtime cache and the hidden `message sweep` helper; the wake path needs an open room so an elder is keeping time. The record layout, gates, and delivery walk are in [harness.md → Talk and queue](../../internals/agents/harness.md#talk-and-queue).
 
 ## Inspect transcripts
 
@@ -216,11 +191,11 @@ rimz pane detach
 
 The agent labels are a best-effort overlay folded from the workspace snapshot, so a pane the multiplexer has handed back to a shell reads `process`; the tab grouping always works, even with no snapshot reachable. `--json` emits the tab tree with a per-pane `kind`, `command`, `cwd`, and `pid`, and an `agent` object for agent panes. `capture` prints visible pane text, `send` types literal text and named keys in order, and `focus` moves attention. Named keys are `enter`, `escape`, `tab`, `backspace`, the four arrows, `ctrl-c`, `ctrl-d`, and `ctrl-u`, with aliases like `return`, `esc`, and `bs`.
 
-Pane capture is untrusted terminal text — scripts and resolvers match bounded patterns before sending anything back, and `pane send` is the same explicit input path as `steer`. Resolver patterns and pane-send discipline are in [resolver internals](../../internals/agents/resolvers.md).
+Pane capture is untrusted terminal text — scripts and resolvers match bounded patterns before sending anything back, and `pane send` is the same explicit input path as `message --steer`. Resolver patterns and pane-send discipline are in [resolver internals](../../internals/agents/resolvers.md).
 
 ## Schedule turns with loop
 
-`rimz loop` schedules one wake-up from the room's sidebar elder while a room for the task's project is open. A task uses either `--spec` to spawn one supervised transient pane, or `--bind` to deliver a prompt to one live agent session through the queue path.
+`rimz loop` schedules one wake-up from the room's sidebar elder while a room for the task's project is open. A task uses either `--spec` to spawn one supervised transient pane, or `--bind` to deliver a prompt to one live agent session through the message path.
 
 ```sh
 rimz loop add morning --spec claude-ping --at 07:00 --days weekdays

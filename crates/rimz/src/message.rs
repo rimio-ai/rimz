@@ -10,8 +10,9 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 
 pub const DEFAULT_SETTLE: Duration = Duration::from_millis(400);
-pub const SETTLE_ENV: &str = "RIMZ_QUEUE_SETTLE_MS";
-/// Default spacing between discrete steer/queue pane writes.
+pub const SETTLE_ENV: &str = "RIMZ_MESSAGE_SETTLE_MS";
+pub const MESSAGE_WAKE_FILE: &str = "message-wake.json";
+/// Default spacing between discrete message pane writes.
 pub const DEFAULT_MESSAGE_INTERVAL: Duration = Duration::from_secs(1);
 pub const MESSAGE_INTERVAL_ENV: &str = "RIMZ_MESSAGE_INTERVAL_MS";
 pub const DEFAULT_DELIVERY_WINDOW: Duration = Duration::from_secs(30);
@@ -244,7 +245,7 @@ pub struct MessageRecord {
     pub enter: bool,
     pub gate: DeliveryGate,
     /// Deliver even when a pending ask reserves the agent's next input. Mirrors
-    /// `steer --force`; without it a pending ask defers delivery to a later
+    /// `message --steer --force`; without it a pending ask defers delivery to a later
     /// boundary.
     #[serde(default)]
     pub force: bool,
@@ -261,6 +262,11 @@ pub struct MessageRecord {
     pub last_error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivered_at: Option<Timestamp>,
+    /// Earliest delivery time for scheduled messages. The turn-boundary gate
+    /// still decides which agent states may receive the message once this floor
+    /// has passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<Timestamp>,
     /// When set, deliver a `/compact` ahead of the text if the agent's context
     /// fill has reached this threshold at delivery time, so the message lands
     /// against a fresh window instead of racing the agent's own auto-compaction.
@@ -303,6 +309,7 @@ impl MessageRecord {
             last_attempt_at: None,
             last_error: None,
             delivered_at: None,
+            not_before: None,
             auto_compact: None,
             compacted_context_tokens: None,
         }
@@ -322,7 +329,7 @@ impl MessageRecord {
         self
     }
 
-    /// Deliver past a pending ask at the boundary, mirroring `steer --force`.
+    /// Deliver past a pending ask at the boundary, mirroring `message --steer --force`.
     #[must_use]
     pub fn with_force(mut self, force: bool) -> Self {
         self.force = force;
@@ -332,6 +339,12 @@ impl MessageRecord {
     #[must_use]
     pub fn with_pane_id(mut self, pane_id: PaneId) -> Self {
         self.pane_id = Some(pane_id);
+        self
+    }
+
+    #[must_use]
+    pub fn with_not_before(mut self, not_before: Option<Timestamp>) -> Self {
+        self.not_before = not_before;
         self
     }
 
@@ -371,6 +384,10 @@ impl MessageRecord {
     pub fn same_agent_card(&self, agent: &AgentState) -> bool {
         self.same_card(&agent.kind, &agent.agent_id, agent.name.as_deref())
     }
+
+    pub fn is_ready(&self, now: Timestamp) -> bool {
+        self.not_before.is_none_or(|not_before| not_before <= now)
+    }
 }
 
 pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
@@ -392,13 +409,56 @@ pub fn queue_head<'a>(
     kind: &AgentKind,
     agent_id: &AgentSessionId,
     agent_name: Option<&str>,
+    now: Timestamp,
 ) -> Option<&'a MessageRecord> {
     pending
         .into_iter()
         .filter(|message| {
-            message.status == MessageStatus::Queued && message.same_card(kind, agent_id, agent_name)
+            message.status == MessageStatus::Queued
+                && message.same_card(kind, agent_id, agent_name)
+                && message.is_ready(now)
         })
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+}
+
+pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, String> {
+    const UNITS: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)];
+    if let Ok(duration) = crate::schedule::parse_duration_units(raw, UNITS) {
+        if duration.is_zero() {
+            return Err("schedule duration must be greater than zero".to_owned());
+        }
+        return now
+            .checked_add(duration)
+            .map(|target| target.timestamp())
+            .map_err(|err| format!("schedule `{raw}` cannot be resolved: {err}"));
+    }
+    let (hour, minute) = parse_hhmm(raw).ok_or_else(|| {
+        format!(
+            "invalid schedule `{raw}`; use a duration like `60m` or a 24-hour time like `14:30`"
+        )
+    })?;
+    let candidate = now
+        .date()
+        .at(hour as i8, minute as i8, 0, 0)
+        .to_zoned(now.time_zone().clone())
+        .map_err(|err| format!("schedule `{raw}` cannot be resolved today: {err}"))?;
+    if candidate.timestamp() > now.timestamp() {
+        return Ok(candidate.timestamp());
+    }
+    now.date()
+        .tomorrow()
+        .map_err(|err| format!("schedule `{raw}` cannot be resolved tomorrow: {err}"))?
+        .at(hour as i8, minute as i8, 0, 0)
+        .to_zoned(now.time_zone().clone())
+        .map(|target| target.timestamp())
+        .map_err(|err| format!("schedule `{raw}` cannot be resolved tomorrow: {err}"))
+}
+
+fn parse_hhmm(raw: &str) -> Option<(u8, u8)> {
+    let (hh, mm) = raw.trim().split_once(':')?;
+    let hour: u8 = hh.parse().ok()?;
+    let minute: u8 = mm.parse().ok()?;
+    (hour <= 23 && minute <= 59).then_some((hour, minute))
 }
 
 pub fn delivery_checkpoint(signal: &LifecycleSignal) -> bool {
@@ -419,7 +479,7 @@ pub fn settle_duration_from_env() -> Duration {
         .unwrap_or(DEFAULT_SETTLE)
 }
 
-/// Spacing between discrete steer/queue pane writes.
+/// Spacing between discrete message pane writes.
 pub fn message_interval_from_env() -> Duration {
     std::env::var(MESSAGE_INTERVAL_ENV)
         .ok()
@@ -586,6 +646,32 @@ mod tests {
     }
 
     #[test]
+    fn not_before_defaults_ready_and_round_trips_when_set() {
+        let base = MessageRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+            &agent("s1", None),
+            "next".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        let now = Timestamp::now();
+        assert_eq!(base.not_before, None);
+        assert!(base.is_ready(now));
+
+        let scheduled_at = now + jiff::SignedDuration::from_secs(60);
+        let scheduled = base.with_not_before(Some(scheduled_at));
+        assert!(!scheduled.is_ready(now));
+        assert!(scheduled.is_ready(scheduled_at));
+        let json = serde_json::to_string(&scheduled).unwrap();
+        let back: MessageRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.not_before, Some(scheduled_at));
+        let mut legacy = serde_json::to_value(&back).unwrap();
+        legacy.as_object_mut().unwrap().remove("not_before");
+        let back: MessageRecord = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.not_before, None);
+    }
+
+    #[test]
     fn message_body_defaults_to_prompt_and_command_round_trips() {
         let base = MessageRecord::new(
             WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
@@ -728,6 +814,7 @@ mod tests {
             &registered.kind,
             &registered.agent_id,
             registered.name.as_deref(),
+            Timestamp::now(),
         )
         .expect("the registered observation selects a head");
         assert_eq!(
@@ -737,9 +824,76 @@ mod tests {
 
         // Without the stable name the provisional record is invisible to the
         // registered id — the reordering this fix closes.
-        let exact = queue_head(pending.iter(), &registered.kind, &registered.agent_id, None)
-            .expect("the registered id still matches its own record");
+        let exact = queue_head(
+            pending.iter(),
+            &registered.kind,
+            &registered.agent_id,
+            None,
+            Timestamp::now(),
+        )
+        .expect("the registered id still matches its own record");
         assert_eq!(exact.message_id, newer.message_id);
+    }
+
+    #[test]
+    fn queue_head_skips_not_yet_ready_scheduled_messages() {
+        let agent = agent("real-session", Some("lucid-atlas"));
+        let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
+        let now = Timestamp::now();
+        let mut scheduled = MessageRecord::new(
+            ws.clone(),
+            &agent,
+            "later".to_owned(),
+            true,
+            DeliveryGate::Done,
+        )
+        .with_not_before(Some(now + jiff::SignedDuration::from_secs(60)));
+        let mut ready = MessageRecord::new(ws, &agent, "now".to_owned(), true, DeliveryGate::Done);
+        scheduled.message_id = MessageId::parse("msg_00000000000000000000000000000001").unwrap();
+        ready.message_id = MessageId::parse("msg_00000000000000000000000000000002").unwrap();
+        let pending = [scheduled.clone(), ready.clone()];
+
+        let head = queue_head(
+            pending.iter(),
+            &agent.kind,
+            &agent.agent_id,
+            agent.name.as_deref(),
+            now,
+        )
+        .expect("ready message is selected");
+
+        assert_eq!(head.message_id, ready.message_id);
+    }
+
+    #[test]
+    fn parse_schedule_at_accepts_duration_and_next_wall_clock_time() {
+        let now = jiff::civil::date(2026, 6, 24)
+            .at(8, 0, 0, 0)
+            .in_tz("UTC")
+            .unwrap();
+        assert_eq!(
+            parse_schedule_at("90s", &now).unwrap(),
+            now.timestamp() + jiff::SignedDuration::from_secs(90)
+        );
+        assert_eq!(
+            parse_schedule_at("08:30", &now).unwrap(),
+            jiff::civil::date(2026, 6, 24)
+                .at(8, 30, 0, 0)
+                .in_tz("UTC")
+                .unwrap()
+                .timestamp()
+        );
+        assert_eq!(
+            parse_schedule_at("07:30", &now).unwrap(),
+            jiff::civil::date(2026, 6, 25)
+                .at(7, 30, 0, 0)
+                .in_tz("UTC")
+                .unwrap()
+                .timestamp()
+        );
+        assert!(parse_schedule_at("0s", &now).is_err());
+        assert!(parse_schedule_at("tomorrow", &now).is_err());
+        assert!(parse_schedule_at("25:00", &now).is_err());
     }
 
     fn agent(id: &str, name: Option<&str>) -> AgentState {

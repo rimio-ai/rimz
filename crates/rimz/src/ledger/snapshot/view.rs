@@ -138,7 +138,7 @@ pub struct SidebarSnapshot {
     pub lazy_agent_default_models: BTreeMap<String, String>,
     /// Every live agent pane the producer bound during the pane fold, uncapped
     /// and built at the binding site — the authoritative source for command
-    /// resolution (`steer`), so a target reaches exactly the agent panes the
+    /// resolution (`message --steer`), so a target reaches exactly the agent panes the
     /// producer saw rather than the capped, display-shaped `worktree_groups`
     /// rows. Holds bound sessions (with their pane, even when the session's own
     /// `agent_id` carries no stamped pane) and lazy panes with no session yet.

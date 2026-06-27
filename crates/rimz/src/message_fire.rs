@@ -1,0 +1,98 @@
+//! Elder-owned scheduled-message wakeups.
+//!
+//! The elected sidebar elder keeps time for queued messages with a future
+//! delivery floor while a room is open. The elder reads only the wake cache and
+//! spawns the hidden `rimz message sweep` helper; ledger reads and writes stay in
+//! that helper.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use jiff::{Timestamp, Zoned};
+
+use crate::RuntimePaths;
+use crate::message::MESSAGE_WAKE_FILE;
+
+pub(crate) fn wake_due_messages(runtime: &RuntimePaths, now: &Zoned) {
+    let path = wake_stamp_path(runtime);
+    if !should_wake(read_stamp(&path), now.timestamp()) {
+        return;
+    }
+    spawn_message_sweep();
+}
+
+fn should_wake(stamp: Option<Timestamp>, now: Timestamp) -> bool {
+    stamp.is_some_and(|stamp| stamp <= now)
+}
+
+fn read_stamp(path: &Path) -> Option<Timestamp> {
+    let Ok(bytes) = std::fs::read(path) else {
+        return None;
+    };
+    serde_json::from_slice::<Option<Timestamp>>(&bytes)
+        .ok()
+        .flatten()
+}
+
+fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
+    runtime.root.join(MESSAGE_WAKE_FILE)
+}
+
+fn spawn_message_sweep() {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(err) => {
+            tracing::warn!(
+                tags.operation = "message_fire.locate_exe",
+                error = &err as &dyn std::error::Error,
+                "sidebar: cannot locate rimz to sweep scheduled messages",
+            );
+            return;
+        }
+    };
+    let mut cmd = Command::new(exe);
+    if let Ok(root) = std::env::var(crate::workspace::ENV_PROJECT_ROOT) {
+        cmd.args(["--root", &root]);
+    }
+    cmd.args(["message", "sweep"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    tracing::info!(
+        target: crate::observability::BREADCRUMB_TARGET,
+        "sidebar: sweeping scheduled messages",
+    );
+    if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "message-sweep") {
+        tracing::warn!(
+            tags.operation = "message_fire.spawn",
+            error = &err as &dyn std::error::Error,
+            "sidebar: failed to spawn scheduled-message sweep",
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn due_stamp_wakes() {
+        let now = Timestamp::from_second(100).unwrap();
+        assert!(should_wake(Some(now), now));
+        assert!(should_wake(Some(Timestamp::from_second(99).unwrap()), now));
+    }
+
+    #[test]
+    fn future_stamp_waits() {
+        let now = Timestamp::from_second(100).unwrap();
+        assert!(!should_wake(
+            Some(Timestamp::from_second(101).unwrap()),
+            now
+        ));
+    }
+
+    #[test]
+    fn missing_stamp_waits() {
+        assert!(!should_wake(None, Timestamp::from_second(100).unwrap()));
+    }
+}

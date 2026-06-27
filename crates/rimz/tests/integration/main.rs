@@ -27,7 +27,7 @@ mod list;
 mod list_pets;
 mod list_themes;
 mod loop_schedule;
-mod message_queue;
+mod message;
 mod oauth_usage;
 mod performance;
 mod presence_wake;

@@ -25,11 +25,11 @@ impl RtkMode {
     }
 }
 
-/// Harness behavior shared by the immediate and queued agent send paths.
+/// Harness behavior shared by immediate and parked message send paths.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct HarnessConfig {
-    /// Compact before `steer` and `queue` sends when the agent's context window
+    /// Compact before `message` sends when the agent's context window
     /// has reached this threshold. Unset keeps compact-first sends opt-in.
     #[serde(
         default,

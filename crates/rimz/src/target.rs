@@ -79,9 +79,9 @@ enum Target {
 }
 
 /// The shared accessor surface over the two resolution sources: rollup sessions
-/// (`&AgentState`, used by management and parked queue records) and the live
-/// agent panes the producer bound (`&PaneAgent`, used by `steer` and send-now
-/// `queue`). One matcher set serves both; each command chooses the source it
+/// (`&AgentState`, used by management and parked message records) and the live
+/// agent panes the producer bound (`&PaneAgent`, used by `message --steer` and
+/// send-now messages). One matcher set serves both; each command chooses the source it
 /// resolves over.
 trait Candidate<'a>: Copy {
     fn kind(self) -> &'a str;
@@ -194,7 +194,7 @@ impl<'a> Candidate<'a> for &'a PaneAgent {
 /// Resolve a target to exactly one rollup agent. `@all` or a kind that fans out
 /// to several agents is [`TargetErr::Ambiguous`] here — pick a more specific
 /// mention. Used by the single-agent management commands (`show`/`focus`/`wait`/
-/// `stop`, `queue clear`/`list`).
+/// `stop`, `message clear`/`list`).
 pub fn resolve_one<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
@@ -213,8 +213,8 @@ pub fn resolve_one<'a>(
 }
 
 /// Resolve a target to every matching rollup agent (fan-out). Empty is an error.
-/// Used by management fan-out reads and the durable-identity side of `queue`;
-/// `steer` and send-now `queue` use [`resolve_targets`].
+/// Used by management fan-out reads and the durable-identity side of parked
+/// messages; `message --steer` and send-now messages use [`resolve_targets`].
 pub fn resolve_many<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
@@ -225,7 +225,7 @@ pub fn resolve_many<'a>(
     resolve_mentions(raw, worktree_flag, current_channel, &candidates)
 }
 
-/// Resolve a `steer` target to every matching live agent pane: bound sessions
+/// Resolve a live message target to every matching live agent pane: bound sessions
 /// and lazy (sessionless) panes alike, each addressed by the pane the producer
 /// bound this fold — so a daemon-routed session reaches its pane and a just
 /// started agent is reachable before its first turn. Empty is an error.
@@ -293,8 +293,8 @@ fn resolve_mentions<'a, C: Candidate<'a>>(
     }
 }
 
-/// Require the `@` mention sigil (or a pane id). The "talk" commands
-/// (`steer`, `queue`) call this so a bare `codex` is a clear miss with the
+/// Require the `@` mention sigil (or a pane id). The `message` command calls
+/// this so a bare `codex` is a clear miss with the
 /// fix, keeping Slack muscle memory. The management commands resolve leniently
 /// so a run id or bare pet name still works.
 pub fn require_mention(raw: &str) -> Result<(), TargetErr> {
@@ -361,7 +361,7 @@ fn parse_target(raw: &str) -> Result<Target, TargetErr> {
         _ => (raw, None),
     };
     // The `@` sigil is optional at the resolver — strip it when present. Strict
-    // `@`-or-error lives in `require_mention`, applied only by steer/queue.
+    // `@`-or-error lives in `require_mention`, applied only by message.
     let selector = agent_part.strip_prefix('@').unwrap_or(agent_part);
     if selector.is_empty() {
         return Err(TargetErr::NoMatch {

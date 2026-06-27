@@ -37,10 +37,10 @@ Routing attention is half the read; the other half is *how the work is going*. R
 A fleet is a team, and Rimz gives it what a team needs: a channel per line of work, a member you can name, and a way to reach that member in either tense. Spawning separates three independent choices — agents (which tools run), layout (the shape on screen), worktree (which channel) — so a planner-and-reviewer pair in any channel is one command.
 
 - A worktree is a channel, an in-place named team is a channel as `<dir>/<team>`, and an agent is a member, addressed as `@handle#channel`: `@claude` the kind, `@planner` the role, `@swift-otter` the one instance, `@all` the whole channel. The address resolves against live presence — one match delivers, many ask you to pick (or `--all` fans out), zero misses or, with `--create`, launches the member straight from its address.
-- You reach a member in two tenses, because work happens in two tenses. `steer` types into a live pane now; `queue` leaves a task that delivers at the member's next open turn, gated by `--on done` or `--on any`. Both route human-authored text through the one pane-send primitive, and both record an audit event that omits the message text.
+- You reach a member through `message`: `--steer` types into a live pane now, the default parks work for the member's next open turn, `--schedule` sets the earliest delivery time, and `--on done|any` chooses the boundary gate. Every mode routes human-authored text through the one pane-send primitive and records an audit event that omits the message text.
 - Automation is a teammate. A supervised `rimz agents … -p` run drives one member headless — a cron job, a CI gate, a PR hook, or a script launches the turn, reads the final answer or a stream, and exits on a script-friendly status code — through the same hooks, ledger, and pane path an interactive member uses.
 
-The launcher, the address grammar, and the steer/queue and supervised-run machinery live in [harness.md](./docs/internals/agents/harness.md).
+The launcher, the address grammar, message delivery, and supervised-run machinery live in [harness.md](./docs/internals/agents/harness.md).
 
 ### Stay light
 
@@ -87,7 +87,7 @@ Each line is a decision a reader might challenge, with the reason on the same li
 - **Interactive attach is opportunistic.** `rimz` enters the selected mux only when stdin/stdout are TTYs and the caller is not already inside it; non-interactive callers get a printed attach command, and explicit flags override.
 - **Resolvers are explicit and per-machine.** A resolver engages the bridge when it is on the local allowlist *and* heartbeating freshly. The allowlist plus a fresh heartbeat is the trust boundary; same-UID file access alone never grants it.
 - **Transcripts and panes enrich display.** Pane contents and transcripts decorate rows; the ledger and explicit events decide permissions, state, and correctness. Core reads a pane only to render it.
-- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives for humans and resolvers. `steer` and `queue` route human-authored text through the same send primitive; deferred delivery types only at done transitions and a pending ask holds delivery. State decisions come from the ledger, hooks, and sidecars.
+- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives for humans and resolvers. `message` routes human-authored text through the same send primitive; deferred delivery types only at open boundaries after any schedule floor, and a pending ask holds delivery. State decisions come from the ledger, hooks, and sidecars.
 - **Headless works.** Hooks, the bridge, `rimz feed ask`, and `rimz agents -p` run with no sidebar and no attached client. The sidebar is a UI over a workspace that runs fine without one.
 
 ## Non-goals

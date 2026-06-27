@@ -1,9 +1,8 @@
-//! Shared surface for `rimz steer` and `rimz queue`: prompt parsing, common
-//! flags, sender attribution, and the live-pane send path. `steer` always sends
-//! now. `queue` sends now through the same path when the target can receive, and
-//! parks a durable record only when a turn-boundary gate, pending ask, FIFO head,
-//! or missing pane requires delivery later. The delivery-timing gate (`--on`) is
-//! the one knob unique to parked messages, so it stays on `queue`.
+//! Shared surface for `rimz message`: prompt parsing, common flags, sender
+//! attribution, and the live-pane send path. `--steer` always sends now. The
+//! default message path sends now when the target can receive, and parks a
+//! durable record when a turn-boundary gate, pending ask, FIFO head, schedule,
+//! or missing pane requires delivery later.
 
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
@@ -22,7 +21,7 @@ use rimz::message::{
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{PaneAgent, SidebarSnapshot};
 
-/// The flags `steer` and `queue` share, flattened into each command's args.
+/// The flags shared by immediate and parked message delivery.
 #[derive(Debug, Args)]
 pub(crate) struct SendFlags {
     /// Restrict matches to one worktree branch, name, or path (the channel).
@@ -82,7 +81,7 @@ pub(crate) fn resolve_message(parts: &[String], file: Option<&Path>) -> Result<S
     }
 }
 
-/// The caller identity for `steer`/`queue`. Rimz-launched agents carry
+/// The caller identity for `message`. Rimz-launched agents carry
 /// `RIMZ_AGENT_KIND`; ordinary room shells carry `RIMZ` identity vars without it,
 /// so they stay human-authored unless an agent kind is present.
 pub(crate) fn sender_from_env(channel: Option<&str>, no_from: bool) -> MessageSender {
@@ -186,6 +185,7 @@ pub(crate) fn message_for_target(
         last_attempt_at: None,
         last_error: None,
         delivered_at: None,
+        not_before: None,
         auto_compact: draft.auto_compact,
         compacted_context_tokens: None,
     }

@@ -390,7 +390,7 @@ pub(crate) fn run_blocking_task(args: AgentsArgs, globals: &GlobalFlags) -> Resu
     run_print(args, globals)
 }
 
-/// Launch a missing agent for `steer`/`queue --create`. A *type* handle — a kind
+/// Launch a missing agent for `message --create`. A *type* handle — a kind
 /// (`@codex`) or an `[agents.profiles]` profile (`@planner`) — opens a fresh agent in
 /// the addressed channel with the message as its first prompt; the channel names
 /// (or creates) a worktree when it differs from the current one. An instance

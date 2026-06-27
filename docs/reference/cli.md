@@ -17,7 +17,7 @@ rimz
 
 `rimz` resolves the workspace, creates or reattaches the Zellij or tmux session, opens the sidebar, and drops you in. From there you work three ways, each with its own entry point:
 
-- **Drive agents live.** Launch them into panes and tabs with [`rimz agents`](./cli/agents.md#agents), use [`rimz message`](./cli/agents.md#message-an-agent) as the one-liner front door, and reach for [`steer`](./cli/agents.md#steer-live-agents) or [`queue`](./cli/agents.md#queue-the-next-message) when you need their explicit forms.
+- **Drive agents live.** Launch them into panes and tabs with [`rimz agents`](./cli/agents.md#agents), then use [`rimz message`](./cli/agents.md#message-an-agent) to interrupt now with `--steer`, park for the next boundary, or schedule the earliest delivery time.
 - **Script the fleet.** Run one supervised agent turn with [`rimz agents … -p`](./cli/agents.md#supervised-runs--p) and branch on its exit code, or block on a human decision with [`rimz feed ask`](./cli/feed.md#feed-items-and-decisions).
 - **Reach a room anywhere.** Attach over SSH with [`rimz remote`](./cli/getting-started.md#remote-rooms).
 
@@ -26,7 +26,7 @@ rimz
 | Group | Commands | Reference |
 | --- | --- | --- |
 | **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `list`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) |
-| **Work with agents** | `agents`, `message`, `transcript`, `steer`, `queue`, `pane`, `worktree`, `loop` | [Agent control](./cli/agents.md) |
+| **Work with agents** | `agents`, `message`, `transcript`, `pane`, `worktree`, `loop` | [Agent control](./cli/agents.md) |
 | **Decisions, hooks, and trust** | `feed`, `event`, `resolver`, `hooks`, `trust` | [Feed, resolvers, hooks, and trust](./cli/feed.md) |
 | **Configure and maintain** | `config`, `coverage`, `list-pets`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, `ping` | [Maintenance](./cli/maintenance.md) |
 
@@ -58,7 +58,7 @@ These hold across the whole CLI, so each command page assumes them rather than r
 
 **`--help` is the flag reference.** Every command and subcommand prints its full flags and defaults with `--help`. These pages teach the model and the forms worth knowing; they leave the exhaustive switch list to `--help`, which never drifts from the binary.
 
-**Addressing agents.** `message`, `steer`, `queue`, `transcript`, and the `agents` management verbs all name agents the same way — `@<handle>` for who, `#<channel>` for which worktree or in-place team, or a raw pane id. The one canonical explanation is [Addressing agents](./cli/agents.md#addressing-agents).
+**Addressing agents.** `message`, `transcript`, and the `agents` management verbs all name agents the same way — `@<handle>` for who, `#<channel>` for which worktree or in-place team, or a raw pane id. The one canonical explanation is [Addressing agents](./cli/agents.md#addressing-agents).
 
 **Pick the backend with `--mux`.** When both Zellij and tmux are installed, `--mux zellij` or `--mux tmux` chooses the backend for that invocation. With one installed, Rimz uses it.
 
@@ -76,4 +76,4 @@ These hold across the whole CLI, so each command page assumes them rather than r
 
 Hidden helper commands are the machinery behind hooks, sidebars, statuslines, and agent wrappers. They stay out of `rimz --help` and are not part of the user-facing contract, so they can change between releases.
 
-They include `rimz sidebar …` (the sidebar's data and focus API), `rimz statusline feed` (the installed statusline datasource), `rimz hooks feed` (the hook decision entrypoint), `rimz queue deliver` (the turn-boundary delivery helper), `rimz agents exec` and `rimz agents auto-continue` (the launch wrapper and the rate-limit-reset nudge), `rimz agents refresh-usage` (the per-provider account-usage probe), `rimz loop run` (the scheduled-turn runner), `rimz worktree cleanup`, and `rimz codex …` (the Codex session-enrichment helpers). The protocols behind them live in the owning internals docs: [ledger](../internals/sidebar/ledger.md), [state](../internals/sidebar/state.md), [agent](../internals/agents/agent.md), [provider](../internals/agents/provider.md), and [harness](../internals/agents/harness.md).
+They include `rimz sidebar …` (the sidebar's data and focus API), `rimz statusline feed` (the installed statusline datasource), `rimz hooks feed` (the hook decision entrypoint), `rimz message deliver` (the turn-boundary delivery helper), `rimz message sweep` (the scheduled-message wake helper), `rimz agents exec` and `rimz agents auto-continue` (the launch wrapper and the rate-limit-reset nudge), `rimz agents refresh-usage` (the per-provider account-usage probe), `rimz loop run` (the scheduled-turn runner), `rimz worktree cleanup`, and `rimz codex …` (the Codex session-enrichment helpers). The protocols behind them live in the owning internals docs: [ledger](../internals/sidebar/ledger.md), [state](../internals/sidebar/state.md), [agent](../internals/agents/agent.md), [provider](../internals/agents/provider.md), and [harness](../internals/agents/harness.md).

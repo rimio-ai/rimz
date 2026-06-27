@@ -481,7 +481,7 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn launch_env(&self) -> Vec<(&'static str, &'static str)> {
         // Claude Code ≥2.1.173 opens its agents dashboard by default; the
-        // Rimz pane contract (hooks, transcript tail, steer/queue sends)
+        // Rimz pane contract (hooks, transcript tail, message sends)
         // drives the classic interactive REPL.
         vec![(remote_control::DISABLE_AGENT_VIEW_ENV, "1")]
     }

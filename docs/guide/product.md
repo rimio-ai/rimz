@@ -51,9 +51,9 @@ A third path exists for scripts: a process can call `rimz feed ask` and route it
 
 Running a fleet locally, you might have four Claude Code or Codex sessions in flight across two worktrees when one hits a permission prompt. The sidebar surfaces it, you focus the pane, read what the agent wants to run, and approve in Claude's own prompt. Triage goes from "stare at five terminals" to "answer the questions that need me, when they need me."
 
-Between questions, you steer. `rimz steer @claude -- "focus on the failing parser test"` types into the agent's pane immediately, and holds off when a pending ask owns the next keystroke. `rimz queue @codex --on done -- "open a PR summary"` sends immediately when Codex is free and parks durably when it is not, so you hand off follow-up work without watching for the turn boundary.
+Between questions, you send messages. `rimz message --steer @claude "focus on the failing parser test"` types into the agent's pane immediately, and holds off when a pending ask owns the next keystroke. `rimz message --on done @codex "open a PR summary"` sends immediately when Codex is free and parks durably when it is not, so you hand off follow-up work without watching for the turn boundary.
 
-Targets read like Slack: `@<who>` names the agent — `@codex` (a kind), `@planner` (a profile you defined), `@swift-otter` (one specific agent), or `@all` for everyone — and `#<channel>` names the worktree or in-place team channel, defaulting to the one you are in. Reaching several at once takes an explicit `--all`, and `--create` launches the agent straight from its address when it isn't running yet. The full address grammar lives in [the harness reference](../internals/agents/harness.md#the-address); the delivery gates are in [the agent-control reference](../reference/cli/agents.md#steer-live-agents).
+Targets read like Slack: `@<who>` names the agent — `@codex` (a kind), `@planner` (a profile you defined), `@swift-otter` (one specific agent), or `@all` for everyone — and `#<channel>` names the worktree or in-place team channel, defaulting to the one you are in. Reaching several at once takes an explicit `--all`, and `--create` launches the agent straight from its address when it isn't running yet. The full address grammar and delivery gates live in [the agent-control reference](../reference/cli/agents.md#message-an-agent).
 
 ## Run it on a server
 
@@ -130,7 +130,7 @@ For orchestration:
 - `--detach` prints the agent pet name and returns immediately.
 - `rimz agents show <ref>` reports the card and attached durable run.
 - `rimz agents wait <ref> --stream` or `rimz agents <kind> "<prompt>" -p --stream` streams the turn as it happens.
-- `rimz steer @<agent> -- "continue"` is the first-class nudge for wrapper scripts.
+- `rimz message --steer @<agent> "continue"` is the first-class nudge for wrapper scripts.
 - `rimz pane send` / `rimz pane capture` remain the universal pane fallback.
 
 Flags and selection rules live in [the agent-control reference](../reference/cli/agents.md#agents); the run record and completion mechanics live in [harness.md](../internals/agents/harness.md#supervised-runs).
