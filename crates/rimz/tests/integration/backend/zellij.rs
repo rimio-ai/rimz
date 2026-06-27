@@ -474,7 +474,7 @@ fn open_sidebar_births_native_layout_and_template() {
             has_sidebar && has_terminal,
             "tab {tab} should carry the sidebar and a right terminal, got {terminals:?}",
         );
-        let focused = focused_nonplugin_title_in_tab(xdg.path(), &name, tab)
+        let focused = wait_for_focused_non_sidebar_title_in_tab(xdg.path(), &name, tab)
             .unwrap_or_else(|| panic!("tab {tab} has no focused terminal pane"));
         assert_ne!(
             focused, "rimz-sidebar",
@@ -2333,6 +2333,25 @@ fn focused_nonplugin_title_in_tab(xdg: &Path, session: &str, tab: u64) -> Option
                 .to_owned()
         })
     })
+}
+
+fn wait_for_focused_non_sidebar_title_in_tab(
+    xdg: &Path,
+    session: &str,
+    tab: u64,
+) -> Option<String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let focused = focused_nonplugin_title_in_tab(xdg, session, tab);
+        if focused
+            .as_deref()
+            .is_some_and(|title| title != "rimz-sidebar")
+            || Instant::now() >= deadline
+        {
+            return focused;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// Raw id of the focused non-plugin pane in `tab`, if any.
