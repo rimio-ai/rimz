@@ -1,4 +1,4 @@
-//! Downsamples a decoded WebP frame into sextant or octant terminal cells,
+//! Downsamples a decoded WebP frame into sextant terminal cells,
 //! choosing each cell's best two-color split in linear light.
 
 use ratatui::style::Color;
@@ -15,28 +15,6 @@ pub(crate) struct PetCell {
     pub(crate) bg: Color,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum GlyphTier {
-    Sextant,
-    Octant,
-}
-
-impl GlyphTier {
-    fn subcells(self) -> (u32, u32) {
-        match self {
-            Self::Sextant => (2, 3),
-            Self::Octant => (2, 4),
-        }
-    }
-
-    fn glyph(self, mask: u8) -> char {
-        match self {
-            Self::Sextant => sextant_char(mask),
-            Self::Octant => octant_char(mask),
-        }
-    }
-}
-
 type Rgb = (u8, u8, u8);
 type LinearRgb = (f32, f32, f32);
 /// A downsampled sub-cell: average sprite color in linear light plus coverage
@@ -45,41 +23,41 @@ type LinearRgb = (f32, f32, f32);
 type Sample = (LinearRgb, f32);
 
 const INK_THRESHOLD: f32 = 0.5;
+const SEXTANT_COLS: u32 = 2;
+const SEXTANT_ROWS: u32 = 3;
 
-pub(crate) fn render_frame(
-    frame: &RgbaImage,
-    cols: u16,
-    rows: u16,
-    tier: GlyphTier,
-) -> PetCellGrid {
-    let (sub_w, sub_h) = tier.subcells();
-    let sample_w = u32::from(cols) * sub_w;
-    let sample_h = u32::from(rows) * sub_h;
+pub(crate) fn render_frame(frame: &RgbaImage, cols: u16, rows: u16) -> PetCellGrid {
+    let sample_w = u32::from(cols) * SEXTANT_COLS;
+    let sample_h = u32::from(rows) * SEXTANT_ROWS;
     let samples = downsample(frame, sample_w, sample_h);
     let mut grid = Vec::with_capacity(usize::from(rows));
     for cell_y in 0..u32::from(rows) {
         let mut row = Vec::with_capacity(usize::from(cols));
         for cell_x in 0..u32::from(cols) {
-            let mut sub = [((0.0, 0.0, 0.0), 0.0); 8];
-            let count = (sub_w * sub_h) as usize;
-            for dy in 0..sub_h {
-                for dx in 0..sub_w {
-                    sub[(dy * sub_w + dx) as usize] =
-                        sample_at(&samples, sample_w, cell_x * sub_w + dx, cell_y * sub_h + dy);
+            let mut sub = [((0.0, 0.0, 0.0), 0.0); 6];
+            let count = (SEXTANT_COLS * SEXTANT_ROWS) as usize;
+            for dy in 0..SEXTANT_ROWS {
+                for dx in 0..SEXTANT_COLS {
+                    sub[(dy * SEXTANT_COLS + dx) as usize] = sample_at(
+                        &samples,
+                        sample_w,
+                        cell_x * SEXTANT_COLS + dx,
+                        cell_y * SEXTANT_ROWS + dy,
+                    );
                 }
             }
-            row.push(glyph_cell(tier, &sub[..count]));
+            row.push(glyph_cell(&sub[..count]));
         }
         grid.push(row);
     }
     grid
 }
 
-/// A sextant/octant cell. A fully-opaque cell keeps the two-color partition for
-/// interior detail; a cell straddling the sprite edge paints its ink subcells in
-/// one color over a transparent background; a fully-transparent cell is blank.
-fn glyph_cell(tier: GlyphTier, sub: &[Sample]) -> PetCell {
-    let octant = tier == GlyphTier::Octant;
+/// A sextant cell. A fully-opaque cell keeps the two-color partition for
+/// interior detail; a cell straddling the sprite edge paints its ink subcells
+/// in one color over a transparent background; a fully-transparent cell is
+/// blank.
+fn glyph_cell(sub: &[Sample]) -> PetCell {
     let ink_mask = sub.iter().enumerate().fold(0u8, |mask, (index, sample)| {
         if sample.1 >= INK_THRESHOLD {
             mask | (1 << index)
@@ -91,19 +69,19 @@ fn glyph_cell(tier: GlyphTier, sub: &[Sample]) -> PetCell {
         return transparent_cell();
     }
     let full_mask = ((1u16 << sub.len()) - 1) as u8;
-    // A solid interior, or an octant edge whose ink pattern has no glyph, keeps
-    // the opaque two-color partition rather than dropping detail.
-    if ink_mask == full_mask || (octant && !octant_representable(ink_mask)) {
+    // A solid interior keeps the opaque two-color partition rather than
+    // dropping detail.
+    if ink_mask == full_mask {
         let colors = sub.iter().map(|sample| sample.0).collect::<Vec<_>>();
-        let (mask, fg, bg) = best_partition(&colors, octant);
+        let (mask, fg, bg) = best_partition(&colors);
         return PetCell {
-            ch: tier.glyph(mask),
+            ch: sextant_char(mask),
             fg: rgb_color(linear_to_rgb(fg)),
             bg: rgb_color(linear_to_rgb(bg)),
         };
     }
     PetCell {
-        ch: tier.glyph(ink_mask),
+        ch: sextant_char(ink_mask),
         fg: rgb_color(linear_to_rgb(mean_ink(sub))),
         bg: Color::Reset,
     }
@@ -200,13 +178,10 @@ fn sample_at(samples: &[Sample], width: u32, x: u32, y: u32) -> Sample {
     samples[(y * width + x) as usize]
 }
 
-fn best_partition(sub: &[LinearRgb], octant: bool) -> (u8, LinearRgb, LinearRgb) {
+fn best_partition(sub: &[LinearRgb]) -> (u8, LinearRgb, LinearRgb) {
     let mut best_error = f32::MAX;
     let mut best = (0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0));
     for mask in 0_u32..(1_u32 << sub.len()) {
-        if octant && !octant_representable(mask as u8) {
-            continue;
-        }
         let (fg, bg) = partition_means(sub, mask);
         let mut error = 0.0;
         for (index, sample) in sub.iter().enumerate() {
@@ -274,14 +249,6 @@ fn sextant_char(pattern: u8) -> char {
     }
 }
 
-fn octant_char(pattern: u8) -> char {
-    char::from_u32(OCTANT_CP[pattern as usize]).unwrap_or('?')
-}
-
-fn octant_representable(pattern: u8) -> bool {
-    OCTANT_CP[pattern as usize] != 0
-}
-
 fn rgb_color((red, green, blue): Rgb) -> Color {
     Color::Rgb(red, green, blue)
 }
@@ -321,35 +288,6 @@ fn linear_to_srgb(value: f32) -> u8 {
     (value * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
-const OCTANT_CP: [u32; 256] = [
-    0x00020, 0x00000, 0x00000, 0x00000, 0x1CD00, 0x02598, 0x1CD01, 0x1CD02, 0x1CD03, 0x1CD04,
-    0x0259D, 0x1CD05, 0x1CD06, 0x1CD07, 0x1CD08, 0x02580, 0x1CD09, 0x1CD0A, 0x1CD0B, 0x1CD0C,
-    0x00000, 0x1CD0D, 0x1CD0E, 0x1CD0F, 0x1CD10, 0x1CD11, 0x1CD12, 0x1CD13, 0x1CD14, 0x1CD15,
-    0x1CD16, 0x1CD17, 0x1CD18, 0x1CD19, 0x1CD1A, 0x1CD1B, 0x1CD1C, 0x1CD1D, 0x1CD1E, 0x1CD1F,
-    0x00000, 0x1CD20, 0x1CD21, 0x1CD22, 0x1CD23, 0x1CD24, 0x1CD25, 0x1CD26, 0x1CD27, 0x1CD28,
-    0x1CD29, 0x1CD2A, 0x1CD2B, 0x1CD2C, 0x1CD2D, 0x1CD2E, 0x1CD2F, 0x1CD30, 0x1CD31, 0x1CD32,
-    0x1CD33, 0x1CD34, 0x1CD35, 0x00000, 0x00000, 0x1CD36, 0x1CD37, 0x1CD38, 0x1CD39, 0x1CD3A,
-    0x1CD3B, 0x1CD3C, 0x1CD3D, 0x1CD3E, 0x1CD3F, 0x1CD40, 0x1CD41, 0x1CD42, 0x1CD43, 0x1CD44,
-    0x02596, 0x1CD45, 0x1CD46, 0x1CD47, 0x1CD48, 0x0258C, 0x1CD49, 0x1CD4A, 0x1CD4B, 0x1CD4C,
-    0x0259E, 0x1CD4D, 0x1CD4E, 0x1CD4F, 0x1CD50, 0x0259B, 0x1CD51, 0x1CD52, 0x1CD53, 0x1CD54,
-    0x1CD55, 0x1CD56, 0x1CD57, 0x1CD58, 0x1CD59, 0x1CD5A, 0x1CD5B, 0x1CD5C, 0x1CD5D, 0x1CD5E,
-    0x1CD5F, 0x1CD60, 0x1CD61, 0x1CD62, 0x1CD63, 0x1CD64, 0x1CD65, 0x1CD66, 0x1CD67, 0x1CD68,
-    0x1CD69, 0x1CD6A, 0x1CD6B, 0x1CD6C, 0x1CD6D, 0x1CD6E, 0x1CD6F, 0x1CD70, 0x00000, 0x1CD71,
-    0x1CD72, 0x1CD73, 0x1CD74, 0x1CD75, 0x1CD76, 0x1CD77, 0x1CD78, 0x1CD79, 0x1CD7A, 0x1CD7B,
-    0x1CD7C, 0x1CD7D, 0x1CD7E, 0x1CD7F, 0x1CD80, 0x1CD81, 0x1CD82, 0x1CD83, 0x1CD84, 0x1CD85,
-    0x1CD86, 0x1CD87, 0x1CD88, 0x1CD89, 0x1CD8A, 0x1CD8B, 0x1CD8C, 0x1CD8D, 0x1CD8E, 0x1CD8F,
-    0x02597, 0x1CD90, 0x1CD91, 0x1CD92, 0x1CD93, 0x0259A, 0x1CD94, 0x1CD95, 0x1CD96, 0x1CD97,
-    0x02590, 0x1CD98, 0x1CD99, 0x1CD9A, 0x1CD9B, 0x0259C, 0x1CD9C, 0x1CD9D, 0x1CD9E, 0x1CD9F,
-    0x1CDA0, 0x1CDA1, 0x1CDA2, 0x1CDA3, 0x1CDA4, 0x1CDA5, 0x1CDA6, 0x1CDA7, 0x1CDA8, 0x1CDA9,
-    0x1CDAA, 0x1CDAB, 0x00000, 0x1CDAC, 0x1CDAD, 0x1CDAE, 0x1CDAF, 0x1CDB0, 0x1CDB1, 0x1CDB2,
-    0x1CDB3, 0x1CDB4, 0x1CDB5, 0x1CDB6, 0x1CDB7, 0x1CDB8, 0x1CDB9, 0x1CDBA, 0x1CDBB, 0x1CDBC,
-    0x1CDBD, 0x1CDBE, 0x1CDBF, 0x1CDC0, 0x1CDC1, 0x1CDC2, 0x1CDC3, 0x1CDC4, 0x1CDC5, 0x1CDC6,
-    0x1CDC7, 0x1CDC8, 0x1CDC9, 0x1CDCA, 0x1CDCB, 0x1CDCC, 0x1CDCD, 0x1CDCE, 0x1CDCF, 0x1CDD0,
-    0x1CDD1, 0x1CDD2, 0x1CDD3, 0x1CDD4, 0x1CDD5, 0x1CDD6, 0x1CDD7, 0x1CDD8, 0x1CDD9, 0x1CDDA,
-    0x02584, 0x1CDDB, 0x1CDDC, 0x1CDDD, 0x1CDDE, 0x02599, 0x1CDDF, 0x1CDE0, 0x1CDE1, 0x1CDE2,
-    0x0259F, 0x1CDE3, 0x00000, 0x1CDE4, 0x1CDE5, 0x02588,
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,31 +301,13 @@ mod tests {
     }
 
     #[test]
-    fn octant_matcher_skips_unrepresentable_patterns() {
-        assert!(!octant_representable(1));
-        let sub = [
-            rgb_to_linear((255, 0, 0)),
-            rgb_to_linear((0, 0, 255)),
-            rgb_to_linear((0, 0, 255)),
-            rgb_to_linear((0, 0, 255)),
-            rgb_to_linear((0, 0, 255)),
-            rgb_to_linear((0, 0, 255)),
-            rgb_to_linear((0, 0, 255)),
-            rgb_to_linear((0, 0, 255)),
-        ];
-        let (mask, _, _) = best_partition(&sub, true);
-        assert_ne!(mask, 1);
-        assert!(octant_representable(mask));
-    }
-
-    #[test]
     fn transparent_pixels_drop_to_terminal_background() {
         let image = RgbaImage {
             width: 1,
             height: 1,
             data: vec![255, 0, 0, 0],
         };
-        let grid = render_frame(&image, 1, 1, GlyphTier::Sextant);
+        let grid = render_frame(&image, 1, 1);
         assert_eq!(grid[0][0].ch, ' ');
         assert_eq!(grid[0][0].fg, Color::Reset);
         assert_eq!(grid[0][0].bg, Color::Reset);

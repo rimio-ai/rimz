@@ -312,7 +312,7 @@ fn fully_populated_theme() -> ThemeConfig {
         pets: PetsConfig {
             enabled: true,
             pet: "dewey".to_owned(),
-            glyphs: PetsGlyphMode::Octant,
+            glyphs: PetsGlyphMode::Sextant,
             voice: false,
         },
     }

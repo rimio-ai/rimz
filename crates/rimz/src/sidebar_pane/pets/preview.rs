@@ -9,7 +9,7 @@ use crate::config::PetsGlyphMode;
 
 use super::asset::{self, PetSource};
 use super::catalog::BUILTIN_PETS;
-use super::cellart::{self, GlyphTier, PetCell};
+use super::cellart::{self, PetCell};
 use super::frames::RgbaImage;
 use super::model::{self, Animation, default_animations};
 use super::{PetRenderCaps, PetRenderTier, resolve_render_tier};
@@ -65,11 +65,10 @@ pub fn load_previews_with_caps(
     glyphs: PetsGlyphMode,
     caps: PetRenderCaps,
 ) -> impl Iterator<Item = PetPreview> {
-    let tier = match resolve_render_tier(glyphs, caps) {
-        PetRenderTier::Pixel => GlyphTier::Sextant,
-        PetRenderTier::Cell(glyph) => glyph,
-    };
-    load_previews_for_tier(cols, rows, tier)
+    // `previews_use_pixels` owns the pixel-vs-cell branch; this loader is the
+    // cell branch.
+    let _ = (glyphs, caps);
+    load_previews_for_tier(cols, rows)
 }
 
 /// Whether CLI previews should render the pixel branch, mirroring the live
@@ -79,11 +78,7 @@ pub fn previews_use_pixels(glyphs: PetsGlyphMode, caps: PetRenderCaps) -> bool {
     matches!(resolve_render_tier(glyphs, caps), PetRenderTier::Pixel)
 }
 
-fn load_previews_for_tier(
-    cols: u16,
-    rows: u16,
-    tier: GlyphTier,
-) -> impl Iterator<Item = PetPreview> {
+fn load_previews_for_tier(cols: u16, rows: u16) -> impl Iterator<Item = PetPreview> {
     let sources = listable_sources();
     let handles = sources
         .iter()
@@ -92,7 +87,7 @@ fn load_previews_for_tier(
             thread::spawn(move || {
                 super::load_pet(source)
                     .map_err(|err| err.to_string())
-                    .map(|frames| render_sprite(&frames, cols, rows, tier))
+                    .map(|frames| render_sprite(&frames, cols, rows))
             })
         })
         .collect::<Vec<_>>();
@@ -138,16 +133,11 @@ pub fn load_pixel_previews() -> impl Iterator<Item = PetPixelPreview> {
         })
 }
 
-fn render_sprite(
-    frames: &[RgbaImage],
-    cols: u16,
-    rows: u16,
-    tier: GlyphTier,
-) -> Vec<Vec<PreviewCell>> {
+fn render_sprite(frames: &[RgbaImage], cols: u16, rows: u16) -> Vec<Vec<PreviewCell>> {
     let Some(sprite) = idle_sprite(frames) else {
         return Vec::new();
     };
-    cellart::render_frame(sprite, cols, rows, tier)
+    cellart::render_frame(sprite, cols, rows)
         .iter()
         .map(|row| row.iter().map(preview_cell).collect())
         .collect()

@@ -16,7 +16,7 @@ fn frame(
         size,
         motion_enabled,
         unread_triggered,
-        tier: PetRenderTier::Cell(GlyphTier::Sextant),
+        tier: PetRenderTier::Cell,
     }
 }
 
@@ -28,30 +28,18 @@ fn dashboard_pet_size_uses_fixed_tier_footprints() {
         dashboard_pet_size(PetRenderTier::Pixel),
         DASHBOARD_PIXEL_PET
     );
-    assert_eq!(
-        dashboard_pet_size(PetRenderTier::Cell(GlyphTier::Sextant)),
-        DASHBOARD_CELL_PET
-    );
-    assert_eq!(
-        dashboard_pet_size(PetRenderTier::Cell(GlyphTier::Octant)),
-        DASHBOARD_CELL_PET
-    );
+    assert_eq!(dashboard_pet_size(PetRenderTier::Cell), DASHBOARD_CELL_PET);
 }
 
 #[test]
 fn render_tier_resolves_mode_and_caps() {
-    use PetsGlyphMode::{Auto, Octant, Pixel, Sextant};
+    use PetsGlyphMode::{Auto, Pixel, Sextant};
     let caps = |pixel| PetRenderCaps { pixel };
     for (mode, caps, tier) in [
         (Auto, caps(true), PetRenderTier::Pixel),
-        (Auto, caps(false), PetRenderTier::Cell(GlyphTier::Sextant)),
-        (Pixel, caps(false), PetRenderTier::Cell(GlyphTier::Sextant)),
-        (
-            Octant,
-            PetRenderCaps::default(),
-            PetRenderTier::Cell(GlyphTier::Octant),
-        ),
-        (Sextant, caps(true), PetRenderTier::Cell(GlyphTier::Sextant)),
+        (Auto, caps(false), PetRenderTier::Cell),
+        (Pixel, caps(false), PetRenderTier::Cell),
+        (Sextant, caps(true), PetRenderTier::Cell),
     ] {
         assert_eq!(resolve_render_tier(mode, caps), tier);
     }
@@ -59,7 +47,7 @@ fn render_tier_resolves_mode_and_caps() {
 
 #[test]
 fn effective_render_tier_downgrades_only_unpaintable_pixels() {
-    use PetsGlyphMode::{Octant, Pixel, Sextant};
+    use PetsGlyphMode::{Pixel, Sextant};
     let pixel_caps = PetRenderCaps { pixel: true };
 
     assert_eq!(
@@ -68,15 +56,11 @@ fn effective_render_tier_downgrades_only_unpaintable_pixels() {
     );
     assert_eq!(
         effective_render_tier(Pixel, pixel_caps, false),
-        PetRenderTier::Cell(GlyphTier::Sextant)
-    );
-    assert_eq!(
-        effective_render_tier(Octant, PetRenderCaps::default(), false),
-        PetRenderTier::Cell(GlyphTier::Octant)
+        PetRenderTier::Cell
     );
     assert_eq!(
         effective_render_tier(Sextant, pixel_caps, false),
-        PetRenderTier::Cell(GlyphTier::Sextant)
+        PetRenderTier::Cell
     );
 }
 
@@ -443,10 +427,9 @@ fn memoized_grids_are_evicted_on_resize() {
                     size: Some(PetGridSize { cols: 12, rows: 6 }),
                     motion_enabled: true,
                     unread_triggered: false,
-                    tier: PetRenderTier::Cell(GlyphTier::Sextant),
+                    tier: PetRenderTier::Cell,
                 },
                 size: PetGridSize { cols: 12, rows: 6 },
-                tier: GlyphTier::Sextant,
             })
             .is_some()
     );
@@ -464,10 +447,9 @@ fn memoized_grids_are_evicted_on_resize() {
                     size: Some(PetGridSize { cols: 13, rows: 6 }),
                     motion_enabled: true,
                     unread_triggered: false,
-                    tier: PetRenderTier::Cell(GlyphTier::Sextant),
+                    tier: PetRenderTier::Cell,
                 },
                 size: PetGridSize { cols: 13, rows: 6 },
-                tier: GlyphTier::Sextant,
             })
             .is_some()
     );

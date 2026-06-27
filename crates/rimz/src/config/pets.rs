@@ -11,8 +11,6 @@ pub enum PetsGlyphMode {
     Pixel,
     /// Use Unicode sextants.
     Sextant,
-    /// Use Unicode 16 octants.
-    Octant,
 }
 
 /// `[theme.pets]`: opt-in animated companion in the provider dashboard.

@@ -64,7 +64,7 @@
 # Opt-in animated companion in the provider dashboard. All optional.
 ## enabled = true                   # opt-in animated companion in the provider dashboard
 ## pet = "rocky"                    # built-in id, an https:// URL, a petdex pet name, or a path to your own .webp sheet
-## glyphs = "auto"                  # auto tries pixels then sextants; "octant" pins sharper cell art
+## glyphs = "auto"                  # auto tries pixels then sextant cell art; or pixel / sextant
 ## voice = true                     # canned captions on fleet-status changes
 
 [theme.animations]

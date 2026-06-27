@@ -19,7 +19,6 @@ use std::thread;
 
 use crate::config::{PetsConfig, PetsGlyphMode};
 
-pub(crate) use cellart::GlyphTier;
 #[cfg(test)]
 pub(crate) use cellart::PetCell;
 pub(crate) use cellart::PetCellGrid;
@@ -80,28 +79,27 @@ pub(crate) struct PetViewFrame {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PetRenderTier {
     Pixel,
-    Cell(GlyphTier),
+    Cell,
 }
 
 pub(crate) fn resolve_render_tier(mode: PetsGlyphMode, caps: PetRenderCaps) -> PetRenderTier {
     match mode {
-        PetsGlyphMode::Sextant => PetRenderTier::Cell(GlyphTier::Sextant),
-        PetsGlyphMode::Octant => PetRenderTier::Cell(GlyphTier::Octant),
+        PetsGlyphMode::Sextant => PetRenderTier::Cell,
         PetsGlyphMode::Auto | PetsGlyphMode::Pixel if caps.pixel => PetRenderTier::Pixel,
-        PetsGlyphMode::Auto | PetsGlyphMode::Pixel => PetRenderTier::Cell(GlyphTier::Sextant),
+        PetsGlyphMode::Auto | PetsGlyphMode::Pixel => PetRenderTier::Cell,
     }
 }
 
 /// The tier actually painted this frame: `resolve_render_tier` downgraded to
-/// sextant cell art when pixels resolve but cannot paint here — no provider
-/// block to ride, or a suppressed body. Cell tiers pass through untouched.
+/// cell art when pixels resolve but cannot paint here — no provider block to
+/// ride, or a suppressed body. Cell tiers pass through untouched.
 pub(crate) fn effective_render_tier(
     mode: PetsGlyphMode,
     caps: PetRenderCaps,
     pixel_paintable: bool,
 ) -> PetRenderTier {
     match resolve_render_tier(mode, caps) {
-        PetRenderTier::Pixel if !pixel_paintable => PetRenderTier::Cell(GlyphTier::Sextant),
+        PetRenderTier::Pixel if !pixel_paintable => PetRenderTier::Cell,
         tier => tier,
     }
 }
@@ -112,7 +110,7 @@ pub const DASHBOARD_CELL_PET: PetGridSize = PetGridSize { cols: 18, rows: 9 };
 pub(crate) fn dashboard_pet_size(tier: PetRenderTier) -> PetGridSize {
     match tier {
         PetRenderTier::Pixel => DASHBOARD_PIXEL_PET,
-        PetRenderTier::Cell(_) => DASHBOARD_CELL_PET,
+        PetRenderTier::Cell => DASHBOARD_CELL_PET,
     }
 }
 
@@ -174,7 +172,6 @@ struct MemoKey {
     sprite_index: usize,
     cols: u16,
     rows: u16,
-    tier: GlyphTier,
 }
 
 type LoadResult = Result<Vec<RgbaImage>, String>;
@@ -191,7 +188,6 @@ struct LoadedGridRequest<'a> {
     previous_action: Option<PetAction>,
     frame: PetViewFrame,
     size: PetGridSize,
-    tier: GlyphTier,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -323,13 +319,12 @@ impl PetAssets {
                 }
                 None
             }
-            PetRenderTier::Cell(glyph) => self
+            PetRenderTier::Cell => self
                 .loaded_grid(LoadedGridRequest {
                     pet_id: id,
                     previous_action,
                     frame,
                     size,
-                    tier: glyph,
                 })
                 .map(|(grid, track)| {
                     active_track = track;
@@ -483,7 +478,6 @@ impl PetAssets {
             previous_action,
             frame,
             size,
-            tier,
         } = request;
         let (sprite_index, track) = self.loaded_sprite(LoadedSpriteRequest {
             pet_id,
@@ -498,16 +492,15 @@ impl PetAssets {
             sprite_index,
             cols: size.cols,
             rows: size.rows,
-            tier,
         };
-        loaded.memo.retain(|memo_key, _| {
-            memo_key.cols == size.cols && memo_key.rows == size.rows && memo_key.tier == tier
-        });
+        loaded
+            .memo
+            .retain(|memo_key, _| memo_key.cols == size.cols && memo_key.rows == size.rows);
         if let Some(grid) = loaded.memo.get(&key) {
             return Some((grid.clone(), track));
         }
         let frame = loaded.frames.get(sprite_index)?;
-        let grid = cellart::render_frame(frame, size.cols, size.rows, tier);
+        let grid = cellart::render_frame(frame, size.cols, size.rows);
         loaded.memo.insert(key, grid.clone());
         Some((grid, track))
     }

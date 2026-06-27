@@ -172,14 +172,13 @@ Bring-your-own sources use the same key:
 | --- | --- |
 | `auto` | Use pixels when the runtime is ready, then fall back to sextant cell art. |
 | `pixel` | Opt past the terminal-name allowlist for newer kitty-compatible terminals while keeping hard gates such as tmux passthrough. |
-| `octant` | Use sharper cell art with more vertical detail. |
 | `sextant` | Use the most portable cell art. |
 
 | key | value |
 | --- | --- |
 | `enabled` | Turns the dashboard pet on or off. |
 | `pet` | Chooses a built-in id, HTTPS URL, local sheet path, petdex slug, or petdex directory. |
-| `glyphs` | Chooses `auto`, `pixel`, `octant`, or `sextant`. |
+| `glyphs` | Chooses `auto`, `pixel`, or `sextant`. |
 | `voice` | Shows canned captions on pet-action changes when true. |
 
 ```toml
