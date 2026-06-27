@@ -120,23 +120,23 @@ pub(super) fn apply_carry_forward(
     }
 
     let ambiguous_loss = missing.iter().any(|(tab, pane)| {
-        !decisions.contains_key(&pane.pane_id)
-            && !expired
+        if decisions.contains_key(&pane.pane_id)
+            || expired
                 .iter()
                 .any(|expired| expired.pane_id == pane.pane_id)
-            && !has_authoritative_dead_liveness_evidence(
-                pane,
-                prior_carried.get(&pane.pane_id).copied(),
-                bindings,
-                read_start_ticks,
-            )
-            && !(confirmed_tabs.contains(&tab.view_id)
-                && has_dead_liveness_evidence(
-                    pane,
-                    prior_carried.get(&pane.pane_id).copied(),
-                    bindings,
-                    read_start_ticks,
-                ))
+        {
+            return false;
+        }
+        let prior_meta = prior_carried.get(&pane.pane_id).copied();
+        if has_authoritative_dead_liveness_evidence(pane, prior_meta, bindings, read_start_ticks) {
+            return false;
+        }
+        if confirmed_tabs.contains(&tab.view_id)
+            && has_dead_liveness_evidence(pane, prior_meta, bindings, read_start_ticks)
+        {
+            return false;
+        }
+        true
     });
 
     let mut decisions = decisions.into_values().collect::<Vec<_>>();
