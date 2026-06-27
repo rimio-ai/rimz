@@ -1351,6 +1351,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             status,
             phase,
             pane: Some(PaneRef::from_id(PaneId::from_parts(
@@ -1397,6 +1398,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             agent_id: Some(agent.agent_id.clone()),
             pane_id: PaneId::from_parts(MuxName::Zellij, raw),
             worktree_path: agent.worktree_path.clone(),
@@ -1412,6 +1414,7 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            channel: None,
             agent_id: None,
             pane_id: PaneId::from_parts(MuxName::Zellij, raw),
             worktree_path: Some("/repo/project".to_owned()),
