@@ -132,6 +132,7 @@ impl ZellijBackend {
 
         let created = spawn()?;
         if self.wait_for_sidebar_layout(&opts.session_name) {
+            self.focus_work_pane_if_sidebar_is_focused(&opts.session_name);
             drop(layout);
             return Ok(());
         }
@@ -145,6 +146,7 @@ impl ZellijBackend {
             self.delete_session(&opts.session_name)?;
             spawn()?;
             if self.wait_for_sidebar_layout(&opts.session_name) {
+                self.focus_work_pane_if_sidebar_is_focused(&opts.session_name);
                 drop(layout);
                 return Ok(());
             }
@@ -279,6 +281,30 @@ impl ZellijBackend {
 
     fn focus_leftmost_work_pane(&self, session: &str, tab_id: u64) {
         let Ok(panes) = self.list_panes_with_session(Some(session)) else {
+            return;
+        };
+        let Some(raw_id) = panes
+            .iter()
+            .filter(|pane| {
+                pane.tab_id == tab_id && pane.is_live_terminal() && !is_sidebar_pane(pane)
+            })
+            .min_by_key(|pane| (pane.pane_x.unwrap_or(u64::MAX), pane.id))
+            .map(|pane| pane.id)
+        else {
+            return;
+        };
+        let _ = self.focus_terminal(session, raw_id);
+    }
+
+    fn focus_work_pane_if_sidebar_is_focused(&self, session: &str) {
+        let Ok(panes) = self.list_panes_with_session(Some(session)) else {
+            return;
+        };
+        let Some(tab_id) = panes
+            .iter()
+            .find(|pane| pane.is_live_terminal() && pane.is_focused && is_sidebar_pane(pane))
+            .map(|pane| pane.tab_id)
+        else {
             return;
         };
         let Some(raw_id) = panes
