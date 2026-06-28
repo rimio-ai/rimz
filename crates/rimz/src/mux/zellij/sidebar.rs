@@ -584,13 +584,12 @@ impl ZellijBackend {
 
     /// Shrink the reconcile heal path's freshly-split sidebar (born at ~50% —
     /// `new-pane` has no tiled-size flag) toward the session's fixed birth
-    /// width. The resize step is coarse, so the target usually falls between
-    /// two reachable widths; stopping at the first width at or below it can
-    /// overshoot, so when the prior width was closer we step back up one — but
-    /// only when that prior width still respects the fixed target. Bounded and
-    /// best-effort: it stops at the target, when a step makes no progress (hit
-    /// a minimum), or after [`RESIZE_MAX_STEPS`] — never a dead loop. Width is
-    /// cosmetic, so any failure just leaves the wider pane.
+    /// width. The resize step is coarse, so the target can fall between two
+    /// reachable widths; stop at the first width at or below it so the pane
+    /// never finishes above the canonical target. Bounded and best-effort: it
+    /// stops at the target, when a step makes no progress (hit a minimum), or
+    /// after [`RESIZE_MAX_STEPS`] — never a dead loop. Width is cosmetic, so
+    /// any failure just leaves the wider pane.
     pub(super) fn resize_sidebar_toward(
         &self,
         session: &str,
@@ -608,15 +607,6 @@ impl ZellijBackend {
                 return;
             };
             if cols <= target_cols {
-                // Reached/overshot the target. If the previous, above-target
-                // width was closer than this one, the last decrease overshot —
-                // step back, but never to a width above the canonical target.
-                if last_cols != u64::MAX
-                    && last_cols <= target_cols
-                    && last_cols.saturating_sub(target_cols) < target_cols.saturating_sub(cols)
-                {
-                    let _ = self.resize_sidebar_step(session, pane_id, "increase");
-                }
                 return;
             }
             if cols >= last_cols {
