@@ -124,6 +124,21 @@ pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Result<()> {
+    // Suppress hooks fired by a Rimz-internal enrichment `codex app-server`.
+    // `refresh-context` cold-spawns such a server to read realtime context; it
+    // is not a user session, but Codex still fires its configured lifecycle
+    // hooks (e.g. `SessionStart`) on startup. Processing one here would call
+    // `post_lifecycle_refresh`, spawn another `refresh-context`, cold-spawn
+    // another app-server, and recurse without bound. The marker rides the
+    // server's env into this hook child; a neutral no-op (empty stdout) breaks
+    // the loop. See `rimz::agents::codex::ENV_INTERNAL_APP_SERVER`.
+    if rimz::agents::codex::spawned_as_internal_app_server() {
+        debug!(
+            source = %source,
+            "hooks feed: suppressed — fired by a Rimz-internal codex app-server",
+        );
+        return Ok(());
+    }
     // A daemon-routed hook (Codex's app-server spawns hook children with the
     // daemon's env, not the pane's) misses the session pin in its own
     // environment, so resolution may recover it from the sibling agent

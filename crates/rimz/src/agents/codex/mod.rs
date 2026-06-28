@@ -103,6 +103,23 @@ const DEFAULT_CONTEXT_WINDOW: u64 = 272_000;
 /// is configured. Adapter conformance pins this to Codex's shipped default.
 const DEFAULT_MODEL: &str = "gpt-5.5-codex";
 
+/// Marker Rimz sets on every `codex app-server` it spawns for read-only
+/// enrichment (the cold-spawn and daemon-proxy in [`app_server`], and the warm
+/// [`broker`]). Such a server is not a user session, yet Codex still fires its
+/// configured lifecycle hooks (e.g. `SessionStart`) when it starts. Those hook
+/// children inherit this marker, and `rimz hooks feed` no-ops on it — which
+/// breaks the `refresh-context → cold-spawn app-server → SessionStart hook →
+/// post_lifecycle_refresh → refresh-context` recursion that would otherwise
+/// spawn unboundedly. Empty value means unset.
+pub const ENV_INTERNAL_APP_SERVER: &str = "RIMZ_CODEX_INTERNAL_APP_SERVER";
+
+/// True when the current process was spawned as a Rimz-internal enrichment
+/// `codex app-server` (the [`ENV_INTERNAL_APP_SERVER`] marker is present and
+/// non-empty). The hook entrypoint reads this to suppress re-entrant feeds.
+pub fn spawned_as_internal_app_server() -> bool {
+    std::env::var_os(ENV_INTERNAL_APP_SERVER).is_some_and(|value| !value.is_empty())
+}
+
 /// Everything `const` about Codex, in one place. See [`AgentDescriptor`] for
 /// the descriptor-vs-trait split.
 static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {

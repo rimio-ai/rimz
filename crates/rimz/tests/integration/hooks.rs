@@ -184,6 +184,54 @@ fn session_start_hooks_write_lifecycle_rows() {
 }
 
 #[test]
+fn internal_app_server_hook_is_suppressed_and_records_nothing() {
+    // A `codex app-server` that Rimz cold-spawns for read-only enrichment fires
+    // its own `SessionStart` hook on startup. The internal-app-server marker
+    // rides that server's env into the hook child, so `rimz hooks feed` must
+    // no-op — no rollup, no lifecycle row, no `refresh-context` spawn — which is
+    // what keeps the refresh→spawn→hook→refresh recursion from forming. Without
+    // the marker the identical payload rolls up an idle agent (see
+    // `session_start_hooks_write_lifecycle_rows`).
+    let env = Env::new();
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "sess-internal-app-server",
+        "approval_policy": "ask",
+    }))
+    .expect("payload");
+
+    let mut cmd = env.hook_command("codex");
+    cmd.env(rimz::agents::codex::ENV_INTERNAL_APP_SERVER, "1");
+    let output = env
+        .spawn_payload(cmd, &payload)
+        .wait_with_output()
+        .expect("wait child");
+
+    assert!(
+        output.status.success(),
+        "suppressed hook stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "suppressed hook stdout must stay empty, got: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let parsed = env.snapshot_json();
+    let agents = parsed["agents"].as_array().expect("agents array");
+    assert!(
+        agents.is_empty(),
+        "internal app-server hook must not roll up an agent: {agents:?}"
+    );
+    assert_eq!(
+        lifecycle_event_count(&env),
+        0,
+        "internal app-server hook must append no lifecycle event"
+    );
+}
+
+#[test]
 fn permission_hook_with_no_allowlisted_resolver_stays_native_ui() {
     for (source, payload) in permission_cases() {
         let env = Env::new();
