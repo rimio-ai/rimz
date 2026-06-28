@@ -189,17 +189,17 @@ pub struct WalkStats {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DaySpend {
     pub usd: f64,
-    /// `input` (cache-write folded in) + `output`, matching [`SpendWindow`]'s
-    /// `◇` token total so a day's tokens agree with the trailing windows.
+    /// `input` (cache-write folded in) + `output` + `cache_read`, matching
+    /// `rimz stats`'s cache-inclusive `◇` token total.
     pub tokens: u64,
 }
 
 /// Bucket the full spend history by UTC day (days since the Unix epoch),
 /// account-global, for the token-usage heatmap. Reuses the same cross-file
 /// Claude `(message_id, request_id)` dedup and sidechain-replay suppression as
-/// the trailing-window tally, so a day's tokens match what [`aggregate_spending`]
-/// would fold for that span. Pure over an already-refreshed cache — the caller
-/// owns the walk that fills it.
+/// the trailing-window tally, folding cache-read into each day's token bucket
+/// for the `rimz stats` heatmap. Pure over an already-refreshed cache — the
+/// caller owns the walk that fills it.
 pub fn compute_daily_spend(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
@@ -215,7 +215,7 @@ fn compute_daily_spend_from_counted(counted: &[impl CountedPayload]) -> BTreeMap
         let day = (entry.ts_secs / 86_400) as i64;
         let cell = by_day.entry(day).or_default();
         cell.usd += entry.cost_usd;
-        cell.tokens += entry.input + entry.cache_write + entry.output;
+        cell.tokens += entry.input + entry.cache_write + entry.output + entry.cache_read;
     }
     by_day
 }
@@ -297,8 +297,9 @@ const SPENDING_CACHE_VERSION: u32 = 11;
 /// v7: the default headline window changed from trailing 24 hours to session,
 /// so cached headline aggregates need a cheap re-aggregate. v8: the published
 /// model rollup became per-window so the stats dashboard can scope tabs without
-/// walking transcripts.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 8;
+/// walking transcripts. v9: daily token buckets fold in cache-read so the
+/// heatmap and `rimz stats` token totals count every token.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 9;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here

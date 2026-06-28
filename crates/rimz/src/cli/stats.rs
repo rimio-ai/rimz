@@ -1005,18 +1005,8 @@ fn ramp_key(styles: &[anstyle::Style; 5]) -> String {
 
 /// The windows row: a static totals row in reports, a tab bar in held dashboards.
 fn windows_lines(lines: &mut Vec<String>, stats: &Stats, active: Option<Window>) {
-    let all_time: u64 = stats
-        .by_model
-        .values()
-        .map(|model| model.year.tokens + model.year.cache_read)
-        .sum();
     let cells = Window::TABS.map(|window| {
-        let tokens = match window {
-            Window::AllTime => all_time,
-            Window::Week => stats.total.week.tokens,
-            Window::Month => stats.total.month.tokens,
-            Window::Year => stats.total.year.tokens,
-        };
+        let tokens = stats_tokens(&window.select(&stats.total));
         (window, window.label(), fmt_tokens(tokens))
     });
     let sep = render::paint(muted(), "  ·  ");
@@ -1091,10 +1081,7 @@ fn model_cells(
     name_w: usize,
     glyphs: &PanelGlyphs,
 ) -> Vec<StatCell> {
-    let total: u64 = models.iter().map(|(_, model)| model.tokens).sum();
-    if total == 0 {
-        return Vec::new();
-    }
+    let total_usd: f64 = models.iter().map(|(_, model)| model.usd).sum();
 
     struct ModelRow {
         name: String,
@@ -1108,7 +1095,11 @@ fn model_cells(
     let rows = models
         .iter()
         .map(|(name, spend)| {
-            let pct = spend.tokens as f64 / total as f64 * 100.0;
+            let pct = if total_usd > 0.0 {
+                spend.usd / total_usd * 100.0
+            } else {
+                0.0
+            };
             ModelRow {
                 name: name.clone(),
                 usd: fmt_usd(spend.usd),
@@ -1192,7 +1183,12 @@ fn model_breakdown(stats: &Stats, active: Window) -> Vec<(String, SpendWindow)> 
             named.push((friendly_model(id), spend));
         }
     }
-    named.sort_by_key(|model| std::cmp::Reverse(model.1.tokens));
+    named.sort_by(|a, b| {
+        b.1.usd
+            .partial_cmp(&a.1.usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.1.tokens.cmp(&a.1.tokens))
+    });
     if named.len() > MAX_MODELS {
         for (_, spend) in named.split_off(MAX_MODELS) {
             fold_window(&mut other, &spend);
@@ -1214,6 +1210,10 @@ fn fold_window(acc: &mut SpendWindow, add: &SpendWindow) {
     acc.sessions += add.sessions;
 }
 
+fn stats_tokens(window: &SpendWindow) -> u64 {
+    window.tokens + window.cache_read
+}
+
 struct AgentBreakdown<'a> {
     kind: &'a str,
     name: String,
@@ -1222,14 +1222,11 @@ struct AgentBreakdown<'a> {
 }
 
 fn agent_breakdown(stats: &Stats, active: Window) -> Vec<AgentBreakdown<'_>> {
-    let total: u64 = stats
+    let total_sessions: u32 = stats
         .by_agent
         .values()
-        .map(|tally| active.select(tally).tokens)
+        .map(|tally| active.select(tally).sessions)
         .sum();
-    if total == 0 {
-        return Vec::new();
-    }
 
     let mut agents: Vec<_> = stats
         .by_agent
@@ -1240,11 +1237,20 @@ fn agent_breakdown(stats: &Stats, active: Window) -> Vec<AgentBreakdown<'_>> {
                 kind: kind.as_str(),
                 name: agent_display_name(kind),
                 window,
-                share: window.tokens as f64 / total as f64,
+                share: if total_sessions > 0 {
+                    window.sessions as f64 / total_sessions as f64
+                } else {
+                    0.0
+                },
             })
         })
         .collect();
-    agents.sort_by_key(|agent| std::cmp::Reverse(agent.window.tokens));
+    agents.sort_by(|a, b| {
+        b.window
+            .sessions
+            .cmp(&a.window.sessions)
+            .then_with(|| b.window.tokens.cmp(&a.window.tokens))
+    });
     agents
 }
 
@@ -1270,7 +1276,7 @@ fn agent_cells(
         .map(|agent| AgentRow {
             name: agent.name.clone(),
             sessions: agent.window.sessions.to_string(),
-            tokens: fmt_tokens(agent.window.tokens),
+            tokens: fmt_tokens(stats_tokens(&agent.window)),
             usd: fmt_usd(agent.window.usd),
             share_pct: agent.share * 100.0,
         })
@@ -1883,10 +1889,10 @@ struct DayJson {
 fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
     let active = Window::AllTime;
     let activity = Activity::of(&stats.by_day, today_day, active);
-    let total: u64 = stats
+    let total_usd: f64 = stats
         .by_model
         .values()
-        .map(|tally| active.select(tally).tokens)
+        .map(|tally| active.select(tally).usd)
         .sum();
 
     let mut models: Vec<ModelJson> = stats
@@ -1901,27 +1907,32 @@ fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
                 } else {
                     friendly_model(id)
                 },
-                tokens: spend.tokens,
+                tokens: stats_tokens(&spend),
                 input: spend.input,
                 output: spend.output,
                 cache_read: spend.cache_read,
                 usd: spend.usd,
-                share: if total > 0 {
-                    spend.tokens as f64 / total as f64
+                share: if total_usd > 0.0 {
+                    spend.usd / total_usd
                 } else {
                     0.0
                 },
             }
         })
         .collect();
-    models.sort_by_key(|model| std::cmp::Reverse(model.tokens));
+    models.sort_by(|a, b| {
+        b.usd
+            .partial_cmp(&a.usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.tokens.cmp(&a.tokens))
+    });
 
     let agents = agent_breakdown(stats, active)
         .into_iter()
         .map(|agent| AgentJson {
             kind: agent.kind.to_owned(),
             name: agent.name,
-            tokens: agent.window.tokens,
+            tokens: stats_tokens(&agent.window),
             usd: agent.window.usd,
             sessions: agent.window.sessions,
             share: agent.share,
@@ -1949,15 +1960,15 @@ fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
             .map(|day| utc_date(day.max(0) as u64 * DAY_SECS as u64)),
         windows: WindowsJson {
             week: WindowJson {
-                tokens: stats.total.week.tokens,
+                tokens: stats_tokens(&stats.total.week),
                 usd: stats.total.week.usd,
             },
             month: WindowJson {
-                tokens: stats.total.month.tokens,
+                tokens: stats_tokens(&stats.total.month),
                 usd: stats.total.month.usd,
             },
             year: WindowJson {
-                tokens: stats.total.year.tokens,
+                tokens: stats_tokens(&stats.total.year),
                 usd: stats.total.year.usd,
             },
         },

@@ -441,27 +441,15 @@ fn month_row_skips_one_column_leading_partial_month() {
 }
 
 #[test]
-fn windows_lines_emit_one_cached_all_time_token_row() {
+fn windows_lines_fold_cache_read_so_all_time_equals_year() {
     let stats = Stats {
         by_day: BTreeMap::new(),
-        by_model: BTreeMap::from([
-            ("a".to_owned(), model_tally(100, 1.0, 40, 60, 75)),
-            ("b".to_owned(), model_tally(25, 2.0, 5, 20, 50)),
-        ]),
+        by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
         total: SpendTally {
-            week: rimz::agents::spending::SpendWindow {
-                tokens: 7,
-                ..Default::default()
-            },
-            month: rimz::agents::spending::SpendWindow {
-                tokens: 30,
-                ..Default::default()
-            },
-            year: rimz::agents::spending::SpendWindow {
-                tokens: 365,
-                ..Default::default()
-            },
+            week: spend_window(7, 0.0, 0, 0, 3, 0),
+            month: spend_window(30, 0.0, 0, 0, 20, 0),
+            year: spend_window(365, 0.0, 0, 0, 35, 0),
             ..Default::default()
         },
     };
@@ -471,10 +459,10 @@ fn windows_lines_emit_one_cached_all_time_token_row() {
 
     assert_eq!(lines.len(), 1);
     let row = strip_ansi(&lines[0]);
-    assert!(row.contains("All time 250"));
-    assert!(row.contains("Week 7"));
-    assert!(row.contains("Month 30"));
-    assert!(row.contains("Year 365"));
+    assert!(row.contains("All time 400"));
+    assert!(row.contains("Week 10"));
+    assert!(row.contains("Month 50"));
+    assert!(row.contains("Year 400"));
     assert!(!row.contains('$'));
     assert!(!row.contains('◇'));
 }
@@ -496,9 +484,9 @@ fn windows_lines_paint_only_the_active_tab_as_a_chip() {
 
     let active_start = active_tab().render().to_string();
     assert_eq!(lines[0].matches(&active_start).count(), 1);
-    assert!(lines[0].contains(&render::paint(active_tab(), " Week 7     ")));
+    assert!(lines[0].contains(&render::paint(active_tab(), " Week 7       ")));
     let row = strip_ansi(&lines[0]);
-    assert!(row.contains("All time 0"));
+    assert!(row.contains("All time 365"));
     assert!(row.contains("Week 7"));
     assert!(row.contains("Month 30"));
     assert!(row.contains("Year 365"));
@@ -537,11 +525,32 @@ fn model_cells_show_usd_and_cache_read_detail() {
     );
 
     assert!(row.contains("Opus 4.8"));
-    assert!(row.contains("46.6%"));
+    assert!(row.contains("100.0%"));
     assert!(row.contains("$12"));
     assert!(row.contains("↘ 1.2m"));
     assert!(row.contains("↗ 500.0k"));
     assert!(row.contains("◌ 2.5m"));
+}
+
+#[test]
+fn model_breakdown_ranks_by_usd_before_tokens() {
+    let stats = Stats {
+        by_day: BTreeMap::new(),
+        by_model: BTreeMap::from([
+            (
+                "claude-opus-4-8".to_owned(),
+                model_tally(100, 12.0, 40, 60, 0),
+            ),
+            ("gpt-5".to_owned(), model_tally(1_000, 1.0, 400, 600, 0)),
+        ]),
+        by_agent: BTreeMap::new(),
+        total: SpendTally::default(),
+    };
+
+    let models = model_breakdown(&stats, Window::AllTime);
+
+    assert_eq!(models[0].0, "Opus 4.8");
+    assert_eq!(models[1].0, "GPT-5");
 }
 
 #[test]
@@ -587,13 +596,15 @@ fn agent_display_name_uses_descriptor_and_kind_fallback() {
 }
 
 #[test]
-fn agent_cells_rank_by_selected_window_tokens_and_skip_empty_agents() {
+fn agent_cells_rank_by_sessions_and_skip_empty_agents() {
+    let mut claude = tally(300, 3.0, 2);
+    claude.year.cache_read = 50;
     let stats = Stats {
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::from([
-            ("claude".to_owned(), tally(100, 3.0, 2)),
-            ("codex".to_owned(), tally(300, 9.0, 4)),
+            ("claude".to_owned(), claude),
+            ("codex".to_owned(), tally(100, 9.0, 4)),
         ]),
         total: SpendTally::default(),
     };
@@ -620,17 +631,18 @@ fn agent_cells_rank_by_selected_window_tokens_and_skip_empty_agents() {
         .iter()
         .position(|line| line.contains("Claude"))
         .expect("claude row");
-    assert!(codex < claude, "larger trailing-year token count leads");
+    assert!(codex < claude, "larger trailing-year session count leads");
     let codex = strip_ansi(&lines[codex]);
     let claude = strip_ansi(&lines[claude]);
     assert!(codex.contains("◎ 4"));
-    assert!(codex.contains("◇ 300"));
+    assert!(codex.contains("◇ 100"));
     assert!(codex.contains("$9"));
-    assert!(codex.contains("75.0%"));
+    assert!(codex.contains("66.7%"));
     assert!(!codex.contains("sess"));
-    assert!(!codex.contains("(75.0%)"));
+    assert!(!codex.contains("(66.7%)"));
     assert!(claude.contains("◎ 2"));
-    assert!(claude.contains("25.0%"));
+    assert!(claude.contains("◇ 350"));
+    assert!(claude.contains("33.3%"));
 
     let empty_cells = agent_cells(&[], 0, &glyphs);
     let mut empty_lines = Vec::new();

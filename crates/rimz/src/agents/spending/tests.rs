@@ -1763,12 +1763,12 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
     let key_b = (day_b / 86_400) as i64;
     let key_c = (day_c / 86_400) as i64;
     assert_eq!(daily.len(), 3);
-    // input + cache_write + output, the main-chain turn alone.
-    assert_eq!(daily[&key_a].tokens, 160);
+    // input + cache_write + output + cache_read, the main-chain turn alone.
+    assert_eq!(daily[&key_a].tokens, 230);
     assert!((daily[&key_a].usd - 1.0).abs() < 1e-9);
-    assert_eq!(daily[&key_b].tokens, 220);
+    assert_eq!(daily[&key_b].tokens, 260);
     assert!((daily[&key_b].usd - 2.0).abs() < 1e-9);
-    assert_eq!(daily[&key_c].tokens, 330);
+    assert_eq!(daily[&key_c].tokens, 390);
     assert!((daily[&key_c].usd - 3.0).abs() < 1e-9);
 
     // The per-model breakdown rides the same dedup: the sidechain replay is
