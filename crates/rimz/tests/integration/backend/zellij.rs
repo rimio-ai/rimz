@@ -1232,12 +1232,7 @@ fn stable_client_present(probes: &[BTreeSet<u32>]) -> bool {
 
 /// The raw `list-panes` JSON object for the session's `rimz-sidebar` pane.
 fn raw_sidebar_pane(xdg: &Path, session: &str) -> serde_json::Value {
-    let output = scoped_zellij(xdg)
-        .args(["--session", session, "action", "list-panes", "-j", "-a"])
-        .bounded_output()
-        .expect("list-panes for sidebar lookup");
-    assert!(output.status.success(), "list-panes for sidebar lookup");
-    let panes: serde_json::Value = serde_json::from_slice(&output.stdout).expect("list-panes json");
+    let panes = expect_list_panes_json(xdg, session);
     panes
         .as_array()
         .expect("pane array")
@@ -1340,7 +1335,7 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
-    let report = reconcile_until_observed(&xdg, &opts, &liveness);
+    let report = reconcile_until_converged(&xdg, &opts, &liveness);
 
     assert_eq!(report.redocked, 1, "the off-spec claimed sidebar converges");
     assert_eq!(report.closed, 0, "the renderer's pane is never closed");
@@ -1484,7 +1479,7 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
-    let report = reconcile_until_observed(&xdg, &opts, &liveness);
+    let report = reconcile_until_converged(&xdg, &opts, &liveness);
 
     assert_eq!(report.redocked, 1, "the nested sidebar converges");
     assert_eq!(report.closed, 0, "geometry repair is not duplicate cleanup");
@@ -1619,7 +1614,7 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
-    let report = reconcile_until_observed(&xdg, &opts, &liveness);
+    let report = reconcile_until_converged(&xdg, &opts, &liveness);
 
     assert_eq!(
         report.misdocked, 1,
@@ -1727,7 +1722,7 @@ fn reconcile_add_ends_docked_in_a_row_stacked_tab() {
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
-    let report = reconcile_until_observed(&xdg, &opts, &rimz::mux::SidebarLiveness::default());
+    let report = reconcile_until_converged(&xdg, &opts, &rimz::mux::SidebarLiveness::default());
 
     assert_eq!(report.recovered, 1, "the missing sidebar is added");
     assert_eq!(report.failed, 0);
@@ -1739,13 +1734,7 @@ fn reconcile_add_ends_docked_in_a_row_stacked_tab() {
 /// the bottom bar plugin itself. Assert the born session actually carries it —
 /// not just that the layout string mentions it.
 fn assert_session_has_bottom_bar(xdg: &Path, session: &str) {
-    let output = scoped_zellij(xdg)
-        .args(["--session", session, "action", "list-panes", "-j", "-a"])
-        .bounded_output()
-        .expect("list-panes for bar check");
-    assert!(output.status.success(), "list-panes for bar check failed");
-    let panes: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("list-panes bar json");
+    let panes = expect_list_panes_json(xdg, session);
     let has_bar = panes.as_array().expect("pane array").iter().any(|pane| {
         pane.get("is_plugin").and_then(|v| v.as_bool()) == Some(true)
             && pane
@@ -2624,12 +2613,44 @@ fn reconcile_until_observed(
     opts: &SidebarPaneOptions,
     live: &SidebarLiveness,
 ) -> SidebarRecovery {
+    reconcile_loop(xdg, opts, live, false)
+}
+
+/// Run `reconcile_sidebars` until an attached-client test reaches a productive
+/// outcome.
+///
+/// When the caller has already confirmed an attached client, a deferral-only
+/// report is the same transient load race as an empty pane read: the client probe
+/// missed the screen thread for one pass, and production retries on later
+/// attach/reload reconciles. Retry it here so the test models that self-healing
+/// loop. A genuine attached-client regression keeps deferring until the deadline,
+/// then returns the deferral report for the caller's assertion.
+fn reconcile_until_converged(
+    xdg: &Path,
+    opts: &SidebarPaneOptions,
+    live: &SidebarLiveness,
+) -> SidebarRecovery {
+    reconcile_loop(xdg, opts, live, true)
+}
+
+fn reconcile_loop(
+    xdg: &Path,
+    opts: &SidebarPaneOptions,
+    live: &SidebarLiveness,
+    retry_deferral: bool,
+) -> SidebarRecovery {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let report = ZellijBackend::with_runtime_dir(xdg)
             .reconcile_sidebars(opts, live)
             .expect("reconcile_sidebars");
-        if report != SidebarRecovery::default() || Instant::now() >= deadline {
+        let deferral_only = report.deferred > 0
+            && SidebarRecovery {
+                deferred: 0,
+                ..report
+            } == SidebarRecovery::default();
+        let transient = report == SidebarRecovery::default() || (retry_deferral && deferral_only);
+        if !transient || Instant::now() >= deadline {
             return report;
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -2637,13 +2658,7 @@ fn reconcile_until_observed(
 }
 
 fn assert_sidebar_is_left_thirty_percent(xdg: &Path, session: &str) {
-    let output = scoped_zellij(xdg)
-        .args(["--session", session, "action", "list-panes", "-j", "-a"])
-        .bounded_output()
-        .expect("list-panes geometry");
-    assert!(output.status.success(), "list-panes geometry failed");
-    let panes: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("list-panes geometry json");
+    let panes = expect_list_panes_json(xdg, session);
     let panes = panes.as_array().expect("pane geometry array");
     let sidebar = panes
         .iter()
