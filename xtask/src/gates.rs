@@ -22,7 +22,15 @@ const LINT_ARGS: &[&str] = &[
     "-D",
     "warnings",
 ];
-const DOCTEST_ARGS: &[&str] = &["test", "--workspace", "--doc", "--all-features", "--locked"];
+const DOCTEST_ARGS: &[&str] = &[
+    "--config",
+    "build.rustc-wrapper=\"\"",
+    "test",
+    "--workspace",
+    "--doc",
+    "--all-features",
+    "--locked",
+];
 const DOCTEST_REMOVED_ENVS: &[&str] = &["RUSTC_WRAPPER"];
 const GATE_TEST_ARGS: &[&str] = &[
     "nextest",
@@ -58,7 +66,7 @@ pub(crate) fn lint(root: &Path) -> Result<()> {
 pub(crate) fn doctest(root: &Path) -> Result<()> {
     // rustdoc doctest compilation can ask for transitive deps in rlib form
     // immediately after clippy refreshed wrapper-managed artifacts. rtk skips
-    // `cargo test --doc`; also clear RUSTC_WRAPPER when the caller set it.
+    // `cargo test --doc`; also clear wrapper env/config when the caller set it.
     run_with_env_removed(
         root,
         "cargo",
