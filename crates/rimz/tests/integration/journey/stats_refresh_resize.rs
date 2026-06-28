@@ -121,7 +121,7 @@ struct StatsRefreshHarness {
 
 impl StatsRefreshHarness {
     fn launch(cols: u16) -> Self {
-        let bin = assert_cmd::cargo::cargo_bin("rimz");
+        let bin = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
         assert!(bin.exists(), "rimz binary missing: {}", bin.display());
 
         let xdg = tempfile::Builder::new()

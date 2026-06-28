@@ -625,7 +625,7 @@ impl MuxBackend for TmuxBackend {
                 "-t".to_owned(),
                 opts.session_name.clone(),
                 "-n".to_owned(),
-                opts.title.clone(),
+                super::window::sanitize_window_name(&opts.title),
                 "-c".to_owned(),
                 opts.cwd.to_string_lossy().into_owned(),
             ])

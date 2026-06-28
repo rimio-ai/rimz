@@ -91,6 +91,7 @@ bench = false
 [[test]]
 name = "integration"
 path = "tests/integration/main.rs"
+required-features = ["testkit"]
 
 [[bench]]
 name = "hotpath"

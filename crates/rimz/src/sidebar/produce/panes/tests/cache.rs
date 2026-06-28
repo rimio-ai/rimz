@@ -3,12 +3,16 @@ use super::*;
 #[test]
 fn snapshot_cache_serves_only_fresh_same_session_readable_entries() {
     let dir = tempfile::tempdir().unwrap();
+    // Keep the freshness cases independent from CI scheduler stalls. The
+    // cache freshness check saturates future stamps to age 0, matching the
+    // production clock-skew contract.
+    let fresh = unix_now_ms().saturating_add(60_000);
     let stale = unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
 
     for (name, publish, requested, expected_hit) in [
         (
             "fresh same-session",
-            Some(("rimz-query-engine", unix_now_ms())),
+            Some(("rimz-query-engine", fresh)),
             "rimz-query-engine",
             true,
         ),
@@ -17,7 +21,7 @@ fn snapshot_cache_serves_only_fresh_same_session_readable_entries() {
         // requested session, so a cross-session hit would mislabel panes.
         (
             "different session",
-            Some(("rimz-query-engine", unix_now_ms())),
+            Some(("rimz-query-engine", fresh)),
             "rimz-other",
             false,
         ),
@@ -216,7 +220,8 @@ fn missing_own_rejection_captures_prior_and_offending_frames() {
     let cache_path = runtime.root.join("snapshot.json");
     let sink = crate::diag::DiagSink::under(dir.path().join("state"), workspace_id, "s", None);
     let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
-    let now = unix_now_ms();
+    let now = unix_now_ms()
+        .saturating_add(crate::sidebar::timing::FRAME_REJECT_ESCAPE.as_millis() as u64);
     let prior = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
         now,

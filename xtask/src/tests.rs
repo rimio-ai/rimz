@@ -59,6 +59,23 @@ fn test_forwards_filter_args() {
 }
 
 #[test]
+fn test_archive_forwards_archive_args() {
+    let argv = args(&[
+        "test-archive",
+        "--archive-file",
+        "target/ci/archive.tar.zst",
+    ]);
+
+    assert_eq!(
+        parse_args(&argv).unwrap(),
+        Action::Run {
+            task: "test-archive",
+            args: &argv[1..],
+        },
+    );
+}
+
+#[test]
 fn screenshot_accepts_subcommands() {
     let argv = args(&["screenshot", "state", "fleet"]);
 

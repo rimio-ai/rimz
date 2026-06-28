@@ -78,6 +78,18 @@ fn tmux_soft_newline_bindings_follow_extended_key_format() {
 }
 
 #[test]
+fn window_name_neutralizes_tmux_target_separators() {
+    use super::window::sanitize_window_name;
+
+    // tmux parses `:` as session:window and `.` as window.pane in a target
+    // spec, so `new-window -n` rejects a name carrying either. The run-pane
+    // title and channel labels are human text that can carry both.
+    assert_eq!(sanitize_window_name("run: codex"), "run- codex");
+    assert_eq!(sanitize_window_name("feat: split.ci"), "feat- split-ci");
+    assert_eq!(sanitize_window_name("plain-name"), "plain-name");
+}
+
+#[test]
 fn open_tab_rejects_an_empty_layout() {
     use std::path::{Path, PathBuf};
 

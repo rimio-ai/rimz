@@ -9,12 +9,16 @@ on:
       base:
         description: base image (defaults to current RIMZ_CI_IMAGE)
         required: false
+      full:
+        description: build ci/Dockerfile instead of refreshing the current image
+        required: false
+        default: "false"
 
 jobs:
   build:
     name: build and publish rimz-ci
     runs-on: [linux_amd64, debian-13]
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
 
@@ -22,6 +26,7 @@ jobs:
         env:
           REQUESTED_TAG: ${{ github.event.inputs.tag }}
           REQUESTED_BASE: ${{ github.event.inputs.base }}
+          REQUESTED_FULL: ${{ github.event.inputs.full }}
           DEFAULT_BASE: ${{ vars.RIMZ_CI_IMAGE }}
         run: |
           set -euo pipefail
@@ -33,7 +38,19 @@ jobs:
           owner="${owner,,}"
           tag="${REQUESTED_TAG:-$(date +%Y%m%d)-${GITHUB_SHA::7}}"
           base="${REQUESTED_BASE:-$DEFAULT_BASE}"
-          if [ -z "$base" ]; then
+          case "${REQUESTED_FULL,,}" in
+            1|true|yes|full)
+              full=1
+              ;;
+            ""|0|false|no)
+              full=0
+              ;;
+            *)
+              echo "::error::invalid full rebuild flag: ${REQUESTED_FULL}"
+              exit 1
+              ;;
+          esac
+          if [ "$full" = 0 ] && [ -z "$base" ]; then
             echo "::error::RIMZ_CI_IMAGE is unset and no base image was provided"
             exit 1
           fi
@@ -44,6 +61,7 @@ jobs:
           echo "REGISTRY_HOST=$host" >> "$GITHUB_ENV"
           echo "IMAGE=${host}/${owner}/rimz-ci:${tag}" >> "$GITHUB_ENV"
           echo "BASE_IMAGE=$base" >> "$GITHUB_ENV"
+          echo "FULL_REBUILD=$full" >> "$GITHUB_ENV"
 
       - name: Build and push image
         env:
@@ -55,24 +73,28 @@ jobs:
           export DOCKER_CONFIG="$auth_dir/docker"
           export REGISTRY_AUTH_FILE="$auth_dir/auth.json"
           echo "$TOKEN" | podman login "$REGISTRY_HOST" -u "$GITHUB_ACTOR" --password-stdin
-          containerfile="$(mktemp)"
-          cat > "$containerfile" <<'CONTAINERFILE'
-          ARG BASE_IMAGE
-          FROM ${BASE_IMAGE}
-          ENV RUSTUP_HOME=/usr/local/rustup \
-              CARGO_HOME=/usr/local/cargo \
-              PATH=/usr/local/cargo/bin:$PATH
-          RUN rm -rf /usr/local/cargo/advisory-dbs \
-           && tmp="$(mktemp -d)" \
-           && printf '[package]\nname="x"\nversion="0.0.0"\nedition="2021"\n' > "$tmp/Cargo.toml" \
-           && mkdir "$tmp/src" \
-           && : > "$tmp/src/lib.rs" \
-           && ( cd "$tmp" && cargo deny fetch db ) \
-           && ( cd "$tmp" && cargo deny check advisories --disable-fetch ) \
-           && rm -rf "$tmp" \
-           && find /usr/local/cargo/advisory-dbs -maxdepth 1 -type d -name 'advisory-db-*' | grep -q .
+          if [ "$FULL_REBUILD" = 1 ]; then
+            podman build --isolation=chroot -f ci/Dockerfile -t "$IMAGE" .
+          else
+            containerfile="$(mktemp)"
+            cat > "$containerfile" <<'CONTAINERFILE'
+            ARG BASE_IMAGE
+            FROM ${BASE_IMAGE}
+            ENV RUSTUP_HOME=/usr/local/rustup \
+                CARGO_HOME=/usr/local/cargo \
+                PATH=/usr/local/cargo/bin:$PATH
+            RUN rm -rf /usr/local/cargo/advisory-dbs \
+             && tmp="$(mktemp -d)" \
+             && printf '[package]\nname="x"\nversion="0.0.0"\nedition="2021"\n' > "$tmp/Cargo.toml" \
+             && mkdir "$tmp/src" \
+             && : > "$tmp/src/lib.rs" \
+             && ( cd "$tmp" && cargo deny fetch db ) \
+             && ( cd "$tmp" && cargo deny check advisories --disable-fetch ) \
+             && rm -rf "$tmp" \
+             && find /usr/local/cargo/advisory-dbs -maxdepth 1 -type d -name 'advisory-db-*' | grep -q .
           CONTAINERFILE
-          podman build --isolation=chroot --build-arg BASE_IMAGE="$BASE_IMAGE" -f "$containerfile" -t "$IMAGE" .
+            podman build --isolation=chroot --build-arg BASE_IMAGE="$BASE_IMAGE" -f "$containerfile" -t "$IMAGE" .
+          fi
           podman push "$IMAGE"
 
       - name: Update RIMZ_CI_IMAGE variable

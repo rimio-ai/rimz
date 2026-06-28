@@ -1,4 +1,4 @@
-//! Contributor task runner — `cargo xtask <task>`; `ci` composes the full quality-gate stack.
+//! Contributor task runner — `cargo xtask <task>`; CI can archive nextest binaries once and run them without recompilation.
 
 #![deny(clippy::print_stdout)]
 #![deny(clippy::print_stderr)]
@@ -94,6 +94,11 @@ const TASKS: &[TaskInfo] = &[
         runs: "cargo nextest run --workspace --all-features --locked [nextest filter]...",
     },
     TaskInfo {
+        name: "test-archive",
+        summary: "Compile and archive workspace nextest binaries.",
+        runs: "cargo nextest archive --workspace --all-features --locked --archive-file <path>",
+    },
+    TaskInfo {
         name: "doctest",
         summary: "Run workspace doctests.",
         runs: "cargo test --workspace --doc --all-features --locked",
@@ -116,12 +121,17 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "coverage",
         summary: "Run the instrumented nextest coverage suite.",
-        runs: "cargo llvm-cov nextest --workspace --all-features --locked",
+        runs: "scheduled instrumented suite: cargo llvm-cov nextest --lcov --output-path target/ci/coverage/lcov.info",
     },
     TaskInfo {
         name: "semver",
         summary: "Run semver checks for published versions.",
         runs: "cargo semver-checks",
+    },
+    TaskInfo {
+        name: "externals",
+        summary: "Run supply-chain checks that reach crates.io directly.",
+        runs: "cargo deny check, cargo vet, then cargo semver-checks",
     },
     TaskInfo {
         name: "perf",
@@ -159,9 +169,14 @@ const TASKS: &[TaskInfo] = &[
         runs: "fmt --all (fix), invariants, docs-links, lint, doctest, test (nextest -P gate)",
     },
     TaskInfo {
+        name: "checks",
+        summary: "Run the non-test CI gate stack.",
+        runs: "fmt, invariants, docs-links, deps, build-plugin, lint, doctest",
+    },
+    TaskInfo {
         name: "ci",
         summary: "Run the full local CI gate stack.",
-        runs: "fmt, invariants, docs-links, audits, build-plugin, lint, doctest, coverage, semver",
+        runs: "checks, then plain nextest over the workspace",
     },
 ];
 
@@ -237,7 +252,7 @@ pub(crate) fn is_help_flag(arg: &str) -> bool {
 }
 
 fn task_accepts_args(task: &str) -> bool {
-    matches!(task, "test" | "perf" | "screenshot")
+    matches!(task, "test" | "test-archive" | "perf" | "screenshot")
 }
 
 fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
@@ -254,16 +269,19 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "fmt" => gates::fmt(root),
         "lint" => gates::lint(root),
         "test" => gates::test(root, args),
+        "test-archive" => gates::test_archive(root, args),
         "doctest" => gates::doctest(root),
         "deny" => gates::deny(root),
         "deps" => gates::deps(root),
         "vet" => gates::vet(root),
         "coverage" => gates::coverage(root),
         "semver" => gates::semver(root),
+        "externals" => gates::externals(root),
         "perf" => gates::perf(root, args),
         "invariants" => invariants::invariants(root),
         "docs-links" => docs_links::docs_links(root),
         "gate" => gates::gate(root),
+        "checks" => gates::checks(root),
         "pricing-refresh" => pricing::pricing_refresh(root),
         "theme-refresh" => theme::theme_refresh(root),
         "screenshot" => screenshot::screenshot(root, args),

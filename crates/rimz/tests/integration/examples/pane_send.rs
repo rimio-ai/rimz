@@ -78,6 +78,7 @@ fn pane_send_resolver_abstains_when_item_has_no_pane() {
 
 fn tmux_present() -> bool {
     Command::new("tmux")
+        .scrub_session_env()
         .arg("-V")
         .stdout(Stdio::null())
         .stderr(Stdio::null())

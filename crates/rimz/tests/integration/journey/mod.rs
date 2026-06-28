@@ -32,7 +32,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use assert_cmd::cargo::cargo_bin;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use rimz::ids::{MuxName, PaneId, ViewKind};
 use rimz::pane::PaneRef;
@@ -110,7 +109,7 @@ impl<'a> RoomHarness<'a> {
         rows: u16,
         cols: u16,
     ) -> Self {
-        let bin = cargo_bin("rimz");
+        let bin = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
         assert!(bin.exists(), "rimz binary missing: {}", bin.display());
 
         // Materialize the workspace ledger so a never-used room answers
@@ -799,7 +798,7 @@ pub fn permission_request(session_id: &str, secret: &str) -> Value {
 /// Absolute path to the built `rimz` binary, or `None` if it is not
 /// built (lets deep tests self-skip rather than fail).
 pub fn rimz_bin() -> Option<PathBuf> {
-    let bin = cargo_bin("rimz");
+    let bin = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
     bin.exists().then_some(bin)
 }
 

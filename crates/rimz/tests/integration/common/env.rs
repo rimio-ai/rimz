@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use assert_cmd::cargo::CommandCargoExt;
 use jiff::Timestamp;
 
 use super::command::ScrubSessionEnvExt;
@@ -115,11 +114,7 @@ impl Env {
 
     /// Absolute path to the built `rimz` binary, for resolvers that shell out.
     pub fn rimz_bin(&self) -> PathBuf {
-        Command::cargo_bin("rimz")
-            .expect("cargo-bin")
-            .get_program()
-            .to_owned()
-            .into()
+        super::shim::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"))
     }
 
     /// Base command: XDG roots scoped to the tempdir, HOME pinned, `RUST_LOG`

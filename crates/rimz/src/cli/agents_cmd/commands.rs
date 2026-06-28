@@ -590,7 +590,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         }),
         RunPlacement::Tab => backend.open_tab(&TabOptions {
             session_name: workspace.session_name.clone(),
-            title: format!("run: {}", adapter.descriptor().kind),
+            title: format!("run {}", adapter.descriptor().kind),
             cwd: launch.cwd.clone(),
             panes: LayoutPanes {
                 columns: vec![LayoutColumn {

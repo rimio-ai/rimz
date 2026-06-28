@@ -794,12 +794,14 @@ fn event_mode_stamp_controls_stale_cache_polling() {
 
 fn trace_shim_path() -> PathBuf {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| PathBuf::from(env!("CARGO_BIN_EXE_zellij-trace")))
-        .clone()
+    PATH.get_or_init(|| {
+        crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
+    })
+    .clone()
 }
 
 fn rimz_cli_path() -> PathBuf {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| PathBuf::from(env!("CARGO_BIN_EXE_rimz")))
+    PATH.get_or_init(|| crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz")))
         .clone()
 }

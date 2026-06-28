@@ -9,7 +9,7 @@
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -484,12 +484,18 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
     let server_dir = TempDir::new().expect("tmux socket dir");
     let socket = server_dir.path().join("tmux.sock");
     let _server = TmuxServerGuard::new(socket.clone());
-    let session = workspace_session(&env);
 
-    let mut cmd = env.rimz();
-    cmd.env("PATH", &agent_path)
+    // `rimz agents -p` births the tmux session and run tab cold, launches the
+    // trusted agent binary, and waits for it. The stub fires its hooks against
+    // the shared ledger, then exits 0 with a final `stub done` message that the
+    // supervised run surfaces on stdout. Reading the child's stdout directly
+    // keeps this on the deterministic launch-and-exit path; the run's sidebar
+    // rendering is owned by `tmux_room_shows_agent_after_hook`, which avoids the
+    // cold-start-versus-run-lifetime race a concurrent capture here would invite.
+    let out = env
+        .rimz()
+        .env("PATH", &agent_path)
         .env("TMUX", tmux_env(&socket))
-        .env("RIMZ_TEST_AGENT_SLEEP_MS", "10000")
         .args([
             "--mux",
             "tmux",
@@ -500,18 +506,11 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
             "journey-runner",
             "-p",
             "--timeout",
-            "60s",
+            "30s",
             "--keep",
         ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let child = cmd.spawn().expect("spawn supervised print");
-    let screen = capture_all_until(&socket, &session, rendered_supervised_row, CAPTURE_BUDGET);
-    let out = child.wait_with_output().expect("wait supervised print");
-    assert!(
-        rendered_supervised_row(&screen),
-        "supervised run should appear in the concurrently served tmux sidebar:\n{screen}"
-    );
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("wait supervised print");
     assert!(
         out.status.success(),
         "supervised print failed\nstdout:\n{}\nstderr:\n{}",
@@ -713,23 +712,6 @@ fn run_steer(env: &Env, socket: &Path, args: &[&str]) -> std::process::Output {
     cmd.env("TMUX", tmux_env(socket))
         .args(["--mux", "tmux", "message", "--steer"]);
     cmd.args(args).output().expect("spawn steer")
-}
-
-fn rendered_agent_row(screen: &str, name: &str) -> bool {
-    screen.lines().any(|line| {
-        line.contains(name)
-            && (line.contains('○')
-                || line.contains('◎')
-                || line.contains('◇')
-                || line.contains('!')
-                || line.contains('⡿')
-                || line.contains('⏸'))
-    })
-}
-
-fn rendered_supervised_row(screen: &str) -> bool {
-    screen.contains("summarize the diff")
-        && (rendered_agent_row(screen, "journey-runner") || rendered_agent_row(screen, "codex"))
 }
 
 fn workspace_session(env: &Env) -> String {

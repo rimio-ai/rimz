@@ -135,7 +135,7 @@ fn metrics_within_ttl_carries_matching_display_values_and_binding() {
         pane("terminal_4", Some("zsh"), Some("/repo")),
     ];
     panes[1].pane_pid = Some(7);
-    let now_ms = unix_now_ms();
+    let now_ms = unix_now_ms().saturating_add(METRICS_BACKGROUND_SAMPLE_TTL.as_millis() as u64);
     let mut cache = MetricsSampleCache {
         sampled_at_ms: now_ms,
         entries: HashMap::new(),

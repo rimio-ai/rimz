@@ -8,6 +8,17 @@ use crate::mux::{MuxErr, PaneCmd, Result, SidebarPaneOptions, TabOptions, ensure
 use super::TmuxBackend;
 use super::options::sidebar_serve_command;
 
+/// A tmux window name with its reserved separators neutralized. tmux parses a
+/// colon as the `session:window` boundary and a dot as the `window.pane`
+/// boundary in a target spec, so `new-window -n` rejects a name carrying
+/// either (`invalid window name: run: codex`). Channel labels and run-pane
+/// titles are human text that can carry both, so map each to a dash before the
+/// name reaches tmux; Zellij tab names have no such constraint, so the mapping
+/// stays inside this backend.
+pub(super) fn sanitize_window_name(raw: &str) -> String {
+    raw.replace([':', '.'], "-")
+}
+
 impl TmuxBackend {
     /// Close a single pane by id (`kill-pane -t %N`), terminating its process.
     /// Reconcile uses this to drop a duplicate or unresponsive sidebar pane
@@ -386,7 +397,7 @@ impl TmuxBackend {
                     "-t".to_owned(),
                     opts.session_name.clone(),
                     "-n".to_owned(),
-                    tab.label.clone(),
+                    sanitize_window_name(&tab.label),
                     "-c".to_owned(),
                     tab.cwd.to_string_lossy().into_owned(),
                 ])

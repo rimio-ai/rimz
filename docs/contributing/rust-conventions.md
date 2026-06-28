@@ -174,7 +174,7 @@ Both helpers live next to the durability contract they enforce. No module hand-r
 
 ## Tests
 
-Local runner: `cargo xtask test` (wraps `cargo nextest run`; trailing args forward as nextest filters, for example `cargo xtask test auth`). The everyday pre-PR composite is `cargo xtask gate`, which layers formatting, invariants, docs-links, lint, doctests, and the fast nextest subset over that runner. nextest is the only suite runner — install it with `cargo install cargo-nextest --locked`. Doctests, which nextest does not run, go through `cargo xtask doctest`.
+Local runner: `cargo xtask test` (wraps `cargo nextest run`; trailing args forward as nextest filters, for example `cargo xtask test auth`). The everyday pre-PR composite is `cargo xtask gate`, which layers formatting, invariants, docs-links, lint, doctests, and the fast nextest subset over that runner. The `gate` nextest profile excludes live-backend and journey tiers; `cargo xtask test -P live` runs the exact excluded complement. nextest is the only suite runner — install it with `cargo install cargo-nextest --locked`. Doctests, which nextest does not run, go through `cargo xtask doctest`.
 
 Core test shapes keep their own discipline:
 
@@ -217,7 +217,7 @@ Rules:
 
 The stable channel is pinned in `rust-toolchain.toml`. No Cargo.toml carries `rust-version`. Required components: `rustfmt`, `clippy`, `llvm-tools-preview`. Required targets: `wasm32-wasip1` (the Zellij presence plugin; rustup provisions it for contributors, and `ci/Dockerfile` mirrors the list for CI).
 
-Repo-local Cargo config stays installation-safe: `.cargo/config.toml` defines only the `xtask` alias, so source installs use each host's platform linker. CI provides `mold` on Linux through the `rimz-ci` image and runs `cargo xtask ci` through `mold -run`; contributors may opt into mold in their user Cargo config for faster local relinks. mold replaces the default bfd linker on the link-heavy integration-test binary, which relinks on every incremental change; it is a build-time tool only — no runtime or transitive footprint — and is the SOTA Unix linker.
+Repo-local Cargo config stays installation-safe: `.cargo/config.toml` defines only the `xtask` alias, so source installs use each host's platform linker. CI provides `mold` on Linux through the `rimz-ci` image and runs cargo gates through `mold -run`; contributors may opt into mold in their user Cargo config for faster local relinks. mold replaces the default bfd linker on the link-heavy integration-test binary, which relinks on every incremental change; it is a build-time tool only — no runtime or transitive footprint — and is the SOTA Unix linker.
 
 Install `sccache` for a local compile cache: xtask detects it on `PATH` and sets `RUSTC_WRAPPER=sccache` plus `CARGO_INCREMENTAL=0` for cargo compile commands; set `RIMZ_SCCACHE=off` to keep incremental enabled for heavy single-crate iteration, or `RIMZ_SCCACHE=on` to request cache routing and warn when `sccache` is missing.
 
@@ -225,7 +225,7 @@ Install `sccache` for a local compile cache: xtask detects it on `PATH` and sets
 
 The `rimz-ci` image bakes Node for Actions, the Rust stable toolchain with required components and targets, cargo gate plugins, `cargo-vet`, `sccache`, a warm RustSec advisory database, tmux, Zellij, mold, Python, `cargo-zigbuild`, Zig, `rcodesign`, and `gh`. Tool versions live in `ci/Dockerfile`, which is the single source of truth for containerized CI and release jobs.
 
-Refresh the Gitea CI image by dispatching `.gitea/workflows/ci-image.yml`. The workflow uses the current `RIMZ_CI_IMAGE` value as its base, refreshes the baked RustSec advisory DB, pushes a new immutable `rimz-ci:<tag>` image with `REGISTRY_PUSH_TOKEN`, then repoints the repository variable; consuming workflows read only that variable. Full toolchain rebuilds still edit `ci/Dockerfile`, which remains the source of truth for the image contents.
+Refresh the Gitea CI image by dispatching `.gitea/workflows/ci-image.yml`. The default workflow uses the current `RIMZ_CI_IMAGE` value as its base, refreshes the baked RustSec advisory DB, pushes a new immutable `rimz-ci:<tag>` image with `REGISTRY_PUSH_TOKEN`, then repoints the repository variable; consuming workflows read only that variable. Toolchain changes edit `ci/Dockerfile`, then dispatch the same workflow with `full=true` so it rebuilds from the Dockerfile before repointing `RIMZ_CI_IMAGE`.
 
 Release packaging uses extra host tools. `cargo xtask dist` packages the non-Darwin host release binary and builds packaged macOS archives for both Apple targets through `cargo-zigbuild`, so release maintainers keep `cargo-zigbuild` and `zig` on `PATH`. Install `cargo-zigbuild` with Cargo and install Zig from the host package manager or Zig's official bundle:
 
@@ -247,25 +247,28 @@ rcodesign --version
 
 ### Quality gates
 
-Every gate runs in CI with warnings treated as errors. Local equivalents are `cargo xtask <task>`; `cargo xtask gate` is the pre-PR default, and `cargo xtask ci` composes the full stack when a change calls for full validation.
+Every PR gate runs in CI with warnings treated as errors. Local equivalents are `cargo xtask <task>`; `cargo xtask gate` is the pre-PR default, and `cargo xtask ci` composes the local full stack when a change calls for full validation.
 
-CI compiles through `sccache` backed by the Actions cache, so a job re-run reuses compiled crates while `rust-cache` keeps the registry and git index warm.
+CI runs three job groups: `checks` for non-test gates, `build-tests` for `cargo xtask test-archive --archive-file target/ci/nextest-archive.tar.zst`, then `tests` as a matrix of four jobs (`gate`, `live-tmux`, `live-zellij`, `journey`) that each downloads the nextest archive and runs `cargo nextest run --profile <tier> --archive-file nextest-archive.tar.zst`. `checks` and `build-tests` run in parallel; the test jobs wait for the archive, pay setup once, and perform no compilation. The `gate`/`live` filters partition the workspace nextest suite for focused local runs: deterministic non-live tests run in `gate`, while Rimz live backend and journey tests run in `live`; CI selects the `live-tmux`, `live-zellij`, and `journey` profiles per matrix leg so latency-sensitive tiers run on separate runners instead of contending in one process. Each CI job runs on its own 64-core runner, so workflows leave nextest's global thread count uncapped; the live server groups in `.config/nextest.toml` bound mux concurrency per run. Instrumented coverage runs off the PR/push hot path in the nightly/dispatch `coverage.yml` workflow and uploads `target/ci/coverage/lcov.info`.
+
+CI compiles through `sccache` backed by the Actions cache in compile jobs, while `rust-cache` keeps the registry and git index warm. CI keeps `cache-targets: false`: target-dir fingerprints are not content-addressed and are a cache-poisoning risk on public PRs, while sccache keys compiler outputs by content and compiler identity. The test jobs still run `actions/checkout` even though they do not compile because a few tests use `env!("CARGO_MANIFEST_DIR")`, which bakes the build job's checkout path into the archived binaries and expects fixtures to exist at that same path when the archive runs.
 
 - `cargo fmt --all -- --check` — formatting.
 - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` — lint.
-- `cargo nextest run --workspace --all-features --locked` — test runner (the `test` task; the standalone fast signal); accepts nextest filters such as `cargo xtask test auth`.
+- `cargo nextest run --workspace --all-features --locked` — test runner (the `test` task; the standalone fast signal); accepts nextest filters and profiles such as `cargo xtask test auth`, `cargo xtask test -P gate`, and `cargo xtask test -P live`.
+- `cargo nextest archive --workspace --all-features --locked --archive-file <path>` — compile and package workspace nextest binaries for CI's compile-once/test-many split.
 - `cargo xtask doctest` — doctests.
 - `cargo xtask docs-links` — every relative markdown link target and `#anchor` resolves in the working tree (offline and deterministic; external URLs are out of scope).
-- `cargo deny check` — licence, advisory, and ban check. Gitea CI ensures the advisory DB exists in the container, then reads it with `--disable-fetch` via `RIMZ_DENY_OFFLINE`; GitHub CI leaves the flag unset and fetches public upstream.
+- `cargo deny check` — license, advisory, ban, and yanked-crate check. CI seeds the advisory DB from the container, then runs deny online through `cargo xtask externals` so the yanked check can read the crates.io index under the retried job.
 - `cargo machete` — unused dependency check.
-- `cargo vet` — supply-chain audit.
-- `cargo llvm-cov nextest --workspace --all-features --locked` — coverage. This *is* the suite run inside `ci`: the tests run once, under instrumentation, instead of building and running a second uninstrumented pass. The `rimz-ci` image provides tmux and Zellij before this gate, so the same pass exercises live backend tests under nextest's live groups.
-- `cargo semver-checks` — release-time API check; skipped while the workspace version is the unpublished pre-release `0.0.0`.
+- `cargo vet` — supply-chain audit. Runs through `cargo xtask externals` (a standalone CI job), not `checks`, because it fetches the crates.io index directly and bypasses the runners' nexus mirror.
+- `cargo llvm-cov nextest --workspace --all-features --locked --lcov --output-path target/ci/coverage/lcov.info` — scheduled coverage. The `rimz-ci` image provides tmux and Zellij before this gate, so the same pass exercises live backend tests under nextest's live groups.
+- `cargo semver-checks` — release-time API check; skipped while the workspace version is the unpublished pre-release `0.0.0`. Runs through `cargo xtask externals` alongside `cargo vet`, since it fetches the published crates.io baseline directly and bypasses the mirror.
 - `cargo xtask perf` — non-gating divan benchmarks for the measured performance model; accepts cargo bench filters such as `cargo xtask perf fleet`.
 
-`cargo xtask gate` runs `cargo fmt --all` in fix mode, then invariants, docs-links, lint, doctests, and `cargo nextest run --profile gate --workspace --all-features --locked`. The `gate` nextest profile excludes live-backend and journey tiers, keeps deterministic performance tests, captures each step's output, prints one compact success line per step, and fails fast with a trimmed excerpt plus a `NEXT:` hint. Use `ci` when a change needs audits, plugin build, coverage, semver, live-backend, or journey coverage.
+`cargo xtask gate` runs `cargo fmt --all` in fix mode, then invariants, docs-links, lint, doctests, and `cargo nextest run --profile gate --workspace --all-features --locked`. The `gate` nextest profile excludes live-backend and journey tiers, keeps deterministic performance tests, captures each step's output, prints one compact success line per step, and fails fast with a trimmed excerpt plus a `NEXT:` hint. Use `cargo xtask test -P live` when a change needs live-backend or journey coverage, `cargo xtask checks` when it needs registry-free deps/plugin/lint gates, `cargo xtask externals` when it touches dependencies or the public API (deny, supply-chain audit, and semver), and `cargo xtask ci` when it needs both checks and the full suite.
 
-Inside `ci` the gates are ordered for speed, not listed order: the instant text gates (`fmt`, `invariants`, `docs-links`) run first and fail fast; the metadata-only audits (`deny`, `deps`, `vet`) overlap the compile gates on their own threads; the compile gates run sequentially (`build-plugin → lint → coverage → doctest → semver`) because concurrent cargo builds only serialize on the target-dir lock. `ci` prints a per-gate timing summary to stderr.
+Inside `checks` the gates are ordered for speed, not listed order: the instant text gates (`fmt`, `invariants`, `docs-links`) run first and fail fast; the registry-free `deps` check overlaps the compile gates on its own thread; the compile gates run sequentially (`build-plugin → lint → doctest`) because concurrent cargo builds only serialize on the target-dir lock. `checks` prints a per-gate timing summary to stderr. `cargo deny`, `cargo vet`, and `cargo semver-checks` sit outside `checks` in `cargo xtask externals` and a standalone CI job: deny's yanked check, vet, and semver fetch the crates.io index/baseline directly and bypass the runners' nexus mirror, so the job is isolated and retried so a transient egress timeout reds it alone rather than the main checks/test jobs. `ci` runs `checks`, then plain `cargo nextest run --workspace --all-features --locked`.
 
 Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it points `core.hooksPath` at `.githooks/`). The committed `pre-commit` shim routes git's call to `cargo xtask fmt`, so a commit that would fail the CI formatting gate is caught locally before it lands; `git commit --no-verify` bypasses it for a single commit. CI stays the authoritative gate — the hook is fast local feedback, not a substitute.
 
@@ -275,7 +278,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 ### Contributor command surface
 
-`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `hooks`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `invariants`, `docs-links`, `gate`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. `install-dev` is the contributor opt-in to [off-box reporting](../internals/health/observability.md): a debug host `rimz` built `--features sentry`, so its reporting defaults to the `development` environment. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
+`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `hooks`, `fmt`, `lint`, `test`, `test-archive`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `invariants`, `docs-links`, `gate`, `checks`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. `install-dev` is the contributor opt-in to [off-box reporting](../internals/health/observability.md): a debug host `rimz` built `--features sentry`, so its reporting defaults to the `development` environment. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
 
 ## Reading order for new contributors
 

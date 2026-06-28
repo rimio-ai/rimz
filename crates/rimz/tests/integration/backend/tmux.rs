@@ -106,6 +106,7 @@ impl TmuxServer {
         // shell to talk to; the default `new-session` shell varies by host.
         // `.output()` captures stderr so test logs stay clean.
         Command::new("tmux")
+            .scrub_session_env()
             .args([
                 "-S",
                 self.socket.to_str().expect("utf8 socket"),
@@ -126,6 +127,7 @@ impl TmuxServer {
     /// `display-message -p -t <target> <format>`, asserting success.
     fn display(&self, target: &str, format: &str) -> String {
         let output = Command::new("tmux")
+            .scrub_session_env()
             .args([
                 "-S",
                 self.socket.to_str().expect("utf8 socket"),
@@ -148,6 +150,7 @@ impl TmuxServer {
     /// Run a raw tmux command against this server's socket, asserting success.
     fn tmux(&self, args: &[&str]) {
         let output = Command::new("tmux")
+            .scrub_session_env()
             .arg("-S")
             .arg(self.socket.to_str().expect("utf8 socket"))
             .args(args)
@@ -186,6 +189,7 @@ impl TmuxServer {
 
     fn window_names(&self, session: &str) -> Vec<String> {
         let output = Command::new("tmux")
+            .scrub_session_env()
             .args([
                 "-S",
                 self.socket.to_str().expect("utf8 socket"),
@@ -205,6 +209,7 @@ impl TmuxServer {
 
     fn client_widths(&self, session: &str) -> Vec<u64> {
         let output = Command::new("tmux")
+            .scrub_session_env()
             .args([
                 "-S",
                 self.socket.to_str().expect("utf8 socket"),
@@ -231,6 +236,7 @@ impl TmuxServer {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let out = Command::new("tmux")
+                .scrub_session_env()
                 .args([
                     "-S",
                     self.socket.to_str().expect("utf8 socket"),
@@ -266,6 +272,7 @@ impl TmuxServer {
     /// option's live value back from the server.
     fn show_option(&self, scope_args: &[&str], option: &str) -> String {
         let output = Command::new("tmux")
+            .scrub_session_env()
             .args(["-S", self.socket.to_str().expect("utf8 socket")])
             .arg("show-options")
             .args(scope_args)
@@ -282,6 +289,7 @@ impl TmuxServer {
 
     fn list_keys(&self, table: &str) -> String {
         let output = Command::new("tmux")
+            .scrub_session_env()
             .args(["-S", self.socket.to_str().expect("utf8 socket")])
             .args(["list-keys", "-T", table])
             .output()
@@ -296,6 +304,7 @@ impl TmuxServer {
 
     fn show_hooks(&self, session: &str) -> String {
         let output = Command::new("tmux")
+            .scrub_session_env()
             .args(["-S", self.socket.to_str().expect("utf8 socket")])
             .args(["show-hooks", "-t", session])
             .output()
@@ -320,6 +329,7 @@ impl Drop for TmuxServer {
         // `.output()` captures stderr so the "no server" message from
         // tests that never started a server doesn't leak into test logs.
         let _ = Command::new("tmux")
+            .scrub_session_env()
             .args(["-S", self.socket.to_str().unwrap_or(""), "kill-server"])
             .output();
     }
@@ -389,6 +399,7 @@ impl Drop for AttachedTmuxClient {
 /// identity pin is stamped into.
 fn show_session_environment(server: &TmuxServer, session: &str, name: &str) -> String {
     let output = Command::new("tmux")
+        .scrub_session_env()
         .args(["-S", server.socket.to_str().expect("utf8 socket")])
         .args(["show-environment", "-t", session, name])
         .output()
@@ -762,6 +773,7 @@ fn left_pane_width(server: &TmuxServer, target: &str) -> Option<u64> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let out = Command::new("tmux")
+            .scrub_session_env()
             .args([
                 "-S",
                 server.socket.to_str().expect("utf8 socket"),
@@ -2363,6 +2375,7 @@ fn presence_watch_streams_typed_lines_and_ends_with_the_server() {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let out = Command::new("tmux")
+            .scrub_session_env()
             .args([
                 "-S",
                 server.socket.to_str().expect("utf8 socket"),
@@ -2398,7 +2411,7 @@ fn presence_watch_streams_typed_lines_and_ends_with_the_server() {
         let _ = tx.send(None);
     });
 
-    server.tmux(&["send-keys", "-t", "presence:0", "exec sleep 30", "Enter"]);
+    server.tmux(&["respawn-pane", "-k", "-t", "presence:0", "sleep 30"]);
     recv_presence_line_until(
         &rx,
         Duration::from_secs(5),

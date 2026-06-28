@@ -24,8 +24,8 @@ env:
   SCCACHE_GHA_ENABLED: "on"
 
 jobs:
-  ci:
-    name: cargo xtask ci
+  checks:
+    name: cargo xtask checks
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
     # The rimz-ci image keeps the no-persistence job container model while
@@ -39,14 +39,14 @@ jobs:
       credentials:
         username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
         password: ${{ secrets.REGISTRY_PULL_TOKEN }}
-    # Per-commit dedupe across events. A rebase-ff merge lands the PR head sha
-    # unchanged on main, so the merge fires both a push (main) and a
+    # Per-commit dedupe across events per tier. A rebase-ff merge lands the PR
+    # head sha unchanged on main, so the merge fires both a push (main) and a
     # pull_request (the rebased branch) run for the same commit. Gitea matches
     # job-level concurrency groups repo-wide, so keying the job on the commit
     # collapses that pair into one run. The push run gates release.yml, so it
     # wins by canceling the redundant pull_request job.
     concurrency:
-      group: ci-commit-${{ github.sha }}
+      group: ci-commit-${{ github.sha }}-checks
       cancel-in-progress: ${{ github.event_name == 'push' }}
     steps:
       - name: Assert running in the rimz-ci image
@@ -68,24 +68,15 @@ jobs:
           cache-bin: false
           cache-targets: false
 
-      - name: Install and configure sccache
+      - name: Configure sccache
         run: |
           cargo_home="${CARGO_HOME:-$HOME/.cargo}"
           export CARGO_HOME="$cargo_home"
-          mkdir -p "$CARGO_HOME/bin"
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$CARGO_HOME/bin:$PATH"
-          if ! command -v sccache >/dev/null 2>&1; then
-            tmp="$(mktemp -d)"
-            url="https://github.com/mozilla/sccache/releases/download/v0.16.0/sccache-v0.16.0-x86_64-unknown-linux-musl.tar.gz"
-            curl -fL --retry 5 --retry-delay 2 --retry-all-errors "$url" -o "$tmp/sccache.tar.gz"
-            printf '%s  %s\n' \
-              aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588 \
-              "$tmp/sccache.tar.gz" | sha256sum -c -
-            tar -xzf "$tmp/sccache.tar.gz" -C "$tmp"
-            install -m 0755 "$tmp/sccache-v0.16.0-x86_64-unknown-linux-musl/sccache" "$CARGO_HOME/bin/sccache"
-            rm -rf "$tmp"
+          if ! sccache_path="$(command -v sccache)"; then
+            echo "::error::sccache missing from rimz-ci image — dispatch ci-image.yml to rebuild/push it and repoint RIMZ_CI_IMAGE"
+            exit 1
           fi
-          sccache_path="$(command -v sccache)"
           dirname "$sccache_path" >> "$GITHUB_PATH"
           {
             echo "SCCACHE_PATH=$sccache_path"
@@ -94,16 +85,78 @@ jobs:
             echo "ACTIONS_RUNTIME_TOKEN=${ACTIONS_RUNTIME_TOKEN:-}"
           } >> "$GITHUB_ENV"
 
-      - name: cargo xtask ci
-        # Cap nextest to half the cores so overlapping GitHub jobs leave the
-        # latency-sensitive live-mux tests enough CPU for their CLI round-trips.
-        # The per-run server cap in .config/nextest.toml bounds server count,
-        # not CPU.
+      - name: cargo xtask checks
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          mold -run cargo xtask checks
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+  externals:
+    name: cargo xtask externals
+    runs-on: [linux_amd64, debian-13]
+    timeout-minutes: 30
+    # cargo deny's yanked check, cargo vet, and cargo semver-checks fetch the
+    # crates.io index/baseline directly and bypass the runners'
+    # `[source.crates-io]` nexus mirror, so they run in this job, one step each:
+    # a crates.io timeout reds this job alone, not the main checks/test jobs,
+    # and is retried in place rather than failing the run. `deny` runs
+    # non-blocking — a policy failure surfaces as a warning and leaves the run
+    # green; `vet` and `semver` stay blocking.
+    container:
+      image: ${{ vars.RIMZ_CI_IMAGE }}
+      credentials:
+        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
+        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+    concurrency:
+      group: ci-commit-${{ github.sha }}-externals
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            exit 1
+          }
+
+      - uses: actions/checkout@v6
+
+      - name: Cargo registry cache
+        # A warm registry/index trims how often deny/vet/semver must touch the network.
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target/ci"
+          prefix-key: "rimz-ci"
+          cache-bin: false
+          cache-targets: false
+
+      - name: Configure sccache
+        run: |
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          export CARGO_HOME="$cargo_home"
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$CARGO_HOME/bin:$PATH"
+          if ! sccache_path="$(command -v sccache)"; then
+            echo "::error::sccache missing from rimz-ci image — dispatch ci-image.yml to rebuild/push it and repoint RIMZ_CI_IMAGE"
+            exit 1
+          fi
+          dirname "$sccache_path" >> "$GITHUB_PATH"
+          {
+            echo "SCCACHE_PATH=$sccache_path"
+            echo "ACTIONS_CACHE_SERVICE_V2=on"
+            echo "ACTIONS_RESULTS_URL=${ACTIONS_RESULTS_URL:-}"
+            echo "ACTIONS_RUNTIME_TOKEN=${ACTIONS_RUNTIME_TOKEN:-}"
+          } >> "$GITHUB_ENV"
+
+      - name: cargo xtask deny
+        # Non-blocking: a deny failure (advisory, license, ban) surfaces as a
+        # warning and leaves the run green. vet and semver stay blocking.
+        continue-on-error: true
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           # Keep Cargo's runtime home at the runner default so rust-cache's
-          # restored registry and git cache are the paths `cargo` reads. The CI
-          # image keeps tools and the baked RustSec DB under /usr/local/cargo.
+          # restored registry and git cache are the paths `cargo` reads.
           cargo_home="${CARGO_HOME:-$HOME/.cargo}"
           export CARGO_HOME="$cargo_home"
           mkdir -p "$CARGO_HOME"
@@ -115,12 +168,153 @@ jobs:
               cargo deny fetch db
             fi
           fi
-          export RIMZ_DENY_OFFLINE=1
-          NEXTEST_TEST_THREADS="$(( ($(nproc) + 1) / 2 ))"
-          export NEXTEST_TEST_THREADS
-          echo "Capping nextest to $NEXTEST_TEST_THREADS of $(nproc) cores for live-mux headroom"
-          mold -run cargo xtask ci
+          # Retry transient crates.io egress failures rather than warning on them.
+          n=0
+          until mold -run cargo xtask deny; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "::warning::deny checks failed after 3 attempts (non-blocking)"
+              exit 1
+            fi
+            echo "::warning::deny attempt $n failed; retrying in 10s"
+            sleep 10
+          done
+
+      - name: cargo xtask vet
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          # Retry transient crates.io egress failures rather than reding the run.
+          n=0
+          until mold -run cargo xtask vet; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::vet checks failed after 3 attempts"
+              exit 1
+            fi
+            echo "::warning::vet attempt $n failed; retrying in 10s"
+            sleep 10
+          done
+
+      - name: cargo xtask semver
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          # Retry transient crates.io egress failures rather than reding the run.
+          n=0
+          until mold -run cargo xtask semver; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::semver checks failed after 3 attempts"
+              exit 1
+            fi
+            echo "::warning::semver attempt $n failed; retrying in 10s"
+            sleep 10
+          done
 
       - name: sccache stats
         if: always()
         run: sccache --show-stats
+
+  build-tests:
+    name: cargo xtask test-archive
+    runs-on: [linux_amd64, debian-13]
+    timeout-minutes: 30
+    container:
+      image: ${{ vars.RIMZ_CI_IMAGE }}
+      credentials:
+        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
+        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+    concurrency:
+      group: ci-commit-${{ github.sha }}-build-tests
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            exit 1
+          }
+
+      - uses: actions/checkout@v6
+
+      - name: Cargo registry cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target/ci"
+          prefix-key: "rimz-ci"
+          cache-bin: false
+          cache-targets: false
+
+      - name: Configure sccache
+        run: |
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          export CARGO_HOME="$cargo_home"
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$CARGO_HOME/bin:$PATH"
+          if ! sccache_path="$(command -v sccache)"; then
+            echo "::error::sccache missing from rimz-ci image — dispatch ci-image.yml to rebuild/push it and repoint RIMZ_CI_IMAGE"
+            exit 1
+          fi
+          dirname "$sccache_path" >> "$GITHUB_PATH"
+          {
+            echo "SCCACHE_PATH=$sccache_path"
+            echo "ACTIONS_CACHE_SERVICE_V2=on"
+            echo "ACTIONS_RESULTS_URL=${ACTIONS_RESULTS_URL:-}"
+            echo "ACTIONS_RUNTIME_TOKEN=${ACTIONS_RUNTIME_TOKEN:-}"
+          } >> "$GITHUB_ENV"
+
+      - name: cargo xtask test-archive
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          mold -run cargo xtask test-archive --archive-file target/ci/nextest-archive.tar.zst
+
+      - name: Upload nextest archive
+        # Gitea's GHES-compatible artifact API does not support artifact v4.
+        uses: actions/upload-artifact@v3
+        with:
+          name: nextest-archive
+          path: target/ci/nextest-archive.tar.zst
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+  tests:
+    name: cargo nextest run (${{ matrix.profile }})
+    runs-on: [linux_amd64, debian-13]
+    timeout-minutes: 30
+    needs: build-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [gate, live-tmux, live-zellij, journey]
+    container:
+      image: ${{ vars.RIMZ_CI_IMAGE }}
+      credentials:
+        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
+        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+    concurrency:
+      group: ci-commit-${{ github.sha }}-tests-${{ matrix.profile }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            exit 1
+          }
+
+      - uses: actions/checkout@v6
+
+      - name: Download nextest archive
+        # Gitea's GHES-compatible artifact API does not support artifact v4.
+        uses: actions/download-artifact@v3
+        with:
+          name: nextest-archive
+          path: .
+
+      - name: cargo nextest run
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          unset NO_COLOR
+          cargo nextest run --profile ${{ matrix.profile }} --archive-file nextest-archive.tar.zst

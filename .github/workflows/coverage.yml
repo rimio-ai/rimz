@@ -1,0 +1,66 @@
+name: Coverage
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * *"
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_HTTP_TIMEOUT: "120"
+  CARGO_NET_RETRY: "5"
+  CARGO_HOME: /usr/local/cargo
+  RUSTUP_HOME: /usr/local/rustup
+  CARGO_TARGET_DIR: target/ci
+  RUSTFLAGS: -D warnings
+  RUST_BACKTRACE: 1
+  SCCACHE_GHA_ENABLED: "on"
+
+jobs:
+  coverage:
+    name: cargo xtask coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ${{ vars.RIMZ_CI_IMAGE }}
+      credentials:
+        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
+        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+    steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            exit 1
+          }
+
+      - uses: actions/checkout@v6
+
+      - name: Cargo registry cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target/ci"
+          prefix-key: "rimz-ci"
+          cache-bin: false
+          cache-targets: false
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+        with:
+          version: "v0.16.0"
+
+      - name: cargo xtask coverage
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          mold -run cargo xtask coverage
+
+      - name: Upload lcov artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov.info
+          path: target/ci/coverage/lcov.info
+          if-no-files-found: error
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats

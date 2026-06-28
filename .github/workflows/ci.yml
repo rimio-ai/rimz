@@ -25,8 +25,8 @@ env:
   SCCACHE_GHA_ENABLED: "on"
 
 jobs:
-  ci:
-    name: cargo xtask ci
+  checks:
+    name: cargo xtask checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # The rimz-ci image keeps the no-persistence job container model while
@@ -40,6 +40,9 @@ jobs:
       credentials:
         username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
         password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+    concurrency:
+      group: ci-commit-${{ github.sha }}-checks
+      cancel-in-progress: ${{ github.event_name == 'push' }}
     steps:
       - name: Assert running in the rimz-ci image
         run: |
@@ -65,18 +68,208 @@ jobs:
         with:
           version: "v0.16.0"
 
-      - name: cargo xtask ci
-        # Cap nextest to half the cores so overlapping GitHub jobs leave the
-        # latency-sensitive live-mux tests enough CPU for their CLI round-trips.
-        # The per-run server cap in .config/nextest.toml bounds server count,
-        # not CPU.
+      - name: cargo xtask checks
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          NEXTEST_TEST_THREADS="$(( ($(nproc) + 1) / 2 ))"
-          export NEXTEST_TEST_THREADS
-          echo "Capping nextest to $NEXTEST_TEST_THREADS of $(nproc) cores for live-mux headroom"
-          mold -run cargo xtask ci
+          mold -run cargo xtask checks
 
       - name: sccache stats
         if: always()
         run: sccache --show-stats
+
+  externals:
+    name: cargo xtask externals
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # cargo deny's yanked check, cargo vet, and cargo semver-checks fetch the
+    # crates.io index/baseline directly and bypass any `[source.crates-io]`
+    # mirror, so they run in this job, one step each: a crates.io timeout reds
+    # this job alone, not the main checks/test jobs, and is retried in place
+    # rather than failing the run. `deny` runs non-blocking — a policy failure
+    # surfaces as a warning and leaves the run green; `vet` and `semver` stay
+    # blocking.
+    container:
+      image: ${{ vars.RIMZ_CI_IMAGE }}
+      credentials:
+        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
+        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+    concurrency:
+      group: ci-commit-${{ github.sha }}-externals
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            exit 1
+          }
+
+      - uses: actions/checkout@v6
+
+      - name: Cargo registry cache
+        # A warm registry/index trims how often deny/vet/semver must touch the network.
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target/ci"
+          prefix-key: "rimz-ci"
+          cache-bin: false
+          cache-targets: false
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+        with:
+          version: "v0.16.0"
+
+      - name: cargo xtask deny
+        # Non-blocking: a deny failure (advisory, license, ban) surfaces as a
+        # warning and leaves the run green. vet and semver stay blocking.
+        continue-on-error: true
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          export CARGO_HOME="$cargo_home"
+          mkdir -p "$CARGO_HOME"
+          if ! find "$CARGO_HOME/advisory-dbs" -maxdepth 1 -type d -name 'advisory-db-*' 2>/dev/null | grep -q .; then
+            if find /usr/local/cargo/advisory-dbs -maxdepth 1 -type d -name 'advisory-db-*' 2>/dev/null | grep -q .; then
+              rm -rf "$CARGO_HOME/advisory-dbs"
+              cp -a /usr/local/cargo/advisory-dbs "$CARGO_HOME/advisory-dbs"
+            else
+              cargo deny fetch db
+            fi
+          fi
+          # Retry transient crates.io egress failures rather than warning on them.
+          n=0
+          until mold -run cargo xtask deny; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "::warning::deny checks failed after 3 attempts (non-blocking)"
+              exit 1
+            fi
+            echo "::warning::deny attempt $n failed; retrying in 10s"
+            sleep 10
+          done
+
+      - name: cargo xtask vet
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          # Retry transient crates.io egress failures rather than reding the run.
+          n=0
+          until mold -run cargo xtask vet; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::vet checks failed after 3 attempts"
+              exit 1
+            fi
+            echo "::warning::vet attempt $n failed; retrying in 10s"
+            sleep 10
+          done
+
+      - name: cargo xtask semver
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          # Retry transient crates.io egress failures rather than reding the run.
+          n=0
+          until mold -run cargo xtask semver; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::semver checks failed after 3 attempts"
+              exit 1
+            fi
+            echo "::warning::semver attempt $n failed; retrying in 10s"
+            sleep 10
+          done
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+  build-tests:
+    name: cargo xtask test-archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ${{ vars.RIMZ_CI_IMAGE }}
+      credentials:
+        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
+        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+    concurrency:
+      group: ci-commit-${{ github.sha }}-build-tests
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            exit 1
+          }
+
+      - uses: actions/checkout@v6
+
+      - name: Cargo registry cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target/ci"
+          prefix-key: "rimz-ci"
+          cache-bin: false
+          cache-targets: false
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+        with:
+          version: "v0.16.0"
+
+      - name: cargo xtask test-archive
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          mold -run cargo xtask test-archive --archive-file target/ci/nextest-archive.tar.zst
+
+      - name: Upload nextest archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive
+          path: target/ci/nextest-archive.tar.zst
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+  tests:
+    name: cargo nextest run (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: build-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [gate, live-tmux, live-zellij, journey]
+    container:
+      image: ${{ vars.RIMZ_CI_IMAGE }}
+      credentials:
+        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
+        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+    concurrency:
+      group: ci-commit-${{ github.sha }}-tests-${{ matrix.profile }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            exit 1
+          }
+
+      - uses: actions/checkout@v6
+
+      - name: Download nextest archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive
+          path: .
+
+      - name: cargo nextest run
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          unset NO_COLOR
+          cargo nextest run --profile ${{ matrix.profile }} --archive-file nextest-archive.tar.zst

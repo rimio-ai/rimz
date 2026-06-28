@@ -17,7 +17,7 @@ fn wait_for_no_serve_processes(session: &str, timeout: Duration) -> bool {
 fn sidebar_self_closes_when_its_tab_empties() {
     require_zellij!();
 
-    let rimz = assert_cmd::cargo::cargo_bin("rimz");
+    let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
     if !rimz.exists() {
         eprintln!("rimz binary not built; skipping self-close test");
         return;

@@ -149,7 +149,7 @@ zellij or tmux runs the room. Building from source is `git clone … && cargo xt
 git clone https://github.com/rimio/rimz.git && cd rimz
 cargo xtask install     # build and install the binary + zellij presence plugin
 cargo xtask test        # the nextest suite
-cargo xtask ci          # the full gate stack
+cargo xtask ci          # non-test checks + the plain nextest suite
 ```
 
 Contributor rules and the gate stack live in [rust-conventions.md](./docs/contributing/rust-conventions.md); the working contract is [AGENTS.md](./AGENTS.md).

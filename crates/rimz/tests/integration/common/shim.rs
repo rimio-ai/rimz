@@ -3,6 +3,17 @@ use std::path::{Path, PathBuf};
 
 use super::Env;
 
+pub fn cargo_bin(name: &str, cargo_env_path: &str) -> PathBuf {
+    archive_extracted_bin(name).unwrap_or_else(|| PathBuf::from(cargo_env_path))
+}
+
+fn archive_extracted_bin(name: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let debug_dir = exe.parent()?.parent()?;
+    let candidate = debug_dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    candidate.is_file().then_some(candidate)
+}
+
 #[cfg(unix)]
 pub fn write_env_dump_shim(env: &Env, agent: &str) -> PathBuf {
     let dir = env.home_root.join("agent-bin");

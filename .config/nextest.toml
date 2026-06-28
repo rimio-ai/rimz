@@ -15,25 +15,12 @@
 # within a single run. This is per-run accounting, NOT a shared lock: the
 # worktrees never block on each other.
 #
-# CI multiplies that aggregate beyond two worktrees. The shared self-hosted
-# runner executes several `cargo llvm-cov nextest` jobs at once — a push and its
-# pull_request land in different concurrency groups (sha vs ref), so the same
-# commit verifies twice over, and back-to-back landings stack a third. Coverage
-# instrumentation also makes every live server cost more CPU than the plain
-# `nextest` the ~4-safe figure was measured under, so the real ceiling is lower
-# there. The `ci` profile pins the Zellij cap to one server per run: N concurrent
-# coverage jobs then put ~N live servers on the host instead of 2N, holding the
-# aggregate inside the safe envelope no matter how the events overlap. `coverage`
-# in xtask selects it (`-P ci`); local `nextest`/`test` keep the cap-2 default.
-#
-# Server count is only half the load story. The live tests are latency-sensitive
+# Server count is not the whole load story. The live tests are latency-sensitive
 # — each spawns a `zellij`/`tmux` CLI client that must round-trip to its server
-# within a deadline — so they also starve when the box is CPU-oversubscribed,
-# which two full instrumented suites running at once on the shared runner cause
-# regardless of how few servers each holds. The CI workflow caps
-# `NEXTEST_TEST_THREADS` to half the runner's cores for exactly this reason: two
-# concurrent runs then sum to ~one box's worth of test threads, leaving the
-# round-trips enough CPU to meet their deadlines (see .github/workflows/ci.yml).
+# within a deadline — so the CI layout matters too. Each CI job now runs on its
+# own 64-core runner, so workflows leave nextest's global thread count uncapped.
+# The binding concurrency control is the per-run live server caps in
+# `[test-groups]`, not `NEXTEST_TEST_THREADS`.
 #
 # Retries absorb the startup races that slip through under load (a different
 # test each time — momentary contention, not a real failure): a starved runner
@@ -53,9 +40,6 @@
 # failing the run outright.
 [test-groups]
 live-zellij = { max-threads = 2 }
-# The coverage-run cap: one live Zellij server per run, so overlapping CI jobs on
-# the shared runner sum to ~N servers across N runs rather than 2N.
-live-zellij-ci = { max-threads = 1 }
 live-tmux = { max-threads = 4 }
 # Rendered journeys each run a real `rimz sidebar serve` process over a PTY. The
 # full journey sweep now covers the dashboard, rate-limit recovery, selection,
@@ -73,9 +57,16 @@ filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^journey::deep::tmux
 test-group = 'live-tmux'
 retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
 
+# Rendered journeys are as latency-sensitive as the live-mux tiers — each polls
+# a real `rimz sidebar serve` process over a PTY for a rendered frame within a
+# deadline — so a starved runner can stall a render past the budget during the
+# suite's heavy phase. Give them the same retry budget so an under-load render
+# race fires a later attempt once that phase has passed instead of failing the
+# run outright, mirroring the live-zellij/live-tmux groups above.
 [[profile.default.overrides]]
 filter = 'package(rimz) & test(/^journey::/) & not test(/^journey::deep::/)'
 test-group = 'rendered-journey'
+retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
 
 # `gate` is the fast pre-PR subset: everything except the live-backend and
 # journey tiers. The perf tier stays in this profile because it is deterministic
@@ -84,14 +75,23 @@ test-group = 'rendered-journey'
 [profile.gate]
 default-filter = 'not (package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^journey::/)))'
 
-# CI runs under coverage instrumentation on a shared runner; `coverage` selects
-# this profile with `-P ci`. It inherits everything from `default` and remaps
-# only the Zellij live group onto the cap-1 `live-zellij-ci` group so concurrent
-# coverage jobs cannot stack two servers each. The tmux override and the retry
-# budget carry over from `default` through profile inheritance.
-[profile.ci]
+# `live` is the exact complement of `gate`: the live-backend and journey tiers
+# `gate` excludes. CI splits that complement into tier profiles below; this
+# profile stays available for focused local runs and targeted dispatches.
+# Inherits the live-server groups and the retry budget from `default`.
+[profile.live]
+default-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^journey::/))'
 
-[[profile.ci.overrides]]
-filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^journey::deep::zellij/))'
-test-group = 'live-zellij-ci'
-retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
+# CI fans the archived suite out into one job per heavy tier so the
+# latency-sensitive tiers never co-schedule (see ci.yml). Each profile selects
+# its tier and inherits the default profile's live-server groups and retry
+# budget. The three filters are the gate-excluded complement, split along the
+# same boundaries as the test-group overrides above.
+[profile.live-tmux]
+default-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^journey::deep::tmux/))'
+
+[profile.live-zellij]
+default-filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^journey::deep::zellij/))'
+
+[profile.journey]
+default-filter = 'package(rimz) & test(/^journey::/) & not test(/^journey::deep::/)'

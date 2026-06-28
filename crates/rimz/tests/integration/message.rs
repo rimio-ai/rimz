@@ -1802,7 +1802,7 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
 }
 
 fn zellij_trace_shim() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_zellij-trace"))
+    crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
 }
 
 fn trace_lines(path: &Path) -> Vec<String> {

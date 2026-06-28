@@ -334,7 +334,7 @@ fn init_git_worktree(dir: &Path, git_bin: &Path) -> bool {
 /// The built `git-trace` shim binary (Cargo exports the path to every declared
 /// `[[bin]]`).
 fn git_trace_shim() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_git-trace"))
+    crate::common::cargo_bin("git-trace", env!("CARGO_BIN_EXE_git-trace"))
 }
 
 /// First `git` on the test process's own (unpatched) PATH — the real binary the

@@ -6,7 +6,6 @@
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use assert_cmd::cargo::CommandCargoExt;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
@@ -1160,11 +1159,10 @@ fn codex_hook_with_app_server(env: &Env, codex_bin: &std::path::Path) -> Command
 
 /// Absolute path to the built `codex app-server` stub fixture.
 fn codex_appserver_stub() -> std::path::PathBuf {
-    Command::cargo_bin("codex-appserver-stub")
-        .expect("cargo-bin stub")
-        .get_program()
-        .to_owned()
-        .into()
+    crate::common::cargo_bin(
+        "codex-appserver-stub",
+        env!("CARGO_BIN_EXE_codex-appserver-stub"),
+    )
 }
 
 /// A Codex turn boundary spawns a detached refresh that reads the app-server

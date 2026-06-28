@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use crate::common::{CommandTimeoutExt, Env};
 
 fn ssh_shim() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_ssh-trace"))
+    crate::common::cargo_bin("ssh-trace", env!("CARGO_BIN_EXE_ssh-trace"))
 }
 
 /// The keepalive prefix shared by supervised and one-shot remote attaches.

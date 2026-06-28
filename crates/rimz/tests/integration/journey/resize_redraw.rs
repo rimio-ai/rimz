@@ -50,7 +50,7 @@ const WORKSPACE_ID: &str = "ws_0123456789abcdef01234567";
 
 #[test]
 fn sidebar_redraws_at_new_size_on_resize() {
-    let bin = assert_cmd::cargo::cargo_bin("rimz");
+    let bin = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
     assert!(bin.exists(), "rimz binary missing: {}", bin.display());
 
     // One short XDG root keeps the per-instance wakeup socket path under the

@@ -8,21 +8,19 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use assert_cmd::cargo::CommandCargoExt;
 use serde_json::{Value, json};
 
 use crate::common::Env;
 
 /// Absolute path to the built `codex app-server` stub fixture.
 fn codex_appserver_stub() -> std::path::PathBuf {
-    Command::cargo_bin("codex-appserver-stub")
-        .expect("cargo-bin stub")
-        .get_program()
-        .to_owned()
-        .into()
+    crate::common::cargo_bin(
+        "codex-appserver-stub",
+        env!("CARGO_BIN_EXE_codex-appserver-stub"),
+    )
 }
 
 /// One JSON-RPC round-trip over the broker socket: write a framed request, then

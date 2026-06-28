@@ -187,5 +187,5 @@ fn agent_pane(env: &Env, command: &str) -> rimz::pane::PaneRef {
 }
 
 fn zellij_trace_shim() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_zellij-trace"))
+    crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
 }

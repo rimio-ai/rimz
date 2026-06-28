@@ -154,7 +154,7 @@ impl FakeZellij {
 }
 
 fn zellij_trace_shim() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_zellij-trace"))
+    crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
 }
 
 fn read_trace_lines(log_path: &Path, timeout: Duration) -> Vec<String> {
