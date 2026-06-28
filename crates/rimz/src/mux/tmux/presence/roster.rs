@@ -98,6 +98,9 @@ impl PresenceRoster {
                 });
             } else {
                 self.pending_unfocused.remove(&window);
+                if is_sidebar {
+                    events.push(SidebarEvent::PanesChanged);
+                }
             }
             self.clear_active_in_window(&window, &pane);
         }
@@ -297,12 +300,11 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_panes_are_tracked_but_do_not_emit() {
+    fn sidebar_pane_focus_nudges_renderer() {
         let mut roster = PresenceRoster::default();
-        assert!(
-            roster
-                .apply(sidebar_sub("%9", "@1", true), false)
-                .is_empty()
+        assert_eq!(
+            roster.apply(sidebar_sub("%9", "@1", true), false),
+            vec![SidebarEvent::PanesChanged]
         );
         assert!(
             roster

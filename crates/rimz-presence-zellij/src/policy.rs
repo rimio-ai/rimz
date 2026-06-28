@@ -196,12 +196,6 @@ pub struct FocusPatch {
     pub is_focused: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FocusShortcut {
-    Patch(Vec<FocusPatch>),
-    Ignore,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TopologyPayload {
     pub session_name: String,
@@ -354,15 +348,15 @@ fn hash_stable_pane_fields(hasher: &mut impl Hasher, pane: &RawStablePaneFields<
 
 /// The focus transitions to publish when the only sidebar-relevant manifest
 /// change is a per-pane focus move onto a pane that can render as an
-/// agent/process card.
-/// Returns [`FocusShortcut::Ignore`] for focus-only moves onto sidebar/chrome so
-/// selection holds its last card, and `None` for topology, command, held/exited,
-/// or suppression changes so the caller falls back to an authoritative pane
-/// produce.
+/// agent/process card. `Some(patch)` is the optimistic card-to-card focus patch;
+/// `None` means no card patch is available, so the caller falls back to an
+/// authoritative pane produce. That includes topology, command, held/exited, or
+/// suppression changes, plus focus moves onto sidebar/chrome so the producer
+/// refreshes own-view visibility and the sidebar resumes animation.
 pub fn focus_shortcut_if_only_focus_changed(
     previous: &BTreeMap<usize, Vec<PaneFields>>,
     next: &BTreeMap<usize, Vec<PaneFields>>,
-) -> Option<FocusShortcut> {
+) -> Option<Vec<FocusPatch>> {
     let mut changed = false;
     let mut focused_card = false;
     let mut patch = Vec::new();
@@ -405,11 +399,7 @@ pub fn focus_shortcut_if_only_focus_changed(
     if !changed {
         return None;
     }
-    if focused_card {
-        Some(FocusShortcut::Patch(patch))
-    } else {
-        Some(FocusShortcut::Ignore)
-    }
+    focused_card.then_some(patch)
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -959,9 +949,8 @@ impl PokePolicy {
         self.queue_change(now_ms);
     }
 
-    /// Accept a manifest observation without queuing a producer poke. Used for a
-    /// focus-only move to sidebar/chrome: the renderer's baseline should hold
-    /// its last card, and no pane truth changed.
+    /// Accept a manifest observation without queuing a producer poke. Used after
+    /// an optimistic direct event already reached the renderer.
     pub fn accept_manifest(&mut self, hash: u64) {
         self.last_hash = Some(hash);
     }

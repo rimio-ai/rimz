@@ -68,8 +68,7 @@ mod shell {
 
     use rimz_presence_zellij::policy::{
         self, CorrectionAction, FOCUS_SIDEBAR_PIPE, FocusCorrection, FocusPatch, FocusResolution,
-        FocusShortcut, ForegroundCommandUpdate, PaneFields, Poke, PokePolicy, RawStablePaneFields,
-        TimerGate,
+        ForegroundCommandUpdate, PaneFields, Poke, PokePolicy, RawStablePaneFields, TimerGate,
     };
     use zellij_tile::prelude::*;
 
@@ -199,19 +198,11 @@ mod shell {
                             self.poke_pane_opened(pane, now) || emitted
                         });
                         match focus_patch {
-                            Some(FocusShortcut::Patch(patch))
-                                if self.poke_focus_changed(&patch, now) =>
-                            {
+                            Some(patch) if self.poke_focus_changed(&patch, now) => {
                                 let hash = policy::manifest_hash(&self.tabs, self.active_tab);
                                 if let Some(policy) = self.policy.as_mut() {
                                     policy.accept_manifest(hash);
                                     policy.on_optimistic_signal(now);
-                                }
-                            }
-                            Some(FocusShortcut::Ignore) => {
-                                let hash = policy::manifest_hash(&self.tabs, self.active_tab);
-                                if let Some(policy) = self.policy.as_mut() {
-                                    policy.accept_manifest(hash);
                                 }
                             }
                             _ if emitted_open => {

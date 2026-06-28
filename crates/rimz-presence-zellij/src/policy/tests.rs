@@ -170,7 +170,7 @@ fn focus_shortcut_patches_card_to_card_moves() {
 
     assert_eq!(
         focus_shortcut_if_only_focus_changed(&previous, &next),
-        Some(FocusShortcut::Patch(vec![
+        Some(vec![
             FocusPatch {
                 id: 1,
                 is_focused: false,
@@ -179,19 +179,18 @@ fn focus_shortcut_patches_card_to_card_moves() {
                 id: 2,
                 is_focused: true,
             },
-        ]))
+        ])
     );
 }
 
 #[test]
-fn focus_shortcut_ignores_moves_onto_the_sidebar() {
+fn focus_shortcut_declines_focus_onto_the_sidebar() {
     let previous = tabs(vec![focused(pane(1)), sidebar_pane(2)]);
     let next = tabs(vec![pane(1), focused(sidebar_pane(2))]);
 
-    assert_eq!(
-        focus_shortcut_if_only_focus_changed(&previous, &next),
-        Some(FocusShortcut::Ignore),
-    );
+    // Chrome focus has no optimistic card patch; the shell falls back to a full
+    // fold and sends panes-changed so own-view visibility refreshes.
+    assert_eq!(focus_shortcut_if_only_focus_changed(&previous, &next), None,);
 }
 
 #[test]
@@ -257,7 +256,7 @@ fn focus_shortcut_survives_a_partial_manifest_merge() {
 
     assert_eq!(
         focus_shortcut_if_only_focus_changed(&previous, &merged),
-        Some(FocusShortcut::Patch(vec![
+        Some(vec![
             FocusPatch {
                 id: 10,
                 is_focused: false,
@@ -266,7 +265,7 @@ fn focus_shortcut_survives_a_partial_manifest_merge() {
                 id: 11,
                 is_focused: true,
             },
-        ])),
+        ]),
         "a focus-only partial still patches after the omitted tab is merged back",
     );
 }
