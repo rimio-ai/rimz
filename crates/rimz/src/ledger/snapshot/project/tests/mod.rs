@@ -91,6 +91,32 @@ mod subagents;
 mod timestamps;
 
 #[test]
+fn serialized_lifecycle_event_folds_like_constructed_event() {
+    let event = raw_lifecycle_at(
+        "claude",
+        1,
+        json!({
+            "event_name": "SessionStart",
+            "agent_id": "session-a",
+            "agent_name": "lucid-atlas",
+            "signal": { "signal": "registered" },
+            "pane_id": "tmux:%1",
+            "context_pct": 42,
+            "context_window": 200_000,
+            "total_tokens": 84_000,
+        }),
+    );
+    let encoded = serde_json::to_vec(&event).expect("encode event");
+    let decoded: EventEnvelope = serde_json::from_slice(&encoded).expect("decode event");
+
+    assert_eq!(
+        reduce_agent_states(&[decoded]),
+        reduce_agent_states(&[event]),
+        "RawValue envelope params must fold identically after event-log round trip"
+    );
+}
+
+#[test]
 fn assigns_and_carries_card_identity() {
     let events = vec![
         raw_lifecycle_at(
@@ -510,16 +536,14 @@ fn late_launch_event_does_not_recreate_provisional_when_name_is_owned() {
         consumed_launches: BTreeSet::new(),
     };
 
-    let (agents, _) = reduce_agent_states_seeded_with_identity(
-        seed,
-        identity,
-        &[raw_launch(
-            AgentLaunchState::Failed,
-            "launch_a",
-            "lucid-atlas",
-            None,
-        )],
-    );
+    let events = [raw_launch(
+        AgentLaunchState::Failed,
+        "launch_a",
+        "lucid-atlas",
+        None,
+    )];
+    let events = decode_events(&events);
+    let (agents, _) = reduce_agent_states_seeded_with_identity(seed, identity, &events);
 
     assert_eq!(agents.len(), 1);
     assert!(
@@ -642,16 +666,14 @@ fn stale_identity_state_does_not_block_reused_launch_name() {
         next_ordinal: BTreeMap::new(),
         consumed_launches: BTreeSet::new(),
     };
-    let (agents, _) = reduce_agent_states_seeded_with_identity(
-        BTreeMap::new(),
-        stale,
-        &[raw_launch(
-            AgentLaunchState::Bound,
-            "launch_a",
-            "lucid-atlas",
-            Some("zellij:terminal_1"),
-        )],
-    );
+    let events = [raw_launch(
+        AgentLaunchState::Bound,
+        "launch_a",
+        "lucid-atlas",
+        Some("zellij:terminal_1"),
+    )];
+    let events = decode_events(&events);
+    let (agents, _) = reduce_agent_states_seeded_with_identity(BTreeMap::new(), stale, &events);
 
     let agent = agents
         .values()

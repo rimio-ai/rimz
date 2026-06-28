@@ -51,6 +51,14 @@ fn lifecycle_observation() -> AgentLifecycleObservation {
     }
 }
 
+fn params_value(event: &EventEnvelope) -> Value {
+    serde_json::from_str(event.params.get()).expect("event params decode")
+}
+
+fn raw_params_value(raw: &RawValue) -> Value {
+    serde_json::from_str(raw.get()).expect("raw params decode")
+}
+
 #[test]
 fn agent_lifecycle_constructor_serializes_compact_wire_shape() {
     let workspace = workspace();
@@ -160,8 +168,9 @@ fn agent_lifecycle_constructor_omits_absent_fields() {
         "pane_id",
         "parent_agent_id",
     ] {
+        let params = params_value(&event);
         assert!(
-            event.params.get(key).is_none(),
+            params.get(key).is_none(),
             "{key} must be omitted when absent"
         );
     }
@@ -207,7 +216,7 @@ fn old_shape_agent_lifecycle_params_still_decode() {
         "pane_id": null,
         "parent_agent_id": null,
     });
-    let payload = AgentLifecyclePayload::from_params(&params).expect("decode");
+    let payload: AgentLifecyclePayload = serde_json::from_value(params).expect("decode");
 
     assert_eq!(payload.event_name.as_deref(), Some("Stop"));
     assert_eq!(
@@ -232,7 +241,7 @@ fn agent_lifecycle_params_round_trip_codex_origin() {
         "origin": "fresh",
     });
 
-    let payload = AgentLifecyclePayload::from_params(&params).expect("decode");
+    let payload: AgentLifecyclePayload = serde_json::from_value(params).expect("decode");
 
     assert_eq!(payload.observation.origin, Some(SessionOrigin::Fresh));
     let event = EventEnvelope::agent_lifecycle(
@@ -242,7 +251,7 @@ fn agent_lifecycle_params_round_trip_codex_origin() {
         "SessionStart",
         &payload.observation,
     );
-    assert_eq!(event.params.get("origin"), Some(&json!("fresh")));
+    assert_eq!(params_value(&event).get("origin"), Some(&json!("fresh")));
 }
 
 #[test]
@@ -303,6 +312,7 @@ fn agent_resumed_records_an_audit_event_on_the_other_carrier() {
     let EventKind::Other { method, params } = event.kind() else {
         panic!("agent.resumed rides the Other audit carrier");
     };
+    let params = raw_params_value(params);
     assert_eq!(method, "agent.resumed");
     assert_eq!(params["kind"], "claude");
     assert_eq!(params["agent_id"], "sess-1");
@@ -366,11 +376,7 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
         serde_json::to_vec(&typed).unwrap(),
         serde_json::to_vec(&legacy).unwrap()
     );
-    assert!(
-        !serde_json::to_string(&typed.params)
-            .unwrap()
-            .contains("secret prompt body")
-    );
+    assert!(!typed.params.get().contains("secret prompt body"));
     let EventKind::Message { method, payload } = typed.kind() else {
         panic!("message.queued decodes to its typed kind");
     };
@@ -390,12 +396,9 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
     let event =
         EventEnvelope::message_event(&attributed, "session", MessageEventMethod::Queued, None);
 
-    assert_eq!(event.params["sender"]["kind"], "codex");
-    assert!(
-        !serde_json::to_string(&event.params)
-            .unwrap()
-            .contains("secret prompt body")
-    );
+    let params = params_value(&event);
+    assert_eq!(params["sender"]["kind"], "codex");
+    assert!(!event.params.get().contains("secret prompt body"));
     let EventKind::Message { payload, .. } = event.kind() else {
         panic!("message.queued decodes to its typed kind");
     };
@@ -442,11 +445,11 @@ fn unknown_event_kind_carries_the_raw_method_and_params() {
         panic!("feed.push stays in the open audit-event channel");
     };
     assert_eq!(method, "feed.push");
-    assert_eq!(raw, &params);
+    assert_eq!(raw_params_value(raw), params);
 }
 
 #[test]
-fn lifecycle_kind_tolerates_missing_identity_and_bad_optional_fields() {
+fn lifecycle_kind_tolerates_missing_identity() {
     let event = EventEnvelope::new(
         workspace(),
         "session",
@@ -456,9 +459,6 @@ fn lifecycle_kind_tolerates_missing_identity_and_bad_optional_fields() {
         json!({
             "event_name": "SessionStart",
             "signal": { "signal": "registered" },
-            "agent_pid": "not-a-pid",
-            "context_pct": 300,
-            "pane_id": "not-a-pane",
         }),
     );
 
@@ -468,13 +468,10 @@ fn lifecycle_kind_tolerates_missing_identity_and_bad_optional_fields() {
     let payload = *payload;
     assert_eq!(payload.observation.agent_id, None);
     assert_eq!(payload.observation.signal, LifecycleSignal::Registered);
-    assert_eq!(payload.observation.agent_pid, None);
-    assert_eq!(payload.observation.context_pct, Some(100));
-    assert_eq!(payload.observation.pane_id, None);
 }
 
 #[test]
-fn signal_less_lifecycle_event_decodes_as_other() {
+fn non_conforming_lifecycle_event_decodes_as_other() {
     for params in [
         json!({ "status": "running", "event_name": "UserPromptSubmit" }),
         json!({ "signal": "not-an-object" }),

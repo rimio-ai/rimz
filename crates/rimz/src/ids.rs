@@ -608,7 +608,7 @@ impl std::borrow::Borrow<str> for AgentSessionId {
 ///
 /// Raw pane IDs stay inside backend adapters. This type is what travels in
 /// feed items, env vars, and `rimz pane` CLI calls.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct PaneId(String);
 
@@ -683,6 +683,16 @@ impl FromStr for PaneId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for PaneId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -838,5 +848,12 @@ mod tests {
         assert!(PaneId::parse("no-colon").is_err());
         assert!(PaneId::parse("tmux:").is_err());
         assert!(PaneId::parse("zellij:").is_err());
+    }
+
+    #[test]
+    fn pane_id_deserialize_rejects_unknown_mux_prefix() {
+        let parsed: PaneId = serde_json::from_str(r#""tmux:%5""#).expect("valid pane id");
+        assert_eq!(parsed.raw(), "%5");
+        assert!(serde_json::from_str::<PaneId>(r#""not-a-pane""#).is_err());
     }
 }

@@ -64,7 +64,7 @@ fn pane_send_resolver_abstains_when_item_has_no_pane() {
         .into_iter()
         .filter(|e| e.method == "feed.abstain")
         .filter_map(|e| {
-            e.params
+            e.params_value()
                 .get("reason")
                 .and_then(|v| v.as_str())
                 .map(ToOwned::to_owned)

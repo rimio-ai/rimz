@@ -129,8 +129,9 @@ fn reset_archives_records_and_clears_room_state() {
         .iter()
         .find(|event| event.method == "feed.abandon")
         .expect("feed abandon event");
-    assert_eq!(abandon.params["request_id"], request_id.as_str());
-    assert_eq!(abandon.params["reason"], "workspace_reset");
+    let params = abandon.params_value();
+    assert_eq!(params["request_id"], request_id.as_str());
+    assert_eq!(params["reason"], "workspace_reset");
 
     let projection = env
         .ledger()

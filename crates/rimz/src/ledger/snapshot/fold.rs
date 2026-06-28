@@ -10,7 +10,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::project::{
-    AgentIdentityState, backfill_agent_identities, reduce_agent_states_seeded_with_identity,
+    AgentIdentityState, FoldEvent, backfill_agent_identities, decode_events,
+    reduce_agent_states_seeded_with_identity,
 };
 use super::{Result, SnapshotErr};
 use crate::agents::AgentState;
@@ -56,15 +57,14 @@ pub(crate) fn agent_rollup_with_carryover(
     events: &[EventEnvelope],
     mut carryover_agents: Vec<AgentState>,
 ) -> Vec<AgentState> {
+    let events = decode_events(events);
     let mut carryover_identity =
         backfill_agent_identities(&mut carryover_agents, AgentIdentityState::default());
     // The carryover predates every event in the current log, so a rebirth
     // boundary anywhere in `events` postdates every carryover stamp — clear
     // them here, mirroring the in-order clear the seeded reducer applies to
     // within-log stamps (`reduce_agent_states_seeded`).
-    let has_rebirth = events
-        .iter()
-        .any(|event| matches!(event.kind(), EventKind::SessionRebirth));
+    let has_rebirth = events_have_rebirth(&events);
     if has_rebirth {
         for agent in &mut carryover_agents {
             agent.pane = None;
@@ -73,11 +73,11 @@ pub(crate) fn agent_rollup_with_carryover(
         carryover_identity = carryover_identity.with_ordinals_reset();
     }
     let live =
-        reduce_agent_states_seeded_with_identity(BTreeMap::new(), carryover_identity, events)
+        reduce_agent_states_seeded_with_identity(BTreeMap::new(), carryover_identity, &events)
             .0
             .into_values()
             .collect::<Vec<_>>();
-    let tombstones = agent_tombstones_for_events(events);
+    let tombstones = agent_tombstones_for_decoded_events(&events);
     let mut merged = merge_agent_rollups_with_tombstones(&carryover_agents, &live, &tombstones);
     if has_rebirth {
         backfill_agent_identities(&mut merged, AgentIdentityState::default());
@@ -116,17 +116,26 @@ pub(super) fn merge_agent_rollups_with_tombstones(
 pub fn agent_tombstones_for_events(
     events: &[EventEnvelope],
 ) -> BTreeSet<(AgentKind, AgentSessionId)> {
+    let events = decode_events(events);
+    agent_tombstones_for_decoded_events(&events)
+}
+
+fn agent_tombstones_for_decoded_events(
+    events: &[FoldEvent<'_>],
+) -> BTreeSet<(AgentKind, AgentSessionId)> {
     let mut tombstones = BTreeSet::new();
     for event in events {
-        if let EventKind::AgentLifecycle(payload) = event.kind() {
-            let payload = *payload;
+        if let EventKind::AgentLifecycle(payload) = &event.kind {
             if !matches!(payload.observation.signal, LifecycleSignal::Ended) {
                 continue;
             }
-            let Some(agent_id) = payload.observation.agent_id else {
+            let Some(agent_id) = payload.observation.agent_id.clone() else {
                 continue;
             };
-            tombstones.insert((AgentKind::new_unchecked(event.source.clone()), agent_id));
+            tombstones.insert((
+                AgentKind::new_unchecked(event.envelope.source.clone()),
+                agent_id,
+            ));
         }
     }
     tombstones
@@ -250,10 +259,11 @@ fn catch_up_from(
         ),
     };
     let (delta, end) = event_log::read_from_offset(&paths.events_log, start)?;
-    saw_session_rebirth |= events_have_rebirth(&delta);
+    let decoded_delta = decode_events(&delta);
+    saw_session_rebirth |= events_have_rebirth(&decoded_delta);
     let (map, mut agent_identity) =
-        reduce_agent_states_seeded_with_identity(seed, identity, &delta);
-    tombstones.extend(agent_tombstones_for_events(&delta));
+        reduce_agent_states_seeded_with_identity(seed, identity, &decoded_delta);
+    tombstones.extend(agent_tombstones_for_decoded_events(&decoded_delta));
     let mut raw_agents: Vec<AgentState> = map.into_values().collect();
     if saw_session_rebirth {
         for agent in &mut carryover.agents {
@@ -282,10 +292,10 @@ fn catch_up_from(
     Ok((refreshed, merged))
 }
 
-fn events_have_rebirth(events: &[EventEnvelope]) -> bool {
+fn events_have_rebirth(events: &[FoldEvent<'_>]) -> bool {
     events
         .iter()
-        .any(|event| matches!(event.kind(), EventKind::SessionRebirth))
+        .any(|event| matches!(event.kind, EventKind::SessionRebirth))
 }
 
 /// Reseed `snapshots/rollup.json` for the next log generation. Called by

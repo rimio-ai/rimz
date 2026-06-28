@@ -212,8 +212,9 @@ fn timeout_marks_script_item_and_late_answer_is_audit_only() {
         .iter()
         .find(|event| event.method == "feed.resolve")
         .expect("late resolve event");
-    assert_eq!(resolve.params["effective"], false);
-    assert_eq!(resolve.params["late"], true);
+    let params = resolve.params_value();
+    assert_eq!(params["effective"], false);
+    assert_eq!(params["late"], true);
 }
 
 #[test]
@@ -292,11 +293,9 @@ fn abstain_advances_chain_and_records_audit_event() {
         .iter()
         .find(|e| e.method == "feed.abstain")
         .expect("abstain event");
-    assert_eq!(abstain.params["resolver_id"].as_str(), Some("opus-policy"));
-    assert_eq!(
-        abstain.params["next_resolver"].as_str(),
-        Some("slack-on-call")
-    );
+    let params = abstain.params_value();
+    assert_eq!(params["resolver_id"].as_str(), Some("opus-policy"));
+    assert_eq!(params["next_resolver"].as_str(), Some("slack-on-call"));
 }
 
 #[test]
@@ -427,7 +426,8 @@ fn expiry_scopes_agent_session_end_and_moved_on_native_ui() {
             .all(|reason| {
                 events.iter().any(|event| {
                     event.method == "feed.expire"
-                        && event.params.get("reason").and_then(|v| v.as_str()) == Some(*reason)
+                        && event.params_value().get("reason").and_then(|v| v.as_str())
+                            == Some(*reason)
                 })
             }),
         "both expiry reasons are audited",
@@ -587,5 +587,5 @@ fn concurrent_abstain_and_resolve_leave_exactly_one_terminal_outcome() {
         .filter(|event| event.method == "feed.resolve")
         .collect();
     assert_eq!(resolves.len(), 1, "exactly one resolve event");
-    assert_eq!(resolves[0].params["effective"], true);
+    assert_eq!(resolves[0].params_value()["effective"], true);
 }

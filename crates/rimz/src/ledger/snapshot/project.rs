@@ -45,9 +45,29 @@ fn canonical_model(model: &str) -> String {
 /// running without erasing its model line.
 #[cfg(test)]
 pub(super) fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
-    reduce_agent_states_seeded_with_identity(BTreeMap::new(), AgentIdentityState::default(), events)
-        .0
-        .into_values()
+    let events = decode_events(events);
+    reduce_agent_states_seeded_with_identity(
+        BTreeMap::new(),
+        AgentIdentityState::default(),
+        &events,
+    )
+    .0
+    .into_values()
+    .collect()
+}
+
+pub(super) struct FoldEvent<'a> {
+    pub(super) envelope: &'a EventEnvelope,
+    pub(super) kind: EventKind<'a>,
+}
+
+pub(super) fn decode_events(events: &[EventEnvelope]) -> Vec<FoldEvent<'_>> {
+    events
+        .iter()
+        .map(|envelope| FoldEvent {
+            envelope,
+            kind: envelope.kind(),
+        })
         .collect()
 }
 
@@ -117,13 +137,14 @@ pub(super) fn reduce_agent_states_seeded(
     seed: BTreeMap<(AgentKind, AgentSessionId), AgentState>,
     events: &[EventEnvelope],
 ) -> BTreeMap<(AgentKind, AgentSessionId), AgentState> {
-    reduce_agent_states_seeded_with_identity(seed, AgentIdentityState::default(), events).0
+    let events = decode_events(events);
+    reduce_agent_states_seeded_with_identity(seed, AgentIdentityState::default(), &events).0
 }
 
 pub(super) fn reduce_agent_states_seeded_with_identity(
     seed: BTreeMap<(AgentKind, AgentSessionId), AgentState>,
     identity_state: AgentIdentityState,
-    events: &[EventEnvelope],
+    events: &[FoldEvent<'_>],
 ) -> (
     BTreeMap<(AgentKind, AgentSessionId), AgentState>,
     AgentIdentityState,
@@ -131,6 +152,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
     let mut map = seed;
     let mut identity = CardIdentityAllocator::from_map_and_state(&map, identity_state);
     for event in events {
+        let envelope = event.envelope;
         // A mux rebirth renumbers panes from zero, so every stamp recorded
         // before the boundary names a pane that no longer exists — and the
         // reborn session reuses those ids for new panes. Clear them all here,
@@ -138,7 +160,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
         // block recovery of) a reused pane id; a stamp recorded by a later
         // event is the new incarnation's and stays. Sessions themselves are
         // kept — the boundary unstamps, it never tombstones.
-        let payload = match event.kind() {
+        let payload = match &event.kind {
             EventKind::SessionRebirth => {
                 for state in map.values_mut() {
                     state.pane = None;
@@ -148,11 +170,11 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                 continue;
             }
             EventKind::AgentLaunch(payload) => {
-                let kind = AgentKind::new_unchecked(event.source.clone());
-                reduce_agent_launch(&mut map, &mut identity, event, &kind, payload);
+                let kind = AgentKind::new_unchecked(envelope.source.clone());
+                reduce_agent_launch(&mut map, &mut identity, envelope, &kind, payload);
                 continue;
             }
-            EventKind::AgentLifecycle(payload) => *payload,
+            EventKind::AgentLifecycle(payload) => payload,
             EventKind::Message { .. } => continue,
             EventKind::Other {
                 method: "agent.lifecycle",
@@ -160,20 +182,20 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
             } => {
                 debug!(
                     target: "rimz::agent::lifecycle",
-                    event_id = %event.event_id,
+                    event_id = %envelope.event_id,
                     "non-conforming agent.lifecycle event ignored",
                 );
                 continue;
             }
             EventKind::Other { .. } => continue,
         };
-        let kind = AgentKind::new_unchecked(event.source.clone());
+        let kind = AgentKind::new_unchecked(envelope.source.clone());
         // The agent-agnostic lifecycle intent this event carries. The status
         // and the phase/compacting heads are all derived from it through the
         // one shared `lifecycle::step` table — never taken verbatim — so an
         // illegal jump can't slip through unvalidated. Replay is silent here;
         // the ingestion path logs anomalies once per fresh event.
-        let observation = payload.observation;
+        let observation = &payload.observation;
         let signal = observation.signal;
         // Identity is required: a session-less event is quarantined (folded
         // to nothing), mirroring the malformed-subagent-identity rule —
@@ -184,8 +206,8 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
         let Some(agent_id) = observation.agent_id.clone() else {
             debug!(
                 target: "rimz::agent::lifecycle",
-                event_id = %event.event_id,
-                workspace = %event.workspace_id,
+                event_id = %envelope.event_id,
+                workspace = %envelope.workspace_id,
                 kind = %kind,
                 "session-less agent.lifecycle event quarantined",
             );
@@ -229,12 +251,12 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
         {
             debug!(
                 target: "rimz::agent::lifecycle",
-                event_id = %event.event_id,
-                workspace = %event.workspace_id,
-                session = %event.session_name,
+                event_id = %envelope.event_id,
+                workspace = %envelope.workspace_id,
+                session = %envelope.session_name,
                 kind = %kind,
-                source_kind = %event.source_kind,
-                timestamp = %event.timestamp,
+                source_kind = %envelope.source_kind,
+                timestamp = %envelope.timestamp,
                 event_name = event_name.unwrap_or(""),
                 parent = event_parent_agent_id.as_deref().unwrap_or(""),
                 child = %agent_id,
@@ -253,13 +275,13 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                 "non-start lifecycle event created an unseen session in the reducer",
             );
         }
-        let card_identity = identity.assign(&kind, &agent_id, &observation, prior);
+        let card_identity = identity.assign(&kind, &agent_id, observation, prior);
         let state = assemble_agent_state(AgentStateInput {
             kind: &kind,
             agent_id: &agent_id,
-            event,
+            event: envelope,
             event_name,
-            observation: &observation,
+            observation,
             signal,
             prior,
             event_parent_agent_id,
@@ -283,7 +305,7 @@ fn reduce_agent_launch(
     identity: &mut CardIdentityAllocator,
     event: &EventEnvelope,
     kind: &AgentKind,
-    payload: AgentLaunchPayload,
+    payload: &AgentLaunchPayload,
 ) {
     if !usable_name(&payload.agent_name) {
         debug!(
@@ -322,7 +344,7 @@ fn reduce_agent_launch(
         identity.release_key(&owner);
     }
     let prior = map.get(&key);
-    let card_identity = identity.assign_launch(kind, &payload.agent_id, &payload, prior);
+    let card_identity = identity.assign_launch(kind, &payload.agent_id, payload, prior);
     let state = assemble_launch_state(kind, event, payload, prior, card_identity);
     map.insert(key, state);
 }
@@ -715,7 +737,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
 fn assemble_launch_state(
     kind: &AgentKind,
     event: &EventEnvelope,
-    payload: AgentLaunchPayload,
+    payload: &AgentLaunchPayload,
     prior: Option<&AgentState>,
     card_identity: CardIdentity,
 ) -> AgentState {
@@ -757,7 +779,7 @@ fn assemble_launch_state(
         }
     };
     AgentState {
-        agent_id: payload.agent_id,
+        agent_id: payload.agent_id.clone(),
         kind: kind.clone(),
         name: Some(card_identity.name),
         kind_ordinal: Some(card_identity.kind_ordinal),
@@ -786,9 +808,11 @@ fn assemble_launch_state(
         parent_agent_id: None,
         worktree_path: payload
             .worktree_path
+            .clone()
             .or_else(|| prior.and_then(|state| state.worktree_path.clone())),
         worktree_branch: payload
             .worktree_branch
+            .clone()
             .or_else(|| prior.and_then(|state| state.worktree_branch.clone())),
         task: prompt.clone(),
         prompt,

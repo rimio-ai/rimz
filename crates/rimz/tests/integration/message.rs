@@ -731,11 +731,12 @@ fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
         .into_iter()
         .find(|event| event.method == "message.sent")
         .expect("sent event");
-    assert_eq!(sent.params["sender"]["origin"], "agent");
-    assert_eq!(sent.params["sender"]["kind"], "codex");
-    assert_eq!(sent.params["sender"]["name"], "swift-otter");
-    assert_eq!(sent.params["text_len"], "ping".len());
-    assert_eq!(sent.params["status"], "sent");
+    let params = sent.params_value();
+    assert_eq!(params["sender"]["origin"], "agent");
+    assert_eq!(params["sender"]["kind"], "codex");
+    assert_eq!(params["sender"]["name"], "swift-otter");
+    assert_eq!(params["text_len"], "ping".len());
+    assert_eq!(params["status"], "sent");
 
     let trace_log = env.project_root.join("zellij-from-steer-no-from-trace.log");
     let out = env
@@ -1035,9 +1036,10 @@ fn queue_send_now_prefixes_sender_and_no_from_suppresses_it() {
         .into_iter()
         .find(|event| event.method == "message.sent")
         .expect("sent event");
-    assert_eq!(sent.params["sender"]["origin"], "agent");
-    assert_eq!(sent.params["sender"]["kind"], "codex");
-    assert_eq!(sent.params["sender"]["name"], "swift-otter");
+    let params = sent.params_value();
+    assert_eq!(params["sender"]["origin"], "agent");
+    assert_eq!(params["sender"]["kind"], "codex");
+    assert_eq!(params["sender"]["name"], "swift-otter");
 
     let trace_log = env.project_root.join("zellij-from-queue-no-from-trace.log");
     let out = env

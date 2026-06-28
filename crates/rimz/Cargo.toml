@@ -125,6 +125,7 @@ sentry-tracing = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 flate2.workspace = true
+foldhash.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true
 shlex.workspace = true

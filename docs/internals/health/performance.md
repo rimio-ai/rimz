@@ -57,7 +57,7 @@ Where the milliseconds are, and what bounds each. Reproducible figures come from
 | jump (focus the bound pane) | one mux-client fork, tens–hundreds ms | off the render thread (detached); in-process focus, no `rimz pane focus` child, no per-click `list-panes` re-validation; fire-and-forget |
 | durable file write | temp + 2 fsyncs (file, parent dir) | cold paths only — trust grants, workspace identity, hook installs, rotation carryover; nothing a hook or the UI waits on pays it |
 | disposable cache write | temp + atomic rename, 0 fsync | `write_temp_then_rename_cache` |
-| frame redraw | sub-millisecond, in-process; 40-agent fixed render median 503µs and ~892KB alloc/op | fixed `[theme.display] refresh_ms` grid for dirty folds and watched fast motion; off-screen animation relaxes to the backstop while data folds still paint; the attention/result blink and the smooth resting breathe on the breath cadence; never forks a fetch; perf guard `compose_budget` and `cargo xtask perf hotpath` |
+| frame redraw | sub-millisecond, in-process; 40-agent fixed render median 422µs and ~947KB alloc/op | fixed `[theme.display] refresh_ms` grid for dirty folds and watched fast motion; off-screen animation relaxes to the backstop while data folds still paint; the attention/result blink and the smooth resting breathe on the breath cadence; never forks a fetch; perf guard `compose_budget` and `cargo xtask perf hotpath` |
 | transition effects pass | µs-scale, O(affected cells) | a color-only post-pass inside the same draw, gated by `Theme::effects_enabled`; targets resolve from the hit-test `line_map`, so cost scales with live transition targets, never screen size |
 | fleet spending walk (producer cache refresher) | within `SPENDING_TTL`: one read of persistent shared `$XDG_STATE_HOME/rimz/shared/provider-spending.json`, zero transcript IO; lock-loser within `SPENDING_STALE_GRACE`: serve the last current-version published cache; due walk over unchanged files: one stat per file plus one in-memory window pass over memoized deduped entries, no dedup or rewrite; changed files: O(appended bytes) parse plus one dedup; cold changed sets parse in a bounded worker pool and skip new files whose mtime predates the widest spend window plus skew margin; local fallback: read the disk cursor cache, then the same history-independent stat/suffix path without persisting | the persistent shared cache stamp gates the whole walk, single-flighted across rooms by runtime `spending.lock`; long-lived `SpendingWalker`s in `cache_refresh` and `stats --refresh` hold the parsed cache and memo the deduped set by cache generation and discovered-file signature; trailing and headline windows re-evaluate every walk for the current `now_secs`, so spend figures stay exact; the incremental `$XDG_STATE_HOME/rimz/shared/spending.json` `(mtime, len, cursor)` parse stays warm across reboot and local fallback, compacts raw rows older than 14 days into per-day rollups, checkpoints dirty cursor progress and publishes partial aggregate rollups on `WALK_CHECKPOINT_INTERVAL`, then writes the final compact cursor when dirty and the final aggregate when publishing ([provider.md → Cost history](../agents/provider.md#cost-history), guards `spending_walk_io_is_history_independent`, `spending_walk_local_seeds_from_disk`, `spending_walk_persists_cursor_before_aggregate`, `spending_walk_warm_skips_parse_dedup_and_write`, and `spending_walk_warm_keeps_trailing_windows_fresh`) |
 | Codex local transcript context refresh | steady-state: one stat on the prior rollout path; changed file: one bounded 64 KiB tail parse, no app-server subprocess | three stat-gated triggers — hook, the elder's transcript watcher, and the producer backstop ([state.md → Push Channels](../sidebar/state.md#push-channels)); app-server fields stay detached and throttled |
@@ -73,18 +73,18 @@ Where the milliseconds are, and what bounds each. Reproducible figures come from
 
 The deterministic CI gates own exact integer budgets. `ledger_fsync.rs` pins the warm write path's fsync count, `ledger_bytes.rs` pins a lifecycle frame below 1KiB, `produce_budget.rs` pins zero subprocess spawns for warm produce with fresh inputs, and the incremental fold guards pin O(new bytes). The benches own wall-clock and allocation figures, which stay out of `ci` so a busy runner never fails a build on timing.
 
-Current local baseline from `cargo xtask perf` on June 27, 2026:
+Current local baseline from `cargo xtask perf` on June 28, 2026:
 
 | Bench | Median | Alloc/op |
 | --- | ---: | ---: |
-| `fleet::produce_cold` 20 / 50 / 100 agents | 6.05ms / 10.97ms / 19.96ms | 7.88MB / 17.46MB / 33.81MB |
-| `fleet::produce_warm` 20 / 50 / 100 agents | 633µs / 892µs / 1.40ms | 1.51MB / 2.07MB / 2.95MB |
-| `hotpath::fuse` 40 agents | 115µs | 79.0KB |
-| `hotpath::rollup_fold_warm` 40 agents | 146µs | 632.3KB |
-| `hotpath::enrich_cached` 40 agents | 600µs | 1.18MB |
-| `hotpath::render_fixed` 40 agents | 548µs | 947.1KB |
-| `hotpath::spending_walk_cold` 20k retained entries | 27.51ms | 33.6MB |
-| `hotpath::spending_walk_warm_no_change` 20k retained entries | 12.20ms | 8.99MB |
+| `fleet::produce_cold` 20 / 50 / 100 agents | 2.54ms / 4.92ms / 9.27ms | 4.00MB / 8.12MB / 15.16MB |
+| `fleet::produce_warm` 20 / 50 / 100 agents | 832µs / 735µs / 1.16ms | 1.53MB / 2.10MB / 3.02MB |
+| `hotpath::fuse` 40 agents | 77µs | 79.4KB |
+| `hotpath::rollup_fold_warm` 40 agents | 105µs | 631.3KB |
+| `hotpath::enrich_cached` 40 agents | 476µs | 1.19MB |
+| `hotpath::render_fixed` 40 agents | 422µs | 947.1KB |
+| `hotpath::spending_walk_cold` 20k retained entries | 21.29ms | 32.66MB |
+| `hotpath::spending_walk_warm_no_change` 20k retained entries | 8.29ms | 8.06MB |
 
 Process-level RAM and CPU stay a manual profiling recipe because they are OS- and workload-shaped. Record CPU flamegraphs with `samply record -- cargo xtask perf`, measure peak RSS with `/usr/bin/time -v cargo xtask perf`, and use `dhat` or the platform allocator profiler when an allocation regression needs ownership. Run the same commands against `rimz sidebar snapshot --json` over a synthetic seeded workspace when the question is process shape rather than microbench shape.
 

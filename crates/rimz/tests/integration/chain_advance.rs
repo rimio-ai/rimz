@@ -24,7 +24,7 @@ fn chain_elapse_reasons(env: &Env) -> Vec<String> {
         .into_iter()
         .filter(|e| e.method == "feed.chain_elapse")
         .filter_map(|e| {
-            e.params
+            e.params_value()
                 .get("reason")
                 .and_then(|v| v.as_str())
                 .map(ToOwned::to_owned)
@@ -230,7 +230,7 @@ fn chain_exhausted_falls_back_to_neutral() {
         .into_iter()
         .filter(|e| e.method == "feed.timeout")
         .filter_map(|e| {
-            e.params
+            e.params_value()
                 .get("reason")
                 .and_then(|v| v.as_str())
                 .map(ToOwned::to_owned)

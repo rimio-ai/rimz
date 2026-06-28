@@ -42,6 +42,8 @@ use super::pricing::PriceBook;
 use super::{AgentAdapter, AgentCost};
 pub use crate::sidebar::timing::SPENDING_TTL;
 
+type FastHashMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>;
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// Spend (USD) and token throughput accumulated over one time window. `tokens`
@@ -856,12 +858,9 @@ pub fn compute_spending_with_origins_and_scope(
     // suppressed.  ID-free entries (Codex, Pi) carry their file's provider so
     // they bucket under the right kind.
     let counted = dedup_cached_entries(files, cache).into_counted();
-    let spending = aggregate_spending(files, cache, &counted, now_secs, spec);
-    let workspace = scope
-        .map(|scope| aggregate_scoped_tally(files, cache, &counted, scope, now_secs, spec))
-        .unwrap_or_default();
+    let aggregate = aggregate_counted_rollups(files, cache, &counted, scope, now_secs, spec, false);
 
-    (spending, workspace)
+    (aggregate.spending, aggregate.workspace_tally)
 }
 
 pub(crate) fn aggregate_walk_publish(
@@ -892,18 +891,13 @@ fn aggregate_walk_publish_from_counted<C: CountedPayload>(
     spec: &HeadlineSpec,
     stats: WalkStats,
 ) -> SpendingWalkResult {
-    let spending = aggregate_spending(files, cache, counted, now_secs, spec);
-    let workspace_tally = scope
-        .map(|scope| aggregate_scoped_tally(files, cache, counted, scope, now_secs, spec))
-        .unwrap_or_default();
-    let days = compute_daily_spend_from_counted(counted);
-    let models = compute_model_breakdown_from_counted(counted, now_secs);
+    let aggregate = aggregate_counted_rollups(files, cache, counted, scope, now_secs, spec, true);
 
     SpendingWalkResult {
-        spending,
-        workspace_tally,
-        days,
-        models,
+        spending: aggregate.spending,
+        workspace_tally: aggregate.workspace_tally,
+        days: aggregate.days,
+        models: aggregate.models,
         stats,
     }
 }
@@ -1121,6 +1115,92 @@ fn fold_spending_parse_job(
     );
 }
 
+struct CountedRollups {
+    spending: Spending,
+    workspace_tally: SpendTally,
+    days: BTreeMap<i64, DaySpend>,
+    models: BTreeMap<String, SpendTally>,
+}
+
+fn aggregate_counted_rollups(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    counted: &[impl CountedPayload],
+    scope: Option<&SpendScope>,
+    now_secs: u64,
+    spec: &HeadlineSpec,
+    include_history_rollups: bool,
+) -> CountedRollups {
+    let scope = scope.filter(|scope| !scope.is_empty());
+    let cutoffs = CountedCutoffs::from_counted(counted, scope, now_secs, spec);
+    let mut spending = Spending::default();
+    let mut workspace_tally = SpendTally::default();
+    let mut days = BTreeMap::<i64, DaySpend>::new();
+    let mut models = BTreeMap::<&str, SpendTally>::new();
+
+    for counted in counted {
+        let provider = counted.kind();
+        let entry = counted.entry();
+        accum(&mut spending.total, entry, now_secs, cutoffs.total);
+        accum(
+            spending.by_provider.entry(provider.to_owned()).or_default(),
+            entry,
+            now_secs,
+            cutoffs.provider(provider),
+        );
+        if let Some(scope) = scope
+            && counted
+                .origin()
+                .is_some_and(|origin| scope.contains(origin))
+        {
+            accum(&mut workspace_tally, entry, now_secs, cutoffs.scoped());
+        }
+
+        if include_history_rollups {
+            let day = (entry.ts_secs / 86_400) as i64;
+            let cell = days.entry(day).or_default();
+            cell.usd += entry.cost_usd;
+            cell.tokens += entry.input + entry.cache_write + entry.output + entry.cache_read;
+
+            accum(
+                models
+                    .entry(entry.model.as_deref().unwrap_or_default())
+                    .or_default(),
+                entry,
+                now_secs,
+                u64::MAX,
+            );
+        }
+    }
+
+    add_spending_sessions(&mut spending, files, cache, now_secs, &cutoffs);
+    if let Some(scope) = scope {
+        add_scoped_sessions(
+            &mut workspace_tally,
+            files,
+            cache,
+            scope,
+            now_secs,
+            cutoffs.scoped(),
+        );
+    }
+
+    CountedRollups {
+        spending,
+        workspace_tally,
+        days,
+        models: if include_history_rollups {
+            models
+                .into_iter()
+                .map(|(model, tally)| (model.to_owned(), tally))
+                .collect()
+        } else {
+            BTreeMap::new()
+        },
+    }
+}
+
+#[cfg(test)]
 fn aggregate_spending(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
@@ -1128,61 +1208,97 @@ fn aggregate_spending(
     now_secs: u64,
     spec: &HeadlineSpec,
 ) -> Spending {
-    let mut spending = Spending::default();
-    let uniform = uniform_headline_cutoff(spec, now_secs);
-    let all_timestamps: Vec<u64> = counted
-        .iter()
-        .map(|counted| counted.entry().ts_secs)
-        .collect();
-    let total_cutoff =
-        uniform.unwrap_or_else(|| session_cutoff_secs(all_timestamps.as_slice(), now_secs));
-    let provider_cutoffs = if uniform.is_none() {
-        let mut timestamps: HashMap<&'static str, Vec<u64>> = HashMap::new();
+    aggregate_counted_rollups(files, cache, counted, None, now_secs, spec, false).spending
+}
+
+struct CountedCutoffs {
+    uniform: Option<u64>,
+    total: u64,
+    provider: HashMap<&'static str, u64>,
+    scoped: Option<u64>,
+    empty_session_cutoff: u64,
+}
+
+impl CountedCutoffs {
+    fn from_counted(
+        counted: &[impl CountedPayload],
+        scope: Option<&SpendScope>,
+        now_secs: u64,
+        spec: &HeadlineSpec,
+    ) -> Self {
+        let uniform = uniform_headline_cutoff(spec, now_secs);
+        let empty_session_cutoff = session_cutoff_secs(&[], now_secs);
+        if let Some(cutoff) = uniform {
+            return Self {
+                uniform,
+                total: cutoff,
+                provider: HashMap::new(),
+                scoped: scope.map(|_| cutoff),
+                empty_session_cutoff,
+            };
+        }
+
+        let mut total_timestamps = Vec::new();
+        let mut provider_timestamps: HashMap<&'static str, Vec<u64>> = HashMap::new();
+        let mut scoped_timestamps = Vec::new();
         for counted in counted {
-            timestamps
+            let ts_secs = counted.entry().ts_secs;
+            total_timestamps.push(ts_secs);
+            provider_timestamps
                 .entry(counted.kind())
                 .or_default()
-                .push(counted.entry().ts_secs);
+                .push(ts_secs);
+            if let Some(scope) = scope
+                && counted
+                    .origin()
+                    .is_some_and(|origin| scope.contains(origin))
+            {
+                scoped_timestamps.push(ts_secs);
+            }
         }
-        timestamps
-            .into_iter()
-            .map(|(provider, timestamps)| {
-                (
-                    provider,
-                    session_cutoff_secs(timestamps.as_slice(), now_secs),
-                )
-            })
-            .collect::<HashMap<_, _>>()
-    } else {
-        HashMap::new()
-    };
-    let cutoff_for = |provider: &'static str| {
-        uniform
-            .or_else(|| provider_cutoffs.get(provider).copied())
-            .unwrap_or_else(|| session_cutoff_secs(&[], now_secs))
-    };
 
-    let mut add = |provider: &'static str, entry: &CachedEntry| {
-        accum(&mut spending.total, entry, now_secs, total_cutoff);
-        accum(
-            spending.by_provider.entry(provider.to_owned()).or_default(),
-            entry,
-            now_secs,
-            cutoff_for(provider),
-        );
-    };
-
-    for counted in counted {
-        add(counted.kind(), counted.entry());
+        Self {
+            uniform: None,
+            total: session_cutoff_secs(total_timestamps.as_slice(), now_secs),
+            provider: provider_timestamps
+                .into_iter()
+                .map(|(provider, timestamps)| {
+                    (
+                        provider,
+                        session_cutoff_secs(timestamps.as_slice(), now_secs),
+                    )
+                })
+                .collect(),
+            scoped: scope.map(|_| session_cutoff_secs(scoped_timestamps.as_slice(), now_secs)),
+            empty_session_cutoff,
+        }
     }
 
-    // Session counts, keyed by provider-native thread id when one is available
-    // and by transcript file grouping otherwise. A Claude session's subagent
-    // files fold under its `session_id` directory so one thread counts once.
-    // Each thread is single-provider; we track its youngest entry and bump every
-    // window that youngest reading still falls within. Counted from the raw
-    // cached entries (not the deduped set) since a thread that ran is a thread,
-    // regardless of which file a duplicated turn was kept in.
+    fn provider(&self, provider: &'static str) -> u64 {
+        self.uniform
+            .or_else(|| self.provider.get(provider).copied())
+            .unwrap_or(self.empty_session_cutoff)
+    }
+
+    fn scoped(&self) -> u64 {
+        self.scoped.unwrap_or(self.empty_session_cutoff)
+    }
+}
+
+/// Session counts, keyed by provider-native thread id when one is available
+/// and by transcript file grouping otherwise. A Claude session's subagent
+/// files fold under its `session_id` directory so one thread counts once.
+/// Each thread is single-provider; we track its youngest entry and bump every
+/// window that youngest reading still falls within. Counted from the raw
+/// cached entries (not the deduped set) since a thread that ran is a thread,
+/// regardless of which file a duplicated turn was kept in.
+fn add_spending_sessions(
+    spending: &mut Spending,
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    now_secs: u64,
+    cutoffs: &CountedCutoffs,
+) {
     let mut threads: HashMap<String, (&'static str, u64)> = HashMap::new();
     for (adapter, file) in files {
         let cache_key = file.to_string_lossy().into_owned();
@@ -1197,7 +1313,7 @@ fn aggregate_spending(
         }
     }
     for (provider, youngest) in threads.values() {
-        bump_sessions(&mut spending.total, *youngest, now_secs, total_cutoff);
+        bump_sessions(&mut spending.total, *youngest, now_secs, cutoffs.total);
         bump_sessions(
             spending
                 .by_provider
@@ -1205,11 +1321,42 @@ fn aggregate_spending(
                 .or_default(),
             *youngest,
             now_secs,
-            cutoff_for(provider),
+            cutoffs.provider(provider),
         );
     }
+}
 
-    spending
+fn add_scoped_sessions(
+    tally: &mut SpendTally,
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    scope: &SpendScope,
+    now_secs: u64,
+    headline_cutoff: u64,
+) {
+    let mut threads: HashMap<String, u64> = HashMap::new();
+    for (adapter, file) in files {
+        let cache_key = file.to_string_lossy().into_owned();
+        let Some(cached_file) = cache.files.get(&cache_key) else {
+            continue;
+        };
+        if !cached_file
+            .origin_path
+            .as_deref()
+            .is_some_and(|origin| scope.contains(origin))
+        {
+            continue;
+        }
+        for entry in &cached_file.entries {
+            threads
+                .entry(session_key(*adapter, file, entry))
+                .and_modify(|ts| *ts = (*ts).max(entry.ts_secs))
+                .or_insert(entry.ts_secs);
+        }
+    }
+    for youngest in threads.values() {
+        bump_sessions(tally, *youngest, now_secs, headline_cutoff);
+    }
 }
 
 /// The roots that define one cockpit scope: the project root plus grouped
@@ -1287,62 +1434,8 @@ pub fn compute_scoped_tally(
     }
     let deduped = dedup_cached_entries(files, cache);
     let counted = deduped.into_counted();
-    aggregate_scoped_tally(files, cache, &counted, scope, now_secs, spec)
-}
-
-fn aggregate_scoped_tally(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
-    cache: &SpendingDiskCache,
-    counted: &[impl CountedPayload],
-    scope: &SpendScope,
-    now_secs: u64,
-    spec: &HeadlineSpec,
-) -> SpendTally {
-    let mut tally = SpendTally::default();
-    let counted = counted
-        .iter()
-        .filter(|counted| {
-            counted
-                .origin()
-                .is_some_and(|origin| scope.contains(origin))
-        })
-        .collect::<Vec<_>>();
-    let timestamps: Vec<u64> = counted
-        .iter()
-        .map(|counted| counted.entry().ts_secs)
-        .collect();
-    let headline_cutoff = uniform_headline_cutoff(spec, now_secs)
-        .unwrap_or_else(|| session_cutoff_secs(timestamps.as_slice(), now_secs));
-
-    for counted in counted {
-        accum(&mut tally, counted.entry(), now_secs, headline_cutoff);
-    }
-
-    let mut threads: HashMap<String, u64> = HashMap::new();
-    for (adapter, file) in files {
-        let cache_key = file.to_string_lossy().into_owned();
-        let Some(cached_file) = cache.files.get(&cache_key) else {
-            continue;
-        };
-        if !cached_file
-            .origin_path
-            .as_deref()
-            .is_some_and(|origin| scope.contains(origin))
-        {
-            continue;
-        }
-        for entry in &cached_file.entries {
-            threads
-                .entry(session_key(*adapter, file, entry))
-                .and_modify(|ts| *ts = (*ts).max(entry.ts_secs))
-                .or_insert(entry.ts_secs);
-        }
-    }
-    for youngest in threads.values() {
-        bump_sessions(&mut tally, *youngest, now_secs, headline_cutoff);
-    }
-
-    tally
+    aggregate_counted_rollups(files, cache, &counted, Some(scope), now_secs, spec, false)
+        .workspace_tally
 }
 
 fn stamp_file_origin(entry: &mut FileCacheEntry, origin: &Path) -> bool {
@@ -1600,16 +1693,16 @@ trait CountedPayload: DedupPayload {
 }
 
 struct SidechainDedup<P> {
-    by_exact_key: HashMap<(String, Option<String>), P>,
-    msg_has_non_sidechain: HashMap<String, bool>,
+    by_exact_key: FastHashMap<(String, Option<String>), P>,
+    msg_has_non_sidechain: FastHashMap<String, bool>,
     free: Vec<P>,
 }
 
 impl<P> Default for SidechainDedup<P> {
     fn default() -> Self {
         Self {
-            by_exact_key: HashMap::new(),
-            msg_has_non_sidechain: HashMap::new(),
+            by_exact_key: FastHashMap::default(),
+            msg_has_non_sidechain: FastHashMap::default(),
             free: Vec::new(),
         }
     }
@@ -1760,7 +1853,7 @@ fn dedup_cached_entries_owned(
 
 fn dedup_chunk(entries: &mut Vec<CachedEntry>) {
     let mut deduped = Vec::with_capacity(entries.len());
-    let mut by_exact_key = HashMap::<(String, Option<String>), usize>::new();
+    let mut by_exact_key = FastHashMap::<(String, Option<String>), usize>::default();
     for entry in entries.drain(..) {
         let Some(msg_id) = entry.message_id.clone() else {
             deduped.push(entry);

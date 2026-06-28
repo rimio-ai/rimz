@@ -1,8 +1,8 @@
 //! Event envelope appended to `events.log.jsonl`.
 
 use jiff::Timestamp;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::value::{RawValue, to_raw_value};
 use serde_json::{Value, json};
 
 use crate::agents::AgentLifecycleObservation;
@@ -14,7 +14,7 @@ use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender, Me
 use crate::pane::RuntimeOwner;
 use crate::schema::EVENT_SCHEMA_VERSION;
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentLifecyclePayload {
     #[serde(default)]
     pub event_name: Option<String>,
@@ -167,51 +167,9 @@ impl AgentLifecyclePayload {
             observation: observation.clone(),
         }
     }
-
-    pub fn from_params(params: &Value) -> Option<Self> {
-        let signal = params
-            .get("signal")
-            .and_then(|value| serde_json::from_value(value.clone()).ok())?;
-        Some(Self {
-            event_name: optional_string(params, "event_name"),
-            observation: AgentLifecycleObservation {
-                agent_id: optional_string(params, "agent_id").map(AgentSessionId::from),
-                agent_name: optional_string(params, "agent_name"),
-                role: optional_string(params, "role"),
-                team: optional_string(params, "team"),
-                channel: optional_string(params, "channel"),
-                profile: optional_string(params, "profile"),
-                kind_ordinal: optional_u64(params, "kind_ordinal").map(clamp_u32),
-                signal,
-                agent_pid: optional_deserialize(params, "agent_pid"),
-                agent_process_start: optional_string(params, "agent_process_start"),
-                runtime_owner: optional_deserialize::<RuntimeOwner>(params, "runtime_owner"),
-                worktree_path: optional_string(params, "worktree_path"),
-                worktree_branch: optional_string(params, "worktree_branch"),
-                task: optional_string(params, "task"),
-                prompt: optional_string(params, "prompt"),
-                transcript_path: optional_string(params, "transcript_path"),
-                origin: optional_deserialize(params, "origin"),
-                model: optional_string(params, "model"),
-                effort: optional_string(params, "effort"),
-                context_pct: optional_u64(params, "context_pct").map(|v| v.min(100) as u8),
-                context_window: optional_u64(params, "context_window"),
-                total_tokens: optional_u64(params, "total_tokens"),
-                turn_error: None,
-                cache_read_input_tokens: optional_u64(params, "cache_read_input_tokens"),
-                cache_write_input_tokens: optional_u64(params, "cache_write_input_tokens"),
-                fresh_input_tokens: optional_u64(params, "fresh_input_tokens"),
-                output_tokens: optional_u64(params, "output_tokens"),
-                pane_id: optional_string(params, "pane_id")
-                    .and_then(|raw| PaneId::parse(&raw).ok()),
-                parent_agent_id: optional_string(params, "parent_agent_id")
-                    .map(AgentSessionId::from),
-            },
-        })
-    }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum EventKind<'a> {
     AgentLifecycle(Box<AgentLifecyclePayload>),
     AgentLaunch(AgentLaunchPayload),
@@ -225,11 +183,42 @@ pub enum EventKind<'a> {
     /// methods from older or newer binaries.
     Other {
         method: &'a str,
-        params: &'a Value,
+        params: &'a RawValue,
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+impl PartialEq for EventKind<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::AgentLifecycle(left), Self::AgentLifecycle(right)) => left == right,
+            (Self::AgentLaunch(left), Self::AgentLaunch(right)) => left == right,
+            (
+                Self::Message {
+                    method: left_method,
+                    payload: left_payload,
+                },
+                Self::Message {
+                    method: right_method,
+                    payload: right_payload,
+                },
+            ) => left_method == right_method && left_payload == right_payload,
+            (Self::SessionRebirth, Self::SessionRebirth) => true,
+            (
+                Self::Other {
+                    method: left_method,
+                    params: left_params,
+                },
+                Self::Other {
+                    method: right_method,
+                    params: right_params,
+                },
+            ) => left_method == right_method && left_params.get() == right_params.get(),
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EventEnvelope {
     pub schema_version: String,
     pub event_id: EventId,
@@ -240,7 +229,22 @@ pub struct EventEnvelope {
     pub source_kind: String,
     pub method: String,
     pub timestamp: Timestamp,
-    pub params: Value,
+    pub params: Box<RawValue>,
+}
+
+impl PartialEq for EventEnvelope {
+    fn eq(&self, other: &Self) -> bool {
+        self.schema_version == other.schema_version
+            && self.event_id == other.event_id
+            && self.workspace_id == other.workspace_id
+            && self.session_name == other.session_name
+            && self.mux == other.mux
+            && self.source == other.source
+            && self.source_kind == other.source_kind
+            && self.method == other.method
+            && self.timestamp == other.timestamp
+            && self.params.get() == other.params.get()
+    }
 }
 
 impl EventEnvelope {
@@ -262,8 +266,14 @@ impl EventEnvelope {
             source_kind: source_kind.into(),
             method: method.into(),
             timestamp: Timestamp::now(),
-            params,
+            params: to_raw_value(&params).expect("params is valid JSON"),
         }
+    }
+
+    /// Decode raw params for audit/reporting call sites that need ad-hoc fields.
+    /// Hot reducers use [`kind`](Self::kind) to parse only the typed event they need.
+    pub fn params_value(&self) -> Value {
+        serde_json::from_str(self.params.get()).expect("RawValue guarantees params JSON is valid")
     }
 
     /// Constructor for the `session.rebirth` boundary a genuine mux-session
@@ -304,14 +314,15 @@ impl EventEnvelope {
 
     pub fn kind(&self) -> EventKind<'_> {
         match self.method.as_str() {
-            "agent.lifecycle" => AgentLifecyclePayload::from_params(&self.params)
+            "agent.lifecycle" => serde_json::from_str::<AgentLifecyclePayload>(self.params.get())
+                .ok()
                 .map(Box::new)
                 .map(EventKind::AgentLifecycle)
                 .unwrap_or(EventKind::Other {
                     method: self.method.as_str(),
                     params: &self.params,
                 }),
-            "agent.launched" => serde_json::from_value(self.params.clone())
+            "agent.launched" => serde_json::from_str(self.params.get())
                 .map(EventKind::AgentLaunch)
                 .unwrap_or(EventKind::Other {
                     method: self.method.as_str(),
@@ -320,7 +331,7 @@ impl EventEnvelope {
             "session.rebirth" => EventKind::SessionRebirth,
             method => MessageEventMethod::parse(method)
                 .and_then(|method| {
-                    serde_json::from_value(self.params.clone())
+                    serde_json::from_str(self.params.get())
                         .ok()
                         .map(|payload| EventKind::Message { method, payload })
                 })
@@ -417,27 +428,6 @@ impl EventEnvelope {
             params,
         )
     }
-}
-
-fn optional_string(params: &Value, key: &str) -> Option<String> {
-    params
-        .get(key)
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-}
-
-fn optional_u64(params: &Value, key: &str) -> Option<u64> {
-    params.get(key).and_then(Value::as_u64)
-}
-
-fn optional_deserialize<T: DeserializeOwned>(params: &Value, key: &str) -> Option<T> {
-    params
-        .get(key)
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-}
-
-fn clamp_u32(value: u64) -> u32 {
-    value.min(u32::MAX as u64) as u32
 }
 
 #[cfg(test)]

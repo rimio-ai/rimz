@@ -26,7 +26,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 toml = "1"
 flate2 = "1"
 # OpenCode stores usage in a WAL SQLite database; the adapter opens it
@@ -130,6 +130,7 @@ glob = "0.3"
 notify = { version = "8", default-features = false, features = ["macos_kqueue"] }
 
 # Hashing
+foldhash = "0.2"
 sha2 = "0.11"
 hex = "0.4"
 # Pet sprite sheets are WebP-only. `image-webp` is decode-only-capable, pure

@@ -2948,6 +2948,7 @@ dependencies = [
  "crc32fast",
  "divan",
  "flate2",
+ "foldhash 0.2.0",
  "fs4",
  "glob",
  "hex",

@@ -285,7 +285,7 @@ fn superseding_push_expires_priors_then_pushes_in_one_cycle() {
         .iter()
         .position(|e| {
             e.method == "feed.expire"
-                && e.params.get("reason").and_then(|v| v.as_str()) == Some("agent_moved_on")
+                && e.params_value().get("reason").and_then(|v| v.as_str()) == Some("agent_moved_on")
         })
         .expect("feed.expire");
     let push_at = events
@@ -325,7 +325,7 @@ fn combined_append_expires_the_sessions_asks_in_the_same_cycle() {
     );
     let events = h.ledger.read_events().expect("events");
     assert!(events.iter().any(|e| e.method == "feed.expire"
-        && e.params.get("reason").and_then(|v| v.as_str()) == Some("agent_session_ended")));
+        && e.params_value().get("reason").and_then(|v| v.as_str()) == Some("agent_session_ended")));
 }
 
 #[test]
@@ -781,8 +781,19 @@ fn checkpoint_publish_is_debounced_and_reads_stay_event_fresh() {
 
     // Crossing the byte budget escapes the interval early, bounding a cold
     // reader's catch-up fold whatever the stamp's age.
-    let mut big = lifecycle(&h, "SessionStart", "big");
-    big.params["blob"] = serde_json::Value::String("x".repeat(70 * 1024));
+    let big = EventEnvelope::new(
+        h.workspace_id.clone(),
+        "rimz-test",
+        "claude",
+        "agent-hook",
+        "agent.lifecycle",
+        json!({
+            "event_name": "SessionStart",
+            "agent_id": "big",
+            "signal": { "signal": "registered" },
+            "blob": "x".repeat(70 * 1024),
+        }),
+    );
     h.ledger.append_event(&big).expect("big append");
     let latest = snapshot::read_fresh_latest(h.ledger.paths())
         .expect("crossing the byte budget forces an early checkpoint");
