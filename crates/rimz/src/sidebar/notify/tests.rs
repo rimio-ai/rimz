@@ -159,6 +159,7 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
         prompt: None,
         description: None,
         transcript_path: None,
+        origin: None,
         recent_prompts: Vec::new(),
         model: None,
         effort: None,

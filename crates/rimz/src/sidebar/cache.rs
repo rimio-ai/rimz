@@ -5,7 +5,7 @@
 //! opportunistically, and every value can be rebuilt from ledger truth plus live
 //! mux/provider state.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -60,6 +60,32 @@ impl AccountsCache {
         };
         now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
     }
+}
+
+/// Producer-published inputs for the Codex daemon ghost reaper. Consumers read
+/// this cache so the fast lane can apply the same reap without proc scans or
+/// app-server probes.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct CodexDaemonReap {
+    pub produced_at_ms: u64,
+    pub daemon_pids: BTreeSet<u32>,
+    pub loaded: Option<BTreeSet<String>>,
+}
+
+fn codex_daemon_reap_path(runtime: &RuntimePaths) -> PathBuf {
+    runtime.root.join("codex-daemon-reap.json")
+}
+
+pub fn write_codex_daemon_reap(
+    runtime: &RuntimePaths,
+    cache: &CodexDaemonReap,
+) -> crate::ledger::atomic::Result<()> {
+    crate::ledger::atomic::write_temp_then_rename_cache(&codex_daemon_reap_path(runtime), cache)
+}
+
+pub fn read_codex_daemon_reap(runtime: &RuntimePaths) -> Option<CodexDaemonReap> {
+    let bytes = std::fs::read(codex_daemon_reap_path(runtime)).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 // The shared pane frame cache is keyed to one `(workspace, session)`: the

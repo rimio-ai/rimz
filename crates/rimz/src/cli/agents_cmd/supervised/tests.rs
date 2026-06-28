@@ -397,6 +397,7 @@ fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {
         prompt: None,
         description: None,
         transcript_path: None,
+        origin: None,
         recent_prompts: Vec::new(),
         model: None,
         effort: None,

@@ -90,6 +90,10 @@ pub struct AgentLifecycleObservation {
     /// sidecar refresh hints, never as routing truth.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
+    /// Codex root lineage from the rollout head, carried forward so the
+    /// same-pane `/clear` reap can run in every render lane.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::agents::codex::SessionOrigin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -159,6 +163,7 @@ impl AgentLifecycleObservation {
             task: None,
             prompt: None,
             transcript_path: None,
+            origin: None,
             model: None,
             effort: None,
             context_pct: None,

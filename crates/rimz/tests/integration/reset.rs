@@ -334,6 +334,7 @@ fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
         task: None,
         prompt: None,
         transcript_path: None,
+        origin: None,
         model: None,
         effort: None,
         context_pct: None,

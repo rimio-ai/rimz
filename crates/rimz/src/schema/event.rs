@@ -191,6 +191,7 @@ impl AgentLifecyclePayload {
                 task: optional_string(params, "task"),
                 prompt: optional_string(params, "prompt"),
                 transcript_path: optional_string(params, "transcript_path"),
+                origin: optional_deserialize(params, "origin"),
                 model: optional_string(params, "model"),
                 effort: optional_string(params, "effort"),
                 context_pct: optional_u64(params, "context_pct").map(|v| v.min(100) as u8),
@@ -443,6 +444,7 @@ fn clamp_u32(value: u64) -> u32 {
 mod tests {
     use super::*;
 
+    use crate::agents::codex::SessionOrigin;
     use crate::agents::lifecycle::LifecycleSignal;
     use crate::ids::{AgentSessionId, MuxName, PaneId};
     use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
@@ -477,6 +479,7 @@ mod tests {
             task: Some("Review".to_owned()),
             prompt: Some("ship it".to_owned()),
             transcript_path: Some("/tmp/transcript.jsonl".to_owned()),
+            origin: None,
             model: Some("claude-opus".to_owned()),
             effort: Some("high".to_owned()),
             context_pct: Some(80),
@@ -588,6 +591,7 @@ mod tests {
             "task",
             "prompt",
             "transcript_path",
+            "origin",
             "model",
             "effort",
             "context_pct",
@@ -661,6 +665,28 @@ mod tests {
         );
         assert_eq!(payload.observation.role, None);
         assert_eq!(payload.observation.pane_id, None);
+    }
+
+    #[test]
+    fn agent_lifecycle_params_round_trip_codex_origin() {
+        let params = json!({
+            "event_name": "SessionStart",
+            "agent_id": "codex-root",
+            "signal": { "signal": "registered" },
+            "origin": "fresh",
+        });
+
+        let payload = AgentLifecyclePayload::from_params(&params).expect("decode");
+
+        assert_eq!(payload.observation.origin, Some(SessionOrigin::Fresh));
+        let event = EventEnvelope::agent_lifecycle(
+            workspace(),
+            "session",
+            "codex",
+            "SessionStart",
+            &payload.observation,
+        );
+        assert_eq!(event.params.get("origin"), Some(&json!("fresh")));
     }
 
     #[test]

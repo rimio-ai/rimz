@@ -11,17 +11,14 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
-use crate::agents::codex::SessionOrigin;
+use crate::agents::AgentStatus;
 use crate::agents::spending::{
     HeadlineSpec, ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
     compute_scoped_tally, discover_spending_files, read_provider_spending_cache,
     read_spending_cache, read_workspace_spending_cache, unix_secs_now,
 };
-use crate::agents::{AgentState, AgentStatus};
-use crate::ids::{AgentSessionId, PaneId, WorkspaceId};
-use crate::ledger::snapshot::{
-    LazyAgentPairingDiagnostic, LazyAgentPairingResult, pane_agent_kind, pane_worktree_path,
-};
+use crate::ids::{PaneId, WorkspaceId};
+use crate::ledger::snapshot::{LazyAgentPairingDiagnostic, LazyAgentPairingResult};
 use crate::{
     RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarSnapshot,
     SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState, WorktreeTrunkSync,
@@ -29,7 +26,10 @@ use crate::{
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 
-use super::cache::{DiffStatsCache, GIT_ACTIVITY_WINDOW, PrStateCache, read_diff_stats_cache};
+use super::cache::{
+    CodexDaemonReap, DiffStatsCache, GIT_ACTIVITY_WINDOW, PrStateCache, read_codex_daemon_reap,
+    read_diff_stats_cache, unix_now_ms, write_codex_daemon_reap,
+};
 use super::frame::{PaneFrame, PaneMetrics};
 use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 
@@ -188,94 +188,6 @@ pub fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
         }
     }
     focused
-}
-
-fn fresh_codex_replacements(
-    snapshot: &SidebarSnapshot,
-    panes: &[crate::pane::PaneRef],
-    mut session_origin: impl FnMut(&str) -> Option<SessionOrigin>,
-) -> BTreeSet<(AgentSessionId, AgentSessionId)> {
-    let live_panes = live_codex_panes_by_worktree(panes);
-    if live_panes.is_empty() {
-        return BTreeSet::new();
-    }
-    let mut origins = BTreeMap::new();
-    let mut replacements = BTreeSet::new();
-    for older in snapshot.agents.iter().filter(|agent| {
-        agent.kind == "codex"
-            && agent.parent_agent_id.is_none()
-            && agent
-                .worktree_path
-                .as_deref()
-                .is_some_and(|path| !path.is_empty())
-    }) {
-        for newer in snapshot.agents.iter().filter(|agent| {
-            agent.kind == "codex"
-                && agent.parent_agent_id.is_none()
-                && agent.agent_id != older.agent_id
-                && agent.last_activity > older.last_activity
-                && agent.worktree_path == older.worktree_path
-                && agent.worktree_branch == older.worktree_branch
-        }) {
-            if !same_live_codex_pane(older, newer, &live_panes) {
-                continue;
-            }
-            if cached_session_origin(older, &mut origins, &mut session_origin)
-                == Some(SessionOrigin::Fresh)
-                && cached_session_origin(newer, &mut origins, &mut session_origin)
-                    == Some(SessionOrigin::Fresh)
-            {
-                replacements.insert((older.agent_id.clone(), newer.agent_id.clone()));
-            }
-        }
-    }
-    replacements
-}
-
-fn cached_session_origin(
-    agent: &AgentState,
-    origins: &mut BTreeMap<AgentSessionId, Option<SessionOrigin>>,
-    session_origin: &mut impl FnMut(&str) -> Option<SessionOrigin>,
-) -> Option<SessionOrigin> {
-    *origins
-        .entry(agent.agent_id.clone())
-        .or_insert_with(|| session_origin(agent.agent_id.as_str()))
-}
-
-fn live_codex_panes_by_worktree(
-    panes: &[crate::pane::PaneRef],
-) -> BTreeMap<&str, Vec<&crate::pane::PaneRef>> {
-    let mut live: BTreeMap<&str, Vec<&crate::pane::PaneRef>> = BTreeMap::new();
-    for pane in panes {
-        if pane_agent_kind(pane) != Some("codex") {
-            continue;
-        }
-        let Some(worktree) = pane_worktree_path(pane) else {
-            continue;
-        };
-        live.entry(worktree).or_default().push(pane);
-    }
-    live
-}
-
-fn same_live_codex_pane(
-    older: &AgentState,
-    newer: &AgentState,
-    live_panes: &BTreeMap<&str, Vec<&crate::pane::PaneRef>>,
-) -> bool {
-    let Some(worktree) = older.worktree_path.as_deref() else {
-        return false;
-    };
-    let Some(panes) = live_panes.get(worktree) else {
-        return false;
-    };
-    match (older.pane.as_ref(), newer.pane.as_ref()) {
-        (Some(older_pane), Some(newer_pane)) => {
-            older_pane.pane_id == newer_pane.pane_id
-                && panes.iter().any(|pane| pane.pane_id == older_pane.pane_id)
-        }
-        _ => false,
-    }
 }
 
 /// Fold the remote-link stats sidecar onto the snapshot. Local rooms never have
@@ -588,39 +500,52 @@ pub fn enrich(
     let read_marks = super::read_marks::ReadMarks::load_merged(runtime);
     let unread_row_ids = episodes.unread_row_ids(&read_marks);
 
-    // Producer-only: reap daemon-mode Codex ghosts the app-server no longer
-    // holds. A remote-control conversation records the shared daemon's pid,
-    // which outlives it, so process liveness can never reap it. Gated on a
-    // pane-less root `codex` session actually being present, so the common
-    // room pays no proc scan or daemon probe. Best-effort and fail-safe — no
-    // daemon process or an untrusted loaded list keeps every session — and run
-    // before the pane fold so a ghost can neither render nor bind its stale
-    // stats to a live pane.
-    if producing
-        && snapshot.agents.iter().any(|agent| {
+    // Reap daemon-mode Codex ghosts the app-server no longer holds. The
+    // producer publishes the live daemon pids plus `thread/loaded/list`; the
+    // cached lane reuses that file, so consumers never scan proc or spawn the
+    // app-server. The probe itself stays gated on a pane-less root `codex`
+    // session, so the common room pays no proc scan. Best-effort and fail-safe:
+    // no daemon process, absent cache, or an untrusted loaded list keeps every
+    // session.
+    let daemon_inputs = if producing {
+        let should_probe = snapshot.agents.iter().any(|agent| {
             agent.kind == "codex" && agent.pane.is_none() && agent.parent_agent_id.is_none()
-        })
-    {
-        let daemon_pids = crate::remote_control::codex_daemon_pids();
-        if !daemon_pids.is_empty() {
-            let loaded = crate::agents::codex::loaded_daemon_threads();
-            snapshot.drop_dead_daemon_sessions(&daemon_pids, loaded.as_ref());
+        });
+        let daemon_pids = if should_probe {
+            crate::remote_control::codex_daemon_pids()
+        } else {
+            BTreeSet::new()
+        };
+        let loaded = if daemon_pids.is_empty() {
+            None
+        } else {
+            crate::agents::codex::loaded_daemon_threads()
+        };
+        let inputs = CodexDaemonReap {
+            produced_at_ms: unix_now_ms(),
+            daemon_pids,
+            loaded,
+        };
+        if let Err(err) = write_codex_daemon_reap(runtime, &inputs) {
+            tracing::debug!(
+                error = %err,
+                "codex daemon reap cache write failed"
+            );
         }
-    }
-    // Producer-only: Codex `/clear` / `/new` starts a fresh session id in the
-    // same pane without firing `SessionStart { source: "clear" }`. Only pairs
-    // that share one live Codex pane pay the rollout-head read; a missing head,
-    // ambiguous same-cwd panes, or a `forked_from_id` keeps both sessions so
-    // `/side` / `/btw` stays pinned to its primary.
-    if producing && let Some(frame) = &frame {
+        inputs
+    } else {
+        read_codex_daemon_reap(runtime).unwrap_or_default()
+    };
+    snapshot.drop_dead_daemon_sessions(&daemon_inputs.daemon_pids, daemon_inputs.loaded.as_ref());
+
+    // Codex `/clear` / `/new` starts a fresh session id in the same pane and
+    // process. The rollout head lineage is carried on each root, so both lanes
+    // can drop only same-live-pane fresh replacements; unknown lineage or
+    // forked sessions keep both rows.
+    if let Some(frame) = &frame {
         let admitted_panes =
             SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), exclude);
-        let fresh_replacements = fresh_codex_replacements(
-            &snapshot,
-            &admitted_panes,
-            crate::agents::codex::session_origin,
-        );
-        snapshot.drop_cleared_codex_sessions(&fresh_replacements);
+        snapshot.drop_cleared_codex_sessions(&admitted_panes);
     }
 
     if let Some(frame) = frame {

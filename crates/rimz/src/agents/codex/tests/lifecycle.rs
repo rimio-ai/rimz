@@ -201,6 +201,51 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
 }
 
 #[test]
+fn root_identity_events_stamp_codex_session_origin() {
+    let dir = tempfile::tempdir().unwrap();
+    let day_dir = dir.path().join("2026").join("06").join("26");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let write_rollout = |session_id: &str, head: &str| {
+        std::fs::write(
+            day_dir.join(format!("rollout-2026-06-26T00-00-00-{session_id}.jsonl")),
+            format!("{head}\n"),
+        )
+        .unwrap();
+    };
+    write_rollout(
+        "fresh",
+        r#"{"type":"session_meta","payload":{"id":"fresh"}}"#,
+    );
+    write_rollout(
+        "fork",
+        r#"{"type":"session_meta","payload":{"id":"fork","forked_from_id":"fresh"}}"#,
+    );
+
+    with_codex_sessions_root(dir.path(), || {
+        let registered = CodexAdapter
+            .observe_lifecycle(
+                "SessionStart",
+                &json!({"session_id":"fresh","source":"startup"}),
+            )
+            .unwrap();
+        assert_eq!(registered.origin, Some(SessionOrigin::Fresh));
+
+        let turn_started = CodexAdapter
+            .observe_lifecycle(
+                "UserPromptSubmit",
+                &json!({"session_id":"fork","prompt":"continue"}),
+            )
+            .unwrap();
+        assert_eq!(turn_started.origin, Some(SessionOrigin::Forked));
+
+        let stop = CodexAdapter
+            .observe_lifecycle("Stop", &json!({"session_id":"fresh"}))
+            .unwrap();
+        assert_eq!(stop.origin, None);
+    });
+}
+
+#[test]
 fn subagent_lifecycle_effort_falls_back_to_codex_config() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");

@@ -27,6 +27,7 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
         task: None,
         prompt: None,
         transcript_path: None,
+        origin: None,
         model: None,
         effort: None,
         context_pct: None,

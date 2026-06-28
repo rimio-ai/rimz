@@ -1,11 +1,11 @@
 use super::*;
 use crate::agents::codex::SessionOrigin;
 use crate::agents::{AgentState, AgentStatus, TurnPhase};
-use crate::ids::AgentSessionId;
 use crate::ledger::atomic;
 use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
-use crate::sidebar::cache::DiffStatsCacheEntry;
-use crate::sidebar::cache::{AccountsCache, unix_now_ms};
+use crate::sidebar::cache::{
+    AccountsCache, CodexDaemonReap, DiffStatsCacheEntry, unix_now_ms, write_codex_daemon_reap,
+};
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
 use jiff::SignedDuration;
 use std::collections::{BTreeMap, BTreeSet};
@@ -384,112 +384,181 @@ fn focused_worktree_paths_keys_on_viewed_row_panes() {
 }
 
 #[test]
-fn fresh_codex_replacements_pairs_daemon_clear_on_unique_live_pane() {
+fn cleared_codex_reap_drops_only_fresh_same_pane_roots() {
     let old_at = Timestamp::from_second(1_000).unwrap();
     let fork_at = Timestamp::from_second(2_000).unwrap();
     let new_at = Timestamp::from_second(3_000).unwrap();
     let mut old = codex_root("old", "/repo/main", "terminal_1");
     old.worktree_branch = Some("main".to_owned());
     old.last_activity = old_at;
+    old.origin = Some(SessionOrigin::Fresh);
     let mut fork = codex_root("fork", "/repo/main", "terminal_1");
     fork.worktree_branch = Some("main".to_owned());
     fork.last_activity = fork_at;
+    fork.origin = Some(SessionOrigin::Forked);
     let mut new = codex_root("new", "/repo/main", "terminal_1");
     new.worktree_branch = Some("main".to_owned());
     new.last_activity = new_at;
-    let snapshot = SidebarSnapshot::build_with_agents(
+    new.origin = Some(SessionOrigin::Fresh);
+    let mut snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
         Vec::new(),
         vec![old, fork, new],
         Timestamp::now(),
     );
 
-    let mut seen = Vec::new();
-    let replacements = fresh_codex_replacements(
-        &snapshot,
-        &[pane("terminal_1", "codex", "/repo/main")],
-        |id| {
-            seen.push(id.to_owned());
-            match id {
-                "old" | "new" => Some(SessionOrigin::Fresh),
-                "fork" => Some(SessionOrigin::Forked),
-                other => panic!("unexpected lineage read for {other}"),
-            }
-        },
-    );
+    snapshot.drop_cleared_codex_sessions(&[pane("terminal_1", "codex", "/repo/main")]);
 
-    assert_eq!(
-        replacements,
-        BTreeSet::from([(AgentSessionId::from("old"), AgentSessionId::from("new"))])
-    );
-    assert_eq!(
-        seen.into_iter().collect::<BTreeSet<_>>(),
-        BTreeSet::from(["fork".to_owned(), "new".to_owned(), "old".to_owned()])
-    );
+    let ids: Vec<_> = snapshot
+        .agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["fork", "new"]);
 }
 
 #[test]
-fn fresh_codex_replacements_does_not_claim_paneless_sibling_occupies_live_pane() {
+fn cleared_codex_reap_requires_both_sessions_on_live_pane() {
     let mut live = codex_root("live", "/repo/main", "terminal_1");
     live.worktree_branch = Some("main".to_owned());
     live.last_activity = Timestamp::from_second(1_000).unwrap();
+    live.origin = Some(SessionOrigin::Fresh);
     let mut closed = root_agent("codex", "closed", None);
     closed.worktree_path = Some("/repo/main".to_owned());
     closed.worktree_branch = Some("main".to_owned());
     closed.last_activity = Timestamp::from_second(2_000).unwrap();
-    let snapshot = SidebarSnapshot::build_with_agents(
+    closed.origin = Some(SessionOrigin::Fresh);
+    let mut snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
         Vec::new(),
         vec![live, closed],
         Timestamp::now(),
     );
 
-    let mut called = false;
-    let replacements = fresh_codex_replacements(
-        &snapshot,
-        &[pane("terminal_1", "codex", "/repo/main")],
-        |_| {
-            called = true;
-            Some(SessionOrigin::Fresh)
-        },
-    );
+    snapshot.drop_cleared_codex_sessions(&[pane("terminal_1", "codex", "/repo/main")]);
 
-    assert!(replacements.is_empty());
-    assert!(
-        !called,
-        "lineage is read only after both sessions prove the same live pane"
-    );
+    assert_eq!(snapshot.agents.len(), 2);
 }
 
 #[test]
-fn fresh_codex_replacements_skips_lineage_when_live_pane_scope_is_ambiguous() {
+fn cleared_codex_reap_keeps_unknown_lineage() {
     let mut old = codex_root("old", "/repo/main", "terminal_1");
     old.last_activity = Timestamp::from_second(1_000).unwrap();
-    let mut new = root_agent("codex", "new", None);
+    old.origin = Some(SessionOrigin::Fresh);
+    let mut new = codex_root("new", "/repo/main", "terminal_1");
     new.worktree_path = Some("/repo/main".to_owned());
     new.last_activity = Timestamp::from_second(2_000).unwrap();
-    let snapshot = SidebarSnapshot::build_with_agents(
+    let mut snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
         Vec::new(),
         vec![old, new],
         Timestamp::now(),
     );
 
-    let mut called = false;
-    let replacements = fresh_codex_replacements(
-        &snapshot,
-        &[
-            pane("terminal_1", "codex", "/repo/main"),
-            pane("terminal_2", "codex", "/repo/main"),
-        ],
-        |_| {
-            called = true;
-            Some(SessionOrigin::Fresh)
-        },
+    snapshot.drop_cleared_codex_sessions(&[pane("terminal_1", "codex", "/repo/main")]);
+
+    assert_eq!(snapshot.agents.len(), 2);
+}
+
+#[test]
+fn cached_enrich_reaps_codex_clear_session_before_pane_binding() {
+    let (_dir, runtime, _) = runtime();
+    let mut old = codex_root("old", "/repo/main", "terminal_1");
+    old.last_activity = Timestamp::from_second(1_000).unwrap();
+    old.origin = Some(SessionOrigin::Fresh);
+    let mut new = codex_root("new", "/repo/main", "terminal_1");
+    new.last_activity = Timestamp::from_second(2_000).unwrap();
+    new.origin = Some(SessionOrigin::Fresh);
+    let snapshot = SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
+        Vec::new(),
+        vec![old, new],
+        Timestamp::now(),
+    );
+    let frame = crate::sidebar::frame::assemble_frame(
+        vec![pane("terminal_1", "codex", "/repo/main")],
+        1_000,
+        "rimz-test",
     );
 
-    assert!(replacements.is_empty());
-    assert!(!called);
+    let snapshot = enrich(
+        snapshot,
+        Some(frame),
+        &runtime,
+        None,
+        EnrichMode::Cached,
+        None,
+    );
+
+    assert_eq!(
+        snapshot
+            .agents
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["new"]
+    );
+}
+
+#[test]
+fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
+    let (_dir, runtime_paths, _) = runtime();
+    let mut closed = root_agent("codex", "closed", None);
+    closed.agent_pid = Some(77);
+    let mut open = root_agent("codex", "open", None);
+    open.agent_pid = Some(77);
+    let snapshot = SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
+        Vec::new(),
+        vec![closed, open],
+        Timestamp::now(),
+    );
+    write_codex_daemon_reap(
+        &runtime_paths,
+        &CodexDaemonReap {
+            produced_at_ms: 1_000,
+            daemon_pids: BTreeSet::from([77]),
+            loaded: Some(BTreeSet::from(["open".to_owned()])),
+        },
+    )
+    .unwrap();
+
+    let snapshot = enrich(
+        snapshot,
+        None,
+        &runtime_paths,
+        None,
+        EnrichMode::Cached,
+        None,
+    );
+
+    assert_eq!(
+        snapshot
+            .agents
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["open"]
+    );
+
+    let (_empty_dir, empty_runtime, _) = runtime();
+    let mut kept = root_agent("codex", "kept", None);
+    kept.agent_pid = Some(77);
+    let snapshot = SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
+        Vec::new(),
+        vec![kept],
+        Timestamp::now(),
+    );
+    let snapshot = enrich(
+        snapshot,
+        None,
+        &empty_runtime,
+        None,
+        EnrichMode::Cached,
+        None,
+    );
+    assert_eq!(snapshot.agents.len(), 1, "absent cache reaps nothing");
 }
 
 #[test]

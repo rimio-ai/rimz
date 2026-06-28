@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::codex::SessionOrigin;
 
 fn daemon_codex(id: &str, worktree: &str, owner_pid: u32) -> AgentState {
     let mut codex = paneless_codex(id, worktree, 1_000);
@@ -20,20 +21,6 @@ fn rollup_ids(snapshot: &SidebarSnapshot) -> Vec<String> {
         .collect();
     ids.sort();
     ids
-}
-
-fn replacement_pairs(
-    pairs: &[(&str, &str)],
-) -> BTreeSet<(crate::ids::AgentSessionId, crate::ids::AgentSessionId)> {
-    pairs
-        .iter()
-        .map(|(older, newer)| {
-            (
-                crate::ids::AgentSessionId::from(*older),
-                crate::ids::AgentSessionId::from(*newer),
-            )
-        })
-        .collect()
 }
 
 #[test]
@@ -107,65 +94,105 @@ fn cleared_codex_session_reap_handles_lineage_and_scope_edges() {
     struct Case {
         label: &'static str,
         agents: Vec<AgentState>,
-        replacements: Vec<(&'static str, &'static str)>,
+        live_panes: Vec<PaneRef>,
         expected: Vec<&'static str>,
     }
 
     let same_pane_pair = || {
-        vec![
-            paneless_codex("old", "/repo/a", 1_000)
-                .branch("main")
-                .in_pane("%1")
-                .active_ago(120),
-            paneless_codex("new", "/repo/a", 2_000)
-                .branch("main")
-                .in_pane("%1")
-                .active_ago(5),
-        ]
+        let mut old = paneless_codex("old", "/repo/a", 1_000)
+            .branch("main")
+            .in_pane("%1")
+            .active_ago(120);
+        old.origin = Some(SessionOrigin::Fresh);
+        let mut new = paneless_codex("new", "/repo/a", 2_000)
+            .branch("main")
+            .in_pane("%1")
+            .active_ago(5);
+        new.origin = Some(SessionOrigin::Fresh);
+        vec![old, new]
+    };
+
+    let fresh = |mut agent: AgentState| {
+        agent.origin = Some(SessionOrigin::Fresh);
+        agent
     };
 
     for case in [
         Case {
             label: "fresh same-pane replacement drops the prior session",
             agents: same_pane_pair(),
-            replacements: vec![("old", "new")],
+            live_panes: vec![pane("%1", "codex", "/repo/a")],
             expected: vec!["new"],
         },
         Case {
             label: "fork or unknown lineage keeps both same-pane sessions",
-            agents: same_pane_pair(),
-            replacements: Vec::new(),
+            agents: {
+                let mut agents = same_pane_pair();
+                agents[1].origin = Some(SessionOrigin::Forked);
+                agents
+            },
+            live_panes: vec![pane("%1", "codex", "/repo/a")],
             expected: vec!["new", "old"],
         },
         Case {
             label: "different worktree keeps both sessions",
             agents: vec![
-                paneless_codex("old", "/repo/a", 1_000)
-                    .in_pane("%1")
-                    .active_ago(120),
-                paneless_codex("new", "/repo/b", 2_000)
-                    .in_pane("%1")
-                    .active_ago(5),
+                fresh(
+                    paneless_codex("old", "/repo/a", 1_000)
+                        .in_pane("%1")
+                        .active_ago(120),
+                ),
+                fresh(
+                    paneless_codex("new", "/repo/b", 2_000)
+                        .in_pane("%1")
+                        .active_ago(5),
+                ),
             ],
-            replacements: vec![("old", "new")],
+            live_panes: vec![pane("%1", "codex", "/repo/a")],
             expected: vec!["new", "old"],
         },
         Case {
-            label: "producer keeps distinct panes by omitting replacement pair",
+            label: "distinct panes keep both sessions",
             agents: vec![
-                paneless_codex("old", "/repo/a", 1_000)
-                    .in_pane("%1")
-                    .active_ago(120),
-                paneless_codex("new", "/repo/a", 2_000)
-                    .in_pane("%2")
-                    .active_ago(5),
+                fresh(
+                    paneless_codex("old", "/repo/a", 1_000)
+                        .in_pane("%1")
+                        .active_ago(120),
+                ),
+                fresh(
+                    paneless_codex("new", "/repo/a", 2_000)
+                        .in_pane("%2")
+                        .active_ago(5),
+                ),
             ],
-            replacements: Vec::new(),
+            live_panes: vec![
+                pane("%1", "codex", "/repo/a"),
+                pane("%2", "codex", "/repo/a"),
+            ],
+            expected: vec!["new", "old"],
+        },
+        Case {
+            label: "non-codex live pane keeps both sessions",
+            agents: vec![
+                fresh(
+                    paneless_codex("old", "/repo/a", 1_000)
+                        .branch("main")
+                        .in_pane("%1")
+                        .active_ago(120),
+                ),
+                fresh(
+                    paneless_codex("new", "/repo/a", 2_000)
+                        .branch("main")
+                        .in_pane("%1")
+                        .active_ago(5),
+                ),
+            ],
+            live_panes: vec![pane("%1", "zsh", "/repo/a")],
             expected: vec!["new", "old"],
         },
     ] {
         let mut snapshot = room(Vec::new(), case.agents);
-        snapshot.drop_cleared_codex_sessions(&replacement_pairs(&case.replacements));
+        snapshot.drop_cleared_codex_sessions(&case.live_panes);
         assert_eq!(rollup_ids(&snapshot), case.expected, "{}", case.label);
     }
 }

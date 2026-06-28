@@ -474,6 +474,11 @@ pub struct AgentState {
     /// readers keep their own freshness gates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
+    /// Codex root lineage from the rollout head, carried forward from lifecycle
+    /// events. `None` means unknown/non-Codex and keeps the `/clear` reaper
+    /// fail-safe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::agents::codex::SessionOrigin>,
     /// Recent user prompts for this session, newest last, capped by the rollup.
     /// The sidebar row keeps only `prompt`; snapshot JSON exposes the history on
     /// `agents[]` for diagnostics and future panes.

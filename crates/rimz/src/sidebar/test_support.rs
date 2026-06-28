@@ -109,6 +109,7 @@ pub(crate) fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> Age
         prompt: None,
         description: None,
         transcript_path: None,
+        origin: None,
         recent_prompts: Vec::new(),
         model: model.map(ToOwned::to_owned),
         effort: None,

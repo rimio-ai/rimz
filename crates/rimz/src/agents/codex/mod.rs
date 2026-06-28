@@ -682,14 +682,23 @@ impl AgentAdapter for CodexAdapter {
             payload,
             &parts,
         )?;
-        Some(build_codex_observation(
+        let root_identity_event = parent_agent_id.is_none()
+            && matches!(
+                signal,
+                LifecycleSignal::Registered | LifecycleSignal::TurnStarted
+            );
+        let mut observation = build_codex_observation(
             payload,
             &parts,
             signal,
             agent_id,
             parent_agent_id,
             transcript,
-        ))
+        );
+        if root_identity_event && let Some(agent_id) = observation.agent_id.as_ref() {
+            observation.origin = session_origin(agent_id.as_str());
+        }
+        Some(observation)
     }
 
     fn last_assistant_message(

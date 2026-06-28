@@ -689,6 +689,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         prompt: prompt.prompt,
         description: input.prior.and_then(|state| state.description.clone()),
         transcript_path: transcript_path_projection(input.observation, input.prior),
+        origin: origin_projection(input.observation, input.prior),
         recent_prompts: prompt.recent_prompts,
         model: model_projection(input.observation, input.prior),
         effort: effort_projection(input.observation, input.prior),
@@ -793,6 +794,7 @@ fn assemble_launch_state(
         prompt,
         description,
         transcript_path: prior.and_then(|state| state.transcript_path.clone()),
+        origin: prior.and_then(|state| state.origin),
         recent_prompts,
         model: prior.and_then(|state| state.model.clone()),
         effort: prior.and_then(|state| state.effort.clone()),
@@ -1073,6 +1075,13 @@ fn transcript_path_projection(
         .transcript_path
         .clone()
         .or_else(|| prior.and_then(|p| p.transcript_path.clone()))
+}
+
+fn origin_projection(
+    observation: &AgentLifecycleObservation,
+    prior: Option<&AgentState>,
+) -> Option<crate::agents::codex::SessionOrigin> {
+    observation.origin.or_else(|| prior.and_then(|p| p.origin))
 }
 
 fn model_projection(

@@ -145,6 +145,7 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         prompt: None,
         description: None,
         transcript_path: None,
+        origin: None,
         recent_prompts: Vec::new(),
         model: None,
         effort: None,

@@ -351,6 +351,7 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         task: None,
         prompt: None,
         transcript_path: None,
+        origin: None,
         model: None,
         effort: None,
         context_pct: None,

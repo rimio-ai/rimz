@@ -10,8 +10,8 @@ Native event or derived surface → internal mapping; the upstream events, paylo
 
 | Native event / surface               | Channel       | `observe_lifecycle` → [`LifecycleSignal`](../../../../crates/rimz/src/agents/lifecycle.rs) | Normalized fields                                |
 | ------------------------------------ | ------------- | ----------------------------------- | ------------------------------------------------ |
-| `SessionStart`                       | lifecycle     | `Registered`; `source = "compact"` maps to `CompactionEnded { auto: None }` | model, effort                  |
-| `UserPromptSubmit`                   | lifecycle     | `TurnStarted`                       | sanitized `task`/`prompt`                        |
+| `SessionStart`                       | lifecycle     | `Registered`; `source = "compact"` maps to `CompactionEnded { auto: None }` | model, effort, root lineage    |
+| `UserPromptSubmit`                   | lifecycle     | `TurnStarted`                       | sanitized `task`/`prompt`; root lineage          |
 | `SubagentStart`                      | lifecycle     | `SubagentStarted`                   | keyed by child `agent_id`; `task` = `agent_type` |
 | `SubagentStop`                       | lifecycle     | `SubagentStopped`                   | child row; keeps the type label                  |
 | `Stop`                               | lifecycle     | `TurnEnded { errored, parked_on_background: false }`; `errored` reads the native payload or a rollout turn-error marker | clear task; refresh context/tokens; merge rollout turn-error marker |
@@ -41,7 +41,7 @@ Codex shares the same keyed subagent identity as Claude (`resolve_subagent_ident
 
 Codex registers its session lazily. A plain CLI launch fires no `SessionStart`; the first prompt fires `SessionStart` and `UserPromptSubmit` together, both carrying the session id. So a freshly launched Codex is an agent instance with no session id until its first turn, which is why the sidebar synthesizes an idle row for it ([agent.md → The instance lifecycle](../agent.md#the-instance-lifecycle)).
 
-`/clear` / `/new` currently fire **no** `SessionStart` (the wired `source = "clear"` never arrives), so Rimz reads the new session's rollout `session_meta` instead: daemon-routed recovery may stamp the new root onto the focused occupied Codex pane on its first prompt event, and a newer root sharing that live pane while carrying no `forked_from_id` reaps the superseded prior session before the pane fold, letting the card re-pin to the fresh conversation. A same-pane newer root with `forked_from_id` is a fork and stays subordinate to the primary.
+`/clear` / `/new` currently fire **no** `SessionStart` (the wired `source = "clear"` never arrives), so Rimz reads each root's rollout `session_meta` on identity events and carries its lineage durably on the rollup: `forked_from_id = null` is a fresh conversation, a populated `forked_from_id` is a fork, and an unreadable head stays unknown. Daemon-routed recovery may stamp the new root onto the focused occupied Codex pane on its first prompt event, and every render lane reaps a newer same-live-pane fresh root before the pane fold, letting the card re-pin to the fresh conversation. A same-pane newer root with `forked_from_id` is a fork and stays subordinate to the primary.
 
 A `/side` / `/btw` thread fork registers a **fresh** session id in the same pane and `codex` process while the main session stays live. The pane's card stays pinned to the primary (earliest-`registered_at`) session, so the fork's newer activity never repaints it; the fork is not rendered ([sidebar.md → Presence model](../../sidebar/sidebar.md#presence-model)) and is not nested as a child row.
 
@@ -49,7 +49,7 @@ Codex hooks are **daemon-routed** (since 0.137 for a plain TUI launch, not just 
 
 ## Context and transcript
 
-Codex writes one rollout file per session at `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session_id>.jsonl`. Given the payload's `session_id`, [`find_session_transcript`](../../../../crates/rimz/src/agents/codex/mod.rs) descends the date tree newest-first, bounded by a day-directory budget so a large archive never stalls the walk; `RIMZ_CODEX_SESSIONS` overrides the root for tests. The rollout feeds usage, cost, model, turn-death, and turn-completion enrichment:
+Codex writes one rollout file per session at `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session_id>.jsonl`. Given the payload's `session_id`, [`find_session_transcript`](../../../../crates/rimz/src/agents/codex/mod.rs) descends the date tree newest-first, bounded by a day-directory budget so a large archive never stalls the walk; `RIMZ_CODEX_SESSIONS` overrides the root for tests. The rollout head feeds the durable root lineage used by the same-pane `/clear` reap; the rollout tail feeds usage, cost, model, turn-death, and turn-completion enrichment:
 
 | Rollout event   | Field                                          | Internal                                  |
 | --------------- | ---------------------------------------------- | ----------------------------------------- |

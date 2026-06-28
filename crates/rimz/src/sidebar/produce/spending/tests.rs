@@ -480,6 +480,7 @@ fn codex_origin_overrides_read_transcript_and_worktree_from_snapshot() {
         prompt: None,
         description: None,
         transcript_path: Some(transcript.display().to_string()),
+        origin: None,
         recent_prompts: Vec::new(),
         model: None,
         effort: None,

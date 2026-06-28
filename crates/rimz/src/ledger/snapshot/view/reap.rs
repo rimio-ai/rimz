@@ -3,10 +3,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Timestamp;
 
 use crate::agents::AgentState;
+use crate::agents::codex::SessionOrigin;
 use crate::feed::FeedItem;
-use crate::ids::AgentSessionId;
 use crate::ledger::snapshot::panes::{agent_owner_pid, is_daemon_mode_codex};
-use crate::ledger::snapshot::process::command_is_sidebar_chrome;
+use crate::ledger::snapshot::process::{
+    command_is_sidebar_chrome, pane_agent_kind, pane_worktree_path,
+};
 use crate::pane::PaneRef;
 use crate::remote_control;
 
@@ -47,8 +49,8 @@ impl SidebarSnapshot {
     ///   from `loaded` — reap it;
     /// - anything else — keep it.
     ///
-    /// The producer runs this before the live-pane fold, so a reaped session can
-    /// neither render a row nor attach stale stats to a live pane.
+    /// The render lanes run this before the live-pane fold, so a reaped session
+    /// can neither render a row nor attach stale stats to a live pane.
     pub fn drop_dead_daemon_sessions(
         &mut self,
         daemon_pids: &BTreeSet<u32>,
@@ -65,16 +67,13 @@ impl SidebarSnapshot {
         });
     }
 
-    /// Reap Codex roots superseded by strictly-newer same-live-pane roots proven
-    /// from rollout heads to be fresh `/clear` / `/new` conversations.
-    /// Producer-only: the lineage and live-pane scope are fetched outside the
-    /// ledger projection. Forks are absent from `replacements`, so a `/side` /
-    /// `/btw` fork never causes the primary to drop.
-    pub fn drop_cleared_codex_sessions(
-        &mut self,
-        replacements: &BTreeSet<(AgentSessionId, AgentSessionId)>,
-    ) {
-        if replacements.is_empty() {
+    /// Reap Codex roots superseded by strictly-newer same-live-pane roots whose
+    /// carried rollout lineage proves both sessions are fresh `/clear` / `/new`
+    /// conversations. Unknown lineage keeps both sessions, so `/side` / `/btw`
+    /// forks never cause the primary to drop.
+    pub fn drop_cleared_codex_sessions(&mut self, live_panes: &[PaneRef]) {
+        let live_panes = live_codex_panes_by_worktree(live_panes);
+        if live_panes.is_empty() {
             return;
         }
         let superseded: Vec<bool> = self
@@ -83,7 +82,7 @@ impl SidebarSnapshot {
             .map(|older| {
                 self.agents
                     .iter()
-                    .any(|newer| cleared_codex_session_supersedes(older, newer, replacements))
+                    .any(|newer| cleared_codex_session_supersedes(older, newer, &live_panes))
             })
             .collect();
         let mut superseded = superseded.into_iter();
@@ -259,7 +258,7 @@ fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
 fn cleared_codex_session_supersedes(
     older: &AgentState,
     newer: &AgentState,
-    replacements: &BTreeSet<(AgentSessionId, AgentSessionId)>,
+    live_panes: &BTreeMap<&str, Vec<&PaneRef>>,
 ) -> bool {
     older.parent_agent_id.is_none()
         && newer.parent_agent_id.is_none()
@@ -267,8 +266,10 @@ fn cleared_codex_session_supersedes(
         && newer.kind == "codex"
         && newer.agent_id != older.agent_id
         && newer.last_activity > older.last_activity
-        && replacements.contains(&(older.agent_id.clone(), newer.agent_id.clone()))
+        && older.origin == Some(SessionOrigin::Fresh)
+        && newer.origin == Some(SessionOrigin::Fresh)
         && same_cleared_codex_scope(older, newer)
+        && same_live_codex_pane(older, newer, live_panes)
 }
 
 fn same_cleared_codex_scope(older: &AgentState, newer: &AgentState) -> bool {
@@ -285,6 +286,40 @@ fn same_cleared_codex_scope(older: &AgentState, newer: &AgentState) -> bool {
         return false;
     }
     true
+}
+
+fn live_codex_panes_by_worktree(panes: &[PaneRef]) -> BTreeMap<&str, Vec<&PaneRef>> {
+    let mut live: BTreeMap<&str, Vec<&PaneRef>> = BTreeMap::new();
+    for pane in panes {
+        if pane_agent_kind(pane) != Some("codex") {
+            continue;
+        }
+        let Some(worktree) = pane_worktree_path(pane) else {
+            continue;
+        };
+        live.entry(worktree).or_default().push(pane);
+    }
+    live
+}
+
+fn same_live_codex_pane(
+    older: &AgentState,
+    newer: &AgentState,
+    live_panes: &BTreeMap<&str, Vec<&PaneRef>>,
+) -> bool {
+    let Some(worktree) = older.worktree_path.as_deref() else {
+        return false;
+    };
+    let Some(panes) = live_panes.get(worktree) else {
+        return false;
+    };
+    match (older.pane.as_ref(), newer.pane.as_ref()) {
+        (Some(older_pane), Some(newer_pane)) => {
+            older_pane.pane_id == newer_pane.pane_id
+                && panes.iter().any(|pane| pane.pane_id == older_pane.pane_id)
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn is_agent_native_item(item: &FeedItem) -> bool {

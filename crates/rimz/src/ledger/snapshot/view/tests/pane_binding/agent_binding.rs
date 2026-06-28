@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::codex::SessionOrigin;
 
 #[test]
 fn live_panes_overlay_only_matching_agent_rows() {
@@ -125,13 +126,19 @@ fn forked_side_session_survives_the_reaper_and_keeps_primary_card() {
 
 #[test]
 fn cleared_fresh_session_reap_repins_shared_pane_but_fork_keeps_primary() {
-    for (label, replacements, expected) in [
+    for (label, main_origin, replacement_origin, expected) in [
         (
             "fresh replacement",
-            vec![("main-sess", "new-sess")],
+            Some(SessionOrigin::Fresh),
+            Some(SessionOrigin::Fresh),
             "new-sess",
         ),
-        ("fork or unknown", Vec::new(), "main-sess"),
+        (
+            "fork or unknown",
+            Some(SessionOrigin::Fresh),
+            Some(SessionOrigin::Forked),
+            "main-sess",
+        ),
     ] {
         let mut main = agent("codex", "main-sess", AgentStatus::Running, 1_000)
             .worktree("/repo/main")
@@ -139,25 +146,18 @@ fn cleared_fresh_session_reap_repins_shared_pane_but_fork_keeps_primary() {
             .active_ago(120);
         main.registered_at = Some(ago(600));
         main.agent_pid = Some(9_999);
+        main.origin = main_origin;
 
         let mut replacement = agent("codex", "new-sess", AgentStatus::Running, 2_000)
             .worktree("/repo/main")
+            .in_pane("%1")
             .active_ago(5);
         replacement.registered_at = Some(ago(60));
         replacement.agent_pid = Some(9_999);
+        replacement.origin = replacement_origin;
 
-        let replacements: BTreeSet<(crate::ids::AgentSessionId, crate::ids::AgentSessionId)> =
-            replacements
-                .into_iter()
-                .map(|(older, newer)| {
-                    (
-                        crate::ids::AgentSessionId::from(older),
-                        crate::ids::AgentSessionId::from(newer),
-                    )
-                })
-                .collect();
         let mut snapshot = room(Vec::new(), vec![main, replacement]);
-        snapshot.drop_cleared_codex_sessions(&replacements);
+        snapshot.drop_cleared_codex_sessions(&[pane("%1", "codex", "/repo/main")]);
         let snapshot = snapshot.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
 
         let rows = rows(&snapshot);

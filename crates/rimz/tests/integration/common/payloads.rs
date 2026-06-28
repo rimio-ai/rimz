@@ -53,6 +53,7 @@ fn registered_observation(agent_id: &str) -> AgentLifecycleObservation {
         task: None,
         prompt: None,
         transcript_path: None,
+        origin: None,
         model: None,
         effort: None,
         context_pct: None,

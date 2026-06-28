@@ -800,6 +800,7 @@ fn agent(kind: &str, id: &str, branch: Option<&str>, raw_pane: &str) -> AgentSta
         prompt: None,
         description: None,
         transcript_path: None,
+        origin: None,
         recent_prompts: Vec::new(),
         model: None,
         effort: None,

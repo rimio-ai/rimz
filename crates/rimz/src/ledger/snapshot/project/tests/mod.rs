@@ -4,6 +4,7 @@ use super::*;
 
 use super::super::view::{attach_sub_agents, row_from_agent, sub_agent_from_state};
 use crate::agents::AgentStatus;
+use crate::agents::codex::SessionOrigin;
 use crate::agents::lifecycle::TurnPhase;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::snapshot::SidebarSnapshot;
@@ -170,6 +171,33 @@ fn rebirth_resets_ordinals_and_keeps_names() {
         .expect("session-a");
     assert_eq!(agent.name.as_deref(), Some("lucid-atlas"));
     assert_eq!(agent.kind_ordinal, Some(1));
+}
+
+#[test]
+fn carries_codex_origin_forward() {
+    let events = vec![
+        raw_lifecycle_at(
+            "codex",
+            1,
+            json!({
+                "agent_id": "root",
+                "signal": { "signal": "registered" },
+                "origin": "fresh",
+            }),
+        ),
+        raw_lifecycle_at(
+            "codex",
+            2,
+            json!({
+                "agent_id": "root",
+                "signal": { "signal": "turn_started" },
+            }),
+        ),
+    ];
+
+    let agents = reduce_agent_states(&events);
+
+    assert_eq!(agents[0].origin, Some(SessionOrigin::Fresh));
 }
 
 #[test]
