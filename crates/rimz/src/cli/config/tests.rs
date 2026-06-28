@@ -38,6 +38,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "sidebar.focus_key",
         "sidebar.spend_window",
         "sidebar.spend_timezone",
+        "sidebar.afk_after_secs",
         "theme.animations.thinking.frames",
         "theme.animations.working.color",
         "theme.animations.idle.effect",

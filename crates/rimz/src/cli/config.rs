@@ -761,6 +761,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "sidebar.focus_key",
         "sidebar.spend_window",
         "sidebar.spend_timezone",
+        "sidebar.afk_after_secs",
         "agents.attention.stalled_after_secs",
         "agents.attention.inactive_after_secs",
         "theme.pets.enabled",

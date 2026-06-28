@@ -14,7 +14,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{AgentKind, AgentSessionId, PaneId, ViewId, ViewKind};
-use crate::ledger::snapshot::{SidebarOwnView, SidebarPresence};
+use crate::ledger::snapshot::{PresenceSample, SidebarOwnView};
 use crate::pane::{ElevatedAgent, PaneRef};
 use crate::schema::diag::DiagEvent;
 
@@ -45,7 +45,7 @@ pub struct PaneFrame {
     /// Producer-sampled session presence. Absent on legacy frames and on
     /// fallback paths that could not read the per-client mux state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub presence: Option<SidebarPresence>,
+    pub presence: Option<PresenceSample>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -10,7 +10,7 @@ use super::Result;
 use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
-use crate::ledger::snapshot::SidebarPresence;
+use crate::ledger::snapshot::PresenceSample;
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing};
 use crate::schema::diag::{DiagEvent, FrameRejectReason};
 use crate::sidebar::cache::{
@@ -557,11 +557,11 @@ pub(super) fn cached_panes_or_produce(
                 }) {
                     Ok(client_view) => (
                         client_view.viewed_panes,
-                        Some(SidebarPresence::classify(
-                            unix_now_ms(),
-                            client_view.presence.human_clients,
-                            client_view.presence.last_input_ms,
-                        )),
+                        Some(PresenceSample {
+                            human_clients: client_view.presence.human_clients,
+                            last_input_ms: client_view.presence.last_input_ms,
+                            sampled_at_ms: unix_now_ms(),
+                        }),
                     ),
                     Err(_) => (Vec::new(), None),
                 }

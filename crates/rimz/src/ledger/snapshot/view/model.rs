@@ -154,7 +154,15 @@ pub enum SidebarLinkFreshness {
     Stale,
 }
 
-pub const AFK_IDLE_THRESHOLD_MS: u64 = 15 * 60 * 1_000;
+/// The producer's raw client-presence sample, classified into
+/// [`SidebarPresence`] at enrich time against the configured idle window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceSample {
+    pub human_clients: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_input_ms: Option<u64>,
+    pub sampled_at_ms: u64,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
@@ -168,19 +176,20 @@ impl SidebarPresence {
     /// Classify client presence from the producer's mux sample. `last_input_ms`
     /// is `None` when the backend cannot report input idle, so an attached
     /// client reads active until it detaches.
-    pub fn classify(now_ms: u64, human_clients: usize, last_input_ms: Option<u64>) -> Self {
-        if human_clients == 0 {
+    pub fn classify(sample: PresenceSample, threshold_ms: u64) -> Self {
+        if sample.human_clients == 0 {
             return Self::Detached;
         }
-        match last_input_ms {
-            Some(last_input_ms)
-                if now_ms.saturating_sub(last_input_ms) >= AFK_IDLE_THRESHOLD_MS =>
-            {
-                Self::Idle {
-                    idle_ms: now_ms - last_input_ms,
+        match sample.last_input_ms {
+            Some(last_input_ms) => {
+                let idle_ms = sample.sampled_at_ms.saturating_sub(last_input_ms);
+                if idle_ms >= threshold_ms {
+                    Self::Idle { idle_ms }
+                } else {
+                    Self::Active
                 }
             }
-            _ => Self::Active,
+            None => Self::Active,
         }
     }
 
@@ -204,25 +213,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn presence_classifies_detached_active_idle_and_unknown_idle() {
+    fn presence_classifies_detached_active_idle_boundary_and_unknown_idle() {
         let now = 1_700_000_000_000;
+        let threshold_ms = 15 * 60 * 1_000;
 
         assert_eq!(
-            SidebarPresence::classify(now, 0, Some(now)),
+            SidebarPresence::classify(
+                PresenceSample {
+                    human_clients: 0,
+                    last_input_ms: Some(now),
+                    sampled_at_ms: now,
+                },
+                threshold_ms,
+            ),
             SidebarPresence::Detached
         );
         assert_eq!(
-            SidebarPresence::classify(now, 1, Some(now - AFK_IDLE_THRESHOLD_MS + 1)),
+            SidebarPresence::classify(
+                PresenceSample {
+                    human_clients: 1,
+                    last_input_ms: Some(now - threshold_ms + 1),
+                    sampled_at_ms: now,
+                },
+                threshold_ms,
+            ),
             SidebarPresence::Active,
         );
         assert_eq!(
-            SidebarPresence::classify(now, 1, Some(now - AFK_IDLE_THRESHOLD_MS)),
+            SidebarPresence::classify(
+                PresenceSample {
+                    human_clients: 1,
+                    last_input_ms: Some(now - threshold_ms),
+                    sampled_at_ms: now,
+                },
+                threshold_ms,
+            ),
             SidebarPresence::Idle {
-                idle_ms: AFK_IDLE_THRESHOLD_MS,
+                idle_ms: threshold_ms,
             },
         );
         assert_eq!(
-            SidebarPresence::classify(now, 1, None),
+            SidebarPresence::classify(
+                PresenceSample {
+                    human_clients: 1,
+                    last_input_ms: None,
+                    sampled_at_ms: now,
+                },
+                threshold_ms,
+            ),
             SidebarPresence::Active,
         );
     }

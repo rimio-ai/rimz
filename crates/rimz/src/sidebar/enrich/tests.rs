@@ -599,8 +599,10 @@ fn codex_root(id: &str, worktree: &str, pane_id: &str) -> AgentState {
 fn frame_fold_carries_presence_onto_snapshot() {
     let (_dir, runtime, snapshot) = runtime();
     let mut frame = crate::sidebar::frame::assemble_frame(Vec::new(), 1_000, "rimz-test");
-    frame.presence = Some(crate::SidebarPresence::Idle {
-        idle_ms: 16 * 60_000,
+    frame.presence = Some(crate::PresenceSample {
+        human_clients: 0,
+        last_input_ms: None,
+        sampled_at_ms: 1_000,
     });
 
     let snapshot = enrich(
@@ -612,12 +614,7 @@ fn frame_fold_carries_presence_onto_snapshot() {
         None,
     );
 
-    assert_eq!(
-        snapshot.presence,
-        Some(crate::SidebarPresence::Idle {
-            idle_ms: 16 * 60_000
-        })
-    );
+    assert_eq!(snapshot.presence, Some(crate::SidebarPresence::Detached));
 }
 
 #[test]

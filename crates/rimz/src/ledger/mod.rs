@@ -67,7 +67,7 @@ pub use crate::ledger::feed_store::FeedStoreErr;
 pub use crate::ledger::paths::{RuntimePaths, StatePaths};
 pub use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
 pub use crate::ledger::snapshot::{
-    AFK_IDLE_THRESHOLD_MS, AgentCard, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard,
+    AgentCard, PaneAgent, PresenceSample, ProcessCard, ProcessState, RowCallSplit, RowCard,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel,
     SidebarResolverState, SidebarRow, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent,
     SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync,

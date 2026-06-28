@@ -1,4 +1,8 @@
+use std::num::NonZeroU32;
+
 use serde::{Deserialize, Serialize};
+
+pub const DEFAULT_AFK_AFTER_SECS: u32 = 15 * 60;
 
 /// Sidebar behavior preferences.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -28,6 +32,11 @@ pub struct SidebarConfig {
     /// Default `Alt+p`; set empty or `off` to register nothing and leave your
     /// keybinds untouched.
     pub focus_key: String,
+    /// Seconds of input idle before the footer shows the AFK badge. tmux
+    /// reports per-client input idle, so this drives `zᶻ idle · Nm`; Zellij
+    /// reports attach state only, so it shows `zᶻ away` on full detach
+    /// regardless of this value. 15 minutes by default.
+    pub afk_after_secs: NonZeroU32,
 }
 
 impl Default for SidebarConfig {
@@ -37,6 +46,8 @@ impl Default for SidebarConfig {
             spend_timezone: None,
             trunk: None,
             focus_key: default_focus_key(),
+            afk_after_secs: NonZeroU32::new(DEFAULT_AFK_AFTER_SECS)
+                .expect("non-zero default afk window"),
         }
     }
 }
@@ -58,6 +69,10 @@ impl SidebarConfig {
             mode: self.spend_window,
             timezone: self.spend_timezone.clone(),
         }
+    }
+
+    pub fn afk_after_ms(&self) -> u64 {
+        u64::from(self.afk_after_secs.get()) * 1_000
     }
 }
 

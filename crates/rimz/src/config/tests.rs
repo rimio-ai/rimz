@@ -880,6 +880,28 @@ fn sidebar_spend_headline_window_parses_and_defaults_session() {
 }
 
 #[test]
+fn sidebar_afk_window_defaults_parses_and_rejects_zero() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    assert_eq!(
+        config.sidebar.afk_after_secs.get(),
+        DEFAULT_AFK_AFTER_SECS,
+        "unset uses the shipped 15-minute AFK window",
+    );
+    assert_eq!(config.sidebar.afk_after_ms(), 15 * 60 * 1_000);
+
+    let tuned =
+        MachineConfig::load_from(&write(&dir, "[sidebar]\nafk_after_secs = 60\n")).expect("load");
+    assert_eq!(tuned.sidebar.afk_after_secs.get(), 60);
+    assert_eq!(tuned.sidebar.afk_after_ms(), 60_000);
+
+    assert!(
+        MachineConfig::load_from(&write(&dir, "[sidebar]\nafk_after_secs = 0\n")).is_err(),
+        "zero cannot disable the AFK badge"
+    );
+}
+
+#[test]
 fn sidebar_scrollbar_parses_and_defaults_auto() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write_named(

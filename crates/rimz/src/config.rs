@@ -81,7 +81,7 @@ pub use pets::{PetsConfig, PetsGlyphMode};
 pub use remote_control::RemoteControlConfig;
 pub use resume::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 pub use sentry::SentryConfig;
-pub use sidebar::SidebarConfig;
+pub use sidebar::{DEFAULT_AFK_AFTER_SECS, SidebarConfig};
 pub use theme::{
     InlineAnsiColors, InlinePalette, InlinePrimaryColors, InlineSelectionColors, ThemeConfig,
     ThemeProviderStyle, ThemeStyle,

@@ -18,7 +18,9 @@ use crate::agents::spending::{
     read_spending_cache, read_workspace_spending_cache, unix_secs_now,
 };
 use crate::ids::{PaneId, WorkspaceId};
-use crate::ledger::snapshot::{LazyAgentPairingDiagnostic, LazyAgentPairingResult};
+use crate::ledger::snapshot::{
+    LazyAgentPairingDiagnostic, LazyAgentPairingResult, SidebarPresence,
+};
 use crate::{
     RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarSnapshot,
     SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState, WorktreeTrunkSync,
@@ -558,7 +560,9 @@ pub fn enrich(
             .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
             .collect();
         snapshot.viewed_panes = frame.viewed_panes.clone();
-        snapshot.presence = frame.presence;
+        snapshot.presence = frame
+            .presence
+            .map(|sample| SidebarPresence::classify(sample, machine_config.sidebar.afk_after_ms()));
         snapshot.truth_degraded = truth_notice_for_frame(&frame);
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_frame(own, &frame);

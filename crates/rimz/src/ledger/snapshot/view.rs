@@ -30,9 +30,9 @@ mod reap;
 mod rows;
 
 pub use model::{
-    AFK_IDLE_THRESHOLD_MS, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
-    SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
-    WorktreePrState, WorktreeTrunkSync, lead_unread_row,
+    PresenceSample, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarProviderPanel,
+    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState,
+    WorktreeTrunkSync, lead_unread_row,
 };
 use reap::{agent_hook_session_stale, is_agent_native_item};
 
