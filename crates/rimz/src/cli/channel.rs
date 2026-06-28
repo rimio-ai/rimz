@@ -215,6 +215,11 @@ pub(crate) fn ensure_named_channel_available(
     Ok(())
 }
 
+pub(crate) fn named_channel_registered(ledger: &rimz::Ledger, name: &str) -> bool {
+    rimz::channel::list(&ledger.paths().channels_record)
+        .is_ok_and(|records| records.iter().any(|record| record.name == name))
+}
+
 fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, channel: &str) {
     let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
         return;

@@ -45,7 +45,7 @@ pub(crate) fn message(status: MessageStatus) -> anstyle::Style {
         MessageStatus::TimedOut | MessageStatus::Errored | MessageStatus::Abandoned => {
             palette::WARN
         }
-        MessageStatus::Removed => palette::MUTED,
+        MessageStatus::Removed | MessageStatus::Archived => palette::MUTED,
     }
 }
 

@@ -125,6 +125,7 @@ pub(crate) enum Outcome {
     },
     SkippedPending {
         label: String,
+        message_id: MessageId,
         request_id: String,
     },
 }
@@ -171,6 +172,7 @@ pub(crate) fn message_for_target(
         kind: target.kind.clone(),
         agent_id,
         agent_name,
+        channel: target.channel(),
         sender: draft.sender,
         body: draft.body,
         text: draft.text,
@@ -274,7 +276,7 @@ pub(crate) fn send_to_live_pane(
     message: &MessageRecord,
     send: &mut LiveSend,
 ) -> Result<Outcome> {
-    let label = target.label();
+    let label = handle_for_pane_target(snapshot, target, bound);
     if !send.force
         && let Some(agent) = bound
         && let Some(ask) = pending_ask_for(
@@ -287,6 +289,7 @@ pub(crate) fn send_to_live_pane(
     {
         return Ok(Outcome::SkippedPending {
             label,
+            message_id: message.message_id.clone(),
             request_id: ask.request_id.to_string(),
         });
     }
@@ -322,6 +325,23 @@ pub(crate) fn send_to_live_pane(
         label,
         message_id: message.message_id.clone(),
     })
+}
+
+pub(crate) fn handle_for_pane_target(
+    snapshot: &SidebarSnapshot,
+    target: &PaneAgent,
+    bound: Option<&AgentState>,
+) -> String {
+    if let Some(agent) = bound {
+        let peers: Vec<&AgentState> = snapshot
+            .agents
+            .iter()
+            .filter(|agent| agent.parent_agent_id.is_none())
+            .collect();
+        format!("@{}", rimz::target::agent_handle(agent, &peers, true))
+    } else {
+        format!("@{}", target.label())
+    }
 }
 
 pub(crate) fn compact_message_for_target(
@@ -414,7 +434,8 @@ pub(crate) fn wait_for_message_until(
                 | MessageStatus::Errored
                 | MessageStatus::TimedOut
                 | MessageStatus::Removed
-                | MessageStatus::Abandoned => return Ok(message.status),
+                | MessageStatus::Abandoned
+                | MessageStatus::Archived => return Ok(message.status),
                 MessageStatus::Sent if Instant::now() >= deadline => {
                     let timed_out =
                         ledger.mark_message_timed_out(message_id, session_name, Some("wait"))?;

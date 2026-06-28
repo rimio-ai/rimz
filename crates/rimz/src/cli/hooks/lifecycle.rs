@@ -55,6 +55,25 @@ pub(super) fn handle_lifecycle_hook(
     if let Some(recorded) = recorded.as_ref() {
         record_run_lifecycle(ledger, agent, event_name, payload, recorded);
         confirm_sent_message_for_lifecycle(ledger, agent, recorded, &workspace.session_name);
+        if recorded.observation.signal == LifecycleSignal::Ended
+            && let Some(agent_id) = agent_id
+        {
+            let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
+            if let Err(err) = ledger.archive_messages_for_card(
+                &kind,
+                &rimz::ids::AgentSessionId::from(agent_id),
+                recorded.observation.agent_name.as_deref(),
+                "receiver ended",
+                &workspace.session_name,
+            ) {
+                warn!(
+                    error = %err,
+                    kind = agent.descriptor().kind,
+                    agent_id,
+                    "lifecycle: failed to archive receiver messages",
+                );
+            }
+        }
         spawn_queue_delivery_if_checkpoint(workspace, ledger, agent, recorded);
         if recorded.appended_lifecycle {
             spawn_auto_rotation_if_due(workspace, ledger);

@@ -98,11 +98,11 @@ impl Ledger {
                 feed_store::write(&self.inner.paths.feed_dir, item)?;
             }
 
-            let mut messages = message_store::list(&self.inner.paths.queue_dir)?;
+            let mut messages = message_store::list(&self.inner.paths.messages_dir)?;
             let messages_rewritten = messages.len();
             for message in &mut messages {
                 message.workspace_id = workspace.workspace_id.clone();
-                message_store::write(&self.inner.paths.queue_dir, message)?;
+                message_store::write(&self.inner.paths.messages_dir, message)?;
             }
 
             let mut events = event_log::read_all(&self.inner.paths.events_log)?;

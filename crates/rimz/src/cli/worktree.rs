@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
-use super::GlobalFlags;
+use super::{GlobalFlags, open_ledger};
 use crate::cli::render;
 use rimz::agents::AgentState;
 use rimz::config::WorktreeBase;
@@ -87,6 +87,14 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             from_pr,
             branch,
         } => {
+            let ledger = open_ledger(&workspace)?;
+            if let Some(name) = name.as_deref()
+                && super::channel::named_channel_registered(&ledger, name)
+            {
+                bail!(
+                    "channel `{name}` is a named channel; use `rimz channel new` or pick another name"
+                );
+            }
             let created = if let Some(pr) = from_pr.as_ref() {
                 rimz::worktree::create_from_pr(
                     &workspace.project_root,
@@ -106,6 +114,13 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                     false,
                 )?
             };
+            ledger
+                .archive_channel_messages(
+                    &created.branch,
+                    "channel recreated",
+                    &workspace.session_name,
+                )
+                .context("archiving messages for recreated worktree channel")?;
             #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
             {
                 println!("created {}", created.name);
@@ -196,7 +211,19 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             Ok(())
         }
         WorktreeSubcmd::Remove { name, force } => {
+            let ledger = open_ledger(&workspace)?;
+            let path = rimz::worktree::worktree_path(&workspace.project_root, &config, &name)?;
+            let marker = rimz::worktree::read_marker_for_worktree(&path)?;
             let branch = rimz::worktree::remove(&workspace.project_root, &config, &name, force)?;
+            if let Some(marker) = marker {
+                ledger
+                    .archive_channel_messages(
+                        &marker.branch,
+                        "worktree removed",
+                        &workspace.session_name,
+                    )
+                    .context("archiving messages for removed worktree channel")?;
+            }
             #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
             {
                 println!("removed {name}");
@@ -243,6 +270,7 @@ pub(super) fn cleanup_worktree(
     match rimz::worktree::cleanup_decision(status, true, other_pane_inside || roster_bound) {
         rimz::worktree::CleanupDecision::RemoveClean => {
             let branch = remove_after_leaving_worktree(path, &marker, false)?;
+            archive_removed_worktree_messages(&marker, globals);
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "rimz: removed clean worktree {}",
@@ -256,6 +284,7 @@ pub(super) fn cleanup_worktree(
                     DirtyChoice::Keep => {}
                     DirtyChoice::Remove => {
                         let branch = remove_after_leaving_worktree(path, &marker, true)?;
+                        archive_removed_worktree_messages(&marker, globals);
                         report_kept_branch(branch, &marker);
                     }
                     DirtyChoice::Shell => exec_shell(path)?,
@@ -347,6 +376,29 @@ fn remove_after_leaving_worktree(
         .with_context(|| format!("leaving worktree before removing {}", path.display()))?;
     rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force)
         .map_err(Into::into)
+}
+
+fn archive_removed_worktree_messages(
+    marker: &rimz::worktree::WorktreeMarker,
+    globals: &GlobalFlags,
+) {
+    let result = (|| -> Result<()> {
+        let workspace = WorkspaceResolver::resolve(&marker.repo_root, globals.root.clone())?;
+        let ledger = open_ledger(&workspace)?;
+        ledger.archive_channel_messages(
+            &marker.branch,
+            "worktree removed",
+            &workspace.session_name,
+        )?;
+        Ok(())
+    })();
+    if let Err(err) = result {
+        tracing::debug!(
+            branch = %marker.branch,
+            error = %err,
+            "could not archive messages for removed worktree",
+        );
+    }
 }
 
 fn report_kept_branch(

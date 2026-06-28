@@ -27,6 +27,8 @@ The registry stores only named channels. Worktree channels use their `rimz-workt
 
 The sidebar remains presence-driven: a group appears when a pane is running in that channel. An empty named channel persists in `channels.json`, appears in `rimz channel list`, and reopens as an empty `#channel` tab on room rebirth. Named-channel records stay until `rimz channel rm`; `rimz gc` acts on worktrees only.
 
+Named channels and Rimz-owned worktrees reserve the same bare channel namespace. `rimz channel new NAME` refuses an existing worktree channel, and `rimz worktree new NAME` refuses an existing named channel with the fix to use the named-channel command or choose another name.
+
 ## Launch and address
 
 `rimz agents <SPEC> --channel design` registers the channel if needed, stamps `RIMZ_CHANNEL`, opens a `#design` tab, and writes the channel into the launch event so the rollup survives hook timing and recovery. `rimz steer @planner#design --create -- "draft"` follows the same path for create-on-miss.
@@ -34,3 +36,5 @@ The sidebar remains presence-driven: a group appears when a pane is running in t
 `--worktree` and `--channel` are separate launch intents. A worktree launch creates or reuses Git backing; a named-channel launch stays in the room root and records only the bare lane. Inline `#design` and `--channel design` reconcile through the same target parser, so mismatched channel names fail before delivery.
 
 Commands run inside a named-channel tab inherit `RIMZ_CHANNEL`, so `@claude` scopes to that lane by default. Human shells in a bare directory room have no current channel and reach the whole room unless an address or flag supplies one.
+
+Message records carry the receiver channel. When a worktree channel is recreated, removed explicitly, or swept by cleanup/gc, open records for that channel move to `archived`; `message list` hides them by default while `message list --all` and `message status <id>` keep the audit trail visible.

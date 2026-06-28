@@ -88,6 +88,112 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
 }
 
 #[test]
+fn message_list_scopes_by_channel_status_and_newest_first() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-docs", "docs", &[]);
+
+    let docs = queue_add_in_channel(&env, "docs", "@claude", "docs task");
+    std::thread::sleep(Duration::from_millis(2));
+    let ops = queue_direct_channel_message(&env, "ops", "ops task");
+    env.ledger()
+        .archive_channel_messages("docs", "test archive", "rimz-test")
+        .expect("archive docs channel");
+
+    let scoped = env
+        .rimz()
+        .env(rimz::run::ENV_CHANNEL, "docs")
+        .args(["message", "list", "--json"])
+        .output()
+        .expect("scoped list");
+    assert!(scoped.status.success(), "scoped list failed");
+    let scoped: serde_json::Value = serde_json::from_slice(&scoped.stdout).expect("json");
+    assert_eq!(scoped.as_array().unwrap().len(), 0, "archived hidden");
+
+    let archived = env
+        .rimz()
+        .env(rimz::run::ENV_CHANNEL, "docs")
+        .args(["message", "list", "--status", "archived", "--json"])
+        .output()
+        .expect("archived list");
+    assert!(archived.status.success(), "archived list failed");
+    let archived: serde_json::Value = serde_json::from_slice(&archived.stdout).expect("json");
+    assert_eq!(archived.as_array().unwrap().len(), 1);
+    assert_eq!(archived[0]["message_id"], docs);
+    assert_eq!(archived[0]["channel"], "docs");
+
+    let ops_only = env
+        .rimz()
+        .args(["message", "list", "--channel", "ops", "--json"])
+        .output()
+        .expect("ops list");
+    assert!(ops_only.status.success(), "ops list failed");
+    let ops_only: serde_json::Value = serde_json::from_slice(&ops_only.stdout).expect("json");
+    assert_eq!(ops_only.as_array().unwrap().len(), 1);
+    assert_eq!(ops_only[0]["message_id"], ops);
+
+    let all = env
+        .rimz()
+        .args(["message", "list", "--all", "--json"])
+        .output()
+        .expect("all list");
+    assert!(all.status.success(), "all list failed");
+    let all: serde_json::Value = serde_json::from_slice(&all.stdout).expect("json");
+    assert_eq!(all.as_array().unwrap().len(), 2);
+    assert_eq!(all[0]["message_id"], ops, "newest message first");
+    assert_eq!(all[1]["message_id"], docs);
+
+    let table = env
+        .rimz()
+        .args(["message", "list", "--all"])
+        .output()
+        .expect("table list");
+    assert!(table.status.success(), "table list failed");
+    let table = String::from_utf8_lossy(&table.stdout);
+    assert!(table.contains("CREATED") && table.contains("DELIVERED"));
+    assert!(!table.contains("ATTEMPTS"));
+
+    let status = env
+        .rimz()
+        .args(["message", "status", &ops])
+        .output()
+        .expect("message status");
+    assert!(status.status.success(), "message status failed");
+    let status = String::from_utf8_lossy(&status.stdout);
+    assert!(status.contains(&ops));
+    assert!(status.contains("queued"));
+    assert!(status.contains("ops"));
+}
+
+#[test]
+fn receiver_end_archives_open_messages() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-ended", "docs", &[]);
+    let message_id = queue_add_in_channel(&env, "docs", "@claude", "stale task");
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "SessionEnd",
+            "session_id": "sess-ended",
+            "worktree_branch": "docs",
+        }),
+        &[],
+    );
+
+    let message = env
+        .ledger()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| message.message_id.as_str() == message_id)
+        .expect("archived message");
+    assert_eq!(message.status, MessageStatus::Archived);
+    assert_eq!(message.last_error.as_deref(), Some("receiver ended"));
+}
+
+#[test]
 fn message_parks_like_queue_without_separator() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -2005,6 +2111,43 @@ fn queue_add(env: &Env, target: &str, text: &str) -> String {
     queued_id_from_stdout(&out.stdout)
 }
 
+fn queue_add_in_channel(env: &Env, channel: &str, target: &str, text: &str) -> String {
+    let out = env
+        .rimz()
+        .args(["message", "--channel", channel, target, "--", text])
+        .output()
+        .expect("message");
+    assert!(
+        out.status.success(),
+        "message failed\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    queued_id_from_stdout(&out.stdout)
+}
+
+fn queue_direct_channel_message(env: &Env, channel: &str, text: &str) -> String {
+    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.parent_agent_id.is_none())
+        .expect("agent");
+    let message = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        text.to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_channel(Some(channel.to_owned()));
+    let message_id = message.message_id.to_string();
+    env.ledger()
+        .queue_message(&message, "rimz-test")
+        .expect("queue message");
+    message_id
+}
+
 fn wake_stamp_path(env: &Env) -> PathBuf {
     env.runtime_paths()
         .root
@@ -2015,11 +2158,11 @@ fn queued_id_from_stdout(stdout: &[u8]) -> String {
     let text = String::from_utf8_lossy(stdout);
     let trimmed = text.trim();
     trimmed
-        .strip_prefix("queued ")
+        .strip_prefix("queued for ")
         .and_then(|rest| rest.rsplit_once('('))
         .and_then(|(_, id)| id.strip_suffix(')'))
         .map(str::to_owned)
-        .unwrap_or_else(|| panic!("expected `queued @target (msg_...)`, got `{trimmed}`"))
+        .unwrap_or_else(|| panic!("expected `queued for @target (msg_...)`, got `{trimmed}`"))
 }
 
 fn push_pending_agent_ask(env: &Env, session_id: &str) {

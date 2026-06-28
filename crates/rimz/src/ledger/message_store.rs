@@ -1,5 +1,5 @@
-//! Per-agent queued-message files: `queue/<message_id>.json` while queued,
-//! `queue/terminal/<message_id>.json` once claimed, sent, or terminal.
+//! Per-agent message files: `messages/<message_id>.json` while queued,
+//! `messages/terminal/<message_id>.json` once claimed, sent, or terminal.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -57,26 +57,26 @@ impl PendingTerminalRecord for MessageRecord {
 }
 
 #[must_use = "durability barrier; check the result"]
-pub fn write(queue_dir: &Path, message: &MessageRecord) -> Result<()> {
-    pending_terminal::write(queue_dir, message)?;
+pub fn write(messages_dir: &Path, message: &MessageRecord) -> Result<()> {
+    pending_terminal::write(messages_dir, message)?;
     Ok(())
 }
 
-pub fn load(queue_dir: &Path, message_id: &MessageId) -> Result<MessageRecord> {
+pub fn load(messages_dir: &Path, message_id: &MessageId) -> Result<MessageRecord> {
     let stem = message_id.to_string();
-    pending_terminal::load::<MessageRecord>(queue_dir, &stem)?
+    pending_terminal::load::<MessageRecord>(messages_dir, &stem)?
         .ok_or_else(|| MessageStoreErr::NotFound(message_id.clone()))
 }
 
-pub fn list(queue_dir: &Path) -> Result<Vec<MessageRecord>> {
-    let mut items = pending_terminal::list_all::<MessageRecord>(queue_dir)?;
+pub fn list(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
+    let mut items = pending_terminal::list_all::<MessageRecord>(messages_dir)?;
     items.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
     Ok(items)
 }
 
-pub fn list_pending(queue_dir: &Path) -> Result<Vec<MessageRecord>> {
+pub fn list_pending(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
     let mut items: Vec<MessageRecord> =
-        pending_terminal::list_pending_raw::<MessageRecord>(queue_dir)?
+        pending_terminal::list_pending_raw::<MessageRecord>(messages_dir)?
             .into_iter()
             .filter(|item| item.status == MessageStatus::Queued)
             .collect();
@@ -94,9 +94,13 @@ mod tests {
     use crate::message::DeliveryGate;
 
     #[test]
-    fn missing_queue_dir_lists_empty() {
+    fn missing_messages_dir_lists_empty() {
         let dir = tempdir().unwrap();
-        assert!(list_pending(&dir.path().join("queue")).unwrap().is_empty());
+        assert!(
+            list_pending(&dir.path().join("messages"))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

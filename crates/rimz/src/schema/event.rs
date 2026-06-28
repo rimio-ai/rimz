@@ -72,6 +72,7 @@ pub enum MessageEventMethod {
     Errored,
     Removed,
     Abandoned,
+    Archived,
 }
 
 impl MessageEventMethod {
@@ -84,6 +85,7 @@ impl MessageEventMethod {
             Self::Errored => "message.errored",
             Self::Removed => "message.removed",
             Self::Abandoned => "message.abandoned",
+            Self::Archived => "message.archived",
         }
     }
 
@@ -98,6 +100,7 @@ impl MessageEventMethod {
             MessageStatus::Errored => Some(Self::Errored),
             MessageStatus::Removed => Some(Self::Removed),
             MessageStatus::Abandoned => Some(Self::Abandoned),
+            MessageStatus::Archived => Some(Self::Archived),
         }
     }
 
@@ -110,6 +113,7 @@ impl MessageEventMethod {
             "message.errored" => Some(Self::Errored),
             "message.removed" => Some(Self::Removed),
             "message.abandoned" => Some(Self::Abandoned),
+            "message.archived" => Some(Self::Archived),
             _ => None,
         }
     }
@@ -733,6 +737,7 @@ mod tests {
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from("sess-1"),
             agent_name: Some("lucid-atlas".to_owned()),
+            channel: None,
             sender: MessageSender::Human,
             body: MessageBody::Prompt,
             text: "secret prompt body".to_owned(),
@@ -814,6 +819,26 @@ mod tests {
             panic!("message.queued decodes to its typed kind");
         };
         assert_eq!(payload.sender, Some(sender));
+    }
+
+    #[test]
+    fn message_event_methods_round_trip_archived() {
+        for method in [
+            MessageEventMethod::Queued,
+            MessageEventMethod::Sent,
+            MessageEventMethod::Delivered,
+            MessageEventMethod::TimedOut,
+            MessageEventMethod::Errored,
+            MessageEventMethod::Removed,
+            MessageEventMethod::Abandoned,
+            MessageEventMethod::Archived,
+        ] {
+            assert_eq!(MessageEventMethod::parse(method.as_str()), Some(method));
+        }
+        assert_eq!(
+            MessageEventMethod::for_terminal_status(MessageStatus::Archived),
+            Some(MessageEventMethod::Archived)
+        );
     }
 
     #[test]

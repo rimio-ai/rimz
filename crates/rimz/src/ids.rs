@@ -1,10 +1,10 @@
 //! Strongly-typed identifiers.
 //!
 //! Every ID that travels through the ledger, the wakeup socket, or the agent
-//! hook protocol is a newtype. Rimz-minted IDs (`RequestId`, `EventId`,
-//! `SidebarInstanceId`) use UUIDv7 so filenames named after the ID sort
-//! chronologically without an external index. IDs derived from external
-//! truth (`WorkspaceId`, `PaneId`) keep their natural shape.
+//! hook protocol is a newtype. Rimz-minted long IDs (`RequestId`, `EventId`,
+//! `SidebarInstanceId`) use UUIDv7, while message IDs use a shorter
+//! time-sortable token. IDs derived from external truth (`WorkspaceId`,
+//! `PaneId`) keep their natural shape.
 
 use std::fmt;
 use std::path::Path;
@@ -253,7 +253,6 @@ fn validate_uuid_id(
 }
 
 uuid_v7_id!(RequestId, "req", "Per-feed-item request identifier.");
-uuid_v7_id!(MessageId, "msg", "Per-agent queued message identifier.");
 uuid_v7_id!(RunId, "run", "Per-supervised-run identifier.");
 uuid_v7_id!(EventId, "evt", "Per-event identifier in the event log.");
 uuid_v7_id!(
@@ -261,6 +260,114 @@ uuid_v7_id!(
     "sb",
     "Per-instance sidebar identifier; one per live sidebar process."
 );
+
+/// Per-agent queued message identifier.
+///
+/// `msg_<16 base32hex chars>` encodes a 48-bit millisecond timestamp plus a
+/// 32-bit suffix seeded from UUIDv7 entropy and made process-monotonic. The
+/// fixed big-endian base32hex form preserves enqueue order in filenames while
+/// keeping command output compact.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MessageId(String);
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid MessageId `{0}`; expected `msg_` followed by 16 lowercase base32hex characters")]
+pub struct InvalidMessageId(String);
+
+const MESSAGE_ID_PREFIX: &str = "msg_";
+const MESSAGE_ID_LEN: usize = 16;
+const BASE32HEX: &[u8; 32] = b"0123456789abcdefghijklmnopqrstuv";
+static LAST_MESSAGE_ID: std::sync::Mutex<(u64, u32)> = std::sync::Mutex::new((0, 0));
+
+impl MessageId {
+    pub fn new() -> Self {
+        let uuid = Uuid::now_v7().as_u128();
+        let timestamp_ms = (uuid >> 80) as u64;
+        let random_suffix = uuid as u32;
+        let (timestamp_ms, suffix) = next_message_id_parts(timestamp_ms, random_suffix);
+        let sortable = ((timestamp_ms as u128) << 32) | u128::from(suffix);
+        let mut token = String::with_capacity(MESSAGE_ID_PREFIX.len() + MESSAGE_ID_LEN);
+        token.push_str(MESSAGE_ID_PREFIX);
+        for shift in (0..80).step_by(5).rev() {
+            let index = ((sortable >> shift) & 0x1f) as usize;
+            token.push(BASE32HEX[index] as char);
+        }
+        Self(token)
+    }
+
+    pub fn parse(value: &str) -> Result<Self, InvalidMessageId> {
+        let Some(token) = value.strip_prefix(MESSAGE_ID_PREFIX) else {
+            return Err(InvalidMessageId(value.to_owned()));
+        };
+        if token.len() != MESSAGE_ID_LEN
+            || !token
+                .bytes()
+                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'v'))
+        {
+            return Err(InvalidMessageId(value.to_owned()));
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+fn next_message_id_parts(timestamp_ms: u64, random_suffix: u32) -> (u64, u32) {
+    let mut last = LAST_MESSAGE_ID
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (mut next_ms, mut next_suffix) = (timestamp_ms, random_suffix);
+    if next_ms < last.0 || (next_ms == last.0 && next_suffix <= last.1) {
+        next_ms = last.0;
+        next_suffix = last.1.wrapping_add(1);
+        if next_suffix == 0 {
+            next_ms = next_ms.saturating_add(1);
+        }
+    }
+    *last = (next_ms, next_suffix);
+    (next_ms, next_suffix)
+}
+
+impl Default for MessageId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for MessageId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for MessageId {
+    type Err = InvalidMessageId;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
+impl Serialize for MessageId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for MessageId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
 
 /// Resolver allowlist identifier. Caller-supplied but constrained: the
 /// allowlist key, the heartbeat filename, and the audit log all use this
@@ -616,9 +723,29 @@ mod tests {
         assert!(RequestId::parse("req_short").is_err());
         assert!(RequestId::parse("req_0123456789abcdef0123456789abcdeg").is_err());
         assert!(RequestId::parse("req_0123456789abcdef0123456789ABCDEF").is_err());
-        assert!(MessageId::parse("msg_0123456789abcdef0123456789abcdef").is_ok());
         assert!(EventId::parse("evt_0123456789abcdef0123456789abcdef").is_ok());
         assert!(SidebarInstanceId::parse("sb_0123456789abcdef0123456789abcdef").is_ok());
+    }
+
+    #[test]
+    fn message_ids_are_short_time_sortable_tokens() {
+        let first = MessageId::new();
+        let second = MessageId::new();
+
+        assert_ne!(first, second);
+        assert!(first.as_str().starts_with("msg_"));
+        assert_eq!(first.as_str().len(), "msg_".len() + 16);
+        assert!(
+            first.as_str()["msg_".len()..]
+                .bytes()
+                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'v'))
+        );
+        assert!(second.as_str() >= first.as_str());
+        assert!(MessageId::parse(first.as_str()).is_ok());
+        assert!(MessageId::parse("msg_0123456789abcdef").is_ok());
+        assert!(MessageId::parse("msg_0123456789abcde").is_err());
+        assert!(MessageId::parse("msg_0123456789abcdew").is_err());
+        assert!(MessageId::parse("msg_0123456789ABCDEF").is_err());
     }
 
     #[test]

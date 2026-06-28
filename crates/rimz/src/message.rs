@@ -167,13 +167,19 @@ pub enum MessageStatus {
     Errored,
     Removed,
     Abandoned,
+    Archived,
 }
 
 impl MessageStatus {
     pub const fn is_terminal(self) -> bool {
         matches!(
             self,
-            Self::Delivered | Self::TimedOut | Self::Errored | Self::Removed | Self::Abandoned
+            Self::Delivered
+                | Self::TimedOut
+                | Self::Errored
+                | Self::Removed
+                | Self::Abandoned
+                | Self::Archived
         )
     }
 
@@ -196,6 +202,7 @@ impl MessageStatus {
             Self::Errored => "errored",
             Self::Removed => "removed",
             Self::Abandoned => "abandoned",
+            Self::Archived => "archived",
         }
     }
 }
@@ -237,6 +244,8 @@ pub struct MessageRecord {
     pub agent_id: AgentSessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
     #[serde(default)]
     pub sender: MessageSender,
     #[serde(default)]
@@ -295,6 +304,7 @@ impl MessageRecord {
             kind: agent.kind.clone(),
             agent_id: agent.agent_id.clone(),
             agent_name: agent.name.clone(),
+            channel: None,
             sender: MessageSender::Human,
             body: MessageBody::Prompt,
             text,
@@ -345,6 +355,12 @@ impl MessageRecord {
     #[must_use]
     pub fn with_not_before(mut self, not_before: Option<Timestamp>) -> Self {
         self.not_before = not_before;
+        self
+    }
+
+    #[must_use]
+    pub fn with_channel(mut self, channel: Option<String>) -> Self {
+        self.channel = channel;
         self
     }
 
@@ -556,6 +572,7 @@ mod tests {
             MessageStatus::Errored,
             MessageStatus::Removed,
             MessageStatus::Abandoned,
+            MessageStatus::Archived,
         ] {
             assert!(status.is_terminal(), "{status}");
         }
@@ -743,6 +760,26 @@ mod tests {
     }
 
     #[test]
+    fn channel_defaults_absent_and_round_trips_when_set() {
+        let base = MessageRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+            &agent("s1", None),
+            "next".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        assert_eq!(base.channel, None);
+        let scoped = base.with_channel(Some("docs".to_owned()));
+        let json = serde_json::to_string(&scoped).unwrap();
+        let back: MessageRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.channel.as_deref(), Some("docs"));
+        let mut legacy = serde_json::to_value(&back).unwrap();
+        legacy.as_object_mut().unwrap().remove("channel");
+        let back: MessageRecord = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.channel, None);
+    }
+
+    #[test]
     fn sender_render_names_human_and_agent_address() {
         assert_eq!(MessageSender::Human.render(), "you");
         assert_eq!(
@@ -805,8 +842,8 @@ mod tests {
             true,
             DeliveryGate::Done,
         );
-        older.message_id = MessageId::parse("msg_00000000000000000000000000000001").unwrap();
-        newer.message_id = MessageId::parse("msg_00000000000000000000000000000002").unwrap();
+        older.message_id = MessageId::parse("msg_0000000000000001").unwrap();
+        newer.message_id = MessageId::parse("msg_0000000000000002").unwrap();
         let pending = [newer.clone(), older.clone()];
 
         let head = queue_head(
@@ -849,8 +886,8 @@ mod tests {
         )
         .with_not_before(Some(now + jiff::SignedDuration::from_secs(60)));
         let mut ready = MessageRecord::new(ws, &agent, "now".to_owned(), true, DeliveryGate::Done);
-        scheduled.message_id = MessageId::parse("msg_00000000000000000000000000000001").unwrap();
-        ready.message_id = MessageId::parse("msg_00000000000000000000000000000002").unwrap();
+        scheduled.message_id = MessageId::parse("msg_0000000000000001").unwrap();
+        ready.message_id = MessageId::parse("msg_0000000000000002").unwrap();
         let pending = [scheduled.clone(), ready.clone()];
 
         let head = queue_head(

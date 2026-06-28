@@ -61,7 +61,7 @@ pub struct StatePaths {
     pub latest_snapshot: PathBuf,
     pub rollup_cache: PathBuf,
     pub feed_dir: PathBuf,
-    pub queue_dir: PathBuf,
+    pub messages_dir: PathBuf,
     pub runs_dir: PathBuf,
     pub locks_dir: PathBuf,
     pub workspace_lock: PathBuf,
@@ -85,7 +85,7 @@ impl StatePaths {
             .join(workspace_id.as_str());
         let snapshots_dir = root.join("snapshots");
         let feed_dir = root.join("feed");
-        let queue_dir = root.join("queue");
+        let messages_dir = root.join("messages");
         let runs_dir = root.join("runs");
         let locks_dir = root.join("locks");
         Ok(Self {
@@ -97,7 +97,7 @@ impl StatePaths {
             rollup_cache: snapshots_dir.join("rollup.json"),
             snapshots_dir,
             feed_dir,
-            queue_dir,
+            messages_dir,
             runs_dir,
             workspace_lock: locks_dir.join("workspace.lock"),
             publish_lock: locks_dir.join("publish.lock"),

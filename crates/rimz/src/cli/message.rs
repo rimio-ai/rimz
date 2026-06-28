@@ -50,9 +50,20 @@ enum MessageSubcmd {
         /// Emit JSON.
         #[arg(long)]
         json: bool,
+        /// Include every channel and archived messages.
+        #[arg(long)]
+        all: bool,
+        /// Exact status filter.
+        #[arg(long, value_name = "STATUS", value_parser = parse_status)]
+        status: Option<MessageStatus>,
+        /// Filter by channel name.
+        #[arg(long, value_name = "NAME")]
+        channel: Option<String>,
         /// Optional target filter.
         target: Option<String>,
     },
+    /// Show one message record.
+    Status { message_id: MessageId },
     /// Remove one queued message.
     Remove { message_id: MessageId },
     /// Remove every queued message for an agent.
@@ -76,7 +87,14 @@ enum MessageSubcmd {
 
 pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        Some(MessageSubcmd::List { json, target }) => list_messages(json, target, globals),
+        Some(MessageSubcmd::List {
+            json,
+            all,
+            status,
+            channel,
+            target,
+        }) => list_messages(json, all, status, channel, target, globals),
+        Some(MessageSubcmd::Status { message_id }) => status_message(message_id, globals),
         Some(MessageSubcmd::Remove { message_id }) => remove_message(message_id, globals),
         Some(MessageSubcmd::Clear {
             target,
@@ -146,6 +164,7 @@ fn message_add(
             no_from,
             wait,
             not_before,
+            stamp_channel: true,
         },
         FanoutFlags { all, create },
         globals,
@@ -176,6 +195,7 @@ pub(crate) fn to_session(
             no_from: false,
             wait: None,
             not_before: None,
+            stamp_channel: false,
         },
         FanoutFlags {
             all: false,
@@ -255,6 +275,7 @@ fn steer_message(
     let mut compacted = Vec::new();
     for target in &targets {
         let bound = send::bound_agent(&snapshot, target);
+        let handle = send::handle_for_pane_target(&snapshot, target, bound);
         let message = send::message_for_target(
             workspace.workspace_id.clone(),
             target,
@@ -285,7 +306,7 @@ fn steer_message(
             }
         };
         if sent.compacted.is_some() {
-            compacted.push(target.label());
+            compacted.push(handle);
         }
         outcomes.push(sent.outcome);
     }
@@ -340,6 +361,7 @@ struct MessageSpec {
     no_from: bool,
     wait: Option<Duration>,
     not_before: Option<Timestamp>,
+    stamp_channel: bool,
 }
 
 /// One logical message target. `pane` is present when the agent can be reached
@@ -408,6 +430,21 @@ impl QueueTarget<'_> {
             )
             .is_none()
         })
+    }
+}
+
+fn handle_for_target(snapshot: &SidebarSnapshot, target: &QueueTarget<'_>) -> String {
+    if let Some(agent) = target.agent {
+        let peers: Vec<&AgentState> = snapshot
+            .agents
+            .iter()
+            .filter(|agent| agent.parent_agent_id.is_none())
+            .collect();
+        format!("@{}", rimz::target::agent_handle(agent, &peers, true))
+    } else if let Some(pane) = target.pane {
+        format!("@{}", pane.label())
+    } else {
+        "@agent".to_owned()
     }
 }
 
@@ -625,7 +662,7 @@ fn add_message(
     let mut compacted = Vec::new();
     let mut outputs = Vec::new();
     for target in &targets {
-        let label = target.label();
+        let handle = handle_for_target(&snapshot, target);
         let mut park = spec.not_before.is_some()
             || !target.receivable_now(&snapshot, &pending, spec.gate, spec.force, now);
         if !park && let Some(pane) = target.pane {
@@ -656,10 +693,10 @@ fn add_message(
                 Ok(sent) => match sent.outcome {
                     send::Outcome::Sent { message_id, .. } => {
                         if sent.compacted.is_some() {
-                            compacted.push(label.clone());
+                            compacted.push(handle.clone());
                         }
                         outputs.push(AddOutput {
-                            label,
+                            label: handle,
                             message_id,
                             status: MessageStatus::Sent,
                         });
@@ -697,6 +734,11 @@ fn add_message(
             spec.gate,
         )
         .with_force(spec.force)
+        .with_channel(
+            spec.stamp_channel
+                .then(|| rimz::target::agent_channel(agent))
+                .flatten(),
+        )
         .with_sender(sender.clone())
         .with_auto_compact(spec.auto_compact)
         .with_not_before(spec.not_before);
@@ -704,7 +746,7 @@ fn add_message(
         ledger.queue_message(&message, &workspace.session_name)?;
         pending.push(message);
         outputs.push(AddOutput {
-            label,
+            label: handle,
             message_id,
             status: MessageStatus::Queued,
         });
@@ -746,15 +788,41 @@ fn add_message(
     Ok(())
 }
 
-fn list_messages(json: bool, target: Option<String>, globals: &GlobalFlags) -> Result<()> {
+fn list_messages(
+    json: bool,
+    all: bool,
+    status: Option<MessageStatus>,
+    channel: Option<String>,
+    target: Option<String>,
+    globals: &GlobalFlags,
+) -> Result<()> {
     let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
     let mut messages = ledger.list_messages()?;
+    let ambient_channel = current_channel(&workspace);
+    let default_channel = if all {
+        None
+    } else {
+        ambient_channel.as_deref()
+    };
+    let filter_channel = channel.as_deref().or(default_channel);
+    if let Some(filter) = filter_channel {
+        messages.retain(|message| message.channel.as_deref() == Some(filter));
+    }
+    if let Some(status) = status {
+        messages.retain(|message| message.status == status);
+    } else if !all {
+        messages.retain(|message| message.status != MessageStatus::Archived);
+    }
     if let Some(raw) = target {
         rimz::target::require_mention(&raw)?;
-        let channel = current_channel(&workspace);
-        let agent = super::resolve_agent_one(&snapshot, &raw, None, channel.as_deref())?;
+        let agent = super::resolve_agent_one(&snapshot, &raw, None, filter_channel)?;
         messages.retain(|message| message.same_agent_card(agent));
     }
+    messages.sort_by(|a, b| {
+        b.enqueued_at
+            .cmp(&a.enqueued_at)
+            .then_with(|| b.message_id.as_str().cmp(a.message_id.as_str()))
+    });
     if json {
         let rendered = serde_json::to_string_pretty(&messages)?;
         #[expect(clippy::print_stdout, reason = "json emitter")]
@@ -769,26 +837,90 @@ fn list_messages(json: bool, target: Option<String>, globals: &GlobalFlags) -> R
             .iter()
             .filter(|agent| agent.parent_agent_id.is_none())
             .collect();
-        let mut table =
-            render::Table::new(["ID", "STATUS", "TARGET", "FROM", "ATTEMPTS", "TEXT"]).right(&[4]);
+        let now = Timestamp::now();
+        let mut table = render::Table::new([
+            "ID",
+            "STATUS",
+            "TARGET",
+            "FROM",
+            "CREATED",
+            "DELIVERED",
+            "TEXT",
+        ]);
         for message in messages {
-            let target = agents
-                .iter()
-                .copied()
-                .find(|agent| message.same_agent_card(agent))
-                .map(|agent| rimz::target::agent_handle(agent, &agents, true))
-                .unwrap_or_else(|| format!("{}:{}", message.kind, message.agent_id));
+            let target = message_target(&message, &agents);
             table.row([
                 render::cell(message.message_id.to_string()).fg(render::palette::ACCENT),
                 render::cell(message.status.as_str()).fg(render::status::message(message.status)),
                 render::cell(target).fg(render::palette::META),
                 render::cell(message.sender.render()).fg(render::palette::META),
-                render::cell(message.attempts.to_string()),
+                render::cell(rel_age(message.enqueued_at, now)),
+                render::cell(
+                    message
+                        .delivered_at
+                        .map(|delivered| rel_age(delivered, now))
+                        .unwrap_or_else(|| "-".to_owned()),
+                )
+                .dash(),
                 render::cell(preview(&message.text)),
             ]);
         }
         table.render(&mut render::out())?;
     }
+    Ok(())
+}
+
+fn status_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
+    let (_workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
+    let Some(message) = ledger
+        .list_messages()?
+        .into_iter()
+        .find(|message| message.message_id == message_id)
+    else {
+        bail!("message {message_id} not found");
+    };
+    let agents: Vec<&AgentState> = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_none())
+        .collect();
+    let now = Timestamp::now();
+    let mut kv = render::KeyVals::new();
+    kv.push("id", render::cell(message.message_id.to_string()));
+    kv.push(
+        "status",
+        render::cell(message.status.as_str()).fg(render::status::message(message.status)),
+    );
+    kv.push(
+        "target",
+        render::cell(message_target_with_at(&message, &agents)).fg(render::palette::META),
+    );
+    kv.push(
+        "from",
+        render::cell(message.sender.render()).fg(render::palette::META),
+    );
+    kv.push(
+        "channel",
+        render::cell(message.channel.clone().unwrap_or_else(|| "-".to_owned())).dash(),
+    );
+    kv.push("created", render::cell(rel_age(message.enqueued_at, now)));
+    kv.push(
+        "delivered",
+        render::cell(
+            message
+                .delivered_at
+                .map(|delivered| rel_age(delivered, now))
+                .unwrap_or_else(|| "-".to_owned()),
+        )
+        .dash(),
+    );
+    kv.push("attempts", render::cell(message.attempts.to_string()));
+    kv.push(
+        "last_error",
+        render::cell(message.last_error.clone().unwrap_or_else(|| "-".to_owned())).dash(),
+    );
+    kv.push("text", render::cell(preview(&message.text)));
+    kv.render(&mut render::out())?;
     Ok(())
 }
 
@@ -831,12 +963,22 @@ fn clear_messages(
 
 fn render_add_output(output: &AddOutput, status: MessageStatus, waited: bool) -> String {
     if waited {
-        return format!("{} {}", wait_status_label(status), output.label);
+        return format!(
+            "{} {} ({})",
+            wait_status_label(status),
+            output.label,
+            output.message_id
+        );
     }
     match status {
-        MessageStatus::Sent => format!("sent {}", output.label),
-        MessageStatus::Queued => format!("queued {} ({})", output.label, output.message_id),
-        other => format!("{} {}", other.as_str(), output.label),
+        MessageStatus::Sent => format!("sent to {} ({})", output.label, output.message_id),
+        MessageStatus::Queued => format!("queued for {} ({})", output.label, output.message_id),
+        other => format!(
+            "{} {} ({})",
+            other.as_str(),
+            output.label,
+            output.message_id
+        ),
     }
 }
 
@@ -852,13 +994,29 @@ fn report_steer(
     outcomes: &[send::Outcome],
     compacted: &[String],
 ) -> Result<()> {
-    let labels = |pick: fn(&send::Outcome) -> Option<&str>| -> Vec<&str> {
-        outcomes.iter().filter_map(pick).collect()
-    };
-    let sent = labels(|outcome| match outcome {
-        send::Outcome::Sent { label, .. } => Some(label.as_str()),
-        _ => None,
-    });
+    let sent = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            send::Outcome::Sent { label, message_id } => Some(format!("{label} ({message_id})")),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let sent_labels = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            send::Outcome::Sent { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let pending = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            send::Outcome::SkippedPending {
+                label, message_id, ..
+            } => Some(format!("{label} ({message_id})")),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     if let Some(timeout) = wait {
         let mut failed = false;
         let deadline = std::time::Instant::now() + timeout;
@@ -872,7 +1030,7 @@ fn report_steer(
                 }
                 #[expect(clippy::print_stdout, reason = "wait status")]
                 {
-                    println!("{} {label}", wait_status_label(status));
+                    println!("{} {label} ({message_id})", wait_status_label(status));
                 }
             }
         }
@@ -883,25 +1041,27 @@ fn report_steer(
     }
     if total == 1 {
         if !sent.is_empty() {
-            let label = sent[0];
+            let label = sent_labels[0];
             print_compacted_if_needed(label, compacted);
             #[expect(clippy::print_stdout, reason = "message confirmation")]
             {
-                println!("sent {label}");
+                println!("sent to {}", sent[0]);
             }
             return Ok(());
         }
         match outcomes.first() {
-            Some(send::Outcome::SkippedPending { label, request_id }) => {
-                bail!("{label} has pending ask {request_id}; resolve it or pass --force")
+            Some(send::Outcome::SkippedPending {
+                label,
+                message_id,
+                request_id,
+            }) => {
+                bail!(
+                    "{label} ({message_id}) has pending ask {request_id}; resolve it or pass --force"
+                )
             }
             _ => bail!("no agent matches `{target}`"),
         }
     }
-    let pending = labels(|outcome| match outcome {
-        send::Outcome::SkippedPending { label, .. } => Some(label.as_str()),
-        _ => None,
-    });
     let mut line = format!("sent {} agent(s)", sent.len());
     if !sent.is_empty() {
         line.push_str(&format!(": {}", sent.join(", ")));
@@ -935,6 +1095,7 @@ fn wait_status_label(status: MessageStatus) -> &'static str {
         MessageStatus::TimedOut => "timed out",
         MessageStatus::Removed => "removed",
         MessageStatus::Abandoned => "abandoned",
+        MessageStatus::Archived => "archived",
         MessageStatus::Created
         | MessageStatus::Queued
         | MessageStatus::Claimed
@@ -1219,6 +1380,57 @@ pub(crate) fn parse_gate(raw: &str) -> std::result::Result<DeliveryGate, String>
         other => Err(format!(
             "unknown delivery gate `{other}`; expected done or any"
         )),
+    }
+}
+
+fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
+    match raw {
+        "created" => Ok(MessageStatus::Created),
+        "queued" | "pending" => Ok(MessageStatus::Queued),
+        "claimed" => Ok(MessageStatus::Claimed),
+        "sent" => Ok(MessageStatus::Sent),
+        "delivered" => Ok(MessageStatus::Delivered),
+        "timed_out" => Ok(MessageStatus::TimedOut),
+        "errored" => Ok(MessageStatus::Errored),
+        "removed" => Ok(MessageStatus::Removed),
+        "abandoned" => Ok(MessageStatus::Abandoned),
+        "archived" => Ok(MessageStatus::Archived),
+        other => Err(format!("unknown message status `{other}`")),
+    }
+}
+
+fn message_target(message: &MessageRecord, agents: &[&AgentState]) -> String {
+    agents
+        .iter()
+        .copied()
+        .find(|agent| message.same_agent_card(agent))
+        .map(|agent| rimz::target::agent_handle(agent, agents, true))
+        .unwrap_or_else(|| format!("{}:{}", message.kind, message.agent_id))
+}
+
+fn message_target_with_at(message: &MessageRecord, agents: &[&AgentState]) -> String {
+    agents
+        .iter()
+        .copied()
+        .find(|agent| message.same_agent_card(agent))
+        .map(|agent| format!("@{}", rimz::target::agent_handle(agent, agents, true)))
+        .unwrap_or_else(|| format!("{}:{}", message.kind, message.agent_id))
+}
+
+fn rel_age(ts: Timestamp, now: Timestamp) -> String {
+    let age = now.duration_since(ts);
+    if age.is_negative() {
+        return "now".to_owned();
+    }
+    let secs = age.as_secs().max(0) as u64;
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3_600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3_600)
+    } else {
+        format!("{}d ago", secs / 86_400)
     }
 }
 

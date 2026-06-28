@@ -29,7 +29,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     spinner.set("sweeping runtime hints…");
     let report = gc::collect_runtime(args.older_than).context("collecting runtime garbage")?;
     spinner.set("repairing ledger…");
-    let (abandoned, messages_abandoned, messages_timed_out, repaired) =
+    let (abandoned, messages_archived, messages_timed_out, repaired) =
         match WorkspaceResolver::resolve(".", globals.root.clone()) {
             Ok(workspace) => match open_ledger(&workspace) {
                 Ok(ledger) => {
@@ -44,9 +44,10 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                     let abandoned = ledger
                         .abandon_dead_owned_items(&workspace.session_name)
                         .context("abandoning dead owned feed items")?;
-                    let messages_abandoned = ledger
-                        .abandon_orphan_messages(&workspace.session_name)
-                        .context("abandoning orphan queued messages")?;
+                    spinner.set("archiving orphan messages…");
+                    let messages_archived = ledger
+                        .archive_orphan_messages(&workspace.session_name)
+                        .context("archiving orphan messages")?;
                     let messages_timed_out = ledger
                         .timeout_sent_messages(
                             &workspace.session_name,
@@ -56,7 +57,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                         .context("timing out sent messages")?;
                     (
                         abandoned,
-                        messages_abandoned,
+                        messages_archived,
                         messages_timed_out,
                         Some(repaired),
                     )
@@ -85,7 +86,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         temps,
         repaired,
         feed_abandoned: abandoned,
-        queue_abandoned: messages_abandoned,
+        queue_archived: messages_archived,
         queue_timed_out: messages_timed_out,
         schedules_reaped,
         prune,
@@ -104,7 +105,7 @@ struct GcOutcome {
     temps: gc::TempSweepReport,
     repaired: Option<RepairOutcome>,
     feed_abandoned: usize,
-    queue_abandoned: usize,
+    queue_archived: usize,
     queue_timed_out: usize,
     schedules_reaped: usize,
     prune: gc::WorkspacePruneReport,
@@ -124,6 +125,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
     if workspace.root_class != rimz::workspace::RootClass::Repo {
         return WorktreeSweep::default();
     }
+    let ledger = open_ledger(&workspace).ok();
     let live_cwds = match rimz::mux::auto_detect_backend(globals.mux) {
         Ok(mux) => rimz::mux::backend_for(mux)
             .list_panes(rimz::mux::PaneListOptions::default())
@@ -174,6 +176,19 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
             Ok(branch) => {
                 sweep.swept += 1;
                 sweep.bytes = sweep.bytes.saturating_add(bytes);
+                if let Some(ledger) = ledger.as_ref()
+                    && let Err(err) = ledger.archive_channel_messages(
+                        &marker.branch,
+                        "worktree removed",
+                        &workspace.session_name,
+                    )
+                {
+                    tracing::debug!(
+                        branch = %marker.branch,
+                        error = %err,
+                        "worktree gc could not archive messages for removed worktree",
+                    );
+                }
                 if branch == rimz::worktree::BranchDeletion::KeptUnmerged {
                     tracing::debug!(
                         path = %entry.path.display(),
@@ -214,7 +229,7 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         || runtime_items(&out.runtime) > 0
         || out.temps.files_removed > 0
         || out.feed_abandoned > 0
-        || out.queue_abandoned > 0
+        || out.queue_archived > 0
         || out.queue_timed_out > 0
         || out.schedules_reaped > 0
         || out.repaired.as_ref().is_some_and(RepairOutcome::truncated)
@@ -293,8 +308,8 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     if out.feed_abandoned > 0 {
         report_note(w, &format!("feed abandoned: {}", out.feed_abandoned))?;
     }
-    if out.queue_abandoned > 0 {
-        report_note(w, &format!("queue abandoned: {}", out.queue_abandoned))?;
+    if out.queue_archived > 0 {
+        report_note(w, &format!("messages archived: {}", out.queue_archived))?;
     }
     if out.queue_timed_out > 0 {
         report_note(w, &format!("queue timed out: {}", out.queue_timed_out))?;
@@ -446,7 +461,7 @@ mod tests {
             },
             repaired: None,
             feed_abandoned: 3,
-            queue_abandoned: 0,
+            queue_archived: 0,
             queue_timed_out: 0,
             schedules_reaped: 0,
             prune: gc::WorkspacePruneReport {

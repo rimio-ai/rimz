@@ -11,10 +11,14 @@ use std::time::{Duration, Instant};
 
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
+use rimz::EventEnvelope;
+use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 #[cfg(unix)]
-use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::ids::AgentKind;
+use rimz::ids::AgentSessionId;
+use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
 #[cfg(unix)]
-use rimz::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+use rimz::schema::event::{AgentLaunchPayload, AgentLaunchState};
 use serde_json::Value;
 
 use crate::common::Env;
@@ -72,6 +76,80 @@ fn worktree_new_list_and_remove_round_trip() {
         .success()
         .stdout(contains("removed demo"));
     assert!(!path.exists(), "worktree removed");
+}
+
+#[test]
+fn worktree_new_refuses_named_channel_conflict() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+
+    env.rimz()
+        .args(["channel", "new", "demo"])
+        .assert()
+        .success();
+
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains("channel `demo` is a named channel"));
+}
+
+#[test]
+fn worktree_new_archives_messages_for_recreated_channel() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    let message_id = queue_channel_message(&env, "demo", "old work");
+
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+
+    let message = env
+        .ledger()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| message.message_id == message_id)
+        .expect("message");
+    assert_eq!(message.status, MessageStatus::Archived);
+    assert_eq!(message.last_error.as_deref(), Some("channel recreated"));
+}
+
+#[test]
+fn worktree_remove_archives_messages_for_removed_channel() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let message_id = queue_channel_message(&env, "demo", "old work");
+
+    env.rimz()
+        .args(["worktree", "remove", "demo"])
+        .assert()
+        .success();
+
+    let message = env
+        .ledger()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| message.message_id == message_id)
+        .expect("message");
+    assert_eq!(message.status, MessageStatus::Archived);
+    assert_eq!(message.last_error.as_deref(), Some("worktree removed"));
 }
 
 #[test]
@@ -832,6 +910,40 @@ fn init_repo(path: &Path) {
     git(path, &["config", "user.email", "rimz@example.com"]);
     git(path, &["config", "user.name", "Rimz Test"]);
     commit_file(path, "README.md", "fixture\n", "initial");
+}
+
+fn queue_channel_message(env: &Env, channel: &str, text: &str) -> rimz::MessageId {
+    let session_id = AgentSessionId::from(format!("sess-{channel}"));
+    let mut observation =
+        AgentLifecycleObservation::new(Some(session_id.clone()), LifecycleSignal::Registered);
+    observation.worktree_branch = Some(channel.to_owned());
+    let event = EventEnvelope::agent_lifecycle(
+        env.workspace_id.clone(),
+        "rimz-test",
+        "claude",
+        "SessionStart",
+        &observation,
+    );
+    env.ledger().append_event(&event).expect("append agent");
+    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == session_id)
+        .expect("agent");
+    let message = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        text.to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_channel(Some(channel.to_owned()));
+    let message_id = message.message_id.clone();
+    env.ledger()
+        .queue_message(&message, "rimz-test")
+        .expect("queue message");
+    message_id
 }
 
 fn publish_pr_ref(env: &Env, remote_ref: &str) -> (String, String) {
