@@ -20,8 +20,8 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 use rimz::agents::spending::{
-    CachedEntry, FileCacheEntry, HeadlineSpec, SpendCursor, SpendingWalker, read_spending_cache,
-    write_spending_cache,
+    CachedEntry, FileCacheEntry, HeadlineSpec, SilentWalk, SpendCursor, SpendingWalker,
+    read_spending_cache, write_spending_cache,
 };
 use rimz::agents::{AgentAdapter, ClaudeAdapter, PriceBook};
 
@@ -147,6 +147,7 @@ fn spending_walk_io_is_history_independent() {
         &Default::default(),
         None,
         &HeadlineSpec::default(),
+        &mut SilentWalk,
     );
     let cold_elapsed = cold_start.elapsed();
     let cache = read_spending_cache(&cache_path);
@@ -179,6 +180,7 @@ fn spending_walk_io_is_history_independent() {
         &Default::default(),
         None,
         &HeadlineSpec::default(),
+        &mut SilentWalk,
     );
     let warm_elapsed = warm_start.elapsed();
 
@@ -205,6 +207,7 @@ fn spending_walk_io_is_history_independent() {
         &Default::default(),
         None,
         &HeadlineSpec::default(),
+        &mut SilentWalk,
     );
     assert!(
         !steady.stats.cache_written,
@@ -243,6 +246,7 @@ fn spending_walk_warm_skips_parse_dedup_and_write() {
             &Default::default(),
             None,
             &HeadlineSpec::default(),
+            &mut SilentWalk,
         );
         assert_eq!(first.stats.dedup_passes, 1);
         let cache_mtime = modified(&cache_path);
@@ -255,6 +259,7 @@ fn spending_walk_warm_skips_parse_dedup_and_write() {
             &Default::default(),
             None,
             &HeadlineSpec::default(),
+            &mut SilentWalk,
         );
         assert_eq!(
             modified(&cache_path),
@@ -318,6 +323,7 @@ fn spending_walk_warm_keeps_trailing_windows_fresh() {
         &Default::default(),
         None,
         &HeadlineSpec::default(),
+        &mut SilentWalk,
     );
     let second = walker.walk(
         &cache_path,
@@ -327,6 +333,7 @@ fn spending_walk_warm_keeps_trailing_windows_fresh() {
         &Default::default(),
         None,
         &HeadlineSpec::default(),
+        &mut SilentWalk,
     );
 
     assert_eq!(first.stats.dedup_passes, 1);
@@ -375,6 +382,7 @@ fn spending_walk_local_seeds_from_disk() {
         &Default::default(),
         None,
         &HeadlineSpec::default(),
+        &mut SilentWalk,
     );
 
     assert!(local.stats.cache_parsed);
@@ -397,6 +405,7 @@ fn spending_walk_local_seeds_from_disk() {
         &Default::default(),
         None,
         &HeadlineSpec::default(),
+        &mut SilentWalk,
     );
     assert!(
         (cold.spending.total.year.usd - actual_cost).abs() < 1e-9,

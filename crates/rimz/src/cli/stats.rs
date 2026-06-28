@@ -35,9 +35,10 @@ use rimz::RuntimePaths;
 use rimz::agents::AgentAdapter;
 use rimz::agents::pricing;
 use rimz::agents::spending::{
-    DaySpend, HeadlineSpec, ProviderSpendingCache, SpendProgress, SpendTally, SpendWindow,
-    Spending, SpendingWalker, discover_spending_files, read_provider_spending_cache, unix_secs_now,
-    utc_date, write_provider_spending_cache_with_rollups,
+    DaySpend, HeadlineSpec, ProviderSpendingCache, SilentWalk, SpendProgress, SpendTally,
+    SpendWindow, Spending, SpendingWalker, WalkObserver, discover_spending_files,
+    read_provider_spending_cache, unix_secs_now, utc_date,
+    write_provider_spending_cache_with_rollups,
 };
 use rimz::config::{GlyphRole, Semantic, ThemeConfig};
 use rimz::ledger::single_flight::{Coalesced, coalesce};
@@ -554,6 +555,14 @@ fn load_or_refresh_stats(
     }
 }
 
+struct ProgressObserver<'a>(&'a mut dyn FnMut(SpendProgress));
+
+impl WalkObserver for ProgressObserver<'_> {
+    fn on_file(&mut self, progress: SpendProgress) {
+        (self.0)(progress);
+    }
+}
+
 fn compute_stats_from_files(
     paths: &RuntimePaths,
     files: Vec<(&'static dyn AgentAdapter, PathBuf)>,
@@ -570,34 +579,45 @@ fn compute_stats_from_files(
         pricing::load_cached_for_spending(&paths.shared_pricing_cache_path())
     };
     let result = match (publish, progress) {
-        (true, Some(progress)) => walker.walk_with_progress(
-            &cursor_path,
-            &files,
-            &prices,
-            now_secs,
-            &Default::default(),
-            None,
-            &HeadlineSpec::default(),
-            progress,
-        ),
-        (true, None) => walker.walk(
-            &cursor_path,
-            &files,
-            &prices,
-            now_secs,
-            &Default::default(),
-            None,
-            &HeadlineSpec::default(),
-        ),
-        (false, _) => walker.walk_local(
-            &cursor_path,
-            &files,
-            &prices,
-            now_secs,
-            &Default::default(),
-            None,
-            &HeadlineSpec::default(),
-        ),
+        (true, Some(progress)) => {
+            let mut observer = ProgressObserver(progress);
+            walker.walk(
+                &cursor_path,
+                &files,
+                &prices,
+                now_secs,
+                &Default::default(),
+                None,
+                &HeadlineSpec::default(),
+                &mut observer,
+            )
+        }
+        (true, None) => {
+            let mut observer = SilentWalk;
+            walker.walk(
+                &cursor_path,
+                &files,
+                &prices,
+                now_secs,
+                &Default::default(),
+                None,
+                &HeadlineSpec::default(),
+                &mut observer,
+            )
+        }
+        (false, _) => {
+            let mut observer = SilentWalk;
+            walker.walk_local(
+                &cursor_path,
+                &files,
+                &prices,
+                now_secs,
+                &Default::default(),
+                None,
+                &HeadlineSpec::default(),
+                &mut observer,
+            )
+        }
     };
     if publish {
         write_provider_spending_cache_with_rollups(

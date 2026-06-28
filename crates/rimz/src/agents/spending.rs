@@ -2,8 +2,9 @@
 //!
 //! Per-provider typed parsers live in each adapter's `spend.rs`; this module
 //! owns the on-disk cache types and the [`compute_spending`] aggregation loop
-//! with store-time chunk dedup plus cross-file Claude dedup. Discovery and
-//! parsing dispatch through the
+//! with a parallel streaming cold parse, store-time chunk dedup, periodic
+//! checkpoint/partial-publish observers, old-file skips, and cross-file Claude
+//! dedup. Discovery and parsing dispatch through the
 //! adapter ([`AgentAdapter::transcript_files`] /
 //! [`AgentAdapter::parse_spend`]): a dollar-logging provider (Claude's legacy
 //! `costUSD`, Pi) reads its figures verbatim, a token-only provider (Codex,
@@ -24,7 +25,11 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    mpsc,
+};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -83,6 +88,16 @@ impl SpendWindow {
 /// The widest spend window. Entries at or beyond this age never contribute to
 /// totals, sessions, or the unknown-model pricing chase.
 const WIDEST_SPEND_WINDOW_SECS: u64 = 365 * 86_400;
+
+/// Margin for the mtime-based cold-parse skip, covering filesystem timestamp
+/// skew and transcript rows written just before the widest window.
+const SKIP_PARSE_MARGIN_SECS: u64 = 2 * 86_400;
+
+/// Cadence for cursor-cache checkpoints and partial aggregate publishes during
+/// a cold spending-history walk.
+pub(crate) const WALK_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
+
+const MAX_SPENDING_PARSE_WORKERS: usize = 8;
 
 /// Raw rows newer than this stay verbatim; older rows fold into
 /// day/model/thread rollups so the shared cache stays bounded by recent
@@ -159,6 +174,16 @@ pub struct SpendProgress {
     pub finished_files: usize,
     pub total_files: usize,
 }
+
+/// Periodic side effects during a long cold walk.
+pub trait WalkObserver {
+    fn on_file(&mut self, _progress: SpendProgress) {}
+    fn on_interval(&mut self, _cache: &SpendingDiskCache) {}
+}
+
+pub struct SilentWalk;
+
+impl WalkObserver for SilentWalk {}
 
 /// Spending data published for one sidebar enrichment fold: account-global
 /// provider totals plus the room-local cockpit tally.
@@ -555,6 +580,7 @@ impl SpendingWalker {
         origin_overrides: &HashMap<PathBuf, PathBuf>,
         scope: Option<&SpendScope>,
         spec: &HeadlineSpec,
+        observer: &mut dyn WalkObserver,
     ) -> SpendingWalkResult {
         self.walk_inner(
             cache_path,
@@ -565,32 +591,7 @@ impl SpendingWalker {
             origin_overrides,
             scope,
             spec,
-            None,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn walk_with_progress(
-        &mut self,
-        cache_path: &Path,
-        files: &[(&'static dyn AgentAdapter, PathBuf)],
-        prices: &PriceBook,
-        now_secs: u64,
-        origin_overrides: &HashMap<PathBuf, PathBuf>,
-        scope: Option<&SpendScope>,
-        spec: &HeadlineSpec,
-        progress: &mut dyn FnMut(SpendProgress),
-    ) -> SpendingWalkResult {
-        self.walk_inner(
-            cache_path,
-            true,
-            files,
-            prices,
-            now_secs,
-            origin_overrides,
-            scope,
-            spec,
-            Some(progress),
+            observer,
         )
     }
 
@@ -604,6 +605,7 @@ impl SpendingWalker {
         origin_overrides: &HashMap<PathBuf, PathBuf>,
         scope: Option<&SpendScope>,
         spec: &HeadlineSpec,
+        observer: &mut dyn WalkObserver,
     ) -> SpendingWalkResult {
         self.walk_inner(
             cache_path,
@@ -614,7 +616,7 @@ impl SpendingWalker {
             origin_overrides,
             scope,
             spec,
-            None,
+            observer,
         )
     }
 
@@ -629,19 +631,38 @@ impl SpendingWalker {
         origin_overrides: &HashMap<PathBuf, PathBuf>,
         scope: Option<&SpendScope>,
         spec: &HeadlineSpec,
-        progress: Option<&mut dyn FnMut(SpendProgress)>,
+        observer: &mut dyn WalkObserver,
     ) -> SpendingWalkResult {
         let mut stats = WalkStats::default();
         self.sync_from_disk(cache_path, &mut stats);
         let prior_generation = self.cache.generation;
-        refresh_spending_cache(
-            files,
-            &mut self.cache,
-            prices,
-            now_secs,
-            origin_overrides,
-            progress,
-        );
+        let mut checkpoint_written = false;
+        {
+            let mut last_checkpoint = Instant::now()
+                .checked_sub(WALK_CHECKPOINT_INTERVAL)
+                .unwrap_or_else(Instant::now);
+            let mut tick = |cache: &SpendingDiskCache, progress: SpendProgress| {
+                observer.on_file(progress);
+                if last_checkpoint.elapsed() >= WALK_CHECKPOINT_INTERVAL {
+                    if persist && cache.dirty && write_spending_cache(cache_path, cache) {
+                        checkpoint_written = true;
+                    }
+                    observer.on_interval(cache);
+                    last_checkpoint = Instant::now();
+                }
+            };
+            refresh_spending_cache(
+                files,
+                &mut self.cache,
+                prices,
+                now_secs,
+                origin_overrides,
+                &mut tick,
+            );
+        }
+        if checkpoint_written {
+            stats.cache_written = true;
+        }
         if persist && self.cache.dirty && write_spending_cache(cache_path, &self.cache) {
             self.cache.dirty = false;
             self.cache_stamp = cache_stamp(cache_path);
@@ -666,20 +687,15 @@ impl SpendingWalker {
         }
 
         let counted = &self.memo.as_ref().expect("memo seeded above").counted;
-        let spending = aggregate_spending(files, &self.cache, counted, now_secs, spec);
-        let workspace_tally = scope
-            .map(|scope| aggregate_scoped_tally(files, &self.cache, counted, scope, now_secs, spec))
-            .unwrap_or_default();
-        let days = compute_daily_spend_from_counted(counted);
-        let models = compute_model_breakdown_from_counted(counted, now_secs);
-
-        SpendingWalkResult {
-            spending,
-            workspace_tally,
-            days,
-            models,
+        aggregate_walk_publish_from_counted(
+            files,
+            &self.cache,
+            counted,
+            now_secs,
+            scope,
+            spec,
             stats,
-        }
+        )
     }
 
     fn sync_from_disk(&mut self, cache_path: &Path, stats: &mut WalkStats) {
@@ -829,30 +845,8 @@ pub fn compute_spending_with_origins_and_scope(
     scope: Option<&SpendScope>,
     spec: &HeadlineSpec,
 ) -> (Spending, SpendTally) {
-    compute_spending_with_origins_and_scope_progress(
-        files,
-        cache,
-        prices,
-        now_secs,
-        origin_overrides,
-        scope,
-        spec,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compute_spending_with_origins_and_scope_progress(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
-    cache: &mut SpendingDiskCache,
-    prices: &PriceBook,
-    now_secs: u64,
-    origin_overrides: &HashMap<PathBuf, PathBuf>,
-    scope: Option<&SpendScope>,
-    spec: &HeadlineSpec,
-    progress: Option<&mut dyn FnMut(SpendProgress)>,
-) -> (Spending, SpendTally) {
-    refresh_spending_cache(files, cache, prices, now_secs, origin_overrides, progress);
+    let mut tick = |_: &SpendingDiskCache, _: SpendProgress| {};
+    refresh_spending_cache(files, cache, prices, now_secs, origin_overrides, &mut tick);
 
     // Second pass: aggregate with cross-file Claude deduplication.
     //
@@ -870,18 +864,64 @@ fn compute_spending_with_origins_and_scope_progress(
     (spending, workspace)
 }
 
+pub(crate) fn aggregate_walk_publish(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    now_secs: u64,
+    scope: Option<&SpendScope>,
+    spec: &HeadlineSpec,
+) -> SpendingWalkResult {
+    let counted = dedup_cached_entries(files, cache).into_counted();
+    aggregate_walk_publish_from_counted(
+        files,
+        cache,
+        &counted,
+        now_secs,
+        scope,
+        spec,
+        WalkStats::default(),
+    )
+}
+
+fn aggregate_walk_publish_from_counted<C: CountedPayload>(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    counted: &[C],
+    now_secs: u64,
+    scope: Option<&SpendScope>,
+    spec: &HeadlineSpec,
+    stats: WalkStats,
+) -> SpendingWalkResult {
+    let spending = aggregate_spending(files, cache, counted, now_secs, spec);
+    let workspace_tally = scope
+        .map(|scope| aggregate_scoped_tally(files, cache, counted, scope, now_secs, spec))
+        .unwrap_or_default();
+    let days = compute_daily_spend_from_counted(counted);
+    let models = compute_model_breakdown_from_counted(counted, now_secs);
+
+    SpendingWalkResult {
+        spending,
+        workspace_tally,
+        days,
+        models,
+        stats,
+    }
+}
+
 fn refresh_spending_cache(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &mut SpendingDiskCache,
     prices: &PriceBook,
     now_secs: u64,
     origin_overrides: &HashMap<PathBuf, PathBuf>,
-    mut progress: Option<&mut dyn FnMut(SpendProgress)>,
+    tick: &mut dyn FnMut(&SpendingDiskCache, SpendProgress),
 ) {
     // First pass: refresh stale cache entries — pure hit, suffix parse, or
     // cold parse, decided from one stat per file.
     let total_files = files.len();
-    for (index, (adapter, file)) in files.iter().enumerate() {
+    let mut finished_files = 0;
+    let mut jobs = Vec::new();
+    for (adapter, file) in files {
         let (mtime, len) = file_stat(file);
         let key = file.to_string_lossy().into_owned();
         let override_origin = origin_overrides
@@ -896,63 +936,189 @@ fn refresh_spending_cache(
             .files
             .get(&key)
             .is_some_and(|entry| has_healed_unknown(entry, prices, now_secs));
-        let mut changed = false;
-        match cache.files.get_mut(&key) {
-            // Unchanged: nothing to read.
-            Some(entry) if !heals && entry.mtime_secs == mtime && entry.len == len => {
-                if let Some(origin) = parse_origin.as_deref()
-                    && stamp_file_origin(entry, origin)
-                {
-                    changed = true;
-                }
-            }
-            // Grown in place: parse only the appended suffix and extend.
-            Some(entry) if !heals && len > entry.len => {
-                let mut parsed = adapter.parse_spend(file, Some(&entry.cursor), prices);
-                dedup_chunk(&mut parsed.entries);
-                let file_origin = parse_origin.or(parsed.origin);
-                entry.entries.extend(parsed.entries);
-                entry.unknown_models.extend(parsed.unknown_models);
-                entry.cursor = parsed.cursor;
-                entry.mtime_secs = mtime;
-                entry.len = len;
-                if let Some(origin) = file_origin.as_deref() {
-                    stamp_file_origin(entry, origin);
-                }
+        let unchanged = cache
+            .files
+            .get(&key)
+            .is_some_and(|entry| !heals && entry.mtime_secs == mtime && entry.len == len);
+        if unchanged {
+            let mut changed = false;
+            if let Some(entry) = cache.files.get_mut(&key)
+                && let Some(origin) = parse_origin.as_deref()
+                && stamp_file_origin(entry, origin)
+            {
                 changed = true;
             }
-            // New, truncated/rotated, or rewritten in place: parse cold.
-            _ => {
-                let mut parsed = adapter.parse_spend(file, None, prices);
-                dedup_chunk(&mut parsed.entries);
-                let file_origin = parse_origin.or(parsed.origin);
-                cache.files.insert(
-                    key.clone(),
-                    FileCacheEntry {
-                        mtime_secs: mtime,
-                        len,
-                        cursor: parsed.cursor,
-                        origin_path: file_origin,
-                        entries: parsed.entries,
-                        unknown_models: parsed.unknown_models,
+            if changed {
+                cache.mark_changed();
+            }
+            finished_files += 1;
+            tick(
+                cache,
+                SpendProgress {
+                    finished_files,
+                    total_files,
+                },
+            );
+            continue;
+        }
+
+        if !cache.files.contains_key(&key) && !heals && cold_parse_out_of_window(mtime, now_secs) {
+            cache.files.insert(
+                key,
+                FileCacheEntry {
+                    mtime_secs: mtime,
+                    len,
+                    cursor: SpendCursor {
+                        offset: len,
+                        state: None,
                     },
-                );
-                changed = true;
-            }
-        }
-        if changed {
+                    origin_path: None,
+                    entries: Vec::new(),
+                    unknown_models: BTreeMap::new(),
+                },
+            );
             cache.mark_changed();
+            finished_files += 1;
+            tick(
+                cache,
+                SpendProgress {
+                    finished_files,
+                    total_files,
+                },
+            );
+            continue;
         }
-        if let Some(progress) = progress.as_deref_mut() {
-            progress(SpendProgress {
-                finished_files: index + 1,
-                total_files,
-            });
-        }
+
+        let resume = cache
+            .files
+            .get(&key)
+            .filter(|entry| !heals && len > entry.len)
+            .map(|entry| entry.cursor.clone());
+        jobs.push(SpendingParseJob {
+            adapter: *adapter,
+            file,
+            key,
+            mtime_secs: mtime,
+            len,
+            resume,
+            parse_origin,
+        });
     }
+
+    refresh_spending_cache_jobs(&jobs, cache, prices, &mut finished_files, total_files, tick);
+
     if compact_spending_cache(cache, files, now_secs) {
         cache.mark_changed();
     }
+}
+
+struct SpendingParseJob<'a> {
+    adapter: &'static dyn AgentAdapter,
+    file: &'a PathBuf,
+    key: String,
+    mtime_secs: u64,
+    len: u64,
+    resume: Option<SpendCursor>,
+    parse_origin: Option<PathBuf>,
+}
+
+fn refresh_spending_cache_jobs(
+    jobs: &[SpendingParseJob<'_>],
+    cache: &mut SpendingDiskCache,
+    prices: &PriceBook,
+    finished_files: &mut usize,
+    total_files: usize,
+    tick: &mut dyn FnMut(&SpendingDiskCache, SpendProgress),
+) {
+    if jobs.is_empty() {
+        return;
+    }
+
+    let workers = spending_parse_workers(jobs.len());
+    let next = AtomicUsize::new(0);
+    let (tx, rx) = mpsc::sync_channel(workers);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let next = &next;
+            let shared_jobs = jobs;
+            let shared_prices = prices;
+            scope.spawn(move || {
+                loop {
+                    let job_index = next.fetch_add(1, Ordering::Relaxed);
+                    if job_index >= shared_jobs.len() {
+                        break;
+                    }
+                    let job = &shared_jobs[job_index];
+                    let mut parsed =
+                        job.adapter
+                            .parse_spend(job.file, job.resume.as_ref(), shared_prices);
+                    dedup_chunk(&mut parsed.entries);
+                    if tx.send((job_index, parsed)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        for (job_index, parsed) in rx {
+            let job = &jobs[job_index];
+            fold_spending_parse_job(cache, job, parsed);
+            cache.mark_changed();
+            *finished_files += 1;
+            tick(
+                cache,
+                SpendProgress {
+                    finished_files: *finished_files,
+                    total_files,
+                },
+            );
+        }
+    });
+}
+
+fn spending_parse_workers(job_count: usize) -> usize {
+    std::thread::available_parallelism()
+        .map(|workers| workers.get())
+        .unwrap_or(4)
+        .min(job_count)
+        .min(MAX_SPENDING_PARSE_WORKERS)
+}
+
+fn fold_spending_parse_job(
+    cache: &mut SpendingDiskCache,
+    job: &SpendingParseJob<'_>,
+    parsed: SpendParse,
+) {
+    let file_origin = job.parse_origin.clone().or(parsed.origin);
+    if job.resume.is_some() {
+        // Grown jobs are created only from an existing cache entry.
+        let entry = cache
+            .files
+            .get_mut(&job.key)
+            .expect("grown spending parse job must have a cache entry");
+        entry.entries.extend(parsed.entries);
+        entry.unknown_models.extend(parsed.unknown_models);
+        entry.cursor = parsed.cursor;
+        entry.mtime_secs = job.mtime_secs;
+        entry.len = job.len;
+        if let Some(origin) = file_origin.as_deref() {
+            stamp_file_origin(entry, origin);
+        }
+        return;
+    }
+
+    cache.files.insert(
+        job.key.clone(),
+        FileCacheEntry {
+            mtime_secs: job.mtime_secs,
+            len: job.len,
+            cursor: parsed.cursor,
+            origin_path: file_origin,
+            entries: parsed.entries,
+            unknown_models: parsed.unknown_models,
+        },
+    );
 }
 
 fn aggregate_spending(
@@ -1479,7 +1645,9 @@ impl<P: DedupPayload> SidechainDedup<P> {
 
     fn into_counted(self) -> Vec<P> {
         let mut counted = Vec::new();
-        for ((msg_id, _), payload) in self.by_exact_key {
+        let mut keyed = self.by_exact_key.into_iter().collect::<Vec<_>>();
+        keyed.sort_by(|(left, _), (right, _)| left.cmp(right));
+        for ((msg_id, _), payload) in keyed {
             let is_sidechain_replay = payload.entry().is_sidechain
                 && self
                     .msg_has_non_sidechain
@@ -1707,6 +1875,12 @@ fn bump_sessions(tally: &mut SpendTally, youngest_ts: u64, now_secs: u64, headli
 
 fn within_widest_window(ts_secs: u64, now_secs: u64) -> bool {
     now_secs.saturating_sub(ts_secs) < WIDEST_SPEND_WINDOW_SECS
+}
+
+/// A new file last modified before the widest spend window (plus a clock-skew
+/// margin) holds no in-window entries, so cold-parsing it is pure waste.
+fn cold_parse_out_of_window(mtime_secs: u64, now_secs: u64) -> bool {
+    mtime_secs.saturating_add(WIDEST_SPEND_WINDOW_SECS + SKIP_PARSE_MARGIN_SECS) < now_secs
 }
 
 fn within_raw_retain_window(ts_secs: u64, now_secs: u64) -> bool {

@@ -142,10 +142,10 @@ fn walk_fleet_spending(
 ) -> crate::agents::spending::SpendingCaches {
     use crate::agents::pricing;
     use crate::agents::spending::{
-        PROVIDER_SPENDING_VERSION, ProviderSpendingCache, SpendScope, Spending, SpendingCaches,
-        WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache, read_provider_spending_cache,
-        unix_secs_now, write_provider_spending_cache, write_provider_spending_cache_with_rollups,
-        write_workspace_spending_cache,
+        PROVIDER_SPENDING_VERSION, ProviderSpendingCache, SilentWalk, SpendScope, Spending,
+        SpendingCaches, WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache,
+        read_provider_spending_cache, unix_secs_now, write_provider_spending_cache,
+        write_provider_spending_cache_with_rollups, write_workspace_spending_cache,
     };
 
     let provider_path = runtime.shared_provider_spending_path();
@@ -217,6 +217,15 @@ fn walk_fleet_spending(
     };
     let origin_overrides = codex_origin_overrides(snapshot);
     let result = if publish {
+        let mut observer = PublishingWalkObserver {
+            runtime,
+            provider_path: provider_path.clone(),
+            files: &files,
+            now_secs,
+            scope: Some(&scope),
+            scope_hash: scope_hash.clone(),
+            spec,
+        };
         walker.walk(
             &cache_path,
             &files,
@@ -225,8 +234,10 @@ fn walk_fleet_spending(
             &origin_overrides,
             Some(&scope),
             spec,
+            &mut observer,
         )
     } else {
+        let mut observer = SilentWalk;
         walker.walk_local(
             &cache_path,
             &files,
@@ -235,6 +246,7 @@ fn walk_fleet_spending(
             &origin_overrides,
             Some(&scope),
             spec,
+            &mut observer,
         )
     };
     let refreshed_at_ms = unix_now_ms();
@@ -270,6 +282,45 @@ fn walk_fleet_spending(
             scope_hash: scope_hash.unwrap_or_default(),
             tally: result.workspace_tally,
         },
+    }
+}
+
+struct PublishingWalkObserver<'a> {
+    runtime: &'a RuntimePaths,
+    provider_path: PathBuf,
+    files: &'a [(&'static dyn crate::agents::AgentAdapter, PathBuf)],
+    now_secs: u64,
+    scope: Option<&'a crate::agents::spending::SpendScope>,
+    scope_hash: Option<String>,
+    spec: &'a crate::agents::spending::HeadlineSpec,
+}
+
+impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
+    fn on_interval(&mut self, cache: &crate::agents::spending::SpendingDiskCache) {
+        let result = crate::agents::spending::aggregate_walk_publish(
+            self.files,
+            cache,
+            self.now_secs,
+            self.scope,
+            self.spec,
+        );
+        let refreshed_at_ms = unix_now_ms();
+        crate::agents::spending::write_provider_spending_cache_with_rollups(
+            &self.provider_path,
+            refreshed_at_ms,
+            &result.spending,
+            &result.days,
+            &result.models,
+        );
+        if let Some(scope_hash) = self.scope_hash.as_deref() {
+            crate::agents::spending::write_workspace_spending_cache(
+                &self.runtime.workspace_spending_path(scope_hash),
+                refreshed_at_ms,
+                scope_hash,
+                &result.workspace_tally,
+            );
+            prune_workspace_spending_siblings(self.runtime, scope_hash);
+        }
     }
 }
 

@@ -272,6 +272,7 @@ fn spending_fixture(warm: bool) -> SpendingFixture {
             &Default::default(),
             None,
             &rimz::agents::spending::HeadlineSpec::default(),
+            &mut rimz::agents::spending::SilentWalk,
         );
     }
     SpendingFixture {
@@ -318,6 +319,7 @@ fn spending_walk_cold(bencher: Bencher) {
                 &Default::default(),
                 None,
                 &rimz::agents::spending::HeadlineSpec::default(),
+                &mut rimz::agents::spending::SilentWalk,
             ));
         });
 }
@@ -335,6 +337,7 @@ fn spending_walk_warm_no_change(bencher: Bencher) {
                 &Default::default(),
                 None,
                 &rimz::agents::spending::HeadlineSpec::default(),
+                &mut rimz::agents::spending::SilentWalk,
             ));
         });
 }

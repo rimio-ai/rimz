@@ -841,6 +841,167 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
 }
 
 #[test]
+fn cold_parse_skip_ignores_new_files_outside_widest_window() {
+    assert!(!cold_parse_out_of_window(
+        1_000,
+        1_000 + WIDEST_SPEND_WINDOW_SECS + SKIP_PARSE_MARGIN_SECS
+    ));
+    assert!(cold_parse_out_of_window(
+        1_000,
+        1_001 + WIDEST_SPEND_WINDOW_SECS + SKIP_PARSE_MARGIN_SECS
+    ));
+
+    let dir = TempDir::new().unwrap();
+    let file = write_jsonl(dir.path(), "old.jsonl", &[]);
+    let (mtime, _) = file_stat(&file);
+    std::fs::write(
+        &file,
+        format!("{}\n", claude_line_ts(&iso_at(mtime), 1.0, "old", "old")),
+    )
+    .unwrap();
+    let (mtime, len) = file_stat(&file);
+    let files = vec![(claude_adapter(), file.clone())];
+    let mut cache = SpendingDiskCache::default();
+
+    let skipped = compute_spending(
+        &files,
+        &mut cache,
+        &PriceBook::default(),
+        mtime + WIDEST_SPEND_WINDOW_SECS + SKIP_PARSE_MARGIN_SECS + 1,
+    );
+
+    assert_eq!(skipped.total.year.usd, 0.0);
+    let entry = &cache.files[&file.to_string_lossy().into_owned()];
+    assert!(entry.entries.is_empty());
+    assert_eq!(entry.cursor.offset, len);
+    assert_eq!(entry.len, len);
+
+    let fresh_file = write_jsonl(
+        dir.path(),
+        "fresh.jsonl",
+        &[&claude_line_ts(&iso_at(mtime), 1.0, "fresh", "fresh")],
+    );
+    let mut fresh_cache = SpendingDiskCache::default();
+    let parsed = compute_spending(
+        &[(claude_adapter(), fresh_file)],
+        &mut fresh_cache,
+        &PriceBook::default(),
+        mtime + 60,
+    );
+
+    assert!((parsed.total.year.usd - 1.0).abs() < 1e-9);
+}
+
+#[test]
+fn spending_walk_observer_checkpoints_on_first_interval() {
+    struct CaptureObserver {
+        cache_path: PathBuf,
+        intervals: usize,
+        saw_cursor_file: bool,
+    }
+
+    impl WalkObserver for CaptureObserver {
+        fn on_interval(&mut self, _cache: &SpendingDiskCache) {
+            self.intervals += 1;
+            self.saw_cursor_file |= self.cache_path.exists();
+        }
+    }
+
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let files = (0..4)
+        .map(|i| {
+            let file = write_jsonl(
+                dir.path(),
+                &format!("cold-{i}.jsonl"),
+                &[&claude_line(
+                    &today,
+                    1.0,
+                    &format!("msg-{i}"),
+                    &format!("req-{i}"),
+                )],
+            );
+            (claude_adapter(), file)
+        })
+        .collect::<Vec<_>>();
+    let cache_path = dir.path().join("spending.json");
+    let mut observer = CaptureObserver {
+        cache_path: cache_path.clone(),
+        intervals: 0,
+        saw_cursor_file: false,
+    };
+    let mut walker = SpendingWalker::new();
+
+    let result = walker.walk(
+        &cache_path,
+        &files,
+        &PriceBook::default(),
+        NOW_SECS,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+        &mut observer,
+    );
+
+    assert!(observer.intervals >= 1);
+    assert!(observer.saw_cursor_file);
+    assert!((result.spending.total.year.usd - 4.0).abs() < 1e-9);
+}
+
+#[test]
+fn parallel_cold_parse_aggregates_deterministically() {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let files = (0..16)
+        .map(|i| {
+            let cost = (i + 1) as f64 / 10.0;
+            let file = write_jsonl(
+                dir.path(),
+                &format!("parallel-{i}.jsonl"),
+                &[&claude_line(
+                    &today,
+                    cost,
+                    &format!("msg-parallel-{i}"),
+                    &format!("req-parallel-{i}"),
+                )],
+            );
+            (claude_adapter(), file)
+        })
+        .collect::<Vec<_>>();
+    let expected = (1..=16).map(|i| i as f64 / 10.0).sum::<f64>();
+
+    let mut first_walker = SpendingWalker::new();
+    let mut second_walker = SpendingWalker::new();
+    let first = first_walker.walk(
+        &dir.path().join("first-spending.json"),
+        &files,
+        &PriceBook::default(),
+        NOW_SECS,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+        &mut SilentWalk,
+    );
+    let second = second_walker.walk(
+        &dir.path().join("second-spending.json"),
+        &files,
+        &PriceBook::default(),
+        NOW_SECS,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+        &mut SilentWalk,
+    );
+
+    assert!((first.spending.total.year.usd - expected).abs() < 1e-9);
+    assert_eq!(first.spending, second.spending);
+    assert_eq!(
+        serde_json::to_vec(&first.spending).unwrap(),
+        serde_json::to_vec(&second.spending).unwrap()
+    );
+}
+
+#[test]
 fn codex_pricing_resume_state_and_provider_breakdown_stay_intact() {
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);
@@ -1173,6 +1334,7 @@ fn spending_walk_persists_cursor_before_aggregate() {
 
     panic_after_next_refresh_for_test();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut observer = SilentWalk;
         walker.walk(
             &cache_path,
             &files,
@@ -1181,6 +1343,7 @@ fn spending_walk_persists_cursor_before_aggregate() {
             &Default::default(),
             None,
             &HeadlineSpec::default(),
+            &mut observer,
         )
     }));
 

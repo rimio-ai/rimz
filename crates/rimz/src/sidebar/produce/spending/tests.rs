@@ -245,6 +245,42 @@ fn produce_local_walk_seeds_from_cursor_cache() {
 }
 
 #[test]
+fn walk_local_stays_memory_only_while_publishing_walk_writes_provider_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime paths");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let transcript = dir.path().join("claude.jsonl");
+    let now_secs = unix_secs_now();
+    std::fs::write(&transcript, claude_cost_line(now_secs, 2.5, "publish")).expect("transcript");
+    let _discovered = override_discovered_spending_files_for_test(vec![(
+        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        transcript,
+    )]);
+    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+    let spec = HeadlineSpec::default();
+
+    let mut local_walker = SpendingWalker::new();
+    let local = super::walk_fleet_spending(&mut local_walker, &runtime, &snapshot, &spec, false);
+
+    assert!((local.provider.spending.total.year.usd - 2.5).abs() < 1e-9);
+    assert_eq!(
+        read_provider_spending_cache(&runtime.shared_provider_spending_path()).refreshed_at_ms,
+        0,
+        "local fallback must not publish provider-spending.json"
+    );
+
+    let mut publishing_walker = SpendingWalker::new();
+    let published =
+        super::walk_fleet_spending(&mut publishing_walker, &runtime, &snapshot, &spec, true);
+    let on_disk = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+
+    assert_eq!(on_disk.version, PROVIDER_SPENDING_VERSION);
+    assert!((published.provider.spending.total.year.usd - 2.5).abs() < 1e-9);
+    assert!((on_disk.spending.total.year.usd - 2.5).abs() < 1e-9);
+}
+
+#[test]
 fn workspace_cache_derives_from_shared_entries_while_global_lock_is_held() {
     let dir = tempfile::tempdir().unwrap();
     let other_project = dir.path().join("other");
