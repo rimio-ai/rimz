@@ -77,14 +77,14 @@ Current local baseline from `cargo xtask perf` on June 28, 2026:
 
 | Bench | Median | Alloc/op |
 | --- | ---: | ---: |
-| `fleet::produce_cold` 20 / 50 / 100 agents | 2.54ms / 4.92ms / 9.27ms | 4.00MB / 8.12MB / 15.16MB |
-| `fleet::produce_warm` 20 / 50 / 100 agents | 832µs / 735µs / 1.16ms | 1.53MB / 2.10MB / 3.02MB |
-| `hotpath::fuse` 40 agents | 77µs | 79.4KB |
-| `hotpath::rollup_fold_warm` 40 agents | 105µs | 631.3KB |
-| `hotpath::enrich_cached` 40 agents | 476µs | 1.19MB |
-| `hotpath::render_fixed` 40 agents | 422µs | 947.1KB |
-| `hotpath::spending_walk_cold` 20k retained entries | 21.29ms | 32.66MB |
-| `hotpath::spending_walk_warm_no_change` 20k retained entries | 8.29ms | 8.06MB |
+| `fleet::produce_cold` 20 / 50 / 100 agents | 2.60ms / 5.03ms / 9.39ms | 4.00MB / 8.12MB / 15.16MB |
+| `fleet::produce_warm` 20 / 50 / 100 agents | 534µs / 756µs / 1.15ms | 1.53MB / 2.10MB / 3.02MB |
+| `hotpath::fuse` 40 agents | 77.5µs | 79.4KB |
+| `hotpath::rollup_fold_warm` 40 agents | 104µs | 631.3KB |
+| `hotpath::enrich_cached` 40 agents | 504µs | 1.19MB |
+| `hotpath::render_fixed` 40 agents | 425µs | 947.1KB |
+| `hotpath::spending_walk_cold` 20k retained entries | 24.11ms | 42.26MB |
+| `hotpath::spending_walk_warm_no_change` 20k retained entries | 8.28ms | 8.06MB |
 
 Process-level RAM and CPU stay a manual profiling recipe because they are OS- and workload-shaped. Record CPU flamegraphs with `samply record -- cargo xtask perf`, measure peak RSS with `/usr/bin/time -v cargo xtask perf`, and use `dhat` or the platform allocator profiler when an allocation regression needs ownership. Run the same commands against `rimz sidebar snapshot --json` over a synthetic seeded workspace when the question is process shape rather than microbench shape.
 
