@@ -162,17 +162,19 @@ Parked delivery needs installed and trusted hooks, because turn-end hooks trigge
 
 ## Inspect transcripts
 
-`rimz transcript` reads a running agent's local transcript and renders the conversation Rimz can see without joining the agent process.
+`rimz transcript` reads running agents' local transcripts and renders the channel as a timestamped chat log.
 
 ```sh
-rimz transcript @swift-otter            # one agent's turns
+rimz transcript @swift-otter            # one agent's channel messages
 rimz transcript @codex#cli-docs --last 4
-rimz transcript #cli-docs               # the channel timeline
+rimz transcript #cli-docs               # the channel chat log
 rimz transcript @all#cli-docs --details
 rimz transcript --json
 ```
 
-A single-agent target prints turns — the user prompt and that turn's final assistant message — while `--details` prints every normalized message and `--last <N>` keeps the last N turns. A pending ask prints at the bottom with its options, so you can resolve a blocker before typing over it. A channel target (`#worktree`, `@all`, or no target for the current channel) fuses every root agent's messages into one timestamp-ordered timeline labelled by handle: prompts render as `you→@handle:` and replies as `@handle:`. `--json` emits `{agent, turns, ask}` for one agent and `{channel, timeline, asks}` for a channel.
+A channel target (`#worktree`, `@all`, or no target for the current channel) fuses every root agent's native transcript into one timestamp-ordered chat log. Human prompts render as `user: @handle, text`; the final assistant message of a human-opened turn renders as `@handle: text`; and delivered agent messages render as `@sender: @receiver, text` by parsing the message-system `from @sender:` prefix. Assistant replies in agent-opened turns stay out of the chat log, because the peer message itself is the channel line. `--details` keeps every assistant message in human-opened turns, `--last <N>` keeps the last N chat lines, and a pending ask prints at the bottom with its options.
+
+A single-agent target builds that same channel log and filters it to messages the focal agent sent or received, so sent messages appear from peers' transcripts as well as received messages from the focal transcript. Sends made with `--no-from` look like human prompts, and cross-channel sends involving agents outside the focal channel are outside this view. `--json` emits `{channel, focus, entries, asks}` for both channel and agent targets.
 
 ## Drive panes
 

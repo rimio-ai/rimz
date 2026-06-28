@@ -5,6 +5,7 @@ use jiff::Timestamp;
 use super::*;
 use crate::agents::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
+use crate::message::MessageSender;
 use crate::pane::PaneRef;
 
 #[test]
@@ -418,6 +419,33 @@ fn handle_falls_back_to_petname_without_an_ordinal() {
 
     assert_eq!(agent_handle(peers[0], &peers, false), "@swift-otter");
     assert_eq!(agent_handle(peers[1], &peers, false), "@brave-lark");
+}
+
+#[test]
+fn sender_prefix_parser_round_trips_same_and_cross_channel_senders() {
+    let body = "ship it";
+    let sender = MessageSender::Agent {
+        kind: AgentKind::new_unchecked("codex"),
+        name: None,
+        profile: None,
+        role: None,
+        channel: Some("design".to_owned()),
+    };
+
+    let same_channel = sender_prefix(&sender, &[], Some("design")).unwrap() + body;
+    assert_eq!(
+        parse_sender_prefix(&same_channel),
+        Some(("@codex".to_owned(), body.to_owned()))
+    );
+
+    let cross_channel = sender_prefix(&sender, &[], Some("main")).unwrap() + body;
+    assert_eq!(
+        parse_sender_prefix(&cross_channel),
+        Some(("@codex#design".to_owned(), body.to_owned()))
+    );
+
+    assert_eq!(parse_sender_prefix("@codex, ship it"), None);
+    assert_eq!(parse_sender_prefix("ordinary text: with colon"), None);
 }
 
 #[test]

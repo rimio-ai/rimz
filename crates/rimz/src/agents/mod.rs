@@ -82,7 +82,7 @@ pub use state::{
     is_turn_complete, is_turn_dead,
 };
 pub(crate) use state::{ResumeArm, display_turn_error, rate_limit_window_kinds, resume_park};
-pub use transcript::{TimelineEntry, TranscriptMessage, TranscriptRole, Turn};
+pub use transcript::{AgentChat, ChatEntry, TranscriptMessage, TranscriptRole, Turn};
 pub use transcript_fs::read_transcript_lines;
 pub(crate) use transcript_fs::read_transcript_tail;
 

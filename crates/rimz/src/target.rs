@@ -655,6 +655,16 @@ pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: 
     }
 }
 
+/// Split a delivered prompt into its `from @sender: ` attribution and the body.
+/// The inverse of [`sender_prefix`]: `Some((handle, body))` for a peer-authored
+/// delivery (handle keeps any `#channel`), `None` for human-authored or
+/// `--no-from` text that carries no prefix.
+pub fn parse_sender_prefix(text: &str) -> Option<(String, String)> {
+    let rest = text.strip_prefix("from @")?;
+    let (handle, body) = rest.split_once(": ")?;
+    Some((format!("@{handle}"), body.to_owned()))
+}
+
 /// The optional `from @sender: ` prefix for a peer-authored message. Human-authored
 /// text stays verbatim; agent-authored text uses the shortest live handle when the
 /// sender is visible in the snapshot and falls back to the launch env identity.

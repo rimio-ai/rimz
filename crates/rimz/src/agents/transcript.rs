@@ -1,9 +1,8 @@
 //! Provider-agnostic transcript messages and timeline shaping.
 //!
 //! Adapters normalize their native JSONL into [`TranscriptMessage`]. The CLI
-//! asks this module to group those messages into turns or to fuse several
-//! agents' messages into a channel timeline, keeping adapter-specific parsing
-//! out of presentation.
+//! asks this module to group those messages into turns or build a channel chat
+//! log, keeping adapter-specific parsing out of presentation.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -31,12 +30,19 @@ pub struct Turn {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct TimelineEntry {
-    pub agent: String,
-    pub role: TranscriptRole,
+pub struct ChatEntry {
+    pub from: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<Timestamp>,
     pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentChat {
+    pub handle: String,
+    pub messages: Vec<TranscriptMessage>,
 }
 
 /// Group a single transcript into user-prompt turns. A user message opens a
@@ -85,47 +91,98 @@ fn summarize_turn_messages(messages: &[TranscriptMessage]) -> Vec<TranscriptMess
     user.into_iter().chain(assistant).collect()
 }
 
-/// Fuse several agents into one timeline. In compact mode each agent is first
-/// reduced to turn summaries; in detail mode every normalized message is merged.
-/// Missing per-message timestamps inherit the last timestamp seen in that
-/// agent's transcript so Codex's sparse rollout rows still sort with their
-/// surrounding turn. Entries with no timestamp at all sort last and keep their
-/// input order.
-pub fn fuse_timeline(
-    per_agent: Vec<(String, Vec<TranscriptMessage>)>,
+/// Build a channel chat log from each agent's native transcript. `classify`
+/// inverts the message-system prefix: `Some((sender, body))` marks a routed
+/// agent-to-agent delivery, `None` a human prompt. Per agent, each turn:
+/// - routed opener emits one `sender -> @handle` entry, and the turn's assistant
+///   replies are dropped.
+/// - human opener emits a `user -> @handle` entry, then the turn-final assistant
+///   reply, or every assistant reply when `details`.
+///
+/// Missing timestamps inherit the last seen in that agent's transcript; entries
+/// sort by timestamp, missing last, stable within equal or unknown times.
+pub fn build_chat(
+    per_agent: Vec<AgentChat>,
     details: bool,
-) -> Vec<TimelineEntry> {
+    classify: impl Fn(&str) -> Option<(String, String)>,
+) -> Vec<ChatEntry> {
     #[derive(Clone)]
     struct Indexed {
-        entry: TimelineEntry,
+        entry: ChatEntry,
         index: usize,
     }
 
     let mut indexed = Vec::new();
-    for (agent, messages) in per_agent {
-        let messages = if details {
-            messages
-        } else {
-            group_turns(&messages, false)
-                .into_iter()
-                .flat_map(|turn| turn.messages)
-                .collect()
-        };
-        let mut last_seen = None;
-        for message in messages {
-            if let Some(at) = message.at {
-                last_seen = Some(at);
-            }
+    {
+        let mut push_entry = |entry| {
             let index = indexed.len();
-            indexed.push(Indexed {
-                entry: TimelineEntry {
-                    agent: agent.clone(),
-                    role: message.role,
-                    at: message.at.or(last_seen),
-                    text: message.text,
-                },
-                index,
-            });
+            indexed.push(Indexed { entry, index });
+        };
+        for AgentChat { handle, messages } in per_agent {
+            let mut last_seen = None;
+            for turn in group_turns(&messages, true) {
+                let mut opener = None;
+                let mut assistants = Vec::new();
+                for message in turn.messages {
+                    if let Some(at) = message.at {
+                        last_seen = Some(at);
+                    }
+                    let at = message.at.or(last_seen);
+                    match message.role {
+                        TranscriptRole::User if opener.is_none() => {
+                            opener = Some(TranscriptMessage {
+                                role: message.role,
+                                at,
+                                text: message.text,
+                            });
+                        }
+                        TranscriptRole::Assistant => {
+                            assistants.push(TranscriptMessage {
+                                role: message.role,
+                                at,
+                                text: message.text,
+                            });
+                        }
+                        TranscriptRole::User => {}
+                    }
+                }
+
+                if let Some(opener) = opener {
+                    if let Some((sender, body)) = classify(&opener.text) {
+                        push_entry(ChatEntry {
+                            from: sender,
+                            to: Some(handle.clone()),
+                            at: opener.at,
+                            text: body,
+                        });
+                        continue;
+                    }
+                    push_entry(ChatEntry {
+                        from: "user".to_owned(),
+                        to: Some(handle.clone()),
+                        at: opener.at,
+                        text: opener.text,
+                    });
+                }
+
+                if details {
+                    for assistant in assistants {
+                        push_entry(ChatEntry {
+                            from: handle.clone(),
+                            to: None,
+                            at: assistant.at,
+                            text: assistant.text,
+                        });
+                    }
+                } else if let Some(assistant) = assistants.into_iter().last() {
+                    push_entry(ChatEntry {
+                        from: handle.clone(),
+                        to: None,
+                        at: assistant.at,
+                        text: assistant.text,
+                    });
+                }
+            }
         }
     }
 
@@ -213,54 +270,29 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fuse_timeline_carries_forward_timestamps_and_sorts_missing_last() {
-        let timeline = fuse_timeline(
-            vec![
-                (
-                    "@a".to_owned(),
-                    vec![
-                        msg(TranscriptRole::User, Some("2026-06-01T00:00:02Z"), "a user"),
-                        msg(TranscriptRole::Assistant, None, "a answer"),
-                    ],
-                ),
-                (
-                    "@b".to_owned(),
-                    vec![msg(
-                        TranscriptRole::Assistant,
-                        Some("2026-06-01T00:00:01Z"),
-                        "b answer",
-                    )],
-                ),
-                (
-                    "@c".to_owned(),
-                    vec![msg(TranscriptRole::Assistant, None, "c answer")],
-                ),
-            ],
-            true,
-        );
+    fn classify(text: &str) -> Option<(String, String)> {
+        text.strip_prefix("from @planner: ")
+            .map(|body| ("@planner".to_owned(), body.to_owned()))
+    }
 
-        assert_eq!(
-            timeline
-                .iter()
-                .map(|entry| (entry.agent.as_str(), entry.text.as_str(), entry.at))
-                .collect::<Vec<_>>(),
-            vec![
-                ("@b", "b answer", Some(ts("2026-06-01T00:00:01Z"))),
-                ("@a", "a user", Some(ts("2026-06-01T00:00:02Z"))),
-                ("@a", "a answer", Some(ts("2026-06-01T00:00:02Z"))),
-                ("@c", "c answer", None),
-            ]
-        );
+    fn agent(handle: &str, messages: Vec<TranscriptMessage>) -> AgentChat {
+        AgentChat {
+            handle: handle.to_owned(),
+            messages,
+        }
     }
 
     #[test]
-    fn fuse_timeline_summarizes_each_agent_before_merging() {
-        let timeline = fuse_timeline(
-            vec![(
-                "@a".to_owned(),
+    fn build_chat_emits_human_turn_final_and_routed_opener_only() {
+        let chat = build_chat(
+            vec![agent(
+                "@coder",
                 vec![
-                    msg(TranscriptRole::User, Some("2026-06-01T00:00:00Z"), "prompt"),
+                    msg(
+                        TranscriptRole::User,
+                        Some("2026-06-01T00:00:00Z"),
+                        "human prompt",
+                    ),
                     msg(
                         TranscriptRole::Assistant,
                         Some("2026-06-01T00:00:01Z"),
@@ -271,16 +303,100 @@ mod tests {
                         Some("2026-06-01T00:00:02Z"),
                         "final",
                     ),
+                    msg(
+                        TranscriptRole::User,
+                        Some("2026-06-01T00:00:03Z"),
+                        "from @planner: do the thing",
+                    ),
+                    msg(
+                        TranscriptRole::Assistant,
+                        Some("2026-06-01T00:00:04Z"),
+                        "routed reply",
+                    ),
                 ],
             )],
             false,
+            classify,
         );
+
         assert_eq!(
-            timeline
-                .iter()
+            chat.iter()
+                .map(|entry| {
+                    (
+                        entry.from.as_str(),
+                        entry.to.as_deref(),
+                        entry.text.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("user", Some("@coder"), "human prompt"),
+                ("@coder", None, "final"),
+                ("@planner", Some("@coder"), "do the thing"),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_chat_details_keeps_every_human_assistant_message() {
+        let chat = build_chat(
+            vec![agent(
+                "@coder",
+                vec![
+                    msg(TranscriptRole::User, None, "human prompt"),
+                    msg(TranscriptRole::Assistant, None, "draft"),
+                    msg(TranscriptRole::Assistant, None, "final"),
+                    msg(TranscriptRole::User, None, "from @planner: routed"),
+                    msg(TranscriptRole::Assistant, None, "hidden routed reply"),
+                ],
+            )],
+            true,
+            classify,
+        );
+
+        assert_eq!(
+            chat.iter()
                 .map(|entry| entry.text.as_str())
                 .collect::<Vec<_>>(),
-            vec!["prompt", "final"]
+            vec!["human prompt", "draft", "final", "routed"]
+        );
+    }
+
+    #[test]
+    fn build_chat_carries_forward_timestamps_and_sorts_missing_last() {
+        let chat = build_chat(
+            vec![
+                agent(
+                    "@a",
+                    vec![
+                        msg(TranscriptRole::User, Some("2026-06-01T00:00:02Z"), "a user"),
+                        msg(TranscriptRole::Assistant, None, "a answer"),
+                    ],
+                ),
+                agent(
+                    "@b",
+                    vec![msg(
+                        TranscriptRole::Assistant,
+                        Some("2026-06-01T00:00:01Z"),
+                        "b answer",
+                    )],
+                ),
+                agent("@c", vec![msg(TranscriptRole::Assistant, None, "c answer")]),
+            ],
+            true,
+            classify,
+        );
+
+        assert_eq!(
+            chat.iter()
+                .map(|entry| (entry.from.as_str(), entry.text.as_str(), entry.at))
+                .collect::<Vec<_>>(),
+            vec![
+                ("@b", "b answer", Some(ts("2026-06-01T00:00:01Z"))),
+                ("user", "a user", Some(ts("2026-06-01T00:00:02Z"))),
+                ("@a", "a answer", Some(ts("2026-06-01T00:00:02Z"))),
+                ("@c", "c answer", None),
+            ]
         );
     }
 }

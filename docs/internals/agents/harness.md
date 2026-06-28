@@ -34,7 +34,7 @@ reach a member by @handle#channel, then:
 
 ## Read the room
 
-`rimz transcript` is the catch-up surface, and the only part worth noting here is the fusion. A single-agent target groups that agent's local transcript into turns; a channel target (`#channel`, `@all#channel`, or a bare invocation in a worktree) reads every root agent in the channel and fuses their messages into one timestamp-ordered timeline labelled by handle. Codex rollout rows that omit timestamps inherit the last timestamp seen in their session file, so sparse progress rows stay anchored to their turn. The parser core is shared with supervised streaming: each adapter implements `parse_transcript_messages` once, and the assistant-only `wait --stream` path filters that same parse.
+`rimz transcript` is the catch-up surface, and the only part worth noting here is the chat-log build. A channel target (`#channel`, `@all#channel`, or a bare invocation in a worktree) reads every root agent in the channel, groups each native transcript into turns, and classifies each turn opener by the message-system `from @sender:` prefix: human openers render as `user: @receiver, text`, peer openers render as `@sender: @receiver, text`, and the turn-final assistant message is kept only for human-opened turns. A single-agent target builds that same channel log and filters it to the focal agent's sent and received lines. Codex rollout rows that omit timestamps inherit the last timestamp seen in their session file, so sparse progress rows stay anchored to their turn. The parser core is shared with supervised streaming: each adapter implements `parse_transcript_messages` once, and the assistant-only `wait --stream` path filters that same parse.
 
 ## Spawn the fleet
 

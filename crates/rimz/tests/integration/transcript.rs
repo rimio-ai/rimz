@@ -50,20 +50,19 @@ fn transcript_renders_agent_turns_channel_timeline_and_pending_asks() {
     ]));
     assert!(single.contains("#feature-transcript"), "{single}");
     assert!(
-        single.contains("user  00:00:00\n  first prompt"),
+        single.contains("00:00:00 user: @claude, first prompt"),
         "{single}"
     );
     assert!(
-        single.contains("assistant  00:00:02\n  @claude  final answer"),
+        single.contains("00:00:02 @claude: final answer"),
         "{single}"
     );
     assert!(
         !single.contains("draft answer"),
         "default view keeps only the final assistant message:\n{single}"
     );
-    assert!(single.contains("\nask\n  approve patch"), "{single}");
     assert!(
-        single.contains("approve patch: choose one [allow, deny]"),
+        single.contains("@claude: approve patch: choose one [allow, deny]"),
         "{single}"
     );
 
@@ -93,16 +92,19 @@ fn transcript_renders_agent_turns_channel_timeline_and_pending_asks() {
         first_prompt < second_prompt
             && second_prompt < final_answer
             && final_answer < second_answer,
-        "channel timeline should sort by transcript timestamps:\n{channel}"
+        "channel chat log should sort by transcript timestamps:\n{channel}"
     );
     assert!(channel.contains("#feature-transcript"), "{channel}");
-    assert!(channel.contains("@claude"), "{channel}");
-    assert!(channel.contains("@codex"), "{channel}");
+    assert!(channel.contains("user: @claude, first prompt"), "{channel}");
+    assert!(channel.contains("@claude: final answer"), "{channel}");
+    assert!(channel.contains("user: @codex, second prompt"), "{channel}");
+    assert!(channel.contains("@codex: second answer"), "{channel}");
     assert!(
-        !channel.contains("you→@") && !channel.contains("@claude#feature-transcript"),
+        !channel.contains("you→@")
+            && !channel.contains("assistant")
+            && !channel.contains("@claude#feature-transcript"),
         "{channel}"
     );
-    assert!(channel.contains("second answer"), "{channel}");
 
     let json = run_ok(env.rimz().args([
         "transcript",
@@ -112,9 +114,12 @@ fn transcript_renders_agent_turns_channel_timeline_and_pending_asks() {
         "--json",
     ]));
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("transcript json");
-    assert_eq!(parsed["turns"][0]["messages"][0]["text"], "first prompt");
-    assert_eq!(parsed["turns"][0]["messages"][1]["text"], "final answer");
-    assert_eq!(parsed["ask"]["title"], "approve patch");
+    assert_eq!(parsed["entries"][0]["from"], "user");
+    assert_eq!(parsed["entries"][0]["to"], "@claude");
+    assert_eq!(parsed["entries"][0]["text"], "first prompt");
+    assert_eq!(parsed["entries"][1]["from"], "@claude");
+    assert_eq!(parsed["entries"][1]["text"], "final answer");
+    assert_eq!(parsed["asks"][0]["title"], "approve patch");
 
     let show = run_ok(env.rimz().args(["agents", "show", "sess-transcript-a"]));
     assert!(show.contains("ask:"), "{show}");
@@ -127,6 +132,56 @@ fn transcript_renders_agent_turns_channel_timeline_and_pending_asks() {
     let parsed: serde_json::Value = serde_json::from_str(&show_json).expect("show json");
     assert_eq!(parsed["ask"]["title"], "approve patch");
     assert_eq!(parsed["ask"]["options"][0], "allow");
+}
+
+#[test]
+fn transcript_attributes_agent_messages_and_filters_agent_view() {
+    let env = Env::new();
+    let branch = "attribution-transcript";
+    let claude_path = env.home_root.join("claude-attribution.jsonl");
+    let codex_sessions = env.home_root.join("codex-attribution-sessions");
+    let codex_day = codex_sessions.join("2026").join("06").join("01");
+    std::fs::create_dir_all(&codex_day).expect("mkdir codex day");
+    let codex_path = codex_day.join("rollout-2026-06-01T00-00-00-sess-attribution-codex.jsonl");
+    std::fs::write(
+        &claude_path,
+        r#"{"type":"user","timestamp":"2026-06-01T00:00:02Z","message":{"content":[{"type":"text","text":"from @codex: ack"}]}}"#
+            .to_owned()
+            + "\n"
+            + r#"{"type":"assistant","timestamp":"2026-06-01T00:00:03Z","message":{"content":[{"type":"text","text":"hidden claude reply"}]}}"#
+            + "\n",
+    )
+    .expect("write claude transcript");
+    std::fs::write(
+        &codex_path,
+        r#"{"timestamp":"2026-06-01T00:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"from @claude: do the thing"}}"#
+            .to_owned()
+            + "\n"
+            + r#"{"timestamp":"2026-06-01T00:00:04Z","type":"event_msg","payload":{"type":"agent_message","message":"hidden codex reply"}}"#
+            + "\n",
+    )
+    .expect("write codex transcript");
+
+    register_claude_agent(&env, "sess-attribution-claude", branch, &claude_path);
+    register_codex_agent(&env, "sess-attribution-codex", branch, &codex_sessions);
+
+    let channel = run_ok(env.rimz().args(["transcript", "#attribution-transcript"]));
+    assert!(
+        channel.contains("@claude: @codex, do the thing"),
+        "{channel}"
+    );
+    assert!(channel.contains("@codex: @claude, ack"), "{channel}");
+    assert!(!channel.contains("hidden codex reply"), "{channel}");
+    assert!(!channel.contains("hidden claude reply"), "{channel}");
+
+    let codex = run_ok(
+        env.rimz()
+            .args(["transcript", "@codex#attribution-transcript"]),
+    );
+    assert!(codex.contains("@claude: @codex, do the thing"), "{codex}");
+    assert!(codex.contains("@codex: @claude, ack"), "{codex}");
+    assert!(!codex.contains("hidden codex reply"), "{codex}");
+    assert!(!codex.contains("hidden claude reply"), "{codex}");
 }
 
 fn register_claude_agent(env: &Env, session_id: &str, branch: &str, transcript: &std::path::Path) {

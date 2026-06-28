@@ -5,13 +5,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use jiff::Timestamp;
 use serde::Serialize;
 
 use super::{GlobalFlags, current_channel, open_ledger};
 use crate::cli::render;
 use rimz::agents::AgentState;
-use rimz::agents::transcript::{TranscriptRole, fuse_timeline, group_turns};
+use rimz::agents::transcript::{self, AgentChat};
 use rimz::feed::{FeedItem, pending_ask_for};
 use rimz::workspace::WorkspaceResolver;
 
@@ -22,7 +21,7 @@ pub struct TranscriptArgs {
     /// Override the channel/worktree used to resolve the target.
     #[arg(short = 'w', long)]
     worktree: Option<String>,
-    /// Keep the last N turns for one agent, or last N entries for a channel.
+    /// Keep the last N chat lines.
     #[arg(short = 'n', long)]
     last: Option<usize>,
     /// Render every normalized message instead of turn summaries.
@@ -44,14 +43,6 @@ pub(crate) struct AskView {
 }
 
 #[derive(Serialize)]
-struct AgentTranscriptView {
-    agent: String,
-    turns: Vec<rimz::agents::Turn>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ask: Option<AskView>,
-}
-
-#[derive(Serialize)]
 struct ChannelAskView {
     agent: String,
     #[serde(flatten)]
@@ -59,10 +50,12 @@ struct ChannelAskView {
 }
 
 #[derive(Serialize)]
-struct ChannelTranscriptView {
+struct ChatView {
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: Option<String>,
-    timeline: Vec<rimz::agents::TimelineEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    focus: Option<String>,
+    entries: Vec<rimz::agents::ChatEntry>,
     asks: Vec<ChannelAskView>,
 }
 
@@ -73,10 +66,14 @@ struct LoadedTranscript {
 }
 
 enum Scope {
-    Agent(Box<AgentState>),
     Channel {
         channel: Option<String>,
         agents: Vec<AgentState>,
+    },
+    Agent {
+        channel: Option<String>,
+        agents: Vec<AgentState>,
+        focus: Box<AgentState>,
     },
 }
 
@@ -103,71 +100,82 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         .filter(|agent| agent.parent_agent_id.is_none())
         .collect();
 
-    match scope {
-        Scope::Agent(agent) => {
-            let label = rimz::target::agent_handle(&agent, &peers, true);
-            let messages = load_agent_messages(&agent)?
-                .with_context(|| format!("no transcript on disk for {label} yet"))?;
-            let mut turns = group_turns(&messages, args.details);
-            keep_last(&mut turns, args.last);
-            let ask = pending_ask_for(&agent, feed_items.iter()).map(ask_view);
-            if args.json {
-                print_json(&AgentTranscriptView {
-                    agent: label,
-                    turns,
-                    ask,
-                })?;
-            } else {
-                let channel = rimz::target::agent_channel(&agent);
-                render_agent(channel.as_deref(), &label, &turns, ask.as_ref())?;
-            }
+    let (channel, agents, focus) = match scope {
+        Scope::Channel { channel, agents } => (channel, agents, None),
+        Scope::Agent {
+            channel,
+            agents,
+            focus,
+        } => {
+            let include_channel = channel.is_none();
+            let focus = rimz::target::agent_handle(&focus, &peers, include_channel);
+            (channel, agents, Some(focus))
         }
-        Scope::Channel { channel, agents } => {
-            let mut loaded = Vec::new();
-            for agent in agents {
-                let label = rimz::target::agent_handle(&agent, &peers, true);
-                if let Some(messages) = load_agent_messages(&agent)? {
-                    loaded.push(LoadedTranscript {
-                        agent,
-                        label,
-                        messages,
-                    });
-                } else if pending_ask_for(&agent, feed_items.iter()).is_some() {
-                    loaded.push(LoadedTranscript {
-                        agent,
-                        label,
-                        messages: Vec::new(),
-                    });
-                }
-            }
-            if loaded.is_empty() {
-                bail!("no transcripts on disk for this scope yet");
-            }
-            let per_agent = loaded
-                .iter()
-                .map(|loaded| (loaded.label.clone(), loaded.messages.clone()))
-                .collect();
-            let mut timeline = fuse_timeline(per_agent, args.details);
-            keep_last(&mut timeline, args.last);
-            let asks: Vec<ChannelAskView> = loaded
-                .iter()
-                .filter_map(|loaded| {
-                    pending_ask_for(&loaded.agent, feed_items.iter()).map(|ask| ChannelAskView {
-                        agent: loaded.label.clone(),
-                        ask: ask_view(ask),
-                    })
-                })
-                .collect();
-            if args.json {
-                print_json(&ChannelTranscriptView {
-                    channel,
-                    timeline,
-                    asks,
-                })?;
-            } else {
-                render_channel(channel.as_deref(), &timeline, &asks)?;
-            }
+    };
+
+    let include_channel = channel.is_none();
+    let mut loaded = Vec::new();
+    for agent in agents {
+        let label = rimz::target::agent_handle(&agent, &peers, include_channel);
+        if let Some(messages) = load_agent_messages(&agent)? {
+            loaded.push(LoadedTranscript {
+                agent,
+                label,
+                messages,
+            });
+        } else if pending_ask_for(&agent, feed_items.iter()).is_some() {
+            loaded.push(LoadedTranscript {
+                agent,
+                label,
+                messages: Vec::new(),
+            });
         }
+    }
+    if loaded.is_empty() {
+        bail!("no transcripts on disk for this scope yet");
+    }
+
+    let per_agent = loaded
+        .iter()
+        .map(|loaded| AgentChat {
+            handle: loaded.label.clone(),
+            messages: loaded.messages.clone(),
+        })
+        .collect();
+    let mut entries =
+        transcript::build_chat(per_agent, args.details, rimz::target::parse_sender_prefix);
+    let mut asks: Vec<ChannelAskView> = loaded
+        .iter()
+        .filter_map(|loaded| {
+            pending_ask_for(&loaded.agent, feed_items.iter()).map(|ask| ChannelAskView {
+                agent: loaded.label.clone(),
+                ask: ask_view(ask),
+            })
+        })
+        .collect();
+
+    if let Some(focus) = focus.as_deref() {
+        let focus = base_handle(focus);
+        entries.retain(|entry| {
+            base_handle(&entry.from) == focus
+                || entry
+                    .to
+                    .as_deref()
+                    .is_some_and(|to| base_handle(to) == focus)
+        });
+        asks.retain(|ask| base_handle(&ask.agent) == focus);
+    }
+    keep_last(&mut entries, args.last);
+
+    if args.json {
+        print_json(&ChatView {
+            channel,
+            focus,
+            entries,
+            asks,
+        })?;
+    } else {
+        render_chat(channel.as_deref(), &entries, &asks)?;
     }
     Ok(())
 }
@@ -216,9 +224,19 @@ fn resolve_scope(
                 agents,
             })
         }
-        Some(raw) => Ok(Scope::Agent(Box::new(
-            super::resolve_agent_one(snapshot, raw, worktree, current)?.clone(),
-        ))),
+        Some(raw) => {
+            let focus = super::resolve_agent_one(snapshot, raw, worktree, current)?.clone();
+            let channel = rimz::target::agent_channel(&focus);
+            let mut agents = root_agents(snapshot, channel.as_deref());
+            if !agents.iter().any(|agent| agent.agent_id == focus.agent_id) {
+                agents.push(focus.clone());
+            }
+            Ok(Scope::Agent {
+                channel,
+                agents,
+                focus: Box::new(focus),
+            })
+        }
     }
 }
 
@@ -341,133 +359,60 @@ fn write_header(out: &mut impl Write, channel: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn render_agent(
-    channel: Option<&str>,
-    label: &str,
-    turns: &[rimz::agents::Turn],
-    ask: Option<&AskView>,
-) -> Result<()> {
-    let mut out = render::out();
-    write_header(&mut out, channel)?;
-    let display = if channel.is_some() {
-        base_handle(label)
-    } else {
-        label
-    };
-    let agent = render::paint(render::palette::META.bold(), display);
-    let user = render::paint(render::palette::COOL, "user");
-    let assistant = render::paint(render::palette::META, "assistant");
-    let ask_role = render::paint(render::palette::WARN, "ask");
-    let mut first = true;
-    for turn in turns {
-        for message in &turn.messages {
-            if !first {
-                writeln!(out)?;
-            }
-            first = false;
-            match message.role {
-                TranscriptRole::User => {
-                    write_block(&mut out, &user, message.at, None, &message.text)?;
-                }
-                TranscriptRole::Assistant => {
-                    write_block(
-                        &mut out,
-                        &assistant,
-                        message.at,
-                        Some(&agent),
-                        &message.text,
-                    )?;
-                }
-            }
-        }
-    }
-    if let Some(ask) = ask {
-        if !first {
-            writeln!(out)?;
-        }
-        write_block(&mut out, &ask_role, None, None, &ask_summary(ask))?;
-    }
-    Ok(())
+fn display_handle(handle: &str, grouped: bool) -> &str {
+    if grouped { base_handle(handle) } else { handle }
 }
 
-fn render_channel(
+fn render_chat(
     channel: Option<&str>,
-    timeline: &[rimz::agents::TimelineEntry],
+    entries: &[rimz::agents::ChatEntry],
     asks: &[ChannelAskView],
 ) -> Result<()> {
     let mut out = render::out();
     write_header(&mut out, channel)?;
     let grouped = channel.is_some();
     let mut tones = AgentTones::default();
-    let user = render::paint(render::palette::COOL, "user");
-    let assistant = render::paint(render::palette::META, "assistant");
-    let ask_role = render::paint(render::palette::WARN, "ask");
-    let mut first = true;
-    for entry in timeline {
-        if !first {
-            writeln!(out)?;
-        }
-        first = false;
-        match entry.role {
-            TranscriptRole::User => write_block(&mut out, &user, entry.at, None, &entry.text)?,
-            TranscriptRole::Assistant => {
-                let display = if grouped {
-                    base_handle(&entry.agent)
-                } else {
-                    entry.agent.as_str()
-                };
-                let handle = render::paint(tones.tone(display).bold(), display);
-                write_block(&mut out, &assistant, entry.at, Some(&handle), &entry.text)?;
-            }
-        }
+    for entry in entries {
+        let from = if entry.from == "user" {
+            render::paint(render::palette::COOL, "user")
+        } else {
+            let display = display_handle(&entry.from, grouped);
+            render::paint(tones.tone(base_handle(&entry.from)).bold(), display)
+        };
+        let to = entry
+            .to
+            .as_deref()
+            .map(|to| format!("{}, ", display_handle(to, grouped)))
+            .unwrap_or_default();
+        write_chat_line(&mut out, entry.at, &from, &format!("{to}{}", entry.text))?;
     }
     for ask in asks {
-        if !first {
-            writeln!(out)?;
-        }
-        first = false;
-        let display = if grouped {
-            base_handle(&ask.agent)
-        } else {
-            ask.agent.as_str()
-        };
-        let handle = render::paint(tones.tone(display).bold(), display);
-        write_block(
-            &mut out,
-            &ask_role,
-            None,
-            Some(&handle),
-            &ask_summary(&ask.ask),
-        )?;
+        let display = display_handle(&ask.agent, grouped);
+        let handle = render::paint(render::palette::WARN.bold(), display);
+        write_chat_line(&mut out, None, &handle, &ask_summary(&ask.ask))?;
     }
     Ok(())
 }
 
-fn write_block(
+fn write_chat_line(
     out: &mut impl Write,
-    role: &str,
-    at: Option<Timestamp>,
-    handle: Option<&str>,
+    at: Option<jiff::Timestamp>,
+    from: &str,
     text: &str,
 ) -> Result<()> {
-    match at {
-        Some(at) => writeln!(
-            out,
-            "{role}  {}",
-            render::paint(render::palette::FAINT, &at.strftime("%H:%M:%S").to_string())
-        )?,
-        None => writeln!(out, "{role}")?,
-    }
-
+    let time = at.map_or_else(
+        || "        ".to_owned(),
+        |at| at.strftime("%H:%M:%S").to_string(),
+    );
+    let time = render::paint(render::palette::FAINT, &time);
     let mut lines = text.lines();
-    match (handle, lines.next()) {
-        (Some(handle), Some(first)) => writeln!(out, "  {handle}  {first}")?,
-        (Some(handle), None) => writeln!(out, "  {handle}")?,
-        (None, Some(first)) => writeln!(out, "  {first}")?,
-        (None, None) => {}
+    match lines.next() {
+        Some(first) => writeln!(out, "{time} {from}: {first}")?,
+        None => writeln!(out, "{time} {from}:")?,
     }
+    let padding = render::paint(render::palette::FAINT, "        ");
     for line in lines {
-        writeln!(out, "  {line}")?;
+        writeln!(out, "{padding}   {line}")?;
     }
     Ok(())
 }
