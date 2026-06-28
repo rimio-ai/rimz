@@ -46,6 +46,10 @@ struct FocusRestoreTarget {
     tab_id: u64,
 }
 
+const FOCUS_RESTORE_ATTEMPTS: u32 = 8;
+const FOCUS_RESTORE_RETRY_DELAY: Duration = Duration::from_millis(100);
+const FOCUS_RESTORE_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
 impl ZellijBackend {
     fn focus_restore_target(&self, session_name: &str) -> Option<FocusRestoreTarget> {
         let pane = self
@@ -63,6 +67,51 @@ impl ZellijBackend {
             .find(|candidate| candidate.is_terminal() && candidate.id == raw_id)
             .map(|candidate| candidate.tab_id)?;
         Some(FocusRestoreTarget { pane, tab_id })
+    }
+
+    fn restore_client_focus(&self, session_name: &str, target: &FocusRestoreTarget) -> Result<()> {
+        let mut last_error = None;
+        for attempt in 0..FOCUS_RESTORE_ATTEMPTS {
+            let action_error = self
+                .go_to_tab_id(session_name, target.tab_id)
+                .and_then(|_| self.focus_pane(&target.pane, Some(session_name)))
+                .err()
+                .map(|err| err.to_string());
+            match self.client_focus_contains(session_name, &target.pane) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {
+                    last_error = Some(action_error.unwrap_or_else(|| {
+                        format!("client focus did not include {}", target.pane.as_str())
+                    }));
+                }
+                Err(err) => {
+                    last_error = Some(
+                        action_error
+                            .map(|action| format!("{action}; focus probe: {err}"))
+                            .unwrap_or_else(|| err.to_string()),
+                    );
+                }
+            }
+            if attempt + 1 < FOCUS_RESTORE_ATTEMPTS {
+                std::thread::sleep(FOCUS_RESTORE_RETRY_DELAY);
+            }
+        }
+        Err(MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!(
+                "could not restore client focus to {} after {FOCUS_RESTORE_ATTEMPTS} attempts: {}",
+                target.pane.as_str(),
+                last_error.unwrap_or_else(|| "focus was not observed".to_owned()),
+            ),
+        })
+    }
+
+    fn client_focus_contains(&self, session_name: &str, pane: &PaneId) -> Result<bool> {
+        self.focused_client_panes(ClientFocusOptions {
+            session_name: Some(session_name.to_owned()),
+            command_timeout: Some(FOCUS_RESTORE_PROBE_TIMEOUT),
+        })
+        .map(|focused| focused.iter().any(|candidate| candidate == pane))
     }
 
     fn run_new_tab_confirmed(&self, session: &str, args: &[String], tab_name: &str) -> Result<()> {
@@ -573,9 +622,7 @@ impl MuxBackend for ZellijBackend {
         drop(layout);
         if !opts.focus {
             let result = match &restore {
-                Some(restore) => self
-                    .go_to_tab_id(&opts.session_name, restore.tab_id)
-                    .and_then(|_| self.focus_pane(&restore.pane, Some(&opts.session_name))),
+                Some(restore) => self.restore_client_focus(&opts.session_name, restore),
                 None => self.go_to_tab(&opts.session_name, 1),
             };
             if let Err(err) = result {
