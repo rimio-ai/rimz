@@ -21,8 +21,8 @@ use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
     ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr,
     NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionHealth, SessionOptions,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions,
-    TabOptions, ensure_pane_backend, memoized_version,
+    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions,
+    ensure_pane_backend, memoized_version,
 };
 use crate::pane::PaneRef;
 
@@ -479,15 +479,23 @@ impl MuxBackend for ZellijBackend {
         // Zellij docks the sidebar left only at session birth, but a left pane
         // can still be reached in a live session: close a stray sidebar by id,
         // and add one by splitting right, moving it left, and resizing it to the
-        // layout width. This never rebirths the session, so the working panes
-        // survive.
+        // session's fixed birth width. This never rebirths the session, so the
+        // working panes survive.
         let panes = self.list_panes_with_session(Some(&opts.session_name))?;
+        let canonical = self
+            .new_tab_template_sidebar_cols(&opts.session_name)
+            .ok()
+            .flatten()
+            .unwrap_or(opts.birth_size.cols);
+        let mut opts = opts.clone();
+        opts.birth_size.cols = canonical;
         let views = views_with_sidebars(&panes);
         let plan = super::super::plan_reconcile(&views, live);
         // Kept sidebars (not planned for closing) whose geometry sits off the
         // layout's dock — the residue of a mis-mounted add — converge in place
         // this pass, renderer untouched.
-        let off_spec = off_spec_sidebars(&panes, &plan.close, opts.width);
+        let off_spec =
+            off_spec_sidebars(&panes, &plan.close, u64::from(opts.birth_size.cols.get()));
         if plan.close.is_empty() && plan.add.is_empty() && off_spec.is_empty() {
             return Ok(SidebarRecovery::default());
         }
@@ -518,7 +526,14 @@ impl MuxBackend for ZellijBackend {
         let attached = !needs_attached || self.session_has_attached_client(&opts.session_name);
         if attached {
             for (tab_id, raw_id) in &off_spec {
-                repair_sidebar_geometry(self, opts, *tab_id, *raw_id, &focused_in_tab, &mut report);
+                repair_sidebar_geometry(
+                    self,
+                    &opts,
+                    *tab_id,
+                    *raw_id,
+                    &focused_in_tab,
+                    &mut report,
+                );
             }
         }
         if needs_attached && !attached {
@@ -531,7 +546,7 @@ impl MuxBackend for ZellijBackend {
         } else {
             add_missing_sidebars(
                 self,
-                opts,
+                &opts,
                 &plan.add,
                 &plan.restart_add,
                 &failed_stale_close_views,
@@ -661,14 +676,14 @@ impl MuxBackend for ZellijBackend {
 fn off_spec_sidebars(
     panes: &[RawPane],
     closing: &[PaneId],
-    width: SidebarWidth,
+    canonical_cols: u64,
 ) -> Vec<(u64, u64)> {
     let closing: HashSet<u64> = closing.iter().filter_map(parse_zellij_raw).collect();
     panes
         .iter()
         .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
         .filter(|pane| !closing.contains(&pane.id))
-        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, width))
+        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, canonical_cols))
         .map(|pane| (pane.tab_id, pane.id))
         .collect()
 }

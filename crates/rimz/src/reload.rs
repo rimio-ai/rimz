@@ -265,11 +265,10 @@ fn reconcile_live(
         workspace_id: ws.workspace_id.clone(),
         project_root: ws.project_root.clone(),
         cwd: ws.project_root.clone(),
-        width,
         // A reload can run from a terminal (or no terminal) unrelated to the
-        // session's clients, so there is no probe to resolve a verdict from —
-        // and reconcile never consumes one: the heal paths size from the
-        // session's own live geometry (`width`).
+        // session's clients, so the bare cap is only a fallback. Reconcile
+        // recovers the session's fixed canonical width from the live Zellij
+        // template or tmux hook before adding or repairing panes.
         birth_size: width.birth_size(None),
         rimz_bin: rimz_bin.to_path_buf(),
         replace_existing: false,

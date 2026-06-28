@@ -2,7 +2,6 @@ use super::*;
 use std::collections::HashSet;
 
 use crate::ids::{MuxName, PaneId, ViewId, ViewKind};
-use crate::mux::SidebarWidth;
 use crate::pane::PaneRef;
 use crate::schema::pane_topology::PaneTopologyCache;
 
@@ -428,25 +427,6 @@ fn topology_cache_panes_feed_the_existing_classifier() {
 }
 
 #[test]
-fn tab_extent_cols_takes_extents_not_the_sum() {
-    // A left sidebar beside two vertically stacked panes: the sum (60 +
-    // 238 + 238 = 536) would nearly double the real tab width (298).
-    let json = r#"[
-          {"id": 0, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar",
-           "pane_x": 0, "pane_columns": 60},
-          {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh",
-           "pane_x": 60, "pane_columns": 238},
-          {"id": 2, "is_plugin": false, "tab_id": 0, "title": "vim",
-           "pane_x": 60, "pane_columns": 238},
-          {"id": 3, "is_plugin": false, "tab_id": 1, "title": "zsh",
-           "pane_x": 0, "pane_columns": 120}
-        ]"#;
-    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    assert_eq!(tab_extent_cols(&panes, 0), 298);
-    assert_eq!(tab_extent_cols(&panes, 1), 120);
-    assert_eq!(tab_extent_cols(&panes, 9), 0, "an absent tab has no width");
-}
-#[test]
 fn sidebar_geometry_classifies_dock_shapes() {
     let json = r#"[
           {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh",
@@ -507,11 +487,11 @@ fn sidebar_geometry_classifies_dock_shapes() {
            "pane_x": 0, "pane_columns": 298}
         ]"#;
     let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    let width = SidebarWidth::default();
+    let canonical_cols = 72;
     let by_id = |id: u64| panes.iter().find(|pane| pane.id == id).unwrap();
     let excluded = HashSet::new();
     assert!(
-        sidebar_geometry_off_spec(by_id(2), &panes, &excluded, width),
+        sidebar_geometry_off_spec(by_id(2), &panes, &excluded, canonical_cols),
         "right-docked 50% sidebar is off-spec",
     );
     assert_eq!(
@@ -519,7 +499,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
         Some(SidebarDock::SwapReachable),
     );
     assert!(
-        !sidebar_geometry_off_spec(by_id(3), &panes, &excluded, width),
+        !sidebar_geometry_off_spec(by_id(3), &panes, &excluded, canonical_cols),
         "a healthy ~21% layout-born sidebar is never churned",
     );
     assert_eq!(
@@ -527,7 +507,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
         Some(SidebarDock::Docked),
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(5), &panes, &excluded, width),
+        sidebar_geometry_off_spec(by_id(5), &panes, &excluded, canonical_cols),
         "left but 50%-wide still wants the resize",
     );
     assert_eq!(
@@ -536,12 +516,12 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "a wide sidebar with a clear band is docked and only needs resizing",
     );
     assert!(
-        !sidebar_geometry_off_spec(by_id(7), &panes, &excluded, width),
+        !sidebar_geometry_off_spec(by_id(7), &panes, &excluded, canonical_cols),
         "missing geometry leaves nothing safe to repair",
     );
     assert_eq!(sidebar_dock_verdict(by_id(7), &panes, &excluded), None);
     assert!(
-        sidebar_geometry_off_spec(by_id(9), &panes, &excluded, width),
+        sidebar_geometry_off_spec(by_id(9), &panes, &excluded, canonical_cols),
         "the live broken nested-row shape is off-spec",
     );
     assert_eq!(
@@ -554,7 +534,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "the narrow one-right-column nested shape can be repaired by stacking",
     );
     assert!(
-        !sidebar_geometry_off_spec(by_id(12), &panes, &excluded, width),
+        !sidebar_geometry_off_spec(by_id(12), &panes, &excluded, canonical_cols),
         "a sidebar beside stacked right-hand work panes is docked",
     );
     assert_eq!(
@@ -573,7 +553,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "plugin, floating, and suppressed panes do not intrude into the dock band",
     );
     assert!(
-        sidebar_geometry_off_spec(by_id(23), &panes, &excluded, width),
+        sidebar_geometry_off_spec(by_id(23), &panes, &excluded, canonical_cols),
         "a dead pane still means the sidebar is not a full-height dock",
     );
     assert_eq!(
@@ -595,23 +575,21 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "multi-column work layouts are left untouched instead of collapsed",
     );
 
-    let width = SidebarWidth::default();
-    let cap = width.cap_cols();
     assert!(
-        !sidebar_width_off_spec(cap, 140, width),
-        "cap-wide on a 140-col tab is a width verdict, not a mis-mount",
+        !sidebar_width_off_spec(canonical_cols, canonical_cols),
+        "canonical width is not a mis-mount",
     );
     assert!(
-        sidebar_width_off_spec(149, 298, width),
-        "the 50% mis-mount is past both the trigger and the cap",
+        sidebar_width_off_spec(149, canonical_cols),
+        "the 50% mis-mount is wider than the canonical width",
     );
     assert!(
-        sidebar_width_off_spec(60, 120, width),
-        "an under-cap 50% mis-mount still wants the layout width",
+        !sidebar_width_off_spec(60, canonical_cols),
+        "sub-canonical panes are left untouched until the view reopens",
     );
     assert!(
-        sidebar_width_off_spec(90, 298, width),
-        "30% on a wide tab is still off-spec when it exceeds max_cols",
+        sidebar_width_off_spec(90, canonical_cols),
+        "anything wider than canonical still shrinks",
     );
 }
 

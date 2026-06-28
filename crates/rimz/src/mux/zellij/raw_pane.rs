@@ -9,10 +9,10 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{SIDEBAR_PANE_NAME, SIDEBAR_RESIZE_TRIGGER_PERCENT};
+use super::SIDEBAR_PANE_NAME;
 use crate::ids::{MuxName, PaneId, ViewId, WorkspaceId};
 use crate::ledger::paths;
-use crate::mux::{PaneListing, SidebarWidth, ViewSidebars};
+use crate::mux::{PaneListing, ViewSidebars};
 use crate::schema::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 
 /// Cleanliness of a live room after a successful pane inspection.
@@ -161,29 +161,11 @@ pub(super) fn parse_new_pane_id(stdout: &str) -> Option<String> {
     Some(trimmed.to_owned())
 }
 
-/// A tab's total width in columns: the extents (`max(pane_x + pane_columns)`)
-/// over its terminal panes. A missing `pane_x` reads as `0`, degrading toward
-/// the widest single pane rather than the stacked-pane-inflated sum.
-pub(super) fn tab_extent_cols(panes: &[RawPane], tab_id: u64) -> u64 {
-    panes
-        .iter()
-        .filter(|pane| pane.is_terminal() && pane.tab_id == tab_id)
-        .filter_map(|pane| Some(pane.pane_x.unwrap_or(0) + pane.pane_columns?))
-        .max()
-        .unwrap_or(0)
-}
-
-/// Whether a sidebar `cols` wide in a `total`-wide tab is past the resize
-/// trigger: wider than the configured `max_cols` cap, or under the cap but over
-/// [`SIDEBAR_RESIZE_TRIGGER_PERCENT`] of the tab. A pane born fixed at the cap
-/// is a deliberate width verdict even on a narrow client; anything wider asks
-/// the repair path to converge it.
-pub(super) fn sidebar_width_off_spec(cols: u64, total: u64, width: SidebarWidth) -> bool {
-    if total == 0 {
-        return false;
-    }
-    let cap = width.cap_cols();
-    cols > cap || (cols < cap && cols * 100 > total * SIDEBAR_RESIZE_TRIGGER_PERCENT)
+/// Whether a sidebar is wider than the session's fixed birth width. Reconcile
+/// shrinks only oversized panes; a sub-canonical sidebar is left in place until
+/// the view is reopened.
+pub(super) fn sidebar_width_off_spec(cols: u64, canonical_cols: u64) -> bool {
+    cols > canonical_cols
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -286,21 +268,21 @@ pub(super) fn repairable_nested_work_pane_ids(
 
 /// Whether a kept sidebar pane sits off the layout's dock: outside the
 /// full-height left column, nested beside a tiled pane that intrudes into its
-/// column band, or past the width trigger ([`sidebar_width_off_spec`]). Unknown
+/// column band, or wider than the session's fixed birth width. Unknown
 /// geometry never reads off-spec.
 pub(super) fn sidebar_geometry_off_spec(
     pane: &RawPane,
     panes: &[RawPane],
     excluded: &HashSet<u64>,
-    width: SidebarWidth,
+    canonical_cols: u64,
 ) -> bool {
     let Some(verdict) = sidebar_dock_verdict(pane, panes, excluded) else {
         return false;
     };
     matches!(verdict, SidebarDock::SwapReachable | SidebarDock::NestedRow)
-        || pane.pane_columns.is_some_and(|cols| {
-            sidebar_width_off_spec(cols, tab_extent_cols(panes, pane.tab_id), width)
-        })
+        || pane
+            .pane_columns
+            .is_some_and(|cols| sidebar_width_off_spec(cols, canonical_cols))
 }
 
 /// The mounted sidebar pane an add produced: a fresh live, sidebar-titled
@@ -360,7 +342,7 @@ pub(super) struct RawPane {
     #[serde(default)]
     pub(super) tab_name: Option<String>,
     /// Column width of the pane, used by in-place sidebar recovery to resize a
-    /// freshly-split sidebar toward the layout's width percentage.
+    /// freshly-split sidebar toward the session's fixed birth width.
     #[serde(default)]
     pub(super) pane_columns: Option<u64>,
     /// Column offset of the pane's left edge — `0` is the left column. Drives

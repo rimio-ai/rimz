@@ -38,19 +38,14 @@ impl TmuxBackend {
     /// Split a left sidebar into a specific window in place, mirroring the
     /// initial-window split: `-b` (before/left), `-l <size>` (width), `-d`
     /// (keep the caller's focus). The `-t <window_id>` target leaves every other
-    /// window untouched. The heal sizes from the live window — `target_cols`
-    /// of `#{window_width}` — never from `opts.birth_size`: a reconcile can run
-    /// from a terminal (or no terminal) unrelated to the session's clients.
-    /// When the width is unreadable, the percentage is the safe fallback.
+    /// window untouched. The heal uses the session's fixed birth width, recovered
+    /// from the live hook on reload.
     pub(super) fn add_sidebar_to_window(
         &self,
         opts: &SidebarPaneOptions,
         window_id: &str,
     ) -> Result<()> {
-        let size = match self.window_width(window_id) {
-            Some(total) => opts.width.target_cols(total).to_string(),
-            None => format!("{}%", opts.width.percent),
-        };
+        let size = opts.birth_size.cols.to_string();
         self.cmd()
             .args([
                 "split-window".to_owned(),
@@ -78,7 +73,7 @@ impl TmuxBackend {
     }
 
     /// Resize a freshly-born tab up to the widest attached client and
-    /// re-assert the hook-docked sidebar to its capped width, so agent column
+    /// re-assert the hook-docked sidebar to its fixed birth width, so agent column
     /// splits land even at full width. Returns whether it resized the window;
     /// the caller must then restore autosizing after placing the splits.
     ///
@@ -120,7 +115,6 @@ impl TmuxBackend {
         if let Some(sidebar_pane) = self.leftmost_pane(window_id)
             && sidebar_pane != first_pane
         {
-            let cols = sidebar.width.target_cols(full_w);
             let _ = self
                 .cmd()
                 .args([
@@ -128,7 +122,7 @@ impl TmuxBackend {
                     "-t".to_owned(),
                     sidebar_pane,
                     "-x".to_owned(),
-                    cols.to_string(),
+                    sidebar.birth_size.cols.to_string(),
                 ])
                 .run();
         }

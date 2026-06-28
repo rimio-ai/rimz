@@ -604,7 +604,6 @@ fn new_window_pins_the_start_verdict_after_a_resize() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-verdict")),
                 project_root: std::env::temp_dir(),
                 cwd: std::env::temp_dir(),
-                width,
                 // The verdict on a 200-column terminal: 30% is 60 ≤ the 72
                 // cap — the under-cap case the old percentage spelling leaked.
                 birth_size: width.birth_size(Some(200)),
@@ -636,6 +635,69 @@ fn new_window_pins_the_start_verdict_after_a_resize() {
 }
 
 #[test]
+fn reconcile_preserves_live_hook_birth_width() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    let width = SidebarWidth::default();
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: "rimz-hook-width".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(&std::env::temp_dir()),
+            project_root: std::env::temp_dir(),
+            cwd: std::env::temp_dir(),
+            config: rimz::config::MultiplexerConfig::default(),
+            detected_size: Some((200, 50)),
+            truecolor: false,
+        })
+        .expect("ensure_session");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let opts = SidebarPaneOptions {
+        session_name: "rimz-hook-width".to_owned(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-hook-width")),
+        project_root: std::env::temp_dir(),
+        cwd: std::env::temp_dir(),
+        birth_size: width.birth_size(Some(200)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    server
+        .backend
+        .open_sidebar(&opts, None)
+        .expect("open_sidebar");
+    assert!(
+        server.show_hooks("rimz-hook-width").contains("-l 60"),
+        "fixture hook should carry the launch verdict: {}",
+        server.show_hooks("rimz-hook-width"),
+    );
+
+    let mut reload_opts = opts.clone();
+    reload_opts.birth_size = width.birth_size(None);
+    server
+        .backend
+        .reconcile_sidebars(&reload_opts, &rimz::mux::SidebarLiveness::default())
+        .expect("reconcile_sidebars");
+    let hooks = server.show_hooks("rimz-hook-width");
+    assert!(
+        hooks.contains("-l 60"),
+        "reconcile should preserve the live hook's 60-col verdict instead of \
+         rewriting to the reload fallback: {hooks}",
+    );
+
+    server.tmux(&["new-window", "-t", "rimz-hook-width"]);
+    let panes = server.wait_for_panes("rimz-hook-width:1", 2);
+    assert_eq!(
+        panes.iter().map(|pane| pane.width).min(),
+        Some(60),
+        "post-reconcile hook should birth new windows at the original verdict: {panes:?}",
+    );
+}
+
+#[test]
 fn reconcile_sidebars_reinstalls_after_new_window_hook() {
     require_tmux!();
 
@@ -648,7 +710,6 @@ fn reconcile_sidebars_reinstalls_after_new_window_hook() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-hook-reconcile")),
         project_root: std::env::temp_dir(),
         cwd: std::env::temp_dir(),
-        width,
         birth_size: width.birth_size(Some(80)),
         rimz_bin: stub,
         replace_existing: false,
@@ -725,7 +786,6 @@ fn launch_sidebar_skipped_by_foreign_heartbeat_still_ensures_tmux_session_view()
         workspace_id: workspace_id.clone(),
         project_root: workspace.path().to_path_buf(),
         cwd: workspace.path().to_path_buf(),
-        width,
         birth_size: width.birth_size(Some(80)),
         rimz_bin: stub,
         replace_existing: false,
@@ -881,7 +941,6 @@ fn open_background_view_creates_named_window_idempotently() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
         project_root: std::env::temp_dir(),
         cwd: std::env::temp_dir(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(80)),
         rimz_bin: stub,
         replace_existing: false,
@@ -1024,7 +1083,6 @@ fn open_background_view_creates_content_only_window() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgstats")),
         project_root: std::env::temp_dir(),
         cwd: std::env::temp_dir(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(80)),
         rimz_bin: stub,
         replace_existing: false,
@@ -1094,7 +1152,6 @@ fn open_background_view_stacks_multiple_content_panes() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgcontent")),
         project_root: std::env::temp_dir(),
         cwd: std::env::temp_dir(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(80)),
         rimz_bin: stub,
         replace_existing: false,
@@ -1192,7 +1249,6 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-resume")),
         project_root: std::env::temp_dir(),
         cwd: std::env::temp_dir(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(80)),
         rimz_bin: stub,
         replace_existing: false,
@@ -1350,7 +1406,6 @@ fn closing_agent_tab_records_end_trace_when_session_survives() {
                 workspace_id: workspace.workspace_id.clone(),
                 project_root: workspace.project_root.clone(),
                 cwd: worktree.clone(),
-                width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(160)),
                 rimz_bin: stub,
                 replace_existing: false,
@@ -1446,7 +1501,6 @@ fn closing_agent_tab_disposes_clean_worktree_when_session_survives() {
                 workspace_id: workspace.workspace_id.clone(),
                 project_root: workspace.project_root.clone(),
                 cwd: worktree.clone(),
-                width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(160)),
                 rimz_bin: stub,
                 replace_existing: false,
@@ -1509,7 +1563,6 @@ fn open_tab_builds_multi_column_layout() {
         workspace_id: WorkspaceId::from_project_root(cwd.path()),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width,
         birth_size: width.birth_size(Some(300)),
         rimz_bin: stub,
         replace_existing: false,
@@ -1632,7 +1685,6 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
         workspace_id: WorkspaceId::from_project_root(cwd.path()),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width,
         birth_size: width.birth_size(Some(240)),
         rimz_bin: stub,
         replace_existing: false,
@@ -1686,7 +1738,7 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
 }
 
 /// A tab opened while tmux's latest client is narrow is still laid out at the
-/// full attached width: the hook sidebar is re-asserted to the cap before
+/// full attached width: the hook sidebar is re-asserted to the birth width before
 /// agent columns split, and autosizing is restored after the birth correction.
 #[test]
 fn open_tab_from_narrow_client_normalizes_to_full_width() {
@@ -1714,7 +1766,6 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
         workspace_id: WorkspaceId::from_project_root(cwd.path()),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width,
         birth_size: width.birth_size(Some(300)),
         rimz_bin: stub,
         replace_existing: false,
@@ -1846,7 +1897,6 @@ fn open_tab_single_pane_layout_docks_one_work_pane_beside_the_sidebar() {
         workspace_id: WorkspaceId::from_project_root(cwd.path()),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width,
         birth_size: width.birth_size(Some(200)),
         rimz_bin: stub,
         replace_existing: false,
@@ -2150,7 +2200,6 @@ fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-orphan")),
                 project_root: std::env::current_dir().expect("cwd"),
                 cwd: std::env::current_dir().expect("cwd"),
-                width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(80)),
                 rimz_bin,
                 replace_existing: false,

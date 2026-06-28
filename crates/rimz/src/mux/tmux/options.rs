@@ -1,10 +1,13 @@
 //! tmux room options and sidebar-pane classification.
 
 use std::collections::HashMap;
+use std::num::NonZeroU16;
 
 use crate::config::{TmuxConfig, TmuxExtendedKeysFormat};
 use crate::mux::{SidebarPaneOptions, ViewSidebars};
 use crate::pane::PaneRef;
+
+use super::TmuxBackend;
 
 /// Pane title the sidebar renderer sets through the terminal title escape. The
 /// host binary is now `rimz`, so tmux identifies chrome through this title
@@ -51,6 +54,41 @@ pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<St
         "after-new-window".to_owned(),
         hook_commands.join(" ; "),
     ]
+}
+
+pub(super) fn after_new_window_hook_cols_from_value(value: &str) -> Option<NonZeroU16> {
+    let words = shlex::split(value)?;
+    let mut in_split = false;
+    let mut words = words.iter();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            ";" => in_split = false,
+            "split-window" => in_split = true,
+            "-l" if in_split => {
+                return words.next()?.parse().ok().and_then(NonZeroU16::new);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+impl TmuxBackend {
+    pub(super) fn after_new_window_hook_cols(&self, session: &str) -> Option<NonZeroU16> {
+        let output = self
+            .cmd()
+            .args([
+                "show-options".to_owned(),
+                "-t".to_owned(),
+                session.to_owned(),
+                "-Hqv".to_owned(),
+                "after-new-window".to_owned(),
+            ])
+            .run()
+            .ok()?;
+        let value = String::from_utf8_lossy(&output.stdout);
+        after_new_window_hook_cols_from_value(value.trim())
+    }
 }
 
 pub(super) fn is_tmux_sidebar(pane: &PaneRef) -> bool {
@@ -195,7 +233,6 @@ mod tests {
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-tmux-refresh")),
             project_root: PathBuf::from("/tmp/rimz-tmux-refresh"),
             cwd: PathBuf::from("/tmp/rimz-tmux-refresh"),
-            width,
             birth_size: width.birth_size(None),
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
@@ -262,6 +299,19 @@ mod tests {
                     opts.birth_size.cols
                 ),
             ],
+        );
+    }
+
+    #[test]
+    fn after_new_window_hook_cols_recovers_fixed_birth_width() {
+        let mut opts = sidebar_opts(None);
+        let width = SidebarWidth::default();
+        opts.birth_size = width.birth_size(Some(120));
+        let command = after_new_window_hook_set_cmd(&opts);
+
+        assert_eq!(
+            after_new_window_hook_cols_from_value(command.last().expect("hook body")),
+            Some(opts.birth_size.cols),
         );
     }
 

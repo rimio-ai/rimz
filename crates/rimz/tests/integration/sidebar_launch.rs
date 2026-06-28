@@ -105,7 +105,6 @@ impl SidebarHarness {
             workspace_id: self.workspace_id.clone(),
             project_root: self.cwd.clone(),
             cwd: self.cwd.clone(),
-            width,
             birth_size: width.birth_size(None),
             rimz_bin: PathBuf::from("rimz"),
             replace_existing: false,

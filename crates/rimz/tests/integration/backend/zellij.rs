@@ -431,7 +431,6 @@ fn open_sidebar_births_native_layout_and_template() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-test")),
                 project_root: cwd.path().to_path_buf(),
                 cwd: cwd.path().to_path_buf(),
-                width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(120)),
                 rimz_bin: stub,
                 replace_existing: false,
@@ -503,7 +502,6 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focuscmd")),
                 project_root: cwd.path().to_path_buf(),
                 cwd: cwd.path().to_path_buf(),
-                width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(200)),
                 rimz_bin: stub,
                 replace_existing: false,
@@ -598,7 +596,6 @@ fn open_tab_unfocused_restores_attached_client_focus() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-tabfocus")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(200)),
         rimz_bin: stub,
         replace_existing: false,
@@ -692,7 +689,6 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-gallery")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(220)),
         rimz_bin: stub,
         replace_existing: false,
@@ -760,7 +756,6 @@ fn open_sidebar_on_live_session_is_idempotent() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-idem")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(120)),
         rimz_bin: stub,
         replace_existing: false,
@@ -813,7 +808,6 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-cleanroom")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(120)),
         rimz_bin: stub,
         replace_existing: false,
@@ -913,7 +907,6 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-nosb")),
                 project_root: cwd.path().to_path_buf(),
                 cwd: cwd.path().to_path_buf(),
-                width: SidebarWidth::default(),
                 birth_size: SidebarWidth::default().birth_size(Some(120)),
                 rimz_bin: stub,
                 replace_existing: false,
@@ -1075,7 +1068,6 @@ fn reconcile_defers_the_add_on_a_detached_session() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-defer")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(120)),
         rimz_bin: stub,
         replace_existing: false,
@@ -1247,7 +1239,7 @@ fn raw_sidebar_pane(xdg: &Path, session: &str) -> serde_json::Value {
 
 /// A claimed live sidebar sitting off the layout's dock — the residue of the
 /// pre-discovery mis-mount (right side, ~50%) — is converged in place by
-/// reconcile: moved to the left column and resized toward the layout width,
+/// reconcile: moved to the left column and resized toward the fixed birth width,
 /// with the renderer's pane (and so the renderer) untouched.
 #[test]
 fn reconcile_redocks_an_off_spec_claimed_sidebar() {
@@ -1327,7 +1319,6 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-redock")),
         project_root: std::env::temp_dir(),
         cwd: std::env::temp_dir(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(240)),
         rimz_bin: stub,
         replace_existing: false,
@@ -1471,7 +1462,6 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-nested")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(160)),
         rimz_bin: stub,
         replace_existing: false,
@@ -1606,7 +1596,6 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-nestedwide")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(240)),
         rimz_bin: stub,
         replace_existing: false,
@@ -1714,7 +1703,6 @@ fn reconcile_add_ends_docked_in_a_row_stacked_tab() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-rowadd")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(160)),
         rimz_bin: stub,
         replace_existing: false,
@@ -2798,7 +2786,6 @@ fn capped_birth_size_lands_the_cap_in_every_tab() {
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-fixed-width")),
                 project_root: cwd.path().to_path_buf(),
                 cwd: cwd.path().to_path_buf(),
-                width,
                 // The launch path's decision on a 340-column terminal: 30%
                 // would be 102, so the birth is capped — 72 columns, derived
                 // as 21% for the tabs that instantiate detached.
@@ -2860,7 +2847,6 @@ fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-worksplit")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width,
         birth_size: width.birth_size(Some(298)),
         rimz_bin: stub,
         replace_existing: false,
@@ -2932,7 +2918,6 @@ fn native_new_tab_reopens_work_panes_evenly_after_closing_to_one() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-native-worksplit")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        width,
         birth_size: width.birth_size(Some(298)),
         rimz_bin: stub,
         replace_existing: false,

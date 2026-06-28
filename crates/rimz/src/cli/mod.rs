@@ -1155,7 +1155,6 @@ fn build_sidebar_opts(
         workspace_id: target.workspace_id.clone(),
         project_root: target.project_root.to_path_buf(),
         cwd: target.cwd.to_path_buf(),
-        width: target.width,
         birth_size: target.birth_size(),
         rimz_bin,
         replace_existing: false,

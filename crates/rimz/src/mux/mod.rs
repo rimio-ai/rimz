@@ -299,12 +299,9 @@ pub struct SidebarPaneOptions {
     /// (tmux pins through [`SessionOptions`] at `new-session` instead).
     pub project_root: PathBuf,
     pub cwd: PathBuf,
-    /// The configured width — the reconcile heal path still steps a recovered
-    /// pane toward [`SidebarWidth::target_cols`] from live geometry.
-    pub width: SidebarWidth,
     /// The width verdict freshly-born panes are spelled with in layouts,
-    /// splits, and hooks — resolved once per command by
-    /// [`SidebarWidth::birth_size`].
+    /// splits, hooks, and in-place sidebar repairs — resolved once per command
+    /// by [`SidebarWidth::birth_size`] and constant for the session's life.
     pub birth_size: BirthSize,
     pub rimz_bin: PathBuf,
     pub replace_existing: bool,
@@ -459,8 +456,8 @@ pub struct BackgroundViewOptions {
     /// View spec shared with `open_sidebar`'s birth-lead daemon view.
     pub view: DaemonView,
     /// The global sidebar docked on the view's left. Carries the session name
-    /// (which is also the view's session), the workspace identity, the width, and
-    /// the `rimz` bin the sidebar renderer runs.
+    /// (which is also the view's session), the workspace identity, the birth
+    /// width verdict, and the `rimz` bin the sidebar renderer runs.
     pub sidebar: SidebarPaneOptions,
 }
 
@@ -584,9 +581,11 @@ pub trait MuxBackend: Send + Sync {
     /// orphan sidebar-only view (no working pane, no daemon host) close every
     /// sidebar pane so a wedged renderer that never self-closed collapses with its
     /// view; leave the daemon view alone. All in place, without disturbing working
-    /// panes. One best-effort pass: a view whose add fails is logged and skipped,
-    /// never retried, never a session rebirth. Unlike [`Self::open_sidebar`], this
-    /// never deletes or recreates the session.
+    /// panes. In-place adds and repairs size to the session's fixed birth
+    /// verdict (recovered from the live template/hook on reload), never a live
+    /// percentage recomputation. One best-effort pass: a view whose add fails is
+    /// logged and skipped, never retried, never a session rebirth. Unlike
+    /// [`Self::open_sidebar`], this never deletes or recreates the session.
     fn reconcile_sidebars(
         &self,
         opts: &SidebarPaneOptions,

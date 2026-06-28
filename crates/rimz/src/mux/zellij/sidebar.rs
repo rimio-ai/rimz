@@ -11,7 +11,7 @@ use super::parse::{
 };
 use super::raw_pane::{
     SidebarDock, is_sidebar_pane, mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id,
-    repairable_nested_work_pane_ids, sidebar_dock_verdict, sidebar_width_off_spec, tab_extent_cols,
+    repairable_nested_work_pane_ids, sidebar_dock_verdict, sidebar_width_off_spec,
 };
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
@@ -20,7 +20,7 @@ use super::{
     parse_version,
 };
 use crate::ids::{MuxName, PaneId};
-use crate::mux::{DaemonView, MuxBackend, MuxErr, Result, SidebarPaneOptions, SidebarWidth};
+use crate::mux::{DaemonView, MuxBackend, MuxErr, Result, SidebarPaneOptions};
 
 const ADD_DOCK_ATTEMPTS: u32 = 2;
 const DOCK_VERIFY_SETTLE: Duration = Duration::from_millis(100);
@@ -347,8 +347,8 @@ impl ZellijBackend {
     /// between steps — `move-pane left` swaps one position per call) until the
     /// pane reaches the left column or stops progressing, a narrow nested-row
     /// repair that stacks work panes into the right column when the surrounding
-    /// layout is safe to rewrite, then a resize back toward the layout width
-    /// when it is still past the trigger. Returns whether any repair was issued.
+    /// layout is safe to rewrite, then a resize back toward the session's fixed
+    /// birth width when it is still too wide. Returns whether any repair was issued.
     /// Best-effort:
     /// geometry is cosmetic, so any failure just leaves the pane where it is for
     /// the next pass.
@@ -387,10 +387,11 @@ impl ZellijBackend {
         if self.stack_nested_work_panes(opts, tab_id, raw_id) {
             repaired = true;
         }
-        if let Some((cols, total)) = self.sidebar_and_tab_cols(&opts.session_name, tab_id, raw_id)
-            && sidebar_width_off_spec(cols, total, opts.width)
+        let target_cols = u64::from(opts.birth_size.cols.get());
+        if let Some(cols) = self.sidebar_cols(&opts.session_name, tab_id, raw_id)
+            && sidebar_width_off_spec(cols, target_cols)
         {
-            self.resize_sidebar_toward(&opts.session_name, tab_id, &pane_raw, opts.width);
+            self.resize_sidebar_toward(&opts.session_name, tab_id, &pane_raw, target_cols);
             repaired = true;
         }
         repaired
@@ -582,25 +583,20 @@ impl ZellijBackend {
     }
 
     /// Shrink the reconcile heal path's freshly-split sidebar (born at ~50% —
-    /// `new-pane` has no tiled-size flag) toward the configured width — the
-    /// target columns at the `max_cols` cap — landing on the width *closest*
-    /// to the target without ever finishing above the cap. Measures
-    /// live tab geometry each step, so it is correct from any invoking
-    /// terminal. The resize step is coarse, so the target usually falls
-    /// between two reachable widths; stopping at the first width at or below
-    /// it can overshoot, so when the prior width was closer we step back up
-    /// one — but only when that prior width respects the cap, so a cap-bound
-    /// target always lands at or below it (a final width one step over the
-    /// cap reads as the cap never applying). Bounded and best-effort: it
-    /// stops at the target, when a step makes no progress (hit a minimum), or
-    /// after [`RESIZE_MAX_STEPS`] — never a dead loop. Width is cosmetic, so
-    /// any failure just leaves the wider pane.
+    /// `new-pane` has no tiled-size flag) toward the session's fixed birth
+    /// width. The resize step is coarse, so the target usually falls between
+    /// two reachable widths; stopping at the first width at or below it can
+    /// overshoot, so when the prior width was closer we step back up one — but
+    /// only when that prior width still respects the fixed target. Bounded and
+    /// best-effort: it stops at the target, when a step makes no progress (hit
+    /// a minimum), or after [`RESIZE_MAX_STEPS`] — never a dead loop. Width is
+    /// cosmetic, so any failure just leaves the wider pane.
     pub(super) fn resize_sidebar_toward(
         &self,
         session: &str,
         tab_id: u64,
         pane_id: &str,
-        width: SidebarWidth,
+        target_cols: u64,
     ) {
         const RESIZE_MAX_STEPS: u32 = 16;
         let Some(target_raw) = parse_terminal_id(pane_id) else {
@@ -608,20 +604,16 @@ impl ZellijBackend {
         };
         let mut last_cols = u64::MAX;
         for _ in 0..RESIZE_MAX_STEPS {
-            let Some((cols, total)) = self.sidebar_and_tab_cols(session, tab_id, target_raw) else {
+            let Some(cols) = self.sidebar_cols(session, tab_id, target_raw) else {
                 return;
             };
-            if total == 0 {
-                return;
-            }
-            let target = width.target_cols(total);
-            if cols <= target {
+            if cols <= target_cols {
                 // Reached/overshot the target. If the previous, above-target
                 // width was closer than this one, the last decrease overshot —
-                // step back, but never to a width above the cap.
+                // step back, but never to a width above the canonical target.
                 if last_cols != u64::MAX
-                    && last_cols <= width.cap_cols()
-                    && last_cols.saturating_sub(target) < target.saturating_sub(cols)
+                    && last_cols <= target_cols
+                    && last_cols.saturating_sub(target_cols) < target_cols.saturating_sub(cols)
                 {
                     let _ = self.resize_sidebar_step(session, pane_id, "increase");
                 }
@@ -658,22 +650,14 @@ impl ZellijBackend {
             .map(|_| ())
     }
 
-    /// Current column width of `target_raw` and the total columns of its tab —
-    /// the *extents* (`max(pane_x + pane_columns)`), not the sum, which would
-    /// double-count vertically stacked panes and inflate the resize target.
-    /// `None` when the pane has vanished or carries no geometry.
-    pub(super) fn sidebar_and_tab_cols(
-        &self,
-        session: &str,
-        tab_id: u64,
-        target_raw: u64,
-    ) -> Option<(u64, u64)> {
+    /// Current column width of `target_raw`. `None` when the pane has vanished
+    /// or carries no geometry.
+    pub(super) fn sidebar_cols(&self, session: &str, tab_id: u64, target_raw: u64) -> Option<u64> {
         let panes = self.list_panes_with_session(Some(session)).ok()?;
-        let current = panes
+        panes
             .iter()
             .find(|pane| pane.is_terminal() && pane.tab_id == tab_id && pane.id == target_raw)
-            .and_then(|pane| pane.pane_columns)?;
-        Some((current, tab_extent_cols(&panes, tab_id)))
+            .and_then(|pane| pane.pane_columns)
     }
 
     /// Block until Zellij has materialized the layout's sidebar pane alongside a

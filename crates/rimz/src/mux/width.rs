@@ -153,4 +153,18 @@ mod tests {
         assert_eq!(width.birth_size(None), birth(72, 30));
         assert_eq!(width.birth_size(Some(0)), birth(72, 30));
     }
+
+    #[test]
+    fn live_targets_do_not_change_the_session_birth_verdict() {
+        let width = SidebarWidth::default();
+        let birth = width.birth_size(Some(300));
+
+        assert_eq!(birth.cols.get(), 72);
+        assert_eq!(
+            width.target_cols(190),
+            57,
+            "live geometry can differ from the fixed session verdict",
+        );
+        assert_ne!(u64::from(birth.cols.get()), width.target_cols(190));
+    }
 }

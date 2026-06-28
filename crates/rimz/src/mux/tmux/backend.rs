@@ -325,15 +325,10 @@ impl MuxBackend for TmuxBackend {
         // `-b` places the new pane before the target so the sidebar sits
         // on the left. Workspace identity is passed directly to the spawned
         // renderer command.
-        // The split sizes from the just-born window: `ensure_session` birthed
-        // it at the probed `-x`/`-y` geometry (or an existing room sits at its
-        // clients' real geometry), so `target_cols` of the live width is the
-        // start verdict in columns. The verdict's percentage spelling is the
-        // safe fallback when the width is unreadable.
-        let size = match self.window_width(&opts.session_name) {
-            Some(total) => opts.width.target_cols(total).to_string(),
-            None => format!("{}%", opts.birth_size.percent),
-        };
+        // The split uses the fixed birth verdict. `ensure_session` birthed the
+        // detached room at the launch probe, and later windows get the same
+        // value from the hook.
+        let size = opts.birth_size.cols.to_string();
         let command = sidebar_serve_command(opts);
         let mut split = vec![
             "split-window".to_owned(),
@@ -372,7 +367,12 @@ impl MuxBackend for TmuxBackend {
         opts: &SidebarPaneOptions,
         live: &SidebarLiveness,
     ) -> Result<SidebarRecovery> {
-        if let Err(err) = self.cmd().args(after_new_window_hook_set_cmd(opts)).run() {
+        let canonical = self
+            .after_new_window_hook_cols(&opts.session_name)
+            .unwrap_or(opts.birth_size.cols);
+        let mut opts = opts.clone();
+        opts.birth_size.cols = canonical;
+        if let Err(err) = self.cmd().args(after_new_window_hook_set_cmd(&opts)).run() {
             tracing::warn!(
                 session = %opts.session_name,
                 tags.operation = "tmux.reconcile.install_hook",
@@ -381,13 +381,13 @@ impl MuxBackend for TmuxBackend {
             );
         }
         // tmux re-adds a sidebar in place with the same left split the initial
-        // window got — `-d` keeps the user's focus, `-l <pct>%` sets the width —
+        // window got — `-d` keeps the user's focus, `-l <cols>` sets the width —
         // and drops a stray sidebar with `kill-pane -t`; no move/resize/refocus
         // dance and no session teardown is needed. `split-window` mounts fine on
         // a detached session, so tmux never defers an add the way the Zellij
         // backend must (its detached screen thread drops the mount). Geometry
         // convergence is likewise a deliberate no-op here: `-b` births every
-        // sidebar left at the layout width synchronously, so the mis-mounted
+        // sidebar left at the session's fixed width synchronously, so the mis-mounted
         // right/50% shape Zellij repairs cannot occur.
         let panes = self.list_panes(PaneListOptions {
             session_name: Some(opts.session_name.clone()),
@@ -425,7 +425,7 @@ impl MuxBackend for TmuxBackend {
                 report.failed += 1;
                 continue;
             }
-            match self.add_sidebar_to_window(opts, window) {
+            match self.add_sidebar_to_window(&opts, window) {
                 Ok(()) => {
                     if plan.restart_add.contains(window) {
                         report.restarted += 1;
@@ -489,7 +489,7 @@ impl MuxBackend for TmuxBackend {
             ])
             .args(first_content.argv.clone())
             .run()?;
-        let (window_id, first_content) = parse_new_window_ids(&output.stdout)?;
+        let (_window_id, first_content) = parse_new_window_ids(&output.stdout)?;
         let mut first_daemon_pane = None;
         if let Some((first, rest)) = opts.view.hosts.split_first() {
             let mut split = vec![
@@ -502,12 +502,7 @@ impl MuxBackend for TmuxBackend {
                 "-t".to_owned(),
                 first_content.clone(),
             ];
-            if let Some(total) = self.window_width(&window_id) {
-                split.extend([
-                    "-l".to_owned(),
-                    opts.sidebar.width.target_cols(total).to_string(),
-                ]);
-            }
+            split.extend(["-l".to_owned(), opts.sidebar.birth_size.cols.to_string()]);
             split.extend(["-c".to_owned(), first.cwd.to_string_lossy().into_owned()]);
             let output = self.cmd().args(split).args(first.argv.clone()).run()?;
             let first_daemon = String::from_utf8_lossy(&output.stdout).trim().to_owned();

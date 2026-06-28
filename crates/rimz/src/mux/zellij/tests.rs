@@ -69,7 +69,6 @@ esac
         workspace_id: WorkspaceId::from_project_root(&project_root),
         project_root: project_root.clone(),
         cwd: project_root,
-        width,
         birth_size: width.birth_size(Some(120)),
         rimz_bin: std::path::PathBuf::from("rimz"),
         replace_existing: false,

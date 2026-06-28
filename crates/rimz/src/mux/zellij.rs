@@ -101,10 +101,6 @@ const SIDEBAR_LAYOUT_TIMEOUT: Duration = Duration::from_secs(10);
 const MOUNT_POLL_TIMEOUT: Duration = Duration::from_secs(2);
 const MOUNT_POLL_STEP: Duration = Duration::from_millis(50);
 
-/// An under-cap sidebar wider than this share of its tab's columns is resized
-/// back toward the layout width.
-const SIDEBAR_RESIZE_TRIGGER_PERCENT: u64 = 45;
-
 /// Bundle reported by `rimz doctor` when the active backend is Zellij.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZellijCapabilities {
