@@ -44,7 +44,7 @@ use rimz::ledger::single_flight::{Coalesced, coalesce};
 use rimz::tui::{MouseCapture, TerminalModeGuard};
 
 const DAY_SECS: i64 = 86_400;
-/// The five-step density ramp: a calm day through your heaviest.
+/// The density ramp: `·` marks no usage; the four shades climb through active days.
 const RAMP: [char; 5] = ['·', '░', '▒', '▓', '█'];
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -828,12 +828,15 @@ impl Grid {
 }
 
 /// Map a cell value onto a ramp index `0..=4`, scaled to the busiest day in
-/// view, so the texture reads against your own rhythm.
+/// view, so the texture reads against your own rhythm. `·` (0) marks a day with
+/// no usage; any active day reads at least `░`, so an active run renders as
+/// activity rather than a gap.
 fn level(value: f64, max: f64) -> usize {
-    if max <= 0.0 {
+    if value <= 0.0 || max <= 0.0 {
         return 0;
     }
-    ((value / max) * 4.0).round().clamp(0.0, 4.0) as usize
+    let frac = (value / max).clamp(0.0, 1.0);
+    1 + (frac * 3.0).round() as usize
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────

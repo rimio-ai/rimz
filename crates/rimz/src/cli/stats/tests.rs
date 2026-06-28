@@ -83,11 +83,16 @@ fn sunday_is_column_zero() {
 
 #[test]
 fn level_scales_to_the_busiest_day() {
-    assert_eq!(level(0.0, 0.0), 0, "empty graph is all calm");
-    assert_eq!(level(0.0, 100.0), 0);
+    assert_eq!(level(0.0, 0.0), 0, "empty graph stays empty");
+    assert_eq!(level(0.0, 100.0), 0, "zero usage stays empty");
     assert_eq!(level(100.0, 100.0), 4, "the busiest day is full");
-    assert_eq!(level(50.0, 100.0), 2);
-    assert_eq!(level(12.0, 100.0), 0, "a near-calm day rounds down");
+    assert_eq!(level(50.0, 100.0), 3);
+    assert_eq!(
+        level(12.0, 100.0),
+        1,
+        "a low but active day reads as activity"
+    );
+    assert_eq!(level(1.0, 100.0), 1, "trace activity clears empty");
 }
 
 #[test]
