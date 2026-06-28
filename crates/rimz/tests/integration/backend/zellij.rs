@@ -2939,6 +2939,15 @@ fn native_new_tab_reopens_work_panes_evenly_after_closing_to_one() {
     let tab_name = wait_for_new_tab_name(xdg.path(), &name, &before_tabs);
     wait_for_named_sidebar_pane(xdg.path(), &name, &tab_name)
         .expect("native tab should carry a sidebar");
+    let native_work = wait_for_named_work_pane_count(xdg.path(), &name, &tab_name, 1);
+    let native_work_id =
+        PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", native_work[0].id));
+    let focused = wait_for_focused_client_pane(&backend, &name, &native_work_id);
+    assert!(
+        focused.iter().any(|pane| pane == &native_work_id),
+        "native tab should become the attached client's active work pane before a \
+         no-direction split; focused client panes: {focused:?}",
+    );
 
     spawn_sleep_pane(xdg.path(), &name, cwd.path());
     let split = wait_for_named_work_pane_state(xdg.path(), &name, &tab_name, 2, |work| {
