@@ -73,6 +73,11 @@ const TAB_NAMES_RETRY_DELAY: Duration = Duration::from_millis(50);
 const NEW_TAB_ATTEMPTS: u32 = 3;
 const NEW_TAB_CONFIRM_WINDOW: Duration = Duration::from_millis(750);
 const NEW_TAB_CONFIRM_STEP: Duration = Duration::from_millis(50);
+/// A freshly opened background tab can report present before client focus has
+/// accepted the return action. Confirm the attached client's pane before
+/// handing control back to the caller.
+const FOCUS_RESTORE_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
+const FOCUS_RESTORE_CONFIRM_STEP: Duration = Duration::from_millis(50);
 
 /// Minimum Zellij that loads the presence plugin.
 pub const PRESENCE_PLUGIN_MIN_ZELLIJ: (u32, u32, u32) = (0, 44, 0);
