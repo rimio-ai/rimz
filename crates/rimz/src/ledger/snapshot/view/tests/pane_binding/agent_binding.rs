@@ -91,6 +91,42 @@ fn forked_side_session_does_not_repaint_primary_card() {
 }
 
 #[test]
+fn shared_pane_primary_is_stable_when_registration_ties() {
+    for (label, a_active_ago, b_active_ago) in [
+        ("agent-b is fresher", 120, 5),
+        ("agent-a is fresher", 5, 120),
+    ] {
+        let mut agent_a = agent("codex", "agent-a", AgentStatus::Running, 1_000)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(a_active_ago);
+        agent_a.registered_at = None;
+
+        let mut agent_b = agent("codex", "agent-b", AgentStatus::Running, 2_000)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(b_active_ago);
+        agent_b.registered_at = None;
+
+        let snapshot = room(Vec::new(), vec![agent_a, agent_b])
+            .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+
+        let rows = rows(&snapshot);
+        assert_eq!(
+            rows.len(),
+            1,
+            "{label}: one top-level row on the shared pane"
+        );
+        assert!(rows[0].is_agent(), "{label}");
+        assert_eq!(
+            rows[0].id, "agent-a",
+            "{label}: registration ties pin to the stable lowest session id",
+        );
+        assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
+    }
+}
+
+#[test]
 fn forked_side_session_survives_the_reaper_and_keeps_primary_card() {
     // Production shape: the ghost reaper runs before the live-pane fold
     // (`assemble.rs`). A `/side` / `/btw` fork shares the primary's daemon owner

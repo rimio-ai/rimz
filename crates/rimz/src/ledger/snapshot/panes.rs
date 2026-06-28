@@ -153,10 +153,13 @@ pub fn stamped_agent_for_pane<'a>(
         // never win the pane as a top-level row. Panes bind root agents only.
         .filter(|agent| agent.parent_agent_id.is_none())
         // The card follows the pane's *primary* — the session that owned it
-        // first (earliest `registered_at`). A later in-process thread fork
-        // (Codex `/side` / `/btw` registers a fresh session id in the same pane
-        // and process) posts newer activity but a later registration, so it can
-        // never repaint the card. Safe because the process-start guard in
+        // first (earliest `registered_at`). When registration order ties or is
+        // unknown, the lowest session id wins so the pane stays pinned to one
+        // primary instead of following whichever co-resident session posted
+        // activity last. A later in-process thread fork (Codex `/side` / `/btw`
+        // registers a fresh session id in the same pane and process) posts
+        // newer activity but a later registration, so it can never repaint the
+        // card. Safe because the process-start guard in
         // `stamped_agent_matches_live_pane` has already evicted any
         // older-instance residue: this only arbitrates between sessions
         // genuinely sharing one live process, and a real relaunch (new process)
@@ -164,10 +167,6 @@ pub fn stamped_agent_for_pane<'a>(
         .min_by(|a, b| {
             registered_rank(a)
                 .cmp(&registered_rank(b))
-                // Most-recently-active as a deterministic fallback when
-                // registration order ties or is unknown (pre-field rollups).
-                .then_with(|| b.last_activity.cmp(&a.last_activity))
-                // Stable final tiebreak so selection is order-independent.
                 .then_with(|| a.agent_id.cmp(&b.agent_id))
         })
 }
