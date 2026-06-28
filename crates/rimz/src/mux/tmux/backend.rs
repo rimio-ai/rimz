@@ -7,6 +7,7 @@ use super::options::{
     after_new_window_hook_set_cmd, sidebar_serve_command, tmux_views_with_sidebars,
 };
 use super::parse::{parse_client_view, parse_new_window_ids, parse_pane_line};
+use super::window::sanitize_window_name;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
@@ -470,6 +471,7 @@ impl MuxBackend for TmuxBackend {
                 reason: "daemon view has no content panes".to_owned(),
             });
         };
+        let view_name = sanitize_window_name(&opts.view.name);
         let output = self
             .cmd()
             .args([
@@ -481,7 +483,7 @@ impl MuxBackend for TmuxBackend {
                 "-t".to_owned(),
                 session.clone(),
                 "-n".to_owned(),
-                opts.view.name.clone(),
+                view_name,
                 "-c".to_owned(),
                 first_content.cwd.to_string_lossy().into_owned(),
             ])
@@ -614,6 +616,7 @@ impl MuxBackend for TmuxBackend {
                 reason: "tab layout has an empty column".to_owned(),
             });
         };
+        let title = sanitize_window_name(&opts.title);
         let output = self
             .cmd()
             .args([
@@ -625,7 +628,7 @@ impl MuxBackend for TmuxBackend {
                 "-t".to_owned(),
                 opts.session_name.clone(),
                 "-n".to_owned(),
-                super::window::sanitize_window_name(&opts.title),
+                title,
                 "-c".to_owned(),
                 opts.cwd.to_string_lossy().into_owned(),
             ])

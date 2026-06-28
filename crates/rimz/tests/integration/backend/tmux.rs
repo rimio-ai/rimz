@@ -2411,6 +2411,9 @@ fn presence_watch_streams_typed_lines_and_ends_with_the_server() {
         let _ = tx.send(None);
     });
 
+    // tmux 3.7 rejects `send-keys` while the only attached client is read-only.
+    // `respawn-pane` still drives the same command-change subscription without
+    // weakening the production watch's read-only control client.
     server.tmux(&["respawn-pane", "-k", "-t", "presence:0", "sleep 30"]);
     recv_presence_line_until(
         &rx,

@@ -254,10 +254,11 @@ impl TmuxBackend {
     /// view is idempotent on its window name, so a relaunch into a session that
     /// already carries it is skipped.
     pub(super) fn session_has_window(&self, session: &str, name: &str) -> Result<bool> {
+        let sanitized = sanitize_window_name(name);
         Ok(self
             .window_names(session)?
             .iter()
-            .any(|window| window == name))
+            .any(|window| window == name || window == &sanitized))
     }
 
     /// Every window name in `session` — one `list-windows` probe that callers
@@ -280,6 +281,7 @@ impl TmuxBackend {
     /// Best-effort: a reorder or focus hiccup never sinks an otherwise-launched
     /// view.
     pub(super) fn lead_window(&self, session: &str, name: &str) {
+        let name = sanitize_window_name(name);
         let base = self.base_index();
         let active_window = match self
             .cmd()
@@ -366,7 +368,8 @@ impl TmuxBackend {
         let mut seeded = existing.into_iter().collect::<HashSet<_>>();
         let mut focus_window: Option<String> = None;
         for tab in &opts.resume_tabs {
-            if !seeded.insert(tab.label.clone()) {
+            let label = sanitize_window_name(&tab.label);
+            if !seeded.insert(label.clone()) {
                 continue; // already seeded by an earlier birth
             }
             let fallback_shell;
@@ -397,7 +400,7 @@ impl TmuxBackend {
                     "-t".to_owned(),
                     opts.session_name.clone(),
                     "-n".to_owned(),
-                    sanitize_window_name(&tab.label),
+                    label.clone(),
                     "-c".to_owned(),
                     tab.cwd.to_string_lossy().into_owned(),
                 ])
