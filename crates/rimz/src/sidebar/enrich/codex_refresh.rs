@@ -176,7 +176,7 @@ fn spawn_codex_context_refresh(runtime: &RuntimePaths, session_id: &str, model_h
             return;
         }
     };
-    let mut cmd = std::process::Command::new(exe);
+    let mut cmd = super::detached_rimz_command(exe, runtime);
     cmd.args([
         "codex",
         "refresh-context",
@@ -188,9 +188,6 @@ fn spawn_codex_context_refresh(runtime: &RuntimePaths, session_id: &str, model_h
     if let Some(model) = model_hint {
         cmd.args(["--model", model]);
     }
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         session = %session_id,
@@ -198,10 +195,10 @@ fn spawn_codex_context_refresh(runtime: &RuntimePaths, session_id: &str, model_h
     );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "codex-refresh-context")
     {
-        // Best-effort enrichment on a per-frame path: a missing `codex` binary
-        // makes this fail (ENOENT) on every due frame, so a warn! here floods
-        // the off-box channel with an environment fact that is not a Rimz fault.
-        // Keep it at debug! for local diagnosis; it never reaches Sentry.
+        // Best-effort enrichment on a per-frame path. The CWD anchor clears the
+        // gc'd-worktree ENOENT; a genuinely missing/replaced `rimz` binary
+        // (upgrade-during-run) still fails here — an environment fact, not a
+        // Rimz fault. Keep it at debug! so it never reaches Sentry.
         tracing::debug!(
             session = %session_id,
             workspace = %runtime.workspace_id,

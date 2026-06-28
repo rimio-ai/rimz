@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
@@ -59,6 +60,17 @@ use codex_refresh::refresh_codex_sessions;
 use forge::{produce_pr_states, read_pr_state_cache};
 use live_spend::refresh_live_spend_baselines;
 use usage_refresh::refresh_account_usage;
+
+/// Build a detached `rimz` helper command for the sidebar producer, anchored to
+/// Rimz-owned shared storage so a deleted launch CWD cannot ENOENT the spawn.
+pub(super) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {
+    let mut cmd = Command::new(exe);
+    cmd.current_dir(&runtime.shared_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd
+}
 
 /// The repo's worktree checkout roots the producer last published, read-only
 /// (no `git worktree list` fork). A consumer reuses whatever the elder cached,

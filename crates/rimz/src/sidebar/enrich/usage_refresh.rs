@@ -165,7 +165,7 @@ fn spawn_usage_refresh(runtime: &RuntimePaths, kind: &str, merge_windows: bool) 
             return;
         }
     };
-    let mut cmd = std::process::Command::new(exe);
+    let mut cmd = super::detached_rimz_command(exe, runtime);
     cmd.args([
         "agents",
         "refresh-usage",
@@ -177,9 +177,6 @@ fn spawn_usage_refresh(runtime: &RuntimePaths, kind: &str, merge_windows: bool) 
     if merge_windows {
         cmd.arg("--merge-windows");
     }
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         workspace = %runtime.workspace_id,
@@ -189,7 +186,11 @@ fn spawn_usage_refresh(runtime: &RuntimePaths, kind: &str, merge_windows: bool) 
     );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "agents-refresh-usage")
     {
-        tracing::warn!(
+        // Best-effort enrichment on a throttled producer path. The CWD anchor
+        // clears the gc'd-worktree ENOENT; a genuinely missing/replaced `rimz`
+        // binary (upgrade-during-run) still fails here — an environment fact,
+        // not a Rimz fault. Keep it at debug! so it never reaches Sentry.
+        tracing::debug!(
             workspace = %runtime.workspace_id,
             kind,
             tags.operation = "agents.usage_refresh.spawn",

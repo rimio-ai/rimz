@@ -20,6 +20,14 @@ fn runtime() -> (tempfile::TempDir, RuntimePaths, SidebarSnapshot) {
     (dir, runtime, snapshot)
 }
 
+#[test]
+fn detached_rimz_command_anchors_cwd_to_shared_root() {
+    let (_dir, runtime, _snapshot) = runtime();
+    let cmd = detached_rimz_command(std::path::PathBuf::from("/nonexistent/rimz"), &runtime);
+
+    assert_eq!(cmd.get_current_dir(), Some(runtime.shared_root.as_path()));
+}
+
 fn diff_entry(
     clean: bool,
     landed: bool,
