@@ -10,7 +10,10 @@ use anyhow::{Context, Result, bail};
 use crate::build::build_plugin;
 use crate::docs_links::docs_links;
 use crate::invariants::invariants;
-use crate::runner::{ensure_success, run, run_captured, run_with_env_removed};
+use crate::runner::{
+    ensure_success, run, run_captured, run_captured_with_env_and_removed, run_with_env_and_removed,
+    run_with_env_removed,
+};
 
 const LINT_ARGS: &[&str] = &[
     "clippy",
@@ -66,13 +69,20 @@ pub(crate) fn lint(root: &Path) -> Result<()> {
 pub(crate) fn doctest(root: &Path) -> Result<()> {
     // rustdoc doctest compilation can ask for transitive deps in rlib form
     // immediately after clippy refreshed wrapper-managed artifacts. rtk skips
-    // `cargo test --doc`; also clear wrapper env/config when the caller set it.
-    run_with_env_removed(
+    // `cargo test --doc`; isolate doctest artifacts from clippy/check artifacts
+    // and clear RUSTC_WRAPPER when the caller set it.
+    let target_dir = doctest_target_dir(root);
+    run_with_env_and_removed(
         root,
         "cargo",
         DOCTEST_ARGS.iter().copied(),
+        &[("CARGO_TARGET_DIR", target_dir)],
         DOCTEST_REMOVED_ENVS,
     )
+}
+
+fn doctest_target_dir(root: &Path) -> PathBuf {
+    root.join("target").join("doctest")
 }
 
 pub(crate) fn deny(root: &Path) -> Result<()> {
@@ -214,9 +224,11 @@ fn gate_lint(root: &Path) -> Result<GateResult> {
 }
 
 fn gate_doctest(root: &Path) -> Result<GateResult> {
-    captured_cargo_gate(
+    let target_dir = doctest_target_dir(root);
+    captured_cargo_gate_with_env(
         root,
         DOCTEST_ARGS.iter().copied(),
+        &[("CARGO_TARGET_DIR", target_dir)],
         DOCTEST_REMOVED_ENVS,
         None,
     )
@@ -242,6 +254,28 @@ where
     S: AsRef<std::ffi::OsStr>,
 {
     let captured = run_captured(root, "cargo", args, removed_envs)?;
+    if captured.status.success() {
+        return Ok(GateResult::Pass {
+            note: note.and_then(|extract| extract(&captured.output)),
+        });
+    }
+    Ok(GateResult::Fail {
+        detail: failure_detail(&captured.output),
+    })
+}
+
+fn captured_cargo_gate_with_env<I, S>(
+    root: &Path,
+    args: I,
+    envs: &[(&str, PathBuf)],
+    removed_envs: &[&str],
+    note: Option<fn(&str) -> Option<String>>,
+) -> Result<GateResult>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let captured = run_captured_with_env_and_removed(root, "cargo", args, envs, removed_envs)?;
     if captured.status.success() {
         return Ok(GateResult::Pass {
             note: note.and_then(|extract| extract(&captured.output)),

@@ -45,7 +45,7 @@ where
     run_with_env_and_removed(root, program, args, &[], removed_envs)
 }
 
-fn run_with_env_and_removed<I, S>(
+pub(crate) fn run_with_env_and_removed<I, S>(
     root: &Path,
     program: &str,
     args: I,
@@ -74,8 +74,22 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_captured_with_env_and_removed(root, program, args, &[], removed_envs)
+}
+
+pub(crate) fn run_captured_with_env_and_removed<I, S>(
+    root: &Path,
+    program: &str,
+    args: I,
+    envs: &[(&str, PathBuf)],
+    removed_envs: &[&str],
+) -> Result<Captured>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let args: Vec<_> = args.into_iter().collect();
-    let output = build_command(root, program, &args, &[], removed_envs)
+    let output = build_command(root, program, &args, envs, removed_envs)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
