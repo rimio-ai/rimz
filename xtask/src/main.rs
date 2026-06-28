@@ -13,6 +13,7 @@ mod invariants;
 mod pricing;
 mod rtk;
 mod runner;
+mod sccache;
 mod screenshot;
 mod source_files;
 mod theme;

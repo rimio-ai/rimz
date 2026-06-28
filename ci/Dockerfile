@@ -8,6 +8,7 @@ ARG ZIG_DOWNLOAD_URL=
 ARG APPLE_CODESIGN_VERSION=0.29.0
 ARG APPLE_CODESIGN_SHA256=dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
 ARG CARGO_VET_VERSION=0.10.2
+ARG SCCACHE_VERSION=0.16.0
 
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -28,7 +29,7 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 2 --retry-all-
 RUN curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
       https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash \
  && cargo binstall -y --no-symlinks \
-      cargo-nextest cargo-deny cargo-machete cargo-llvm-cov cargo-semver-checks cargo-zigbuild \
+      cargo-nextest cargo-deny cargo-machete cargo-llvm-cov cargo-semver-checks cargo-zigbuild sccache@${SCCACHE_VERSION} \
  && cargo install --locked cargo-vet@${CARGO_VET_VERSION}
 
 # Bake a warm RustSec advisory DB so the Gitea deny gate reads it locally
@@ -70,6 +71,7 @@ RUN rustc -V \
  && cargo semver-checks --version \
  && cargo vet --version \
  && cargo zigbuild --help >/dev/null \
+ && sccache --version \
  && tmux -V \
  && zellij --version \
  && mold --version \

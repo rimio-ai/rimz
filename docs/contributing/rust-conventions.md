@@ -219,9 +219,11 @@ The stable channel is pinned in `rust-toolchain.toml`. No Cargo.toml carries `ru
 
 Repo-local Cargo config stays installation-safe: `.cargo/config.toml` defines only the `xtask` alias, so source installs use each host's platform linker. CI provides `mold` on Linux through the `rimz-ci` image and runs `cargo xtask ci` through `mold -run`; contributors may opt into mold in their user Cargo config for faster local relinks. mold replaces the default bfd linker on the link-heavy integration-test binary, which relinks on every incremental change; it is a build-time tool only — no runtime or transitive footprint — and is the SOTA Unix linker.
 
+Install `sccache` for a local compile cache: xtask detects it on `PATH` and sets `RUSTC_WRAPPER=sccache` plus `CARGO_INCREMENTAL=0` for cargo compile commands; set `RIMZ_SCCACHE=off` to keep incremental enabled for heavy single-crate iteration, or `RIMZ_SCCACHE=on` to request cache routing and warn when `sccache` is missing.
+
 ### CI image
 
-The `rimz-ci` image bakes Node for Actions, the Rust stable toolchain with required components and targets, cargo gate plugins, `cargo-vet`, a warm RustSec advisory database, tmux, Zellij, mold, Python, `cargo-zigbuild`, Zig, `rcodesign`, and `gh`. Tool versions live in `ci/Dockerfile`, which is the single source of truth for containerized CI and release jobs.
+The `rimz-ci` image bakes Node for Actions, the Rust stable toolchain with required components and targets, cargo gate plugins, `cargo-vet`, `sccache`, a warm RustSec advisory database, tmux, Zellij, mold, Python, `cargo-zigbuild`, Zig, `rcodesign`, and `gh`. Tool versions live in `ci/Dockerfile`, which is the single source of truth for containerized CI and release jobs.
 
 Refresh the Gitea CI image by dispatching `.gitea/workflows/ci-image.yml`. The workflow uses the current `RIMZ_CI_IMAGE` value as its base, refreshes the baked RustSec advisory DB, pushes a new immutable `rimz-ci:<tag>` image with `REGISTRY_PUSH_TOKEN`, then repoints the repository variable; consuming workflows read only that variable. Full toolchain rebuilds still edit `ci/Dockerfile`, which remains the source of truth for the image contents.
 
@@ -246,6 +248,8 @@ rcodesign --version
 ### Quality gates
 
 Every gate runs in CI with warnings treated as errors. Local equivalents are `cargo xtask <task>`; `cargo xtask gate` is the pre-PR default, and `cargo xtask ci` composes the full stack when a change calls for full validation.
+
+CI compiles through `sccache` backed by the Actions cache, so a job re-run reuses compiled crates while `rust-cache` keeps the registry and git index warm.
 
 - `cargo fmt --all -- --check` — formatting.
 - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` — lint.

@@ -14,11 +14,14 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_HTTP_TIMEOUT: "120"
+  CARGO_NET_RETRY: "5"
   RUSTUP_HOME: /usr/local/rustup
   CARGO_TARGET_DIR: target/ci
   # `-D warnings` is the deny-warnings gate.
   RUSTFLAGS: -D warnings
   RUST_BACKTRACE: 1
+  SCCACHE_GHA_ENABLED: "on"
 
 jobs:
   ci:
@@ -26,11 +29,11 @@ jobs:
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
     # The rimz-ci image keeps the no-persistence job container model while
-    # starting warm: Rust, cargo plugins, cargo-vet, tmux, Zellij, mold, and the
-    # release toolchain are baked once by ci-image.yml. The workspace path stays
-    # stable for rust-cache, concurrent jobs stay isolated, and every run skips
-    # per-job toolchain bootstrap. The private Gitea package pulls with a
-    # dedicated read:package PAT.
+    # starting warm: Rust, cargo plugins, cargo-vet, tmux, Zellij, mold,
+    # sccache, and the release toolchain are baked once by ci-image.yml. The
+    # workspace path stays stable for cargo cache keys, concurrent jobs stay
+    # isolated, and every run skips per-job toolchain bootstrap. The private
+    # Gitea package pulls with a dedicated read:package PAT.
     container:
       image: ${{ vars.RIMZ_CI_IMAGE }}
       credentials:
@@ -55,13 +58,41 @@ jobs:
 
       - uses: actions/checkout@v6
 
-      - name: Cargo cache
+      - name: Cargo registry cache
+        # rust-cache keeps the registry and git index warm; sccache owns
+        # compiled artifact reuse.
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target/ci"
           prefix-key: "rimz-ci"
           cache-bin: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-targets: false
+
+      - name: Install and configure sccache
+        run: |
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          export CARGO_HOME="$cargo_home"
+          mkdir -p "$CARGO_HOME/bin"
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$CARGO_HOME/bin:$PATH"
+          if ! command -v sccache >/dev/null 2>&1; then
+            tmp="$(mktemp -d)"
+            url="https://github.com/mozilla/sccache/releases/download/v0.16.0/sccache-v0.16.0-x86_64-unknown-linux-musl.tar.gz"
+            curl -fL --retry 5 --retry-delay 2 --retry-all-errors "$url" -o "$tmp/sccache.tar.gz"
+            printf '%s  %s\n' \
+              aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588 \
+              "$tmp/sccache.tar.gz" | sha256sum -c -
+            tar -xzf "$tmp/sccache.tar.gz" -C "$tmp"
+            install -m 0755 "$tmp/sccache-v0.16.0-x86_64-unknown-linux-musl/sccache" "$CARGO_HOME/bin/sccache"
+            rm -rf "$tmp"
+          fi
+          sccache_path="$(command -v sccache)"
+          dirname "$sccache_path" >> "$GITHUB_PATH"
+          {
+            echo "SCCACHE_PATH=$sccache_path"
+            echo "ACTIONS_CACHE_SERVICE_V2=on"
+            echo "ACTIONS_RESULTS_URL=${ACTIONS_RESULTS_URL:-}"
+            echo "ACTIONS_RUNTIME_TOKEN=${ACTIONS_RUNTIME_TOKEN:-}"
+          } >> "$GITHUB_ENV"
 
       - name: cargo xtask ci
         # Cap nextest to half the cores so overlapping GitHub jobs leave the
@@ -89,3 +120,7 @@ jobs:
           export NEXTEST_TEST_THREADS
           echo "Capping nextest to $NEXTEST_TEST_THREADS of $(nproc) cores for live-mux headroom"
           mold -run cargo xtask ci
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats

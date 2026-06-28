@@ -51,7 +51,7 @@ fn is_rtk_subcommand(subcommand: &OsStr) -> bool {
         .any(|name| OsStr::new(name) == subcommand)
 }
 
-fn is_doctest<S: AsRef<OsStr>>(args: &[S]) -> bool {
+pub(crate) fn is_doctest<S: AsRef<OsStr>>(args: &[S]) -> bool {
     args.first()
         .is_some_and(|arg| arg.as_ref() == OsStr::new("test"))
         && args.iter().any(|arg| arg.as_ref() == OsStr::new("--doc"))

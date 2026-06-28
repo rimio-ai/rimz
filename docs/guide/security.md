@@ -65,6 +65,10 @@ An agent launched through `sudo`, `su`, or `doas` as another real uid is visible
 
 The sidebar's PR marker is best-effort enrichment: the producer runs `gh` for GitHub remotes or `tea` for Gitea/Forgejo/Codeberg remotes, in the worktree, on a long TTL. The CLI uses your existing forge login and contacts the repository's own forge to list PR state for the current branch; unsupported forges and branches without PRs publish an empty cache. The probe reads no Rimz secrets and adds no project config field, so it stays outside the project trust hash.
 
+## CI build cache
+
+CI build and test workflows run PR code on the `pull_request` trigger, so fork PRs receive an isolated Actions-cache scope: they can restore base warm entries and write only their PR scope for same-PR re-runs. Release jobs set `RIMZ_SCCACHE=off`, so published archives are built from fresh rustc outputs in the release target directory.
+
 ## Pane safety
 
 `rimz pane capture` returns untrusted terminal text. Rimz core does not parse it for correctness and does not auto-type. Resolvers that use pane primitives must pattern-match bounded prompt shapes and abstain when unsure. Captured text is data, never an instruction stream — feeding it into an LLM prompt as if it were a user message is the standard prompt-injection footgun.

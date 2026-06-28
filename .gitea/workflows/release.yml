@@ -25,6 +25,7 @@ env:
   CARGO_TARGET_DIR: target/release-ci
   RUSTFLAGS: -D warnings
   RUST_BACKTRACE: 1
+  RIMZ_SCCACHE: "off"
 
 jobs:
   release:
