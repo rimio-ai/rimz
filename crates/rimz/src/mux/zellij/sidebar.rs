@@ -25,6 +25,11 @@ use crate::mux::{DaemonView, MuxBackend, MuxErr, Result, SidebarPaneOptions, Sid
 const ADD_DOCK_ATTEMPTS: u32 = 2;
 const DOCK_VERIFY_SETTLE: Duration = Duration::from_millis(100);
 const CLIENT_PROBE_SETTLE: Duration = Duration::from_millis(100);
+// Birth can land Zellij's layout focus on the sidebar in a detached session
+// under load, and a single `focus-pane-id` can lag before it lands. Re-issue
+// and re-check a bounded number of times until the work pane holds focus.
+const BIRTH_FOCUS_ATTEMPTS: u32 = 8;
+const BIRTH_FOCUS_RETRY_DELAY: Duration = Duration::from_millis(100);
 // Confirmation must outlast Zellij's background-create bootstrap-client linger.
 // A false negative only defers one recoverable add pass; a false positive can
 // leak an unmounted sidebar serve pair.
@@ -296,28 +301,45 @@ impl ZellijBackend {
         let _ = self.focus_terminal(session, raw_id);
     }
 
+    /// Repair birth-time stranded focus: while any tab holds focus on its
+    /// sidebar pane, focus that tab's leftmost live work pane instead. Re-checks
+    /// and re-issues across a bounded window because Zellij can lag a
+    /// `focus-pane-id` before it lands under load. Returns once focus is off the
+    /// sidebar everywhere, or when no stranded tab has a work pane to move to.
     fn focus_work_pane_if_sidebar_is_focused(&self, session: &str) {
-        let Ok(panes) = self.list_panes_with_session(Some(session)) else {
-            return;
-        };
-        let Some(tab_id) = panes
-            .iter()
-            .find(|pane| pane.is_live_terminal() && pane.is_focused && is_sidebar_pane(pane))
-            .map(|pane| pane.tab_id)
-        else {
-            return;
-        };
-        let Some(raw_id) = panes
-            .iter()
-            .filter(|pane| {
-                pane.tab_id == tab_id && pane.is_live_terminal() && !is_sidebar_pane(pane)
-            })
-            .min_by_key(|pane| (pane.pane_x.unwrap_or(u64::MAX), pane.id))
-            .map(|pane| pane.id)
-        else {
-            return;
-        };
-        let _ = self.focus_terminal(session, raw_id);
+        for attempt in 0..BIRTH_FOCUS_ATTEMPTS {
+            let Ok(panes) = self.list_panes_with_session(Some(session)) else {
+                return;
+            };
+            let stranded_tabs: Vec<u64> = panes
+                .iter()
+                .filter(|pane| pane.is_live_terminal() && pane.is_focused && is_sidebar_pane(pane))
+                .map(|pane| pane.tab_id)
+                .collect();
+            if stranded_tabs.is_empty() {
+                return;
+            }
+            let mut acted = false;
+            for tab_id in stranded_tabs {
+                if let Some(raw_id) = panes
+                    .iter()
+                    .filter(|pane| {
+                        pane.tab_id == tab_id && pane.is_live_terminal() && !is_sidebar_pane(pane)
+                    })
+                    .min_by_key(|pane| (pane.pane_x.unwrap_or(u64::MAX), pane.id))
+                    .map(|pane| pane.id)
+                {
+                    let _ = self.focus_terminal(session, raw_id);
+                    acted = true;
+                }
+            }
+            if !acted {
+                return;
+            }
+            if attempt + 1 < BIRTH_FOCUS_ATTEMPTS {
+                std::thread::sleep(BIRTH_FOCUS_RETRY_DELAY);
+            }
+        }
     }
 
     /// Converge one kept sidebar pane onto the layout's dock, in place and
