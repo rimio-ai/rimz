@@ -31,6 +31,10 @@ In tmux poll mode, a row born late in warmup can still look short-lived on the f
 | Order flap | `OBSERVE_ORDER_FLAP_WINDOW` | rendered row order inside one group returns to its prior order after differing, with unchanged visible membership | the visible set changed, as in a real re-rank or `WORKTREE_ROW_CAP` tail rotation |
 | Status churn | `OBSERVE_STATUS_CHURN_WINDOW` | four or more status transitions on one row inside the window — a rate verdict, deliberately wider than the oscillation window | a quick `running → idle → running` turn boundary, which is normal pace |
 
+### Spend tally reset edge
+
+A spend tally aggregate — cockpit, workspace, or provider spend — that drops from a non-zero figure to zero in a committed frame fires `aggregate_reset` immediately on the edge, carrying the prior figure and the pulled value so producer-published zero and a fusion/gate zero split in the evidence. Provider mana windows are excluded because their zero is a legitimate rate-limit roll. This detector complements the spend-blink prevention above: it catches a reset the carry did not heal, while a transient zero that returns inside the aggregate window still records `aggregate_oscillation` beside it.
+
 ## Per-frame checks
 
 The consistency family checks each committed frame alone — detect and log immediately, no window. Each check compares fields the view-model contract says must agree:

@@ -613,6 +613,161 @@ fn aggregate_oscillation_reports_spend_blink_with_pulled_evidence() {
 }
 
 #[test]
+fn aggregate_reset_reports_spend_drop_to_zero() {
+    for (name, pulled) in [
+        ("producer published zero", Some("0")),
+        ("consumer zeroed", Some("1234")),
+    ] {
+        let mut observer = Observer::default();
+        observer.observe(with_aggregate(
+            sig(0, Vec::new()),
+            AggregateKey::CockpitTally,
+            Some("1234"),
+            Some("1234"),
+        ));
+        observer.observe(with_aggregate(
+            sig(11_000, Vec::new()),
+            AggregateKey::CockpitTally,
+            Some("1234"),
+            Some("1234"),
+        ));
+
+        let drafts = observer.observe(with_aggregate(
+            sig(12_000, Vec::new()),
+            AggregateKey::CockpitTally,
+            Some("0"),
+            pulled,
+        ));
+
+        assert_eq!(
+            drafts
+                .iter()
+                .filter(|draft| matches!(draft.kind, AnomalyKind::AggregateReset { .. }))
+                .count(),
+            1,
+            "wrong aggregate reset count for {name}"
+        );
+        assert!(
+            drafts.iter().any(|draft| matches!(
+                &draft.kind,
+                AnomalyKind::AggregateReset {
+                    aggregate: AggregateKey::CockpitTally,
+                    from,
+                    pulled: observed,
+                } if from == "1234" && observed.as_deref() == pulled
+            )),
+            "missing aggregate reset for {name}"
+        );
+    }
+}
+
+#[test]
+fn aggregate_reset_quiet_for_mana_window_roll() {
+    let key = AggregateKey::ProviderMana {
+        kind: "codex".to_owned(),
+        duration_mins: Some(300),
+    };
+    let mut observer = Observer::default();
+    observer.observe(with_aggregate(
+        sig(0, Vec::new()),
+        key.clone(),
+        Some("88"),
+        Some("88"),
+    ));
+    observer.observe(with_aggregate(
+        sig(11_000, Vec::new()),
+        key.clone(),
+        Some("88"),
+        Some("88"),
+    ));
+
+    let drafts = observer.observe(with_aggregate(
+        sig(12_000, Vec::new()),
+        key,
+        Some("0"),
+        Some("0"),
+    ));
+
+    assert!(!kinds(&drafts).contains(&"aggregate_reset"));
+}
+
+#[test]
+fn aggregate_reset_quiet_on_first_appearance_warmup_and_recovery() {
+    let mut first_appearance = Observer::default();
+    first_appearance.observe(with_aggregate(
+        sig(0, Vec::new()),
+        AggregateKey::WorkspaceTally,
+        None,
+        None,
+    ));
+    first_appearance.observe(with_aggregate(
+        sig(11_000, Vec::new()),
+        AggregateKey::WorkspaceTally,
+        None,
+        None,
+    ));
+    let drafts = first_appearance.observe(with_aggregate(
+        sig(12_000, Vec::new()),
+        AggregateKey::WorkspaceTally,
+        Some("0"),
+        Some("0"),
+    ));
+    assert!(!kinds(&drafts).contains(&"aggregate_reset"));
+
+    let mut warmup = Observer::default();
+    warmup.observe(with_aggregate(
+        sig(0, Vec::new()),
+        AggregateKey::CockpitTally,
+        Some("7"),
+        Some("7"),
+    ));
+    assert!(
+        warmup
+            .observe(with_aggregate(
+                sig(1_000, Vec::new()),
+                AggregateKey::CockpitTally,
+                Some("0"),
+                Some("0"),
+            ))
+            .is_empty()
+    );
+    let drafts = warmup.observe(with_aggregate(
+        sig(11_000, Vec::new()),
+        AggregateKey::CockpitTally,
+        Some("0"),
+        Some("0"),
+    ));
+    assert!(!kinds(&drafts).contains(&"aggregate_reset"));
+
+    let mut recovery = Observer::default();
+    recovery.observe(with_aggregate(
+        sig(0, Vec::new()),
+        AggregateKey::ProviderSpend {
+            kind: "claude".to_owned(),
+        },
+        Some("0"),
+        Some("0"),
+    ));
+    recovery.observe(with_aggregate(
+        sig(11_000, Vec::new()),
+        AggregateKey::ProviderSpend {
+            kind: "claude".to_owned(),
+        },
+        Some("0"),
+        Some("0"),
+    ));
+    let drafts = recovery.observe(with_aggregate(
+        sig(12_000, Vec::new()),
+        AggregateKey::ProviderSpend {
+            kind: "claude".to_owned(),
+        },
+        Some("500"),
+        Some("500"),
+    ));
+    assert!(!kinds(&drafts).contains(&"aggregate_reset"));
+}
+
+#[test]
 fn aggregate_first_appearance_and_warmup_stay_quiet() {
     let mut first_appearance = Observer::default();
     first_appearance.observe(with_aggregate(

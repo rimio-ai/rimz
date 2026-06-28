@@ -483,6 +483,15 @@ impl AggregateKey {
             }
         }
     }
+
+    /// True for monetary spend tallies, whose trailing-year figure never
+    /// drops to zero in place. Provider mana windows roll to zero normally.
+    pub fn is_spend_tally(&self) -> bool {
+        matches!(
+            self,
+            Self::CockpitTally | Self::WorkspaceTally | Self::ProviderSpend { .. }
+        )
+    }
 }
 
 /// What the frame-stream observer judged anomalous; the detectors live in
@@ -523,6 +532,11 @@ pub enum AnomalyKind {
         back: String,
         span_ms: u64,
         pulled_via: Option<String>,
+    },
+    AggregateReset {
+        aggregate: AggregateKey,
+        from: String,
+        pulled: Option<String>,
     },
     OrderFlap {
         group_key: String,
@@ -586,6 +600,7 @@ impl AnomalyKind {
             Self::ShortLivedRow { .. } => "short_lived_row",
             Self::ValueOscillation { .. } => "value_oscillation",
             Self::AggregateOscillation { .. } => "aggregate_oscillation",
+            Self::AggregateReset { .. } => "aggregate_reset",
             Self::OrderFlap { .. } => "order_flap",
             Self::StatusChurn { .. } => "status_churn",
             Self::DuplicateRowId { .. } => "duplicate_row_id",
@@ -619,7 +634,8 @@ impl AnomalyKind {
             Self::OwnViewIncoherent { active_pane_id, .. } => Some(Cow::Borrowed(active_pane_id)),
             Self::SubagentTopLevelLeak { agent_id } => Some(Cow::Borrowed(agent_id)),
             Self::SubagentDoubleRender { id } => Some(Cow::Borrowed(id)),
-            Self::AggregateOscillation { aggregate, .. } => Some(Cow::Owned(aggregate.identity())),
+            Self::AggregateOscillation { aggregate, .. }
+            | Self::AggregateReset { aggregate, .. } => Some(Cow::Owned(aggregate.identity())),
             Self::RosterFlap { .. }
             | Self::FramelessRows { .. }
             | Self::CardsExceedPanes { .. } => None,
@@ -770,6 +786,30 @@ mod tests {
                 gate_reject_streak: 0,
                 health_failure_streak: 0,
                 suppressed_since_last: 3,
+                dropped_msgs: 0,
+            },
+            DiagEvent::FrameAnomaly {
+                role: ObserveRole::Consumer,
+                anomaly: AnomalyKind::AggregateReset {
+                    aggregate: AggregateKey::ProviderSpend {
+                        kind: "claude".to_owned(),
+                    },
+                    from: "1234".to_owned(),
+                    pulled: Some("0".to_owned()),
+                },
+                window_ms: None,
+                frame: FrameStamp {
+                    produced_at_ms: Some(13_000),
+                    rows: 2,
+                    agents: 2,
+                    processes: 0,
+                    pulled_rows: Some(2),
+                    pulled_panes_produced_at_ms: Some(13_000),
+                },
+                events_recent: EventsSig::default(),
+                gate_reject_streak: 0,
+                health_failure_streak: 0,
+                suppressed_since_last: 0,
                 dropped_msgs: 0,
             },
         ];

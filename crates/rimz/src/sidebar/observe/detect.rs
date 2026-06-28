@@ -498,6 +498,7 @@ impl Observer {
             {
                 continue;
             }
+            let prior = ring.samples.back().cloned();
             ring.samples.push_back(AggregateSample {
                 at_ms: sig.at_ms,
                 committed: aggregate.committed.clone(),
@@ -505,6 +506,23 @@ impl Observer {
             });
             while ring.samples.len() > 3 {
                 ring.samples.pop_front();
+            }
+            if aggregate.key.is_spend_tally()
+                && aggregate.committed.as_deref() == Some("0")
+                && let Some(from) = prior
+                    .as_ref()
+                    .and_then(|sample| sample.committed.as_deref())
+                    .filter(|figure| *figure != "0")
+            {
+                drafts.push(AnomalyDraft::from_sig(
+                    sig,
+                    AnomalyKind::AggregateReset {
+                        aggregate: aggregate.key.clone(),
+                        from: from.to_owned(),
+                        pulled: aggregate.pulled.clone(),
+                    },
+                    None,
+                ));
             }
             let Some((from, via, back)) = ring.oscillation(window) else {
                 continue;
