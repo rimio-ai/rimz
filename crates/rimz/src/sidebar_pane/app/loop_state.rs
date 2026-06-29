@@ -87,8 +87,9 @@ impl LoopState {
             .alert
             .as_ref()
             .is_some_and(render::Alert::is_active);
+        let watched = self.watched();
         let animating = is_animating(&self.current, &self.ui, phase, alert_active);
-        let active = (animating && self.watched()) || self.dirty;
+        let active = watched && (animating || self.dirty);
         let timeout = if active {
             self.next_frame
                 .saturating_duration_since(Instant::now())
@@ -598,7 +599,8 @@ impl LoopState {
         }
         // Once the tab has emptied, never paint again. A grow resize also
         // defers its paint until the sibling-count verdict releases the hold.
-        if !self.should_exit && !paint_blocked && (active || self.dirty) && now >= self.next_frame {
+        let paintable = active || (self.dirty && self.watched());
+        if !self.should_exit && !paint_blocked && paintable && now >= self.next_frame {
             self.ui.animation_phase =
                 wall_clock_phase(anim_start, self.current.theme.display.resolved_refresh_ms());
             let alert_active = self
@@ -954,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_timing_keeps_animation_when_visibility_is_unknown_or_dirty() {
+    fn frame_timing_keeps_unknown_visibility_hot_but_holds_hidden_dirty() {
         let ws = workspace();
         let (_dir, mut state) = loop_state_with_own_pane(&ws, None);
         state.current = animating_agent_snapshot(&ws);
@@ -971,6 +973,10 @@ mod tests {
         state.current.own_view = Some(own_view(false, false));
         state.current.viewed_panes.clear();
         state.dirty = true;
+        assert!(!frame_active(&state));
+
+        state.current.own_view = Some(own_view(true, false));
+        state.current.viewed_panes = vec![pane("terminal_1", "tab_0", false).pane_id];
         assert!(frame_active(&state));
     }
 
