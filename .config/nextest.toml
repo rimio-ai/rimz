@@ -82,11 +82,11 @@ default-filter = 'not (package(rimz) & (test(/^backend::tmux::/) | test(/^backen
 [profile.live]
 default-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^journey::/))'
 
-# CI fans the archived suite out into one job per heavy tier so the
-# latency-sensitive tiers never co-schedule (see ci.yml). Each profile selects
-# its tier and inherits the default profile's live-server groups and retry
-# budget. The three filters are the gate-excluded complement, split along the
-# same boundaries as the test-group overrides above.
+# CI runs the three heavy tiers as sequential steps in a single tests-live job
+# so the latency-sensitive tiers never co-schedule (see ci.yml). Each profile
+# selects its tier and inherits the default profile's live-server groups and
+# retry budget. The three filters are the gate-excluded complement, split along
+# the same boundaries as the test-group overrides above.
 [profile.live-tmux]
 default-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^journey::deep::tmux/))'
 
