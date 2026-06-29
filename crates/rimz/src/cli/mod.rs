@@ -388,8 +388,9 @@ pub(crate) fn resolution_snapshot(
 }
 
 /// The no-frame fallback: the rollup, with `agent_panes` synthesized from each
-/// stamped session's pane. Without a live frame there is nothing to cwd-bind, so
-/// only sessions that already carry a pane are reachable — the pre-fold message
+/// registered session's stamped pane. Without a live frame there is nothing to
+/// cwd-bind or verify, so launch placeholders stay pane-less and only registered
+/// sessions that already carry a pane are reachable — the pre-fold message
 /// behaviour.
 fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<rimz::SidebarSnapshot> {
     let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
@@ -397,6 +398,7 @@ fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<rimz::SidebarSnapshot> 
         .agents
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| !agent.agent_id.is_provisional())
         .filter_map(|agent| {
             let pane = agent.pane.as_ref()?;
             Some(rimz::PaneAgent {

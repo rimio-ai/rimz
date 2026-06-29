@@ -2402,3 +2402,96 @@ fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
         "send-now queue is not parked: {methods:?}"
     );
 }
+
+#[test]
+fn queue_to_provisional_without_live_frame_parks_not_stale_rollup_pane() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    seed_provisional_codex_launch(
+        &env,
+        "launch_no_frame",
+        "swift-otter",
+        Some("coder"),
+        "terminal_8",
+    );
+
+    let trace_log = env
+        .project_root
+        .join("zellij-provisional-no-frame-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "@coder", "--", "read plan"])
+        .output()
+        .expect("message");
+    assert!(
+        out.status.success(),
+        "queue to a provisional codex should park without a live pane: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let messages = env.ledger().list_messages().unwrap();
+    assert_eq!(
+        messages.len(),
+        1,
+        "parked provisional queue writes a record"
+    );
+    assert_eq!(messages[0].status, MessageStatus::Queued);
+    assert_eq!(messages[0].agent_id.as_str(), "launch_no_frame");
+    let methods: Vec<String> = env
+        .read_events()
+        .into_iter()
+        .map(|event| event.method)
+        .collect();
+    assert!(
+        methods.iter().any(|method| method == "message.queued"),
+        "no-live-frame queue records message.queued: {methods:?}"
+    );
+    assert!(
+        methods.iter().all(|method| method != "message.sent"),
+        "no-live-frame queue is not sent: {methods:?}"
+    );
+    let lines = trace_lines(&trace_log);
+    assert!(
+        lines
+            .iter()
+            .all(|line| !is_paste_to_any_pane(line, "read plan")),
+        "no-live-frame queue must not paste into the stale launch pane: {lines:?}"
+    );
+}
+
+#[test]
+fn steer_to_provisional_without_live_frame_refuses_not_stale_rollup_pane() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    seed_provisional_codex_launch(
+        &env,
+        "launch_no_frame_steer",
+        "swift-otter",
+        Some("coder"),
+        "terminal_8",
+    );
+
+    let trace_log = env
+        .project_root
+        .join("zellij-provisional-no-frame-steer-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "--steer", "@coder", "--", "read plan"])
+        .output()
+        .expect("message --steer");
+    assert!(
+        !out.status.success(),
+        "steer to a provisional codex without a live pane should fail"
+    );
+    let lines = trace_lines(&trace_log);
+    assert!(
+        lines
+            .iter()
+            .all(|line| !is_paste_to_any_pane(line, "read plan")),
+        "no-live-frame steer must not paste into the stale launch pane: {lines:?}"
+    );
+}
