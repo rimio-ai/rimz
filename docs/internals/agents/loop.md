@@ -1,6 +1,6 @@
 # Loop tasks
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. Loop tasks ride the supervised-run path in [harness.md](./harness.md#supervised-runs), the message path in [harness.md](./harness.md#talk-and-queue), and the budget-window model in [provider.md](./provider.md).
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. Loop tasks ride the supervised-run path in [harness.md](./harness.md#supervised-runs), the message path in [message.md](./message.md), and the budget-window model in [provider.md](./provider.md).
 
 Loop tasks run scheduled wake-ups from the room's elected sidebar elder. While a room for the task's project is open, the elder's data tick evaluates configured tasks and fires `rimz loop run <name>`, which resolves the recorded project `root` and then uses exactly one configured mode: `spec` spawns one transient supervised pane, while `bind` delivers a prompt to one living agent instance.
 

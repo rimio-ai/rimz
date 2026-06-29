@@ -264,7 +264,7 @@ Resume covers two tenses. On a **rebirth** (reboot, multiplexer crash, or a clea
 smart_compact = "70%"
 ```
 
-`smart_compact` sets the default threshold for compact-first `message` sends — a percentage (`"70%"`) or an occupied-token count (`"120000"`). When an agent's context window has reached the threshold, Rimz submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [harness.md](../internals/agents/harness.md#compact-before-sending).
+`smart_compact` sets the default threshold for compact-first `message` sends — a percentage (`"70%"`) or an occupied-token count (`"120000"`). When an agent's context window has reached the threshold, Rimz submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [message.md](../internals/agents/message.md#smart-compaction).
 
 ### rtk output compression
 
