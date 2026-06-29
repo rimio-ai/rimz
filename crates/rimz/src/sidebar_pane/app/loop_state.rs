@@ -89,7 +89,7 @@ impl LoopState {
             .is_some_and(render::Alert::is_active);
         let watched = self.watched();
         let animating = is_animating(&self.current, &self.ui, phase, alert_active);
-        let active = watched && (animating || self.dirty);
+        let active = (watched && animating) || (self.dirty && self.dirty_paintable(watched));
         let timeout = if active {
             self.next_frame
                 .saturating_duration_since(Instant::now())
@@ -122,6 +122,19 @@ impl LoopState {
         };
         view.active_pane_is_viewed
             || (view.own_is_active && self.current.viewed_panes.contains(own_pane))
+    }
+
+    /// Whether a dirty data fold should paint even though animation may be idle.
+    /// Suppress dirty frames only when an attached client is known to be looking
+    /// elsewhere. Detached sessions have no terminal stream to spam, and keeping
+    /// their pane buffer current makes attach and `capture-pane` land on the
+    /// latest frame.
+    fn dirty_paintable(&self, watched: bool) -> bool {
+        watched
+            || !matches!(
+                self.current.presence,
+                Some(crate::SidebarPresence::Active | crate::SidebarPresence::Idle { .. })
+            )
     }
 
     pub(super) fn on_snapshot(
@@ -599,7 +612,8 @@ impl LoopState {
         }
         // Once the tab has emptied, never paint again. A grow resize also
         // defers its paint until the sibling-count verdict releases the hold.
-        let paintable = active || (self.dirty && self.watched());
+        let watched = self.watched();
+        let paintable = (active && watched) || (self.dirty && self.dirty_paintable(watched));
         if !self.should_exit && !paint_blocked && paintable && now >= self.next_frame {
             self.ui.animation_phase =
                 wall_clock_phase(anim_start, self.current.theme.display.resolved_refresh_ms());
@@ -956,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_timing_keeps_unknown_visibility_hot_but_holds_hidden_dirty() {
+    fn frame_timing_keeps_unknown_or_detached_dirty_hot_but_holds_hidden_dirty() {
         let ws = workspace();
         let (_dir, mut state) = loop_state_with_own_pane(&ws, None);
         state.current = animating_agent_snapshot(&ws);
@@ -964,7 +978,7 @@ mod tests {
         assert!(frame_active(&state));
 
         let own_pane = pane("terminal_1", "tab_0", false).pane_id;
-        let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane));
+        let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
         state.current = animating_agent_snapshot(&ws);
         state.current.own_view = None;
         state.dirty = false;
@@ -973,10 +987,15 @@ mod tests {
         state.current.own_view = Some(own_view(false, false));
         state.current.viewed_panes.clear();
         state.dirty = true;
+        state.current.presence = Some(crate::SidebarPresence::Active);
         assert!(!frame_active(&state));
 
+        state.current.presence = Some(crate::SidebarPresence::Detached);
+        assert!(frame_active(&state));
+
+        state.current.presence = Some(crate::SidebarPresence::Active);
         state.current.own_view = Some(own_view(true, false));
-        state.current.viewed_panes = vec![pane("terminal_1", "tab_0", false).pane_id];
+        state.current.viewed_panes = vec![own_pane];
         assert!(frame_active(&state));
     }
 
