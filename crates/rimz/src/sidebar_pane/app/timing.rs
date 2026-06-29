@@ -55,9 +55,6 @@ fn pet_frame_interval(
 /// already-queued datagram drain on this turn without a zero-timeout busy spin.
 pub(super) const FRAME_MIN_TIMEOUT: Duration = Duration::from_millis(1);
 
-/// How often a long-lived renderer checks whether the installed binary changed.
-pub(super) const RELOAD_SELF_CHECK: Duration = Duration::from_secs(60);
-
 /// How long own-pane focus keeps cosmetic animation on the watched grid before
 /// the authoritative pane frame confirms. Too short risks a suspend/resume
 /// flicker after a slow produce; too long spends animation on a hidden pane
