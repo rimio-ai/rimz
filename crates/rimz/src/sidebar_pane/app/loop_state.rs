@@ -29,8 +29,6 @@ pub(super) struct LoopState {
     next_frame: Instant,
     fetched_at: Instant,
     last_self_close_check: Instant,
-    last_build_check: Instant,
-    on_disk_baseline: Option<BinaryStamp>,
     last_heartbeat: Option<Instant>,
     prev_width: Option<u16>,
     pub(super) should_exit: bool,
@@ -72,10 +70,6 @@ impl LoopState {
             next_frame: now,
             fetched_at: now,
             last_self_close_check: now,
-            last_build_check: now,
-            on_disk_baseline: crate::reload::current_reexec_target()
-                .as_deref()
-                .and_then(binary_stamp),
             last_heartbeat: None,
             prev_width: initial_width,
             should_exit: false,
@@ -536,30 +530,6 @@ impl LoopState {
             self.last_self_close_check = Instant::now();
             fetch.request(FetchRequest::default(), false);
         }
-
-        self.check_build_reexec(
-            crate::reload::current_reexec_target,
-            crate::reload::reexec_target_if_build_changed,
-        );
-    }
-
-    fn check_build_reexec(
-        &mut self,
-        current_target: impl FnOnce() -> Option<PathBuf>,
-        reexec_target: impl FnOnce() -> Option<PathBuf>,
-    ) {
-        if self.last_build_check.elapsed() < RELOAD_SELF_CHECK {
-            return;
-        }
-        self.last_build_check = Instant::now();
-
-        let stamp = current_target().as_deref().and_then(binary_stamp);
-        let changed = self.on_disk_baseline.is_none() || self.on_disk_baseline != stamp;
-        self.on_disk_baseline = stamp;
-        if changed && let Some(target) = reexec_target() {
-            self.reexec_to = Some(target);
-            self.should_exit = true;
-        }
     }
 
     pub(super) fn maybe_remind(
@@ -762,20 +732,6 @@ impl LoopState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct BinaryStamp {
-    len: u64,
-    modified: std::time::SystemTime,
-}
-
-fn binary_stamp(path: &Path) -> Option<BinaryStamp> {
-    let metadata = std::fs::metadata(path).ok()?;
-    Some(BinaryStamp {
-        len: metadata.len(),
-        modified: metadata.modified().ok()?,
-    })
-}
-
 /// Ping every sidebar in the room to refold after a mark read/unread — the
 /// elder prunes or keeps the episode and peer tabs converge on the new state.
 fn wake_room(runtime: &RuntimePaths) {
@@ -941,64 +897,6 @@ mod tests {
         state.current.viewed_panes.clear();
         state.dirty = true;
         assert!(frame_active(&state));
-    }
-
-    #[test]
-    fn build_reexec_check_is_throttled() {
-        let ws = workspace();
-        let (_dir, mut state) = loop_state(&ws);
-        let stat_calls = std::cell::Cell::new(0);
-        let reexec_calls = std::cell::Cell::new(0);
-
-        state.last_build_check = Instant::now();
-        state.check_build_reexec(
-            || {
-                stat_calls.set(stat_calls.get() + 1);
-                None
-            },
-            || {
-                reexec_calls.set(reexec_calls.get() + 1);
-                None
-            },
-        );
-
-        assert_eq!(stat_calls.get(), 0);
-        assert_eq!(reexec_calls.get(), 0);
-        assert!(!state.should_exit);
-    }
-
-    #[test]
-    fn build_reexec_check_updates_baseline_without_exit_when_build_matches() {
-        let ws = workspace();
-        let (dir, mut state) = loop_state(&ws);
-        let binary = dir.path().join("rimz");
-        std::fs::write(&binary, b"current build").unwrap();
-
-        state.last_build_check = Instant::now() - RELOAD_SELF_CHECK;
-        state.on_disk_baseline = None;
-        state.check_build_reexec(|| Some(binary.clone()), || None);
-
-        assert_eq!(state.on_disk_baseline, binary_stamp(&binary));
-        assert!(!state.should_exit);
-        assert!(state.reexec_to.is_none());
-    }
-
-    #[test]
-    fn build_reexec_check_exits_when_stamp_changes_and_build_differs() {
-        let ws = workspace();
-        let (dir, mut state) = loop_state(&ws);
-        let old = dir.path().join("old-rimz");
-        let new = dir.path().join("new-rimz");
-        std::fs::write(&old, b"old").unwrap();
-        std::fs::write(&new, b"new build").unwrap();
-
-        state.last_build_check = Instant::now() - RELOAD_SELF_CHECK;
-        state.on_disk_baseline = binary_stamp(&old);
-        state.check_build_reexec(|| Some(new.clone()), || Some(new.clone()));
-
-        assert!(state.should_exit);
-        assert_eq!(state.reexec_to, Some(new.clone()));
-        assert_eq!(state.on_disk_baseline, binary_stamp(&new));
     }
 
     #[test]

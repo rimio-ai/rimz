@@ -55,9 +55,6 @@ fn pet_frame_interval(
 /// already-queued datagram drain on this turn without a zero-timeout busy spin.
 pub(super) const FRAME_MIN_TIMEOUT: Duration = Duration::from_millis(1);
 
-/// How often a long-lived renderer checks whether the installed binary changed.
-pub(super) const RELOAD_SELF_CHECK: Duration = Duration::from_secs(60);
-
 /// The animation frame index for `now`, derived from elapsed wall-clock since
 /// the serve loop's monotonic base. Every redraw path sets the phase from this,
 /// so the spin advances on real time and survives re-fetches and ledger deltas
