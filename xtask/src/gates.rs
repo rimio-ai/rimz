@@ -88,8 +88,9 @@ fn doctest_target_dir(root: &Path) -> PathBuf {
 pub(crate) fn deny(root: &Path) -> Result<()> {
     let mut args = vec!["deny", "check", "-D", "warnings"];
     if deny_offline(std::env::var("RIMZ_DENY_OFFLINE").ok().as_deref()) {
-        // Gitea bakes the advisory DB into the image; read it locally instead
-        // of cloning per run. Unset elsewhere keeps the public-upstream fetch.
+        // CI bakes the advisory DB into the image, rebuilds the index through
+        // the nexus mirror, and aliases it to the canonical crates.io cache path,
+        // so read both locally. Unset elsewhere keeps the public-upstream fetch.
         args.push("--disable-fetch");
     }
     run(root, "cargo", args)
@@ -174,9 +175,11 @@ const COVERAGE_LCOV_PATH: &str = "target/ci/coverage/lcov.info";
 //      nothing. Doctests stay last so cheaper host and plugin compile failures
 //      land first.
 //
-// `deny`, `vet`, and `semver` are not here: they fetch the crates.io
-// index/baseline directly and bypass a `[source.crates-io]` mirror, so they run
-// in their own `externals` task and a standalone CI job (see `externals`).
+// `deny`, `vet`, and `semver` stay out of `checks`: `deny` runs offline against
+// the baked advisory DB and a mirror-rebuilt index aliased to the canonical
+// crates.io cache path, while `vet` and `semver` fetch the crates.io
+// index/baseline directly and bypass a `[source.crates-io]` mirror. They run in
+// their own `externals` task and a standalone CI job (see `externals`).
 type Gate = fn(&Path) -> Result<()>;
 
 type CompactGate = fn(&Path) -> Result<GateResult>;
@@ -356,11 +359,12 @@ pub(crate) fn checks(root: &Path) -> Result<()> {
     first_err.map_or(Ok(()), Err)
 }
 
-// Supply-chain checks that reach crates.io directly. `deny` checks yanked
-// crates through the registry index, `vet` fetches the registry index to
-// resolve its audit set, and `semver` fetches the published baseline; all three
-// bypass a `[source.crates-io]` mirror, so they run as a standalone CI job where
-// transient egress failures can be retried without reding `checks`. All run so
+// Supply-chain checks that sit outside `checks`. `deny` runs offline against the
+// baked advisory DB and a mirror-rebuilt index aliased to the canonical
+// crates.io cache path. `vet` fetches the registry index to resolve its audit
+// set, and `semver` fetches the published baseline; both bypass a
+// `[source.crates-io]` mirror, so they run as a standalone CI job where
+// transient egress failures can be retried without failing `checks`. All run so
 // a single pass reports every signal; the first error is returned.
 pub(crate) fn externals(root: &Path) -> Result<()> {
     let externals_start = Instant::now();
