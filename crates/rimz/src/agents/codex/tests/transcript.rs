@@ -143,6 +143,22 @@ fn turn_error_detector_maps_known_error_shapes() {
     assert_eq!(error.class, crate::agents::TurnErrorClass::PausedRateLimit);
     assert_eq!(error.label.as_deref(), Some("You've hit your usage limit"));
 
+    let session_limit = json!({
+        "timestamp": "2026-06-11T07:18:00.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "turn_error",
+            "message": "You've hit your session limit · resets 10:50am (UTC)"
+        }
+    })
+    .to_string();
+    let error = detect_turn_error(&session_limit).expect("session-limit error detected");
+    assert_eq!(error.class, crate::agents::TurnErrorClass::PausedRateLimit);
+    assert_eq!(
+        error.label.as_deref(),
+        Some("You've hit your session limit · resets 10:50am (UTC)")
+    );
+
     let overloaded = json!({
         "timestamp": "2026-06-11T07:18:00.000Z",
         "type": "event_msg",

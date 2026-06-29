@@ -2,7 +2,10 @@ use jiff::Timestamp;
 
 use crate::agents::TurnErrorClass;
 use crate::agents::lifecycle::TurnPhase;
-use crate::agents::{AgentState, AgentStatus, display_turn_error, rate_limit_window_kinds};
+use crate::agents::{
+    AgentState, AgentStatus, display_turn_error, effective_turn_error_class,
+    rate_limit_window_kinds,
+};
 use crate::ledger::snapshot::row::SidebarRow;
 
 /// Project each agent row's *displayed* status from its raw lifecycle status,
@@ -46,13 +49,15 @@ pub(super) fn project_display_status(
             last_activity,
             turn_started_at,
         );
-        let projected = if let Some(error) = turn_error.filter(|error| {
-            matches!(
-                error.class,
-                TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedOverloaded
-            )
-        }) {
-            if error.class == TurnErrorClass::PausedRateLimit
+        let projected = if let Some((error, class)) = turn_error
+            .map(|error| (error, effective_turn_error_class(error)))
+            .filter(|(_, class)| {
+                matches!(
+                    class,
+                    TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedOverloaded
+                )
+            }) {
+            if class == TurnErrorClass::PausedRateLimit
                 && rate_limit_kinds.reset.contains(row_name.as_str())
                 && !rate_limit_kinds.spent.contains(row_name.as_str())
             {

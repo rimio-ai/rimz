@@ -255,6 +255,30 @@ fn terminal_turn_error(
         .filter(|error| error.at >= started)
 }
 
+/// The class to use for display and auto-resume decisions. Current adapters
+/// stamp the class directly; the label fallback keeps older sidecars that saw
+/// a provider "session limit" before Rimz knew that phrase parked instead of
+/// actionable.
+pub(crate) fn effective_turn_error_class(error: &AgentTurnError) -> TurnErrorClass {
+    if error.class == TurnErrorClass::Failed && label_indicates_rate_limit(error.label.as_deref()) {
+        TurnErrorClass::PausedRateLimit
+    } else {
+        error.class
+    }
+}
+
+fn label_indicates_rate_limit(label: Option<&str>) -> bool {
+    let Some(label) = label else {
+        return false;
+    };
+    let lower = label.to_ascii_lowercase();
+    lower.contains("usage limit")
+        || lower.contains("session limit")
+        || lower.contains("rate limit")
+        || lower.contains("quota")
+        || lower.contains("too many requests")
+}
+
 /// Each agent kind's rate-limit window standing, summarized across every session
 /// of that kind (the windows are account-scoped, so any session's reading speaks
 /// for the kind). A kind lands in `spent` while it has a window that is exhausted
@@ -355,7 +379,7 @@ pub(crate) fn resume_park(agent: &AgentState, now: Timestamp) -> Option<ResumeAr
         agent.last_activity,
         agent.turn_started_at,
     )?;
-    match error.class {
+    match effective_turn_error_class(error) {
         TurnErrorClass::PausedRateLimit => {
             let deadline = agent
                 .context

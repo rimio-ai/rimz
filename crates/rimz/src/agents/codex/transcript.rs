@@ -626,6 +626,7 @@ fn classify_turn_error_label(label: Option<&str>) -> TurnErrorClass {
     };
     let lower = label.to_ascii_lowercase();
     if lower.contains("usage limit")
+        || lower.contains("session limit")
         || lower.contains("rate limit")
         || lower.contains("quota")
         || lower.contains("too many requests")

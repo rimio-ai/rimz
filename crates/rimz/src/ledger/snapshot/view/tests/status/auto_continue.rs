@@ -39,6 +39,21 @@ fn arms_a_rate_limit_park_at_its_window_reset() {
 }
 
 #[test]
+fn legacy_session_limit_marker_arms_a_rate_limit_park() {
+    let parked = agent("claude", "limited", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .active_ago(60)
+        .limits(vec![window(100, 3_600)])
+        .turn_error(10, "You've hit your session limit · resets 10:50am (UTC)");
+    assert_eq!(
+        arm(&parked),
+        Some(ResumeArm::RateLimit {
+            deadline: deadline(3_600)
+        })
+    );
+}
+
+#[test]
 fn arms_for_the_latest_of_several_spent_windows() {
     // The turn may resume only once every spent window has reset, so the deadline
     // is the furthest reset — here the 7d window, not the 5h.

@@ -81,6 +81,28 @@ fn codex_stop_over_rate_limit_terminal_row_parks_until_budget_resets() {
 }
 
 #[test]
+fn legacy_session_limit_marker_parks_while_budget_is_spent() {
+    let session = agent("claude", "session-limited", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(60)
+        .limits(vec![window(100, 3_600)])
+        .turn_error(10, "You've hit your session limit · resets 10:50am (UTC)");
+
+    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let row = row(&snapshot, "session-limited");
+    assert_eq!(
+        row.status(),
+        Some(AgentStatus::Paused),
+        "older sidecars with a failed-class session-limit marker still render as parked"
+    );
+    assert!(
+        row.turn_error_label().is_none(),
+        "a parked limit keeps the upstream text out of the actionable-failure line"
+    );
+}
+
+#[test]
 fn terminal_turn_error_before_current_turn_does_not_repark_row() {
     let session = agent("codex", "codex-stale-error", AgentStatus::Failed, 0)
         .worktree("/repo/main")

@@ -81,7 +81,9 @@ pub use state::{
     ContextSeverity, DEFAULT_INACTIVE_AFTER_SECS, DEFAULT_STALL_AFTER_SECS, is_stalled,
     is_turn_complete, is_turn_dead,
 };
-pub(crate) use state::{ResumeArm, display_turn_error, rate_limit_window_kinds, resume_park};
+pub(crate) use state::{
+    ResumeArm, display_turn_error, effective_turn_error_class, rate_limit_window_kinds, resume_park,
+};
 pub use transcript::{AgentChat, ChatEntry, TranscriptMessage, TranscriptRole, Turn};
 pub use transcript_fs::read_transcript_lines;
 pub(crate) use transcript_fs::read_transcript_tail;

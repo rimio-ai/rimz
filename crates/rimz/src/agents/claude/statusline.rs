@@ -202,7 +202,12 @@ pub(crate) fn classify_turn_error_label(label: Option<&str>) -> TurnErrorClass {
         return TurnErrorClass::Failed;
     };
     let lower = label.to_ascii_lowercase();
-    if lower.contains("usage limit") || lower.contains("rate limit") {
+    if lower.contains("usage limit")
+        || lower.contains("session limit")
+        || lower.contains("rate limit")
+        || lower.contains("quota")
+        || lower.contains("too many requests")
+    {
         TurnErrorClass::PausedRateLimit
     } else if is_transient_server_error(&lower) {
         TurnErrorClass::PausedOverloaded
@@ -674,6 +679,14 @@ mod tests {
             detect_turn_error(&entry("You've hit your usage limit"))
                 .unwrap()
                 .class,
+            TurnErrorClass::PausedRateLimit
+        );
+        assert_eq!(
+            detect_turn_error(&entry(
+                "You've hit your session limit · resets 10:50am (UTC)"
+            ))
+            .unwrap()
+            .class,
             TurnErrorClass::PausedRateLimit
         );
         assert_eq!(
