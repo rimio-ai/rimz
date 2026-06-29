@@ -9,7 +9,7 @@
 Three modes cover the timing axis. All three resolve the target through the same address parser, ride the same bracketed-paste primitive, and write the same audit events.
 
 - **`--steer`** — interrupt the live pane immediately. Writes a durable `sent` record and prints `sent to @handle (msg_...)`. Conflicts with `--schedule` and `--on`, because it has no later boundary.
-- **Default** — send now when the target has a live pane, the gate is open, no pending ask reserves input unless `--force`, and no older ready queued message owns that card's FIFO head. When any condition fails, the text parks as a `queued` record for the next qualifying turn boundary. A successful send-now writes the same durable `sent` record as `--steer`.
+- **Default** — send now when the target has a live pane, the gate is open, no pending ask reserves input unless `--force`, and no older ready queued message owns that card's FIFO head. Open-gate launch placeholders fail fast until the real session registers; gated or scheduled placeholders park so FIFO survives registration. When any condition fails, the text parks as a `queued` record for the next qualifying turn boundary. A successful send-now writes the same durable `sent` record as `--steer`.
 - **`--schedule <DUR|HH:MM>`** — always parks and stores a `not_before` timestamp. The room must be open so the sidebar elder can spawn `message sweep` when the wake stamp comes due.
 
 ## The message record
@@ -87,7 +87,7 @@ A multi-match is an ambiguity error until `--all` or `@all` opts in. Fan-out del
 
 `message --steer` reaches **live panes**: a bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet — a lazy-registering agent (Codex) before its first turn ([agent.md § The instance lifecycle](./agent.md#the-instance-lifecycle)) — because the thing a paste needs is the *pane*, which the producer already detects.
 
-The default message path uses that live pane when the target can receive now, including lazy panes with no session yet; when it must park work, it keys the durable record on the bound session or launch placeholder card so FIFO survives registration. A message queued against a provisional `launch_*` card keeps the launch id in the record; when the card registers, name-based matching (`same_card`) folds it into the session's single FIFO queue — one card, one queue.
+The default message path uses that live pane when the target can receive now, including lazy panes with no session yet. A launch placeholder card (`launch_*`) represents a member whose process is still starting; send-now paths refuse it until the real session registers, while park paths key a durable record on the placeholder so FIFO survives registration. A message queued against a provisional `launch_*` card keeps the launch id in the record; when the card registers, name-based matching (`same_card`) folds it into the session's single FIFO queue — one card, one queue.
 
 A petname, kind ordinal, or real session-id prefix names a bound session in every mode; launch placeholder ids stay internal. The `@` sigil is required — a bare selector fails with a `did you mean @…?` hint, so a stray word never broadcasts; a pane id is the one sigil-free exception. Floating Zellij panes participate in live-pane addressing.
 

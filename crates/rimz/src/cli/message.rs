@@ -276,6 +276,11 @@ fn steer_message(
     for target in &targets {
         let bound = send::bound_agent(&snapshot, target);
         let handle = send::handle_for_pane_target(&snapshot, target, bound);
+        if let Some(agent) = bound
+            && agent.agent_id.is_provisional()
+        {
+            return Err(refuse_still_starting(&handle));
+        }
         let message = send::message_for_target(
             workspace.workspace_id.clone(),
             target,
@@ -440,12 +445,18 @@ fn handle_for_target(snapshot: &SidebarSnapshot, target: &QueueTarget<'_>) -> St
             .iter()
             .filter(|agent| agent.parent_agent_id.is_none())
             .collect();
-        format!("@{}", rimz::target::agent_handle(agent, &peers, true))
+        rimz::target::agent_handle(agent, &peers, true)
     } else if let Some(pane) = target.pane {
         format!("@{}", pane.label())
     } else {
         "@agent".to_owned()
     }
+}
+
+fn refuse_still_starting(handle: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "`{handle}` is still starting and has no live session yet; resend once it has registered"
+    )
 }
 
 fn combine_queue_targets<'a>(
@@ -665,6 +676,12 @@ fn add_message(
         let handle = handle_for_target(&snapshot, target);
         let mut park = spec.not_before.is_some()
             || !target.receivable_now(&snapshot, &pending, spec.gate, spec.force, now);
+        if !park
+            && let Some(agent) = target.agent
+            && agent.agent_id.is_provisional()
+        {
+            return Err(refuse_still_starting(&handle));
+        }
         if !park && let Some(pane) = target.pane {
             let bound = target.bound(&snapshot);
             let message = send::message_for_target(
@@ -1413,7 +1430,7 @@ fn message_target_with_at(message: &MessageRecord, agents: &[&AgentState]) -> St
         .iter()
         .copied()
         .find(|agent| message.same_agent_card(agent))
-        .map(|agent| format!("@{}", rimz::target::agent_handle(agent, agents, true)))
+        .map(|agent| rimz::target::agent_handle(agent, agents, true))
         .unwrap_or_else(|| format!("{}:{}", message.kind, message.agent_id))
 }
 
@@ -1538,6 +1555,28 @@ mod tests {
                 timestamp
             )
         );
+    }
+
+    #[test]
+    fn rendered_agent_handles_keep_single_sigil() {
+        let mut coder = agent("sess-coder", AgentStatus::Idle);
+        coder.role = Some("coder".to_owned());
+        let snapshot = snapshot_with_panes(vec![coder], Vec::new());
+        let target = QueueTarget {
+            pane: None,
+            agent: Some(&snapshot.agents[0]),
+        };
+        assert_eq!(handle_for_target(&snapshot, &target), "@coder#project");
+
+        let message = MessageRecord::new(
+            workspace_id(),
+            &snapshot.agents[0],
+            "work".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        let agents: Vec<&AgentState> = snapshot.agents.iter().collect();
+        assert_eq!(message_target_with_at(&message, &agents), "@coder#project");
     }
 
     fn workspace_id() -> WorkspaceId {

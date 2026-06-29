@@ -725,6 +725,7 @@ fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
         "steer failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+    assert_single_sigil_sent(&out.stdout);
     assert_text_then_enter(&trace_log, "from @swift-otter: ping");
     let sent = env
         .read_events()
@@ -790,6 +791,7 @@ fn queue_delivery_presses_enter_as_discrete_key() {
         "message failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+    assert_single_sigil_sent(&out.stdout);
 
     assert!(
         env.ledger().list_pending_messages().unwrap().is_empty(),
@@ -2167,6 +2169,15 @@ fn queued_id_from_stdout(stdout: &[u8]) -> String {
         .unwrap_or_else(|| panic!("expected `queued for @target (msg_...)`, got `{trimmed}`"))
 }
 
+fn assert_single_sigil_sent(stdout: &[u8]) {
+    let text = String::from_utf8_lossy(stdout);
+    let trimmed = text.trim();
+    assert!(
+        trimmed.starts_with("sent to @") && !trimmed.starts_with("sent to @@"),
+        "send confirmation should carry one sigil: {trimmed}"
+    );
+}
+
 fn push_pending_agent_ask(env: &Env, session_id: &str) {
     let mut item = FeedItem::new(
         env.workspace_id.clone(),
@@ -2343,51 +2354,45 @@ fn queue_sends_now_to_unbound_codex_pane() {
 }
 
 #[test]
-fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
+fn message_refuses_still_starting_agent() {
     let env = Env::new();
     env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
     seed_provisional_codex_launch(
         &env,
-        "launch_queue_bug",
+        "launch_idle",
         "swift-otter",
         Some("coder"),
-        "terminal_8",
+        TRACE_PANE,
     );
-    let pane_fixture = env.write_pane_fixture(&[unbound_codex_pane(&env)]);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
 
-    let trace_log = env.project_root.join("zellij-provisional-queue-trace.log");
+    let trace_log = env.project_root.join("zellij-still-starting-trace.log");
     let out = env
         .rimz()
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
         .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "@coder", "--", "read plan"])
+        .args(["message", "@coder", "--", "x"])
         .output()
         .expect("message");
     assert!(
-        out.status.success(),
-        "queue to a provisional codex should send now: {}",
+        !out.status.success(),
+        "send-now to a provisional agent must fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("still starting"),
+        "error explains still-starting target: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_text_then_enter(&trace_log, "read plan");
     let messages = env.ledger().list_messages().unwrap();
-    assert_eq!(
-        messages.len(),
-        1,
-        "send-now provisional queue writes a durable record"
-    );
-    assert_eq!(messages[0].status, MessageStatus::Sent);
-    let methods: Vec<String> = env
-        .read_events()
-        .into_iter()
-        .map(|event| event.method)
-        .collect();
     assert!(
-        methods.iter().any(|method| method == "message.sent"),
-        "send-now queue records message.sent: {methods:?}"
+        messages.is_empty(),
+        "refusal writes no message: {messages:?}"
     );
+    let lines = trace_lines(&trace_log);
     assert!(
-        methods.iter().all(|method| method != "message.queued"),
-        "send-now queue is not parked: {methods:?}"
+        !lines.iter().any(|line| is_paste_to_any_pane(line, "x")),
+        "refusal must not paste into the launch pane: {lines:?}"
     );
 }

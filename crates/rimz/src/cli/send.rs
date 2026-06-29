@@ -338,7 +338,7 @@ pub(crate) fn handle_for_pane_target(
             .iter()
             .filter(|agent| agent.parent_agent_id.is_none())
             .collect();
-        format!("@{}", rimz::target::agent_handle(agent, &peers, true))
+        rimz::target::agent_handle(agent, &peers, true)
     } else {
         format!("@{}", target.label())
     }
