@@ -532,6 +532,11 @@ impl FetchRequest {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn is_producer_fresh_panes(self) -> bool {
+        matches!(self.mode, FetchMode::ProducerFreshPanes)
+    }
+
     fn merge(&mut self, other: Self) {
         self.mode = self.mode.strongest(other.mode);
         self.published_frame_hint |= other.published_frame_hint;

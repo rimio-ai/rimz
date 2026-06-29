@@ -97,9 +97,19 @@ impl PresenceRoster {
                     unfocused,
                 });
             } else {
-                self.pending_unfocused.remove(&window);
-                if is_sidebar {
-                    events.push(SidebarEvent::PanesChanged);
+                let pending = self.pending_unfocused.remove(&window);
+                if is_sidebar && !seeding {
+                    let unfocused = self
+                        .prior_active_working_pane(&window, &pane)
+                        .or(pending)
+                        .filter(|raw| raw != &pane)
+                        .map(|raw| pane_id(raw.as_str()))
+                        .into_iter()
+                        .collect();
+                    events.push(SidebarEvent::FocusChanged {
+                        focused: vec![pane_id(&pane)],
+                        unfocused,
+                    });
                 }
             }
             self.clear_active_in_window(&window, &pane);
@@ -300,11 +310,14 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_pane_focus_nudges_renderer() {
+    fn sidebar_pane_focus_names_sidebar_pane() {
         let mut roster = PresenceRoster::default();
         assert_eq!(
             roster.apply(sidebar_sub("%9", "@1", true), false),
-            vec![SidebarEvent::PanesChanged]
+            vec![SidebarEvent::FocusChanged {
+                focused: vec![pane_id("%9")],
+                unfocused: Vec::new(),
+            }]
         );
         assert!(
             roster
@@ -317,6 +330,19 @@ mod tests {
                 .is_empty()
         );
         assert!(!roster.panes.contains_key("%9"));
+    }
+
+    #[test]
+    fn sidebar_pane_focus_unfocuses_prior_active_working_pane() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        assert_eq!(
+            roster.apply(sidebar_sub("%9", "@1", true), false),
+            vec![SidebarEvent::FocusChanged {
+                focused: vec![pane_id("%9")],
+                unfocused: vec![pane_id("%1")],
+            }]
+        );
     }
 
     #[test]

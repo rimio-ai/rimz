@@ -139,7 +139,7 @@ The snapshot fetch runs on the background worker; the loop blocks only in `recv`
 
 ### Animate only what a human watches
 
-Each renderer carries its own pane id and the latest folded same-tab focus view, so the serve loop can tell whether an attached client is viewing the sidebar's tab. A watched tab keeps the normal animation grid; an unwatched or detached tab treats cosmetic motion as idle and wakes on the data/watchdog backstop. Dirty data folds still paint once, which keeps the off-screen buffer current for the next tab switch while spinner, pet, money-roll, scrollbar, and effect frames stop spending render CPU in panes no client sees. Unknown ownership or missing own-view state reads as watched, so demos, tests, and cold starts keep the responsive path.
+Each renderer carries its own pane id and the latest folded same-tab focus view, so the serve loop can tell whether an attached client is viewing the sidebar's tab. A watched tab keeps the normal animation grid; an unwatched or detached tab treats cosmetic motion as idle and wakes on the data/watchdog backstop. Focus onto the sidebar's own pane optimistically resumes the watched grid for a short window, so a tab switch onto a sidebar-focused tab animates without waiting for the produce round-trip. Dirty data folds still paint once, which keeps the off-screen buffer current for the next tab switch while spinner, pet, money-roll, scrollbar, and effect frames stop spending render CPU in panes no client sees. Unknown ownership or missing own-view state reads as watched, so demos, tests, and cold starts keep the responsive path.
 
 ### One producer per workspace
 

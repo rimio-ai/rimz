@@ -12,6 +12,7 @@ pub(super) struct LoopState {
     current: SidebarSnapshot,
     last_pulled: SidebarSnapshot,
     own_pane: Option<PaneId>,
+    optimistic_watch_until: Option<Instant>,
     event_store: EventStore,
     observer: observe::Observer,
     observe_tx: SyncSender<ObserveMsg>,
@@ -53,6 +54,7 @@ impl LoopState {
             last_pulled: current.clone(),
             current,
             own_pane,
+            optimistic_watch_until: None,
             event_store: EventStore::default(),
             observer: observe::Observer::default(),
             observe_tx,
@@ -105,6 +107,12 @@ impl LoopState {
     /// Unknown ownership or own-view state reads as watched so uncertainty never
     /// suppresses motion.
     fn watched(&self) -> bool {
+        if self
+            .optimistic_watch_until
+            .is_some_and(|until| Instant::now() < until)
+        {
+            return true;
+        }
         let Some(own_pane) = self.own_pane.as_ref() else {
             return true;
         };
@@ -254,6 +262,11 @@ impl LoopState {
             // folds in. A resize-grow paint hold stays held until a pulled
             // sibling-count verdict releases it.
             event if event.is_overlay() => {
+                let own = self.own_pane.as_ref();
+                let own_focused = matches!(&event, SidebarEvent::FocusChanged { focused, .. }
+                    if own.is_some_and(|pane| focused.contains(pane)));
+                let own_unfocused = matches!(&event, SidebarEvent::FocusChanged { unfocused, .. }
+                    if own.is_some_and(|pane| unfocused.contains(pane)));
                 let now_ms = crate::sidebar::cache::unix_now_ms();
                 self.event_store.append(event, sent_at_ms, now_ms);
                 let fused = fuse(&self.last_pulled, &self.event_store, now_ms);
@@ -273,6 +286,14 @@ impl LoopState {
                 self.next_frame = Instant::now();
                 if !self.should_exit && requests_verification {
                     fetch.request(FetchRequest::producer_fresh_panes(), true);
+                }
+                if own_focused {
+                    self.optimistic_watch_until = Some(Instant::now() + FOCUS_RESUME_WATCH_WINDOW);
+                    if !self.should_exit {
+                        fetch.request(FetchRequest::producer_fresh_panes(), true);
+                    }
+                } else if own_unfocused {
+                    self.optimistic_watch_until = None;
                 }
             }
             // Identity-free nudges — `LedgerDelta`, `PanesChanged`, a
@@ -876,6 +897,60 @@ mod tests {
         state.current.own_view = Some(own_view(true, false));
         state.current.viewed_panes = vec![own_pane];
         assert!(frame_active(&state));
+    }
+
+    #[test]
+    fn frame_timing_resumes_on_own_pane_focus() {
+        let ws = workspace();
+        let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+        let foreign_pane = pane("terminal_2", "tab_0", false).pane_id;
+        let mut snapshot = animating_agent_snapshot(&ws);
+        snapshot.own_view = Some(own_view(false, false));
+        snapshot.viewed_panes.clear();
+
+        let config = serve_config(&ws);
+        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24));
+        let mut terminal = Terminal::with_options(
+            CrosstermBackend::new(io::stdout()),
+            ratatui::TerminalOptions { viewport },
+        )
+        .expect("terminal");
+        for (focused, resumes) in [(own_pane.clone(), true), (foreign_pane, false)] {
+            let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
+            state.last_pulled = snapshot.clone();
+            state.current = snapshot.clone();
+            state.dirty = false;
+            let (mut fetch, request_rx) = fetch_dispatcher();
+            state
+                .on_event(
+                    &config,
+                    &mut fetch,
+                    &mut terminal,
+                    SidebarEventEnvelope::new(
+                        ws.clone(),
+                        Some("rimz-test".to_owned()),
+                        crate::sidebar::cache::unix_now_ms(),
+                        SidebarEvent::FocusChanged {
+                            focused: vec![focused],
+                            unfocused: Vec::new(),
+                        },
+                    ),
+                    Instant::now(),
+                    None,
+                )
+                .expect("focus event folds");
+            state.dirty = false;
+
+            assert_eq!(state.optimistic_watch_until.is_some(), resumes);
+            assert_eq!(frame_active(&state), resumes);
+            assert_eq!(
+                request_rx
+                    .try_recv()
+                    .ok()
+                    .map(FetchRequest::is_producer_fresh_panes),
+                resumes.then_some(true)
+            );
+        }
     }
 
     #[test]

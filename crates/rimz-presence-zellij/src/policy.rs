@@ -348,17 +348,18 @@ fn hash_stable_pane_fields(hasher: &mut impl Hasher, pane: &RawStablePaneFields<
 
 /// The focus transitions to publish when the only sidebar-relevant manifest
 /// change is a per-pane focus move onto a pane that can render as an
-/// agent/process card. `Some(patch)` is the optimistic card-to-card focus patch;
-/// `None` means no card patch is available, so the caller falls back to an
-/// authoritative pane produce. That includes topology, command, held/exited, or
-/// suppression changes, plus focus moves onto sidebar/chrome so the producer
-/// refreshes own-view visibility and the sidebar resumes animation.
+/// agent/process card or the sidebar pane itself. `Some(patch)` is the
+/// optimistic focus patch; `None` means no patch is available, so the caller
+/// falls back to an authoritative pane produce. That includes topology,
+/// command, held/exited, suppression changes, and focus moves onto other
+/// chrome.
 pub fn focus_shortcut_if_only_focus_changed(
     previous: &BTreeMap<usize, Vec<PaneFields>>,
     next: &BTreeMap<usize, Vec<PaneFields>>,
 ) -> Option<Vec<FocusPatch>> {
     let mut changed = false;
     let mut focused_card = false;
+    let mut focused_sidebar = false;
     let mut patch = Vec::new();
     if previous.len() != next.len() {
         return None;
@@ -388,7 +389,11 @@ pub fn focus_shortcut_if_only_focus_changed(
             if previous.is_focused != next.is_focused && next.is_focused && next.is_card_pane() {
                 focused_card = true;
             }
-            if previous.is_focused != next.is_focused && next.is_card_pane() {
+            if previous.is_focused != next.is_focused && next.is_focused && next.is_sidebar() {
+                focused_sidebar = true;
+            }
+            if previous.is_focused != next.is_focused && (next.is_card_pane() || next.is_sidebar())
+            {
                 patch.push(FocusPatch {
                     id: next.id,
                     is_focused: next.is_focused,
@@ -399,7 +404,7 @@ pub fn focus_shortcut_if_only_focus_changed(
     if !changed {
         return None;
     }
-    focused_card.then_some(patch)
+    (focused_card || focused_sidebar).then_some(patch)
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
