@@ -910,7 +910,7 @@ fn status_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
     );
     kv.push(
         "target",
-        render::cell(message_target_with_at(&message, &agents)).fg(render::palette::META),
+        render::cell(message_target(&message, &agents)).fg(render::palette::META),
     );
     kv.push(
         "from",
@@ -1425,15 +1425,6 @@ fn message_target(message: &MessageRecord, agents: &[&AgentState]) -> String {
         .unwrap_or_else(|| format!("{}:{}", message.kind, message.agent_id))
 }
 
-fn message_target_with_at(message: &MessageRecord, agents: &[&AgentState]) -> String {
-    agents
-        .iter()
-        .copied()
-        .find(|agent| message.same_agent_card(agent))
-        .map(|agent| rimz::target::agent_handle(agent, agents, true))
-        .unwrap_or_else(|| format!("{}:{}", message.kind, message.agent_id))
-}
-
 fn rel_age(ts: Timestamp, now: Timestamp) -> String {
     let age = now.duration_since(ts);
     if age.is_negative() {
@@ -1576,7 +1567,7 @@ mod tests {
             DeliveryGate::Done,
         );
         let agents: Vec<&AgentState> = snapshot.agents.iter().collect();
-        assert_eq!(message_target_with_at(&message, &agents), "@coder#project");
+        assert_eq!(message_target(&message, &agents), "@coder#project");
     }
 
     fn workspace_id() -> WorkspaceId {
