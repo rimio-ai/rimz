@@ -2354,45 +2354,51 @@ fn queue_sends_now_to_unbound_codex_pane() {
 }
 
 #[test]
-fn message_refuses_still_starting_agent() {
+fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
     let env = Env::new();
     env.install_agent_hooks("codex");
-    trust_codex_hooks(&env);
     seed_provisional_codex_launch(
         &env,
-        "launch_idle",
+        "launch_queue_bug",
         "swift-otter",
         Some("coder"),
-        TRACE_PANE,
+        "terminal_8",
     );
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
+    let pane_fixture = env.write_pane_fixture(&[unbound_codex_pane(&env)]);
 
-    let trace_log = env.project_root.join("zellij-still-starting-trace.log");
+    let trace_log = env.project_root.join("zellij-provisional-queue-trace.log");
     let out = env
         .rimz()
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
         .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "@coder", "--", "x"])
+        .args(["message", "@coder", "--", "read plan"])
         .output()
         .expect("message");
     assert!(
-        !out.status.success(),
-        "send-now to a provisional agent must fail"
-    );
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("still starting"),
-        "error explains still-starting target: {}",
+        out.status.success(),
+        "queue to a provisional codex should send now: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+    assert_text_then_enter(&trace_log, "read plan");
     let messages = env.ledger().list_messages().unwrap();
-    assert!(
-        messages.is_empty(),
-        "refusal writes no message: {messages:?}"
+    assert_eq!(
+        messages.len(),
+        1,
+        "send-now provisional queue writes a durable record"
     );
-    let lines = trace_lines(&trace_log);
+    assert_eq!(messages[0].status, MessageStatus::Sent);
+    let methods: Vec<String> = env
+        .read_events()
+        .into_iter()
+        .map(|event| event.method)
+        .collect();
     assert!(
-        !lines.iter().any(|line| is_paste_to_any_pane(line, "x")),
-        "refusal must not paste into the launch pane: {lines:?}"
+        methods.iter().any(|method| method == "message.sent"),
+        "send-now queue records message.sent: {methods:?}"
+    );
+    assert!(
+        methods.iter().all(|method| method != "message.queued"),
+        "send-now queue is not parked: {methods:?}"
     );
 }

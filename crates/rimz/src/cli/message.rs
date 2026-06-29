@@ -276,11 +276,6 @@ fn steer_message(
     for target in &targets {
         let bound = send::bound_agent(&snapshot, target);
         let handle = send::handle_for_pane_target(&snapshot, target, bound);
-        if let Some(agent) = bound
-            && agent.agent_id.is_provisional()
-        {
-            return Err(refuse_still_starting(&handle));
-        }
         let message = send::message_for_target(
             workspace.workspace_id.clone(),
             target,
@@ -451,12 +446,6 @@ fn handle_for_target(snapshot: &SidebarSnapshot, target: &QueueTarget<'_>) -> St
     } else {
         "@agent".to_owned()
     }
-}
-
-fn refuse_still_starting(handle: &str) -> anyhow::Error {
-    anyhow::anyhow!(
-        "`{handle}` is still starting and has no live session yet; resend once it has registered"
-    )
 }
 
 fn combine_queue_targets<'a>(
@@ -676,12 +665,6 @@ fn add_message(
         let handle = handle_for_target(&snapshot, target);
         let mut park = spec.not_before.is_some()
             || !target.receivable_now(&snapshot, &pending, spec.gate, spec.force, now);
-        if !park
-            && let Some(agent) = target.agent
-            && agent.agent_id.is_provisional()
-        {
-            return Err(refuse_still_starting(&handle));
-        }
         if !park && let Some(pane) = target.pane {
             let bound = target.bound(&snapshot);
             let message = send::message_for_target(
