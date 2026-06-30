@@ -16,7 +16,7 @@ rimz                        # open the room and drop in
 | Start or reattach a room for a path | `rimz start [PATH]` |
 | Attach by directory or exact session name | `rimz attach [SESSION]` |
 | Connect to a remote room over SSH | `rimz remote connect <alias-or-target>` |
-| Save, rename, list, or remove remote aliases | `rimz remote add` / `rename` / `list` / `del` |
+| Save, update, rename, list, or remove remote aliases | `rimz remote add` / `update` / `rename` / `list` / `rm` |
 | Find known rooms and their live backend | `rimz list` |
 | Bootstrap this machine's config | `rimz setup` |
 | Diagnose backend, hook, trust, and room health | `rimz doctor` |
@@ -52,6 +52,8 @@ rimz remote connect agent@prod-box:/srv/query-engine
 A raw target is `[user@]host:<session-or-path>`. After the colon, a value containing `/` or starting with `~` is a remote path and runs remote `rimz start`; a bare word is a remote session name and runs remote `rimz attach`. Valid targets include `dev-box:query-engine`, `dev-box:~/code/query-engine`, `agent@prod-box:/srv/query-engine`, and `user@[::1]:query-engine`. Spell another user's home as an absolute path (`/home/alice/code`), because `~user` does not expand through the guarded command.
 
 - `rimz remote add <name> <target>` saves an alias in `~/.config/rimz/remote.toml`. Any input with a `:` is treated as a raw target; everything else is an alias name.
+- `rimz remote update <name> <target>` replaces a saved alias's target and flags with the same flags as `add`; it errors if the alias does not exist. Flags not passed reset to their defaults.
+- `rimz remote add` on an existing name prompts to overwrite on an interactive terminal; non-interactively it errors so a saved alias is never silently replaced. Use `remote update` to change one in a script.
 - Reconnect supervision is on by default. `--no-reconnect` hands the link to one SSH run; `remote add --no-reconnect` saves that as the alias default.
 - `remote connect --reset` and `remote reset` pass `--no-resume` to the remote `rimz`, so a remote room comes up empty instead of recovering; `remote add --no-resume` saves that birth behavior.
 - `--attach`, `--no-attach`, and `--print` mirror local behavior; `--print` emits the SSH command instead of running it.

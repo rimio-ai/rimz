@@ -39,6 +39,20 @@ enum RemoteSubcmd {
         #[arg(long)]
         no_resume: bool,
     },
+    /// Replace a saved remote target.
+    #[command(
+        after_help = "Like `remote add`, --mux <name> pins the saved alias when scoped to `remote` or `update`. Flags not passed reset to their defaults."
+    )]
+    Update {
+        name: String,
+        target: String,
+        /// Hand the link to a single ssh run instead of supervising reconnects.
+        #[arg(long)]
+        no_reconnect: bool,
+        /// Come up empty when this alias births a remote room.
+        #[arg(long)]
+        no_resume: bool,
+    },
     /// Connect to a remote alias or raw `[user@]host:<session-or-path>` target.
     Connect {
         alias_or_target: String,
@@ -61,8 +75,7 @@ enum RemoteSubcmd {
         attach: AttachFlags,
     },
     /// Delete a saved remote alias.
-    #[command(name = "del", visible_alias = "rm")]
-    Delete { name: String },
+    Rm { name: String },
     /// Rename a saved remote alias.
     Rename { old: String, new: String },
     /// List saved remote aliases.
@@ -85,6 +98,22 @@ enum LinkStatsSubcmd {
     Ingest(link_stats::LinkStatsIngestArgs),
 }
 
+fn build_alias(
+    name: String,
+    target: String,
+    no_reconnect: bool,
+    no_resume: bool,
+    globals: &GlobalFlags,
+) -> RemoteAlias {
+    RemoteAlias {
+        name,
+        target,
+        reconnect: !no_reconnect,
+        no_resume,
+        mux: add_persistent_mux(globals),
+    }
+}
+
 pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         RemoteSubcmd::Add {
@@ -94,13 +123,29 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             no_resume,
         } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
-            aliases.add(RemoteAlias {
-                name,
-                target,
-                reconnect: !no_reconnect,
-                no_resume,
-                mux: add_persistent_mux(globals),
-            })?;
+            let entry = build_alias(name, target, no_reconnect, no_resume, globals);
+            if aliases.contains(&entry.name)
+                && std::io::stdin().is_terminal()
+                && super::confirm(&format!(
+                    "remote alias `{}` already exists; update it?",
+                    entry.name
+                ))?
+            {
+                aliases.update(entry)?;
+            } else {
+                aliases.add(entry)?;
+            }
+            aliases.save().context("saving remote aliases")?;
+            Ok(())
+        }
+        RemoteSubcmd::Update {
+            name,
+            target,
+            no_reconnect,
+            no_resume,
+        } => {
+            let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
+            aliases.update(build_alias(name, target, no_reconnect, no_resume, globals))?;
             aliases.save().context("saving remote aliases")?;
             Ok(())
         }
@@ -125,7 +170,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
                 resolve_connect(&alias_or_target, true, no_reconnect, globals.mux, &aliases)?;
             attach_remote(remote, attach.mode())
         }
-        RemoteSubcmd::Delete { name } => {
+        RemoteSubcmd::Rm { name } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
             aliases.remove(&name)?;
             aliases.save().context("saving remote aliases")?;
@@ -149,18 +194,18 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn add_persistent_mux(globals: &GlobalFlags) -> Option<MuxName> {
-    remote_add_scopes_mux_flag(std::env::args_os())
+    remote_writer_scopes_mux_flag(std::env::args_os())
         .then_some(globals.mux)
         .flatten()
 }
 
-fn remote_add_scopes_mux_flag<I, S>(args: I) -> bool
+fn remote_writer_scopes_mux_flag<I, S>(args: I) -> bool
 where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
     let mut in_remote = false;
-    let mut in_add = false;
+    let mut in_writer = false;
     let mut mux_scoped_to_remote = false;
 
     for arg in args.into_iter().skip(1) {
@@ -175,18 +220,18 @@ where
             break;
         }
         if is_mux_flag(arg) {
-            if in_add {
+            if in_writer {
                 return true;
             }
             mux_scoped_to_remote = true;
             continue;
         }
-        if !in_add && arg == "add" {
-            in_add = true;
+        if !in_writer && matches!(arg, "add" | "update") {
+            in_writer = true;
         }
     }
 
-    in_add && mux_scoped_to_remote
+    in_writer && mux_scoped_to_remote
 }
 
 fn is_mux_flag(arg: &str) -> bool {
@@ -309,17 +354,17 @@ mod tests {
     }
 
     #[test]
-    fn remote_add_scopes_mux_from_remote_or_add_position() {
-        assert!(!remote_add_scopes_mux_flag(args(&[
+    fn remote_writer_scopes_mux_from_remote_or_writer_position() {
+        assert!(!remote_writer_scopes_mux_flag(args(&[
             "rimz", "--mux", "tmux", "remote", "add", "name", "target",
         ])));
-        assert!(remote_add_scopes_mux_flag(args(&[
+        assert!(remote_writer_scopes_mux_flag(args(&[
             "rimz", "remote", "--mux", "tmux", "add", "name", "target",
         ])));
-        assert!(remote_add_scopes_mux_flag(args(&[
+        assert!(remote_writer_scopes_mux_flag(args(&[
             "rimz", "remote", "add", "--mux", "tmux", "name", "target",
         ])));
-        assert!(remote_add_scopes_mux_flag(args(&[
+        assert!(remote_writer_scopes_mux_flag(args(&[
             "rimz",
             "remote",
             "add",
@@ -327,7 +372,10 @@ mod tests {
             "target",
             "--mux=tmux",
         ])));
-        assert!(!remote_add_scopes_mux_flag(args(&[
+        assert!(remote_writer_scopes_mux_flag(args(&[
+            "rimz", "remote", "update", "--mux", "tmux", "name", "target",
+        ])));
+        assert!(!remote_writer_scopes_mux_flag(args(&[
             "rimz", "remote", "add", "name", "target", "--", "--mux", "tmux",
         ])));
     }

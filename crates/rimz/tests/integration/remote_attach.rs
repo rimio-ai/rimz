@@ -445,14 +445,72 @@ fn remote_alias_round_trip_connects_lists_resets_and_deletes() {
         "remote reset injects --no-resume: {line}"
     );
 
-    let del = env
+    let rm = env
         .rimz()
-        .args(["remote", "del", "prod"])
+        .args(["remote", "rm", "prod"])
         .bounded_output()
-        .expect("run rimz remote del");
+        .expect("run rimz remote rm");
     assert!(
-        del.status.success(),
-        "delete succeeds\nstderr:\n{}",
-        String::from_utf8_lossy(&del.stderr),
+        rm.status.success(),
+        "rm succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&rm.stderr),
+    );
+}
+
+#[test]
+fn remote_add_rejects_existing_name_and_update_replaces_target() {
+    let env = Env::new();
+    let remote_file = env.config_root().join("rimz").join("remote.toml");
+
+    let add = env
+        .rimz()
+        .args(["remote", "add", "prod", "agent@prod-box:query-engine"])
+        .bounded_output()
+        .expect("run rimz remote add");
+    assert!(
+        add.status.success(),
+        "add succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&add.stderr),
+    );
+
+    let dup = env
+        .rimz()
+        .args(["remote", "add", "prod", "other-box:other-engine"])
+        .bounded_output()
+        .expect("run duplicate rimz remote add");
+    assert!(
+        !dup.status.success(),
+        "duplicate add must fail non-interactively"
+    );
+    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
+    assert!(
+        text.contains("agent@prod-box:query-engine"),
+        "target unchanged: {text}",
+    );
+
+    let update = env
+        .rimz()
+        .args(["remote", "update", "prod", "agent@prod-box:other-engine"])
+        .bounded_output()
+        .expect("run rimz remote update");
+    assert!(
+        update.status.success(),
+        "update succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&update.stderr),
+    );
+    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
+    assert!(
+        text.contains("agent@prod-box:other-engine"),
+        "target replaced: {text}",
+    );
+
+    let missing = env
+        .rimz()
+        .args(["remote", "update", "nope", "host:path"])
+        .bounded_output()
+        .expect("run missing rimz remote update");
+    assert!(
+        !missing.status.success(),
+        "update of absent alias must fail"
     );
 }

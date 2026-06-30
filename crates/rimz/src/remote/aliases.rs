@@ -157,6 +157,18 @@ impl RemoteAliases {
         Ok(())
     }
 
+    pub fn update(&mut self, entry: RemoteAlias) -> Result<()> {
+        validate_name(&entry.name)?;
+        RemoteTarget::parse(&entry.target)?;
+        let slot = self
+            .entries
+            .iter_mut()
+            .find(|existing| existing.name == entry.name)
+            .ok_or_else(|| AliasErr::NotFound(entry.name.clone()))?;
+        *slot = entry;
+        Ok(())
+    }
+
     pub fn remove(&mut self, name: &str) -> Result<()> {
         let len_before = self.entries.len();
         self.entries.retain(|entry| entry.name != name);
@@ -330,6 +342,25 @@ mod tests {
     }
 
     #[test]
+    fn update_replaces_existing_entry() {
+        let mut list = RemoteAliases::default();
+        list.add(alias("prod", "prod-box:query-engine")).unwrap();
+        list.update(alias("prod", "prod-box:other-engine")).unwrap();
+        let entries = list.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].target, "prod-box:other-engine");
+    }
+
+    #[test]
+    fn update_errors_when_absent() {
+        let mut list = RemoteAliases::default();
+        let err = list
+            .update(alias("prod", "prod-box:query-engine"))
+            .unwrap_err();
+        assert!(matches!(err, AliasErr::NotFound(_)));
+    }
+
+    #[test]
     fn remove_and_rename_return_not_found_when_absent() {
         let mut list = RemoteAliases::default();
         let remove = list.remove("missing").unwrap_err();
@@ -351,6 +382,13 @@ mod tests {
     fn add_rejects_invalid_target() {
         let mut list = RemoteAliases::default();
         let err = list.add(alias("prod", "prod-box")).unwrap_err();
+        assert!(matches!(err, AliasErr::InvalidTarget(_)));
+    }
+
+    #[test]
+    fn update_rejects_invalid_target() {
+        let mut list = RemoteAliases::default();
+        let err = list.update(alias("prod", "prod-box")).unwrap_err();
         assert!(matches!(err, AliasErr::InvalidTarget(_)));
     }
 
