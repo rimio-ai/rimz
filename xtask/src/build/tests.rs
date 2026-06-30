@@ -1,6 +1,6 @@
 use std::env;
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::*;
 
@@ -28,6 +28,26 @@ fn relative_install_paths_report_as_absolute() {
 
     assert!(path.is_absolute());
     assert!(path.ends_with("target/xtask-install/bin/rimz"));
+}
+
+#[test]
+fn install_destinations_include_cargo_bin_and_usr_local_bin() {
+    let dirs = install_bin_dirs_from(PathBuf::from("/home/me/.cargo/bin"));
+
+    assert_eq!(
+        dirs,
+        vec![
+            PathBuf::from("/home/me/.cargo/bin"),
+            PathBuf::from("/usr/local/bin")
+        ]
+    );
+}
+
+#[test]
+fn install_destinations_do_not_duplicate_usr_local_bin() {
+    let dirs = install_bin_dirs_from(PathBuf::from("/usr/local/bin"));
+
+    assert_eq!(dirs, vec![PathBuf::from("/usr/local/bin")]);
 }
 
 #[test]

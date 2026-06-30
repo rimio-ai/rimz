@@ -147,7 +147,7 @@ zellij or tmux runs the room. Building from source is `git clone … && cargo xt
 
 ```sh
 git clone https://github.com/rimio/rimz.git && cd rimz
-cargo xtask install     # build and install the binary + zellij presence plugin
+cargo xtask install     # build and install the binary to Cargo bin + /usr/local/bin
 cargo xtask test        # the nextest suite
 cargo xtask ci          # non-test checks + the plain nextest suite
 ```

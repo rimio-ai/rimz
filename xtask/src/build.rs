@@ -15,6 +15,7 @@ use crate::runner::{run, run_with_env};
 
 const PRESENCE_PLUGIN_TARGET: &str = "wasm32-wasip1";
 const DARWIN_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
+const SYSTEM_INSTALL_BIN_DIR: &str = "/usr/local/bin";
 pub(crate) const WASM_MAGIC: [u8; 4] = *b"\0asm";
 
 pub(crate) fn build(root: &Path) -> Result<()> {
@@ -256,6 +257,22 @@ fn cargo_install_bin_dir() -> PathBuf {
         .join("bin")
 }
 
+fn install_bin_dirs() -> Vec<PathBuf> {
+    install_bin_dirs_from(cargo_install_bin_dir())
+}
+
+fn install_bin_dirs_from(cargo_bin_dir: PathBuf) -> Vec<PathBuf> {
+    let mut dirs = vec![cargo_bin_dir];
+    push_unique_path(&mut dirs, PathBuf::from(SYSTEM_INSTALL_BIN_DIR));
+    dirs
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
 pub(crate) fn install(root: &Path) -> Result<()> {
     install_from_stage(stage_install(root)?)
 }
@@ -268,16 +285,27 @@ pub(crate) fn install_dev(root: &Path) -> Result<()> {
     install_from_stage(stage_dev_install(root)?)
 }
 
-/// Copy the staged install artifacts onto the `cargo install` ladder and report
-/// the version the way `rimz --version` does.
+/// Copy the staged install artifacts onto the `cargo install` ladder and
+/// `/usr/local/bin`, then report the version the way `rimz --version` does.
 fn install_from_stage(stage: PathBuf) -> Result<()> {
-    let dest_dir = cargo_install_bin_dir();
-    fs::create_dir_all(&dest_dir).with_context(|| format!("creating {}", dest_dir.display()))?;
-    for artifact in INSTALL_ARTIFACTS {
-        copy_atomically(&stage.join(artifact), &dest_dir.join(artifact))?;
+    let dest_dirs = install_bin_dirs();
+    for dest_dir in &dest_dirs {
+        fs::create_dir_all(dest_dir).with_context(|| format!("creating {}", dest_dir.display()))?;
+        for artifact in INSTALL_ARTIFACTS {
+            copy_atomically(&stage.join(artifact), &dest_dir.join(artifact))
+                .with_context(|| format!("installing {artifact} to {}", dest_dir.display()))?;
+        }
     }
-    let installed = absolute_lexical_path(&dest_dir.join("rimz"))?;
-    report_install(&binary_build_version(&installed)?, &installed);
+    let installed: Vec<_> = dest_dirs
+        .iter()
+        .map(|dest_dir| absolute_lexical_path(&dest_dir.join("rimz")))
+        .collect::<Result<_>>()?;
+    let version = binary_build_version(
+        installed
+            .first()
+            .context("install destination list unexpectedly empty")?,
+    )?;
+    report_install(&version, &installed);
     Ok(())
 }
 
@@ -317,8 +345,13 @@ fn parse_version_line(line: &str) -> String {
     clippy::print_stdout,
     reason = "install summary is the command's stdout contract"
 )]
-fn report_install(version: &str, path: &Path) {
-    println!("Installed rimz {version} to {}", path.display());
+fn report_install(version: &str, paths: &[PathBuf]) {
+    let paths = paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!("Installed rimz {version} to {paths}");
 }
 
 pub(crate) fn stage_install(root: &Path) -> Result<PathBuf> {

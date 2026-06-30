@@ -51,12 +51,12 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "install",
         summary: "Build and install the host rimz binary.",
-        runs: "cargo xtask stage-install, then atomically installs host rimz",
+        runs: "cargo xtask stage-install, then atomically installs host rimz to Cargo bin and /usr/local/bin",
     },
     TaskInfo {
         name: "install-dev",
         summary: "Build and install host rimz with off-box reporting (sentry) for dev.",
-        runs: "build-plugin, debug host rimz with --features sentry, then atomically installs",
+        runs: "build-plugin, debug host rimz with --features sentry, then atomically installs to Cargo bin and /usr/local/bin",
     },
     TaskInfo {
         name: "stage-install",
