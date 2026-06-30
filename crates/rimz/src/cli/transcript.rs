@@ -1,17 +1,18 @@
 //! `rimz transcript` — inspect agent and channel conversations from local logs.
 
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
-use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
 use serde::Serialize;
 
-use super::{GlobalFlags, current_channel, open_ledger};
+use super::{GlobalFlags, current_channel};
 use crate::cli::render;
-use rimz::agents::AgentState;
 use rimz::agents::transcript::{self, AgentChat};
-use rimz::feed::{FeedItem, pending_ask_for};
+use rimz::feed::FeedItem;
+use rimz::ids::{AgentKind, AgentSessionId, RequestId};
+use rimz::ledger::transcript_log::{TranscriptEntry, TranscriptKind};
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -43,119 +44,111 @@ pub(crate) struct AskView {
 }
 
 #[derive(Serialize)]
-struct ChannelAskView {
-    agent: String,
-    #[serde(flatten)]
-    ask: AskView,
-}
-
-#[derive(Serialize)]
 struct ChatView {
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     focus: Option<String>,
     entries: Vec<rimz::agents::ChatEntry>,
-    asks: Vec<ChannelAskView>,
 }
 
-struct LoadedTranscript {
-    agent: AgentState,
-    label: String,
-    messages: Vec<rimz::agents::TranscriptMessage>,
+type AgentKey = (AgentKind, AgentSessionId);
+
+#[derive(Clone, Debug)]
+struct Identity {
+    base_handle: String,
+    channel: Option<String>,
+    name: Option<String>,
+    profile: Option<String>,
+    role: Option<String>,
+    rich: bool,
 }
 
-enum Scope {
-    Channel {
-        channel: Option<String>,
-        agents: Vec<AgentState>,
-    },
-    Agent {
-        channel: Option<String>,
-        agents: Vec<AgentState>,
-        focus: Box<AgentState>,
-    },
+#[derive(Clone, Debug)]
+struct Scope {
+    channel: Option<String>,
+    channel_filter: Option<String>,
+    focus: Option<String>,
+    focus_base: Option<String>,
+    include_channel: bool,
 }
 
 pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
-    let snapshot = ledger
-        .snapshot_cached()
-        .context("reading agent snapshot")?
-        .with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing state paths")?;
     let current = current_channel(&workspace);
+    let entries = dedup_asks(rimz::ledger::transcript_log::read_all(&paths)?);
+    if entries.is_empty() {
+        bail!("no transcripts on disk yet");
+    }
+    let identities = build_identities(&entries);
     let scope = resolve_scope(
-        &snapshot,
         args.target.as_deref(),
         args.worktree.as_deref(),
         current.as_deref(),
+        &identities,
     )?;
-    let feed_items = ledger.list_feed_items()?;
-    let peers: Vec<&AgentState> = snapshot
-        .agents
+    let filtered: Vec<&TranscriptEntry> = entries
         .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|entry| channel_matches(entry.channel.as_deref(), scope.channel_filter.as_deref()))
         .collect();
-
-    let (channel, agents, focus) = match scope {
-        Scope::Channel { channel, agents } => (channel, agents, None),
-        Scope::Agent {
-            channel,
-            agents,
-            focus,
-        } => {
-            let include_channel = channel.is_none();
-            let focus = rimz::target::agent_handle(&focus, &peers, include_channel);
-            (channel, agents, Some(focus))
-        }
-    };
-
-    let include_channel = channel.is_none();
-    let mut loaded = Vec::new();
-    for agent in agents {
-        let label = rimz::target::agent_handle(&agent, &peers, include_channel);
-        if let Some(messages) = load_agent_messages(&agent)? {
-            loaded.push(LoadedTranscript {
-                agent,
-                label,
-                messages,
-            });
-        } else if pending_ask_for(&agent, feed_items.iter()).is_some() {
-            loaded.push(LoadedTranscript {
-                agent,
-                label,
-                messages: Vec::new(),
-            });
-        }
-    }
-    if loaded.is_empty() {
+    if filtered.is_empty() {
         bail!("no transcripts on disk for this scope yet");
     }
 
-    let per_agent = loaded
-        .iter()
-        .map(|loaded| AgentChat {
-            handle: loaded.label.clone(),
-            messages: loaded.messages.clone(),
+    let mut per_agent_messages: BTreeMap<AgentKey, Vec<rimz::agents::TranscriptMessage>> =
+        BTreeMap::new();
+    let mut direct = Vec::new();
+    for entry in filtered {
+        match entry.entry {
+            TranscriptKind::Prompt | TranscriptKind::Assistant => {
+                per_agent_messages
+                    .entry(entry_key(entry))
+                    .or_default()
+                    .push(rimz::agents::TranscriptMessage {
+                        role: match entry.entry {
+                            TranscriptKind::Prompt => rimz::agents::TranscriptRole::User,
+                            TranscriptKind::Assistant => rimz::agents::TranscriptRole::Assistant,
+                            TranscriptKind::Ask | TranscriptKind::Answer => unreachable!(),
+                        },
+                        at: Some(entry.at),
+                        text: entry.text.clone(),
+                    });
+            }
+            TranscriptKind::Ask => direct.push(rimz::agents::ChatEntry {
+                from: handle_for(entry, &identities, scope.include_channel),
+                to: None,
+                at: Some(entry.at),
+                text: entry.text.clone(),
+            }),
+            TranscriptKind::Answer => direct.push(rimz::agents::ChatEntry {
+                from: entry.from.clone().unwrap_or_else(|| "resolver".to_owned()),
+                to: Some(handle_for(entry, &identities, scope.include_channel)),
+                at: Some(entry.at),
+                text: entry.text.clone(),
+            }),
+        }
+    }
+
+    let per_agent = per_agent_messages
+        .into_iter()
+        .map(|(key, messages)| AgentChat {
+            handle: handle_for_key(&key, &identities, scope.include_channel),
+            messages,
         })
         .collect();
     let mut entries =
         transcript::build_chat(per_agent, args.details, rimz::target::parse_sender_prefix);
-    let mut asks: Vec<ChannelAskView> = loaded
-        .iter()
-        .filter_map(|loaded| {
-            pending_ask_for(&loaded.agent, feed_items.iter()).map(|ask| ChannelAskView {
-                agent: loaded.label.clone(),
-                ask: ask_view(ask),
-            })
-        })
-        .collect();
+    entries.extend(direct);
+    entries.sort_by(|left, right| match (left.at, right.at) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
 
-    if let Some(focus) = focus.as_deref() {
-        let focus = base_handle(focus);
+    if let Some(focus) = scope.focus_base.as_deref() {
         entries.retain(|entry| {
             base_handle(&entry.from) == focus
                 || entry
@@ -163,37 +156,99 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
                     .as_deref()
                     .is_some_and(|to| base_handle(to) == focus)
         });
-        asks.retain(|ask| base_handle(&ask.agent) == focus);
+    }
+    if entries.is_empty() {
+        bail!("no transcripts on disk for this scope yet");
     }
     keep_last(&mut entries, args.last);
 
     if args.json {
         print_json(&ChatView {
-            channel,
-            focus,
+            channel: scope.channel,
+            focus: scope.focus,
             entries,
-            asks,
         })?;
     } else {
-        render_chat(channel.as_deref(), &entries, &asks)?;
+        render_chat(scope.channel.as_deref(), &entries)?;
     }
     Ok(())
 }
 
+fn dedup_asks(entries: Vec<TranscriptEntry>) -> Vec<TranscriptEntry> {
+    let mut other = Vec::new();
+    let mut latest_asks: HashMap<RequestId, TranscriptEntry> = HashMap::new();
+    for entry in entries {
+        if entry.entry == TranscriptKind::Ask
+            && let Some(request_id) = entry.request_id.clone()
+        {
+            latest_asks
+                .entry(request_id)
+                .and_modify(|prior| {
+                    if entry.at >= prior.at {
+                        *prior = entry.clone();
+                    }
+                })
+                .or_insert(entry);
+        } else {
+            other.push(entry);
+        }
+    }
+    other.extend(latest_asks.into_values());
+    other
+}
+
+fn build_identities(entries: &[TranscriptEntry]) -> HashMap<AgentKey, Identity> {
+    let mut identities = HashMap::new();
+    for entry in entries {
+        let candidate = Identity {
+            base_handle: rimz::target::identity_handle(
+                &entry.kind,
+                entry.name.as_deref(),
+                entry.profile.as_deref(),
+                entry.role.as_deref(),
+            ),
+            channel: entry.channel.clone(),
+            name: entry.name.clone(),
+            profile: entry.profile.clone(),
+            role: entry.role.clone(),
+            rich: entry.role.is_some() || entry.name.is_some() || entry.profile.is_some(),
+        };
+        identities
+            .entry(entry_key(entry))
+            .and_modify(|existing: &mut Identity| {
+                if existing.channel.is_none() {
+                    existing.channel = candidate.channel.clone();
+                }
+                if candidate.rich && !existing.rich {
+                    existing.base_handle = candidate.base_handle.clone();
+                    existing.name = candidate.name.clone();
+                    existing.profile = candidate.profile.clone();
+                    existing.role = candidate.role.clone();
+                    existing.rich = true;
+                }
+            })
+            .or_insert(candidate);
+    }
+    identities
+}
+
 fn resolve_scope(
-    snapshot: &rimz::SidebarSnapshot,
     target: Option<&str>,
     worktree: Option<&str>,
     current: Option<&str>,
+    identities: &HashMap<AgentKey, Identity>,
 ) -> Result<Scope> {
     match target {
         None => {
             let channel = worktree.or(current).map(ToOwned::to_owned);
-            let agents = root_agents(snapshot, channel.as_deref());
-            if agents.is_empty() {
-                bail!(empty_channel_message(channel.as_deref()));
-            }
-            Ok(Scope::Channel { channel, agents })
+            let include_channel = channel.is_none();
+            Ok(Scope {
+                channel: channel.clone(),
+                channel_filter: channel,
+                focus: None,
+                focus_base: None,
+                include_channel,
+            })
         }
         Some(raw) if raw.starts_with('#') => {
             let channel = raw.trim_start_matches('#');
@@ -205,77 +260,151 @@ fn resolve_scope(
             {
                 bail!("target `{raw}` names channel `#{channel}` but --worktree names `{flag}`");
             }
-            let agents = root_agents(snapshot, Some(channel));
-            if agents.is_empty() {
-                bail!("no agents in channel `#{channel}`");
-            }
-            Ok(Scope::Channel {
-                channel: Some(channel.to_owned()),
-                agents,
-            })
+            Ok(single_channel_scope(channel.to_owned()))
         }
         Some(raw) if raw == "@all" || raw.starts_with("@all#") => {
-            let agents = super::resolve_agent_many(snapshot, raw, worktree, current)?
-                .into_iter()
-                .cloned()
-                .collect();
-            Ok(Scope::Channel {
-                channel: channel_label(raw, worktree, current),
-                agents,
+            let inline = raw.split_once('#').map(|(_, channel)| channel);
+            if inline == Some("") {
+                bail!("channel suffix in target `{raw}` must name a channel");
+            }
+            let channel = reconcile_channel(raw, inline, worktree, None)?;
+            let include_channel = channel.is_none();
+            Ok(Scope {
+                channel: channel.clone(),
+                channel_filter: channel,
+                focus: None,
+                focus_base: None,
+                include_channel,
             })
         }
         Some(raw) => {
-            let focus = super::resolve_agent_one(snapshot, raw, worktree, current)?.clone();
-            let channel = rimz::target::agent_channel(&focus);
-            let mut agents = root_agents(snapshot, channel.as_deref());
-            if !agents.iter().any(|agent| agent.agent_id == focus.agent_id) {
-                agents.push(focus.clone());
-            }
-            Ok(Scope::Agent {
-                channel,
-                agents,
-                focus: Box::new(focus),
+            let (selector, inline) = split_agent_target(raw)?;
+            let explicit_or_current = reconcile_channel(raw, inline, worktree, current)?;
+            let matches = matching_identities(selector, explicit_or_current.as_deref(), identities);
+            let Some((_, identity)) = matches.first() else {
+                bail!("no agent matches target `{raw}` in the transcript log");
+            };
+            let channel = explicit_or_current.or_else(|| identity.channel.clone());
+            let include_channel = channel.is_none();
+            let focus = Some(render_handle(
+                &identity.base_handle,
+                identity.channel.as_deref(),
+                include_channel,
+            ));
+            Ok(Scope {
+                channel: channel.clone(),
+                channel_filter: channel,
+                focus,
+                focus_base: Some(identity.base_handle.clone()),
+                include_channel,
             })
         }
     }
 }
 
-fn root_agents(snapshot: &rimz::SidebarSnapshot, channel: Option<&str>) -> Vec<AgentState> {
-    snapshot
-        .agents
-        .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
-        .filter(|agent| channel.is_none_or(|filter| rimz::target::agent_in_worktree(agent, filter)))
-        .cloned()
-        .collect()
-}
-
-fn channel_label(raw: &str, worktree: Option<&str>, current: Option<&str>) -> Option<String> {
-    raw.split_once('#')
-        .map(|(_, channel)| channel.to_owned())
-        .or_else(|| worktree.or(current).map(ToOwned::to_owned))
-}
-
-fn empty_channel_message(channel: Option<&str>) -> String {
-    match channel {
-        Some(channel) => format!("no agents in channel `#{channel}`"),
-        None => "no agents in this workspace".to_owned(),
+fn single_channel_scope(channel: String) -> Scope {
+    Scope {
+        channel: Some(channel.clone()),
+        channel_filter: Some(channel),
+        focus: None,
+        focus_base: None,
+        include_channel: false,
     }
 }
 
-fn load_agent_messages(agent: &AgentState) -> Result<Option<Vec<rimz::agents::TranscriptMessage>>> {
-    let Some(adapter) = rimz::agents::find_adapter(agent.kind.as_str()) else {
-        bail!("unknown agent integration `{}`", agent.kind);
+fn split_agent_target(raw: &str) -> Result<(&str, Option<&str>)> {
+    match raw.split_once('#') {
+        Some((selector, channel)) if !selector.is_empty() && !channel.is_empty() => {
+            Ok((selector, Some(channel)))
+        }
+        Some((_, "")) => bail!("channel suffix in target `{raw}` must name a channel"),
+        _ => Ok((raw, None)),
+    }
+}
+
+fn reconcile_channel(
+    raw: &str,
+    inline: Option<&str>,
+    flag: Option<&str>,
+    fallback: Option<&str>,
+) -> Result<Option<String>> {
+    match (inline, flag) {
+        (Some(channel), Some(flag)) if channel != flag => {
+            bail!("target `{raw}` names channel `#{channel}` but --worktree names `{flag}`")
+        }
+        (Some(channel), _) => Ok(Some(channel.to_owned())),
+        (None, Some(flag)) => Ok(Some(flag.to_owned())),
+        (None, None) => Ok(fallback.map(ToOwned::to_owned)),
+    }
+}
+
+fn matching_identities<'a>(
+    selector: &str,
+    channel: Option<&str>,
+    identities: &'a HashMap<AgentKey, Identity>,
+) -> Vec<(&'a AgentKey, &'a Identity)> {
+    let selector = selector.strip_prefix('@').unwrap_or(selector);
+    let wanted_handle = format!("@{selector}");
+    identities
+        .iter()
+        .filter(|(key, identity)| {
+            (identity.base_handle == wanted_handle
+                || key.0.as_str() == selector
+                || identity.name.as_deref() == Some(selector)
+                || identity.profile.as_deref() == Some(selector)
+                || identity.role.as_deref() == Some(selector)
+                || key.1.as_str() == selector
+                || key.1.as_str().starts_with(selector))
+                && channel_matches(identity.channel.as_deref(), channel)
+        })
+        .collect()
+}
+
+fn channel_matches(entry_channel: Option<&str>, filter: Option<&str>) -> bool {
+    filter.is_none_or(|filter| entry_channel == Some(filter))
+}
+
+fn entry_key(entry: &TranscriptEntry) -> AgentKey {
+    (entry.kind.clone(), entry.agent_id.clone())
+}
+
+fn handle_for(
+    entry: &TranscriptEntry,
+    identities: &HashMap<AgentKey, Identity>,
+    include_channel: bool,
+) -> String {
+    let key = entry_key(entry);
+    if let Some(identity) = identities.get(&key) {
+        return render_handle(
+            &identity.base_handle,
+            entry.channel.as_deref().or(identity.channel.as_deref()),
+            include_channel,
+        );
+    }
+    let base = rimz::target::identity_handle(&entry.kind, None, None, None);
+    render_handle(&base, entry.channel.as_deref(), include_channel)
+}
+
+fn handle_for_key(
+    key: &AgentKey,
+    identities: &HashMap<AgentKey, Identity>,
+    include_channel: bool,
+) -> String {
+    let Some(identity) = identities.get(key) else {
+        return rimz::target::identity_handle(&key.0, None, None, None);
     };
-    let prior = agent.transcript_path.as_deref().map(Path::new);
-    let Some(path) = adapter.session_transcript(agent.agent_id.as_str(), prior) else {
-        return Ok(None);
-    };
-    let Some((bytes, _)) = rimz::agents::read_transcript_lines(&path, 0) else {
-        return Ok(None);
-    };
-    let text = String::from_utf8_lossy(&bytes);
-    Ok(Some(adapter.parse_transcript_messages(&text)))
+    render_handle(
+        &identity.base_handle,
+        identity.channel.as_deref(),
+        include_channel,
+    )
+}
+
+fn render_handle(base: &str, channel: Option<&str>, include_channel: bool) -> String {
+    if include_channel && let Some(channel) = channel.filter(|channel| !channel.is_empty()) {
+        return format!("{base}#{channel}");
+    }
+    base.to_owned()
 }
 
 fn keep_last<T>(items: &mut Vec<T>, last: Option<usize>) {
@@ -299,22 +428,7 @@ pub(crate) fn ask_view(item: &FeedItem) -> AskView {
 }
 
 pub(crate) fn ask_summary(ask: &AskView) -> String {
-    let mut text = ask.title.clone();
-    if let Some(body) = ask
-        .body
-        .as_deref()
-        .map(str::trim)
-        .filter(|body| !body.is_empty())
-    {
-        text.push_str(": ");
-        text.push_str(body);
-    }
-    if !ask.options.is_empty() {
-        text.push_str(" [");
-        text.push_str(&ask.options.join(", "));
-        text.push(']');
-    }
-    text
+    rimz::feed::ask_summary(&ask.title, ask.body.as_deref(), &ask.options)
 }
 
 const AGENT_TONES: [anstyle::Style; 3] = [
@@ -363,11 +477,7 @@ fn display_handle(handle: &str, grouped: bool) -> &str {
     if grouped { base_handle(handle) } else { handle }
 }
 
-fn render_chat(
-    channel: Option<&str>,
-    entries: &[rimz::agents::ChatEntry],
-    asks: &[ChannelAskView],
-) -> Result<()> {
+fn render_chat(channel: Option<&str>, entries: &[rimz::agents::ChatEntry]) -> Result<()> {
     let mut out = render::out();
     write_header(&mut out, channel)?;
     let grouped = channel.is_some();
@@ -375,6 +485,8 @@ fn render_chat(
     for entry in entries {
         let from = if entry.from == "user" {
             render::paint(render::palette::COOL, "user")
+        } else if entry.from == "you" {
+            render::paint(render::palette::COOL.bold(), "you")
         } else {
             let display = display_handle(&entry.from, grouped);
             render::paint(tones.tone(base_handle(&entry.from)).bold(), display)
@@ -385,11 +497,6 @@ fn render_chat(
             .map(|to| format!("{}, ", display_handle(to, grouped)))
             .unwrap_or_default();
         write_chat_line(&mut out, entry.at, &from, &format!("{to}{}", entry.text))?;
-    }
-    for ask in asks {
-        let display = display_handle(&ask.agent, grouped);
-        let handle = render::paint(render::palette::WARN.bold(), display);
-        write_chat_line(&mut out, None, &handle, &ask_summary(&ask.ask))?;
     }
     Ok(())
 }

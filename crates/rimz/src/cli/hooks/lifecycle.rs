@@ -54,6 +54,16 @@ pub(super) fn handle_lifecycle_hook(
     }
     if let Some(recorded) = recorded.as_ref() {
         record_run_lifecycle(ledger, agent, event_name, payload, recorded);
+        if let Err(err) =
+            record_transcript_conversation(workspace, ledger, agent, event_name, payload, recorded)
+        {
+            warn!(
+                agent = agent.descriptor().kind,
+                event = %event_name,
+                error = %err,
+                "lifecycle: failed to record transcript entry",
+            );
+        }
         confirm_sent_message_for_lifecycle(ledger, agent, recorded, &workspace.session_name);
         if recorded.observation.signal == LifecycleSignal::Ended
             && let Some(agent_id) = agent_id
@@ -377,6 +387,84 @@ fn record_run_lifecycle(
             );
         }
     }
+}
+
+fn record_transcript_conversation(
+    workspace: &ResolvedWorkspace,
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    payload: &Value,
+    recorded: &RecordedLifecycle,
+) -> rimz::ledger::transcript_log::Result<()> {
+    let observation = &recorded.observation;
+    if observation.parent_agent_id.is_some() {
+        return Ok(());
+    }
+    let Some(agent_id) = observation.agent_id.clone() else {
+        return Ok(());
+    };
+    let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
+    let channel = rimz::target::compose_channel(
+        observation.channel.as_deref(),
+        observation.worktree_branch.as_deref(),
+        observation.worktree_path.as_deref().and_then(path_basename),
+        observation.team.as_deref(),
+    )
+    .or_else(|| workspace.worktree_branch.clone());
+    let entry_base = |entry, text: String| rimz::ledger::transcript_log::TranscriptEntry {
+        at: jiff::Timestamp::now(),
+        kind: kind.clone(),
+        agent_id: agent_id.clone(),
+        channel: channel.clone(),
+        name: observation.agent_name.clone(),
+        profile: observation.profile.clone(),
+        role: observation.role.clone(),
+        entry,
+        request_id: None,
+        from: None,
+        text,
+    };
+
+    match observation.signal {
+        LifecycleSignal::TurnStarted => {
+            if let Some(prompt) = observation
+                .prompt
+                .as_deref()
+                .map(str::trim)
+                .filter(|prompt| !prompt.is_empty())
+            {
+                rimz::ledger::transcript_log::append(
+                    ledger.paths(),
+                    &entry_base(
+                        rimz::ledger::transcript_log::TranscriptKind::Prompt,
+                        prompt.to_owned(),
+                    ),
+                )?;
+            }
+        }
+        LifecycleSignal::TurnEnded { .. } => {
+            if let Some(message) = agent
+                .last_assistant_message(event_name, payload, observation)
+                .map(|message| message.trim().to_owned())
+                .filter(|message| !message.is_empty())
+            {
+                rimz::ledger::transcript_log::append(
+                    ledger.paths(),
+                    &entry_base(
+                        rimz::ledger::transcript_log::TranscriptKind::Assistant,
+                        message,
+                    ),
+                )?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn path_basename(path: &str) -> Option<&str> {
+    path.rsplit('/').next().filter(|value| !value.is_empty())
 }
 
 fn confirm_sent_message_for_lifecycle(

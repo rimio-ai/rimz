@@ -696,8 +696,7 @@ pub fn sender_prefix(
         ));
     }
     let include_channel = channel.as_deref() != target_channel;
-    let mut handle =
-        fallback_sender_handle(kind, name.as_deref(), profile.as_deref(), role.as_deref());
+    let mut handle = identity_handle(kind, name.as_deref(), profile.as_deref(), role.as_deref());
     if include_channel && let Some(channel) = channel.as_deref().filter(|value| !value.is_empty()) {
         handle.push('#');
         handle.push_str(channel);
@@ -705,7 +704,7 @@ pub fn sender_prefix(
     Some(format!("from {handle}: "))
 }
 
-fn fallback_sender_handle(
+pub fn identity_handle(
     kind: &AgentKind,
     name: Option<&str>,
     profile: Option<&str>,

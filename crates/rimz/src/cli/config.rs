@@ -720,6 +720,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "agents.placement",
         "harness.smart_compact",
         "harness.rtk",
+        "transcript.file_days",
         "resume.on_rebirth",
         "resume.max",
         "resume.auto_continue",
@@ -879,6 +880,14 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         };
         if !matches!(mode, "auto" | "on" | "off") {
             bail!("harness.rtk must be one of auto, on, or off");
+        }
+    }
+    if matches!(path, [root, leaf] if root == "transcript" && leaf == "file_days") {
+        let Some(days) = value.as_integer() else {
+            bail!("transcript.file_days must be an integer");
+        };
+        if days <= 0 {
+            bail!("transcript.file_days must be greater than zero");
         }
     }
     if matches!(

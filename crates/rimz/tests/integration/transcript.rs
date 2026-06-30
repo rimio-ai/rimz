@@ -1,137 +1,121 @@
+use std::time::{Duration, Instant};
+
+use jiff::Timestamp;
 use serde_json::json;
 
 use rimz::feed::{FeedItem, FeedKind, Surface};
 
 use crate::common::Env;
 
-#[test]
-fn transcript_renders_agent_turns_channel_timeline_and_pending_asks() {
-    let env = Env::new();
-    let first = env.home_root.join("first-chat.jsonl");
-    let codex_sessions = env.home_root.join("codex-sessions");
-    let codex_day = codex_sessions.join("2026").join("06").join("01");
-    std::fs::create_dir_all(&codex_day).expect("mkdir codex day");
-    let second = codex_day.join("rollout-2026-06-01T00-00-00-sess-transcript-b.jsonl");
-    std::fs::write(
-        &first,
-        r#"{"type":"user","timestamp":"2026-06-01T00:00:00Z","message":{"content":[{"type":"text","text":"first prompt"}]}}"#
-            .to_owned()
-            + "\n"
-            + r#"{"type":"assistant","timestamp":"2026-06-01T00:00:01Z","message":{"content":[{"type":"text","text":"draft answer"}]}}"#
-            + "\n"
-            + r#"{"type":"assistant","timestamp":"2026-06-01T00:00:02Z","message":{"content":[{"type":"text","text":"final answer"}]}}"#
-            + "\n",
-    )
-    .expect("write first transcript");
-    std::fs::write(
-        &second,
-        r#"{"timestamp":"2026-06-01T00:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"second prompt"}}"#
-            .to_owned()
-            + "\n"
-            + r#"{"timestamp":"2026-06-01T00:00:03Z","type":"event_msg","payload":{"type":"agent_message","message":"second answer"}}"#
-            + "\n",
-    )
-    .expect("write second transcript");
+const BRIDGE_ITEM_WAIT: Duration = Duration::from_secs(5);
 
-    register_claude_agent(&env, "sess-transcript-a", "feature-transcript", &first);
-    register_codex_agent(
+#[test]
+fn transcript_renders_durable_turns_asks_answers_and_channels() {
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let branch = "feature-transcript";
+    let other = "other-transcript";
+    let claude_path = env.home_root.join("first-chat.jsonl");
+    write_claude_transcript(&claude_path, "draft answer", "final answer");
+
+    register_claude_turn(
+        &env,
+        "sess-transcript-a",
+        branch,
+        &claude_path,
+        "first prompt",
+    );
+    register_codex_turn(
         &env,
         "sess-transcript-b",
-        "feature-transcript",
-        &codex_sessions,
+        branch,
+        "second prompt",
+        "second answer",
     );
-    push_pending_agent_ask(&env, "sess-transcript-a");
+    register_codex_turn(
+        &env,
+        "sess-transcript-c",
+        other,
+        "other prompt",
+        "other answer",
+    );
+    bridge_permission_to_allow(&env, "sess-transcript-a", branch, &claude_path);
 
-    let single = run_ok(env.rimz().args([
-        "transcript",
-        "sess-transcript-a",
-        "--worktree",
-        "feature-transcript",
-    ]));
+    let single = run_ok(
+        env.rimz()
+            .args(["transcript", "sess-transcript-a", "--worktree", branch]),
+    );
     assert!(single.contains("#feature-transcript"), "{single}");
-    assert!(
-        single.contains("00:00:00 user: @claude, first prompt"),
-        "{single}"
-    );
-    assert!(
-        single.contains("00:00:02 @claude: final answer"),
-        "{single}"
-    );
+    assert!(single.contains("user: @claude, first prompt"), "{single}");
+    assert!(single.contains("@claude: final answer"), "{single}");
+    assert!(single.contains("@claude: final answer\n"), "{single}");
+    assert!(single.contains("claude needs attention"), "{single}");
+    assert!(single.contains("you: @claude, allow"), "{single}");
     assert!(
         !single.contains("draft answer"),
-        "default view keeps only the final assistant message:\n{single}"
+        "durable log stores the turn-final assistant message only:\n{single}"
     );
-    assert!(
-        single.contains("@claude: approve patch: choose one [allow, deny]"),
-        "{single}"
-    );
-
-    let details = run_ok(env.rimz().args([
-        "transcript",
-        "sess-transcript-a",
-        "--worktree",
-        "feature-transcript",
-        "--details",
-    ]));
-    assert!(details.contains("draft answer"), "{details}");
 
     let channel = run_ok(env.rimz().args(["transcript", "#feature-transcript"]));
-    let first_prompt = channel
-        .find("first prompt")
-        .expect("first prompt in channel");
-    let second_prompt = channel
-        .find("second prompt")
-        .expect("second prompt in channel");
-    let final_answer = channel
-        .find("final answer")
-        .expect("first final in channel");
-    let second_answer = channel
-        .find("second answer")
-        .expect("second answer in channel");
-    assert!(
-        first_prompt < second_prompt
-            && second_prompt < final_answer
-            && final_answer < second_answer,
-        "channel chat log should sort by transcript timestamps:\n{channel}"
-    );
     assert!(channel.contains("#feature-transcript"), "{channel}");
     assert!(channel.contains("user: @claude, first prompt"), "{channel}");
     assert!(channel.contains("@claude: final answer"), "{channel}");
     assert!(channel.contains("user: @codex, second prompt"), "{channel}");
     assert!(channel.contains("@codex: second answer"), "{channel}");
-    assert!(
-        !channel.contains("you→@")
-            && !channel.contains("assistant")
-            && !channel.contains("@claude#feature-transcript"),
-        "{channel}"
-    );
+    assert!(channel.contains("you: @claude, allow"), "{channel}");
+    assert!(!channel.contains("other prompt"), "{channel}");
+
+    let all = run_ok(env.rimz().args(["transcript", "@all"]));
+    assert!(all.contains("@claude#feature-transcript"), "{all}");
+    assert!(all.contains("@codex#feature-transcript"), "{all}");
+    assert!(all.contains("@codex#other-transcript"), "{all}");
 
     let json = run_ok(env.rimz().args([
         "transcript",
         "sess-transcript-a",
         "--worktree",
-        "feature-transcript",
+        branch,
         "--json",
     ]));
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("transcript json");
-    assert_eq!(parsed["entries"][0]["from"], "user");
-    assert_eq!(parsed["entries"][0]["to"], "@claude");
-    assert_eq!(parsed["entries"][0]["text"], "first prompt");
-    assert_eq!(parsed["entries"][1]["from"], "@claude");
-    assert_eq!(parsed["entries"][1]["text"], "final answer");
-    assert_eq!(parsed["asks"][0]["title"], "approve patch");
+    assert!(parsed.get("asks").is_none(), "{parsed}");
+    let entries = parsed["entries"].as_array().expect("entries");
+    assert!(entries.iter().any(|entry| {
+        entry["from"] == "user" && entry["to"] == "@claude" && entry["text"] == "first prompt"
+    }));
+    assert!(
+        entries
+            .iter()
+            .any(|entry| { entry["from"] == "@claude" && entry["text"] == "final answer" })
+    );
+    assert!(entries.iter().any(|entry| {
+        entry["from"] == "@claude"
+            && entry["text"].as_str().is_some_and(|text| {
+                text.contains("final answer") && text.contains("claude needs attention")
+            })
+    }));
+    assert!(entries.iter().any(|entry| {
+        entry["from"] == "you" && entry["to"] == "@claude" && entry["text"] == "allow"
+    }));
 
+    push_pending_agent_ask(&env, "sess-transcript-a");
     let show = run_ok(env.rimz().args(["agents", "show", "sess-transcript-a"]));
     assert!(show.contains("ask:"), "{show}");
-    assert!(show.contains("approve patch"), "{show}");
-
-    let show_json = run_ok(
-        env.rimz()
-            .args(["agents", "show", "sess-transcript-a", "--json"]),
+    assert!(
+        show.contains("approve patch: choose one [allow, deny]"),
+        "{show}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&show_json).expect("show json");
-    assert_eq!(parsed["ask"]["title"], "approve patch");
-    assert_eq!(parsed["ask"]["options"][0], "allow");
+    let transcript_after_pending =
+        run_ok(
+            env.rimz()
+                .args(["transcript", "sess-transcript-a", "--worktree", branch]),
+        );
+    assert!(
+        !transcript_after_pending.contains("approve patch"),
+        "live pending asks are no longer overlaid on transcript output:\n{transcript_after_pending}"
+    );
 }
 
 #[test]
@@ -139,31 +123,21 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
     let env = Env::new();
     let branch = "attribution-transcript";
     let claude_path = env.home_root.join("claude-attribution.jsonl");
-    let codex_sessions = env.home_root.join("codex-attribution-sessions");
-    let codex_day = codex_sessions.join("2026").join("06").join("01");
-    std::fs::create_dir_all(&codex_day).expect("mkdir codex day");
-    let codex_path = codex_day.join("rollout-2026-06-01T00-00-00-sess-attribution-codex.jsonl");
-    std::fs::write(
+    write_claude_transcript(&claude_path, "hidden claude draft", "hidden claude reply");
+    register_claude_turn(
+        &env,
+        "sess-attribution-claude",
+        branch,
         &claude_path,
-        r#"{"type":"user","timestamp":"2026-06-01T00:00:02Z","message":{"content":[{"type":"text","text":"from @codex: ack"}]}}"#
-            .to_owned()
-            + "\n"
-            + r#"{"type":"assistant","timestamp":"2026-06-01T00:00:03Z","message":{"content":[{"type":"text","text":"hidden claude reply"}]}}"#
-            + "\n",
-    )
-    .expect("write claude transcript");
-    std::fs::write(
-        &codex_path,
-        r#"{"timestamp":"2026-06-01T00:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"from @claude: do the thing"}}"#
-            .to_owned()
-            + "\n"
-            + r#"{"timestamp":"2026-06-01T00:00:04Z","type":"event_msg","payload":{"type":"agent_message","message":"hidden codex reply"}}"#
-            + "\n",
-    )
-    .expect("write codex transcript");
-
-    register_claude_agent(&env, "sess-attribution-claude", branch, &claude_path);
-    register_codex_agent(&env, "sess-attribution-codex", branch, &codex_sessions);
+        "from @codex: ack",
+    );
+    register_codex_turn(
+        &env,
+        "sess-attribution-codex",
+        branch,
+        "from @claude: do the thing",
+        "hidden codex reply",
+    );
 
     let channel = run_ok(env.rimz().args(["transcript", "#attribution-transcript"]));
     assert!(
@@ -184,7 +158,27 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
     assert!(!codex.contains("hidden claude reply"), "{codex}");
 }
 
-fn register_claude_agent(env: &Env, session_id: &str, branch: &str, transcript: &std::path::Path) {
+fn write_claude_transcript(path: &std::path::Path, draft: &str, final_message: &str) {
+    std::fs::write(
+        path,
+        format!(
+            r#"{{"type":"assistant","timestamp":"2026-06-01T00:00:01Z","message":{{"content":[{{"type":"text","text":"{draft}"}}]}}}}"#
+        ) + "\n"
+            + &format!(
+                r#"{{"type":"assistant","timestamp":"2026-06-01T00:00:02Z","message":{{"content":[{{"type":"text","text":"{final_message}"}}]}}}}"#
+            )
+            + "\n",
+    )
+    .expect("write claude transcript");
+}
+
+fn register_claude_turn(
+    env: &Env,
+    session_id: &str,
+    branch: &str,
+    transcript: &std::path::Path,
+    prompt: &str,
+) {
     let transcript = transcript.to_string_lossy().into_owned();
     run_hook(
         env,
@@ -202,16 +196,25 @@ fn register_claude_agent(env: &Env, session_id: &str, branch: &str, transcript: 
         json!({
             "hook_event_name": "UserPromptSubmit",
             "session_id": session_id,
-            "prompt": "work",
+            "prompt": prompt,
+            "worktree_branch": branch,
+            "transcript_path": transcript,
+        }),
+    );
+    run_hook(
+        env,
+        "claude",
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": session_id,
             "worktree_branch": branch,
             "transcript_path": transcript,
         }),
     );
 }
 
-fn register_codex_agent(env: &Env, session_id: &str, branch: &str, sessions: &std::path::Path) {
-    let sessions = sessions.to_string_lossy().into_owned();
-    run_hook_with_env(
+fn register_codex_turn(env: &Env, session_id: &str, branch: &str, prompt: &str, answer: &str) {
+    run_hook(
         env,
         "codex",
         json!({
@@ -219,31 +222,75 @@ fn register_codex_agent(env: &Env, session_id: &str, branch: &str, sessions: &st
             "session_id": session_id,
             "worktree_branch": branch,
         }),
-        &[("RIMZ_CODEX_SESSIONS", sessions.as_str())],
     );
-    run_hook_with_env(
+    run_hook(
         env,
         "codex",
         json!({
             "hook_event_name": "UserPromptSubmit",
             "session_id": session_id,
-            "prompt": "work",
+            "prompt": prompt,
             "worktree_branch": branch,
         }),
-        &[("RIMZ_CODEX_SESSIONS", sessions.as_str())],
+    );
+    run_hook(
+        env,
+        "codex",
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": session_id,
+            "last_assistant_message": answer,
+            "worktree_branch": branch,
+        }),
+    );
+}
+
+fn bridge_permission_to_allow(
+    env: &Env,
+    session_id: &str,
+    branch: &str,
+    transcript: &std::path::Path,
+) {
+    env.enrol("opus-policy", 10, "30s");
+    env.write_heartbeat("opus-policy", Timestamp::now());
+    let transcript = transcript.to_string_lossy().into_owned();
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "PermissionRequest",
+        "session_id": session_id,
+        "tool_name": "Bash",
+        "tool_input": { "command": "echo hi" },
+        "worktree_branch": branch,
+        "transcript_path": transcript,
+    }))
+    .expect("payload");
+    let mut cmd = env.hook_command("claude");
+    cmd.env_remove("RIMZ_AGENT_PID");
+    cmd.env(rimz::run::ENV_AGENT_ROLE, "claude");
+    let child = env.spawn_payload(cmd, &payload);
+    let request_id = env
+        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
+        .expect("bridge item should appear in feed");
+
+    let resolve = env.resolve(&request_id, r#"{"choice":"allow"}"#, "opus-policy", "cli");
+    assert!(
+        resolve.status.success(),
+        "resolve failed: {}",
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+    let output = child.wait_with_output().expect("wait hook");
+    assert!(
+        output.status.success(),
+        "hook failed\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
 fn run_hook(env: &Env, source: &str, payload: serde_json::Value) {
-    run_hook_with_env(env, source, payload, &[]);
-}
-
-fn run_hook_with_env(env: &Env, source: &str, payload: serde_json::Value, vars: &[(&str, &str)]) {
     let payload = serde_json::to_string(&payload).expect("payload");
     let mut cmd = env.hook_command(source);
-    for (key, value) in vars {
-        cmd.env(key, value);
-    }
+    cmd.env_remove("RIMZ_AGENT_PID");
+    cmd.env(rimz::run::ENV_AGENT_ROLE, source);
     let output = env
         .spawn_payload(cmd, &payload)
         .wait_with_output()

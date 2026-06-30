@@ -62,7 +62,7 @@ State is three tiers of plain files. The path constants and their exact filename
 ```text
 workspace ledger   ~/.local/state/rimz/workspaces/<id>/
   events.log.jsonl · snapshots/latest.json · feed/<request_id>.json
-  runs/<run_id>.json · queue/<msg_id>.json · locks/workspace.lock
+  runs/<run_id>.json · messages/<msg_id>.json · transcript/<date>.jsonl · locks/workspace.lock
   workspace.json · channels.json
   diag.log.jsonl · diag-frames/                      durable truth
 
@@ -111,7 +111,7 @@ The crate splits into subtree modules (each with a local contract or detail doc)
 | --- | --- | --- |
 | `cli/` | command parsing and one `run(...)` per subcommand; oversized commands split under matching leaves (`cli/agents_cmd/`, `cli/channel.rs`, `cli/remote/`, …); human-facing output flows through the shared `cli/render/` presentation layer | [cli.md](./docs/reference/cli.md) |
 | `agents/` | the agent integration layer: the `AgentAdapter` trait, the `state.rs` agent rollup model, registry, per-provider adapters, provider-agnostic transcript fusion, and spend/pricing/account | [contract](./crates/rimz/src/agents/AGENTS.md) · [agent.md](./docs/internals/agents/agent.md) · [provider.md](./docs/internals/agents/provider.md) |
-| `ledger/` | durable state: atomic helpers, framed event log, feed store, snapshot rebuild and staged view projection, wakeups, GC | [contract](./crates/rimz/src/ledger/AGENTS.md) · [ledger.md](./docs/internals/sidebar/ledger.md) |
+| `ledger/` | durable state: atomic helpers, framed event log, feed store, `transcript_log.rs`, snapshot rebuild and staged view projection, wakeups, GC | [contract](./crates/rimz/src/ledger/AGENTS.md) · [ledger.md](./docs/internals/sidebar/ledger.md) |
 | `mux/` | the Zellij/tmux seam: `MuxBackend`, the bounded subprocess engine, the reconcile planner, recovery | [contract](./crates/rimz/src/mux/AGENTS.md) · [multiplexers.md](./docs/internals/sidebar/multiplexers.md) |
 | `sidebar/` | the sidebar data plane: producer election and heartbeats, unread episodes, read-mark receipts, pulled-truth/event fusion, the enrichment fold (including producer-only account and forge PR probes), the producer pipeline, and the rendered-stream anomaly observer | [state.md](./docs/internals/sidebar/state.md) · [sidebar.md](./docs/internals/sidebar/sidebar.md) · [observe.md](./docs/internals/health/observe.md) |
 | `sidebar_pane/` | the native pane-resident sidebar process: the fixed-timestep serve loop, elder cache refresher and loop-task firing, renderer-local pets, and frame composition over the snapshot view-model, with the three-layer `render/theme/` color pipeline as the one place hue is decided | [sidebar.md](./docs/internals/sidebar/sidebar.md) · [interface/sidebar.md](./docs/interface/sidebar.md) · [pets.md](./docs/internals/sidebar/pets.md) |

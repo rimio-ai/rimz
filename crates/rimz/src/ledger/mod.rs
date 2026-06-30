@@ -13,6 +13,7 @@
 //!   pending_terminal.rs shared pending/terminal file-store invariant
 //!   feed_store.rs   feed item wrappers + status CAS
 //!   message_store.rs queued-message wrappers
+//!   transcript_log.rs rolling Rimz-owned conversation JSONL
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
 //!   writer.rs       write choreography façade: lock → write → append → wake → publish
 //!   writer/         debounce, publish, expiry, resolver-chain writes
@@ -50,6 +51,7 @@ pub(crate) mod sidecar;
 pub mod single_flight;
 pub mod snapshot;
 pub mod subagent_context;
+pub mod transcript_log;
 pub mod wakeup;
 pub mod workspace_record;
 

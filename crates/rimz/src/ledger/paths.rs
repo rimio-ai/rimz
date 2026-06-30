@@ -62,6 +62,7 @@ pub struct StatePaths {
     pub rollup_cache: PathBuf,
     pub feed_dir: PathBuf,
     pub messages_dir: PathBuf,
+    pub transcript_dir: PathBuf,
     pub runs_dir: PathBuf,
     pub locks_dir: PathBuf,
     pub workspace_lock: PathBuf,
@@ -86,6 +87,7 @@ impl StatePaths {
         let snapshots_dir = root.join("snapshots");
         let feed_dir = root.join("feed");
         let messages_dir = root.join("messages");
+        let transcript_dir = root.join("transcript");
         let runs_dir = root.join("runs");
         let locks_dir = root.join("locks");
         Ok(Self {
@@ -98,6 +100,7 @@ impl StatePaths {
             snapshots_dir,
             feed_dir,
             messages_dir,
+            transcript_dir,
             runs_dir,
             workspace_lock: locks_dir.join("workspace.lock"),
             publish_lock: locks_dir.join("publish.lock"),
@@ -542,6 +545,7 @@ mod tests {
         assert_eq!(paths.rollup_cache.file_name().unwrap(), "rollup.json");
         assert!(paths.rollup_cache.starts_with(&paths.snapshots_dir));
         assert_eq!(paths.runs_dir.file_name().unwrap(), "runs");
+        assert_eq!(paths.transcript_dir.file_name().unwrap(), "transcript");
         assert_eq!(
             paths.workspace_record.file_name().unwrap(),
             "workspace.json"

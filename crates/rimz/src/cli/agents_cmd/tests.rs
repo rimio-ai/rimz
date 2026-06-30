@@ -126,6 +126,7 @@ fn full_launch_env_marks_agent_kind() {
         dir.path(),
         adapter,
         rimz::config::RtkMode::On,
+        30,
         AgentLaunchEnvIdentity {
             agent_name: Some("swift-otter"),
             agent_profile: Some("planner"),
@@ -167,6 +168,11 @@ fn full_launch_env_marks_agent_kind() {
         Some("xhigh")
     );
     assert_eq!(env.get(rimz::run::ENV_RTK).map(String::as_str), Some("on"));
+    assert_eq!(
+        env.get(rimz::run::ENV_TRANSCRIPT_FILE_DAYS)
+            .map(String::as_str),
+        Some("30")
+    );
 }
 
 #[test]

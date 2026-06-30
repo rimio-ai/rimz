@@ -33,6 +33,7 @@ pub(super) fn handle_blocking_feed(
         if agent.descriptor().capabilities.native_ask_ui {
             let item = build_item(workspace, Surface::NativeUi, feed_kind, agent, payload);
             ledger.push_feed_item_superseding(&item, supersede, &workspace.session_name)?;
+            record_transcript_ask(ledger, agent, event_name, &item);
         }
         emit_neutral(agent, event_name)?;
         return Ok(());
@@ -74,6 +75,7 @@ pub(super) fn handle_blocking_feed(
             downgraded.chain_active_resolver = None;
             downgraded.chain_active_until = None;
             ledger.push_feed_item_superseding(&downgraded, supersede, &workspace.session_name)?;
+            record_transcript_ask(ledger, agent, event_name, &downgraded);
         }
         emit_neutral(agent, event_name)?;
         return Ok(());
@@ -87,6 +89,7 @@ pub(super) fn handle_blocking_feed(
     };
 
     ledger.push_feed_item_superseding(&item, supersede, &workspace.session_name)?;
+    record_transcript_ask(ledger, agent, event_name, &item);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -110,6 +113,82 @@ pub(super) fn handle_blocking_feed(
     });
     drop(guard);
     result
+}
+
+fn record_transcript_ask(
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    item: &FeedItem,
+) {
+    if let Err(err) = append_transcript_ask(ledger, agent, event_name, item) {
+        warn!(
+            agent = agent.descriptor().kind,
+            request_id = %item.request_id,
+            error = %err,
+            "bridge: failed to record transcript ask",
+        );
+    }
+}
+
+fn append_transcript_ask(
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    item: &FeedItem,
+) -> rimz::ledger::transcript_log::Result<()> {
+    if item.source_kind != "agent-hook" || !item.kind.is_ask() {
+        return Ok(());
+    }
+    let Some(agent_id) = item.agent_session_id().map(rimz::ids::AgentSessionId::from) else {
+        return Ok(());
+    };
+    let mut observation =
+        AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::TurnStarted);
+    observation.worktree_path = item.worktree_path.clone();
+    observation.worktree_branch = item.worktree_branch.clone();
+    observation.transcript_path = item
+        .payload
+        .get("transcript_path")
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+        .map(ToOwned::to_owned);
+
+    let last = agent
+        .last_assistant_message(event_name, &item.payload, &observation)
+        .map(|message| message.trim().to_owned())
+        .filter(|message| !message.is_empty());
+    let questions = rimz::feed::ask_summary(&item.title, item.body.as_deref(), &item.options);
+    let text = match last {
+        Some(last) => format!("{last}\n\n{questions}"),
+        None => questions,
+    };
+    let channel = rimz::target::compose_channel(
+        None,
+        item.worktree_branch.as_deref(),
+        item.worktree_path.as_deref().and_then(path_basename),
+        None,
+    );
+    rimz::ledger::transcript_log::append(
+        ledger.paths(),
+        &rimz::ledger::transcript_log::TranscriptEntry {
+            at: jiff::Timestamp::now(),
+            kind: rimz::ids::AgentKind::new_unchecked(item.source.clone()),
+            agent_id,
+            channel,
+            name: None,
+            profile: None,
+            role: None,
+            entry: rimz::ledger::transcript_log::TranscriptKind::Ask,
+            request_id: Some(item.request_id.clone()),
+            from: None,
+            text,
+        },
+    )
+}
+
+fn path_basename(path: &str) -> Option<&str> {
+    path.rsplit('/').next().filter(|value| !value.is_empty())
 }
 
 /// Poll loop driving the bridge from a resolver answer, a per-step budget,

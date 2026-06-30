@@ -18,8 +18,21 @@ pub(super) fn build_item(
     );
     item.payload = payload;
     item.runtime_owner = agent_runtime_owner(agent.descriptor().kind, &item.payload);
-    item.worktree_path = Some(workspace.worktree_root.display().to_string());
-    item.worktree_branch = workspace.worktree_branch.clone();
+    item.worktree_path = item
+        .payload
+        .get("worktree_path")
+        .or_else(|| item.payload.get("cwd"))
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| Some(workspace.worktree_root.display().to_string()));
+    item.worktree_branch = item
+        .payload
+        .get("worktree_branch")
+        .and_then(Value::as_str)
+        .filter(|branch| !branch.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| workspace.worktree_branch.clone());
     item
 }
 

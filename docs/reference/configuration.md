@@ -275,6 +275,15 @@ rtk = "auto"
 
 `rtk` controls output compression for Rimz-launched agents that run `cargo xtask`; direct human `cargo xtask` runs stay on plain cargo. `auto` wraps recognized cargo subcommands (`build`, `check`, `test`, `nextest`, `clippy`) through `rtk` when the binary is on the agent's `PATH`; `on` forces the wrapper and prints one warning before plain cargo when `rtk` is missing; `off` keeps cargo unwrapped. Install `rtk` on the machine for compression to take effect.
 
+### Transcript log buckets
+
+```toml
+[transcript]
+file_days = 7
+```
+
+`file_days` controls how many days of conversation entries land in one `transcript/<date>.jsonl` bucket. It controls file size only: transcript buckets are append-only and are not deleted by this setting. `rimz transcript` reads every bucket and sorts entries by their recorded timestamp, so changing the value affects future file boundaries rather than transcript order.
+
 ### Off-box error reporting
 
 ```toml

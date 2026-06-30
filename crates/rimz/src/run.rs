@@ -44,6 +44,10 @@ pub const ENV_AGENT_EFFORT: &str = "RIMZ_AGENT_EFFORT";
 /// agent launch so `cargo xtask` can route recognized cargo commands through
 /// `rtk`. Read by xtask, never by rimz itself.
 pub const ENV_RTK: &str = "RIMZ_RTK";
+/// Rolling transcript log bucket width in days. Exported to agent launch
+/// environments from `[transcript] file_days`; hook children read it when
+/// appending conversation entries.
+pub const ENV_TRANSCRIPT_FILE_DAYS: &str = "RIMZ_TRANSCRIPT_FILE_DAYS";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

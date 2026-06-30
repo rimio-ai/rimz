@@ -58,6 +58,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "notifications.body",
         "harness.smart_compact",
         "harness.rtk",
+        "transcript.file_days",
     ] {
         validate_set_key(&parse_key(key).unwrap()).unwrap_or_else(|err| panic!("{key}: {err}"));
     }
@@ -558,6 +559,18 @@ fn harness_rtk_validation_rejects_bad_values() {
         .expect_err("invalid rtk mode")
         .to_string();
     assert_eq!(err, "harness.rtk must be one of auto, on, or off");
+}
+
+#[test]
+fn transcript_file_days_validation_rejects_non_positive_values() {
+    let key = parse_key("transcript.file_days").expect("key");
+
+    validate_set_value(&key, &Value::from(7)).expect("positive bucket width");
+
+    let err = validate_set_value(&key, &Value::from(0))
+        .expect_err("zero bucket width")
+        .to_string();
+    assert_eq!(err, "transcript.file_days must be greater than zero");
 }
 
 #[test]

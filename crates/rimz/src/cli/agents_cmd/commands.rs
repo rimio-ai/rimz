@@ -448,6 +448,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.project_root,
         adapter,
         machine_config.harness.rtk,
+        machine_config.transcript.file_days,
         AgentLaunchEnvIdentity {
             agent_profile: agent_cell.profile,
             agent_role: agent_cell.role,

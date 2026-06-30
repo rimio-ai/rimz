@@ -44,6 +44,7 @@ mod resume;
 mod sentry;
 mod sidebar;
 mod theme;
+mod transcript;
 mod worktree;
 
 pub use accounts::{AccountsConfig, UsageLimitUsd};
@@ -86,6 +87,7 @@ pub use theme::{
     InlineAnsiColors, InlinePalette, InlinePrimaryColors, InlineSelectionColors, ThemeConfig,
     ThemeProviderStyle, ThemeStyle,
 };
+pub use transcript::{DEFAULT_FILE_DAYS, TranscriptConfig};
 pub use worktree::{WorktreeBase, WorktreeConfig};
 
 const CONFIG_FILE: &str = "config.toml";
@@ -151,6 +153,7 @@ pub struct MachineConfig {
     pub tmux: TmuxConfig,
     pub resume: ResumeConfig,
     pub harness: HarnessConfig,
+    pub transcript: TranscriptConfig,
     pub sentry: SentryConfig,
     #[serde(skip_serializing_if = "ThemeConfig::is_unset")]
     pub theme: ThemeConfig,
@@ -296,6 +299,7 @@ impl MachineConfig {
             tmux: core.tmux,
             resume: core.resume,
             harness: core.harness,
+            transcript: core.transcript,
             sentry: core.sentry,
             theme,
             agents,
@@ -421,6 +425,7 @@ struct CoreConfig {
     tmux: TmuxConfig,
     resume: ResumeConfig,
     harness: HarnessConfig,
+    transcript: TranscriptConfig,
     sentry: SentryConfig,
 }
 

@@ -124,6 +124,13 @@ impl FeedKind {
             _ => Self::Generic,
         }
     }
+
+    pub const fn is_ask(self) -> bool {
+        matches!(
+            self,
+            Self::Permission | Self::PlanApproval | Self::Question | Self::NeedsInput
+        )
+    }
 }
 
 /// How a resolution was delivered. Recorded for audit even when the value
@@ -443,6 +450,20 @@ pub fn pending_ask_for<'a>(
     })
 }
 
+pub fn ask_summary(title: &str, body: Option<&str>, options: &[String]) -> String {
+    let mut text = title.to_owned();
+    if let Some(body) = body.map(str::trim).filter(|body| !body.is_empty()) {
+        text.push_str(": ");
+        text.push_str(body);
+    }
+    if !options.is_empty() {
+        text.push_str(" [");
+        text.push_str(&options.join(", "));
+        text.push(']');
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,5 +582,21 @@ mod tests {
         );
         agent.last_activity = item.updated_at + std::time::Duration::from_secs(1);
         assert!(pending_ask_for(&agent, [&item]).is_none());
+    }
+
+    #[test]
+    fn ask_summary_renders_body_and_options() {
+        assert_eq!(
+            ask_summary(
+                "approve patch",
+                Some(" choose one "),
+                &["allow".to_owned(), "deny".to_owned()],
+            ),
+            "approve patch: choose one [allow, deny]"
+        );
+        assert_eq!(
+            ask_summary("approve patch", Some(" "), &[]),
+            "approve patch"
+        );
     }
 }
