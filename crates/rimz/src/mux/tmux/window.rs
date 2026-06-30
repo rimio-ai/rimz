@@ -35,11 +35,12 @@ impl TmuxBackend {
             .map(|_| ())
     }
 
-    /// Split a left sidebar into a specific window in place, mirroring the
-    /// initial-window split: `-b` (before/left), `-l <size>` (width), `-d`
-    /// (keep the caller's focus). The `-t <window_id>` target leaves every other
-    /// window untouched. The heal uses the session's fixed birth width, recovered
-    /// from the live hook on reload.
+    /// Split a left sidebar into a specific window in place: `-f` spans the full
+    /// window height even when reload heals a multi-pane layout, `-b` places the
+    /// pane before/left, `-l <size>` fixes its width, and `-d` keeps the caller's
+    /// focus. The `-t <window_id>` target leaves every other window untouched. The
+    /// heal uses the session's fixed birth width, recovered from the live hook on
+    /// reload.
     pub(super) fn add_sidebar_to_window(
         &self,
         opts: &SidebarPaneOptions,
@@ -51,6 +52,7 @@ impl TmuxBackend {
                 "split-window".to_owned(),
                 "-d".to_owned(),
                 "-h".to_owned(),
+                "-f".to_owned(),
                 "-b".to_owned(),
                 "-l".to_owned(),
                 size,

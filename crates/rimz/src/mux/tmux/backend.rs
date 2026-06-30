@@ -386,9 +386,10 @@ impl MuxBackend for TmuxBackend {
         // dance and no session teardown is needed. `split-window` mounts fine on
         // a detached session, so tmux never defers an add the way the Zellij
         // backend must (its detached screen thread drops the mount). Geometry
-        // convergence is likewise a deliberate no-op here: `-b` births every
-        // sidebar left at the session's fixed width synchronously, so the mis-mounted
-        // right/50% shape Zellij repairs cannot occur.
+        // convergence is likewise a deliberate no-op here: reconcile's `-f -b`
+        // split spans the full window edge and lands every sidebar left at the
+        // session's fixed width synchronously, so the mis-mounted right/50% shape
+        // Zellij repairs cannot occur.
         let panes = self.list_panes(PaneListOptions {
             session_name: Some(opts.session_name.clone()),
             ..Default::default()

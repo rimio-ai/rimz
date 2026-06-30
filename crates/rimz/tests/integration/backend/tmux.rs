@@ -70,7 +70,7 @@ macro_rules! require_tmux {
     };
 }
 
-/// One pane's live placement: its raw id, left/top edge, width, and current
+/// One pane's live placement: its raw id, left/top edge, size, and current
 /// working directory — read from `list-panes -F` to assert layout geometry.
 #[derive(Clone, Debug)]
 struct PaneGeom {
@@ -79,6 +79,7 @@ struct PaneGeom {
     left: u64,
     top: u64,
     width: u64,
+    height: u64,
     path: String,
 }
 
@@ -229,7 +230,7 @@ impl TmuxServer {
 
     /// Live geometry for every pane in `target` (a `session:window` address),
     /// polling until at least `want` panes are present or the budget elapses.
-    /// Reads the left edge, top edge, width, and current path per pane —
+    /// Reads the left edge, top edge, size, and current path per pane —
     /// enough to assert the imperative `open_tab` builder's column/row
     /// placement.
     fn wait_for_panes(&self, target: &str, want: usize) -> Vec<PaneGeom> {
@@ -244,7 +245,7 @@ impl TmuxServer {
                     "-t",
                     target,
                     "-F",
-                    "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_current_path}",
+                    "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{pane_current_path}",
                 ])
                 .output()
                 .expect("spawn tmux list-panes");
@@ -257,6 +258,7 @@ impl TmuxServer {
                         left: cols.next()?.parse().ok()?,
                         top: cols.next()?.parse().ok()?,
                         width: cols.next()?.parse().ok()?,
+                        height: cols.next()?.parse().ok()?,
                         path: cols.next().unwrap_or_default().to_owned(),
                     })
                 })
@@ -748,6 +750,95 @@ fn reconcile_sidebars_reinstalls_after_new_window_hook() {
     assert!(
         server.has_after_new_window_hook("rimz-hook-reconcile"),
         "reconcile should re-install a missing hook"
+    );
+}
+
+#[test]
+fn reconcile_sidebars_redocks_sidebar_full_height_in_split_window() {
+    require_tmux!();
+
+    let session = "rimz-reconcile-full-height";
+    let target = format!("{session}:0");
+    let server = TmuxServer::new();
+    server.ensure_with_shell(session);
+    server.tmux(&["split-window", "-v", "-t", &target]);
+    let work_panes = server.wait_for_panes(&target, 2);
+    let full_top = work_panes
+        .iter()
+        .map(|pane| pane.top)
+        .min()
+        .expect("top pane");
+    let full_height = work_panes
+        .iter()
+        .map(|pane| pane.top + pane.height)
+        .max()
+        .expect("bottom pane")
+        - full_top;
+    assert!(
+        server
+            .display(&target, "#{pane_top}")
+            .parse::<u64>()
+            .expect("active pane top")
+            > full_top,
+        "test setup should leave the bottom pane active"
+    );
+
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let width = SidebarWidth::default();
+    let opts = SidebarPaneOptions {
+        session_name: session.to_owned(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-reconcile-full-height")),
+        project_root: std::env::temp_dir(),
+        cwd: std::env::temp_dir(),
+        birth_size: width.birth_size(Some(80)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+
+    let report = server
+        .backend
+        .reconcile_sidebars(&opts, &rimz::mux::SidebarLiveness::default())
+        .expect("reconcile_sidebars");
+
+    assert_eq!(report.recovered, 1);
+    server.wait_for_pane_command(session, "rimz-sidebar");
+    let panes = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some(session.to_owned()),
+            ..Default::default()
+        })
+        .expect("list_panes")
+        .panes;
+    let sidebar = panes
+        .iter()
+        .find(|pane| pane.command.as_deref() == Some("rimz-sidebar"))
+        .expect("sidebar pane");
+    let raw_id = sidebar.pane_id.raw();
+
+    assert_eq!(
+        server
+            .display(raw_id, "#{pane_left}")
+            .parse::<u64>()
+            .expect("sidebar left"),
+        0
+    );
+    assert_eq!(
+        server
+            .display(raw_id, "#{pane_top}")
+            .parse::<u64>()
+            .expect("sidebar top"),
+        full_top
+    );
+    assert_eq!(
+        server
+            .display(raw_id, "#{pane_height}")
+            .parse::<u64>()
+            .expect("sidebar height"),
+        full_height
     );
 }
 
