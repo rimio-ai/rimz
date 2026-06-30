@@ -682,6 +682,15 @@ mod tests {
         }
     }
 
+    fn ask_entry(at: &str, text: &str) -> rimz::agents::ChatEntry {
+        rimz::agents::ChatEntry {
+            from: "claude".to_owned(),
+            to: None,
+            at: Some(ts(at)),
+            text: text.to_owned(),
+        }
+    }
+
     fn render(entries: &[rimz::agents::ChatEntry], today: Date) -> String {
         let tz = TimeZone::get("America/New_York").expect("timezone");
         let mut out = Vec::new();
@@ -721,5 +730,22 @@ mod tests {
 
         assert!(!out.contains("────"));
         assert!(out.contains("00:30:00"));
+    }
+
+    #[test]
+    fn timestamped_asks_advance_day_delimiter() {
+        let out = render(
+            &[
+                entry("2026-06-27T14:00:00Z", "yesterday"),
+                ask_entry("2026-06-28T16:00:00Z", "Approve tool?"),
+            ],
+            jiff::civil::date(2026, 6, 28),
+        );
+
+        let yesterday = out.find("──── Sat, Jun 27 2026 ────").expect("yesterday");
+        let today = out.find("──── Today ").expect("today");
+        let ask = out.find("Approve tool?").expect("ask");
+        assert!(yesterday < today);
+        assert!(today < ask);
     }
 }

@@ -70,7 +70,7 @@ struct AddArgs {
     /// File whose contents are used as the scheduled prompt.
     #[arg(long = "prompt-file", value_name = "PATH")]
     prompt_file: Option<PathBuf>,
-    /// Daily firing time, 24-hour `HH:MM` local wall-clock.
+    /// Daily firing time, 24-hour `HH:MM` in the configured timezone.
     #[arg(long, conflicts_with_all = ["every", "cron", "in_after"])]
     at: Option<String>,
     /// Day mask: `daily`, `weekdays`, `weekends`, a range `mon-fri`, or a list `mon,wed,fri`.
@@ -85,7 +85,7 @@ struct AddArgs {
     /// Remove the task after a successful fire.
     #[arg(long)]
     once: bool,
-    /// Fire once after a duration such as `30m`; resolves to a concrete local time.
+    /// Fire once after a duration such as `30m`; resolves in the configured timezone.
     #[arg(long = "in", value_name = "DUR", conflicts_with_all = ["at", "days", "every", "cron"])]
     in_after: Option<String>,
     /// Project root whose room hosts the task; resolved to an absolute root.

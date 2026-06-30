@@ -36,7 +36,7 @@ pub struct MessageArgs {
     /// Interrupt the live pane now instead of parking for a turn boundary.
     #[arg(long, conflicts_with_all = ["schedule", "on"])]
     steer: bool,
-    /// Park the message until at least this duration or local `HH:MM`.
+    /// Park the message until at least this duration or configured-zone `HH:MM`.
     #[arg(long, value_name = "DUR|HH:MM", conflicts_with = "steer")]
     schedule: Option<String>,
     #[command(flatten)]
