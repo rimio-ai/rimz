@@ -340,6 +340,17 @@ fn parse_io_bytes(io: &str) -> Option<u64> {
     Some(rchar?.saturating_add(wchar?))
 }
 
+/// The `wchar` counter from `/proc/<pid>/io`. This counts bytes passed to
+/// write-like syscalls, including terminal output and non-pty writes.
+#[cfg(target_os = "linux")]
+fn parse_write_bytes(io: &str) -> Option<u64> {
+    io.lines()
+        .find_map(|line| line.strip_prefix("wchar:"))?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// Field 22 (`starttime`) of a `/proc/<pid>/stat` line. The second field (`comm`)
 /// is parenthesized and may itself contain spaces and parens, so anchor on the
 /// *last* `)` and count whitespace-separated fields after it: `starttime` is the
@@ -425,6 +436,20 @@ pub fn io_bytes(pid: u32) -> Option<u64> {
 
 #[cfg(not(target_os = "linux"))]
 pub fn io_bytes(_pid: u32) -> Option<u64> {
+    None
+}
+
+/// Process write-like bytes (`wchar`) for `pid` from `/proc/<pid>/io`. Two
+/// readings diffed over a known interval give process write-rate. `None` on a
+/// non-Linux target, an unreadable file, or a missing field.
+#[cfg(target_os = "linux")]
+pub fn write_bytes(pid: u32) -> Option<u64> {
+    let io = std::fs::read_to_string(format!("/proc/{pid}/io")).ok()?;
+    parse_write_bytes(&io)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn write_bytes(_pid: u32) -> Option<u64> {
     None
 }
 
@@ -589,6 +614,13 @@ Uid:\t0\t0\t0\t0
     fn parse_io_bytes_sums_rchar_and_wchar() {
         let io = "rchar: 1000\nwchar: 500\nsyscr: 12\nsyscw: 8\nread_bytes: 0\nwrite_bytes: 512\n";
         assert_eq!(parse_io_bytes(io), Some(1500));
+    }
+
+    #[test]
+    fn parse_write_bytes_reads_wchar_only() {
+        let io =
+            "rchar: 1000\nwchar: 500\nsyscr: 12\nsyscw: 9000\nread_bytes: 0\nwrite_bytes: 8192\n";
+        assert_eq!(parse_write_bytes(io), Some(500));
     }
 
     #[test]

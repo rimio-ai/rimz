@@ -179,7 +179,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
     let (command, session, agent) = match sub {
         None | Some(Subcmd::Start(_)) => ("start", None, None),
         Some(Subcmd::Attach(_)) => ("attach", None, None),
-        Some(Subcmd::Remote(_)) => ("remote", None, None),
+        Some(Subcmd::Remote(args)) => (args.command_label(), None, None),
         Some(Subcmd::Workspace(_)) => ("workspace", None, None),
         Some(Subcmd::List(_)) => ("list", None, None),
         Some(Subcmd::Stats(_)) => ("stats", None, None),

@@ -100,6 +100,8 @@ The cost attaches to three units, and only the cheapest grows with the agent cou
 
 Two costs stay flat in the agent count by design: durability is one group `fdatasync` per second per workspace however many agents append into it, and the snapshot publish is one debounced cache rename per second per workspace — both scale with rooms, not agents. The hot runtime caches — the published snapshot, heartbeats, diff-stats, `/proc` samples — land in `$XDG_RUNTIME_DIR` (tmpfs), so their churn is memory traffic, never disk IO.
 
+Remote render-stream bytes sit outside the core network budget: SSH carries whatever visible full-screen TUIs repaint. Idle Rimz surfaces are near zero; busy agent TUIs and system monitors are commonly tens of KB/s, scaled by terminal size and visible high-churn panes. `rimz remote bandwidth` samples the room on the serving host and attributes that process write-rate per pane.
+
 The table totals across a 2–5 room fleet and names the per-workspace rate where it matters:
 
 | Resource | 20 agents | 50 agents | 100 agents | What sets it |

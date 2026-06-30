@@ -17,6 +17,7 @@ rimz                        # open the room and drop in
 | Attach by directory or exact session name | `rimz attach [SESSION]` |
 | Connect to a remote room over SSH | `rimz remote connect <alias-or-target>` |
 | Save, update, rename, list, or remove remote aliases | `rimz remote add` / `update` / `rename` / `list` / `rm` |
+| Attribute render-stream bytes in the current room | `rimz remote bandwidth` |
 | Find known rooms and their live backend | `rimz list` |
 | Bootstrap this machine's config | `rimz setup` |
 | Diagnose backend, hook, trust, and room health | `rimz doctor` |
@@ -45,6 +46,7 @@ A few specifics:
 rimz remote add dev-box dev-box:query-engine     # save an alias
 rimz remote connect dev-box                       # attach the saved room over SSH
 rimz remote connect agent@prod-box:/srv/query-engine
+rimz remote bandwidth --secs 5                    # attribute pane write-rate in this room
 ```
 
 `rimz remote connect` builds a guarded `ssh -t` command locally and runs the remote host's own `rimz`, so your SSH config, keys, ports, and jump hosts all apply through normal `ssh` resolution.
@@ -58,8 +60,9 @@ A raw target is `[user@]host:<session-or-path>`. After the colon, a value contai
 - `remote connect --reset` and `remote reset` pass `--no-resume` to the remote `rimz`, so a remote room comes up empty instead of recovering; `remote add --no-resume` saves that birth behavior.
 - `--attach`, `--no-attach`, and `--print` mirror local behavior; `--print` emits the SSH command instead of running it.
 - For `remote add` and `remote update`, `--mux` is saved on the alias only when scoped to `remote`, `add`, or `update` (`rimz remote add --mux tmux …`); a top-level `rimz --mux tmux remote add …` affects only that invocation.
+- `rimz remote bandwidth [--secs N] [--json]` runs on the host serving the room and samples `/proc` to attribute per-pane process write-rate. Use it inside the room when a remote attach looks chatty; full-screen TUIs such as agents mid-turn or system monitors should dominate the report.
 
-Link-health and reconnect mechanics are in [remote.md](../../internals/reach/remote.md).
+Link-health, reconnect mechanics, and bandwidth attribution are in [remote.md](../../internals/reach/remote.md).
 
 ## List rooms
 

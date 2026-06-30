@@ -30,6 +30,16 @@ The schema is versioned as `rimz.link.v1`. The remote ingest writes `<runtime>/<
 
 `RIMZ_REMOTE_PROBE_MS=0` disables probing. Probe spawn failures are best-effort; a missing or schema-skewed remote subcommand stops probing without changing the room. The main SSH session is never killed by the probe.
 
+## Bandwidth Attribution
+
+`rimz remote bandwidth --secs 5` samples the room it runs in and reports each pane's process write-rate. Run it on the host serving the room: locally for a local room, or inside a remote shell/pane after attaching over SSH. The command resolves the current workspace session, lists panes through the selected backend, pins each pane's root process tree at the start of the window, reads `/proc/<pid>/io` `wchar` before and after the sleep, and prints per-pane bytes/s plus a total.
+
+The report is best-effort Linux host observability. Hosts without `/proc`, unreadable proc entries, or panes without reported process ids return a clear notice or omit the unreadable process from that pane's sum. The sampler pins the process tree at the first snapshot, so short-lived children born during the window can escape the sample; a longer window catches persistent high-churn TUIs.
+
+The figures are process write-rate, including terminal output and non-pty writes such as transcript files. Multiplexers diff and throttle the final render stream, so SSH wire bytes are at or below the per-pane sum. The number still identifies the culprit pane for the usual remote-bandwidth problem: hosted full-screen TUIs repainting while visible.
+
+Tmux can provide a pty-exact future path with `pipe-pane`, but that precision is tmux-only. The current command keeps the backend-parity path by using the per-pane process id both Zellij and tmux expose.
+
 ## User Signals
 
 The footer shows a link badge when fresh or stale stats exist: `⇄ remote 210ms` for fresh stats, `⇄ remote …` while the RTT warms, and `⇄ remote ?` for stale stats. Clean links omit loss; the badge appends `{n}%` only when loss is above `10%`.

@@ -13,6 +13,7 @@ use rimz::remote::{
     term_plan_from,
 };
 
+mod bandwidth;
 mod link_stats;
 mod list;
 mod supervisor;
@@ -84,6 +85,14 @@ enum RemoteSubcmd {
         #[arg(long)]
         json: bool,
     },
+    /// Profile the current room's per-pane render output (run on the host serving the room).
+    Bandwidth {
+        /// Sampling window in seconds.
+        #[arg(long, default_value_t = 5)]
+        secs: u64,
+        #[arg(long)]
+        json: bool,
+    },
     /// Hidden remote-link stats plumbing. The SSH probe stream calls this.
     #[command(name = "link-stats", hide = true)]
     LinkStats {
@@ -111,6 +120,23 @@ fn build_alias(
         reconnect: !no_reconnect,
         no_resume,
         mux: add_persistent_mux(globals),
+    }
+}
+
+impl RemoteArgs {
+    /// The low-cardinality command label for the Sentry command scope.
+    pub(crate) fn command_label(&self) -> &'static str {
+        match &self.command {
+            RemoteSubcmd::Add { .. } => "remote add",
+            RemoteSubcmd::Update { .. } => "remote update",
+            RemoteSubcmd::Connect { .. } => "remote connect",
+            RemoteSubcmd::Reset { .. } => "remote reset",
+            RemoteSubcmd::Rm { .. } => "remote rm",
+            RemoteSubcmd::Rename { .. } => "remote rename",
+            RemoteSubcmd::List { .. } => "remote list",
+            RemoteSubcmd::Bandwidth { .. } => "remote bandwidth",
+            RemoteSubcmd::LinkStats { .. } => "remote link-stats",
+        }
     }
 }
 
@@ -187,6 +213,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             list::print(aliases.entries(), json)?;
             Ok(())
         }
+        RemoteSubcmd::Bandwidth { secs, json } => bandwidth::run(secs, json, globals),
         RemoteSubcmd::LinkStats { command } => match command {
             LinkStatsSubcmd::Ingest(args) => link_stats::ingest(args),
         },

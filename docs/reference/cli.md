@@ -19,7 +19,7 @@ rimz
 
 - **Drive agents live.** Launch them into panes and tabs with [`rimz agents`](./cli/agents.md#agents), then use [`rimz message`](./cli/agents.md#message-an-agent) to interrupt now with `--steer`, park for the next boundary, or schedule the earliest delivery time.
 - **Script the fleet.** Run one supervised agent turn with [`rimz agents … -p`](./cli/agents.md#supervised-runs--p) and branch on its exit code, or block on a human decision with [`rimz feed ask`](./cli/feed.md#feed-items-and-decisions).
-- **Reach a room anywhere.** Attach over SSH with [`rimz remote`](./cli/getting-started.md#remote-rooms).
+- **Reach a room anywhere.** Attach over SSH with [`rimz remote`](./cli/getting-started.md#remote-rooms), then attribute render-stream bytes with `rimz remote bandwidth` from inside the served room.
 
 ## Find a command
 
