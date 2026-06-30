@@ -52,6 +52,7 @@ fn refresh_override_stamps_folded_snapshot() {
         instance_id: SidebarInstanceId::new(),
         tick_seconds: 2,
         refresh_ms_override: Some(50),
+        timezone: jiff::tz::TimeZone::UTC,
         notification_prefs: NotificationsPrefs::default(),
         pet_glyphs: crate::config::PetsGlyphMode::Auto,
         own_pane: None,
@@ -340,6 +341,7 @@ fn test_config(workspace_id: WorkspaceId, instance_id: SidebarInstanceId) -> Ser
         instance_id,
         tick_seconds: 2,
         refresh_ms_override: None,
+        timezone: jiff::tz::TimeZone::UTC,
         notification_prefs: NotificationsPrefs::default(),
         pet_glyphs: crate::config::PetsGlyphMode::Auto,
         // No own pane: the fold must admit every published fixture pane even

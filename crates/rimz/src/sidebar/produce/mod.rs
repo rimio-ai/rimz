@@ -160,7 +160,7 @@ pub fn refresh_producer_caches(
     let base = read_published_snapshot(cursor, state, runtime, session, exclude)?;
     let config = crate::config::MachineConfig::load().unwrap_or_default();
     let trunk = config.sidebar.trunk.clone();
-    let headline_spec = config.sidebar.headline_spec();
+    let headline_spec = config.headline_spec();
     let spending = spending::compute_fleet_spending_with_walker(
         spending_walker,
         runtime,
@@ -282,7 +282,7 @@ fn enrich_producing(
     match heavy {
         HeavyLaneMode::Refresh => {
             let trunk = config.sidebar.trunk.clone();
-            let headline_spec = config.sidebar.headline_spec();
+            let headline_spec = config.headline_spec();
             let compute_spending = |snapshot: &SidebarSnapshot| {
                 spending::compute_fleet_spending(runtime, snapshot, &headline_spec)
             };

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use jiff::{Timestamp, Zoned};
+use jiff::Timestamp;
 
 use super::send::{self, SendFlags, resolve_message};
 use super::{GlobalFlags, current_channel, open_ledger};
@@ -145,11 +145,13 @@ fn message_add(
     }
     let wait = send::wait_duration(wait);
     send::validate_wait(!no_enter, wait)?;
-    let auto_compact = smart_compact.or_else(|| super::machine_config().harness.smart_compact);
+    let machine_config = super::machine_config();
+    let auto_compact = smart_compact.or(machine_config.harness.smart_compact);
     let text = resolve_message(&text, file.as_deref())?;
+    let now = Timestamp::now().to_zoned(machine_config.time_zone());
     let not_before = schedule
         .as_deref()
-        .map(|raw| parse_schedule_at(raw, &Zoned::now()).map_err(anyhow::Error::msg))
+        .map(|raw| parse_schedule_at(raw, &now).map_err(anyhow::Error::msg))
         .transpose()?;
     add_message(
         target,

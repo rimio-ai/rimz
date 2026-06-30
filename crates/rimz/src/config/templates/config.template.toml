@@ -5,6 +5,8 @@
 # keeps following defaults shipped by future Rimz versions; uncomment a line
 # only when this machine needs an override.
 
+## timezone = "America/New_York" # IANA zone for displayed times and scheduling; default = system local
+
 [remote_control]
 # claude = false                       # auto-launch `claude remote-control` in the managed daemon tab
 # codex = false                        # ensure the per-user Codex remote-control daemon when installed
@@ -50,7 +52,6 @@
 # focus_key = "Alt+p"                 # global chord to focus the sidebar (toggle); "" or "off" to disable
 # afk_after_secs = 900                # input-idle seconds before the AFK badge (tmux only); default 15 min
 # spend_window = "session"            # cockpit & provider headline window: "session", "24h", or "today"
-## spend_timezone = "America/New_York" # IANA zone for "today" start; default = system local
 ## trunk = "develop"                  # optional preferred branch for worktree comparison stats
 
 [zellij]

@@ -861,22 +861,23 @@ fn sidebar_spend_headline_window_parses_and_defaults_session() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(
         &dir,
-        "[sidebar]\nspend_window = \"session\"\nspend_timezone = \"America/New_York\"\n",
+        "timezone = \"America/New_York\"\n[sidebar]\nspend_window = \"session\"\n",
     ))
     .expect("load");
     assert_eq!(
         config.sidebar.spend_window,
         crate::agents::SpendWindowMode::Session
     );
+    assert_eq!(config.timezone.as_deref(), Some("America/New_York"));
     assert_eq!(
-        config.sidebar.spend_timezone.as_deref(),
+        config.headline_spec().timezone.as_deref(),
         Some("America/New_York")
     );
     assert_eq!(
         MachineConfig::default().sidebar.spend_window,
         crate::agents::SpendWindowMode::Session
     );
-    assert_eq!(MachineConfig::default().sidebar.spend_timezone, None);
+    assert_eq!(MachineConfig::default().timezone, None);
 }
 
 #[test]

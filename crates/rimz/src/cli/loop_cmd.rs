@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use jiff::{Timestamp, Zoned};
+use jiff::Timestamp;
 use toml_edit::{DocumentMut, InlineTable, Item, Table, Value, value};
 
 use rimz::agents::{find_adapter, hook_trust_fix};
@@ -658,9 +658,10 @@ fn resolve_add_timing(args: &AddArgs) -> Result<(Option<String>, Option<String>,
     if duration.is_zero() {
         bail!("--in must be greater than zero");
     }
-    let target = Zoned::now()
+    let target = Timestamp::now()
+        .to_zoned(MachineConfig::load_lenient().time_zone())
         .checked_add(duration)
-        .context("resolving --in against the local clock")?;
+        .context("resolving --in against the configured clock")?;
     Ok((
         Some(format!("{:02}:{:02}", target.hour(), target.minute())),
         Some(weekday_name(target.weekday()).to_owned()),

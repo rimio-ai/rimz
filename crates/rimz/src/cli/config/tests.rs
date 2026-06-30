@@ -35,9 +35,9 @@ fn validates_config_key_read_and_write_surfaces() {
         "theme.mode",
         "theme.scheme",
         "theme.caution",
+        "timezone",
         "sidebar.focus_key",
         "sidebar.spend_window",
-        "sidebar.spend_timezone",
         "sidebar.afk_after_secs",
         "theme.animations.thinking.frames",
         "theme.animations.working.color",
@@ -107,6 +107,32 @@ fn validates_config_key_read_and_write_surfaces() {
     ] {
         assert_eq!(is_known_get_key(&parse_key(key).unwrap()), known, "{key}");
     }
+}
+
+#[test]
+fn set_top_level_timezone_keeps_core_config_valid() {
+    let mut doc = MachineConfig::template_core()
+        .parse::<DocumentMut>()
+        .expect("template parses");
+    let key = parse_key("timezone").expect("key");
+    apply_logical_key(
+        &mut doc,
+        std::path::Path::new("config.toml"),
+        &key,
+        parse_set_value(&key, "America/New_York"),
+    )
+    .expect("set timezone");
+
+    let rendered = doc.to_string();
+    let timezone = rendered
+        .lines()
+        .position(|line| line.starts_with("timezone = "))
+        .expect("timezone line");
+    let first_table = rendered
+        .lines()
+        .position(|line| line.starts_with('['))
+        .expect("first table");
+    assert!(timezone < first_table);
 }
 
 #[test]

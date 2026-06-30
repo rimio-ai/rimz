@@ -5,6 +5,8 @@ use std::io::Write;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
+use jiff::civil::Date;
+use jiff::tz::TimeZone;
 use serde::Serialize;
 
 use super::{GlobalFlags, current_channel};
@@ -183,7 +185,8 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
             entries,
         })?;
     } else {
-        render_chat(scope.channel.as_deref(), &entries)?;
+        let tz = super::machine_config().time_zone();
+        render_chat(scope.channel.as_deref(), &entries, &tz)?;
     }
     Ok(())
 }
@@ -569,12 +572,35 @@ fn display_handle(handle: &str, grouped: bool) -> &str {
     if grouped { base_handle(handle) } else { handle }
 }
 
-fn render_chat(channel: Option<&str>, entries: &[rimz::agents::ChatEntry]) -> Result<()> {
+fn render_chat(
+    channel: Option<&str>,
+    entries: &[rimz::agents::ChatEntry],
+    tz: &TimeZone,
+) -> Result<()> {
     let mut out = render::out();
-    write_header(&mut out, channel)?;
+    let today = jiff::Timestamp::now().to_zoned(tz.clone()).date();
+    render_chat_to(&mut out, channel, entries, tz, today)
+}
+
+fn render_chat_to(
+    out: &mut impl Write,
+    channel: Option<&str>,
+    entries: &[rimz::agents::ChatEntry],
+    tz: &TimeZone,
+    today: Date,
+) -> Result<()> {
+    write_header(out, channel)?;
     let grouped = channel.is_some();
     let mut tones = AgentTones::default();
+    let mut last_date = Some(today);
     for entry in entries {
+        if let Some(at) = entry.at {
+            let date = at.to_zoned(tz.clone()).date();
+            if Some(date) != last_date {
+                write_day_delimiter(out, date, today)?;
+                last_date = Some(date);
+            }
+        }
         let from = if entry.from == "user" {
             render::paint(render::palette::COOL, "user")
         } else if entry.from == "you" {
@@ -588,8 +614,23 @@ fn render_chat(channel: Option<&str>, entries: &[rimz::agents::ChatEntry]) -> Re
             .as_deref()
             .map(|to| format!("{}, ", display_handle(to, grouped)))
             .unwrap_or_default();
-        write_chat_line(&mut out, entry.at, &from, &format!("{to}{}", entry.text))?;
+        write_chat_line(out, entry.at, &from, &format!("{to}{}", entry.text), tz)?;
     }
+    Ok(())
+}
+
+fn write_day_delimiter(out: &mut impl Write, date: Date, today: Date) -> Result<()> {
+    const WIDTH: usize = 26;
+    let label = if date == today {
+        "Today".to_owned()
+    } else {
+        date.strftime("%a, %b %-d %Y").to_string()
+    };
+    let mut rule = format!("──── {label} ");
+    while rule.chars().count() < WIDTH {
+        rule.push('─');
+    }
+    writeln!(out, "{}", render::paint(render::palette::FAINT, &rule))?;
     Ok(())
 }
 
@@ -598,10 +639,11 @@ fn write_chat_line(
     at: Option<jiff::Timestamp>,
     from: &str,
     text: &str,
+    tz: &TimeZone,
 ) -> Result<()> {
     let time = at.map_or_else(
         || "        ".to_owned(),
-        |at| at.strftime("%H:%M:%S").to_string(),
+        |at| at.to_zoned(tz.clone()).strftime("%H:%M:%S").to_string(),
     );
     let time = render::paint(render::palette::FAINT, &time);
     let mut lines = text.lines();
@@ -621,4 +663,63 @@ fn print_json(value: &impl Serialize) -> Result<()> {
     serde_json::to_writer_pretty(&mut stdout, value)?;
     writeln!(stdout)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ts(raw: &str) -> jiff::Timestamp {
+        raw.parse().expect("timestamp")
+    }
+
+    fn entry(at: &str, text: &str) -> rimz::agents::ChatEntry {
+        rimz::agents::ChatEntry {
+            from: "user".to_owned(),
+            to: None,
+            at: Some(ts(at)),
+            text: text.to_owned(),
+        }
+    }
+
+    fn render(entries: &[rimz::agents::ChatEntry], today: Date) -> String {
+        let tz = TimeZone::get("America/New_York").expect("timezone");
+        let mut out = Vec::new();
+        render_chat_to(&mut out, None, entries, &tz, today).expect("render");
+        String::from_utf8(out).expect("utf8")
+    }
+
+    #[test]
+    fn chat_renders_configured_zone_and_day_boundaries() {
+        let today = jiff::civil::date(2026, 6, 28);
+        let out = render(
+            &[
+                entry("2026-06-27T03:30:00Z", "late friday"),
+                entry("2026-06-27T14:00:00Z", "saturday"),
+                entry("2026-06-28T16:00:00Z", "today"),
+            ],
+            today,
+        );
+
+        let friday = out.find("──── Fri, Jun 26 2026 ────").expect("friday");
+        let saturday = out.find("──── Sat, Jun 27 2026 ────").expect("saturday");
+        let today = out.find("──── Today ").expect("today");
+        assert!(friday < saturday);
+        assert!(saturday < today);
+        assert!(out.contains("23:30:00"));
+        assert!(out.contains("10:00:00"));
+        assert!(out.contains("12:00:00"));
+        assert!(!out.contains("03:30:00"));
+    }
+
+    #[test]
+    fn today_only_chat_omits_day_delimiter() {
+        let out = render(
+            &[entry("2026-06-28T04:30:00Z", "same day")],
+            jiff::civil::date(2026, 6, 28),
+        );
+
+        assert!(!out.contains("────"));
+        assert!(out.contains("00:30:00"));
+    }
 }

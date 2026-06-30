@@ -155,7 +155,7 @@ Lifecycle `Ended` archives receiver messages in realtime; worktree create/remove
 
 ## Scheduling
 
-`--schedule <DUR|HH:MM>` always parks and stores `not_before`. Durations accept `s`, `m`, `h`, and `d`; wall-clock times resolve to the next local occurrence (today if still in the future, otherwise tomorrow). A zero duration is rejected.
+`--schedule <DUR|HH:MM>` always parks and stores `not_before`. Durations accept `s`, `m`, `h`, and `d`; wall-clock times resolve to the next occurrence in the configured `timezone` (today if still in the future, otherwise tomorrow), falling back to the system zone when unset. A zero duration is rejected.
 
 FIFO scans filter out messages whose `not_before` is still in the future, so a scheduled message cannot block a later ready message on the same card. The FIFO head is the oldest **ready** queued record for that card.
 

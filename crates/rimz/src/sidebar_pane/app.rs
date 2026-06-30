@@ -88,6 +88,7 @@ pub struct ServeConfig {
     /// this renderer's folded snapshots only; shared producer caches stay
     /// config-shaped so recovery can fall back to `[sidebar].refresh_ms`.
     pub refresh_ms_override: Option<u16>,
+    pub timezone: jiff::tz::TimeZone,
     pub notification_prefs: NotificationsPrefs,
     /// Initial pet render tier from machine theme config, used before the first
     /// produced snapshot arrives.

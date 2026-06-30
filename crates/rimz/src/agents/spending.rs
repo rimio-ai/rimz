@@ -32,7 +32,6 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use jiff::Timestamp;
-use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
@@ -113,7 +112,7 @@ pub enum SpendWindowMode {
     /// Trailing 24 hours, matching Rimz's original "today" row behaviour.
     #[serde(rename = "24h")]
     Trailing24h,
-    /// The local calendar day, using `[sidebar] spend_timezone` when set.
+    /// The local calendar day, using the global `timezone` when set.
     Today,
     /// The current activity burst since the last five-hour idle gap.
     #[default]
@@ -1895,11 +1894,7 @@ fn trailing_window_cutoff(now_secs: u64, span_secs: u64) -> u64 {
 
 fn local_day_start_secs(now_secs: u64, tz: Option<&str>) -> Option<u64> {
     let now = Timestamp::from_second(i64::try_from(now_secs).ok()?).ok()?;
-    let zone = tz
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .and_then(|name| TimeZone::get(name).ok())
-        .unwrap_or_else(TimeZone::system);
+    let zone = crate::config::resolve_time_zone(tz);
     let start = now.to_zoned(zone).start_of_day().ok()?.timestamp();
     u64::try_from(start.as_second()).ok()
 }

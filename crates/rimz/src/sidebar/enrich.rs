@@ -797,7 +797,7 @@ fn fold_machine_config_cached(
         &snapshot.worktree_roots,
         snapshot.worktree_home.as_deref(),
     );
-    let spec = config.sidebar.headline_spec();
+    let spec = config.headline_spec();
     let workspace = cached_workspace_spending(runtime, &scope, cache.refreshed_at_ms, &spec);
     let mut snapshot =
         fold_machine_config_with(snapshot, config, accounts, &cache.spending.by_provider);

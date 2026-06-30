@@ -144,6 +144,10 @@ pub type Result<T> = std::result::Result<T, ConfigErr>;
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MachineConfig {
+    /// IANA time zone for displayed times and scheduling. Unset or unknown
+    /// falls back to the system zone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
     pub accounts: AccountsConfig,
     pub remote_control: RemoteControlConfig,
     pub daemon: DaemonConfig,
@@ -290,6 +294,7 @@ impl MachineConfig {
 
     fn assemble(core: CoreConfig, theme: ThemeConfig, agents: AgentsConfig) -> Self {
         Self {
+            timezone: core.timezone,
             accounts: core.accounts,
             remote_control: core.remote_control,
             daemon: core.daemon,
@@ -303,6 +308,17 @@ impl MachineConfig {
             sentry: core.sentry,
             theme,
             agents,
+        }
+    }
+
+    pub fn time_zone(&self) -> jiff::tz::TimeZone {
+        resolve_time_zone(self.timezone.as_deref())
+    }
+
+    pub fn headline_spec(&self) -> crate::agents::spending::HeadlineSpec {
+        crate::agents::spending::HeadlineSpec {
+            mode: self.sidebar.spend_window,
+            timezone: self.timezone.clone(),
         }
     }
 
@@ -413,9 +429,18 @@ fn collect_agents_home_fragment_stamps(
     Ok(())
 }
 
+/// Resolve an optional IANA name to a zone, falling back to the system zone.
+pub fn resolve_time_zone(name: Option<&str>) -> jiff::tz::TimeZone {
+    name.map(str::trim)
+        .filter(|name| !name.is_empty())
+        .and_then(|name| jiff::tz::TimeZone::get(name).ok())
+        .unwrap_or_else(jiff::tz::TimeZone::system)
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct CoreConfig {
+    timezone: Option<String>,
     accounts: AccountsConfig,
     remote_control: RemoteControlConfig,
     daemon: DaemonConfig,

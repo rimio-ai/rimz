@@ -25,6 +25,7 @@ fn serve_config(ws: &WorkspaceId) -> ServeConfig {
         instance_id: SidebarInstanceId::new(),
         tick_seconds: 1,
         refresh_ms_override: None,
+        timezone: jiff::tz::TimeZone::UTC,
         notification_prefs: crate::config::NotificationsPrefs::default(),
         pet_glyphs: crate::config::PetsGlyphMode::Auto,
         own_pane: None,

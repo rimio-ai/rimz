@@ -10,10 +10,10 @@ In `spec` mode, each task names exactly one agent cell: a built-in kind, a profi
 
 Rimz stores schedule intent in per-machine `agents.toml`. `rimz loop add` validates the task, runs hook preflight, and makes it live immediately while a room for the task's project is open.
 
-- **Calendar:** `at = "07:00"` with optional `days = "weekdays"`, `daily`, `weekends`, `mon-fri`, or `mon,wed,fri`.
+- **Calendar:** `at = "07:00"` with optional `days = "weekdays"`, `daily`, `weekends`, `mon-fri`, or `mon,wed,fri`; wall-clock evaluation uses the configured `timezone`, falling back to the system zone when unset.
 - **Interval:** `every = "15m"`, `2h`, or `1d`; the elder fires at the exact interval measured from the last arm or fire.
-- **Raw cron:** `cron = "*/15 * * * *"` uses the in-process five-field matcher for minute, hour, day-of-month, month, and day-of-week.
-- **One-shot:** `once = true` with a calendar or cron schedule. `rimz loop add --in 30m` resolves to a local `at` time and implies `once`.
+- **Raw cron:** `cron = "*/15 * * * *"` uses the in-process five-field matcher for minute, hour, day-of-month, month, and day-of-week in the configured `timezone`.
+- **One-shot:** `once = true` with a calendar or cron schedule. `rimz loop add --in 30m` resolves to an `at` time in the configured `timezone` and implies `once`.
 
 Calendar tasks catch up once for today's matching time when a room opens later the same day. Cron tasks fire during matching open-room minutes, so a room opened later waits for the next matching minute.
 
