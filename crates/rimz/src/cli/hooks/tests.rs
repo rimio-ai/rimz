@@ -56,6 +56,13 @@ fn candidate(raw: &str, focused: bool) -> PaneRef {
     pane(raw, "codex", "/repo/main", focused)
 }
 
+fn hosted_candidate(raw: &str, focused: bool) -> PaneRef {
+    PaneRef {
+        hosted_agent_kind: Some(rimz::ids::AgentKind::new_unchecked("codex")),
+        ..pane(raw, "chezmoi cd", "/repo/main", focused)
+    }
+}
+
 fn started(raw: &str, start: jiff::Timestamp) -> PaneRef {
     PaneRef {
         pane_process_start: Some(start),
@@ -322,6 +329,16 @@ fn focus_recovery_cases() -> Vec<Case> {
             candidate_count: 1,
             method: SingleCandidate,
             reject_reasons: vec![(1, cwd_reject("/repo/other"))],
+        },
+        Case {
+            name: "hosted agent under wrapper command",
+            panes: vec![hosted_candidate("terminal_176", true)],
+            client_focus: Some(vec![id("terminal_176")]),
+            prior_stamps: vec![],
+            expected_pane: Some("terminal_176"),
+            candidate_count: 1,
+            method: SingleCandidate,
+            reject_reasons: vec![],
         },
         Case {
             name: "ambiguous client focus",

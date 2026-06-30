@@ -108,13 +108,18 @@ fn stamp_pane_resumed_session_ids(
         if pane.current.resumed_session_id.is_some() {
             continue;
         }
-        if pane
+        let is_codex = pane
             .current
             .command
             .as_deref()
             .and_then(crate::ledger::snapshot::command_agent_kind)
-            != Some("codex")
-        {
+            == Some("codex")
+            || pane
+                .current
+                .hosted_agent_kind
+                .as_ref()
+                .is_some_and(|kind| kind.as_str() == "codex");
+        if !is_codex {
             continue;
         }
         if let Some(resumed) = pane.current.pid.and_then(root_resume) {
@@ -144,6 +149,10 @@ fn repair_pane_frame(
         &crate::proc::comm,
         &crate::proc::children,
     );
+    stamp_hosted_agent_processes(
+        frame,
+        &crate::remote_control::in_pane_agent_process_for_root,
+    );
     backfill_pane_cwds(frame, &|pid| crate::proc::cwd(pid));
     stamp_pane_resumed_session_ids(
         frame,
@@ -155,7 +164,6 @@ fn repair_pane_frame(
         &crate::remote_control::in_pane_agent_start_for_root,
         &crate::remote_control::in_pane_agent_starts,
     );
-    stamp_hosted_agent_processes(frame, &crate::remote_control::in_pane_agent_start_for_root);
     if crate::proc::process_start(std::process::id()).is_some() {
         drop_reused_pid_bindings(
             frame,

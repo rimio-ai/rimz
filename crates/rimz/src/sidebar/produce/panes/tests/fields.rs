@@ -308,7 +308,10 @@ fn stamp_hosted_agent_processes_ignores_foreground_command() {
 
     stamp_hosted_agent_processes(&mut frame, &|kind, pid| {
         assert_eq!(pid, 777);
-        (kind == "codex").then_some(start)
+        (kind == "codex").then_some(crate::remote_control::InPaneAgentProcess {
+            started_at: start,
+            cwd: None,
+        })
     });
 
     assert_eq!(
@@ -323,6 +326,34 @@ fn stamp_hosted_agent_processes_ignores_foreground_command() {
         first(&frame).current.hosted_agent_process_start,
         Some(start)
     );
+}
+
+#[test]
+fn hosted_agent_process_fills_empty_cwd_for_wrapped_shell_pane() {
+    let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let expected = cwd.path().to_string_lossy().into_owned();
+    let mut frame = frame(vec![pane("terminal_176", Some("chezmoi cd"), None)]);
+    first_mut(&mut frame).current.pid = Some(3153567);
+
+    stamp_hosted_agent_processes(&mut frame, &|kind, pid| {
+        assert_eq!(pid, 3153567);
+        (kind == "codex").then_some(crate::remote_control::InPaneAgentProcess {
+            started_at: start,
+            cwd: Some(cwd.path().to_path_buf()),
+        })
+    });
+
+    let pane = first(&frame);
+    assert_eq!(
+        pane.current
+            .hosted_agent_kind
+            .as_ref()
+            .map(|kind| kind.as_str()),
+        Some("codex")
+    );
+    assert_eq!(pane.current.hosted_agent_process_start, Some(start));
+    assert_eq!(pane.current.cwd.as_deref(), Some(expected.as_str()));
 }
 
 #[test]

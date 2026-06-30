@@ -33,6 +33,26 @@ fn cwd_bound_session_lists_its_producer_bound_pane() {
 }
 
 #[test]
+fn cwd_bound_session_binds_wrapper_pane_hosting_agent_process() {
+    let mut live = pane("term1", "chezmoi cd", "/repo/main");
+    live.hosted_agent_kind = Some(crate::ids::AgentKind::new_unchecked("codex"));
+    live.hosted_agent_process_start = Some(ago(60));
+    let mut snapshot = room(
+        Vec::new(),
+        vec![paneless_codex("sess-1", "/repo/main", 1_000)],
+    );
+    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    let snapshot = snapshot.with_live_panes(vec![live], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].is_agent());
+    assert_eq!(rows[0].id, "sess-1");
+    assert_eq!(snapshot.agent_panes.len(), 1);
+    assert_eq!(snapshot.agent_panes[0].pane_id.raw(), "term1");
+}
+
+#[test]
 fn lazy_pane_lists_without_a_session() {
     // An unprompted wired codex lists as a lazy pane: kind and pane, no session.
     let mut snapshot = room(Vec::new(), Vec::new());

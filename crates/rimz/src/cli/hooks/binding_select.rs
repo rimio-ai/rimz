@@ -233,12 +233,7 @@ fn binding_candidate_record(
             got: pane.cwd.clone(),
         });
     }
-    if pane
-        .command
-        .as_deref()
-        .and_then(rimz::ledger::snapshot::command_agent_kind)
-        != Some(kind)
-    {
+    if rimz::ledger::snapshot::pane_agent_kind(pane) != Some(kind) {
         reject_reasons.push(BindingRejectReason::CommandMismatch {
             got: pane.command.clone(),
         });

@@ -64,6 +64,13 @@ const APP_SERVER_MARKER: &str = "app-server";
 /// unbounded tree walk.
 const ELEVATED_AGENT_DESCENT_DEPTH: usize = 8;
 
+/// A live in-pane lazy-agent CLI found below a pane root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InPaneAgentProcess {
+    pub started_at: jiff::Timestamp,
+    pub cwd: Option<PathBuf>,
+}
+
 /// The Claude Remote Control argv (program first). `--spawn worktree` isolates
 /// each on-demand remote session in its own git worktree — the worktree mode.
 pub fn claude_command() -> Vec<String> {
@@ -581,30 +588,61 @@ pub fn in_pane_agent_starts(kind: &str, pane_cwd: &str) -> Vec<jiff::Timestamp> 
 /// Start time of the in-pane lazy-agent CLI behind a pane's bound root process —
 /// the per-pane exact signal the frame stamp prefers over the cwd scan above.
 /// The root is the CLI itself when its cmdline reads as the agent TUI (a pane
-/// running it directly); a shell-hosted CLI is the root's single child, since
-/// the mux reports the *foreground* command while the root stays the shell. The
-/// cmdline check is load-bearing twice over: a shell outlives the agents it
-/// hosts, so stamping its older start would re-admit the very sessions
-/// `pane_start_allows_bind` refuses, and a re-run CLI is a fresh child pid even
-/// when the hosting shell survives, so re-tenancy stays visible. `None` for a
-/// non-lazy kind or when neither process reads as the CLI, so the caller falls
+/// running it directly); shell-hosted and wrapper-hosted CLIs are accepted only
+/// along a single-child chain from the pane root. The cmdline check is
+/// load-bearing twice over: a shell outlives the agents it hosts, so stamping
+/// its older start would re-admit the very sessions `pane_start_allows_bind`
+/// refuses, and a re-run CLI is a fresh child pid even when the hosting shell
+/// survives, so re-tenancy stays visible. `None` for a non-lazy kind, a branchy
+/// process tree, or when no descendant reads as the CLI, so the caller falls
 /// back rather than guesses.
 pub fn in_pane_agent_start_for_root(kind: &str, root_pid: u32) -> Option<jiff::Timestamp> {
+    in_pane_agent_process_for_root(kind, root_pid).map(|process| process.started_at)
+}
+
+/// The in-pane lazy-agent CLI process backing a live pane, including its cwd
+/// when readable. Rimz walks only a single-child chain from the pane root:
+/// direct agent launches, shell-hosted agents, and wrapper-spawned subshells
+/// such as `chezmoi cd -> zsh -> codex` are unambiguous, while a branching
+/// process tree abstains.
+pub fn in_pane_agent_process_for_root(kind: &str, root_pid: u32) -> Option<InPaneAgentProcess> {
+    in_pane_agent_process_for_root_with(
+        kind,
+        root_pid,
+        &crate::proc::cmdline,
+        &crate::proc::children,
+        &crate::proc::process_start,
+        &crate::proc::cwd,
+    )
+}
+
+fn in_pane_agent_process_for_root_with(
+    kind: &str,
+    root_pid: u32,
+    cmdline: &dyn Fn(u32) -> Option<String>,
+    children: &dyn Fn(u32) -> Vec<u32>,
+    process_start: &dyn Fn(u32) -> Option<jiff::Timestamp>,
+    cwd: &dyn Fn(u32) -> Option<PathBuf>,
+) -> Option<InPaneAgentProcess> {
     if !in_pane_agent_probe_supported(kind) {
         return None;
     }
-    if crate::proc::cmdline(root_pid)
-        .as_deref()
-        .is_some_and(|cmdline| in_pane_agent_cmdline_matches(kind, cmdline))
-    {
-        return crate::proc::process_start(root_pid);
-    }
-    if let &[child] = crate::proc::children(root_pid).as_slice()
-        && crate::proc::cmdline(child)
+    let mut pid = root_pid;
+    for _ in 0..=ELEVATED_AGENT_DESCENT_DEPTH {
+        if cmdline(pid)
             .as_deref()
             .is_some_and(|cmdline| in_pane_agent_cmdline_matches(kind, cmdline))
-    {
-        return crate::proc::process_start(child);
+        {
+            return Some(InPaneAgentProcess {
+                started_at: process_start(pid)?,
+                cwd: cwd(pid),
+            });
+        }
+        let children = children(pid);
+        let [child] = children.as_slice() else {
+            return None;
+        };
+        pid = *child;
     }
     None
 }
@@ -622,9 +660,10 @@ fn in_pane_agent_probe_supported(kind: &str) -> bool {
 }
 
 /// Session id from the in-pane Codex CLI behind a pane's bound root process.
-/// The root is the CLI itself when the pane runs it directly; a shell-hosted CLI
-/// is the root's single foreground child. Multiple children abstain so a shell
-/// doing other work cannot donate the wrong resumed session id.
+/// The root is the CLI itself when the pane runs it directly; shell-hosted and
+/// wrapper-hosted CLIs are accepted only along a single-child chain. Multiple
+/// children abstain so a shell doing other work cannot donate the wrong resumed
+/// session id.
 pub fn codex_resumed_session_id_for_root(root_pid: u32) -> Option<crate::ids::AgentSessionId> {
     codex_resumed_session_id_for_root_with(root_pid, &crate::proc::cmdline, &crate::proc::children)
 }
@@ -634,16 +673,19 @@ fn codex_resumed_session_id_for_root_with(
     cmdline: &dyn Fn(u32) -> Option<String>,
     children: &dyn Fn(u32) -> Vec<u32>,
 ) -> Option<crate::ids::AgentSessionId> {
-    if let Some(resumed) = cmdline(root_pid)
-        .as_deref()
-        .and_then(codex_resumed_session_id_from_cmdline)
-    {
-        return Some(resumed);
-    }
-    if let &[child] = children(root_pid).as_slice() {
-        return cmdline(child)
+    let mut pid = root_pid;
+    for _ in 0..=ELEVATED_AGENT_DESCENT_DEPTH {
+        if let Some(resumed) = cmdline(pid)
             .as_deref()
-            .and_then(codex_resumed_session_id_from_cmdline);
+            .and_then(codex_resumed_session_id_from_cmdline)
+        {
+            return Some(resumed);
+        }
+        let children = children(pid);
+        let [child] = children.as_slice() else {
+            return None;
+        };
+        pid = *child;
     }
     None
 }

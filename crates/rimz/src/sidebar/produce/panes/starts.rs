@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use crate::ids::{AgentKind, PaneId};
+use crate::remote_control::InPaneAgentProcess;
 use crate::sidebar::frame::{PaneFrame, PaneMetrics};
 use crate::sidebar::timing::PROCESS_START_MATCH_TOLERANCE;
 
@@ -14,6 +16,13 @@ fn pane_process_agent_kind(process: &crate::sidebar::frame::PaneProcess) -> Opti
                 .command
                 .as_deref()
                 .and_then(crate::ledger::snapshot::command_agent_kind)
+        })
+        .or_else(|| {
+            process
+                .hosted_agent_kind
+                .as_ref()
+                .and_then(|kind| crate::agents::descriptor_by_kind(kind.as_str()))
+                .map(|descriptor| descriptor.kind)
         })
 }
 
@@ -125,7 +134,7 @@ pub(super) fn stamp_pane_process_starts(
 /// stable until the in-pane agent process actually exits.
 pub(super) fn stamp_hosted_agent_processes(
     frame: &mut PaneFrame,
-    root_start: &dyn Fn(&str, u32) -> Option<jiff::Timestamp>,
+    root_process: &dyn Fn(&str, u32) -> Option<InPaneAgentProcess>,
 ) {
     for pane in frame.pane_states_mut() {
         pane.current.hosted_agent_kind = None;
@@ -134,15 +143,27 @@ pub(super) fn stamp_hosted_agent_processes(
             continue;
         };
         let mut hosted = lazy_agent_kinds()
-            .filter_map(|kind| root_start(kind, pid).map(|start| (kind, start)))
+            .filter_map(|kind| root_process(kind, pid).map(|process| (kind, process)))
             .collect::<Vec<_>>();
-        hosted.sort_by_key(|(kind, start)| (*kind, *start));
-        hosted.dedup();
-        if let [(kind, start)] = hosted.as_slice() {
+        hosted.sort_by_key(|(kind, process)| (*kind, process.started_at));
+        hosted.dedup_by(|left, right| left.0 == right.0 && left.1.started_at == right.1.started_at);
+        if let [(kind, process)] = hosted.as_slice() {
             pane.current.hosted_agent_kind = Some(AgentKind::new_unchecked(*kind));
-            pane.current.hosted_agent_process_start = Some(*start);
+            pane.current.hosted_agent_process_start = Some(process.started_at);
+            if pane.current.cwd.as_deref().is_none_or(|cwd| cwd.is_empty())
+                && let Some(cwd) = displayable_cwd(process.cwd.as_ref())
+            {
+                pane.current.cwd = Some(cwd);
+            }
         }
     }
+}
+
+fn displayable_cwd(cwd: Option<&PathBuf>) -> Option<String> {
+    let cwd = cwd?;
+    cwd.exists()
+        .then(|| cwd.clone())
+        .and_then(|cwd| cwd.into_os_string().into_string().ok())
 }
 
 /// Drop a pane's process binding when the live process no longer matches the

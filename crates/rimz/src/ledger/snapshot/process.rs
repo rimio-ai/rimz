@@ -96,6 +96,12 @@ pub fn pane_agent_kind(pane: &PaneRef) -> Option<&'static str> {
         .as_deref()
         .and_then(command_agent_kind)
         .or_else(|| pane.command.as_deref().and_then(command_agent_kind))
+        .or_else(|| {
+            pane.hosted_agent_kind
+                .as_ref()
+                .and_then(|kind| crate::agents::descriptor_by_kind(kind.as_str()))
+                .map(|descriptor| descriptor.kind)
+        })
 }
 
 fn display_command(pane: &PaneRef) -> Option<&str> {

@@ -494,7 +494,7 @@ fn codex_resume_cmdline_yields_session_id() {
 }
 
 #[test]
-fn codex_resume_root_yields_session_id_from_root_or_single_child() {
+fn codex_resume_root_yields_session_id_from_root_or_single_child_chain() {
     assert_eq!(
         codex_resumed_session_id_for_root_with(
             200,
@@ -521,11 +521,93 @@ fn codex_resume_root_yields_session_id_from_root_or_single_child() {
         codex_resumed_session_id_for_root_with(
             200,
             &|pid| match pid {
+                200 => Some("zsh".to_owned()),
+                300 => Some("chezmoi cd".to_owned()),
+                400 => Some("/bin/zsh".to_owned()),
+                500 => Some("codex resume nested-sess".to_owned()),
+                _ => None,
+            },
+            &|pid| match pid {
+                200 => vec![300],
+                300 => vec![400],
+                400 => vec![500],
+                _ => Vec::new(),
+            },
+        )
+        .as_deref(),
+        Some("nested-sess")
+    );
+    assert_eq!(
+        codex_resumed_session_id_for_root_with(
+            200,
+            &|pid| match pid {
                 300 => Some("codex resume child-a".to_owned()),
                 301 => Some("codex resume child-b".to_owned()),
                 _ => Some("zsh".to_owned()),
             },
             &|pid| (pid == 200).then_some(vec![300, 301]).unwrap_or_default(),
+        ),
+        None
+    );
+}
+
+#[test]
+fn in_pane_agent_process_walks_wrapper_shell_chain() {
+    let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
+    let cwd = PathBuf::from("/home/marvin/.local/share/chezmoi");
+    let fixture = ProcFixture::new([
+        ProcNode::new(10, 1_000, "zsh", &[20]),
+        ProcNode::new(20, 1_000, "chezmoi cd", &[30]),
+        ProcNode::new(30, 1_000, "/bin/zsh", &[40]),
+        ProcNode::new(40, 1_000, "codex", &[]),
+    ]);
+
+    let found = in_pane_agent_process_for_root_with(
+        "codex",
+        10,
+        &|pid| fixture.nodes.get(&pid).map(|node| node.cmdline.to_owned()),
+        &|pid| {
+            fixture
+                .nodes
+                .get(&pid)
+                .map(|node| node.children.to_vec())
+                .unwrap_or_default()
+        },
+        &|pid| (pid == 40).then_some(start),
+        &|pid| (pid == 40).then_some(cwd.clone()),
+    );
+
+    assert_eq!(
+        found,
+        Some(InPaneAgentProcess {
+            started_at: start,
+            cwd: Some(cwd)
+        })
+    );
+}
+
+#[test]
+fn in_pane_agent_process_abstains_on_branching_tree() {
+    let fixture = ProcFixture::new([
+        ProcNode::new(10, 1_000, "zsh", &[20, 30]),
+        ProcNode::new(20, 1_000, "codex", &[]),
+        ProcNode::new(30, 1_000, "make", &[]),
+    ]);
+
+    assert_eq!(
+        in_pane_agent_process_for_root_with(
+            "codex",
+            10,
+            &|pid| fixture.nodes.get(&pid).map(|node| node.cmdline.to_owned()),
+            &|pid| {
+                fixture
+                    .nodes
+                    .get(&pid)
+                    .map(|node| node.children.to_vec())
+                    .unwrap_or_default()
+            },
+            &|_| panic!("branching tree must not read process starts"),
+            &|_| panic!("branching tree must not read cwds"),
         ),
         None
     );
