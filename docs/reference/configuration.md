@@ -123,7 +123,7 @@ A profile may be named like a kind: `[agents.profiles.claude]` overrides the bas
 
 ### Teams
 
-A team is an ordered `roles` list that feeds `rimz agents <name>`; each role binds a role name to a profile and may set any of the same **override fields** (replacing, like profiles). Each member answers to `@<role>` in that channel. `rimz agents <team>.<role>` launches one declared role with the same identity it has inside the full team. By default the roles open left to right as one side-by-side column per role in one tab; an optional `layout` uses the inline shape grammar (comma = column, plus = tiled row, slash = Zellij stacked row with tmux tiling), resolving declared role names first and then falling back to roleless cells. The built-in `peer` team is the roleless `claude,codex`.
+A team is an ordered `roles` list that feeds `rimz agents <name>`; each role binds a role name to a profile and may set any of the same **override fields** (replacing, like profiles). Each member answers to `@<role>` in that channel. `rimz agents <team>.<role>` launches one declared role with the same identity it has inside the full team. By default multi-role teams open left to right as one side-by-side column per role in one tab; a one-role team follows the single-cell placement policy. An optional `layout` uses the inline shape grammar (comma = column, plus = tiled row, slash = Zellij stacked row with tmux tiling), resolving declared role names first and then falling back to roleless cells. The built-in `peer` team is the roleless `claude,codex`.
 
 ### Inline specs and cell resolution
 
@@ -144,7 +144,7 @@ Profiles and roles become addressable handles, so they must not shadow `@all`, a
 placement = "auto"   # "auto" | "pane" | "tab"
 ```
 
-`placement` sets where a launch lands when neither `--new-pane` nor `--new-tab` is passed. `auto` (the default) runs a single non-worktree agent in the current pane and opens a new tab for a worktree launch, team, or multi-cell layout; `pane` splits a new pane for a single non-worktree agent and otherwise opens a tab; `tab` always opens a tab. The CLI side of placement is in [agents.md → Channel, worktree, and placement](./cli/agents.md#channel-worktree-and-placement).
+`placement` sets where a launch lands when neither `--new-pane` nor `--new-tab` is passed. `auto` (the default) runs a one-cell non-worktree launch in the current pane and opens a new tab for a worktree, named-channel, or multi-cell launch; `pane` splits a new pane for a one-cell non-worktree launch and otherwise opens a tab; `tab` always opens a tab. The CLI side of placement is in [agents.md → Channel, worktree, and placement](./cli/agents.md#channel-worktree-and-placement).
 
 ## Worktrees
 

@@ -57,12 +57,12 @@ fn default_machine_teams() -> TeamsConfig {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LaunchPlacement {
-    /// A single non-worktree agent runs in the current pane; a team, multi-cell
-    /// layout, or worktree launch opens a new tab.
+    /// A one-cell non-worktree launch runs in the current pane; a multi-cell,
+    /// named-channel, or worktree launch opens a new tab.
     #[default]
     Auto,
-    /// A single non-worktree agent splits a new pane in the current tab; a team
-    /// or worktree opens a new tab.
+    /// A one-cell non-worktree launch splits a new pane in the current tab; a
+    /// multi-cell, named-channel, or worktree launch opens a new tab.
     Pane,
     /// Always open a new tab/window.
     Tab,
