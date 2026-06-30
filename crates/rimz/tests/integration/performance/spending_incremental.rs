@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::time::{Instant, SystemTime};
+use std::time::SystemTime;
 
 use rimz::agents::spending::{
     CachedEntry, FileCacheEntry, HeadlineSpec, SilentWalk, SpendCursor, SpendingWalker,
@@ -138,7 +138,7 @@ fn spending_walk_io_is_history_independent() {
     let cache_path = dir.path().join("spending.json");
     let mut walker = SpendingWalker::new();
 
-    let cold_start = Instant::now();
+    let cold_len = std::fs::metadata(&file).expect("seed metadata").len();
     let cold = walker.walk(
         &cache_path,
         &files,
@@ -149,7 +149,11 @@ fn spending_walk_io_is_history_independent() {
         &HeadlineSpec::default(),
         &mut SilentWalk,
     );
-    let cold_elapsed = cold_start.elapsed();
+    assert_eq!(cold.stats.parse_jobs, 1, "cold walk parses the file once");
+    assert_eq!(
+        cold.stats.parse_bytes, cold_len,
+        "cold walk parses the whole transcript"
+    );
     let cache = read_spending_cache(&cache_path);
     let baseline_entries = cache
         .files
@@ -164,14 +168,18 @@ fn spending_walk_io_is_history_independent() {
     );
 
     // One turn lands: a single appended line.
+    let prior_len = std::fs::metadata(&file).expect("pre-append metadata").len();
     let mut f = std::fs::OpenOptions::new()
         .append(true)
         .open(&file)
         .expect("append");
     writeln!(f, "{}", claude_line(HISTORY_LINES)).expect("append line");
     drop(f);
+    let appended_len = std::fs::metadata(&file)
+        .expect("post-append metadata")
+        .len()
+        - prior_len;
 
-    let warm_start = Instant::now();
     let warm = walker.walk(
         &cache_path,
         &files,
@@ -182,7 +190,11 @@ fn spending_walk_io_is_history_independent() {
         &HeadlineSpec::default(),
         &mut SilentWalk,
     );
-    let warm_elapsed = warm_start.elapsed();
+    assert_eq!(warm.stats.parse_jobs, 1, "warm walk parses one suffix");
+    assert_eq!(
+        warm.stats.parse_bytes, appended_len,
+        "warm walk parses only the appended turn"
+    );
 
     // Work proxy: the cache grew by exactly the appended entry — the history
     // was never re-read, so nothing duplicated.
@@ -219,13 +231,12 @@ fn spending_walk_io_is_history_independent() {
         "unchanged walk leaves the spending cache mtime untouched"
     );
 
-    // Wall-clock: the warm pass skips the parse entirely (one stat + a
-    // one-line read + the in-memory fold), so even a generous bound on the
-    // cold parse holds with margin. 3x guards against a re-parse regression
-    // (which would land at ~1x) without flaking on slow CI.
+    // Resource shape: the warm pass keeps transcript IO to the appended turn.
+    // The in-memory fold still walks the retained cache to publish trailing
+    // totals, so wall-clock ratios are a noisy proxy for the invariant.
     assert!(
-        warm_elapsed * 3 < cold_elapsed,
-        "warm recompute {warm_elapsed:?} must stay well under cold parse {cold_elapsed:?}"
+        warm.stats.parse_bytes < cold.stats.parse_bytes / 100,
+        "warm transcript IO must stay history-independent"
     );
 }
 

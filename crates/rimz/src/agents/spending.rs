@@ -208,6 +208,13 @@ pub struct WalkStats {
     pub dedup_passes: u32,
     pub cache_parsed: bool,
     pub cache_written: bool,
+    /// Transcript parse jobs scheduled by this walk. An unchanged file or a
+    /// memo-only recompute contributes zero; a grown file contributes one
+    /// suffix job.
+    pub parse_jobs: u32,
+    /// Transcript bytes scheduled for parsing by this walk. For grown files
+    /// this is the appended suffix, not the full file length.
+    pub parse_bytes: u64,
 }
 
 /// One UTC day's deduplicated, account-global spend and token total — a cell of
@@ -658,6 +665,7 @@ impl SpendingWalker {
                 prices,
                 now_secs,
                 origin_overrides,
+                &mut stats,
                 &mut tick,
             );
         }
@@ -847,7 +855,16 @@ pub fn compute_spending_with_origins_and_scope(
     spec: &HeadlineSpec,
 ) -> (Spending, SpendTally) {
     let mut tick = |_: &SpendingDiskCache, _: SpendProgress| {};
-    refresh_spending_cache(files, cache, prices, now_secs, origin_overrides, &mut tick);
+    let mut stats = WalkStats::default();
+    refresh_spending_cache(
+        files,
+        cache,
+        prices,
+        now_secs,
+        origin_overrides,
+        &mut stats,
+        &mut tick,
+    );
 
     // Second pass: aggregate with cross-file Claude deduplication.
     //
@@ -907,6 +924,7 @@ fn refresh_spending_cache(
     prices: &PriceBook,
     now_secs: u64,
     origin_overrides: &HashMap<PathBuf, PathBuf>,
+    stats: &mut WalkStats,
     tick: &mut dyn FnMut(&SpendingDiskCache, SpendProgress),
 ) {
     // First pass: refresh stale cache entries — pure hit, suffix parse, or
@@ -987,6 +1005,12 @@ fn refresh_spending_cache(
             .get(&key)
             .filter(|entry| !heals && len > entry.len)
             .map(|entry| entry.cursor.clone());
+        stats.parse_jobs = stats.parse_jobs.saturating_add(1);
+        stats.parse_bytes = stats.parse_bytes.saturating_add(
+            resume
+                .as_ref()
+                .map_or(len, |cursor| len.saturating_sub(cursor.offset)),
+        );
         jobs.push(SpendingParseJob {
             adapter: *adapter,
             file,
