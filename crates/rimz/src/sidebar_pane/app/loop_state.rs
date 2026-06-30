@@ -17,6 +17,65 @@ pub(super) struct MaintenanceContext<'a> {
     pub(super) tick: Duration,
 }
 
+/// Compact projection of the glanceable sidebar content an off-screen pane
+/// keeps fresh. It deliberately skips animation state, turn phase, gauges,
+/// process metrics, spend, and git facts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BackgroundContentKey {
+    groups: Vec<BackgroundGroupKey>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BackgroundGroupKey {
+    key: String,
+    hidden_count: usize,
+    rows: Vec<BackgroundRowKey>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BackgroundRowKey {
+    id: String,
+    unread: bool,
+    inactive: bool,
+    status: BackgroundRowStatusKey,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackgroundRowStatusKey {
+    Agent(Option<crate::agents::AgentStatus>),
+    ProcessBusy(bool),
+}
+
+fn background_content_key(snapshot: &SidebarSnapshot) -> BackgroundContentKey {
+    BackgroundContentKey {
+        groups: snapshot
+            .worktree_groups
+            .iter()
+            .map(|group| BackgroundGroupKey {
+                key: group.key.clone(),
+                hidden_count: group.hidden_count,
+                rows: group
+                    .rows
+                    .iter()
+                    .map(|row| BackgroundRowKey {
+                        id: row.id.clone(),
+                        unread: row.unread,
+                        inactive: row.inactive,
+                        status: row_status_key(row),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+fn row_status_key(row: &crate::SidebarRow) -> BackgroundRowStatusKey {
+    match &row.card {
+        crate::RowCard::Agent(card) => BackgroundRowStatusKey::Agent(card.status),
+        crate::RowCard::Process(_) => BackgroundRowStatusKey::ProcessBusy(row.process_is_busy()),
+    }
+}
+
 pub(super) struct LoopState {
     last_snapshot: Option<SidebarSnapshot>,
     current: SidebarSnapshot,
@@ -39,6 +98,8 @@ pub(super) struct LoopState {
     paint_hold: PaintHold,
     next_frame: Instant,
     fetched_at: Instant,
+    last_bg_paint: Option<Instant>,
+    last_bg_key: Option<BackgroundContentKey>,
     last_self_close_check: Instant,
     last_heartbeat: Option<Instant>,
     prev_width: Option<u16>,
@@ -81,6 +142,8 @@ impl LoopState {
             paint_hold: PaintHold::default(),
             next_frame: now,
             fetched_at: now,
+            last_bg_paint: None,
+            last_bg_key: None,
             last_self_close_check: now,
             last_heartbeat: None,
             prev_width: initial_width,
@@ -628,8 +691,19 @@ impl LoopState {
         // Once the tab has emptied, never paint again. A grow resize also
         // defers its paint until the sibling-count verdict releases the hold.
         let watched = self.watched();
+        let background_key = (self.dirty && !watched && !self.dirty_paintable(watched))
+            .then(|| background_content_key(&self.current));
+        let background = background_key.as_ref().is_some_and(|key| {
+            self.last_bg_paint.is_none_or(|at| {
+                now.saturating_duration_since(at)
+                    >= crate::sidebar::timing::BACKGROUND_PAINT_MIN_INTERVAL
+            }) && self.last_bg_key.as_ref() != Some(key)
+        });
         let paintable = (active && watched) || (self.dirty && self.dirty_paintable(watched));
-        if !self.should_exit && !paint_blocked && paintable && now >= self.next_frame {
+        if !self.should_exit
+            && !paint_blocked
+            && ((paintable && now >= self.next_frame) || background)
+        {
             self.ui.animation_phase =
                 wall_clock_phase(anim_start, self.current.theme.display.resolved_refresh_ms());
             let alert_active = self
@@ -644,6 +718,7 @@ impl LoopState {
                 alert_active,
             );
             if self.dirty || animating {
+                let was_dirty = self.dirty;
                 refresh_pet_view(
                     &mut self.ui,
                     &mut self.pet_assets,
@@ -660,6 +735,16 @@ impl LoopState {
                     &mut self.pixel_painter,
                 )?;
                 self.dirty = false;
+                if was_dirty {
+                    self.last_bg_key = Some(
+                        background_key
+                            .clone()
+                            .unwrap_or_else(|| background_content_key(&self.current)),
+                    );
+                }
+                if background {
+                    self.last_bg_paint = Some(now);
+                }
             }
             self.next_frame = next_frame_after(
                 self.next_frame,
@@ -793,491 +878,7 @@ fn wake_room(runtime: &RuntimePaths) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sidebar_pane::app::fixtures::{
-        agent_snapshot, pane, snapshot_with_panes, workspace,
-    };
-
-    fn read_marks(ws: &WorkspaceId) -> (tempfile::TempDir, ReadMarkStore) {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
-        let store = ReadMarkStore::new(runtime, SidebarInstanceId::new());
-        (dir, store)
-    }
-
-    fn serve_config(ws: &WorkspaceId) -> ServeConfig {
-        ServeConfig {
-            workspace_id: ws.clone(),
-            mux: crate::MuxName::Zellij,
-            session_name: "rimz-test".to_owned(),
-            instance_id: SidebarInstanceId::new(),
-            tick_seconds: 1,
-            refresh_ms_override: None,
-            timezone: jiff::tz::TimeZone::UTC,
-            notification_prefs: crate::config::NotificationsPrefs::default(),
-            pet_glyphs: crate::config::PetsGlyphMode::Auto,
-            own_pane: None,
-        }
-    }
-
-    fn loop_state(ws: &WorkspaceId) -> (tempfile::TempDir, LoopState) {
-        loop_state_with_own_pane(ws, None)
-    }
-
-    fn loop_state_with_own_pane(
-        ws: &WorkspaceId,
-        own_pane: Option<PaneId>,
-    ) -> (tempfile::TempDir, LoopState) {
-        let (tx, _rx) = std::sync::mpsc::sync_channel(64);
-        let (dir, store) = read_marks(ws);
-        (
-            dir,
-            LoopState::new(
-                ws.clone(),
-                own_pane,
-                None,
-                tx,
-                store,
-                PetRenderCaps::default(),
-                true,
-            ),
-        )
-    }
-
-    fn process_snapshot(ws: &WorkspaceId, observed_at_ms: u64) -> SidebarSnapshot {
-        let mut snapshot = snapshot_with_panes(ws, vec![pane("terminal_9", "tab_0", false)]);
-        snapshot.panes_observed_at_ms = Some(observed_at_ms);
-        snapshot
-    }
-
-    fn agent_snapshot_observed(ws: &WorkspaceId, observed_at_ms: u64) -> SidebarSnapshot {
-        let mut snapshot = agent_snapshot(ws);
-        snapshot.panes_observed_at_ms = Some(observed_at_ms);
-        snapshot
-    }
-
-    fn animating_agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
-        let mut snapshot = agent_snapshot(ws);
-        let row = &mut snapshot.worktree_groups[0].rows[0];
-        let crate::RowCard::Agent(card) = &mut row.card else {
-            panic!("fixture row is an agent");
-        };
-        card.status = Some(crate::agents::AgentStatus::Running);
-        card.phase = crate::agents::TurnPhase::Acting;
-        snapshot
-    }
-
-    fn own_view(own_is_active: bool, active_pane_is_viewed: bool) -> crate::SidebarOwnView {
-        crate::SidebarOwnView {
-            sibling_count: 1,
-            own_is_active,
-            active_pane_id: Some(pane("terminal_9", "tab_0", false).pane_id),
-            active_pane_is_viewed,
-            working_pane_ids: vec![pane("terminal_9", "tab_0", false).pane_id],
-            focus_contested: false,
-            own_view_is_daemon: false,
-        }
-    }
-
-    fn fold_snapshot(
-        state: &mut LoopState,
-        config: &ServeConfig,
-        fetch: &mut FetchDispatcher,
-        snapshot: SidebarSnapshot,
-        fresh_pane_frame: bool,
-    ) {
-        let (result_tx, result_rx) = std::sync::mpsc::channel();
-        result_tx
-            .send(FetchOutcome {
-                snapshot: Ok(snapshot),
-                final_for_request: true,
-                fresh_pane_frame,
-            })
-            .expect("send fetch outcome");
-        state
-            .on_snapshot(config, fetch, &result_rx, Instant::now(), None)
-            .expect("fold snapshot");
-    }
-
-    fn fetch_dispatcher() -> (FetchDispatcher, std::sync::mpsc::Receiver<FetchRequest>) {
-        let (request_tx, request_rx) = std::sync::mpsc::channel();
-        (FetchDispatcher::new(request_tx), request_rx)
-    }
-
-    fn frame_active(state: &LoopState) -> bool {
-        state
-            .frame_timing(Duration::from_secs(10), Instant::now())
-            .0
-    }
-
-    #[test]
-    fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
-        let ws = workspace();
-        let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
-        let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
-        let socket_path = sidebar_socket_path(&runtime, &SidebarInstanceId::new());
-        let (_dir, mut state) = loop_state(&ws);
-        state.last_heartbeat = Some(Instant::now());
-        let config = serve_config(&ws);
-        let (mut fetch, _request_rx) = fetch_dispatcher();
-        let (result_tx, result_rx) = std::sync::mpsc::channel();
-        result_tx
-            .send(FetchOutcome {
-                snapshot: Ok(agent_snapshot(&ws)),
-                final_for_request: true,
-                fresh_pane_frame: false,
-            })
-            .expect("send fetch outcome");
-
-        state
-            .run_maintenance(
-                &mut fetch,
-                MaintenanceContext {
-                    config: &config,
-                    runtime: &runtime,
-                    socket_path: &socket_path,
-                    result_rx: &result_rx,
-                    anim_start: Instant::now(),
-                    diag: None,
-                    tick: Duration::from_secs(60),
-                },
-            )
-            .expect("maintenance drains ready outcome");
-
-        assert_eq!(state.current.worktree_groups.len(), 1);
-        assert_eq!(state.current.worktree_groups[0].rows[0].name, "claude");
-        assert!(state.last_snapshot.is_some());
-        assert!(state.dirty, "the folded snapshot is paint-pending");
-    }
-
-    #[test]
-    fn frame_timing_suspends_unwatched_animation() {
-        let ws = workspace();
-        let own_pane = pane("terminal_1", "tab_0", false).pane_id;
-        let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
-        state.current = animating_agent_snapshot(&ws);
-        state.current.own_view = Some(own_view(false, false));
-        state.current.viewed_panes.clear();
-        state.dirty = false;
-
-        assert!(!frame_active(&state));
-
-        state.current.own_view = Some(own_view(false, true));
-        assert!(frame_active(&state));
-
-        state.current.own_view = Some(own_view(true, false));
-        state.current.viewed_panes = vec![own_pane];
-        assert!(frame_active(&state));
-    }
-
-    #[test]
-    fn frame_timing_resumes_on_own_pane_focus() {
-        let ws = workspace();
-        let own_pane = pane("terminal_1", "tab_0", false).pane_id;
-        let foreign_pane = pane("terminal_2", "tab_0", false).pane_id;
-        let mut snapshot = animating_agent_snapshot(&ws);
-        snapshot.own_view = Some(own_view(false, false));
-        snapshot.viewed_panes.clear();
-
-        let config = serve_config(&ws);
-        let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24));
-        let mut terminal = Terminal::with_options(
-            CrosstermBackend::new(io::stdout()),
-            ratatui::TerminalOptions { viewport },
-        )
-        .expect("terminal");
-        for (focused, resumes) in [(own_pane.clone(), true), (foreign_pane, false)] {
-            let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
-            state.last_pulled = snapshot.clone();
-            state.current = snapshot.clone();
-            state.dirty = false;
-            let (mut fetch, request_rx) = fetch_dispatcher();
-            state
-                .on_event(
-                    &config,
-                    &mut fetch,
-                    &mut terminal,
-                    SidebarEventEnvelope::new(
-                        ws.clone(),
-                        Some("rimz-test".to_owned()),
-                        crate::sidebar::cache::unix_now_ms(),
-                        SidebarEvent::FocusChanged {
-                            focused: vec![focused],
-                            unfocused: Vec::new(),
-                        },
-                    ),
-                    Instant::now(),
-                    None,
-                )
-                .expect("focus event folds");
-            state.dirty = false;
-
-            assert_eq!(state.optimistic_watch_until.is_some(), resumes);
-            assert_eq!(frame_active(&state), resumes);
-            assert_eq!(
-                request_rx
-                    .try_recv()
-                    .ok()
-                    .map(FetchRequest::is_producer_fresh_panes),
-                resumes.then_some(true)
-            );
-        }
-    }
-
-    #[test]
-    fn frame_timing_keeps_unknown_or_detached_dirty_hot_but_holds_hidden_dirty() {
-        let ws = workspace();
-        let (_dir, mut state) = loop_state_with_own_pane(&ws, None);
-        state.current = animating_agent_snapshot(&ws);
-        state.dirty = false;
-        assert!(frame_active(&state));
-
-        let own_pane = pane("terminal_1", "tab_0", false).pane_id;
-        let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
-        state.current = animating_agent_snapshot(&ws);
-        state.current.own_view = None;
-        state.dirty = false;
-        assert!(frame_active(&state));
-
-        state.current.own_view = Some(own_view(false, false));
-        state.current.viewed_panes.clear();
-        state.dirty = true;
-        state.current.presence = Some(crate::SidebarPresence::Active);
-        assert!(!frame_active(&state));
-
-        state.current.presence = Some(crate::SidebarPresence::Detached);
-        assert!(frame_active(&state));
-
-        state.current.presence = Some(crate::SidebarPresence::Active);
-        state.current.own_view = Some(own_view(true, false));
-        state.current.viewed_panes = vec![own_pane];
-        assert!(frame_active(&state));
-    }
-
-    #[test]
-    fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
-        let ws = workspace();
-        let (_dir, mut state) = loop_state(&ws);
-        let config = serve_config(&ws);
-        let (mut fetch, _request_rx) = fetch_dispatcher();
-        let mut prior = agent_snapshot(&ws);
-        prior.panes_observed_at_ms = Some(90);
-        state.last_snapshot = Some(prior.clone());
-        state.current = prior;
-        state.paint_hold.engage(Instant::now(), 100);
-
-        fold_snapshot(
-            &mut state,
-            &config,
-            &mut fetch,
-            process_snapshot(&ws, 150),
-            false,
-        );
-        assert!(
-            state.paint_hold.is_engaged(),
-            "the rejected fold stays held"
-        );
-        assert_eq!(state.gate.reject_streak, 1);
-
-        fold_snapshot(
-            &mut state,
-            &config,
-            &mut fetch,
-            process_snapshot(&ws, 151),
-            false,
-        );
-        assert!(
-            state.paint_hold.is_engaged(),
-            "the second rejected fold still stays held"
-        );
-        assert_eq!(state.gate.reject_streak, 2);
-
-        fold_snapshot(
-            &mut state,
-            &config,
-            &mut fetch,
-            process_snapshot(&ws, 152),
-            false,
-        );
-        assert!(
-            !state.paint_hold.is_engaged(),
-            "the escape-hatch accepted fold releases by pane stamp"
-        );
-    }
-
-    #[test]
-    fn resize_hold_releases_on_accepted_default_fetch_with_post_engage_stamp() {
-        let ws = workspace();
-        let (_dir, mut state) = loop_state(&ws);
-        let config = serve_config(&ws);
-        let (mut fetch, _request_rx) = fetch_dispatcher();
-        state.current = agent_snapshot(&ws);
-        state.paint_hold.engage(Instant::now(), 100);
-
-        fold_snapshot(
-            &mut state,
-            &config,
-            &mut fetch,
-            agent_snapshot_observed(&ws, 101),
-            false,
-        );
-
-        assert!(
-            !state.paint_hold.is_engaged(),
-            "a normal accepted fetch releases when it carries a post-resize pane stamp"
-        );
-    }
-
-    #[test]
-    fn resize_hold_stays_held_on_accepted_default_fetch_with_pre_engage_stamp() {
-        let ws = workspace();
-        let (_dir, mut state) = loop_state(&ws);
-        let config = serve_config(&ws);
-        let (mut fetch, _request_rx) = fetch_dispatcher();
-        state.current = agent_snapshot(&ws);
-        state.paint_hold.engage(Instant::now(), 100);
-
-        fold_snapshot(
-            &mut state,
-            &config,
-            &mut fetch,
-            agent_snapshot_observed(&ws, 99),
-            false,
-        );
-
-        assert!(
-            state.paint_hold.is_engaged(),
-            "an old pane stamp is not proof the resize verdict landed"
-        );
-    }
-
-    #[test]
-    fn paint_path_arms_resize_hold_on_grow_without_advancing_prev_width() {
-        let ws = workspace();
-        let (_dir, mut state) = loop_state(&ws);
-        state.prev_width = Some(60);
-        state.self_close.seen_sibling = true;
-
-        assert!(state.arm_paint_hold_on_grow(120, Instant::now()));
-        assert!(state.paint_hold.is_engaged(), "grow arms the paint hold");
-        assert_eq!(
-            state.prev_width,
-            Some(60),
-            "resize wakeup still owns prev_width advancement"
-        );
-    }
-
-    #[test]
-    fn paint_path_does_not_arm_resize_hold_without_grow() {
-        let ws = workspace();
-        let (_dir, mut state) = loop_state(&ws);
-        state.prev_width = Some(120);
-        state.self_close.seen_sibling = true;
-
-        assert!(!state.arm_paint_hold_on_grow(120, Instant::now()));
-        assert!(
-            !state.paint_hold.is_engaged(),
-            "same-width paint does not arm the hold"
-        );
-        assert!(!state.arm_paint_hold_on_grow(60, Instant::now()));
-        assert!(
-            !state.paint_hold.is_engaged(),
-            "shrink paint does not arm the hold"
-        );
-    }
-
-    #[test]
-    fn arm_paint_hold_does_not_engage_before_a_sibling_is_seen() {
-        let ws = workspace();
-        let (_dir, mut state) = loop_state(&ws);
-        state.prev_width = Some(60);
-
-        assert!(!state.arm_paint_hold_on_grow(120, Instant::now()));
-        assert!(
-            !state.paint_hold.is_engaged(),
-            "startup grow paints immediately before any sibling has been observed"
-        );
-    }
-
-    #[test]
-    fn resize_reprobe_refreshes_pet_render_caps_with_current_glyph_mode() {
-        let ws = workspace();
-        let (_dir, mut state) = loop_state(&ws);
-        state.current.theme.pets.glyphs = crate::config::PetsGlyphMode::Pixel;
-        let mut observed = None;
-
-        state.refresh_pet_render_caps_with(
-            crate::MuxName::Tmux,
-            "rimz-test",
-            |mux, mode, session| {
-                observed = Some((mux, mode, session.to_owned()));
-                PetRenderCaps { pixel: true }
-            },
-        );
-
-        assert_eq!(
-            observed,
-            Some((
-                crate::MuxName::Tmux,
-                crate::config::PetsGlyphMode::Pixel,
-                "rimz-test".to_owned()
-            ))
-        );
-        assert_eq!(state.pet_render_caps, PetRenderCaps { pixel: true });
-    }
-
-    #[test]
-    fn resize_reprobe_can_downgrade_enabled_pet_render_caps() {
-        let ws = workspace();
-        let (_dir, mut state) = loop_state(&ws);
-        state.pet_render_caps = PetRenderCaps { pixel: true };
-
-        state.refresh_pet_render_caps_with(crate::MuxName::Tmux, "rimz-test", |_, _, _| {
-            PetRenderCaps { pixel: false }
-        });
-
-        assert_eq!(state.pet_render_caps, PetRenderCaps::default());
-    }
-
-    #[test]
-    fn failed_anomaly_send_preserves_carried_drop_count() {
-        let ws = workspace();
-        let (tx, _rx) = std::sync::mpsc::sync_channel(0);
-        let (_dir, store) = read_marks(&ws);
-        let mut state = LoopState::new(
-            ws.clone(),
-            None,
-            None,
-            tx,
-            store,
-            PetRenderCaps::default(),
-            true,
-        );
-        let mut current = agent_snapshot(&ws);
-        let mut duplicate = current.worktree_groups[0].rows[0].clone();
-        duplicate.pane = duplicate.pane.map(|mut pane| {
-            pane.pane_id = crate::ids::PaneId::from_parts(crate::MuxName::Zellij, "terminal_10");
-            pane
-        });
-        current.worktree_groups[0].rows.push(duplicate);
-        current.worktree_groups[0].status_counts[0].count = 2;
-        state.current = current;
-        state.observer.dropped_msgs = 3;
-
-        state.observe_commit();
-
-        assert_eq!(
-            state.observer.dropped_msgs, 5,
-            "the failed anomaly send carries the prior drop count, then the failed roster send adds one"
-        );
-        state.observe_commit();
-        assert_eq!(
-            state.observer.dropped_msgs, 7,
-            "a consecutive full-channel commit keeps accumulating without losing the carried count or pending roster retry"
-        );
-    }
-}
+mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LoopFlow {

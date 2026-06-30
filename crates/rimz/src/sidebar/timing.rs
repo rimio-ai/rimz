@@ -22,6 +22,11 @@ pub const EVENT_STORE_TTL: Duration = Duration::from_secs(EVENT_PANE_TTL.as_secs
 /// yanking the user's current pane.
 pub const FOCUS_STRANDED_EVENT_TTL: Duration = Duration::from_secs(2);
 
+/// Minimum gap between repaints of an off-screen attached sidebar. Hidden
+/// panes refresh only when their glanceable roster/status/unread projection
+/// changes, keeping the buffer near-current without running animations.
+pub const BACKGROUND_PAINT_MIN_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Coalescing window for the shared snapshot cache — the **poll-mode** pane
 /// TTL, in effect whenever the presence push channel is dead or absent. Just
 /// under the default 1s data tick: when one ledger-delta wakeup wakes every

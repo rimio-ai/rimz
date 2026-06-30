@@ -373,9 +373,8 @@ mod shell {
             }
         }
 
-        /// Resolve a switched-tab focus classification. The plugin broadcasts
-        /// only the stranded sidebar pane; the renderer owning that pane
-        /// chooses the remembered working target.
+        /// Resolve a switched-tab focus classification and publish the exact
+        /// overlay the renderer needs before the next producer pull.
         fn resolve_focus_correction(&mut self, now: u64, manifest_fresh: bool) {
             match self.focus_correction.resolve_with_resolution(
                 &self.tabs,
@@ -384,8 +383,29 @@ mod shell {
                 manifest_fresh,
                 now,
             ) {
-                CorrectionAction::Broadcast(pane_id) => {
+                CorrectionAction::StrandedSidebar(pane_id) => {
                     self.poke_focus_stranded(pane_id, now);
+                }
+                CorrectionAction::FocusWorkingPane { focused, unfocused } => {
+                    let mut patch = vec![FocusPatch {
+                        id: focused,
+                        is_focused: true,
+                    }];
+                    if let Some(unfocused) = unfocused {
+                        patch.push(FocusPatch {
+                            id: unfocused,
+                            is_focused: false,
+                        });
+                    }
+                    if self.poke_focus_changed(&patch, now) {
+                        let hash = policy::manifest_hash(&self.tabs, self.active_tab);
+                        if let Some(policy) = self.policy.as_mut() {
+                            policy.accept_manifest(hash);
+                            policy.on_optimistic_signal(now);
+                        }
+                    } else {
+                        self.signal_change(now);
+                    }
                 }
                 CorrectionAction::Wait | CorrectionAction::Clear => {}
             }

@@ -830,7 +830,7 @@ fn focus_correction_does_not_arm_on_load() {
 }
 
 #[test]
-fn focus_correction_clears_when_a_fresh_jump_lands_on_work() {
+fn focus_correction_broadcasts_when_a_fresh_switch_lands_on_work() {
     let mut correction = FocusCorrection::default();
     correction.on_active_tab_change(Some(0), Some(1), 1_000);
 
@@ -841,10 +841,32 @@ fn focus_correction_clears_when_a_fresh_jump_lands_on_work() {
 
     assert_eq!(
         correction.resolve(&manifest, Some(1), true, 1_001),
-        CorrectionAction::Clear,
-        "a fresh manifest from an explicit jump proves work holds focus before the settle deadline",
+        CorrectionAction::FocusWorkingPane {
+            focused: 11,
+            unfocused: None,
+        },
+        "a fresh manifest from a tab switch can publish work focus before the settle deadline",
     );
     assert_eq!(correction.next_deadline(), None);
+}
+
+#[test]
+fn focus_correction_broadcasts_the_previous_focused_pane_on_work_switch() {
+    let mut correction = FocusCorrection::default();
+    correction.on_active_tab_change_with_focus(Some(0), Some(1), Some(2), 1_000);
+
+    let manifest = tabs_by_index(vec![
+        (0, vec![focused(pane(2))]),
+        (1, vec![sidebar_pane(10), focused(pane(11))]),
+    ]);
+
+    assert_eq!(
+        correction.resolve(&manifest, Some(1), true, 1_001),
+        CorrectionAction::FocusWorkingPane {
+            focused: 11,
+            unfocused: Some(2),
+        },
+    );
 }
 
 #[test]
@@ -863,7 +885,7 @@ fn focus_correction_broadcasts_a_stranded_sidebar_at_the_deadline() {
     );
     assert_eq!(
         correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS),
-        CorrectionAction::Broadcast(10),
+        CorrectionAction::StrandedSidebar(10),
     );
     assert_eq!(correction.next_deadline(), None);
 }
@@ -882,7 +904,7 @@ fn focus_correction_waits_out_the_window_on_a_fresh_sidebar_manifest() {
     );
     assert_eq!(
         correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS),
-        CorrectionAction::Broadcast(10),
+        CorrectionAction::StrandedSidebar(10),
     );
 }
 
@@ -901,7 +923,7 @@ fn focus_correction_retargets_to_the_latest_switch() {
 
     assert_eq!(
         correction.resolve(&manifest, Some(2), false, 1_050 + FOCUS_SETTLE_MS),
-        CorrectionAction::Broadcast(20),
+        CorrectionAction::StrandedSidebar(20),
     );
 }
 
@@ -935,6 +957,22 @@ fn focus_correction_does_not_broadcast_without_live_work() {
         correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS),
         CorrectionAction::Clear,
     );
+}
+
+#[test]
+fn focus_correction_clears_when_target_focus_is_not_work() {
+    let mut correction = FocusCorrection::default();
+    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+
+    let mut floating = focused(pane(11));
+    floating.is_floating = true;
+    let manifest = tabs_by_index(vec![(1, vec![sidebar_pane(10), floating])]);
+
+    assert_eq!(
+        correction.resolve(&manifest, Some(1), true, 1_001),
+        CorrectionAction::Clear,
+    );
+    assert_eq!(correction.next_deadline(), None);
 }
 
 #[test]

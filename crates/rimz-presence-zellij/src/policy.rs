@@ -791,15 +791,20 @@ struct PendingFocusCorrection {
 pub enum CorrectionAction {
     /// The pending classification is not ready, or no classification is armed.
     Wait,
-    /// The pending classification resolved without a stranded sidebar.
+    /// The pending classification resolved without a focus event to publish.
     Clear,
     /// Broadcast `focus-stranded` for this sidebar pane id.
-    Broadcast(u32),
+    StrandedSidebar(u32),
+    /// Broadcast `focus-changed` for a tab switch that restored work focus.
+    FocusWorkingPane {
+        focused: u32,
+        unfocused: Option<u32>,
+    },
 }
 
-/// Classifies whether a tab switch restored focus to Rimz's sidebar. The plugin
-/// only reports the stranded sidebar id; the renderer that owns that pane
-/// decides whether and where to move focus.
+/// Classifies focus transitions caused by a tab switch. Zellij keeps per-tab
+/// focus marks, so a pure switch needs an explicit sidebar wake even when the
+/// pane manifest did not change.
 #[derive(Debug, Default)]
 pub struct FocusCorrection {
     pending: Option<PendingFocusCorrection>,
@@ -885,11 +890,20 @@ impl FocusCorrection {
             Some(_) if now_ms < pending.deadline => CorrectionAction::Wait,
             Some(pane_id) => {
                 self.pending = None;
-                CorrectionAction::Broadcast(pane_id)
+                CorrectionAction::StrandedSidebar(pane_id)
             }
             None => {
+                let focused = resolved_focused_pane(tabs, Some(pending.tab), focus_resolution)
+                    .filter(|pane| pane.is_card_pane())
+                    .map(|pane| pane.id);
                 self.pending = None;
-                CorrectionAction::Clear
+                match focused {
+                    Some(focused) => CorrectionAction::FocusWorkingPane {
+                        focused,
+                        unfocused: pending.previous_focused_pane,
+                    },
+                    None => CorrectionAction::Clear,
+                }
             }
         }
     }

@@ -76,7 +76,7 @@ The receive path drops an event for another workspace or session before it reach
 | --- | --- | --- | --- |
 | `PaneClosed` | `pane_id` | Delete every row bound to the pane (highest precedence) | Zellij plugin, tmux control-mode watch |
 | `CommandChanged` | `pane_id`, `command` | Overlay the command until a pull verifies the pane's row shape | Zellij plugin, tmux watch |
-| `FocusChanged` | focused / unfocused pane ids | Mirror focus bits onto every row; retarget the own-view baseline only onto one of the view's own working panes | Zellij plugin, tmux watch, renderer jumps |
+| `FocusChanged` | focused / unfocused pane ids | Mirror focus bits onto every row; retarget the own-view baseline only onto one of the view's own working panes | Zellij plugin pane-focus and tab-switch-to-work events, tmux watch, renderer jumps |
 | `FocusStranded` | sidebar `pane_id` | Renderer action only: the matching sidebar pane refocuses its held or own-view working sibling; when attached clients are viewing distinct panes, the renderer leaves focus alone because `focus-pane-id` is session-global | Zellij plugin |
 | `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull; never admits a card on its own | Zellij plugin, tmux watch |
 | `PanesChanged` | none | Nudge a producer pull — topology moved, identity unknown | tmux watch fallback, the Zellij manifest fold |
@@ -90,7 +90,7 @@ The receive path drops an event for another workspace or session before it reach
 Each push channel exists so a change a writer already knows about reaches every node within one wakeup instead of a poll window; the producer's pull stays the structural backstop behind all of them.
 
 - **Ledger and sidecar writers** post a `LedgerDelta` after every durable write or context-sidecar merge, so status, tokens, and cost repaint within one wakeup.
-- **The Zellij presence plugin** pushes exact pane events, stamps `presence.stamp`, and publishes `pane-topology.json` through the host CLI; it skips title-only manifest churn before projection and floors repeated same-pane command shortcuts to one immediate patch plus the settled producer pull. **The tmux control-mode watcher** pushes typed pane overlays from its `refresh-client -B` subscription, stamps `presence.stamp`, and falls back to `PanesChanged` for identity-free topology notices ([multiplexers.md](./multiplexers.md)).
+- **The Zellij presence plugin** pushes exact pane events, stamps `presence.stamp`, and publishes `pane-topology.json` through the host CLI; it skips title-only manifest churn before projection, floors repeated same-pane command shortcuts to one immediate patch plus the settled producer pull, and emits `FocusChanged` when a tab switch lands on a working pane. **The tmux control-mode watcher** pushes typed pane overlays from its `refresh-client -B` subscription, stamps `presence.stamp`, and falls back to `PanesChanged` for identity-free topology notices ([multiplexers.md](./multiplexers.md)).
 - **The elder's transcript watcher** ([`transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs)) watches each live Codex session's rollout JSONL and runs the stat-gated context refresh on write, covering the mid-turn gap where Codex hooks fire only at progress events. Only the elder watches; demotion drops the watch, and a watcher that never starts costs nothing because the producer-tick refresh stays unconditional.
 - **The elder's cache refresher** ([`cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs)) ticks on the data cadence, re-checks the heartbeat election each pass, refreshes heavy caches from the last published pane frame, and fires due loop tasks for this room. Demotion turns it into a sleeper; a panic resets its rollup cursor and the next tick retries from cache truth.
 
@@ -132,6 +132,8 @@ The table names staleness-budget semantics; exact values and rationale live in [
 `[theme.display] refresh_ms` is the base render grid, defaulting to `DEFAULT_REFRESH_MS`. It rides `snapshot.theme.display`, so the renderer uses the default until the first fold and picks up config changes on later folds without reading config itself.
 
 Money rolls sample on `refresh_ms * CLICK_PHASES`, matching the odometer phase counter; row animations sample on `BREATH_ANIMATION_FRAME`, clamped to at least the base. Input paints synchronously off-grid, an overlay event fuses on arrival and paints on the spot, and a burst of events still coalesces to one paint per base frame. The data backstop remains `rimz sidebar serve --tick-seconds`: changing `refresh_ms` changes paint cadence, not pull cadence.
+
+An attached sidebar in an unviewed tab keeps animation suspended and repaints only when its glanceable roster/status/unread projection changes, throttled by `BACKGROUND_PAINT_MIN_INTERVAL`; turn phase, gauges, `/proc` metrics, spend, git facts, and animation phase stay off the hidden paint trigger.
 
 ## Failure Modes
 
