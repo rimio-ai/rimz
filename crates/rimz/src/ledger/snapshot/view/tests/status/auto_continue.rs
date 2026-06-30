@@ -39,6 +39,30 @@ fn arms_a_rate_limit_park_at_its_window_reset() {
 }
 
 #[test]
+fn arms_a_spend_limit_park_at_its_window_reset() {
+    let parked = agent("claude", "limited", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .active_ago(60)
+        .limits(vec![window(100, 3_600)])
+        .spend_limit_turn_error(10, "You've hit your monthly spend limit.");
+    assert_eq!(
+        arm(&parked),
+        Some(ResumeArm::RateLimit {
+            deadline: deadline(3_600)
+        })
+    );
+}
+
+#[test]
+fn spend_limit_with_no_window_arms_nothing() {
+    let parked = agent("claude", "limited", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .active_ago(60)
+        .spend_limit_turn_error(10, "You've hit your monthly spend limit.");
+    assert_eq!(arm(&parked), None);
+}
+
+#[test]
 fn legacy_session_limit_marker_arms_a_rate_limit_park() {
     let parked = agent("claude", "limited", AgentStatus::Running, 0)
         .worktree("/repo/main")

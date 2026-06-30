@@ -159,6 +159,22 @@ fn turn_error_detector_maps_known_error_shapes() {
         Some("You've hit your session limit · resets 10:50am (UTC)")
     );
 
+    let spend_limit = json!({
+        "timestamp": "2026-06-11T07:18:00.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "turn_error",
+            "message": "You've hit your monthly spend limit."
+        }
+    })
+    .to_string();
+    let error = detect_turn_error(&spend_limit).expect("spend-limit error detected");
+    assert_eq!(error.class, crate::agents::TurnErrorClass::PausedSpendLimit);
+    assert_eq!(
+        error.label.as_deref(),
+        Some("You've hit your monthly spend limit.")
+    );
+
     let overloaded = json!({
         "timestamp": "2026-06-11T07:18:00.000Z",
         "type": "event_msg",

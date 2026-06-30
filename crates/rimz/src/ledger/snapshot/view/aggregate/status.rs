@@ -54,11 +54,15 @@ pub(super) fn project_display_status(
             .filter(|(_, class)| {
                 matches!(
                     class,
-                    TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedOverloaded
+                    TurnErrorClass::PausedRateLimit
+                        | TurnErrorClass::PausedSpendLimit
+                        | TurnErrorClass::PausedOverloaded
                 )
             }) {
-            if class == TurnErrorClass::PausedRateLimit
-                && rate_limit_kinds.reset.contains(row_name.as_str())
+            if matches!(
+                class,
+                TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
+            ) && rate_limit_kinds.reset.contains(row_name.as_str())
                 && !rate_limit_kinds.spent.contains(row_name.as_str())
             {
                 agent.turn_error_label = error.label.clone();

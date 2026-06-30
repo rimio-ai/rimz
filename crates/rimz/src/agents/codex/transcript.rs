@@ -625,7 +625,9 @@ fn classify_turn_error_label(label: Option<&str>) -> TurnErrorClass {
         return TurnErrorClass::Failed;
     };
     let lower = label.to_ascii_lowercase();
-    if lower.contains("usage limit")
+    if lower.contains("spend limit") {
+        TurnErrorClass::PausedSpendLimit
+    } else if lower.contains("usage limit")
         || lower.contains("session limit")
         || lower.contains("rate limit")
         || lower.contains("quota")

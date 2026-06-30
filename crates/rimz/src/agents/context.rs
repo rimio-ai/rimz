@@ -392,6 +392,12 @@ pub enum TurnErrorClass {
     /// while any known spent window remains unreset, then to failed once all
     /// known spent windows have reset if no newer hook event self-clears it.
     PausedRateLimit,
+    /// The turn stopped on a monthly spend cap. It projects like
+    /// [`Self::PausedRateLimit`]: paused while any known spent window remains
+    /// unreset, then to failed once all known spent windows have reset if no
+    /// newer hook event self-clears it. With no known window it stays paused
+    /// until the cap resets or the user raises it.
+    PausedSpendLimit,
     /// The provider was overloaded or returned a transient server error. There
     /// is no local reset window to wait for, so the row stays paused until a
     /// newer hook event self-clears it.
@@ -524,15 +530,28 @@ mod tests {
 
     #[test]
     fn turn_error_class_round_trips_and_defaults_to_failed() {
-        let error = AgentTurnError {
-            class: TurnErrorClass::PausedRateLimit,
-            at: Timestamp::from_second(1_700_000_000).unwrap(),
-            label: Some("You've hit your usage limit".to_owned()),
-        };
-        let value = serde_json::to_value(&error).unwrap();
-        assert_eq!(value["class"], "paused_rate_limit");
-        let back: AgentTurnError = serde_json::from_value(value).unwrap();
-        assert_eq!(back, error);
+        for (class, wire, label) in [
+            (
+                TurnErrorClass::PausedRateLimit,
+                "paused_rate_limit",
+                "You've hit your usage limit",
+            ),
+            (
+                TurnErrorClass::PausedSpendLimit,
+                "paused_spend_limit",
+                "You've hit your monthly spend limit",
+            ),
+        ] {
+            let error = AgentTurnError {
+                class,
+                at: Timestamp::from_second(1_700_000_000).unwrap(),
+                label: Some(label.to_owned()),
+            };
+            let value = serde_json::to_value(&error).unwrap();
+            assert_eq!(value["class"], wire);
+            let back: AgentTurnError = serde_json::from_value(value).unwrap();
+            assert_eq!(back, error);
+        }
 
         let legacy: AgentTurnError = serde_json::from_value(serde_json::json!({
             "at": "2023-11-14T22:13:20Z",

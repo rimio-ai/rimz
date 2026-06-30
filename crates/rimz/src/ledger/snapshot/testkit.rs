@@ -189,6 +189,7 @@ pub(super) trait AgentStateFx: Sized {
     fn turn_error(self, secs_ago: i64, label: &str) -> Self;
     fn turn_error_class(self, secs_ago: i64, label: &str, class: TurnErrorClass) -> Self;
     fn paused_turn_error(self, secs_ago: i64, label: &str) -> Self;
+    fn spend_limit_turn_error(self, secs_ago: i64, label: &str) -> Self;
     fn overloaded_turn_error(self, secs_ago: i64, label: &str) -> Self;
     /// Attach a clean turn-completion marker stamped `secs_ago` before the
     /// [`epoch`] — the success twin of [`turn_error`](Self::turn_error).
@@ -251,6 +252,10 @@ impl AgentStateFx for AgentState {
 
     fn paused_turn_error(self, secs_ago: i64, label: &str) -> Self {
         self.turn_error_class(secs_ago, label, TurnErrorClass::PausedRateLimit)
+    }
+
+    fn spend_limit_turn_error(self, secs_ago: i64, label: &str) -> Self {
+        self.turn_error_class(secs_ago, label, TurnErrorClass::PausedSpendLimit)
     }
 
     fn overloaded_turn_error(self, secs_ago: i64, label: &str) -> Self {

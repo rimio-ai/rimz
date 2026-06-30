@@ -257,14 +257,24 @@ fn terminal_turn_error(
 
 /// The class to use for display and auto-resume decisions. Current adapters
 /// stamp the class directly; the label fallback keeps older sidecars that saw
-/// a provider "session limit" before Rimz knew that phrase parked instead of
-/// actionable.
+/// a provider "session limit" or "spend limit" before Rimz knew that phrase
+/// parked instead of actionable.
 pub(crate) fn effective_turn_error_class(error: &AgentTurnError) -> TurnErrorClass {
-    if error.class == TurnErrorClass::Failed && label_indicates_rate_limit(error.label.as_deref()) {
+    if error.class != TurnErrorClass::Failed {
+        return error.class;
+    }
+    let label = error.label.as_deref();
+    if label_indicates_spend_limit(label) {
+        TurnErrorClass::PausedSpendLimit
+    } else if label_indicates_rate_limit(label) {
         TurnErrorClass::PausedRateLimit
     } else {
-        error.class
+        TurnErrorClass::Failed
     }
+}
+
+fn label_indicates_spend_limit(label: Option<&str>) -> bool {
+    label.is_some_and(|label| label.to_ascii_lowercase().contains("spend limit"))
 }
 
 fn label_indicates_rate_limit(label: Option<&str>) -> bool {
@@ -368,11 +378,11 @@ pub(crate) enum ResumeArm {
 
 /// What kind of resume, if any, this root agent's parked turn is armed for. It
 /// stopped its last turn on a provider park certificate ([`display_turn_error`]):
-/// a `rate_limit` park arms for the latest reset of the windows still spent now
-/// and recreates an immediate arm from a still-active marker once every spent
-/// window has reset, while a non-clocked backoff park arms while its marker stays
-/// active. Every other class — and a `rate_limit` park whose budget has already
-/// refilled into a non-spent reading — arms nothing.
+/// a `rate_limit` or spend-limit park arms for the latest reset of the windows
+/// still spent now and recreates an immediate arm from a still-active marker
+/// once every spent window has reset, while a non-clocked backoff park arms
+/// while its marker stays active. Every other class — and a clocked park whose
+/// budget has already refilled into a non-spent reading — arms nothing.
 pub(crate) fn resume_park(agent: &AgentState, now: Timestamp) -> Option<ResumeArm> {
     if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
         return None;
@@ -384,7 +394,7 @@ pub(crate) fn resume_park(agent: &AgentState, now: Timestamp) -> Option<ResumeAr
         agent.turn_started_at,
     )?;
     match effective_turn_error_class(error) {
-        TurnErrorClass::PausedRateLimit => {
+        TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit => {
             let mut spent_unreset = false;
             let mut unreset_deadline = None;
             let mut reset_deadline = None;
@@ -730,6 +740,30 @@ mod tests {
         assert_eq!(tier(200, None), ContextSeverity::Red);
         // The tiers order, so a future hook threshold reads naturally.
         assert!(ContextSeverity::Amber > ContextSeverity::Yellow);
+    }
+
+    #[test]
+    fn effective_turn_error_class_parks_legacy_limit_labels() {
+        let turn_error = |label: &str| AgentTurnError {
+            class: TurnErrorClass::Failed,
+            at: Timestamp::from_second(1_700_000_000).unwrap(),
+            label: Some(label.to_owned()),
+        };
+
+        assert_eq!(
+            effective_turn_error_class(&turn_error("You've hit your monthly spend limit.")),
+            TurnErrorClass::PausedSpendLimit
+        );
+        assert_eq!(
+            effective_turn_error_class(&turn_error(
+                "You've hit your session limit · resets 10:50am (UTC)"
+            )),
+            TurnErrorClass::PausedRateLimit
+        );
+        assert_eq!(
+            effective_turn_error_class(&turn_error("API Error: Bad Request")),
+            TurnErrorClass::Failed
+        );
     }
 
     /// The bands come from `[theme.display.context_meter]`, so a custom set moves every
