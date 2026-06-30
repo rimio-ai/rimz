@@ -1,6 +1,6 @@
 //! `rimz transcript` — inspect agent and channel conversations from local logs.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 
 use anyhow::{Context, Result, bail};
@@ -69,7 +69,7 @@ struct Scope {
     channel: Option<String>,
     channel_filter: Option<String>,
     focus: Option<String>,
-    focus_base: Option<String>,
+    focus_keys: Option<BTreeSet<AgentKey>>,
     include_channel: bool,
 }
 
@@ -101,10 +101,11 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         BTreeMap::new();
     let mut direct = Vec::new();
     for entry in filtered {
+        let key = entry_key(entry);
         match entry.entry {
             TranscriptKind::Prompt | TranscriptKind::Assistant => {
                 per_agent_messages
-                    .entry(entry_key(entry))
+                    .entry(key)
                     .or_default()
                     .push(rimz::agents::TranscriptMessage {
                         role: match entry.entry {
@@ -116,47 +117,60 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
                         text: entry.text.clone(),
                     });
             }
-            TranscriptKind::Ask => direct.push(rimz::agents::ChatEntry {
-                from: handle_for(entry, &identities, scope.include_channel),
-                to: None,
-                at: Some(entry.at),
-                text: entry.text.clone(),
-            }),
-            TranscriptKind::Answer => direct.push(rimz::agents::ChatEntry {
-                from: entry.from.clone().unwrap_or_else(|| "resolver".to_owned()),
-                to: Some(handle_for(entry, &identities, scope.include_channel)),
-                at: Some(entry.at),
-                text: entry.text.clone(),
-            }),
+            TranscriptKind::Ask => direct.push((
+                key,
+                rimz::agents::ChatEntry {
+                    from: handle_for(entry, &identities, scope.include_channel),
+                    to: None,
+                    at: Some(entry.at),
+                    text: entry.text.clone(),
+                },
+            )),
+            TranscriptKind::Answer => direct.push((
+                key,
+                rimz::agents::ChatEntry {
+                    from: entry.from.clone().unwrap_or_else(|| "resolver".to_owned()),
+                    to: Some(handle_for(entry, &identities, scope.include_channel)),
+                    at: Some(entry.at),
+                    text: entry.text.clone(),
+                },
+            )),
         }
     }
 
-    let per_agent = per_agent_messages
-        .into_iter()
-        .map(|(key, messages)| AgentChat {
-            handle: handle_for_key(&key, &identities, scope.include_channel),
-            messages,
-        })
-        .collect();
-    let mut entries =
-        transcript::build_chat(per_agent, args.details, rimz::target::parse_sender_prefix);
-    entries.extend(direct);
-    entries.sort_by(|left, right| match (left.at, right.at) {
-        (Some(a), Some(b)) => a.cmp(&b),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    });
-
-    if let Some(focus) = scope.focus_base.as_deref() {
-        entries.retain(|entry| {
-            base_handle(&entry.from) == focus
-                || entry
-                    .to
-                    .as_deref()
-                    .is_some_and(|to| base_handle(to) == focus)
-        });
+    let mut entries = Vec::new();
+    for (key, mut messages) in per_agent_messages {
+        sort_transcript_messages(&mut messages);
+        let mut chat = transcript::build_chat(
+            vec![AgentChat {
+                handle: handle_for_key(&key, &identities, scope.include_channel),
+                messages,
+            }],
+            args.details,
+            rimz::target::parse_sender_prefix,
+        );
+        if let Some(focus) = scope.focus_keys.as_ref() {
+            chat.retain(|entry| {
+                focus.contains(&key)
+                    || sender_matches_focus(
+                        &entry.from,
+                        focus,
+                        &identities,
+                        scope.channel_filter.as_deref(),
+                    )
+            });
+        }
+        entries.extend(chat);
     }
+    entries.extend(direct.into_iter().filter_map(|(key, entry)| {
+        scope
+            .focus_keys
+            .as_ref()
+            .is_none_or(|focus| focus.contains(&key))
+            .then_some(entry)
+    }));
+    entries.sort_by(|left, right| compare_optional_timestamps(left.at, right.at));
+
     if entries.is_empty() {
         bail!("no transcripts on disk for this scope yet");
     }
@@ -174,27 +188,85 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
+fn sort_transcript_messages(messages: &mut [rimz::agents::TranscriptMessage]) {
+    messages.sort_by(|left, right| compare_optional_timestamps(left.at, right.at));
+}
+
+fn compare_optional_timestamps(
+    left: Option<jiff::Timestamp>,
+    right: Option<jiff::Timestamp>,
+) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn sender_matches_focus(
+    sender: &str,
+    focus: &BTreeSet<AgentKey>,
+    identities: &HashMap<AgentKey, Identity>,
+    channel_filter: Option<&str>,
+) -> bool {
+    let matches = matching_handle_keys(sender, channel_filter, identities);
+    matches.len() == 1 && focus.contains(matches[0])
+}
+
+fn matching_handle_keys<'a>(
+    handle: &str,
+    channel_filter: Option<&str>,
+    identities: &'a HashMap<AgentKey, Identity>,
+) -> Vec<&'a AgentKey> {
+    let (base, channel) = split_rendered_handle(handle);
+    let mut matches: Vec<_> = identities
+        .iter()
+        .filter_map(|(key, identity)| {
+            (identity.base_handle == base
+                && channel_matches(identity.channel.as_deref(), channel.or(channel_filter)))
+            .then_some(key)
+        })
+        .collect();
+    matches.sort();
+    matches
+}
+
+fn split_rendered_handle(handle: &str) -> (&str, Option<&str>) {
+    handle
+        .split_once('#')
+        .map_or((handle, None), |(base, channel)| (base, Some(channel)))
+}
+
 fn dedup_asks(entries: Vec<TranscriptEntry>) -> Vec<TranscriptEntry> {
-    let mut other = Vec::new();
-    let mut latest_asks: HashMap<RequestId, TranscriptEntry> = HashMap::new();
-    for entry in entries {
+    let mut latest_asks: HashMap<RequestId, (usize, jiff::Timestamp)> = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
         if entry.entry == TranscriptKind::Ask
-            && let Some(request_id) = entry.request_id.clone()
+            && let Some(request_id) = entry.request_id.as_ref()
         {
             latest_asks
-                .entry(request_id)
+                .entry(request_id.clone())
                 .and_modify(|prior| {
-                    if entry.at >= prior.at {
-                        *prior = entry.clone();
+                    if entry.at >= prior.1 {
+                        *prior = (index, entry.at);
                     }
                 })
-                .or_insert(entry);
-        } else {
-            other.push(entry);
+                .or_insert((index, entry.at));
         }
     }
-    other.extend(latest_asks.into_values());
-    other
+    entries
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            if entry.entry == TranscriptKind::Ask
+                && let Some(request_id) = entry.request_id.as_ref()
+            {
+                return (latest_asks.get(request_id).map(|(latest, _)| *latest) == Some(index))
+                    .then_some(entry);
+            }
+            Some(entry)
+        })
+        .collect()
 }
 
 fn build_identities(entries: &[TranscriptEntry]) -> HashMap<AgentKey, Identity> {
@@ -246,7 +318,7 @@ fn resolve_scope(
                 channel: channel.clone(),
                 channel_filter: channel,
                 focus: None,
-                focus_base: None,
+                focus_keys: None,
                 include_channel,
             })
         }
@@ -273,7 +345,7 @@ fn resolve_scope(
                 channel: channel.clone(),
                 channel_filter: channel,
                 focus: None,
-                focus_base: None,
+                focus_keys: None,
                 include_channel,
             })
         }
@@ -281,8 +353,10 @@ fn resolve_scope(
             let (selector, inline) = split_agent_target(raw)?;
             let explicit_or_current = reconcile_channel(raw, inline, worktree, current)?;
             let matches = matching_identities(selector, explicit_or_current.as_deref(), identities);
-            let Some((_, identity)) = matches.first() else {
-                bail!("no agent matches target `{raw}` in the transcript log");
+            let (key, identity) = match matches.as_slice() {
+                [(key, identity)] => (*key, *identity),
+                [] => bail!("no agent matches target `{raw}` in the transcript log"),
+                _ => return Err(ambiguous_target(raw, &matches)),
             };
             let channel = explicit_or_current.or_else(|| identity.channel.clone());
             let include_channel = channel.is_none();
@@ -295,7 +369,7 @@ fn resolve_scope(
                 channel: channel.clone(),
                 channel_filter: channel,
                 focus,
-                focus_base: Some(identity.base_handle.clone()),
+                focus_keys: Some(BTreeSet::from([(*key).clone()])),
                 include_channel,
             })
         }
@@ -307,7 +381,7 @@ fn single_channel_scope(channel: String) -> Scope {
         channel: Some(channel.clone()),
         channel_filter: Some(channel),
         focus: None,
-        focus_base: None,
+        focus_keys: None,
         include_channel: false,
     }
 }
@@ -345,7 +419,7 @@ fn matching_identities<'a>(
 ) -> Vec<(&'a AgentKey, &'a Identity)> {
     let selector = selector.strip_prefix('@').unwrap_or(selector);
     let wanted_handle = format!("@{selector}");
-    identities
+    let mut matches: Vec<_> = identities
         .iter()
         .filter(|(key, identity)| {
             (identity.base_handle == wanted_handle
@@ -357,7 +431,25 @@ fn matching_identities<'a>(
                 || key.1.as_str().starts_with(selector))
                 && channel_matches(identity.channel.as_deref(), channel)
         })
-        .collect()
+        .collect();
+    matches.sort_by(|left, right| {
+        candidate_label(left.0, left.1).cmp(&candidate_label(right.0, right.1))
+    });
+    matches
+}
+
+fn ambiguous_target(raw: &str, matches: &[(&AgentKey, &Identity)]) -> anyhow::Error {
+    let candidates = matches
+        .iter()
+        .map(|(key, identity)| candidate_label(key, identity))
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::anyhow!("target `{raw}` matched multiple agents in transcript log: {candidates}")
+}
+
+fn candidate_label(key: &AgentKey, identity: &Identity) -> String {
+    let handle = render_handle(&identity.base_handle, identity.channel.as_deref(), true);
+    format!("{handle} ({})", key.1.as_str())
 }
 
 fn channel_matches(entry_channel: Option<&str>, filter: Option<&str>) -> bool {

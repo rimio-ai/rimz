@@ -32,8 +32,14 @@ pub(super) fn handle_blocking_feed(
         // exist.
         if agent.descriptor().capabilities.native_ask_ui {
             let item = build_item(workspace, Surface::NativeUi, feed_kind, agent, payload);
-            ledger.push_feed_item_superseding(&item, supersede, &workspace.session_name)?;
-            record_transcript_ask(ledger, agent, event_name, &item);
+            push_feed_item_recording_ask(
+                ledger,
+                agent,
+                event_name,
+                &item,
+                supersede,
+                &workspace.session_name,
+            )?;
         }
         emit_neutral(agent, event_name)?;
         return Ok(());
@@ -74,8 +80,14 @@ pub(super) fn handle_blocking_feed(
             downgraded.chain.clear();
             downgraded.chain_active_resolver = None;
             downgraded.chain_active_until = None;
-            ledger.push_feed_item_superseding(&downgraded, supersede, &workspace.session_name)?;
-            record_transcript_ask(ledger, agent, event_name, &downgraded);
+            push_feed_item_recording_ask(
+                ledger,
+                agent,
+                event_name,
+                &downgraded,
+                supersede,
+                &workspace.session_name,
+            )?;
         }
         emit_neutral(agent, event_name)?;
         return Ok(());
@@ -88,8 +100,14 @@ pub(super) fn handle_blocking_feed(
         nonce: item.nonce.clone(),
     };
 
-    ledger.push_feed_item_superseding(&item, supersede, &workspace.session_name)?;
-    record_transcript_ask(ledger, agent, event_name, &item);
+    push_feed_item_recording_ask(
+        ledger,
+        agent,
+        event_name,
+        &item,
+        supersede,
+        &workspace.session_name,
+    )?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -115,13 +133,21 @@ pub(super) fn handle_blocking_feed(
     result
 }
 
-fn record_transcript_ask(
+fn push_feed_item_recording_ask(
     ledger: &Ledger,
     agent: &dyn AgentAdapter,
     event_name: &str,
     item: &FeedItem,
-) {
-    if let Err(err) = append_transcript_ask(ledger, agent, event_name, item) {
+    supersede: Option<(&str, &str)>,
+    session_name: &str,
+) -> Result<()> {
+    let transcript = transcript_ask_entry(agent, event_name, item);
+    if let Some(err) = ledger.push_feed_item_superseding_with_transcript(
+        item,
+        supersede,
+        session_name,
+        transcript.as_ref(),
+    )? {
         warn!(
             agent = agent.descriptor().kind,
             request_id = %item.request_id,
@@ -129,20 +155,20 @@ fn record_transcript_ask(
             "bridge: failed to record transcript ask",
         );
     }
+    Ok(())
 }
 
-fn append_transcript_ask(
-    ledger: &Ledger,
+fn transcript_ask_entry(
     agent: &dyn AgentAdapter,
     event_name: &str,
     item: &FeedItem,
-) -> rimz::ledger::transcript_log::Result<()> {
+) -> Option<rimz::ledger::transcript_log::TranscriptEntry> {
     if item.source_kind != "agent-hook" || !item.kind.is_ask() {
-        return Ok(());
+        return None;
     }
-    let Some(agent_id) = item.agent_session_id().map(rimz::ids::AgentSessionId::from) else {
-        return Ok(());
-    };
+    let agent_id = item
+        .agent_session_id()
+        .map(rimz::ids::AgentSessionId::from)?;
     let mut observation =
         AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::TurnStarted);
     observation.worktree_path = item.worktree_path.clone();
@@ -169,22 +195,19 @@ fn append_transcript_ask(
         item.worktree_path.as_deref().and_then(path_basename),
         None,
     );
-    rimz::ledger::transcript_log::append(
-        ledger.paths(),
-        &rimz::ledger::transcript_log::TranscriptEntry {
-            at: jiff::Timestamp::now(),
-            kind: rimz::ids::AgentKind::new_unchecked(item.source.clone()),
-            agent_id,
-            channel,
-            name: None,
-            profile: None,
-            role: None,
-            entry: rimz::ledger::transcript_log::TranscriptKind::Ask,
-            request_id: Some(item.request_id.clone()),
-            from: None,
-            text,
-        },
-    )
+    Some(rimz::ledger::transcript_log::TranscriptEntry {
+        at: item.created_at,
+        kind: rimz::ids::AgentKind::new_unchecked(item.source.clone()),
+        agent_id,
+        channel,
+        name: None,
+        profile: None,
+        role: None,
+        entry: rimz::ledger::transcript_log::TranscriptKind::Ask,
+        request_id: Some(item.request_id.clone()),
+        from: None,
+        text,
+    })
 }
 
 fn path_basename(path: &str) -> Option<&str> {

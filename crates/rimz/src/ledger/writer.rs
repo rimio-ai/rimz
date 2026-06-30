@@ -15,7 +15,8 @@ use crate::workspace::ResolvedWorkspace;
 use super::{
     AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest, AskExpiry,
     EventLogRotationOutcome, Ledger, LedgerErr, Result, StatePaths, WorkspaceRewriteOutcome,
-    event_log, feed_store, lock, message_store, runtime, snapshot, workspace_record,
+    event_log, feed_store, lock, message_store, runtime, snapshot, transcript_log,
+    workspace_record,
 };
 
 mod debounce;
@@ -227,7 +228,23 @@ impl Ledger {
         supersede: Option<(&str, &str)>,
         session_name: &str,
     ) -> Result<()> {
-        let (abandoned, expired) = {
+        self.push_feed_item_superseding_with_transcript(item, supersede, session_name, None)
+            .map(|_| ())
+    }
+
+    /// [`Self::push_feed_item_superseding`] plus an optional transcript append
+    /// inside the same critical section. The feed push remains authoritative:
+    /// transcript append errors are returned for warning logs after wakeups, not
+    /// promoted into a failed ask.
+    #[must_use = "durability barrier; check the result"]
+    pub fn push_feed_item_superseding_with_transcript(
+        &self,
+        item: &FeedItem,
+        supersede: Option<(&str, &str)>,
+        session_name: &str,
+        transcript: Option<&transcript_log::TranscriptEntry>,
+    ) -> Result<Option<transcript_log::TranscriptLogErr>> {
+        let (abandoned, expired, transcript_err) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             let abandoned =
                 expiry::sweep_dead_owned_items_debounced(&self.inner.paths, session_name)?;
@@ -246,14 +263,16 @@ impl Ledger {
                 &self.inner.paths.events_log,
                 &EventEnvelope::feed_pushed(item, session_name),
             )?;
-            (abandoned, expired)
+            let transcript_err = transcript
+                .and_then(|entry| transcript_log::append_locked(&self.inner.paths, entry).err());
+            (abandoned, expired, transcript_err)
         };
         for request_id in abandoned.iter().chain(expired.iter()) {
             self.wake_sidebars_best_effort(request_id);
         }
         self.wake_sidebars_best_effort(&item.request_id);
         self.publish_snapshot_best_effort();
-        Ok(())
+        Ok(transcript_err)
     }
 
     /// Rotate the active event log when it exceeds `min_bytes`, preserving

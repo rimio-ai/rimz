@@ -4,6 +4,8 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use rimz::feed::{FeedItem, FeedKind, Surface};
+use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::ledger::transcript_log::{TranscriptEntry, TranscriptKind};
 
 use crate::common::Env;
 
@@ -53,6 +55,11 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
     assert!(single.contains("@claude: final answer\n"), "{single}");
     assert!(single.contains("claude needs attention"), "{single}");
     assert!(single.contains("you: @claude, allow"), "{single}");
+    assert!(
+        single.find("claude needs attention").unwrap()
+            < single.find("you: @claude, allow").unwrap(),
+        "ask should sort before its answer:\n{single}"
+    );
     assert!(
         !single.contains("draft answer"),
         "durable log stores the turn-final assistant message only:\n{single}"
@@ -119,6 +126,130 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
 }
 
 #[test]
+fn transcript_groups_chronological_entries_across_append_order() {
+    let env = Env::new();
+    let branch = "chronological-transcript";
+    append_transcript(
+        &env,
+        entry(
+            "sess-order",
+            branch,
+            TranscriptKind::Prompt,
+            "first prompt",
+            "2026-06-01T00:00:00Z",
+        ),
+    );
+    append_transcript(
+        &env,
+        entry(
+            "sess-order",
+            branch,
+            TranscriptKind::Prompt,
+            "second prompt",
+            "2026-06-01T00:00:03Z",
+        ),
+    );
+    append_transcript(
+        &env,
+        entry(
+            "sess-order",
+            branch,
+            TranscriptKind::Assistant,
+            "first answer",
+            "2026-06-01T00:00:02Z",
+        ),
+    );
+    append_transcript(
+        &env,
+        entry(
+            "sess-order",
+            branch,
+            TranscriptKind::Assistant,
+            "second answer",
+            "2026-06-01T00:00:04Z",
+        ),
+    );
+
+    let output = run_ok(
+        env.rimz()
+            .args(["transcript", "sess-order", "--worktree", branch]),
+    );
+
+    assert!(output.contains("user: @claude, first prompt"), "{output}");
+    assert!(output.contains("@claude: first answer"), "{output}");
+    assert!(output.contains("user: @claude, second prompt"), "{output}");
+    assert!(output.contains("@claude: second answer"), "{output}");
+    assert!(
+        output.find("first answer").unwrap() < output.find("second prompt").unwrap(),
+        "{output}"
+    );
+}
+
+#[test]
+fn transcript_exact_session_target_filters_same_handle_peers() {
+    let env = Env::new();
+    let branch = "same-handle-transcript";
+    append_transcript(
+        &env,
+        entry(
+            "sess-same-a",
+            branch,
+            TranscriptKind::Prompt,
+            "prompt from a",
+            "2026-06-01T00:00:00Z",
+        ),
+    );
+    append_transcript(
+        &env,
+        entry(
+            "sess-same-a",
+            branch,
+            TranscriptKind::Assistant,
+            "answer from a",
+            "2026-06-01T00:00:01Z",
+        ),
+    );
+    append_transcript(
+        &env,
+        entry(
+            "sess-same-b",
+            branch,
+            TranscriptKind::Prompt,
+            "prompt from b",
+            "2026-06-01T00:00:02Z",
+        ),
+    );
+    append_transcript(
+        &env,
+        entry(
+            "sess-same-b",
+            branch,
+            TranscriptKind::Assistant,
+            "answer from b",
+            "2026-06-01T00:00:03Z",
+        ),
+    );
+
+    let one = run_ok(
+        env.rimz()
+            .args(["transcript", "sess-same-a", "--worktree", branch]),
+    );
+    assert!(one.contains("prompt from a"), "{one}");
+    assert!(one.contains("answer from a"), "{one}");
+    assert!(!one.contains("prompt from b"), "{one}");
+    assert!(!one.contains("answer from b"), "{one}");
+
+    let ambiguous = env
+        .rimz()
+        .args(["transcript", &format!("@claude#{branch}")])
+        .output()
+        .expect("spawn transcript");
+    assert!(!ambiguous.status.success(), "ambiguous target should fail");
+    let stderr = String::from_utf8_lossy(&ambiguous.stderr);
+    assert!(stderr.contains("matched multiple agents"), "{stderr}");
+}
+
+#[test]
 fn transcript_attributes_agent_messages_and_filters_agent_view() {
     let env = Env::new();
     let branch = "attribution-transcript";
@@ -156,6 +287,32 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
     assert!(codex.contains("@codex: @claude, ack"), "{codex}");
     assert!(!codex.contains("hidden codex reply"), "{codex}");
     assert!(!codex.contains("hidden claude reply"), "{codex}");
+}
+
+fn entry(
+    session_id: &str,
+    branch: &str,
+    kind: TranscriptKind,
+    text: &str,
+    at: &str,
+) -> TranscriptEntry {
+    TranscriptEntry {
+        at: at.parse().expect("timestamp"),
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: AgentSessionId::from(session_id),
+        channel: Some(branch.to_owned()),
+        name: None,
+        profile: None,
+        role: None,
+        entry: kind,
+        request_id: None,
+        from: None,
+        text: text.to_owned(),
+    }
+}
+
+fn append_transcript(env: &Env, entry: TranscriptEntry) {
+    rimz::ledger::transcript_log::append(env.ledger().paths(), &entry).expect("append transcript");
 }
 
 fn write_claude_transcript(path: &std::path::Path, draft: &str, final_message: &str) {

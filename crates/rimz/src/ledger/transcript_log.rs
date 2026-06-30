@@ -1,9 +1,8 @@
 //! Rolling Rimz-owned transcript log.
 //!
 //! The log is append-only JSONL under `transcript/<bucket-start>.jsonl`. File
-//! buckets cap individual file size; reads concatenate every bucket and sort by
-//! entry timestamp at presentation time, so bucket boundaries never carry
-//! ordering meaning.
+//! buckets cap individual file size; reads return entries sorted by timestamp,
+//! so bucket boundaries never carry ordering meaning.
 
 use std::fs;
 use std::io;
@@ -72,6 +71,12 @@ pub struct TranscriptEntry {
 #[must_use = "durability barrier; check the result"]
 pub fn append(paths: &StatePaths, entry: &TranscriptEntry) -> Result<()> {
     let _guard = lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+    append_locked(paths, entry)
+}
+
+/// Append one transcript entry while the caller holds the workspace lock.
+#[must_use = "durability barrier; check the result"]
+pub(crate) fn append_locked(paths: &StatePaths, entry: &TranscriptEntry) -> Result<()> {
     fs::create_dir_all(&paths.transcript_dir).map_err(|source| TranscriptLogErr::Io {
         path: paths.transcript_dir.clone(),
         source,
@@ -98,6 +103,7 @@ pub fn read_all(paths: &StatePaths) -> Result<Vec<TranscriptEntry>> {
             }
         }
     }
+    entries.sort_by_key(|entry| entry.at);
     Ok(entries)
 }
 
@@ -252,10 +258,10 @@ mod tests {
     }
 
     #[test]
-    fn read_all_keeps_file_order_and_skips_malformed_lines() {
+    fn read_all_sorts_by_timestamp_and_skips_malformed_lines() {
         let (_dir, paths) = paths();
         fs::create_dir_all(&paths.transcript_dir).expect("mkdir transcript");
-        let first = entry(TranscriptKind::Prompt, "first", "2026-06-01T00:00:00Z");
+        let first = entry(TranscriptKind::Prompt, "first", "2026-06-01T00:00:02Z");
         let second = entry(TranscriptKind::Assistant, "second", "2026-06-01T00:00:01Z");
         fs::write(
             paths.transcript_dir.join("2026-06-01.jsonl"),
@@ -275,7 +281,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.text.as_str())
                 .collect::<Vec<_>>(),
-            vec!["first", "second"]
+            vec!["second", "first"]
         );
     }
 
