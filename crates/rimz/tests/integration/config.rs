@@ -337,6 +337,22 @@ profile = "helper"
         "custom layout should survive:\n{text}"
     );
     assert!(
+        text.contains("[[agents.teams.duo.roles]]"),
+        "roles should render as array-of-tables:\n{text}"
+    );
+    assert!(
+        !text.contains("roles = ["),
+        "roles should not collapse to an inline array:\n{text}"
+    );
+    assert!(
+        text.find("layout = \"lead+helper\"")
+            .expect("layout survives")
+            < text
+                .find("[[agents.teams.duo.roles]]")
+                .expect("roles block renders"),
+        "layout should stay in the team table before roles:\n{text}"
+    );
+    assert!(
         text.contains("role = \"lead\"") && text.contains("profile = \"helper\""),
         "roles should survive:\n{text}"
     );

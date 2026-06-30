@@ -153,6 +153,58 @@ fn merge_key_oracle_accepts_sentry_and_rejects_bogus_keys() {
 }
 
 #[test]
+fn set_document_value_renders_inline_table_arrays_as_table_blocks() {
+    let mut doc = r#"
+[agents.teams.pcr]
+layout = "planner,coder"
+"#
+    .parse::<DocumentMut>()
+    .expect("parse config snippet");
+    let path = parse_key("agents.teams.pcr.roles").expect("key");
+    let value = parse_edit_value(
+        r#"[
+            { role = "planner", profile = "claude-planner" },
+            { role = "coder", profile = "codex-coder" }
+        ]"#,
+    );
+
+    set_document_value(&mut doc, &path, value).expect("set roles");
+
+    let rendered = doc.to_string();
+    assert!(
+        rendered.contains("[[agents.teams.pcr.roles]]"),
+        "roles should render as array-of-tables:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("roles = ["),
+        "roles should not render as an inline array:\n{rendered}"
+    );
+    assert!(
+        rendered
+            .find("layout = \"planner,coder\"")
+            .expect("layout survives")
+            < rendered
+                .find("[[agents.teams.pcr.roles]]")
+                .expect("roles block renders"),
+        "layout should stay in the team table before role blocks:\n{rendered}"
+    );
+}
+
+#[test]
+fn set_document_value_keeps_scalar_arrays_inline() {
+    let mut doc = DocumentMut::new();
+    let path = parse_key("agents.profiles.codex.args").expect("key");
+    let value = parse_edit_value(r#"["--search", "none"]"#);
+
+    set_document_value(&mut doc, &path, value).expect("set args");
+
+    assert!(
+        matches!(item_at(&doc, &path), Some(Item::Value(Value::Array(_)))),
+        "scalar arrays should remain inline values:\n{doc}"
+    );
+}
+
+#[test]
 fn set_keys_cover_serialized_default_leaves() {
     let root = config_value(&MachineConfig::default()).expect("default config serializes");
     let mut leaves = BTreeSet::new();

@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use rimz::config::{GlyphRole, MachineConfig, validate_glyph_cells};
 use rimz::ledger::atomic::write_bytes_atomically;
-use toml_edit::{DocumentMut, Item, Table, Value};
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
 use super::GlobalFlags;
 
@@ -971,8 +971,25 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
             .with_context(|| format!("`{segment}` is not a table"))?;
     }
     let leaf = path.last().expect("validated key has a leaf");
-    table[leaf] = Item::Value(value);
+    table[leaf] = value_to_item(value);
     Ok(())
+}
+
+/// Render arrays of inline tables as TOML array-of-tables blocks so multi-field
+/// rows like team roles stay readable. Other values keep their inline form.
+fn value_to_item(value: Value) -> Item {
+    match value {
+        Value::Array(array) if !array.is_empty() && array.iter().all(Value::is_inline_table) => {
+            let mut tables = ArrayOfTables::new();
+            for element in array {
+                if let Value::InlineTable(inline) = element {
+                    tables.push(inline.into_table());
+                }
+            }
+            Item::ArrayOfTables(tables)
+        }
+        other => Item::Value(other),
+    }
 }
 
 #[expect(clippy::print_stdout, reason = "config command stdout")]
