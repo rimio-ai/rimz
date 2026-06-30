@@ -57,7 +57,7 @@ A raw target is `[user@]host:<session-or-path>`. After the colon, a value contai
 - Reconnect supervision is on by default. `--no-reconnect` hands the link to one SSH run; `remote add --no-reconnect` saves that as the alias default.
 - `remote connect --reset` and `remote reset` pass `--no-resume` to the remote `rimz`, so a remote room comes up empty instead of recovering; `remote add --no-resume` saves that birth behavior.
 - `--attach`, `--no-attach`, and `--print` mirror local behavior; `--print` emits the SSH command instead of running it.
-- For `remote add`, `--mux` is saved on the alias only when scoped to `remote` or `add` (`rimz remote add --mux tmux …`); a top-level `rimz --mux tmux remote add …` affects only that invocation.
+- For `remote add` and `remote update`, `--mux` is saved on the alias only when scoped to `remote`, `add`, or `update` (`rimz remote add --mux tmux …`); a top-level `rimz --mux tmux remote add …` affects only that invocation.
 
 Link-health and reconnect mechanics are in [remote.md](../../internals/reach/remote.md).
 
