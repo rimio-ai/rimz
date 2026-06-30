@@ -518,9 +518,6 @@ fn diagnostic_summary(event: &rimz::schema::diag::DiagEvent) -> String {
                 .map(|name| format!("; frames {name}"))
                 .unwrap_or_default()
         ),
-        DiagEvent::FrameRejectEscape { held_ms } => {
-            format!("published after holding {held_ms}ms")
-        }
         DiagEvent::FrameShrinkVerified { prior, fresh } => {
             format!("verified shrink {prior}->{fresh}")
         }

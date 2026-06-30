@@ -20,7 +20,7 @@ Records are anomaly-only. Routine fetch ticks, successful paints, and stable cac
 
 | Event | Emitter | Evidence |
 | --- | --- | --- |
-| `frame_rejected`, `frame_reject_escape`, `frame_shrink_verified`, `pane_count_drop`, `pane_carry_forward`, `pane_carry_refuted`, `carry_forward_expired`, `duplicate_pane_id`, `focus_contested`, `foreign_session_pane` | `sidebar::produce::panes` / `sidebar::frame` | Ok-but-empty frames, missing-own-pane reads, large pane drops, liveness-guarded carried panes, forced re-pulls that refute an initial omission, carry expiry, duplicate ids, multi-valued focus candidates, foreign-session leaks |
+| `frame_rejected`, `frame_shrink_verified`, `pane_count_drop`, `pane_carry_forward`, `pane_carry_refuted`, `carry_forward_expired`, `duplicate_pane_id`, `focus_contested`, `foreign_session_pane` | `sidebar::produce::panes` / `sidebar::frame` | Ok-but-empty frames, missing-own-pane reads, large pane drops, liveness-guarded carried panes, forced re-pulls that refute an initial omission, carry expiry, duplicate ids, multi-valued focus candidates, foreign-session leaks |
 | `gate_hold`, `gate_release`, `fetch_failure`, `health_alert`, `link_alert`, `producer_elected`, `producer_demoted`, `renderer_panic` | `sidebar_pane::app` | Renderer-side holds, degraded refresh episodes, remote-link degraded/recovered episodes, producer handoff, panics that would otherwise disappear with the pane |
 | `row_conflict`, `newborn_quarantined`, `group_migration` | `ledger::snapshot::view` via `sidebar::enrich` and renderer state diffing | duplicate agent identity suppression, newborn known-command unknown-cwd quarantine, rows moving between groups |
 | `frame_anomaly` | `sidebar::observe` writer thread | rendered-stream detector verdicts — flaps, oscillations, resets, per-frame consistency violations, elder cross-checks — each carrying its detector key, evidence, frame stamp, and the writer's elder/consumer role ([observe.md](./observe.md)) |
@@ -61,7 +61,7 @@ One pass over the log answers an episode's three questions in order — what the
 
 1. **Build the timeline.** Run the timeline one-liner above (or `rimz doctor` for the tail) and cluster records by `at_ms`; an episode reads as a burst across kinds. Copy the matching `diag-frames/` pairs out now, before the ring churns.
 2. **Locate the fault: published truth or local fold.** Every `frame_anomaly` carries the pulled snapshot's scalars beside the rendered ones — `pulled_rows` and the pulled frame stamp — so the record itself says whether the producer's published truth already held the anomaly or that instance's fusion/gating introduced it. The distinct `instance_id` count says the same thing from the other side.
-3. **Attribute the cause.** Producer records in the same window name it: the carry kinds with the semantics above, `frame_rejected`/`frame_reject_escape` for held implausible reads, `pane_count_drop` for published shrinks, `gate_hold` for renderer-side holds. The frame stamp (`produced_at_ms`) joins producer records, observer records, and capture filenames across the episode.
+3. **Attribute the cause.** Producer records in the same window name it: the carry kinds with the semantics above, `frame_rejected` for held implausible reads, `pane_count_drop` for published shrinks, `gate_hold` for renderer-side holds. The frame stamp (`produced_at_ms`) joins producer records, observer records, and capture filenames across the episode.
 4. **Diff the captures.** Each capture file holds the last good frame beside the offending one — `jq '{prior: (.prior.tabs | length), offending: (.offending.tabs | length)}'` shows a whole-tab omission at a glance.
 5. **Encode the episode.** A confirmed anomaly becomes a synthetic regression test over recorded signatures — the workflow lives in [observe.md → From anomaly to regression test](./observe.md#from-anomaly-to-regression-test).
 
@@ -71,7 +71,6 @@ A recorded partial-read episode reads like this — a pane source reports fourte
 
 | Records | Reading |
 | --- | --- |
-| `frame_rejected: missing_own_pane` repeating, then `frame_reject_escape` | the producer held the implausible read, then the bounded escape released it |
 | `pane_count_drop` with eight removed panes | the shrink published; the capture pair preserves both frames |
 | 5× `row_presence_flap`, gone→back 2.26s, no `pane_closed` events, `pulled_rows` back at full count | every instance painted the flap; pulled truth had already recovered, so the rendered gap was the published partial frame propagating |
 

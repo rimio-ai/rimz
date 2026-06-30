@@ -77,7 +77,11 @@ pub(super) fn apply_carry_forward(
 
     for (tab, pane) in &missing {
         let prior_meta = prior_carried.get(&pane.pane_id).copied();
-        if let Some(expired_meta) = expired_carry(&pane.pane_id, prior_meta, now_ms) {
+        // The producer runs inside its own pane, so that pane is provably alive
+        // for as long as we are producing; its carry never expires.
+        let is_own_pane = own_pane.is_some_and(|own| *own == pane.pane_id);
+        if !is_own_pane && let Some(expired_meta) = expired_carry(&pane.pane_id, prior_meta, now_ms)
+        {
             expired.push(expired_meta);
             continue;
         }
@@ -541,6 +545,32 @@ mod tests {
         assert_eq!(outcome.frame.pane_states().count(), 1);
         assert!(outcome.carried.is_empty());
         assert_eq!(outcome.expired[0].pane_id, pane_id("terminal_2"));
+        assert!(!outcome.ambiguous_loss);
+    }
+
+    #[test]
+    fn own_pane_carry_never_expires() {
+        let mut prior = frame(&["terminal_1", "terminal_2"], 1);
+        prior.carried_panes = vec![CarriedPane {
+            pane_id: pane_id("terminal_1"),
+            pid: Some(101),
+            start_ticks: Some(9),
+            carried_since_ms: 1,
+        }];
+        let fresh = frame(&["terminal_2"], 2);
+
+        let outcome = apply_carry_forward(
+            fresh,
+            Some(&prior),
+            Some(&pane_id("terminal_1")),
+            &HashMap::new(),
+            &|_| None,
+            2 + PANE_CARRY_TTL.as_millis() as u64,
+        );
+
+        assert_eq!(outcome.frame.pane_states().count(), 2);
+        assert_eq!(outcome.carried[0].pane_id, pane_id("terminal_1"));
+        assert!(outcome.expired.is_empty());
         assert!(!outcome.ambiguous_loss);
     }
 

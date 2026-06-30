@@ -47,11 +47,6 @@ pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 /// it, so lifecycle/resize floors still pull a fresh pane list in event mode.
 pub const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 
-/// Wall-clock ceiling for holding a frame whose producer cannot see its own
-/// pane. A sidebar process runs inside the session it lists, so a missing own
-/// pane is a failed pull unless every reader would otherwise stay frameless.
-pub const FRAME_REJECT_ESCAPE: Duration = Duration::from_secs(5);
-
 /// Maximum time a pane omitted by the mux source may be carried from the last
 /// good frame while `/proc` still proves the old pane root alive. Long enough
 /// to bridge several bad pane pulls, short enough that a persistently lying mux

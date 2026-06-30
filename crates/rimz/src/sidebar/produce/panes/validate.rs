@@ -1,24 +1,18 @@
 //! Pure publish verdicts for producer pane frames.
 
-use std::time::Duration;
-
 use crate::ids::PaneId;
 use crate::schema::diag::FrameRejectReason;
 use crate::sidebar::frame::PaneFrame;
-use crate::sidebar::timing::FRAME_REJECT_ESCAPE;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum PublishVerdict {
     Publish,
     Reject(FrameRejectReason),
-    Escape { held_ms: u64 },
 }
 
 pub(super) fn frame_publish_verdict(
     fresh: &PaneFrame,
-    prior: Option<&PaneFrame>,
     own_pane: Option<&PaneId>,
-    now_ms: u64,
 ) -> PublishVerdict {
     if pane_count(fresh) == 0 {
         return PublishVerdict::Reject(FrameRejectReason::Empty);
@@ -26,12 +20,6 @@ pub(super) fn frame_publish_verdict(
     if let Some(own_pane) = own_pane
         && !frame_contains_pane(fresh, own_pane)
     {
-        let held_ms = prior
-            .map(|prior| now_ms.saturating_sub(prior.produced_at_ms))
-            .unwrap_or(0);
-        if prior.is_some() && Duration::from_millis(held_ms) >= FRAME_REJECT_ESCAPE {
-            return PublishVerdict::Escape { held_ms };
-        }
         return PublishVerdict::Reject(FrameRejectReason::MissingOwnPane);
     }
     PublishVerdict::Publish
@@ -66,36 +54,23 @@ mod tests {
     }
 
     #[test]
-    fn empty_frame_rejects_even_with_prior() {
-        let prior = assemble_frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))], 1, "s");
+    fn empty_frame_rejects() {
         let fresh = assemble_frame(Vec::new(), 2, "s");
 
         assert_eq!(
-            frame_publish_verdict(&fresh, Some(&prior), None, 10),
+            frame_publish_verdict(&fresh, None),
             PublishVerdict::Reject(FrameRejectReason::Empty)
         );
     }
 
     #[test]
-    fn missing_own_pane_rejects_until_escape() {
-        let prior = assemble_frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))], 1, "s");
+    fn missing_own_pane_rejects() {
         let fresh = assemble_frame(vec![pane("terminal_2", Some("zsh"), Some("/repo"))], 2, "s");
         let own = pane_id("terminal_1");
 
         assert_eq!(
-            frame_publish_verdict(&fresh, Some(&prior), Some(&own), 1_000),
+            frame_publish_verdict(&fresh, Some(&own)),
             PublishVerdict::Reject(FrameRejectReason::MissingOwnPane)
-        );
-        assert_eq!(
-            frame_publish_verdict(
-                &fresh,
-                Some(&prior),
-                Some(&own),
-                FRAME_REJECT_ESCAPE.as_millis() as u64 + 2
-            ),
-            PublishVerdict::Escape {
-                held_ms: FRAME_REJECT_ESCAPE.as_millis() as u64 + 1
-            }
         );
     }
 

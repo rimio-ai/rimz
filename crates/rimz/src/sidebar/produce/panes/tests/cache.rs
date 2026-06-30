@@ -220,8 +220,7 @@ fn missing_own_rejection_captures_prior_and_offending_frames() {
     let cache_path = runtime.root.join("snapshot.json");
     let sink = crate::diag::DiagSink::under(dir.path().join("state"), workspace_id, "s", None);
     let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
-    let now = unix_now_ms()
-        .saturating_add(crate::sidebar::timing::FRAME_REJECT_ESCAPE.as_millis() as u64);
+    let now = unix_now_ms();
     let prior = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
         now,
@@ -242,7 +241,7 @@ fn missing_own_rejection_captures_prior_and_offending_frames() {
         &runtime,
         &cache_path,
     )
-    .expect("missing-own rejection holds the prior frame before escape");
+    .expect("missing-own rejection holds the prior frame");
 
     assert_eq!(pane_count(&held), 1);
     let event = diagnostic_events(&sink).pop().expect("diagnostic event");
@@ -258,6 +257,31 @@ fn missing_own_rejection_captures_prior_and_offending_frames() {
         sink.frame_capture_path(&frames_ref).exists(),
         "the frame reference points at a captured prior/offending pair"
     );
+}
+
+#[test]
+fn missing_own_pane_without_prior_publishes() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
+        "/tmp/missing-own-no-prior",
+    ));
+    let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let cache_path = runtime.root.join("snapshot.json");
+    let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
+    let fresh = crate::sidebar::frame::assemble_frame(
+        vec![pane("terminal_2", Some("zsh"), Some("/repo"))],
+        unix_now_ms(),
+        "s",
+    );
+
+    let published =
+        validate_frame_for_publish(fresh, None, Some(&own), None, true, &runtime, &cache_path)
+            .expect("missing-own frame without prior remains publishable");
+
+    assert_eq!(pane_count(&published), 1);
+    let cached = read_snapshot_cache(&cache_path, "s").expect("published frame");
+    assert_eq!(pane_count(&cached), 1);
 }
 
 #[test]

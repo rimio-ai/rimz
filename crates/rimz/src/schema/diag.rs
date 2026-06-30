@@ -83,9 +83,6 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         frames_ref: Option<String>,
     },
-    FrameRejectEscape {
-        held_ms: u64,
-    },
     FrameShrinkVerified {
         prior: usize,
         fresh: usize,
@@ -234,8 +231,7 @@ impl DiagEvent {
             | Self::ForeignSessionPane { .. } => DiagSeverity::Warn,
             Self::FrameAnomaly { .. } => DiagSeverity::Warn,
             Self::RendererPanic { .. } => DiagSeverity::Error,
-            Self::FrameRejectEscape { .. }
-            | Self::FrameShrinkVerified { .. }
+            Self::FrameShrinkVerified { .. }
             | Self::PaneCarryRefuted { .. }
             | Self::GateRelease { .. }
             | Self::ProducerElected { .. }
@@ -257,7 +253,6 @@ impl DiagEvent {
     pub fn kind_name(&self) -> &'static str {
         match self {
             Self::FrameRejected { .. } => "frame_rejected",
-            Self::FrameRejectEscape { .. } => "frame_reject_escape",
             Self::FrameShrinkVerified { .. } => "frame_shrink_verified",
             Self::PaneCountDrop { .. } => "pane_count_drop",
             Self::PaneCarryForward { .. } => "pane_carry_forward",
@@ -370,7 +365,6 @@ impl DiagEvent {
             } => format!("{}:{prior_build}:{own_build}", self.kind_name()),
             Self::ProducerElected { .. }
             | Self::ProducerDemoted { .. }
-            | Self::FrameRejectEscape { .. }
             | Self::FrameShrinkVerified { .. }
             | Self::RendererPanic { .. } => self.kind_name().to_owned(),
         }
@@ -665,7 +659,6 @@ mod tests {
                 fresh_pane_count: 0,
                 frames_ref: Some("frame.1.0.frame_rejected.json".to_owned()),
             },
-            DiagEvent::FrameRejectEscape { held_ms: 5_001 },
             DiagEvent::FrameShrinkVerified { prior: 8, fresh: 3 },
             DiagEvent::PaneCountDrop {
                 prior: 3,
@@ -846,7 +839,7 @@ mod tests {
             "rimz-test".to_owned(),
             None,
             42,
-            DiagEvent::FrameRejectEscape { held_ms: 5_001 },
+            DiagEvent::FrameShrinkVerified { prior: 8, fresh: 3 },
         );
 
         assert_eq!(envelope.build.as_deref(), crate::build_id::current());
@@ -860,7 +853,7 @@ mod tests {
             "rimz-test".to_owned(),
             None,
             42,
-            DiagEvent::FrameRejectEscape { held_ms: 5_001 },
+            DiagEvent::FrameShrinkVerified { prior: 8, fresh: 3 },
         );
         let mut value = serde_json::to_value(&envelope).expect("encode");
         value.as_object_mut().expect("object").remove("build");

@@ -849,18 +849,8 @@ fn validate_frame_for_publish(
     let now_ms = unix_now_ms();
     let prior = prior.and_then(|prior| publishable_prior(prior, own_pane, diag));
     emit_mixed_build_writers(diag, prior.as_ref());
-    match frame_publish_verdict(&frame, prior.as_ref(), own_pane, now_ms) {
+    match frame_publish_verdict(&frame, own_pane) {
         PublishVerdict::Publish => {
-            if publish {
-                emit_pane_count_drop(diag, prior.as_ref(), &frame, now_ms);
-                publish_frame(runtime, cache_path, &frame);
-            }
-            Ok(frame)
-        }
-        PublishVerdict::Escape { held_ms } => {
-            if let Some(diag) = diag {
-                diag.emit(DiagEvent::FrameRejectEscape { held_ms });
-            }
             if publish {
                 emit_pane_count_drop(diag, prior.as_ref(), &frame, now_ms);
                 publish_frame(runtime, cache_path, &frame);
@@ -869,7 +859,20 @@ fn validate_frame_for_publish(
         }
         PublishVerdict::Reject(reason) => {
             emit_frame_rejected(diag, reason.clone(), prior.as_ref(), &frame, now_ms);
-            prior.ok_or(crate::sidebar::produce::ProduceErr::FrameRejected(reason))
+            match prior {
+                Some(prior) => Ok(prior),
+                None => match reason {
+                    // The producing process runs inside this pane, so a fresh
+                    // frame missing only that pane is still usable room truth.
+                    FrameRejectReason::MissingOwnPane => {
+                        if publish {
+                            publish_frame(runtime, cache_path, &frame);
+                        }
+                        Ok(frame)
+                    }
+                    _ => Err(crate::sidebar::produce::ProduceErr::FrameRejected(reason)),
+                },
+            }
         }
     }
 }
@@ -920,9 +923,8 @@ fn publishable_cached_frame(
     own_pane: Option<&PaneId>,
     diag: Option<&crate::diag::DiagSink>,
 ) -> Option<PaneFrame> {
-    match frame_publish_verdict(&frame, None, own_pane, unix_now_ms()) {
+    match frame_publish_verdict(&frame, own_pane) {
         PublishVerdict::Publish => Some(frame),
-        PublishVerdict::Escape { .. } => Some(frame),
         PublishVerdict::Reject(reason) => {
             emit_frame_rejected(diag, reason, None, &frame, unix_now_ms());
             None
