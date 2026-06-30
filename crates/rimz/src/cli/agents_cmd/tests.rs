@@ -789,7 +789,7 @@ fn launch_placement_resolves_from_flags_policy_and_feasibility() {
 }
 
 #[test]
-fn one_role_whole_team_launch_splits_instead_of_replacing_caller_pane() {
+fn single_role_team_launch_takes_over_caller_pane() {
     let profiles = rimz::config::ProfilesConfig(BTreeMap::from([(
         "planner-profile".to_owned(),
         rimz::config::Profile {
@@ -818,38 +818,39 @@ fn one_role_whole_team_launch_splits_instead_of_replacing_caller_pane() {
             layout: None,
         },
     )]));
-    let layout = rimz::agents_spec::resolve_spec(
-        Some("solo"),
-        &profiles,
-        &rimz::config::CommandsConfig::default(),
-        &teams,
-    )
-    .expect("one-role team");
-    let single_cell = layout
-        .columns
-        .iter()
-        .map(|column| column.rows.len())
-        .sum::<usize>()
-        == 1;
-    let team_name = rimz::agents_spec::spec_team("solo", &teams);
-
-    let placement = apply_in_place_downgrade(
-        resolve_placement(
-            false,
-            false,
-            LaunchPlacement::Auto,
-            false,
-            single_cell,
-            true,
+    for spec in ["solo", "solo.planner"] {
+        let layout = rimz::agents_spec::resolve_spec(
+            Some(spec),
+            &profiles,
+            &rimz::config::CommandsConfig::default(),
+            &teams,
         )
-        .unwrap(),
-        false,
-        true,
-        team_name.is_some(),
-    );
+        .expect("single-role team launch");
+        let single_cell = layout
+            .columns
+            .iter()
+            .map(|column| column.rows.len())
+            .sum::<usize>()
+            == 1;
+        let team_name = rimz::agents_spec::spec_team(spec, &teams);
 
-    assert_eq!(team_name, Some("solo"));
-    assert_eq!(placement, Placement::NewPane);
+        let placement = apply_in_place_downgrade(
+            resolve_placement(
+                false,
+                false,
+                LaunchPlacement::Auto,
+                false,
+                single_cell,
+                true,
+            )
+            .unwrap(),
+            false,
+            true,
+        );
+
+        assert_eq!(team_name, Some("solo"));
+        assert_eq!(placement, Placement::SamePane);
+    }
 }
 
 #[test]
@@ -870,23 +871,19 @@ fn run_placement_opens_tab_without_current_pane() {
 #[test]
 fn in_place_launch_downgrades_when_caller_pane_must_stay_available() {
     assert_eq!(
-        apply_in_place_downgrade(Placement::SamePane, true, true, false),
+        apply_in_place_downgrade(Placement::SamePane, true, true),
         Placement::NewPane
     );
     assert_eq!(
-        apply_in_place_downgrade(Placement::SamePane, false, false, false),
+        apply_in_place_downgrade(Placement::SamePane, false, false),
         Placement::NewPane
     );
     assert_eq!(
-        apply_in_place_downgrade(Placement::SamePane, false, true, true),
-        Placement::NewPane
-    );
-    assert_eq!(
-        apply_in_place_downgrade(Placement::NewTab, false, false, true),
+        apply_in_place_downgrade(Placement::NewTab, false, false),
         Placement::NewTab
     );
     assert_eq!(
-        apply_in_place_downgrade(Placement::NewPane, true, false, true),
+        apply_in_place_downgrade(Placement::NewPane, true, false),
         Placement::NewPane
     );
 }

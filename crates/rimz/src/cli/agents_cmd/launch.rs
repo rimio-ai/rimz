@@ -63,7 +63,6 @@ pub(super) fn launch_layout(
         )?,
         args.bg,
         allow_in_place,
-        team_name.is_some(),
     );
     let in_place = placement == Placement::SamePane;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
@@ -211,7 +210,7 @@ pub(super) enum Placement {
 }
 
 /// Resolve launch placement. Explicit flags win; otherwise the config policy
-/// decides, with `auto` running a single non-worktree agent in the current pane
+/// decides, with `auto` running a single non-worktree cell in the current pane
 /// and opening a new tab for a worktree or multi-cell layout. In-pane placement
 /// needs a single cell and a launching pane; an explicit `--new-pane` that
 /// cannot be honored fails fast, while a defaulted one falls back to a new tab.
@@ -256,12 +255,10 @@ pub(super) fn apply_in_place_downgrade(
     placement: Placement,
     bg: bool,
     allow_in_place: bool,
-    is_team_role: bool,
 ) -> Placement {
     // In-place takes over the launching pane: it cannot honor --bg, and
-    // create-on-miss and team-role launches must never replace the caller's
-    // pane. Downgrade to a split.
-    if placement == Placement::SamePane && (bg || !allow_in_place || is_team_role) {
+    // create-on-miss must never replace the caller's pane. Downgrade to a split.
+    if placement == Placement::SamePane && (bg || !allow_in_place) {
         Placement::NewPane
     } else {
         placement
