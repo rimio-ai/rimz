@@ -58,7 +58,7 @@ mod timing;
 mod tmux_watch;
 mod transcript_watch;
 
-use self::loop_state::{LoopFlow, LoopState};
+use self::loop_state::{LoopFlow, LoopState, MaintenanceContext};
 use self::{notify::*, socket::*, timing::*};
 use fetch::{FetchDispatcher, FetchOutcome, FetchRequest, spawn_fetch_worker};
 use gate::GateState;
@@ -186,9 +186,10 @@ pub fn serve(config: ServeConfig) -> Result<()> {
 
     // The snapshot fetch (fast in-process fold plus optional produce) runs on a
     // background worker, so animation and input never block on it. The worker
-    // posts `SNAPSHOT_WAKEUP` when a result is ready. The dispatcher coalesces
-    // requests so a ledger-delta storm or a slow produce can never queue more
-    // than one extra run.
+    // posts `SNAPSHOT_WAKEUP` when a result is ready; the frame/tick path also
+    // drains the result channel so that wakeup stays a latency hint. The
+    // dispatcher coalesces requests so a ledger-delta storm or a slow produce
+    // can never queue more than one extra run.
     let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
     let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchOutcome>();
     // `JoinHandle` drops without blocking: the thread runs to completion on its
@@ -302,7 +303,18 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             }
         }
 
-        state.run_maintenance(&config, &runtime, &socket_path, &mut fetch, tick);
+        state.run_maintenance(
+            &mut fetch,
+            MaintenanceContext {
+                config: &config,
+                runtime: &runtime,
+                socket_path: &socket_path,
+                result_rx: &result_rx,
+                anim_start,
+                diag: diag.as_ref(),
+                tick,
+            },
+        )?;
         state.maybe_remind(&config, &mut terminal, diag.as_ref());
         state.paint_frame_if_due(&mut terminal, anim_start, active)?;
     }

@@ -7,6 +7,16 @@ use crate::sidebar::read_marks::{ReadMarkStore, write_manual_read_marks};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pets::{PetAssets, PetRenderCaps, PixelPainter, detect_pet_render_caps};
 
+pub(super) struct MaintenanceContext<'a> {
+    pub(super) config: &'a ServeConfig,
+    pub(super) runtime: &'a RuntimePaths,
+    pub(super) socket_path: &'a Path,
+    pub(super) result_rx: &'a Receiver<FetchOutcome>,
+    pub(super) anim_start: Instant,
+    pub(super) diag: Option<&'a crate::diag::DiagSink>,
+    pub(super) tick: Duration,
+}
+
 pub(super) struct LoopState {
     last_snapshot: Option<SidebarSnapshot>,
     current: SidebarSnapshot,
@@ -533,15 +543,19 @@ impl LoopState {
 
     pub(super) fn run_maintenance(
         &mut self,
-        config: &ServeConfig,
-        runtime: &RuntimePaths,
-        socket_path: &Path,
         fetch: &mut FetchDispatcher,
-        tick: Duration,
-    ) {
+        ctx: MaintenanceContext<'_>,
+    ) -> Result<()> {
+        // Snapshot wakeups are a latency hint, not the only correctness path.
+        // `rimz reload` replaces the renderer in place and a ready-result
+        // datagram can be lost around socket teardown/rebind; the frame/tick
+        // path still drains the channel so startup cannot strand the
+        // placeholder cockpit.
+        self.on_snapshot(ctx.config, fetch, ctx.result_rx, ctx.anim_start, ctx.diag)?;
+
         // Data backstop: catch pane/git drift no ledger delta announced. It is
         // self-gated to the data tick and no-ops while a fetch is in flight.
-        if self.fetched_at.elapsed() >= tick {
+        if self.fetched_at.elapsed() >= ctx.tick {
             fetch.request(FetchRequest::default(), false);
         }
 
@@ -549,9 +563,9 @@ impl LoopState {
         // exit path never races a background writer.
         if heartbeat_write_due(self.last_heartbeat) {
             self.last_heartbeat = Some(Instant::now());
-            if let Err(err) = write_heartbeat(config, runtime, socket_path) {
+            if let Err(err) = write_heartbeat(ctx.config, ctx.runtime, ctx.socket_path) {
                 warn!(
-                    session = %config.session_name,
+                    session = %ctx.config.session_name,
                     error = %err,
                     "heartbeat write failed",
                 );
@@ -565,6 +579,7 @@ impl LoopState {
             self.last_self_close_check = Instant::now();
             fetch.request(FetchRequest::default(), false);
         }
+        Ok(())
     }
 
     pub(super) fn maybe_remind(
@@ -893,6 +908,46 @@ mod tests {
         state
             .frame_timing(Duration::from_secs(10), Instant::now())
             .0
+    }
+
+    #[test]
+    fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
+        let ws = workspace();
+        let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
+        let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
+        let socket_path = sidebar_socket_path(&runtime, &SidebarInstanceId::new());
+        let (_dir, mut state) = loop_state(&ws);
+        state.last_heartbeat = Some(Instant::now());
+        let config = serve_config(&ws);
+        let (mut fetch, _request_rx) = fetch_dispatcher();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        result_tx
+            .send(FetchOutcome {
+                snapshot: Ok(agent_snapshot(&ws)),
+                final_for_request: true,
+                fresh_pane_frame: false,
+            })
+            .expect("send fetch outcome");
+
+        state
+            .run_maintenance(
+                &mut fetch,
+                MaintenanceContext {
+                    config: &config,
+                    runtime: &runtime,
+                    socket_path: &socket_path,
+                    result_rx: &result_rx,
+                    anim_start: Instant::now(),
+                    diag: None,
+                    tick: Duration::from_secs(60),
+                },
+            )
+            .expect("maintenance drains ready outcome");
+
+        assert_eq!(state.current.worktree_groups.len(), 1);
+        assert_eq!(state.current.worktree_groups[0].rows[0].name, "claude");
+        assert!(state.last_snapshot.is_some());
+        assert!(state.dirty, "the folded snapshot is paint-pending");
     }
 
     #[test]

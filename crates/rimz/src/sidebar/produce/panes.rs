@@ -541,16 +541,18 @@ pub(super) fn cached_panes_or_produce(
             let observed_at_ms = listing.observed_at_ms;
             let panes = filter_foreign_session_panes(listing.panes, session, diag);
             let prior = read_snapshot_cache(&cache_path, session);
-            // Sample attached-client focus and presence only on a live read. A
-            // topology-served frame forks no mux command (the topology cache's
-            // contract), so carry the prior publish's client view forward as the
-            // freshest non-forking estimate rather than reach for `list-clients`.
-            let (viewed_panes, presence) = if served_from_topology {
+            // A topology-served pane list skips the expensive `list-panes`
+            // read, but renderer paint gating still depends on fresh client
+            // focus. Sample `client_view` on every producer tick so a newly
+            // viewed tab can repaint immediately; only a failed topology-side
+            // sample carries the last publish forward.
+            let prior_client_view = || {
                 prior.as_ref().map_or_else(
                     || (Vec::new(), None),
                     |prior| (prior.viewed_panes.clone(), prior.presence),
                 )
-            } else {
+            };
+            let (viewed_panes, presence) =
                 match crate::mux::backend_for(mux).client_view(ClientFocusOptions {
                     session_name: Some(session.to_owned()),
                     ..Default::default()
@@ -563,9 +565,9 @@ pub(super) fn cached_panes_or_produce(
                             sampled_at_ms: unix_now_ms(),
                         }),
                     ),
+                    Err(_) if served_from_topology => prior_client_view(),
                     Err(_) => (Vec::new(), None),
-                }
-            };
+                };
             let (mut frame, diagnostics) =
                 crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
                     panes,

@@ -272,6 +272,10 @@ impl WakeEnv {
     /// Run the producer path (`rimz sidebar snapshot`) with this environment's
     /// scoped roots and the trace shim standing in for every mux fork.
     fn snapshot(&self) -> std::process::Output {
+        self.snapshot_with_list_clients(None)
+    }
+
+    fn snapshot_with_list_clients(&self, list_clients: Option<&str>) -> std::process::Output {
         let mut command = Command::new(rimz_cli_path());
         command
             .scrub_session_env()
@@ -289,9 +293,11 @@ impl WakeEnv {
             .env("XDG_STATE_HOME", &self.state_root)
             .env("XDG_RUNTIME_DIR", &self.runtime_root)
             .env("RIMZ_ZELLIJ_BIN", trace_shim_path())
-            .env("RIMZ_TEST_ZELLIJ_LOG", &self.trace_log)
-            .output()
-            .expect("spawn rimz sidebar snapshot")
+            .env("RIMZ_TEST_ZELLIJ_LOG", &self.trace_log);
+        if let Some(list_clients) = list_clients {
+            command.env("RIMZ_TEST_ZELLIJ_LIST_CLIENTS", list_clients);
+        }
+        command.output().expect("spawn rimz sidebar snapshot")
     }
 
     fn trace_lines(&self) -> Vec<String> {
@@ -544,15 +550,33 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
     );
     assert!(wake.status.success(), "topology wake must succeed");
 
-    let output = env.snapshot();
+    let output = env.snapshot_with_list_clients(Some(
+        "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 zsh\n",
+    ));
     assert!(
         output.status.success(),
         "snapshot failed: stderr={}",
         String::from_utf8_lossy(&output.stderr),
     );
     env.assert_no_list_panes_fork("fresh topology cache");
+    assert!(
+        env.trace_lines()
+            .iter()
+            .any(|line| line.contains("list-clients")),
+        "topology-served producer must still refresh client focus",
+    );
     let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
         .expect("snapshot cache published from topology");
+    assert_eq!(
+        cached.viewed_panes,
+        vec![PaneId::from_parts(MuxName::Zellij, "terminal_7")],
+        "topology cache skips list-panes but refreshes viewed panes",
+    );
+    assert_eq!(
+        cached.presence.map(|presence| presence.human_clients),
+        Some(1),
+        "client focus sample carries attached-client presence",
+    );
     assert_eq!(
         cached.observed_at_ms,
         Some(topology.produced_at_ms),

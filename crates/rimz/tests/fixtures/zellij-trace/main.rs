@@ -31,6 +31,16 @@ fn main() {
         std::process::exit(1);
     }
 
+    if cli
+        .windows(2)
+        .any(|window| window[0] == "action" && window[1] == "list-clients")
+    {
+        if let Ok(output) = env::var("RIMZ_TEST_ZELLIJ_LIST_CLIENTS") {
+            write_stdout_raw(&output);
+        }
+        return;
+    }
+
     let mode = env::var("RIMZ_TEST_ZELLIJ_MODE").unwrap_or_default();
     if mode == "socket-overflow-on-birth"
         && cli.first().is_some_and(|arg| arg == "attach")
@@ -44,6 +54,11 @@ fn main() {
 fn write_stdout(line: &str) {
     let mut stdout = io::stdout().lock();
     writeln!(stdout, "{line}").expect("write zellij trace stdout");
+}
+
+fn write_stdout_raw(text: &str) {
+    let mut stdout = io::stdout().lock();
+    write!(stdout, "{text}").expect("write zellij trace stdout");
 }
 
 fn write_stderr(line: &str) {

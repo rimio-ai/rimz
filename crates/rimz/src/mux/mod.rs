@@ -196,9 +196,8 @@ pub struct PaneListing {
     /// Whether `source_active` came from transition-resolved backend focus.
     pub source_active_authoritative: bool,
     /// Whether this listing came from the presence topology cache rather than a
-    /// live mux read. A topology hit forks no mux command, so the producer skips
-    /// the per-client focus probe too and carries viewed panes from its prior
-    /// publish instead.
+    /// live mux pane read. A topology hit skips the expensive pane-list command;
+    /// the producer may still sample the cheaper per-client focus probe.
     pub served_from_topology: bool,
 }
 
