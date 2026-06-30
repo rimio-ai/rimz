@@ -16,7 +16,7 @@ fn arm(agent: &AgentState) -> Option<ResumeArm> {
 /// The reset deadline `resets_in_secs` after the fixed epoch — the value `window`
 /// stamps onto a window's `resets_at`.
 fn deadline(resets_in_secs: i64) -> Timestamp {
-    epoch() + Duration::from_secs(resets_in_secs as u64)
+    Timestamp::from_second(epoch().as_second() + resets_in_secs).expect("valid test timestamp")
 }
 
 fn ago(secs: u64) -> Timestamp {
@@ -71,13 +71,31 @@ fn arms_for_the_latest_of_several_spent_windows() {
 }
 
 #[test]
-fn does_not_arm_once_the_only_window_has_reset() {
-    // A window already past its reset is no longer spent: there is nothing fresh to
-    // arm. The producer fires off the deadline it recorded earlier, not this frame.
+fn arms_after_reset_when_the_park_marker_is_still_active() {
+    // A producer can miss the pre-reset frame during a reload or elder change.
+    // While the same parked turn-error marker remains active, a spent window that
+    // has crossed its reset recreates a due arm so live auto-continue still fires.
     let parked = agent("claude", "limited", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .active_ago(60)
         .limits(vec![window(100, -60)])
+        .paused_turn_error(10, "You've hit your usage limit");
+    assert_eq!(
+        arm(&parked),
+        Some(ResumeArm::RateLimit {
+            deadline: deadline(-60)
+        })
+    );
+}
+
+#[test]
+fn does_not_recreate_an_arm_from_a_refilled_reading() {
+    // Once the agent reports a non-spent window, there is no spent reset
+    // certificate left to distinguish a missed park from a stale marker.
+    let parked = agent("claude", "limited", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .active_ago(60)
+        .limits(vec![window(20, -60)])
         .paused_turn_error(10, "You've hit your usage limit");
     assert_eq!(arm(&parked), None);
 }

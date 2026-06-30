@@ -339,15 +339,18 @@ fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
 }
 
 /// How a parked root agent's turn may resume, or `None` when nothing is armed.
-/// The producer persists the arm while the park is fresh so the resume outlives
-/// the ephemeral context it was first seen through. A Rimz-derived projection over
-/// enrichment, never a status the agent reports.
+/// The producer persists the arm so the resume outlives the ephemeral context it
+/// was first seen through; a still-active post-reset marker can also recreate a
+/// due arm if the producer missed the pre-reset frame. A Rimz-derived projection
+/// over enrichment, never a status the agent reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ResumeArm {
     /// A `rate_limit` park: the turn may resume at the latest reset among the
     /// windows still spent *now* — the instant the displayed-status projection
-    /// would lift the park from `paused` to `failed`. Persisting this deadline
-    /// keeps the resume alive once the reading turns over: neither a
+    /// would lift the park from `paused` to `failed`. If every spent window has
+    /// already reset while the same turn-error marker is still active, the latest
+    /// already-reset window becomes an immediate deadline. Persisting this
+    /// deadline keeps the resume alive once the reading turns over: neither a
     /// context-sidecar TTL expiry (a 5h/7d window outlasts the 3h context TTL) nor
     /// a fresh non-spent reading (Codex's app-server refresh rolls the window
     /// forward) can erase it.
@@ -366,9 +369,10 @@ pub(crate) enum ResumeArm {
 /// What kind of resume, if any, this root agent's parked turn is armed for. It
 /// stopped its last turn on a provider park certificate ([`display_turn_error`]):
 /// a `rate_limit` park arms for the latest reset of the windows still spent now
-/// (and stops arming once every spent window has reset), while a non-clocked
-/// backoff park arms while its marker stays active. Every other class — and a
-/// `rate_limit` park whose budget has already refilled — arms nothing.
+/// and recreates an immediate arm from a still-active marker once every spent
+/// window has reset, while a non-clocked backoff park arms while its marker stays
+/// active. Every other class — and a `rate_limit` park whose budget has already
+/// refilled into a non-spent reading — arms nothing.
 pub(crate) fn resume_park(agent: &AgentState, now: Timestamp) -> Option<ResumeArm> {
     if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
         return None;
@@ -381,15 +385,29 @@ pub(crate) fn resume_park(agent: &AgentState, now: Timestamp) -> Option<ResumeAr
     )?;
     match effective_turn_error_class(error) {
         TurnErrorClass::PausedRateLimit => {
-            let deadline = agent
+            let mut spent_unreset = false;
+            let mut unreset_deadline = None;
+            let mut reset_deadline = None;
+            for window in agent
                 .context
                 .as_ref()
                 .and_then(|ctx| ctx.rate_limits.as_ref())
                 .into_iter()
                 .flat_map(|limits| limits.windows.iter())
-                .filter(|window| window_spent_unreset(window, now))
-                .filter_map(|window| window.resets_at)
-                .max()?;
+                .filter(|window| window.is_spent())
+            {
+                if window_spent_unreset(window, now) {
+                    spent_unreset = true;
+                    unreset_deadline = unreset_deadline.max(window.resets_at);
+                } else {
+                    reset_deadline = reset_deadline.max(window.resets_at);
+                }
+            }
+            let deadline = if spent_unreset {
+                unreset_deadline
+            } else {
+                reset_deadline
+            }?;
             Some(ResumeArm::RateLimit { deadline })
         }
         TurnErrorClass::PausedOverloaded => Some(ResumeArm::Overloaded {

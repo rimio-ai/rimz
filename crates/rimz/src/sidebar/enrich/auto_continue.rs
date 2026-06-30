@@ -2,16 +2,17 @@
 //! after a rate-limit window resets or a retry backoff elapses.
 //!
 //! Opt-in ([`ResumeConfig::auto_continue`]). The producer arms the resume while
-//! the park is fresh and fires it once the class-specific clock is due,
-//! recording everything it needs in between so the decision never depends on the
-//! ephemeral per-session context surviving the wait:
+//! the park is fresh, or recreates a due rate-limit arm from a still-active
+//! post-reset marker if the producer missed the earlier frame, and fires it once
+//! the class-specific clock is due. The durable record carries everything needed
+//! between arm and fire so the decision never depends on the ephemeral
+//! per-session context surviving the wait:
 //!
 //! - **Arm.** Each frame an agent is parked on a resumable certificate
 //!   ([`crate::agents::resume_park`]), the producer writes a durable [`ParkRecord`]
 //!   capturing the park class and the agent's frozen `last_activity`. A
-//!   rate-limit record also captures the latest spent-window reset deadline while
-//!   the reading is still spent; a backoff record carries the turn-error marker
-//!   time and retry state.
+//!   rate-limit record captures the latest spent-window reset deadline; a
+//!   backoff record carries the turn-error marker time and retry state.
 //! - **Fire.** Once the window reset deadline or retry backoff is due and the
 //!   agent is still idle (`last_activity` unchanged), the producer spawns the
 //!   detached `rimz agents auto-continue` helper that types the nudge and writes
