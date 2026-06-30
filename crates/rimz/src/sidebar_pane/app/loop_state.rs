@@ -43,7 +43,7 @@ struct BackgroundRowKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BackgroundRowStatusKey {
     Agent(Option<crate::agents::AgentStatus>),
-    ProcessBusy(bool),
+    Process(crate::ProcessState),
 }
 
 fn background_content_key(snapshot: &SidebarSnapshot) -> BackgroundContentKey {
@@ -72,7 +72,7 @@ fn background_content_key(snapshot: &SidebarSnapshot) -> BackgroundContentKey {
 fn row_status_key(row: &crate::SidebarRow) -> BackgroundRowStatusKey {
     match &row.card {
         crate::RowCard::Agent(card) => BackgroundRowStatusKey::Agent(card.status),
-        crate::RowCard::Process(_) => BackgroundRowStatusKey::ProcessBusy(row.process_is_busy()),
+        crate::RowCard::Process(card) => BackgroundRowStatusKey::Process(card.state),
     }
 }
 

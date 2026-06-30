@@ -134,6 +134,21 @@ fn hidden_attached_agent_snapshot(
     snapshot
 }
 
+fn hidden_attached_process_snapshot(
+    ws: &WorkspaceId,
+    state: crate::ProcessState,
+) -> SidebarSnapshot {
+    let mut snapshot = process_snapshot(ws, 1);
+    let card = snapshot.worktree_groups[0].rows[0]
+        .as_process_mut()
+        .expect("process row");
+    card.state = state;
+    snapshot.own_view = Some(own_view(false, false));
+    snapshot.viewed_panes.clear();
+    snapshot.presence = Some(crate::SidebarPresence::Active);
+    snapshot
+}
+
 fn set_agent_status(snapshot: &mut SidebarSnapshot, status: crate::agents::AgentStatus) {
     let card = snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
@@ -360,6 +375,30 @@ fn background_paint_throttles_changed_hidden_content() {
 
     assert!(state.dirty, "throttled background change stays pending");
     assert_eq!(state.last_bg_paint, Some(stamp));
+}
+
+#[test]
+fn background_paint_tracks_process_stuck_state() {
+    let ws = workspace();
+    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane));
+    let idle = hidden_attached_process_snapshot(&ws, crate::ProcessState::Idle);
+    let stuck = hidden_attached_process_snapshot(&ws, crate::ProcessState::Stuck);
+    state.current = stuck;
+    state.last_bg_key = Some(background_content_key(&idle));
+    state.dirty = true;
+    state.next_frame = Instant::now() + Duration::from_secs(60);
+
+    let mut terminal = fixed_terminal();
+    state
+        .paint_frame_if_due(&mut terminal, Instant::now(), false)
+        .expect("process stuck background paint");
+
+    assert!(!state.dirty, "idle-to-stuck process state paints");
+    assert_eq!(
+        state.last_bg_key.as_ref(),
+        Some(&background_content_key(&state.current))
+    );
 }
 
 #[test]
