@@ -272,17 +272,11 @@ jobs:
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           mold -run cargo xtask test --profile gate
 
-      - name: cargo xtask test (live-tmux)
+      - name: cargo xtask test (live)
         if: ${{ !cancelled() }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --profile live-tmux
-
-      - name: cargo xtask test (live-zellij)
-        if: ${{ !cancelled() }}
-        run: |
-          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --profile live-zellij
+          mold -run cargo xtask test --profile live
 
       - name: cargo xtask test (journey)
         if: ${{ !cancelled() }}

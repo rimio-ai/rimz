@@ -62,7 +62,7 @@ retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s",
 # deadline — so a starved runner can stall a render past the budget during the
 # suite's heavy phase. Give them the same retry budget so an under-load render
 # race fires a later attempt once that phase has passed instead of failing the
-# run outright, mirroring the live-zellij/live-tmux groups above.
+# run outright, mirroring the live mux groups above.
 [[profile.default.overrides]]
 filter = 'package(rimz) & test(/^journey::/) & not test(/^journey::deep::/)'
 test-group = 'rendered-journey'
@@ -75,23 +75,14 @@ retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s",
 [profile.gate]
 default-filter = 'not (package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^journey::/)))'
 
-# `live` is the exact complement of `gate`: the live-backend and journey tiers
-# `gate` excludes. CI splits that complement into tier profiles below; this
-# profile stays available for focused local runs and targeted dispatches.
+# `live` runs both mux backends in one nextest process, letting tmux and Zellij
+# co-schedule on 64-core CI while each stays bounded by its per-backend group.
+# Together, `live` and `journey` are the exact complement of `gate`.
 # Inherits the live-server groups and the retry budget from `default`.
 [profile.live]
-default-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^journey::/))'
+default-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^journey::deep::/))'
 
-# CI runs the three heavy tiers as sequential steps in a single tests-live job
-# so the latency-sensitive tiers never co-schedule (see ci.yml). Each profile
-# selects its tier and inherits the default profile's live-server groups and
-# retry budget. The three filters are the gate-excluded complement, split along
-# the same boundaries as the test-group overrides above.
-[profile.live-tmux]
-default-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^journey::deep::tmux/))'
-
-[profile.live-zellij]
-default-filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^journey::deep::zellij/))'
-
+# CI runs `journey` as its own step after `live`; the deep mux smokes ride in
+# `live` so the per-backend groups bound their real-server load.
 [profile.journey]
 default-filter = 'package(rimz) & test(/^journey::/) & not test(/^journey::deep::/)'

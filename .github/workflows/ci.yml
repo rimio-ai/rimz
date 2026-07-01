@@ -304,18 +304,11 @@ jobs:
           name: nextest-archive
           path: .
 
-      - name: cargo nextest run (live-tmux)
+      - name: cargo nextest run (live)
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           unset NO_COLOR
-          cargo nextest run --profile live-tmux --archive-file nextest-archive.tar.zst
-
-      - name: cargo nextest run (live-zellij)
-        if: ${{ !cancelled() }}
-        run: |
-          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          unset NO_COLOR
-          cargo nextest run --profile live-zellij --archive-file nextest-archive.tar.zst
+          cargo nextest run --profile live --archive-file nextest-archive.tar.zst
 
       - name: cargo nextest run (journey)
         if: ${{ !cancelled() }}
