@@ -179,13 +179,14 @@ fn rate_limits_and_account_shapes_map_tolerantly() {
 
 #[test]
 fn rate_limits_response_maps_credits_balance_at_root_or_inside_rate_limits() {
-    for (label, result) in [
+    for (label, result, expected) in [
         (
             "root credits",
             json!({
                 "rateLimits": {},
                 "credits": { "balance": 12.5 }
             }),
+            ExtraCredits::known(None, Some(12.5), None),
         ),
         (
             "nested credits",
@@ -194,6 +195,7 @@ fn rate_limits_response_maps_credits_balance_at_root_or_inside_rate_limits() {
                     "credits": { "balance": "7.25" }
                 }
             }),
+            ExtraCredits::known(None, Some(7.25), None),
         ),
     ] {
         let transport = CannedTransport::new().with("account/rateLimits/read", result);
@@ -203,7 +205,7 @@ fn rate_limits_response_maps_credits_balance_at_root_or_inside_rate_limits() {
         let credits = observation
             .extra_credits
             .unwrap_or_else(|| panic!("missing credits for {label}"));
-        assert!(credits.is_usable(), "{label}");
+        assert_eq!(credits, expected, "{label}");
     }
 
     let transport = CannedTransport::new().with(
@@ -241,6 +243,69 @@ fn rate_limits_response_maps_credits_balance_at_root_or_inside_rate_limits() {
             .windows[0]
             .used_percentage,
         Some(42)
+    );
+}
+
+#[test]
+fn rate_limits_response_maps_credit_state_fields() {
+    for (label, result, expected) in [
+        (
+            "disabled camelCase",
+            json!({
+                "rateLimits": {},
+                "credits": { "hasCredits": false }
+            }),
+            ExtraCredits::Disabled,
+        ),
+        (
+            "disabled snake_case",
+            json!({
+                "rateLimits": {},
+                "credits": { "has_credits": false }
+            }),
+            ExtraCredits::Disabled,
+        ),
+        (
+            "unlimited",
+            json!({
+                "rateLimits": {},
+                "credits": { "unlimited": true }
+            }),
+            ExtraCredits::known(None, None, None),
+        ),
+        (
+            "exhausted",
+            json!({
+                "rateLimits": {},
+                "credits": { "overageLimitReached": true, "balance": 12.5 }
+            }),
+            ExtraCredits::known(None, Some(0.0), None),
+        ),
+    ] {
+        let transport = CannedTransport::new().with("account/rateLimits/read", result);
+        let mut client = CodexAppServer::new(transport);
+        client.handshake().unwrap();
+        assert_eq!(
+            client.observe("codex", None, None, ts()).extra_credits,
+            Some(expected),
+            "{label}"
+        );
+    }
+
+    let transport = CannedTransport::new().with(
+        "account/rateLimits/read",
+        json!({
+            "rateLimits": {
+                "credits": { "hasCredits": false }
+            },
+            "credits": { "balance": true }
+        }),
+    );
+    let mut client = CodexAppServer::new(transport);
+    client.handshake().unwrap();
+    assert_eq!(
+        client.observe("codex", None, None, ts()).extra_credits,
+        Some(ExtraCredits::Disabled)
     );
 }
 

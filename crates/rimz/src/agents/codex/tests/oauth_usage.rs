@@ -95,3 +95,65 @@ fn usage_response_maps_windows_and_tolerates_bad_credit_balance() {
         Some(42)
     );
 }
+
+#[test]
+fn usage_response_maps_credit_state_ladder() {
+    let usage = parse_usage_response(r#"{ "credits": { "has_credits": false } }"#).unwrap();
+    assert_eq!(usage.extra_credits, Some(ExtraCredits::Disabled));
+
+    let usage = parse_usage_response(r#"{ "credits": { "unlimited": true } }"#).unwrap();
+    assert_eq!(
+        usage.extra_credits,
+        Some(ExtraCredits::known(None, None, None))
+    );
+
+    let usage =
+        parse_usage_response(r#"{ "credits": { "overage_limit_reached": true } }"#).unwrap();
+    assert_eq!(
+        usage.extra_credits,
+        Some(ExtraCredits::known(None, Some(0.0), None))
+    );
+}
+
+#[test]
+fn usage_response_maps_verified_team_payload_with_disabled_credits() {
+    let usage = parse_usage_response(
+        r#"{
+            "user_id": "user-123",
+            "account_id": "acct-123",
+            "email": "person@example.com",
+            "plan_type": "team",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 42.4,
+                    "reset_at": 1780092691,
+                    "limit_window_seconds": 18000,
+                    "reset_after_seconds": 991
+                },
+                "secondary_window": {
+                    "used_percent": 7,
+                    "reset_at": 1780186207,
+                    "limit_window_seconds": 604800,
+                    "reset_after_seconds": 86400
+                }
+            },
+            "credits": {
+                "has_credits": false,
+                "unlimited": false,
+                "overage_limit_reached": false,
+                "balance": null,
+                "approx_local_messages": null,
+                "approx_cloud_messages": null
+            },
+            "spend_control": {},
+            "rate_limit_reset_credits": null
+        }"#,
+    )
+    .unwrap();
+
+    let windows = usage.rate_limits.expect("windows");
+    assert_eq!(windows.windows.len(), 2);
+    assert_eq!(windows.windows[0].duration_mins, Some(300));
+    assert_eq!(windows.windows[1].duration_mins, Some(10080));
+    assert_eq!(usage.extra_credits, Some(ExtraCredits::Disabled));
+}

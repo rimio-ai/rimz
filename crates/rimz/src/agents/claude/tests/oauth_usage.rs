@@ -110,6 +110,57 @@ fn usage_response_maps_windows_and_extra_usage() {
 }
 
 #[test]
+fn usage_response_tolerates_verified_full_payload_shape() {
+    let usage = parse_usage_response(
+        r#"{
+            "five_hour": {
+                "utilization": 12.5,
+                "resets_at": "2026-09-21T14:13:20Z",
+                "limit_dollars": null,
+                "used_dollars": null,
+                "remaining_dollars": null
+            },
+            "seven_day": {
+                "utilization": 7,
+                "resets_at": "2026-09-27T09:06:40Z",
+                "limit_dollars": null,
+                "used_dollars": null,
+                "remaining_dollars": null
+            },
+            "extra_usage": {
+                "is_enabled": false,
+                "monthly_limit": 0,
+                "used_credits": 0.0,
+                "utilization": 0,
+                "currency": "USD",
+                "decimal_places": 2,
+                "disabled_reason": "admin_disabled",
+                "daily": null,
+                "weekly": null
+            },
+            "limits": [],
+            "spend": {},
+            "member_dashboard_available": false
+        }"#,
+    )
+    .unwrap();
+
+    let windows = usage.rate_limits.expect("windows");
+    assert_eq!(windows.windows.len(), 2);
+    assert_eq!(
+        windows.windows[0].duration_mins,
+        Some(CLAUDE_FIVE_HOUR_MINS)
+    );
+    assert_eq!(windows.windows[0].used_percentage, Some(13));
+    assert_eq!(
+        windows.windows[1].duration_mins,
+        Some(CLAUDE_SEVEN_DAY_MINS)
+    );
+    assert_eq!(windows.windows[1].used_percentage, Some(7));
+    assert_eq!(usage.extra_credits, Some(ExtraCredits::Disabled));
+}
+
+#[test]
 fn user_agent_uses_claude_version_when_supplied() {
     assert_eq!(
         claude_code_user_agent(Some(" 2.1.173 ")),

@@ -182,7 +182,7 @@ The reaper queries the per-user daemon **specifically** (never a cold-spawn, who
 { "method": "initialized", "params": {} }
 ```
 
-**`account/rateLimits/read`** → the 5h/7d balance windows, plan tier, and optional paid-credit balance.
+**`account/rateLimits/read`** → the 5h/7d balance windows, plan tier, and optional paid-credit state.
 
 ```jsonc
 // result — RateLimitsResponse { rateLimits: RateLimitSnapshot }
@@ -191,13 +191,23 @@ The reaper queries the per-user daemon **specifically** (never a cold-spawn, who
     "primary":   { "usedPercent": 0-100, "resetsAt": <epoch s>, "windowDurationMins": 300 },   // ~5h
     "secondary": { "usedPercent": 0-100, "resetsAt": <epoch s>, "windowDurationMins": 10080 }, // ~7d
     "planType": "plus | pro | team | …",
-    "credits": { "balance": <USD number or string> } // optional, tolerated here or at the result root
+    "credits": {
+      "hasCredits": true | false,          // optional, mapped
+      "unlimited": true | false,           // optional, mapped
+      "overageLimitReached": true | false, // optional, mapped
+      "balance": <USD number or string>    // optional, mapped
+    } // optional, tolerated here or at the result root
   },
-  "credits": { "balance": <USD number or string> } // optional
+  "credits": {
+    "hasCredits": true | false,
+    "unlimited": true | false,
+    "overageLimitReached": true | false,
+    "balance": <USD number or string>
+  } // optional
 }
 ```
 
-Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and a server-side change in window count or length renders gracefully off `windowDurationMins` rather than a hard-coded 5h/7d. The optional `credits.balance` field is parsed only when present and represents a remaining USD balance. Unknown `credits.balance` types are ignored so a credit-shape drift cannot poison valid windows.
+Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and a server-side change in window count or length renders gracefully off `windowDurationMins` rather than a hard-coded 5h/7d. The optional `credits` object is mapped by the shared Codex credit rule: `overageLimitReached: true` means exhausted, `unlimited: true` means usable with unknown remaining balance, numeric/string `balance` means remaining USD, and `hasCredits: false` means disabled. Snake-case aliases are tolerated for the credit-state fields, and unknown credit shapes leave valid windows intact.
 
 **`model/list`** (`{ "includeHidden": true }`) → the session model's display name. The payload also carries `defaultReasoningEffort`, but Rimz does not map it to row effort because it is a catalog default/recommendation, not the current session's configured value.
 
@@ -288,21 +298,35 @@ The default URL is `GET https://chatgpt.com/backend-api/wham/usage`. A `chatgpt_
 
 ```jsonc
 {
-  "plan_type": "plus | pro | team | …",
+  "user_id": "user_…",     // present, ignored
+  "account_id": "acct_…",  // present, ignored
+  "email": "person@example.com", // present, ignored
+  "plan_type": "plus | pro | team | …", // present, ignored here; live app-server owns the plan label
   "rate_limit": {
     "primary_window": {
-      "used_percent": 0-100,
-      "reset_at": <epoch s>,
-      "limit_window_seconds": 18000
+      "used_percent": 0-100,           // mapped
+      "reset_at": <epoch s>,           // mapped
+      "limit_window_seconds": 18000,   // mapped to duration_mins
+      "reset_after_seconds": 123       // present, ignored
     },
     "secondary_window": {
-      "used_percent": 0-100,
-      "reset_at": <epoch s>,
-      "limit_window_seconds": 604800
+      "used_percent": 0-100,           // mapped
+      "reset_at": <epoch s>,           // mapped
+      "limit_window_seconds": 604800,  // mapped to duration_mins
+      "reset_after_seconds": 123       // present, ignored
     }
   },
-  "credits": { "balance": <USD number or string> }
+  "credits": {
+    "has_credits": true | false,            // mapped
+    "unlimited": true | false,              // mapped
+    "overage_limit_reached": true | false,  // mapped
+    "balance": <USD number, string, or null>, // mapped when numeric/string
+    "approx_local_messages": null,          // present, ignored
+    "approx_cloud_messages": null           // present, ignored
+  },
+  "spend_control": {},                 // present, ignored
+  "rate_limit_reset_credits": null     // present, ignored
 }
 ```
 
-Each window's `limit_window_seconds` maps to `duration_mins`; primary/secondary order is not semantic. `credits.balance` maps to `ExtraCredits::Known { remaining_usd }` when it parses as a number.
+Each window's `limit_window_seconds` maps to `duration_mins`; primary/secondary order is not semantic. Codex credits map in this order: `overage_limit_reached: true` → exhausted `ExtraCredits::Known { remaining_usd: 0 }`, `unlimited: true` → usable `ExtraCredits::Known` with unknown remaining balance, numeric/string `balance` → `ExtraCredits::Known { remaining_usd }`, `has_credits: false` → `ExtraCredits::Disabled`, and omitted/unknown fields → no extra-credit reading.

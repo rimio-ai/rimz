@@ -14,7 +14,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::{ExtraCredits, HttpErrKind, url_host};
+use crate::agents::credits::OauthUsageResponse;
+use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind, url_host};
 
 use super::app_server::codex_home;
 
@@ -46,12 +47,6 @@ impl crate::agents::credits::OauthReportable for CodexOauthUsageErr {
 }
 
 pub(crate) type Result<T> = std::result::Result<T, CodexOauthUsageErr>;
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct CodexOauthUsage {
-    pub(crate) rate_limits: Option<AgentRateLimits>,
-    pub(crate) extra_credits: Option<ExtraCredits>,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CodexOauthCredentials {
@@ -107,9 +102,12 @@ struct WindowWire {
 #[serde(default)]
 struct CreditsWire {
     balance: Option<Value>,
+    has_credits: Option<bool>,
+    unlimited: Option<bool>,
+    overage_limit_reached: Option<bool>,
 }
 
-pub(crate) fn fetch_usage() -> Result<CodexOauthUsage> {
+pub(crate) fn fetch_usage() -> Result<AccountUsageSnapshot> {
     let home = codex_home().ok_or(CodexOauthUsageErr::NoCredentials)?;
     let credentials = load_credentials_from(&home.join("auth.json"))?;
     let base_url = configured_base_url(&home)?;
@@ -120,7 +118,7 @@ pub(crate) fn fetch_usage() -> Result<CodexOauthUsage> {
 pub(crate) fn fetch_usage_with_token(
     access_token: &str,
     account_id: Option<&str>,
-) -> Result<CodexOauthUsage> {
+) -> Result<AccountUsageSnapshot> {
     fetch_usage_with_url(
         &usage_url(None),
         &CodexOauthCredentials {
@@ -192,7 +190,7 @@ pub(crate) fn usage_url(chatgpt_base_url: Option<&str>) -> String {
 pub(crate) fn fetch_usage_with_url(
     url: &str,
     credentials: &CodexOauthCredentials,
-) -> Result<CodexOauthUsage> {
+) -> Result<AccountUsageSnapshot> {
     let body = http_get(url, credentials)?;
     parse_usage_response(&body)
 }
@@ -245,19 +243,48 @@ fn http_get(url: &str, credentials: &CodexOauthCredentials) -> Result<String> {
         })
 }
 
-pub(crate) fn parse_usage_response(body: &str) -> Result<CodexOauthUsage> {
-    let parsed: UsageWire = serde_json::from_str(body)?;
-    Ok(CodexOauthUsage {
-        rate_limits: collect_windows(
-            parsed.rate_limit.primary_window,
-            parsed.rate_limit.secondary_window,
-        ),
-        extra_credits: parsed
-            .credits
-            .as_ref()
-            .and_then(CreditsWire::balance_usd)
-            .map(|balance| ExtraCredits::known(None, Some(balance), None)),
-    })
+pub(crate) fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
+    Ok(serde_json::from_str::<UsageWire>(body)?.into_account_usage())
+}
+
+impl OauthUsageResponse for UsageWire {
+    fn into_account_usage(self) -> AccountUsageSnapshot {
+        AccountUsageSnapshot {
+            rate_limits: collect_windows(
+                self.rate_limit.primary_window,
+                self.rate_limit.secondary_window,
+            ),
+            extra_credits: self.credits.and_then(|credits| {
+                credits_to_extra(
+                    credits.has_credits,
+                    credits.unlimited,
+                    credits.overage_limit_reached,
+                    credits.balance.as_ref().and_then(parse_balance),
+                )
+            }),
+        }
+    }
+}
+
+pub(in crate::agents::codex) fn credits_to_extra(
+    has_credits: Option<bool>,
+    unlimited: Option<bool>,
+    overage_limit_reached: Option<bool>,
+    balance: Option<f64>,
+) -> Option<ExtraCredits> {
+    if overage_limit_reached == Some(true) {
+        return Some(ExtraCredits::known(None, Some(0.0), None));
+    }
+    if unlimited == Some(true) {
+        return Some(ExtraCredits::known(None, None, None));
+    }
+    if let Some(balance) = balance {
+        return Some(ExtraCredits::known(None, Some(balance), None));
+    }
+    if has_credits == Some(false) {
+        return Some(ExtraCredits::Disabled);
+    }
+    None
 }
 
 fn collect_windows(
@@ -294,16 +321,14 @@ fn clamp_pct(value: f64) -> u8 {
     value.round().clamp(0.0, 100.0) as u8
 }
 
-impl CreditsWire {
-    fn balance_usd(&self) -> Option<f64> {
-        match self.balance.as_ref()? {
-            Value::Number(value) => value.as_f64().filter(|value| value.is_finite()),
-            Value::String(value) => value.trim().parse::<f64>().ok(),
-            _ => None,
-        }
-        .filter(|value| value.is_finite())
-        .map(|value| value.max(0.0))
+pub(in crate::agents::codex) fn parse_balance(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(value) => value.as_f64().filter(|value| value.is_finite()),
+        Value::String(value) => value.trim().parse::<f64>().ok(),
+        _ => None,
     }
+    .filter(|value| value.is_finite())
+    .map(|value| value.max(0.0))
 }
 
 #[cfg(test)]

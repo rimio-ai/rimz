@@ -75,12 +75,12 @@ use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
-    AccountUsageSnapshot, AgentAdapter, AgentErr, AgentLifecycleObservation, AgentTurnError,
-    ClassifiedHook, ExtraCredits, HookInstallPreview, HookInstallReport, HookUninstallReport,
-    LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, Result,
-    RootIdentity, SubagentIdentity, TranscriptMessage, TranscriptRole, choice_is_allow,
-    classify_agent_hook, non_empty_trimmed, optional_payload_string, read_transcript_tail,
-    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    AgentAdapter, AgentErr, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
+    ExtraCredits, HookInstallPreview, HookInstallReport, HookUninstallReport, LifecycleRefreshCtx,
+    LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, Result, RootIdentity,
+    SubagentIdentity, TranscriptMessage, TranscriptRole, choice_is_allow, classify_agent_hook,
+    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::run::PermissionMode;
@@ -758,13 +758,7 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
-        crate::agents::credits::map_probe_snapshot(
-            oauth_usage::fetch_usage().map(|usage| AccountUsageSnapshot {
-                rate_limits: usage.rate_limits,
-                extra_credits: usage.extra_credits,
-            }),
-            "codex.oauth_usage",
-        )
+        crate::agents::credits::map_probe_snapshot(oauth_usage::fetch_usage(), "codex.oauth_usage")
     }
 
     /// Codex has no statusline, so app-server-owned metadata (rate-limit

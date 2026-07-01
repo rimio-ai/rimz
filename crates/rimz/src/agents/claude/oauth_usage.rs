@@ -15,7 +15,10 @@ use jiff::Timestamp;
 use serde::Deserialize;
 
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::{ExtraCredits, HttpErrKind, transcript_fs::home_dir, url_host};
+use crate::agents::credits::OauthUsageResponse;
+use crate::agents::{
+    AccountUsageSnapshot, ExtraCredits, HttpErrKind, transcript_fs::home_dir, url_host,
+};
 
 use super::statusline::{CLAUDE_FIVE_HOUR_MINS, CLAUDE_SEVEN_DAY_MINS, clamp_rate_limit_used_pct};
 
@@ -55,12 +58,6 @@ impl crate::agents::credits::OauthReportable for ClaudeOauthUsageErr {
 }
 
 pub(crate) type Result<T> = std::result::Result<T, ClaudeOauthUsageErr>;
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ClaudeOauthUsage {
-    pub(crate) rate_limits: Option<AgentRateLimits>,
-    pub(crate) extra_credits: Option<ExtraCredits>,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ClaudeOauthCredentials {
@@ -104,7 +101,7 @@ struct ExtraUsageWire {
     monthly_limit: Option<f64>,
 }
 
-pub(crate) fn fetch_usage(cli_version: Option<&str>) -> Result<ClaudeOauthUsage> {
+pub(crate) fn fetch_usage(cli_version: Option<&str>) -> Result<AccountUsageSnapshot> {
     let credentials = load_credentials()?;
     fetch_usage_with_url(&usage_url(), &credentials, cli_version)
 }
@@ -112,7 +109,7 @@ pub(crate) fn fetch_usage(cli_version: Option<&str>) -> Result<ClaudeOauthUsage>
 pub(crate) fn fetch_usage_with_token(
     access_token: &str,
     cli_version: Option<&str>,
-) -> Result<ClaudeOauthUsage> {
+) -> Result<AccountUsageSnapshot> {
     fetch_usage_with_url(
         &usage_url(),
         &ClaudeOauthCredentials {
@@ -186,7 +183,7 @@ pub(crate) fn fetch_usage_with_url(
     url: &str,
     credentials: &ClaudeOauthCredentials,
     cli_version: Option<&str>,
-) -> Result<ClaudeOauthUsage> {
+) -> Result<AccountUsageSnapshot> {
     let body = http_get(url, &credentials.access_token, cli_version)?;
     parse_usage_response(&body)
 }
@@ -256,12 +253,17 @@ fn normalized_version(version: &str) -> Option<String> {
     (!trimmed.is_empty()).then_some(trimmed.to_owned())
 }
 
-pub(crate) fn parse_usage_response(body: &str) -> Result<ClaudeOauthUsage> {
-    let parsed: UsageWire = serde_json::from_str(body)?;
-    Ok(ClaudeOauthUsage {
-        rate_limits: collect_rate_limits(parsed.five_hour, parsed.seven_day),
-        extra_credits: collect_extra_usage(parsed.extra_usage),
-    })
+pub(crate) fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
+    Ok(serde_json::from_str::<UsageWire>(body)?.into_account_usage())
+}
+
+impl OauthUsageResponse for UsageWire {
+    fn into_account_usage(self) -> AccountUsageSnapshot {
+        AccountUsageSnapshot {
+            rate_limits: collect_rate_limits(self.five_hour, self.seven_day),
+            extra_credits: collect_extra_usage(self.extra_usage),
+        }
+    }
 }
 
 fn collect_rate_limits(

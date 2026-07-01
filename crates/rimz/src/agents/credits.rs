@@ -60,6 +60,11 @@ pub struct AccountUsageSnapshot {
     pub extra_credits: Option<ExtraCredits>,
 }
 
+/// A provider's raw OAuth usage response, normalized to the shared snapshot.
+pub(crate) trait OauthUsageResponse {
+    fn into_account_usage(self) -> AccountUsageSnapshot;
+}
+
 /// Paid usage beyond the subscription windows: Claude extra usage, Codex
 /// credits, or API-key spend against a display ceiling.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

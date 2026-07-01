@@ -317,13 +317,34 @@ The helper calls `GET https://api.anthropic.com/api/oauth/usage` with `Authoriza
 
 ```jsonc
 {
-  "five_hour": { "utilization": 12.5, "resets_at": "2026-09-21T14:13:20Z" },
-  "seven_day": { "utilization": 7, "resets_at": "2026-09-27T09:06:40Z" },
+  "five_hour": {
+    "utilization": 12.5,                 // mapped
+    "resets_at": "2026-09-21T14:13:20Z", // mapped
+    "limit_dollars": null,               // present, ignored
+    "used_dollars": null,                // present, ignored
+    "remaining_dollars": null            // present, ignored
+  },
+  "seven_day": {
+    "utilization": 7,                    // mapped
+    "resets_at": "2026-09-27T09:06:40Z", // mapped
+    "limit_dollars": null,               // present, ignored
+    "used_dollars": null,                // present, ignored
+    "remaining_dollars": null            // present, ignored
+  },
   "extra_usage": {
-    "is_enabled": true,
-    "used_credits": 725,     // cents
-    "monthly_limit": 5000    // cents
-  }
+    "is_enabled": true,        // mapped
+    "used_credits": 725,       // cents, mapped
+    "monthly_limit": 5000,     // cents, mapped
+    "utilization": 14.5,       // present, ignored
+    "currency": "USD",         // present, ignored
+    "decimal_places": 2,       // present, ignored
+    "disabled_reason": null,   // present, ignored
+    "daily": null,             // present, ignored
+    "weekly": null             // present, ignored
+  },
+  "limits": [],                       // present, ignored
+  "spend": {},                        // present, ignored
+  "member_dashboard_available": false // present, ignored
 }
 ```
 

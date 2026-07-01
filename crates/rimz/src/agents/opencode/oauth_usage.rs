@@ -75,26 +75,16 @@ pub(crate) fn fetch() -> Result<AccountUsageSnapshot> {
     let path = auth_path().ok_or(OpencodeOauthUsageErr::NoCredentials)?;
     let credential = load_credentials_from(&path, latest_message_provider())?;
     match credential.provider.as_str() {
-        "anthropic" => {
-            let usage = crate::agents::claude::oauth_usage::fetch_usage_with_token(
-                &credential.access_token,
-                None,
-            )?;
-            Ok(AccountUsageSnapshot {
-                rate_limits: usage.rate_limits,
-                extra_credits: usage.extra_credits,
-            })
-        }
-        "openai" | "openai-codex" => {
-            let usage = crate::agents::codex::oauth_usage::fetch_usage_with_token(
-                &credential.access_token,
-                credential.account_id.as_deref(),
-            )?;
-            Ok(AccountUsageSnapshot {
-                rate_limits: usage.rate_limits,
-                extra_credits: usage.extra_credits,
-            })
-        }
+        "anthropic" => crate::agents::claude::oauth_usage::fetch_usage_with_token(
+            &credential.access_token,
+            None,
+        )
+        .map_err(OpencodeOauthUsageErr::from),
+        "openai" | "openai-codex" => crate::agents::codex::oauth_usage::fetch_usage_with_token(
+            &credential.access_token,
+            credential.account_id.as_deref(),
+        )
+        .map_err(OpencodeOauthUsageErr::from),
         provider => Err(OpencodeOauthUsageErr::UnsupportedProvider(
             provider.to_owned(),
         )),

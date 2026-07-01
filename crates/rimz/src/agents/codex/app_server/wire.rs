@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::ExtraCredits;
+use crate::agents::codex::oauth_usage::{credits_to_extra, parse_balance};
 use crate::agents::context::{
     AgentAccount, AgentContext, AgentRateLimits, RateLimitWindow, WindowSource,
 };
@@ -45,6 +46,12 @@ pub(super) struct RateLimitSnapshot {
 pub(super) struct CreditsWire {
     #[serde(default)]
     balance: Option<Value>,
+    #[serde(default, alias = "has_credits")]
+    has_credits: Option<bool>,
+    #[serde(default)]
+    unlimited: Option<bool>,
+    #[serde(default, alias = "overage_limit_reached")]
+    overage_limit_reached: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -260,30 +267,20 @@ pub(super) fn collect_windows(
 }
 
 pub(super) fn collect_credits(parsed: &RateLimitsResponse) -> Option<ExtraCredits> {
-    let balance = parsed
+    parsed
         .credits
         .as_ref()
-        .and_then(CreditsWire::balance_usd)
-        .or_else(|| {
-            parsed
-                .rate_limits
-                .credits
-                .as_ref()
-                .and_then(CreditsWire::balance_usd)
-        });
-    balance.map(|remaining| ExtraCredits::known(None, Some(remaining), None))
+        .and_then(map_credits)
+        .or_else(|| parsed.rate_limits.credits.as_ref().and_then(map_credits))
 }
 
-impl CreditsWire {
-    fn balance_usd(&self) -> Option<f64> {
-        match self.balance.as_ref()? {
-            Value::Number(value) => value.as_f64().filter(|value| value.is_finite()),
-            Value::String(value) => value.trim().parse::<f64>().ok(),
-            _ => None,
-        }
-        .filter(|value| value.is_finite())
-        .map(|value| value.max(0.0))
-    }
+fn map_credits(credits: &CreditsWire) -> Option<ExtraCredits> {
+    credits_to_extra(
+        credits.has_credits,
+        credits.unlimited,
+        credits.overage_limit_reached,
+        credits.balance.as_ref().and_then(parse_balance),
+    )
 }
 
 fn clamp_pct(value: i64) -> u8 {
