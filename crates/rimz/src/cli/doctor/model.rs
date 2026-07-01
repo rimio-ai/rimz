@@ -28,6 +28,7 @@ pub(super) enum Probe<T> {
 #[derive(Debug, Serialize)]
 pub(super) struct DoctorReport {
     pub(super) version: &'static str,
+    pub(super) host: Host,
     pub(super) workspace: Probe<Workspace>,
     pub(super) mux: Probe<Mux>,
     pub(super) sidebar_renderer: &'static str,
@@ -47,6 +48,17 @@ pub(super) struct DoctorReport {
     pub(super) agents: Option<AgentRollup>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) diagnostics: Option<Diagnostics>,
+}
+
+/// Host/process identity: who is running doctor and from which binary — the
+/// facts that pin a workspace to an OS user and a rimz install.
+#[derive(Debug, Serialize)]
+pub(super) struct Host {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) user: Option<String>,
+    pub(super) uid: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) binary: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,6 +102,8 @@ pub(super) struct Mux {
     pub(super) capabilities: Capabilities,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) zellij_socket: Option<ZellijSocket>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) socket: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) session_health: Option<Probe<SessionHealth>>,
     #[serde(skip_serializing_if = "Option::is_none")]

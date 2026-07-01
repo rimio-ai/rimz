@@ -17,7 +17,7 @@ mod window;
 pub(crate) use presence::PresenceRoster;
 pub use presence::{ControlLine, PresenceWatch, control_socket_from_env};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +32,23 @@ use crate::config::TmuxConfig;
 /// Minimum tmux version that supports the room options Rimz applies across all
 /// supported hosts: `extended-keys-format` (3.5) and `allow-passthrough` (3.3).
 pub const MIN_TMUX_VERSION: (u32, u32, u32) = (3, 5, 0);
+
+/// The tmux server socket Rimz addresses by default:
+/// `${TMUX_TMPDIR:-/tmp}/tmux-<uid>/default`.
+///
+/// Reports the default socket the local backend uses; a `-S` override
+/// (test-only today) is not reflected.
+pub fn default_server_socket_path() -> PathBuf {
+    let tmpdir = std::env::var_os("TMUX_TMPDIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    default_server_socket_path_from(&tmpdir, nix::unistd::Uid::current().as_raw())
+}
+
+fn default_server_socket_path_from(tmpdir: &Path, uid: u32) -> PathBuf {
+    tmpdir.join(format!("tmux-{uid}")).join("default")
+}
 
 /// Bundle reported by `rimz doctor` when the active backend is tmux.
 #[derive(Clone, Debug, Serialize, Deserialize)]

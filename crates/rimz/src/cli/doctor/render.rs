@@ -16,8 +16,9 @@ use rimz::schema::diag::DiagSeverity;
 use rimz::trust::TrustState;
 
 use super::model::{
-    AgentRollup, Capabilities, Diagnostics, DoctorReport, HookStatus, LoopTasks, Mux, Presence,
-    Probe, RemoteControl, Rooms, SessionHealth, Storage, Terminal, Trust, Version, Workspace,
+    AgentRollup, Capabilities, Diagnostics, DoctorReport, HookStatus, Host, LoopTasks, Mux,
+    Presence, Probe, RemoteControl, Rooms, SessionHealth, Storage, Terminal, Trust, Version,
+    Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -69,10 +70,7 @@ fn note(w: &mut impl Write, health: Health, text: &str) -> io::Result<()> {
 }
 
 pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Result<()> {
-    writeln!(w, "{}", paint(palette::ACCENT.bold(), "Rimz doctor"))?;
-    let mut kv = KeyVals::new().indent(2);
-    kv.push("version", cell(report.version));
-    kv.render(w)?;
+    render_identity(w, report.version, &report.host)?;
     render_workspace(w, &report.workspace)?;
     render_mux(w, &report.mux)?;
 
@@ -107,6 +105,22 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_agents(w, report)?;
     render_diagnostics(w, report)?;
     Ok(())
+}
+
+fn render_identity(w: &mut impl Write, version: &str, host: &Host) -> io::Result<()> {
+    writeln!(w, "{}", paint(palette::ACCENT.bold(), "Rimz doctor"))?;
+    let mut kv = KeyVals::new().indent(2);
+    kv.push("version", cell(version));
+    let user = match &host.user {
+        Some(name) => format!("{name} (uid {})", host.uid),
+        None => format!("uid {}", host.uid),
+    };
+    kv.push("user", cell(user));
+    kv.push(
+        "binary",
+        cell(host.binary.as_deref().unwrap_or("unknown")).fg(palette::BODY),
+    );
+    kv.render(w)
 }
 
 fn render_terminal(w: &mut impl Write, terminal: &Terminal) -> io::Result<()> {
@@ -168,12 +182,12 @@ fn render_workspace(w: &mut impl Write, workspace: &Probe<Workspace>) -> io::Res
             kv.push("id", cell(ws.workspace_id.as_str()).fg(palette::ACCENT));
             kv.push(
                 "project root",
-                cell(home_relative(&ws.project_root)).fg(palette::BODY),
+                cell(ws.project_root.as_str()).fg(palette::BODY),
             );
             kv.push("root class", cell(ws.root_class.label()));
             kv.push(
                 "worktree root",
-                cell(home_relative(&ws.worktree_root)).fg(palette::BODY),
+                cell(ws.worktree_root.as_str()).fg(palette::BODY),
             );
             kv.push(
                 "worktree branch",
@@ -200,7 +214,7 @@ fn render_workspace(w: &mut impl Write, workspace: &Probe<Workspace>) -> io::Res
                                 "{label} ({}/{} bytes for {})",
                                 budget.used,
                                 budget.limit,
-                                home_relative(&budget.dir)
+                                budget.dir.as_str()
                             ),
                         ),
                     );
@@ -269,6 +283,9 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>) -> io::Result<()> {
             "tmux floor",
             verdict(Health::Warn, format!("unavailable ({error})")),
         ),
+    }
+    if let Some(socket) = &mux.socket {
+        kv.push("socket", cell(socket.as_str()).fg(palette::BODY));
     }
     if let Some(socket) = &mux.zellij_socket {
         let health = if socket.fits {
@@ -756,7 +773,10 @@ fn age_label(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::doctor::model::{HookRow, LoopTaskRow, RemoteAgent, StorageRootView};
+    use crate::cli::doctor::model::{
+        HookRow, Host, LoopTaskRow, RemoteAgent, StorageRootView, TmuxCaps,
+    };
+    use rimz::ids::MuxName;
 
     fn strip(
         render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> io::Result<()>,
@@ -786,6 +806,20 @@ mod tests {
     }
 
     #[test]
+    fn render_identity_shows_user_and_binary() {
+        let host = Host {
+            user: Some("eddie".to_owned()),
+            uid: 1001,
+            binary: Some("/home/eddie/.cargo/bin/rimz".to_owned()),
+        };
+        let out = strip(|w| render_identity(w, "0.1.0", &host));
+        assert!(out.contains("Rimz doctor"), "{out}");
+        assert!(out.contains("0.1.0"), "{out}");
+        assert!(out.contains("eddie (uid 1001)"), "{out}");
+        assert!(out.contains("/home/eddie/.cargo/bin/rimz"), "{out}");
+    }
+
+    #[test]
     fn terminal_section_renders_depth_signals_and_fix() {
         let terminal = Terminal {
             truecolor_advertised: false,
@@ -812,6 +846,11 @@ mod tests {
     fn hooks_section_renders_glyph_status_and_fix() {
         let report = DoctorReport {
             version: crate::cli::version::VERSION,
+            host: Host {
+                user: None,
+                uid: 0,
+                binary: None,
+            },
             workspace: Probe::Unavailable {
                 error: "test".to_owned(),
             },
@@ -897,6 +936,29 @@ mod tests {
             out.contains("rimz loop list"),
             "the installed-state hint is present:\n{out}"
         );
+    }
+
+    #[test]
+    fn mux_section_shows_backend_socket() {
+        let mux = Mux {
+            name: MuxName::Tmux,
+            version: Version::Reported {
+                version: "tmux 3.5".to_owned(),
+            },
+            capabilities: Capabilities::Tmux(Probe::Ready(TmuxCaps {
+                meets_min_version: true,
+                min_version: (3, 5, 0),
+                popup_supported: true,
+            })),
+            zellij_socket: None,
+            socket: Some("/tmp/tmux-1001/default".to_owned()),
+            session_health: None,
+            duplicate_sessions: None,
+            presence: None,
+        };
+        let out = strip(|w| render_mux(w, &Probe::Ready(mux)));
+        assert!(out.contains("MULTIPLEXER"), "{out}");
+        assert!(out.contains("/tmp/tmux-1001/default"), "{out}");
     }
 
     #[test]

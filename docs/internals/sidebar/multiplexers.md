@@ -145,4 +145,4 @@ What both backends deliver:
 - **Runtime correctness needs no visible sidebar** — hooks, the bridge, and `rimz feed ask` work headless.
 - **The renderer is interchangeable and optional** — the native pane is the default on both backends; correctness never depends on which renderer (or none) is attached.
 - **The ledger survives host restart; processes do not**, unless a host supervisor is wired (tmux-resurrect, Zellij resurrect, systemd).
-- **`rimz doctor` reports** the selected backend, versions and floor compliance, feature availability, sidebar liveness, Rimz runtime socket headroom, Zellij IPC socket headroom when selected, and any degraded modes.
+- **`rimz doctor` reports** the selected backend, versions and floor compliance, feature availability, sidebar liveness, Rimz runtime socket headroom, the server socket path, Zellij IPC socket headroom when selected, and any degraded modes.

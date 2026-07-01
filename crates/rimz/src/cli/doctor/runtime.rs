@@ -38,6 +38,17 @@ pub(super) fn collect_terminal() -> model::Terminal {
     }
 }
 
+pub(super) fn collect_host() -> model::Host {
+    let uid = nix::unistd::Uid::current().as_raw();
+    model::Host {
+        user: rimz::proc::user_name(uid),
+        uid,
+        binary: std::env::current_exe()
+            .ok()
+            .map(|path| path.display().to_string()),
+    }
+}
+
 pub(super) fn collect_storage() -> model::Storage {
     let storage = rimz::storage::measure();
     model::Storage {
@@ -55,8 +66,8 @@ pub(super) fn collect_storage() -> model::Storage {
     }
 }
 
-/// The multiplexer section: which backend Rimz detected, its version and floor,
-/// and — once a workspace resolves — its session, socket, duplicate-session, and
+/// The multiplexer section: which backend Rimz detected, its version, floor, and
+/// server socket; once a workspace resolves, its session, duplicate-session, and
 /// presence health.
 pub(super) fn collect_mux(
     mux_hint: Option<MuxName>,
@@ -87,10 +98,14 @@ pub(super) fn collect_mux(
         version,
         capabilities,
         zellij_socket: None,
+        socket: None,
         session_health: None,
         duplicate_sessions: None,
         presence: None,
     };
+    if mux == MuxName::Tmux {
+        report.socket = Some(tmux_mod::default_server_socket_path().display().to_string());
+    }
     if let Some(ws) = ws {
         if mux == MuxName::Zellij {
             report.zellij_socket = Some(collect_zellij_socket_headroom(ws));

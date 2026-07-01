@@ -47,6 +47,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
     let ws = workspace.as_ref().ok();
     DoctorReport {
         version: super::version::VERSION,
+        host: runtime::collect_host(),
         workspace: match &workspace {
             Ok(ws) => model::Probe::Ready(workspace_view(ws)),
             Err(err) => model::Probe::Unavailable {

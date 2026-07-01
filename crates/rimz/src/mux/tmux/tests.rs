@@ -1,6 +1,14 @@
 use super::*;
 
 #[test]
+fn default_server_socket_path_uses_tmux_default_layout() {
+    assert_eq!(
+        default_server_socket_path_from(Path::new("/tmp"), 1001),
+        PathBuf::from("/tmp/tmux-1001/default"),
+    );
+}
+
+#[test]
 fn version_parser_and_floor_hold() {
     assert_eq!(parse_version("tmux 3.5a"), Some((3, 5, 0)));
     assert_eq!(parse_version("tmux 3.2"), Some((3, 2, 0)));
