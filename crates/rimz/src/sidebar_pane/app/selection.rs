@@ -638,7 +638,7 @@ pub(super) fn reconcile_selection(
 /// selected pane has left the room — or the make-up filter hides its row — drop
 /// the dangling identity and clamp the index; the held baseline or the next
 /// pick re-seats it.
-fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
+pub(super) fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     if let Some(pane) = ui.selected_pane.clone() {
         if let Some(index) = row_index_of_pane(snapshot, ui.make_up_filter, &pane) {
             ui.selected_index = index;

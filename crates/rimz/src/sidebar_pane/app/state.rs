@@ -17,6 +17,7 @@ use super::fetch::FetchOutcome;
 use super::gate::{GateState, apply_gate, gate_held_ms};
 use super::health::{Health, degraded_too_long, next_health};
 use super::lifecycle::{SelfCloseState, self_close_decision};
+use super::order_hold;
 use super::selection::{reconcile_selection, row_index_of_pane};
 use super::{Result, ServeConfig, wall_clock_phase};
 
@@ -183,6 +184,7 @@ pub(super) fn apply_fetch_outcome(
     *last_snapshot = state.last_snapshot;
     *health = state.health;
     *current = state.snapshot;
+    let prev_selected = ui.selected_pane.clone();
     let contested_existing_baseline = current
         .own_view
         .as_ref()
@@ -236,6 +238,8 @@ pub(super) fn apply_fetch_outcome(
         emit_unread_cleared_trace(diag, &clear.trace);
     }
     // Presentation sort only reorders the producer's already-capped visible set.
+    // The order hold below can keep this sorted order stable across a read-clear
+    // long enough for the user to confirm where they landed.
     current.sort_groups_for_presentation();
     // Reconcile the highlight as part of the fold, before the next frame paints:
     // re-anchor the identity-keyed selection to its row (so a status-churn
@@ -249,6 +253,9 @@ pub(super) fn apply_fetch_outcome(
     // narrowed, so a hidden baseline holds rather than blanks.
     let derived = focused_pane.filter(|pane| row_index_of_pane(current, None, pane).is_some());
     reconcile_selection(ui, current, derived);
+    let interacted = !clear.ids.is_empty() || ui.selected_pane != prev_selected;
+    order_hold::apply_order_hold(ui, current, interacted, now.as_millisecond());
+    ui.last_order = order_hold::capture_order(current);
     ui.animation_phase = wall_clock_phase(anim_start, current.theme.display.resolved_refresh_ms());
     // Fold the fresh headline spend into the count-up: a higher figure starts a
     // stepped roll that the next frames paint, a reset or first value snaps,

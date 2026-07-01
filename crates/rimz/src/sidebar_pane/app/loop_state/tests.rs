@@ -1,5 +1,6 @@
 use super::*;
 use crate::sidebar_pane::app::fixtures::{agent_snapshot, pane, snapshot_with_panes, workspace};
+use crate::sidebar_pane::app::input::KeyAction;
 
 fn read_marks(ws: &WorkspaceId) -> (tempfile::TempDir, ReadMarkStore) {
     let dir = tempfile::TempDir::new().expect("tempdir");
@@ -204,6 +205,44 @@ fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
 }
 
 #[test]
+fn maintenance_requests_releasing_fetch_when_order_hold_expires() {
+    let ws = workspace();
+    let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
+    let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
+    let socket_path = sidebar_socket_path(&runtime, &SidebarInstanceId::new());
+    let (_dir, mut state) = loop_state(&ws);
+    state.last_heartbeat = Some(Instant::now());
+    state.last_self_close_check = Instant::now();
+    state.ui.order_hold = Some(crate::sidebar_pane::render::OrderHold {
+        frozen: crate::sidebar_pane::render::FrozenOrder::default(),
+        expires_ms: jiff::Timestamp::now().as_millisecond() - 1,
+    });
+    let config = serve_config(&ws);
+    let (mut fetch, request_rx) = fetch_dispatcher();
+    let (_result_tx, result_rx) = std::sync::mpsc::channel();
+
+    state
+        .run_maintenance(
+            &mut fetch,
+            MaintenanceContext {
+                config: &config,
+                runtime: &runtime,
+                socket_path: &socket_path,
+                result_rx: &result_rx,
+                anim_start: Instant::now(),
+                diag: None,
+                tick: Duration::from_secs(60),
+            },
+        )
+        .expect("maintenance requests release fold");
+
+    assert!(
+        request_rx.try_recv().is_ok(),
+        "expired order hold schedules a fold to release the frozen order"
+    );
+}
+
+#[test]
 fn frame_timing_suspends_unwatched_animation() {
     let ws = workspace();
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
@@ -305,6 +344,62 @@ fn frame_timing_keeps_unknown_or_detached_dirty_hot_but_holds_hidden_dirty() {
     state.current.own_view = Some(own_view(true, false));
     state.current.viewed_panes = vec![own_pane];
     assert!(frame_active(&state));
+}
+
+#[test]
+fn frame_timing_caps_idle_timeout_at_order_hold_expiry() {
+    let ws = workspace();
+    let (_dir, mut state) = loop_state(&ws);
+    state.dirty = false;
+    state.last_self_close_check = Instant::now();
+    let now_ms = jiff::Timestamp::now().as_millisecond();
+    state.ui.order_hold = Some(crate::sidebar_pane::render::OrderHold {
+        frozen: crate::sidebar_pane::render::FrozenOrder::default(),
+        expires_ms: now_ms + 200,
+    });
+
+    let (_active, timeout) = state.frame_timing(Duration::from_secs(10), Instant::now());
+
+    assert!(
+        timeout <= Duration::from_millis(200),
+        "idle wait wakes for the order-hold release fold"
+    );
+}
+
+#[test]
+fn input_browse_arms_order_hold_before_next_fold() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let (_dir, mut state) = loop_state(&ws);
+    let panes = vec![
+        pane("terminal_1", "tab_0", false),
+        pane("terminal_2", "tab_0", false),
+    ];
+    let first = panes[0].pane_id.clone();
+    let second = panes[1].pane_id.clone();
+    state.current = snapshot_with_panes(&ws, panes);
+    state.ui.selected_pane = Some(first);
+    state.ui.selected_index = 0;
+    state.ui.last_order = super::super::order_hold::capture_order(&state.current);
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+    let mut terminal = fixed_terminal();
+
+    state
+        .on_input(
+            &config,
+            Wakeup::Key(KeyAction::Down),
+            &mut terminal,
+            &mut fetch,
+            Instant::now(),
+            None,
+        )
+        .expect("browse input");
+
+    assert_eq!(state.ui.selected_pane, Some(second));
+    assert!(
+        state.ui.order_hold.is_some(),
+        "arrow-key browse arms the order hold immediately, without waiting for a fold"
+    );
 }
 
 #[test]

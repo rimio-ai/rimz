@@ -142,6 +142,44 @@ fn row_unread_by_id(snapshot: &SidebarSnapshot, row_id: &str) -> bool {
         .unread
 }
 
+fn row_ids(snapshot: &SidebarSnapshot) -> Vec<String> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+        .map(|row| row.id.clone())
+        .collect()
+}
+
+fn set_row_status(snapshot: &mut SidebarSnapshot, row_id: &str, status: AgentStatus) {
+    let row = snapshot
+        .worktree_groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+        .find(|row| row.id == row_id)
+        .expect("row exists");
+    row.as_agent_mut().expect("agent row").status = Some(status);
+}
+
+fn append_agent_row(
+    snapshot: &mut SidebarSnapshot,
+    row_id: &str,
+    raw_pane: &str,
+    status: AgentStatus,
+    unread: bool,
+) {
+    let mut row = snapshot.worktree_groups[0].rows[0].clone();
+    row.id = row_id.to_owned();
+    row.name = row_id.to_owned();
+    row.pane = Some(crate::pane::PaneRef::from_id(PaneId::from_parts(
+        crate::MuxName::Tmux,
+        raw_pane,
+    )));
+    row.unread = unread;
+    row.as_agent_mut().expect("agent row").status = Some(status);
+    snapshot.worktree_groups[0].rows.push(row);
+}
+
 fn set_all_rows_unread(snapshot: &mut SidebarSnapshot) {
     for row in snapshot
         .worktree_groups
@@ -404,6 +442,54 @@ fn focus_writes_read_receipt_and_clears_current_unread_row() {
 }
 
 #[test]
+fn focused_read_clear_holds_row_order_until_order_hold_expires() {
+    let ws = workspace();
+    let (_dir, mut a) = ApplyHarness::new(&ws);
+    let (mut background, first, _) =
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+    set_row_status(&mut background, "sess-1", AgentStatus::Success);
+    set_row_status(&mut background, "sess-2", AgentStatus::Waiting);
+    background.worktree_groups[0].rows[0].unread = true;
+    set_viewed(&mut background, false);
+
+    a.apply(background);
+    assert_eq!(row_ids(&a.current), vec!["sess-1", "sess-2"]);
+
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone(), false);
+    set_row_status(&mut viewed, "sess-1", AgentStatus::Success);
+    set_row_status(&mut viewed, "sess-2", AgentStatus::Waiting);
+    viewed.worktree_groups[0].rows[0].unread = true;
+    a.apply(viewed.clone());
+
+    assert_eq!(
+        row_ids(&a.current),
+        vec!["sess-1", "sess-2"],
+        "the focused row stays where it was for the landing glance"
+    );
+    assert!(!row_unread_by_id(&a.current, "sess-1"));
+    assert_eq!(
+        a.ui.selected_index, 0,
+        "selection re-anchors to the held position"
+    );
+
+    let mut settled = viewed;
+    settled.worktree_groups[0].rows[0].unread = false;
+    a.ui.order_hold.as_mut().expect("hold armed").expires_ms =
+        jiff::Timestamp::now().as_millisecond() - 1;
+    a.apply(settled);
+
+    assert_eq!(
+        row_ids(&a.current),
+        vec!["sess-2", "sess-1"],
+        "after the hold expires the live rank can settle"
+    );
+    assert_eq!(
+        a.ui.selected_index, 1,
+        "selection follows the same pane after live re-sort"
+    );
+}
+
+#[test]
 fn focus_clears_sticky_unread_after_status_returns_to_running() {
     let ws = workspace();
     let (_dir, runtime) = runtime_for(&ws);
@@ -485,6 +571,35 @@ fn tab_switch_in_sweeps_all_unread_in_tab() {
 }
 
 #[test]
+fn tab_switch_clear_holds_cleared_siblings_above_live_rank() {
+    let ws = workspace();
+    let (_dir, mut a) = ApplyHarness::new(&ws);
+    let (mut background, first, _) =
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+    set_row_status(&mut background, "sess-1", AgentStatus::Success);
+    set_row_status(&mut background, "sess-2", AgentStatus::Success);
+    set_all_rows_unread(&mut background);
+    append_agent_row(&mut background, "sess-3", "%3", AgentStatus::Waiting, false);
+    set_viewed(&mut background, false);
+    a.apply(background);
+
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first, false);
+    set_row_status(&mut viewed, "sess-1", AgentStatus::Success);
+    set_row_status(&mut viewed, "sess-2", AgentStatus::Success);
+    set_all_rows_unread(&mut viewed);
+    append_agent_row(&mut viewed, "sess-3", "%3", AgentStatus::Waiting, false);
+    a.apply(viewed);
+
+    assert_eq!(
+        row_ids(&a.current),
+        vec!["sess-1", "sess-2", "sess-3"],
+        "tab-view read clears do not let a read attention row jump over the just-read siblings"
+    );
+    assert!(!row_unread_by_id(&a.current, "sess-1"));
+    assert!(!row_unread_by_id(&a.current, "sess-2"));
+}
+
+#[test]
 fn staying_on_tab_does_not_sweep_new_unread() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
@@ -504,6 +619,44 @@ fn staying_on_tab_does_not_sweep_new_unread() {
 
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert!(row_unread_by_id(&a.current, "sess-2"));
+}
+
+#[test]
+fn new_unread_during_order_hold_appends_after_held_rows() {
+    let ws = workspace();
+    let (_dir, mut a) = ApplyHarness::new(&ws);
+    let (mut background, first, _) =
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+    set_row_status(&mut background, "sess-1", AgentStatus::Success);
+    set_row_status(&mut background, "sess-2", AgentStatus::Running);
+    background.worktree_groups[0].rows[0].unread = true;
+    set_viewed(&mut background, false);
+    a.apply(background);
+
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone(), false);
+    set_row_status(&mut viewed, "sess-1", AgentStatus::Success);
+    set_row_status(&mut viewed, "sess-2", AgentStatus::Running);
+    viewed.worktree_groups[0].rows[0].unread = true;
+    a.apply(viewed);
+
+    let (mut with_new_unread, _, _) = two_pane_snapshot(&ws, first, false);
+    set_row_status(&mut with_new_unread, "sess-1", AgentStatus::Success);
+    set_row_status(&mut with_new_unread, "sess-2", AgentStatus::Running);
+    append_agent_row(
+        &mut with_new_unread,
+        "sess-new",
+        "%9",
+        AgentStatus::Waiting,
+        true,
+    );
+    a.apply(with_new_unread);
+
+    assert_eq!(
+        row_ids(&a.current),
+        vec!["sess-1", "sess-2", "sess-new"],
+        "fresh unread rows blink and feed the banner without reshuffling the frozen list"
+    );
+    assert!(row_unread_by_id(&a.current, "sess-new"));
 }
 
 #[test]

@@ -63,6 +63,12 @@ pub struct UiState {
     /// The transient arrow-key browse pick riding above the baseline, or `None`
     /// when not browsing (see [`Browse`]).
     pub(crate) browse: Option<Browse>,
+    /// The row/group order actually painted last fold; this is the source for
+    /// an order hold. Empty before the first paint, which makes the first hold
+    /// a no-op for ordering.
+    pub(crate) last_order: FrozenOrder,
+    /// The active renderer-local order hold, or `None` while rows rank live.
+    pub(crate) order_hold: Option<OrderHold>,
     /// First scroll-zone content line visible in the agent-cards viewport.
     /// Resolved by every draw — clamped to the zone, then auto-scrolled so the
     /// selected card stays in view unless a [`ManualScroll`] pin holds it —
@@ -160,6 +166,23 @@ pub(crate) struct Browse {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ManualScroll {
     pub(crate) selection_at_start: Option<PaneId>,
+}
+
+/// A snapshot of painted row/group order. Group keys and row ids are in
+/// on-screen order; row ids are globally unique, so one flat row list can
+/// reorder rows across every group.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FrozenOrder {
+    pub(crate) groups: Vec<String>,
+    pub(crate) rows: Vec<String>,
+}
+
+/// Renderer-local order hold that keeps rows and groups stable while the user
+/// is looking. Read state still clears immediately; only position holds.
+#[derive(Clone, Debug)]
+pub(crate) struct OrderHold {
+    pub(crate) frozen: FrozenOrder,
+    pub(crate) expires_ms: i64,
 }
 
 /// A sticky health alert pinned to the bottom of the sidebar.

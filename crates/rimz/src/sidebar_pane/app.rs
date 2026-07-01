@@ -5,8 +5,9 @@
 //! fetch cycle), [`state`] (the pure `compute_next_state` reducer and the fold
 //! integrator), [`gate`] (the last-known-good regression hold), [`health`]
 //! (failure debounce and give-up), [`lifecycle`] (self-close and the bounded
-//! resize-grow paint hold), [`reload`] (binary resolution and re-exec), and
-//! [`selection`] (the identity-keyed highlight and input handlers).
+//! resize-grow paint hold), [`order_hold`] (renderer-local row/group order
+//! freeze), [`reload`] (binary resolution and re-exec), and [`selection`] (the
+//! identity-keyed highlight and input handlers).
 
 use std::cell::Cell;
 use std::io::{self, Write};
@@ -49,6 +50,7 @@ mod input;
 mod lifecycle;
 mod loop_state;
 mod notify;
+mod order_hold;
 mod reload;
 mod remind;
 mod selection;

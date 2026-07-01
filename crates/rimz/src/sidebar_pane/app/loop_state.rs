@@ -169,10 +169,17 @@ impl LoopState {
                 .max(FRAME_MIN_TIMEOUT)
         } else {
             // Cap by the watchdog so the self-close backstop fires on time even
-            // when the data tick is much longer.
+            // when the data tick is much longer. Also wake at order-hold expiry:
+            // a fold must run to release the frozen row/group order after idle.
             let watchdog_due =
                 SELF_CLOSE_WATCHDOG.saturating_sub(self.last_self_close_check.elapsed());
-            tick.min(watchdog_due).max(FRAME_MIN_TIMEOUT)
+            let mut timeout = tick.min(watchdog_due);
+            if let Some(hold) = self.ui.order_hold.as_ref() {
+                let now_ms = jiff::Timestamp::now().as_millisecond();
+                let remaining = Duration::from_millis((hold.expires_ms - now_ms).max(0) as u64);
+                timeout = timeout.min(remaining);
+            }
+            timeout.max(FRAME_MIN_TIMEOUT)
         };
         (active, timeout)
     }
@@ -499,6 +506,13 @@ impl LoopState {
             // paint settles any frame the loop owed.
             self.dirty = false;
         }
+        let interacted = applied.painted
+            || applied.focused.is_some()
+            || applied.mark_read.is_some()
+            || applied.mark_unread.is_some();
+        if interacted {
+            order_hold::arm_order_hold(&mut self.ui, jiff::Timestamp::now().as_millisecond());
+        }
         if let Some(pane) = applied.focused {
             // A jump fires the one-way focus command at the resolved pane. The
             // highlight moves only when the derived baseline catches up on a
@@ -640,6 +654,14 @@ impl LoopState {
         // close a lone sidebar.
         if self.last_self_close_check.elapsed() >= SELF_CLOSE_WATCHDOG {
             self.last_self_close_check = Instant::now();
+            fetch.request(FetchRequest::default(), false);
+        }
+        if self
+            .ui
+            .order_hold
+            .as_ref()
+            .is_some_and(|hold| jiff::Timestamp::now().as_millisecond() >= hold.expires_ms)
+        {
             fetch.request(FetchRequest::default(), false);
         }
         Ok(())

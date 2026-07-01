@@ -27,6 +27,12 @@ pub const FOCUS_STRANDED_EVENT_TTL: Duration = Duration::from_secs(2);
 /// changes, keeping the buffer near-current without running animations.
 pub const BACKGROUND_PAINT_MIN_INTERVAL: Duration = Duration::from_secs(1);
 
+/// How long the interactive sidebar keeps its last row/group order after a
+/// jump, tab-switch, or browse before re-sorting to live rank. Long enough to
+/// cover the glance to the sidebar as you land; each interaction re-arms it, so
+/// a rapid triage burst holds one stable list and it tidies once you settle.
+pub const REORDER_HOLD: Duration = Duration::from_millis(2500);
+
 /// Coalescing window for the shared snapshot cache — the **poll-mode** pane
 /// TTL, in effect whenever the presence push channel is dead or absent. Just
 /// under the default 1s data tick: when one ledger-delta wakeup wakes every

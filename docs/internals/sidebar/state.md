@@ -133,6 +133,8 @@ The table names staleness-budget semantics; exact values and rationale live in [
 
 Money rolls sample on `refresh_ms * CLICK_PHASES`, matching the odometer phase counter; row animations sample on `BREATH_ANIMATION_FRAME`, clamped to at least the base. Input paints synchronously off-grid, an overlay event fuses on arrival and paints on the spot, and a burst of events still coalesces to one paint per base frame. The data backstop remains `rimz sidebar serve --tick-seconds`: changing `refresh_ms` changes paint cadence, not pull cadence.
 
+The serve loop also wakes at the renderer-local order-hold expiry to fire the releasing fold that lets rows and groups settle back to live rank after the user goes idle.
+
 An attached sidebar in an unviewed tab keeps animation suspended and repaints only when its glanceable roster/status/unread projection changes, throttled by `BACKGROUND_PAINT_MIN_INTERVAL`; turn phase, gauges, `/proc` metrics, spend, git facts, and animation phase stay off the hidden paint trigger.
 
 ## Failure Modes
