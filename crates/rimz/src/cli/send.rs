@@ -18,6 +18,7 @@ use rimz::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
     delivery_window_from_env,
 };
+use rimz::schema::event::EventKind;
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{PaneAgent, SidebarSnapshot};
 
@@ -391,7 +392,7 @@ fn already_compacted_at(
     command: &str,
     used: u64,
 ) -> bool {
-    ledger
+    let live = ledger
         .list_messages()
         .map(|messages| {
             messages.iter().any(|message| {
@@ -399,6 +400,29 @@ fn already_compacted_at(
                     && message.text == command
                     && message.compacted_context_tokens == Some(used)
                     && message.same_agent_card(agent)
+            })
+        })
+        .unwrap_or(false);
+    if live {
+        return true;
+    }
+    ledger
+        .read_events()
+        .map(|events| {
+            events.into_iter().any(|event| {
+                let EventKind::Message { payload, .. } = event.kind() else {
+                    return false;
+                };
+                payload.body == MessageBody::Command
+                    && matches!(
+                        payload.status,
+                        MessageStatus::Sent | MessageStatus::Delivered
+                    )
+                    && payload.compacted_context_tokens == Some(used)
+                    && payload.kind == agent.kind
+                    && (payload.agent_id == agent.agent_id
+                        || (agent.name.is_some()
+                            && payload.agent_name.as_deref() == agent.name.as_deref()))
             })
         })
         .unwrap_or(false)
@@ -450,6 +474,8 @@ pub(crate) fn wait_for_message_until(
                 | MessageStatus::Claimed
                 | MessageStatus::Sent => {}
             }
+        } else if let Some(status) = latest_terminal_message_status(ledger, message_id)? {
+            return Ok(status);
         }
         if Instant::now() >= deadline {
             return Ok(MessageStatus::TimedOut);
@@ -457,6 +483,22 @@ pub(crate) fn wait_for_message_until(
         let remaining = deadline.saturating_duration_since(Instant::now());
         std::thread::sleep(remaining.min(POLL));
     }
+}
+
+fn latest_terminal_message_status(
+    ledger: &rimz::Ledger,
+    message_id: &MessageId,
+) -> Result<Option<MessageStatus>> {
+    let mut latest = None;
+    for event in ledger.read_events()? {
+        let EventKind::Message { payload, .. } = event.kind() else {
+            continue;
+        };
+        if payload.message_id == *message_id && payload.status.is_terminal() {
+            latest = Some(payload.status);
+        }
+    }
+    Ok(latest)
 }
 
 fn env_string(key: &str) -> Option<String> {

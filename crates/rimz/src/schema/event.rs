@@ -124,6 +124,10 @@ pub struct MessageEventPayload {
     pub message_id: MessageId,
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
     pub gate: DeliveryGate,
     pub status: MessageStatus,
     #[serde(default)]
@@ -138,6 +142,12 @@ pub struct MessageEventPayload {
     pub sender: Option<MessageSender>,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enqueued_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted_context_tokens: Option<u64>,
 }
 
 impl MessageEventPayload {
@@ -146,6 +156,8 @@ impl MessageEventPayload {
             message_id: message.message_id.clone(),
             kind: message.kind.clone(),
             agent_id: message.agent_id.clone(),
+            agent_name: message.agent_name.clone(),
+            channel: message.channel.clone(),
             gate: message.gate,
             status: message.status,
             body: message.body,
@@ -156,6 +168,9 @@ impl MessageEventPayload {
             attempts: message.attempts,
             sender: message.sender.attributed(),
             reason: reason.map(ToOwned::to_owned),
+            enqueued_at: Some(message.enqueued_at),
+            delivered_at: message.delivered_at,
+            compacted_context_tokens: message.compacted_context_tokens,
         }
     }
 }

@@ -359,6 +359,7 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
             "message_id": message.message_id.as_str(),
             "kind": "claude",
             "agent_id": "sess-1",
+            "agent_name": "lucid-atlas",
             "gate": "done",
             "status": "queued",
             "body": "prompt",
@@ -367,6 +368,7 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
             "enter": true,
             "attempts": 0,
             "reason": null,
+            "enqueued_at": now,
         }),
     );
     legacy.event_id = typed.event_id.clone();
@@ -384,6 +386,8 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
     assert_eq!(payload.message_id, message.message_id);
     assert_eq!(payload.text_len, "secret prompt body".len());
     assert_eq!(payload.reason, None);
+    assert_eq!(payload.agent_name.as_deref(), Some("lucid-atlas"));
+    assert_eq!(payload.enqueued_at, Some(now));
 
     let sender = MessageSender::Agent {
         kind: AgentKind::new_unchecked("codex"),

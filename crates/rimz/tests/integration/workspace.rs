@@ -102,16 +102,16 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
         .expect("pending message");
     assert_eq!(pending.workspace_id, new_id);
     assert_eq!(pending.status, MessageStatus::Queued);
-    let delivered = messages
-        .iter()
-        .find(|message| message.message_id == delivered_message_id)
-        .expect("delivered message");
-    assert_eq!(delivered.workspace_id, new_id);
-    assert_eq!(delivered.status, MessageStatus::Delivered);
-
     let events = migrated.read_events().expect("read events");
     assert!(!events.is_empty());
     assert!(events.iter().all(|event| event.workspace_id == new_id));
+    assert!(
+        events.iter().any(|event| {
+            event.method == "message.delivered"
+                && event.params_value()["message_id"] == delivered_message_id.as_str()
+        }),
+        "delivered message is represented by the rewritten event log"
+    );
 
     let record = rimz::ledger::workspace_record::read(&new_paths.workspace_record)
         .expect("workspace record");

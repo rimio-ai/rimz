@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
@@ -121,6 +122,10 @@ fn message_list_scopes_by_channel_status_and_newest_first() {
     assert_eq!(archived.as_array().unwrap().len(), 1);
     assert_eq!(archived[0]["message_id"], docs);
     assert_eq!(archived[0]["channel"], "docs");
+    assert!(
+        archived[0].get("text").is_none(),
+        "terminal rows come from the log without message text"
+    );
 
     let ops_only = env
         .rimz()
@@ -131,6 +136,7 @@ fn message_list_scopes_by_channel_status_and_newest_first() {
     let ops_only: serde_json::Value = serde_json::from_slice(&ops_only.stdout).expect("json");
     assert_eq!(ops_only.as_array().unwrap().len(), 1);
     assert_eq!(ops_only[0]["message_id"], ops);
+    assert_eq!(ops_only[0]["text"], "ops task");
 
     let all = env
         .rimz()
@@ -182,15 +188,15 @@ fn receiver_end_archives_open_messages() {
         &[],
     );
 
-    let message = env
-        .ledger()
-        .list_messages()
-        .expect("messages")
+    assert!(env.ledger().list_messages().expect("messages").is_empty());
+    let archived = env
+        .read_events()
         .into_iter()
-        .find(|message| message.message_id.as_str() == message_id)
-        .expect("archived message");
-    assert_eq!(message.status, MessageStatus::Archived);
-    assert_eq!(message.last_error.as_deref(), Some("receiver ended"));
+        .find(|event| event.method == "message.archived")
+        .expect("archived event");
+    let params = archived.params_value();
+    assert_eq!(params["message_id"], message_id);
+    assert_eq!(params["reason"], "receiver ended");
 }
 
 #[test]
@@ -403,6 +409,66 @@ fn message_sweep_delivers_due_message_and_registers_reconcile_wake() {
         sent.sent_reconcile_deadline(Duration::from_secs(30)),
         "wake stamp tracks the sent reconcile deadline"
     );
+}
+
+#[test]
+fn message_sweep_delivers_ready_queued_message_without_schedule() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-sweep-ready", "feature-sweep-ready", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-sweep-ready",
+            "worktree_branch": "feature-sweep-ready",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-sweep-ready")
+        .expect("agent");
+    let message = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "ready now".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    let message_id = message.message_id.clone();
+    env.ledger()
+        .queue_message(&message, "rimz-test")
+        .expect("queue ready message");
+
+    let trace_log = env.project_root.join("zellij-sweep-ready-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "sweep"])
+        .output()
+        .expect("message sweep");
+    assert!(
+        out.status.success(),
+        "message sweep failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_text_then_enter(&trace_log, "ready now");
+    let sent = env
+        .ledger()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| message.message_id == message_id)
+        .expect("swept message");
+    assert_eq!(sent.status, MessageStatus::Sent);
 }
 
 #[test]
@@ -632,9 +698,64 @@ fn steer_wait_times_out_without_turn_started_ack() {
         "stdout reports timeout: {}",
         String::from_utf8_lossy(&out.stdout)
     );
-    let messages = env.ledger().list_messages().unwrap();
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].status, MessageStatus::TimedOut);
+    assert!(env.ledger().list_messages().unwrap().is_empty());
+    assert!(
+        env.read_events()
+            .iter()
+            .any(|event| event.method == "message.timed_out"),
+        "wait timeout records a terminal event"
+    );
+}
+
+#[test]
+fn steer_wait_returns_delivered_after_terminal_record_self_cleans() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-wait-delivered",
+        "feature-wait-delivered",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+
+    let trace_log = env.project_root.join("zellij-wait-delivered-trace.log");
+    let child = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "--steer", "@claude", "--wait=5s", "--", "ack me"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn steer --wait");
+
+    wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-wait-delivered",
+            "prompt": "ack me",
+            "worktree_branch": "feature-wait-delivered",
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+
+    let out = child.wait_with_output().expect("wait steer --wait");
+    assert!(
+        out.status.success(),
+        "--wait should succeed after delivery: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("delivered"),
+        "stdout reports delivery: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        env.ledger().list_messages().unwrap().is_empty(),
+        "delivered record self-cleans while wait still succeeds"
+    );
 }
 
 /// A `\n` in the steered text is a soft composer newline: it rides inside the
@@ -878,14 +999,20 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
         }),
         pane_env,
     );
-    let delivered = env
-        .ledger()
-        .list_messages()
-        .expect("messages")
-        .into_iter()
-        .find(|message| message.message_id.as_str() == message_id)
-        .expect("delivered message");
-    assert_eq!(delivered.status, MessageStatus::Delivered);
+    assert!(
+        env.ledger()
+            .list_messages()
+            .expect("messages")
+            .into_iter()
+            .all(|message| message.message_id.as_str() != message_id),
+        "delivered message self-cleans from the live queue"
+    );
+    assert!(
+        env.read_events()
+            .iter()
+            .any(|event| event.method == "message.delivered"),
+        "delivery confirmation records a terminal event"
+    );
 }
 
 #[test]
@@ -991,12 +1118,14 @@ fn queue_deliver_sends_deferred_message_and_marks_delivered() {
         }),
         pane_env,
     );
-    let messages = env.ledger().list_messages().expect("messages");
-    let message = messages
-        .iter()
-        .find(|message| message.message_id.as_str() == message_id)
-        .expect("delivered message");
-    assert_eq!(message.status, MessageStatus::Delivered);
+    assert!(
+        env.ledger()
+            .list_messages()
+            .expect("messages")
+            .into_iter()
+            .all(|message| message.message_id.as_str() != message_id),
+        "delivered message self-cleans from the live queue"
+    );
     assert!(
         env.read_events()
             .iter()
@@ -1268,13 +1397,11 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
         &[("ZELLIJ_PANE_ID", "3")],
     );
     let messages = env.ledger().list_messages().expect("messages");
-    assert_eq!(
+    assert!(
         messages
             .iter()
-            .find(|message| message.message_id == command_id)
-            .expect("command after compacting")
-            .status,
-        MessageStatus::Delivered
+            .all(|message| message.message_id != command_id),
+        "delivered compact command self-cleans from the live queue"
     );
     assert_eq!(
         messages
@@ -1295,14 +1422,13 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
         }),
         &[("ZELLIJ_PANE_ID", "3")],
     );
-    let messages = env.ledger().list_messages().expect("messages");
-    assert_eq!(
-        messages
+    assert!(
+        env.ledger()
+            .list_messages()
+            .expect("messages")
             .iter()
-            .find(|message| message.message_id == prompt_id)
-            .expect("prompt after turn start")
-            .status,
-        MessageStatus::Delivered
+            .all(|message| message.message_id != prompt_id),
+        "delivered prompt self-cleans from the live queue"
     );
 }
 
@@ -2244,6 +2370,17 @@ fn wake_stamp_path(env: &Env) -> PathBuf {
     env.runtime_paths()
         .root
         .join(rimz::message::MESSAGE_WAKE_FILE)
+}
+
+fn wait_for_message_event(env: &Env, method: &str, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if env.read_events().iter().any(|event| event.method == method) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {method}");
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn queued_id_from_stdout(stdout: &[u8]) -> String {

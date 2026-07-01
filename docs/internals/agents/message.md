@@ -14,11 +14,11 @@ Three modes cover the timing axis. All three resolve the target through the same
 
 ## The message record
 
-Each message is a durable JSON file written with temp-file-plus-rename through the ledger atomic helpers. `msg_` ids are short workspace-unique time-sortable tokens, so filename order is FIFO order; queued scans read only `messages/*.json`, and the directory is created lazily so an empty workspace costs the hook path one missing-dir stat.
+Each live message is a record in the workspace's `messages/messages.jsonl` queue file, rewritten with temp-file-plus-rename under the workspace lock. `msg_` ids are short workspace-unique time-sortable tokens, so id order is FIFO order; terminal outcomes leave the queue file and live in the append-only event log.
 
 ```text
-messages/<msg_id>.json            queued or claimed (open)
-messages/terminal/<msg_id>.json   sent, delivered, or other terminal state
+messages/messages.jsonl   live queued, claimed, and sent records
+events.log.jsonl          message.* audit history and terminal outcomes
 ```
 
 A record stores:
@@ -61,9 +61,9 @@ Created ──► Queued ──► Claimed ──► Sent ──► Delivered
 
 - **`Created`** is transient — the record reaches `Queued` before the write returns.
 - **`Queued`** and **`Claimed`** are **open** (`is_open`): the message is live in the queue.
-- **`Sent`** means bytes were written to the pane; the record has left the pending queue (`leaves_pending_queue`) but is not yet terminal.
+- **`Sent`** means bytes were written to the pane; the record stays live in the queue until confirmation or reconciliation makes a terminal decision.
 - **`Delivered`** means the agent acknowledged the text — `TurnStarted` for a `Prompt`, `Compacting` for a `Command`.
-- **Terminal** states (`Delivered`, `TimedOut`, `Errored`, `Removed`, `Abandoned`, `Archived`) are final; the record relocates from `messages/` to `messages/terminal/`.
+- **Terminal** states (`Delivered`, `TimedOut`, `Errored`, `Removed`, `Abandoned`, `Archived`) are final; the record is removed from `messages/messages.jsonl` after the terminal event is prepared, and the event log is the transcript for that outcome.
 
 ## Send path
 
@@ -107,7 +107,7 @@ A parked message delivers when all five conditions hold:
 
 ### Park path
 
-`queue_message` writes the record to `messages/<msg_id>.json`, appends a `message.queued` audit event, and wakes sidebars. The `messages/` directory is created lazily so an empty workspace costs the hook path one missing-dir stat. Each write holds the workspace lock and uses temp-file-plus-rename.
+`queue_message` upserts the record in `messages/messages.jsonl`, appends a `message.queued` audit event, and wakes sidebars. The file is created lazily so an empty workspace costs the hook path one missing-file stat. Each write holds the workspace lock and uses temp-file-plus-rename.
 
 ### Delivery trigger
 
@@ -121,7 +121,7 @@ The helper follows a strict sequence:
 2. **Candidate check** — read the queued head, verify `not_before` has passed, gate is open against a fresh snapshot, pending-ask predicate holds (skipped under `force`), and a live pane exists.
 3. **Claim** — under the workspace lock, transition the record from `Queued` to `Claimed` and increment the attempt count. The claim moves the record out of the queued scan immediately before sending.
 4. **Send** — write text to the live pane through the same bracketed-paste path as `--steer`. Smart compaction prepends a fresh `Command` record at delivery time before the claimed prompt.
-5. **Settle to terminal** — a successful pane write moves the record to `Sent`.
+5. **Record send** — a successful pane write moves the record to `Sent`, still live until the agent confirms it or the reconciler times it out.
 
 ### Delivery confirmation
 
@@ -163,9 +163,9 @@ Scheduled messages need an open room for wakeups:
 
 1. The CLI writes `message-wake.json` under the runtime root with the earliest future `not_before` or unconfirmed `Sent` reconcile deadline.
 2. The elected sidebar elder reads that cache and, when due, spawns a detached `rimz message sweep`.
-3. The sweep helper reconciles stale `Sent` records, finds ready FIFO heads whose gates are open, calls the same one-message delivery path as lifecycle hooks, then rewrites the wake cache to the next future schedule or reconcile deadline or removes it.
+3. The sweep helper reconciles stale `Sent` records, finds ready FIFO heads whose gates are open, calls the same one-message delivery path as lifecycle hooks, then rewrites the wake cache to the next future schedule, ready queued retry, or reconcile deadline or removes it.
 
-Past-due-but-blocked messages (closed gate, pending ask) are not kept in the wake stamp, so a blocked scheduled message does not spawn a helper every tick; the next turn-end hook and `gc` backstop own them.
+Ready `Queued` heads arm the wake stamp as a backstop even when `not_before` is absent or already elapsed. A never-attempted ready message contributes its `updated_at` timestamp, so the elder sweep recovers an idle-agent message that missed the live send path; after a claim, `last_attempt_at + RIMZ_MESSAGE_DELIVERY_WINDOW_MS` throttles repeated pre-send failures. Future scheduled messages still arm their `not_before`, and `Sent` records still arm their reconcile deadline.
 
 ## Smart compaction
 
@@ -201,16 +201,15 @@ An omitted flag falls back to the [`[harness] smart_compact`](../../reference/co
 
 ## Message store
 
-The ledger persists message records in two directories under the workspace state root:
+The ledger persists the live queue in one JSONL file under the workspace state root:
 
 ```text
-messages/<msg_id>.json            open (queued or claimed)
-messages/terminal/<msg_id>.json   terminal (delivered, timed_out, errored, removed, abandoned, archived)
+messages/messages.jsonl   live queued, claimed, and sent records
 ```
 
-Records relocate from `messages/` to `messages/terminal/` on any status transition out of `is_open()`. Pending scans read only `messages/*.json`, so terminal relocations keep the scan O(1) in the number of active messages. All writes use temp-file-plus-rename through the ledger atomic helpers and hold the workspace lock.
+`messages/messages.jsonl` holds only live records. Terminal transitions remove the record from the queue file, then append the terminal `message.*` event; a crash in between cannot redeliver the message, and the cost is at most a missing terminal audit row. All writes use temp-file-plus-rename through the ledger atomic helpers and hold the workspace lock.
 
-`list` operations span both directories; the store exposes `list()` (all records) and `list_pending()` (open records only). Store implementation: [`ledger/message_store.rs`](../../../crates/rimz/src/ledger/message_store.rs); ledger mutations: [`ledger/writer/queue.rs`](../../../crates/rimz/src/ledger/writer/queue.rs).
+The store exposes `list()` (live records) and `list_pending()` (`Queued` records only). On first access, a legacy `messages/<msg_id>.json` plus `messages/terminal/` layout migrates live `Queued`, `Claimed`, and `Sent` records into the JSONL file and discards terminal files that are already represented by the event log. Store implementation: [`ledger/message_store.rs`](../../../crates/rimz/src/ledger/message_store.rs); ledger mutations: [`ledger/writer/queue.rs`](../../../crates/rimz/src/ledger/writer/queue.rs).
 
 ## Audit trail
 
@@ -218,14 +217,14 @@ Every status transition appends a typed event to `events.log.jsonl`. The event m
 
 `message.queued` · `message.sent` · `message.delivered` · `message.timed_out` · `message.errored` · `message.removed` · `message.abandoned` · `message.archived`
 
-The payload carries `message_id`, `kind`, `agent_id`, `gate`, `status`, `body` (Prompt or Command), `pane_id` (when known), `forced` flag, `sender` attribution, `text_len`, `attempts`, and `reason` (on error or abandon). **Message content stays in the message record, never in the event.**
+The payload carries `message_id`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body` (Prompt or Command), `pane_id` (when known), `forced` flag, `sender` attribution, `text_len`, `attempts`, timestamps, compaction baseline, and `reason` (on error or abandon). **Message content stays in the live message record, never in the event.**
 
 ## Subcommands
 
 **User-facing:**
 
-- `message list` — defaults to the current channel, hides archived records, sorts newest first, renders `ID STATUS TARGET FROM CREATED DELIVERED TEXT`. `--all` widens the view, `--channel <NAME>` selects one channel, `--status <STATUS>` filters exactly, `--json` keeps the full record including attempts.
-- `message status <msg_id>` — prints one record as key/value detail: status, target, sender, channel, timestamps, attempts, last error, and text preview.
+- `message list` — defaults to the current channel, hides archived records, sorts newest first, renders `ID STATUS TARGET FROM CREATED DELIVERED TEXT`. Live rows come from `messages/messages.jsonl` and include text; terminal rows come from the event log and omit text. `--all` widens the view, `--channel <NAME>` selects one channel, `--status <STATUS>` filters exactly, `--json` emits the merged projection including attempts.
+- `message status <msg_id>` — prints one live record or terminal projection as key/value detail: status, target, sender, channel, timestamps, attempts, last error, and text preview when the live record still exists.
 - `message remove <msg_id>` — removes a queued or claimed message → `Removed`.
 - `message clear <target>` — removes every open message for one agent card. Accepts `--worktree` and `--channel` for scoping.
 

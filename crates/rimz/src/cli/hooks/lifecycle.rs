@@ -1578,13 +1578,11 @@ mod tests {
             "session",
         );
         let messages = ledger.list_messages().unwrap();
-        assert_eq!(
+        assert!(
             messages
                 .iter()
-                .find(|message| message.message_id == command.message_id)
-                .unwrap()
-                .status,
-            rimz::message::MessageStatus::Delivered
+                .all(|message| message.message_id != command.message_id),
+            "delivered command self-cleans from the live queue"
         );
         assert_eq!(
             messages
@@ -1612,13 +1610,19 @@ mod tests {
             "session",
         );
         let messages = ledger.list_messages().unwrap();
-        assert_eq!(
+        assert!(
             messages
                 .iter()
-                .find(|message| message.message_id == prompt.message_id)
+                .all(|message| message.message_id != prompt.message_id),
+            "delivered prompt self-cleans from the live queue"
+        );
+        assert!(
+            ledger
+                .read_events()
                 .unwrap()
-                .status,
-            rimz::message::MessageStatus::Delivered
+                .iter()
+                .any(|event| event.method == "message.delivered"),
+            "terminal delivery event is logged"
         );
     }
 

@@ -25,6 +25,74 @@ impl Ledger {
         Ok(message_store::list_pending(&self.inner.paths.messages_dir)?)
     }
 
+    fn finalize_message_locked(
+        &self,
+        mut message: MessageRecord,
+        status: MessageStatus,
+        session_name: &str,
+        reason: Option<&str>,
+        now: Timestamp,
+    ) -> Result<(MessageRecord, EventEnvelope)> {
+        debug_assert!(status.is_terminal());
+        message.status = status;
+        message.updated_at = now;
+        if status == MessageStatus::Delivered {
+            message.delivered_at = Some(now);
+        }
+        let method = MessageEventMethod::for_terminal_status(status)
+            .expect("finalize_message_locked only accepts terminal message statuses");
+        let event = EventEnvelope::message_event(&message, session_name, method, reason);
+        message_store::remove(&self.inner.paths.messages_dir, &message.message_id)?;
+        event_log::append(&self.inner.paths.events_log, &event)?;
+        Ok((message, event))
+    }
+
+    fn finalize_matching_messages_locked(
+        &self,
+        status: MessageStatus,
+        session_name: &str,
+        reason: &str,
+        mut select: impl FnMut(&MessageRecord) -> bool,
+        mut update: impl FnMut(&mut MessageRecord),
+    ) -> Result<(Vec<MessageRecord>, Vec<EventEnvelope>)> {
+        debug_assert!(status.is_terminal());
+        let now = Timestamp::now();
+        let method = MessageEventMethod::for_terminal_status(status)
+            .expect("finalize_matching_messages_locked only accepts terminal message statuses");
+        let mut messages = message_store::list(&self.inner.paths.messages_dir)?;
+        let mut removed_ids = std::collections::BTreeSet::new();
+        let mut finalized = Vec::new();
+        let mut events = Vec::new();
+        for message in &mut messages {
+            if !select(message) {
+                continue;
+            }
+            update(message);
+            message.status = status;
+            message.updated_at = now;
+            if status == MessageStatus::Delivered {
+                message.delivered_at = Some(now);
+            }
+            removed_ids.insert(message.message_id.to_string());
+            finalized.push(message.clone());
+            events.push(EventEnvelope::message_event(
+                message,
+                session_name,
+                method,
+                Some(reason),
+            ));
+        }
+        if finalized.is_empty() {
+            return Ok((finalized, events));
+        }
+        messages.retain(|message| !removed_ids.contains(message.message_id.as_str()));
+        message_store::replace_all(&self.inner.paths.messages_dir, &messages)?;
+        for event in &events {
+            event_log::append(&self.inner.paths.events_log, event)?;
+        }
+        Ok((finalized, events))
+    }
+
     #[must_use = "durability barrier; check the result"]
     pub fn queue_message(&self, message: &MessageRecord, session_name: &str) -> Result<()> {
         let event =
@@ -135,8 +203,7 @@ impl Ledger {
         debug_assert!(status.is_terminal());
         let (settled, event) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let mut message = match message_store::load(&self.inner.paths.messages_dir, message_id)
-            {
+            let message = match message_store::load(&self.inner.paths.messages_dir, message_id) {
                 Ok(message)
                     if matches!(
                         message.status,
@@ -149,17 +216,7 @@ impl Ledger {
                 Err(err) => return Err(err.into()),
             };
             let now = Timestamp::now();
-            message.status = status;
-            message.updated_at = now;
-            if status == MessageStatus::Delivered {
-                message.delivered_at = Some(now);
-            }
-            message_store::write(&self.inner.paths.messages_dir, &message)?;
-            let method = MessageEventMethod::for_terminal_status(status)
-                .expect("settle_message only accepts terminal message statuses");
-            let event = EventEnvelope::message_event(&message, session_name, method, reason);
-            event_log::append(&self.inner.paths.events_log, &event)?;
-            (message, event)
+            self.finalize_message_locked(message, status, session_name, reason, now)?
         };
         self.wake_sidebars_for_event_best_effort(&event);
         self.publish_snapshot_best_effort();
@@ -177,7 +234,7 @@ impl Ledger {
     ) -> Result<Option<MessageRecord>> {
         let outcome = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let Some(mut message) = message_store::list(&self.inner.paths.messages_dir)?
+            let Some(message) = message_store::list(&self.inner.paths.messages_dir)?
                 .into_iter()
                 .filter(|message| {
                     message.status == MessageStatus::Sent
@@ -189,18 +246,13 @@ impl Ledger {
                 return Ok(None);
             };
             let now = Timestamp::now();
-            message.status = MessageStatus::Delivered;
-            message.updated_at = now;
-            message.delivered_at = Some(now);
-            message_store::write(&self.inner.paths.messages_dir, &message)?;
-            let event = EventEnvelope::message_event(
-                &message,
+            Some(self.finalize_message_locked(
+                message,
+                MessageStatus::Delivered,
                 session_name,
-                MessageEventMethod::Delivered,
                 None,
-            );
-            event_log::append(&self.inner.paths.events_log, &event)?;
-            Some((message, event))
+                now,
+            )?)
         };
         let Some((message, event)) = outcome else {
             return Ok(None);
@@ -225,19 +277,16 @@ impl Ledger {
                 Ok(_) | Err(message_store::MessageStoreErr::NotFound(_)) => return Ok(None),
                 Err(err) => return Err(err.into()),
             };
-            message.status = MessageStatus::TimedOut;
-            message.updated_at = Timestamp::now();
+            let now = Timestamp::now();
             let reason = reason.unwrap_or("delivery window elapsed");
             message.last_error = Some(reason.to_owned());
-            message_store::write(&self.inner.paths.messages_dir, &message)?;
-            let event = EventEnvelope::message_event(
-                &message,
+            Some(self.finalize_message_locked(
+                message,
+                MessageStatus::TimedOut,
                 session_name,
-                MessageEventMethod::TimedOut,
                 Some(reason),
-            );
-            event_log::append(&self.inner.paths.events_log, &event)?;
-            Some((message, event))
+                now,
+            )?)
         };
         let Some((message, event)) = outcome else {
             return Ok(None);
@@ -259,7 +308,9 @@ impl Ledger {
         let mut events = Vec::new();
         {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            for mut message in message_store::list(&self.inner.paths.messages_dir)? {
+            let mut messages = message_store::list(&self.inner.paths.messages_dir)?;
+            let mut removed_ids = std::collections::BTreeSet::new();
+            for message in &mut messages {
                 if message.status != MessageStatus::Sent {
                     continue;
                 }
@@ -280,15 +331,21 @@ impl Ledger {
                     message.last_error = Some(format!(
                         "delivery unconfirmed after {max_attempts} attempts"
                     ));
+                    removed_ids.insert(message.message_id.to_string());
                     report.timed_out += 1;
                     (MessageEventMethod::TimedOut, "reconcile")
                 };
                 message.updated_at = now;
-                message_store::write(&self.inner.paths.messages_dir, &message)?;
                 let event =
-                    EventEnvelope::message_event(&message, session_name, method, Some(reason));
-                event_log::append(&self.inner.paths.events_log, &event)?;
+                    EventEnvelope::message_event(message, session_name, method, Some(reason));
                 events.push(event);
+            }
+            if !events.is_empty() {
+                messages.retain(|message| !removed_ids.contains(message.message_id.as_str()));
+                message_store::replace_all(&self.inner.paths.messages_dir, &messages)?;
+                for event in &events {
+                    event_log::append(&self.inner.paths.events_log, event)?;
+                }
             }
         }
         for event in &events {
@@ -307,12 +364,7 @@ impl Ledger {
     ) -> Result<Option<Timestamp>> {
         let next = message_store::list(&self.inner.paths.messages_dir)?
             .into_iter()
-            .filter_map(|message| {
-                if message.status == MessageStatus::Queued {
-                    return message.not_before.filter(|not_before| *not_before > now);
-                }
-                message.sent_reconcile_deadline(window)
-            })
+            .filter_map(|message| message.wake_deadline(now, window))
             .min();
         Ok(next)
     }
@@ -343,18 +395,14 @@ impl Ledger {
                     Err(message_store::MessageStoreErr::NotFound(_)) => message.clone(),
                     Err(err) => return Err(err.into()),
                 };
-            message.status = MessageStatus::Errored;
             message.last_error = Some(error.to_owned());
-            message.updated_at = Timestamp::now();
-            message_store::write(&self.inner.paths.messages_dir, &message)?;
-            let event = EventEnvelope::message_event(
-                &message,
+            self.finalize_message_locked(
+                message,
+                MessageStatus::Errored,
                 session_name,
-                MessageEventMethod::Errored,
                 Some(error),
-            );
-            event_log::append(&self.inner.paths.events_log, &event)?;
-            (message, event)
+                Timestamp::now(),
+            )?
         };
         self.wake_sidebars_for_event_best_effort(&event);
         self.publish_snapshot_best_effort();
@@ -386,15 +434,13 @@ impl Ledger {
             message.last_error = Some(error.to_owned());
             message.updated_at = Timestamp::now();
             if message.attempts >= MAX_DELIVERY_ATTEMPTS {
-                message.status = MessageStatus::Abandoned;
-                message_store::write(&self.inner.paths.messages_dir, &message)?;
-                let event = EventEnvelope::message_event(
-                    &message,
+                let (message, event) = self.finalize_message_locked(
+                    message,
+                    MessageStatus::Abandoned,
                     session_name,
-                    MessageEventMethod::Abandoned,
                     Some(error),
-                );
-                event_log::append(&self.inner.paths.events_log, &event)?;
+                    Timestamp::now(),
+                )?;
                 Some((message, Some(event)))
             } else {
                 message.status = MessageStatus::Queued;
@@ -437,28 +483,16 @@ impl Ledger {
         agent_name: Option<&str>,
         session_name: &str,
     ) -> Result<usize> {
-        let mut removed = Vec::new();
-        let mut events = Vec::new();
-        {
+        let (removed, events) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            for mut message in message_store::list(&self.inner.paths.messages_dir)? {
-                if !message.status.is_open() || !message.same_card(kind, agent_id, agent_name) {
-                    continue;
-                }
-                message.status = MessageStatus::Removed;
-                message.updated_at = Timestamp::now();
-                message_store::write(&self.inner.paths.messages_dir, &message)?;
-                let event = EventEnvelope::message_event(
-                    &message,
-                    session_name,
-                    MessageEventMethod::Removed,
-                    Some("clear"),
-                );
-                event_log::append(&self.inner.paths.events_log, &event)?;
-                events.push(event);
-                removed.push(message);
-            }
-        }
+            self.finalize_matching_messages_locked(
+                MessageStatus::Removed,
+                session_name,
+                "clear",
+                |message| message.status.is_open() && message.same_card(kind, agent_id, agent_name),
+                |_| {},
+            )?
+        };
         for event in &events {
             self.wake_sidebars_for_event_best_effort(event);
         }
@@ -472,33 +506,21 @@ impl Ledger {
     pub fn archive_orphan_messages(&self, session_name: &str) -> Result<usize> {
         let snapshot = self.snapshot()?;
         let live_agents = snapshot.agents;
-        let mut archived = Vec::new();
-        let mut events = Vec::new();
-        {
+        let (archived, events) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            for mut message in message_store::list(&self.inner.paths.messages_dir)? {
-                if !message.status.is_open()
-                    || live_agents
-                        .iter()
-                        .any(|agent| message.same_agent_card(agent))
-                {
-                    continue;
-                }
-                message.status = MessageStatus::Archived;
-                message.last_error = Some("receiver ended".to_owned());
-                message.updated_at = Timestamp::now();
-                message_store::write(&self.inner.paths.messages_dir, &message)?;
-                let event = EventEnvelope::message_event(
-                    &message,
-                    session_name,
-                    MessageEventMethod::Archived,
-                    Some("receiver ended"),
-                );
-                event_log::append(&self.inner.paths.events_log, &event)?;
-                events.push(event);
-                archived.push(message);
-            }
-        }
+            self.finalize_matching_messages_locked(
+                MessageStatus::Archived,
+                session_name,
+                "receiver ended",
+                |message| {
+                    message.status.is_open()
+                        && !live_agents
+                            .iter()
+                            .any(|agent| message.same_agent_card(agent))
+                },
+                |message| message.last_error = Some("receiver ended".to_owned()),
+            )?
+        };
         for event in &events {
             self.wake_sidebars_for_event_best_effort(event);
         }
@@ -517,29 +539,16 @@ impl Ledger {
         reason: &str,
         session_name: &str,
     ) -> Result<usize> {
-        let mut archived = Vec::new();
-        let mut events = Vec::new();
-        {
+        let (archived, events) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            for mut message in message_store::list(&self.inner.paths.messages_dir)? {
-                if !message.status.is_open() || !message.same_card(kind, agent_id, agent_name) {
-                    continue;
-                }
-                message.status = MessageStatus::Archived;
-                message.last_error = Some(reason.to_owned());
-                message.updated_at = Timestamp::now();
-                message_store::write(&self.inner.paths.messages_dir, &message)?;
-                let event = EventEnvelope::message_event(
-                    &message,
-                    session_name,
-                    MessageEventMethod::Archived,
-                    Some(reason),
-                );
-                event_log::append(&self.inner.paths.events_log, &event)?;
-                events.push(event);
-                archived.push(message);
-            }
-        }
+            self.finalize_matching_messages_locked(
+                MessageStatus::Archived,
+                session_name,
+                reason,
+                |message| message.status.is_open() && message.same_card(kind, agent_id, agent_name),
+                |message| message.last_error = Some(reason.to_owned()),
+            )?
+        };
         for event in &events {
             self.wake_sidebars_for_event_best_effort(event);
         }
@@ -556,29 +565,16 @@ impl Ledger {
         reason: &str,
         session_name: &str,
     ) -> Result<usize> {
-        let mut archived = Vec::new();
-        let mut events = Vec::new();
-        {
+        let (archived, events) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            for mut message in message_store::list(&self.inner.paths.messages_dir)? {
-                if !message.status.is_open() || message.channel.as_deref() != Some(channel) {
-                    continue;
-                }
-                message.status = MessageStatus::Archived;
-                message.last_error = Some(reason.to_owned());
-                message.updated_at = Timestamp::now();
-                message_store::write(&self.inner.paths.messages_dir, &message)?;
-                let event = EventEnvelope::message_event(
-                    &message,
-                    session_name,
-                    MessageEventMethod::Archived,
-                    Some(reason),
-                );
-                event_log::append(&self.inner.paths.events_log, &event)?;
-                events.push(event);
-                archived.push(message);
-            }
-        }
+            self.finalize_matching_messages_locked(
+                MessageStatus::Archived,
+                session_name,
+                reason,
+                |message| message.status.is_open() && message.channel.as_deref() == Some(channel),
+                |message| message.last_error = Some(reason.to_owned()),
+            )?
+        };
         for event in &events {
             self.wake_sidebars_for_event_best_effort(event);
         }
@@ -646,8 +642,14 @@ mod tests {
 
         assert!(ledger.list_pending_messages().unwrap().is_empty());
         let messages = ledger.list_messages().unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].status, MessageStatus::Abandoned);
+        assert!(messages.is_empty());
+        let events = event_log::read_all(&ledger.inner.paths.events_log).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| event.method == "message.abandoned"),
+            "abandoned event missing: {events:?}"
+        );
     }
 
     #[test]
@@ -697,8 +699,14 @@ mod tests {
 
         assert_eq!(archived, 1);
         let messages = ledger.list_messages().unwrap();
-        assert_eq!(messages[0].status, MessageStatus::Archived);
-        assert_eq!(messages[0].last_error.as_deref(), Some("receiver ended"));
+        assert!(messages.is_empty());
+        let events = event_log::read_all(&ledger.inner.paths.events_log).unwrap();
+        let archived = events
+            .iter()
+            .find(|event| event.method == "message.archived")
+            .expect("archived event");
+        let params: serde_json::Value = serde_json::from_str(archived.params.get()).unwrap();
+        assert_eq!(params["reason"], "receiver ended");
     }
 
     #[test]
@@ -722,17 +730,19 @@ mod tests {
 
         assert_eq!(archived, 1);
         let messages = ledger.list_messages().unwrap();
-        let archived = messages
-            .iter()
-            .find(|record| record.message_id == target.message_id)
-            .unwrap();
         let untouched = messages
             .iter()
             .find(|record| record.message_id == other.message_id)
             .unwrap();
-        assert_eq!(archived.status, MessageStatus::Archived);
-        assert_eq!(archived.last_error.as_deref(), Some("receiver ended"));
+        assert_eq!(messages.len(), 1);
         assert_eq!(untouched.status, MessageStatus::Queued);
+        let events = event_log::read_all(&ledger.inner.paths.events_log).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| event.method == "message.archived"),
+            "archived event missing: {events:?}"
+        );
     }
 
     #[test]
@@ -749,17 +759,19 @@ mod tests {
 
         assert_eq!(archived, 1);
         let messages = ledger.list_messages().unwrap();
-        let docs = messages
-            .iter()
-            .find(|record| record.message_id == docs.message_id)
-            .unwrap();
         let ops = messages
             .iter()
             .find(|record| record.message_id == ops.message_id)
             .unwrap();
-        assert_eq!(docs.status, MessageStatus::Archived);
-        assert_eq!(docs.last_error.as_deref(), Some("worktree removed"));
+        assert_eq!(messages.len(), 1);
         assert_eq!(ops.status, MessageStatus::Queued);
+        let events = event_log::read_all(&ledger.inner.paths.events_log).unwrap();
+        let archived = events
+            .iter()
+            .find(|event| event.method == "message.archived")
+            .expect("archived event");
+        let params: serde_json::Value = serde_json::from_str(archived.params.get()).unwrap();
+        assert_eq!(params["reason"], "worktree removed");
     }
 
     #[test]
@@ -828,6 +840,14 @@ mod tests {
             .expect("delivered");
         assert_eq!(delivered.status, MessageStatus::Delivered);
         assert!(delivered.delivered_at.is_some());
+        assert!(ledger.list_messages().unwrap().is_empty());
+        let events = event_log::read_all(&ledger.inner.paths.events_log).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| event.method == "message.delivered"),
+            "delivered event missing: {events:?}"
+        );
     }
 
     #[test]
@@ -905,11 +925,7 @@ mod tests {
         assert_eq!(report.requeued, 0);
         assert_eq!(report.timed_out, 1);
         let messages = ledger.list_messages().unwrap();
-        assert_eq!(messages[0].status, MessageStatus::TimedOut);
-        assert_eq!(
-            messages[0].last_error.as_deref(),
-            Some("delivery unconfirmed after 3 attempts")
-        );
+        assert!(messages.is_empty());
         let events = event_log::read_all(&ledger.inner.paths.events_log).unwrap();
         let timed_out = events
             .iter()
@@ -953,6 +969,22 @@ mod tests {
             .unwrap();
 
         assert_eq!(wake, Some(sent.updated_at + Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn earliest_message_wake_includes_ready_queued_message() {
+        let (_dir, ledger, workspace_id) = ledger();
+        let message = message(&workspace_id);
+        ledger.queue_message(&message, "session").unwrap();
+
+        let wake = ledger
+            .earliest_message_wake(
+                message.updated_at + jiff::SignedDuration::from_secs(1),
+                Duration::from_secs(30),
+            )
+            .unwrap();
+
+        assert_eq!(wake, Some(message.updated_at));
     }
 
     fn ledger() -> (tempfile::TempDir, Ledger, WorkspaceId) {

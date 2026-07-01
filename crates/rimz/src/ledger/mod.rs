@@ -10,9 +10,9 @@
 //!   lock.rs         workspace advisory lock
 //!   event_log.rs    framed append-log façade
 //!   event_log/      frame codec, rotation, recovery, unit tests
-//!   pending_terminal.rs shared pending/terminal file-store invariant
+//!   pending_terminal.rs feed pending/terminal file-store invariant
 //!   feed_store.rs   feed item wrappers + status CAS
-//!   message_store.rs queued-message wrappers
+//!   message_store.rs live message queue JSONL store
 //!   transcript_log.rs rolling Rimz-owned conversation JSONL
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
 //!   writer.rs       write choreography façade: lock → write → append → wake → publish

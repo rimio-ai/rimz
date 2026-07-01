@@ -16,7 +16,7 @@ use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 #[cfg(unix)]
 use rimz::ids::AgentKind;
 use rimz::ids::AgentSessionId;
-use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
+use rimz::message::{DeliveryGate, MessageRecord};
 #[cfg(unix)]
 use rimz::schema::event::{AgentLaunchPayload, AgentLaunchState};
 use serde_json::Value;
@@ -112,15 +112,16 @@ fn worktree_new_archives_messages_for_recreated_channel() {
         .assert()
         .success();
 
-    let message = env
-        .ledger()
-        .list_messages()
-        .expect("messages")
+    assert!(env.ledger().list_messages().expect("messages").is_empty());
+    let archived = env
+        .read_events()
         .into_iter()
-        .find(|message| message.message_id == message_id)
+        .find(|event| {
+            event.method == "message.archived"
+                && event.params_value()["message_id"] == message_id.as_str()
+        })
         .expect("message");
-    assert_eq!(message.status, MessageStatus::Archived);
-    assert_eq!(message.last_error.as_deref(), Some("channel recreated"));
+    assert_eq!(archived.params_value()["reason"], "channel recreated");
 }
 
 #[test]
@@ -141,15 +142,16 @@ fn worktree_remove_archives_messages_for_removed_channel() {
         .assert()
         .success();
 
-    let message = env
-        .ledger()
-        .list_messages()
-        .expect("messages")
+    assert!(env.ledger().list_messages().expect("messages").is_empty());
+    let archived = env
+        .read_events()
         .into_iter()
-        .find(|message| message.message_id == message_id)
+        .find(|event| {
+            event.method == "message.archived"
+                && event.params_value()["message_id"] == message_id.as_str()
+        })
         .expect("message");
-    assert_eq!(message.status, MessageStatus::Archived);
-    assert_eq!(message.last_error.as_deref(), Some("worktree removed"));
+    assert_eq!(archived.params_value()["reason"], "worktree removed");
 }
 
 #[test]

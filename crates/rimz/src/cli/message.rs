@@ -7,19 +7,21 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use jiff::Timestamp;
+use serde::Serialize;
 
 use super::send::{self, SendFlags, resolve_message};
 use super::{GlobalFlags, current_channel, open_ledger};
 use crate::cli::render;
 use rimz::agents::AgentState;
 use rimz::feed::pending_ask_for;
-use rimz::ids::MessageId;
+use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use rimz::message::{
-    AutoCompact, DeliveryGate, MessageRecord, MessageStatus, gate_open,
+    AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus, gate_open,
     max_delivery_attempts_from_env, message_interval_from_env, parse_schedule_at, queue_head,
     settle_duration_from_env,
 };
 use rimz::mux::MuxErr;
+use rimz::schema::event::{EventEnvelope, EventKind, MessageEventPayload};
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 use rimz::{PaneAgent, RuntimePaths, SidebarSnapshot};
 
@@ -394,6 +396,110 @@ struct AddOutput {
     label: String,
     message_id: MessageId,
     status: MessageStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct MessageListRow {
+    message_id: MessageId,
+    kind: AgentKind,
+    agent_id: AgentSessionId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: Option<String>,
+    sender: MessageSender,
+    body: MessageBody,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    enter: bool,
+    gate: DeliveryGate,
+    force: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pane_id: Option<PaneId>,
+    status: MessageStatus,
+    enqueued_at: Timestamp,
+    updated_at: Timestamp,
+    attempts: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_attempt_at: Option<Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delivered_at: Option<Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_before: Option<Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_compact: Option<AutoCompact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compacted_context_tokens: Option<u64>,
+}
+
+impl MessageListRow {
+    fn from_record(message: MessageRecord) -> Self {
+        Self {
+            message_id: message.message_id,
+            kind: message.kind,
+            agent_id: message.agent_id,
+            agent_name: message.agent_name,
+            channel: message.channel,
+            sender: message.sender,
+            body: message.body,
+            text: Some(message.text),
+            enter: message.enter,
+            gate: message.gate,
+            force: message.force,
+            pane_id: message.pane_id,
+            status: message.status,
+            enqueued_at: message.enqueued_at,
+            updated_at: message.updated_at,
+            attempts: message.attempts,
+            last_attempt_at: message.last_attempt_at,
+            last_error: message.last_error,
+            delivered_at: message.delivered_at,
+            not_before: message.not_before,
+            auto_compact: message.auto_compact,
+            compacted_context_tokens: message.compacted_context_tokens,
+        }
+    }
+
+    fn from_terminal_event(event: &EventEnvelope, payload: MessageEventPayload) -> Option<Self> {
+        if !payload.status.is_terminal() {
+            return None;
+        }
+        let delivered_at = payload
+            .delivered_at
+            .or_else(|| (payload.status == MessageStatus::Delivered).then_some(event.timestamp));
+        Some(Self {
+            message_id: payload.message_id,
+            kind: payload.kind,
+            agent_id: payload.agent_id,
+            agent_name: payload.agent_name,
+            channel: payload.channel,
+            sender: payload.sender.unwrap_or_default(),
+            body: payload.body,
+            text: None,
+            enter: payload.enter,
+            gate: payload.gate,
+            force: payload.forced,
+            pane_id: payload.pane_id,
+            status: payload.status,
+            enqueued_at: payload.enqueued_at.unwrap_or(event.timestamp),
+            updated_at: event.timestamp,
+            attempts: payload.attempts,
+            last_attempt_at: None,
+            last_error: payload.reason,
+            delivered_at,
+            not_before: None,
+            auto_compact: None,
+            compacted_context_tokens: payload.compacted_context_tokens,
+        })
+    }
+
+    fn same_agent_card(&self, agent: &AgentState) -> bool {
+        self.kind == agent.kind
+            && (self.agent_id == agent.agent_id
+                || (agent.name.is_some() && self.agent_name.as_deref() == agent.name.as_deref()))
+    }
 }
 
 impl QueueTarget<'_> {
@@ -826,7 +932,7 @@ fn list_messages(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
-    let mut messages = ledger.list_messages()?;
+    let mut messages = projected_messages(&ledger)?;
     let ambient_channel = current_channel(&workspace);
     let default_channel = if all {
         None
@@ -891,7 +997,14 @@ fn list_messages(
                         .unwrap_or_else(|| "-".to_owned()),
                 )
                 .dash(),
-                render::cell(preview(&message.text)),
+                render::cell(
+                    message
+                        .text
+                        .as_deref()
+                        .map(preview)
+                        .unwrap_or_else(|| "-".to_owned()),
+                )
+                .dash(),
             ]);
         }
         table.render(&mut render::out())?;
@@ -899,10 +1012,27 @@ fn list_messages(
     Ok(())
 }
 
+fn projected_messages(ledger: &rimz::Ledger) -> Result<Vec<MessageListRow>> {
+    let mut rows = std::collections::BTreeMap::new();
+    for event in ledger.read_events()? {
+        let EventKind::Message { payload, .. } = event.kind() else {
+            continue;
+        };
+        let Some(row) = MessageListRow::from_terminal_event(&event, payload) else {
+            continue;
+        };
+        rows.insert(row.message_id.to_string(), row);
+    }
+    for message in ledger.list_messages()? {
+        let row = MessageListRow::from_record(message);
+        rows.insert(row.message_id.to_string(), row);
+    }
+    Ok(rows.into_values().collect())
+}
+
 fn status_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
     let (_workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
-    let Some(message) = ledger
-        .list_messages()?
+    let Some(message) = projected_messages(&ledger)?
         .into_iter()
         .find(|message| message.message_id == message_id)
     else {
@@ -951,7 +1081,17 @@ fn status_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
         "last_error",
         render::cell(message.last_error.clone().unwrap_or_else(|| "-".to_owned())).dash(),
     );
-    kv.push("text", render::cell(preview(&message.text)));
+    kv.push(
+        "text",
+        render::cell(
+            message
+                .text
+                .as_deref()
+                .map(preview)
+                .unwrap_or_else(|| "-".to_owned()),
+        )
+        .dash(),
+    );
     kv.render(&mut render::out())?;
     Ok(())
 }
@@ -1455,7 +1595,7 @@ fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
     }
 }
 
-fn message_target(message: &MessageRecord, agents: &[&AgentState]) -> String {
+fn message_target(message: &MessageListRow, agents: &[&AgentState]) -> String {
     agents
         .iter()
         .copied()
@@ -1588,6 +1728,7 @@ mod tests {
             true,
             DeliveryGate::Done,
         );
+        let message = MessageListRow::from_record(message);
         let agents: Vec<&AgentState> = snapshot.agents.iter().collect();
         assert_eq!(message_target(&message, &agents), "@coder#project");
     }

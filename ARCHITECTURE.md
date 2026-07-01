@@ -62,7 +62,7 @@ State is three tiers of plain files. The path constants and their exact filename
 ```text
 workspace ledger   ~/.local/state/rimz/workspaces/<id>/
   events.log.jsonl · snapshots/latest.json · feed/<request_id>.json
-  runs/<run_id>.json · messages/<msg_id>.json · transcript/<date>.jsonl · locks/workspace.lock
+  runs/<run_id>.json · messages/messages.jsonl · transcript/<date>.jsonl · locks/workspace.lock
   workspace.json · channels.json
   diag.log.jsonl · diag-frames/                      durable truth
 
