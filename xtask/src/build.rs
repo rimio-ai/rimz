@@ -376,17 +376,6 @@ fn report_install(version: &str, paths: &[PathBuf]) {
     reason = "install-dev reports optional Sentry debug-file enrichment"
 )]
 fn upload_debug_files(binary: &Path) -> Result<()> {
-    if env::var_os("SENTRY_AUTH_TOKEN")
-        .as_deref()
-        .is_none_or(OsStr::is_empty)
-    {
-        println!(
-            "Sentry debug-file upload skipped; set SENTRY_AUTH_TOKEN with SENTRY_ORG and SENTRY_PROJECT to upload {}",
-            binary.display()
-        );
-        return Ok(());
-    }
-
     match Command::new("sentry-cli")
         .args(["debug-files", "upload"])
         .arg(binary)
