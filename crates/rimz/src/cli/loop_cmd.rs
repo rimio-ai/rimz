@@ -260,8 +260,10 @@ fn add(args: AddArgs) -> Result<()> {
         preflight_entry(&args.name, &entry, resolved.as_ref())?;
     }
     if is_ephemeral(&entry) {
+        config_remove(&args.name)?;
         loop_instances::insert(&args.name, &entry)?;
     } else {
+        loop_instances::remove(&args.name)?;
         config_set_entry(&args.name, &entry)?;
     }
 

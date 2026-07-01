@@ -177,6 +177,92 @@ fn loop_add_ephemeral_tasks_use_instance_state() {
 }
 
 #[test]
+fn loop_add_replaces_same_name_across_config_and_state() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-replace", "feature-loop");
+
+    let add_durable = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "swap",
+            "--bind",
+            "@claude",
+            "--every",
+            "15m",
+            "--prompt",
+            "durable wake",
+        ])
+        .output()
+        .expect("loop add durable");
+    assert!(
+        add_durable.status.success(),
+        "loop add durable failed: {}",
+        String::from_utf8_lossy(&add_durable.stderr)
+    );
+    assert!(
+        std::fs::read_to_string(loop_config_path(&env))
+            .expect("read loop config")
+            .contains("[tasks.swap]"),
+        "durable task should persist in loop.toml"
+    );
+
+    let add_ephemeral = env
+        .rimz()
+        .args([
+            "loop", "add", "swap", "--bind", "@claude", "--in", "5m", "--prompt", "one shot",
+        ])
+        .output()
+        .expect("loop add ephemeral");
+    assert!(
+        add_ephemeral.status.success(),
+        "loop add ephemeral failed: {}",
+        String::from_utf8_lossy(&add_ephemeral.stderr)
+    );
+    assert!(
+        read_loop_instances(&env).0.contains_key("swap"),
+        "ephemeral replacement should persist in state"
+    );
+    let loop_text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
+    assert!(
+        !loop_text.contains("[tasks.swap]"),
+        "ephemeral replacement should remove config task: {loop_text}"
+    );
+
+    let add_durable_again = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "swap",
+            "--bind",
+            "@claude",
+            "--every",
+            "30m",
+            "--prompt",
+            "durable again",
+        ])
+        .output()
+        .expect("loop add durable again");
+    assert!(
+        add_durable_again.status.success(),
+        "loop add durable again failed: {}",
+        String::from_utf8_lossy(&add_durable_again.stderr)
+    );
+    assert!(
+        !read_loop_instances(&env).0.contains_key("swap"),
+        "durable replacement should remove state task"
+    );
+    let loop_text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
+    assert!(
+        loop_text.contains("[tasks.swap]"),
+        "durable replacement should persist in loop.toml: {loop_text}"
+    );
+}
+
+#[test]
 fn loop_run_check_only_logs_command_result() {
     let env = Env::new();
 
