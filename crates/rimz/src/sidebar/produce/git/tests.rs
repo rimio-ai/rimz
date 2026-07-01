@@ -1,5 +1,6 @@
 use super::*;
 use std::path::PathBuf;
+use std::process::Command;
 
 struct GitFixture {
     dir: tempfile::TempDir,
@@ -133,12 +134,12 @@ fn untracked_added_lines_spends_a_shared_read_budget() {
 }
 
 #[test]
-fn worktree_branch_reads_live_checkout() {
+fn head_facts_reads_live_branch_and_detached_head() {
     let repo = GitFixture::init(&["init", "-q"]);
     if !repo.initialized {
         // No git on PATH (or init failed); the helper degrades to None,
         // which is the documented fallback. Nothing to assert.
-        assert_eq!(worktree_branch(repo.path()), None);
+        assert_eq!(head_facts(repo.path()).branch, None);
         return;
     }
     let _ = repo.git(&["checkout", "-q", "-b", "feature-migration"]);
@@ -147,13 +148,19 @@ fn worktree_branch_reads_live_checkout() {
     let _ = repo.git(&["commit", "-q", "-m", "init"]);
 
     assert_eq!(
-        worktree_branch(repo.path()).as_deref(),
+        head_facts(repo.path()).branch.as_deref(),
         Some("feature-migration"),
         "the live branch is read from the worktree, overriding any pinned label"
     );
+    let _ = repo.git(&["checkout", "-q", "--detach"]);
+    assert_eq!(
+        head_facts(repo.path()).branch,
+        None,
+        "a detached HEAD has no branch label"
+    );
     // A non-repository path has no branch to track.
     let plain = tempfile::tempdir().unwrap();
-    assert_eq!(worktree_branch(plain.path()), None);
+    assert_eq!(head_facts(plain.path()).branch, None);
 }
 
 #[test]
@@ -228,6 +235,28 @@ fn worktree_diff_stats_total_committed_staged_and_unstaged_over_trunk() {
     assert_eq!(plain_entry.behind, None);
     assert_eq!(plain_entry.trunk, None);
     assert_eq!(plain_entry.clean, None);
+}
+
+#[test]
+fn orphan_branch_without_merge_base_omits_commit_counts() {
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    if !repo.initialized {
+        return;
+    }
+    repo.write("main.txt", "main\n");
+    let _ = repo.git(&["add", "main.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "main"]);
+    let _ = repo.git(&["checkout", "-q", "--orphan", "orphan"]);
+    let _ = std::fs::remove_file(repo.path().join("main.txt"));
+    repo.write("orphan.txt", "orphan\n");
+    let _ = repo.git(&["add", "orphan.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "orphan"]);
+
+    let entry = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+
+    assert_eq!(entry.stats(), None);
+    assert_eq!(entry.commits, None);
+    assert_eq!(entry.behind, None);
 }
 
 #[test]
@@ -479,14 +508,14 @@ fn did_work_reads_head_against_rimz_worktree_marker_base_ref() {
 fn merge_in_progress_reads_git_state_paths() {
     let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
     if !repo.initialized {
-        assert_eq!(merge_in_progress(repo.path()), None);
+        assert_eq!(head_facts(repo.path()).merge_in_progress, None);
         return;
     }
     repo.write("base.txt", "base\n");
     let _ = repo.git(&["add", "base.txt"]);
     let _ = repo.git(&["commit", "-q", "-m", "base"]);
 
-    assert_eq!(merge_in_progress(repo.path()), Some(false));
+    assert_eq!(head_facts(repo.path()).merge_in_progress, Some(false));
 
     let merge_head = git_line(repo.path(), &["rev-parse", "--git-path", "MERGE_HEAD"]).unwrap();
     let merge_head = Path::new(&merge_head);
@@ -497,7 +526,7 @@ fn merge_in_progress_reads_git_state_paths() {
     };
     std::fs::write(merge_head, "deadbeef\n").unwrap();
 
-    assert_eq!(merge_in_progress(repo.path()), Some(true));
+    assert_eq!(head_facts(repo.path()).merge_in_progress, Some(true));
 }
 
 #[test]

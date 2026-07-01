@@ -7,7 +7,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -878,9 +877,8 @@ where
     I: IntoIterator<Item = &'a str>,
 {
     let args: Vec<&str> = args.into_iter().collect();
-    let output = Command::new("git")
+    let output = crate::proc::git_command(cwd)
         .args(&args)
-        .current_dir(cwd)
         .env("LC_ALL", "C")
         .output()?;
     if output.status.success() {

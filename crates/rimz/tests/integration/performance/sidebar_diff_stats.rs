@@ -2,16 +2,16 @@
 //!
 //! A multi-tab session runs one `rimz sidebar serve` per tab, each forking
 //! `rimz sidebar snapshot --json`, which runs git per worktree (trunk ref →
-//! merge-base → numstat → branch). Those probes are single-flighted across the
-//! fleet: one elected producer forks git and writes the shared `diff-stats.json`
-//! cache; the rest read it back.
+//! merge-base → numstat → folded head facts). Those probes are single-flighted
+//! across the fleet: one elected producer forks git and writes the shared
+//! `diff-stats.json` cache; the rest read it back.
 //!
 //! No live mux needed. We point `RIMZ_TEST_PANE_LIST` at a one-pane fixture
 //! whose `cwd` is a real on-disk git worktree (bypassing `list-panes` while
 //! keeping the git path), and put a `git`-shaped trace shim
-//! (`tests/fixtures/git-trace`) first on the snapshot process's PATH. The shim
-//! logs each `git` argv then execs the real git, so the log line count is the
-//! true cross-process git fork rate.
+//! (`tests/fixtures/git-trace`) first on the snapshot process's PATH. The cached
+//! git path resolves to that shim; the shim logs each `git` argv then execs the
+//! real git, so the log line count is the true cross-process git fork rate.
 
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
@@ -82,7 +82,8 @@ impl Fixture {
         )
         .expect("write panes fixture");
 
-        // A `git`-named link to the trace shim, first on PATH.
+        // A `git`-named link to the trace shim, first on PATH, so the sidebar's
+        // resolved git path lands on the shim.
         let bin_dir = env.project_root.join("bin");
         std::fs::create_dir_all(&bin_dir).expect("mkdir bin");
         let git_link = bin_dir.join("git");

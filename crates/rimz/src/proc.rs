@@ -3,7 +3,22 @@
 //! pid ([`comm`]), dates an in-pane agent instance from its start
 //! ([`process_start`]), and matches a process to a pane by working directory
 //! ([`cwd`]). Linux-only; other platforms return an empty list / `None`, so
-//! callers fall back rather than guessing without `/proc`.
+//! callers fall back rather than guessing without `/proc`. It also owns the
+//! hot-path subprocess spawn seams the perf guards count.
+
+fn git_binary() -> &'static std::path::Path {
+    static GIT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    GIT.get_or_init(|| which::which("git").unwrap_or_else(|_| "git".into()))
+}
+
+/// `git -C <worktree>` with the binary resolved once, so repeated hot-path
+/// probes skip PATH lookup. Counts the spawn for the subprocess perf guards.
+pub(crate) fn git_command(worktree: &std::path::Path) -> std::process::Command {
+    testkit::count_spawn();
+    let mut cmd = std::process::Command::new(git_binary());
+    cmd.arg("-C").arg(worktree);
+    cmd
+}
 
 /// One process as the reset sweep needs to see it: its pid, its parent, the real
 /// uid that owns it, and its full command line (argv joined by spaces).

@@ -226,10 +226,7 @@ fn git_branch(worktree: &Path) -> Option<String> {
 }
 
 fn git_line(worktree: &Path, args: &[&str]) -> Option<String> {
-    crate::proc::testkit::count_spawn();
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(worktree)
+    let output = crate::proc::git_command(worktree)
         .args(args)
         .output()
         .ok()?;

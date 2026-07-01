@@ -4,8 +4,8 @@
 //! real `git` at `$RIMZ_TEST_REAL_GIT` with the same arguments so the snapshot's
 //! per-worktree git probes still return real data. The test prepends the
 //! directory holding this binary (linked as `git`) to PATH for the spawned
-//! `rimz sidebar snapshot` process, so every `Command::new("git")` lands here
-//! first and the trace log counts the true cross-process fork rate.
+//! `rimz sidebar snapshot` process, so the sidebar's cached git path lands here
+//! and the trace log counts the true cross-process fork rate.
 //!
 //! Appends are `O_APPEND` writes of one short line, so concurrent shims never
 //! interleave — the line count is an honest fork tally across the fleet.

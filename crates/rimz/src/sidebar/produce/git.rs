@@ -1,11 +1,12 @@
 //! The per-worktree git facts: the activity-tiered, single-flighted diff-stats
-//! refresh (trunk ref → merge-base → numstat + rev-list ×2 + status → landed
-//! verdict → marker/merge state → branch), the group-root enumeration
-//! (repo worktree checkouts), and their parsers.
+//! refresh (trunk ref → merge-base → numstat + status → one folded `rev-parse`
+//! for head/branch/merge state → landed verdict + one `rev-list --left-right`),
+//! the group-root enumeration (repo worktree checkouts), and their parsers.
+//! An unborn HEAD makes the folded `rev-parse` fail, so head/branch/merge facts
+//! publish as absent until the first commit.
 
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
 
 use crate::ledger::atomic;
@@ -207,6 +208,13 @@ struct CommitFacts {
     did_work: Option<bool>,
 }
 
+#[derive(Default)]
+struct HeadFacts {
+    head_sha: Option<String>,
+    branch: Option<String>,
+    merge_in_progress: Option<bool>,
+}
+
 /// Most worktrees probed concurrently. Each worktree's own chain stays
 /// sequential (merge-base needs the trunk ref), but independent worktrees run in
 /// parallel; the cap keeps a many-worktree fleet from bursting a fork storm.
@@ -263,9 +271,15 @@ fn refresh_entry(
     let base = trunk
         .as_deref()
         .and_then(|trunk| diff_base(worktree, trunk));
+    let head = head_facts(worktree);
 
     if due.local {
-        let local = refresh_local_facts(worktree, base.as_deref());
+        let local = refresh_local_facts(
+            worktree,
+            base.as_deref(),
+            head.branch.clone(),
+            head.merge_in_progress,
+        );
         entry.added = local.stats.map(|stats| stats.added);
         entry.removed = local.stats.map(|stats| stats.removed);
         entry.branch = local.branch;
@@ -273,7 +287,13 @@ fn refresh_entry(
         entry.merge_in_progress = local.merge_in_progress;
     }
     if due.commit {
-        let commit = refresh_commit_facts(worktree, base.as_deref(), trunk.as_deref(), entry.clean);
+        let commit = refresh_commit_facts(
+            worktree,
+            base.as_deref(),
+            trunk.as_deref(),
+            entry.clean,
+            head.head_sha.as_deref(),
+        );
         entry.commits = commit.commits;
         entry.behind = commit.behind;
         entry.trunk = commit.trunk;
@@ -291,11 +311,15 @@ fn refresh_entry(
     entry
 }
 
-fn refresh_local_facts(worktree: &Path, base: Option<&str>) -> LocalFacts {
+fn refresh_local_facts(
+    worktree: &Path,
+    base: Option<&str>,
+    branch: Option<String>,
+    merge_in_progress: Option<bool>,
+) -> LocalFacts {
     let stats = base.and_then(|base| worktree_diff_stats(worktree, base));
     let status = worktree_status(worktree);
     let clean = status.as_ref().map(|status| status.clean);
-    let merge_in_progress = merge_in_progress(worktree);
     // Untracked content is change the diff is blind to: fold its line count
     // into the `+` churn so an untracked-only worktree reads as carrying work,
     // never as landed.
@@ -308,7 +332,7 @@ fn refresh_local_facts(worktree: &Path, base: Option<&str>) -> LocalFacts {
     };
     LocalFacts {
         stats,
-        branch: worktree_branch(worktree),
+        branch,
         clean,
         merge_in_progress,
     }
@@ -319,11 +343,13 @@ fn refresh_commit_facts(
     base: Option<&str>,
     trunk: Option<&str>,
     clean: Option<bool>,
+    head_sha: Option<&str>,
 ) -> CommitFacts {
-    let commits = base.and_then(|base| worktree_commits_ahead(worktree, base));
-    let behind = base
+    let (commits, behind) = base
         .zip(trunk)
-        .and_then(|(base, trunk)| worktree_commits_behind(worktree, base, trunk));
+        .and_then(|(_, trunk)| commits_ahead_behind(worktree, trunk))
+        .map(|(commits, behind)| (Some(commits), Some(behind)))
+        .unwrap_or((None, None));
     let landed = match (commits, clean, trunk) {
         (Some(0), _, _) => Some(true),
         (Some(_), Some(true), Some(trunk)) => {
@@ -335,15 +361,10 @@ fn refresh_commit_facts(
         }
         _ => None,
     };
-    let head_sha = git_line(worktree, &["rev-parse", "HEAD"]);
     let did_work = worktree::read_marker_for_worktree(worktree)
         .ok()
         .flatten()
-        .and_then(|marker| {
-            head_sha
-                .as_deref()
-                .map(|head| head != marker.base_ref.as_str())
-        });
+        .and_then(|marker| head_sha.map(|head| head != marker.base_ref.as_str()));
     CommitFacts {
         commits,
         behind,
@@ -353,33 +374,51 @@ fn refresh_commit_facts(
     }
 }
 
-fn merge_in_progress(worktree: &Path) -> Option<bool> {
-    let mut args = vec!["rev-parse"];
-    for name in [
-        "rebase-merge",
-        "rebase-apply",
-        "MERGE_HEAD",
-        "CHERRY_PICK_HEAD",
-    ] {
-        args.push("--git-path");
-        args.push(name);
-    }
-    let output = git_output(worktree, &args)?;
+fn head_facts(worktree: &Path) -> HeadFacts {
+    let output = git_output(
+        worktree,
+        &[
+            "rev-parse",
+            "HEAD",
+            "--abbrev-ref",
+            "HEAD",
+            "--git-path",
+            "MERGE_HEAD",
+            "--git-path",
+            "CHERRY_PICK_HEAD",
+            "--git-path",
+            "rebase-merge",
+            "--git-path",
+            "rebase-apply",
+        ],
+    );
+    let Some(output) = output else {
+        return HeadFacts::default();
+    };
     if !output.status.success() {
-        return None;
+        return HeadFacts::default();
     }
-    for raw in String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-    {
-        if raw.is_empty() {
-            continue;
-        }
-        if git_path_from_rev_parse(worktree, raw).exists() {
-            return Some(true);
-        }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines().map(str::trim);
+    let head_sha = lines
+        .next()
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned);
+    let branch = lines
+        .next()
+        .filter(|line| !line.is_empty() && *line != "HEAD")
+        .map(ToOwned::to_owned);
+    let merge_in_progress = lines
+        .take(4)
+        .filter(|line| !line.is_empty())
+        .any(|raw| git_path_from_rev_parse(worktree, raw).exists());
+
+    HeadFacts {
+        head_sha,
+        branch,
+        merge_in_progress: Some(merge_in_progress),
     }
-    Some(false)
 }
 
 fn git_path_from_rev_parse(worktree: &Path, raw: &str) -> std::path::PathBuf {
@@ -389,13 +428,6 @@ fn git_path_from_rev_parse(worktree: &Path, raw: &str) -> std::path::PathBuf {
     } else {
         worktree.join(path)
     }
-}
-
-fn worktree_branch(worktree: &Path) -> Option<String> {
-    let branch = git_line(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    // A detached HEAD has no branch to track — keep the reducer's path-basename
-    // label rather than printing the literal "HEAD".
-    if branch == "HEAD" { None } else { Some(branch) }
 }
 
 /// The total diff the worktree carries relative to `main`: committed, staged,
@@ -417,22 +449,23 @@ fn worktree_diff_stats(worktree: &Path, base: &str) -> Option<DiffStats> {
     Some(parse_numstat(&String::from_utf8_lossy(&output.stdout)))
 }
 
-/// The commits the worktree carries ahead of the trunk — `git rev-list --count
-/// <base>..HEAD`, the committed work waiting to land. Measured off the same
-/// merge-base as the diff, so it counts this branch's own commits since the
-/// fork, never the trunk's. The diff's `+/-` also folds in staged/unstaged
-/// change; this column is committed work alone.
-fn worktree_commits_ahead(worktree: &Path, base: &str) -> Option<u32> {
-    rev_list_count(worktree, &format!("{base}..HEAD"))
-}
-
-/// The commits the trunk has advanced past the worktree's fork point — `git
-/// rev-list --count <base>..<trunk>`, the work a rebase would pick up. The
-/// mirror of [`worktree_commits_ahead`], off the same merge-base. This column
-/// splits the header's two content-landed markers: zero behind gets `≡`, and
-/// any trunk movement past the worktree gets `✓` — safe to remove either way.
-fn worktree_commits_behind(worktree: &Path, base: &str, trunk: &str) -> Option<u32> {
-    rev_list_count(worktree, &format!("{base}..{trunk}"))
+/// The commits the worktree carries ahead of trunk, and the commits trunk has
+/// advanced past the worktree. The symmetric-difference form gives left
+/// (HEAD-only) and right (trunk-only) counts in one fork; callers gate it on a
+/// resolved merge-base so unrelated histories keep publishing no counts.
+fn commits_ahead_behind(worktree: &Path, trunk: &str) -> Option<(u32, u32)> {
+    let range = format!("HEAD...{trunk}");
+    let line = git_line(
+        worktree,
+        &["rev-list", "--count", "--left-right", range.as_str()],
+    )?;
+    let mut counts = line.split_whitespace();
+    let ahead = parse_commit_count(counts.next()?)?;
+    let behind = parse_commit_count(counts.next()?)?;
+    if counts.next().is_some() {
+        return None;
+    }
+    Some((ahead, behind))
 }
 
 /// One worktree's `git status` verdict: whether the working tree is clean — no
@@ -540,10 +573,7 @@ fn count_added_lines(bytes: &[u8]) -> u32 {
     (newlines + tail).min(u32::MAX as usize) as u32
 }
 
-/// `git rev-list --count <range>` as a capped `u32` — the shared tail of the
-/// ahead/behind columns.
-fn rev_list_count(worktree: &Path, range: &str) -> Option<u32> {
-    let count = git_line(worktree, &["rev-list", "--count", range])?;
+fn parse_commit_count(count: &str) -> Option<u32> {
     count
         .parse::<u64>()
         .ok()
@@ -591,13 +621,7 @@ fn git_line(worktree: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn git_output(worktree: &Path, args: &[&str]) -> Option<std::process::Output> {
-    crate::proc::testkit::count_spawn();
-    Command::new("git")
-        .arg("-C")
-        .arg(worktree)
-        .args(args)
-        .output()
-        .ok()
+    crate::proc::git_command(worktree).args(args).output().ok()
 }
 
 fn parse_numstat(output: &str) -> DiffStats {
