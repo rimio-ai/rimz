@@ -686,6 +686,68 @@ fn sender_prefix_uses_live_handle_and_channel_only_when_crossing_channels() {
 }
 
 #[test]
+fn recipient_channel_falls_back_to_addressed_scope_for_fresh_pane() {
+    let target = fresh_pane("codex", "terminal_9");
+
+    assert_eq!(
+        recipient_channel(&target, None, Some("bandwidth-profiling")).as_deref(),
+        Some("bandwidth-profiling")
+    );
+}
+
+#[test]
+fn recipient_channel_prefers_live_pane_channel_over_scope() {
+    let target = lazy_pane("codex", "/repo/main", "terminal_9");
+
+    assert_eq!(
+        recipient_channel(&target, None, Some("other")).as_deref(),
+        Some("main")
+    );
+}
+
+#[test]
+fn recipient_channel_prefers_bound_agent_channel() {
+    let target = bound_pane(
+        "codex",
+        1,
+        "swift-otter",
+        "session-x",
+        "pane-channel",
+        "terminal_9",
+    );
+    let bound = agent("codex", "session-x", Some("auth"), "terminal_9");
+
+    assert_eq!(
+        recipient_channel(&target, Some(&bound), Some("other")).as_deref(),
+        Some("auth")
+    );
+}
+
+#[test]
+fn sender_prefix_uses_recipient_channel_for_same_lane_fresh_pane() {
+    let target = fresh_pane("codex", "terminal_9");
+    let sender = MessageSender::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        name: None,
+        profile: None,
+        role: None,
+        channel: Some("bandwidth-profiling".to_owned()),
+    };
+
+    let same_channel = recipient_channel(&target, None, Some("bandwidth-profiling"));
+    assert_eq!(
+        sender_prefix(&sender, &[], same_channel.as_deref()).unwrap(),
+        "from @claude: "
+    );
+
+    let cross_channel = recipient_channel(&target, None, Some("other"));
+    assert_eq!(
+        sender_prefix(&sender, &[], cross_channel.as_deref()).unwrap(),
+        "from @claude#bandwidth-profiling: "
+    );
+}
+
+#[test]
 fn sender_prefix_live_handle_disambiguates_same_kind_peers() {
     let mut snapshot = empty_snapshot();
     let mut one = agent("claude", "session-a", Some("main"), "terminal_1");
@@ -865,6 +927,23 @@ fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
         agent_id: None,
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
         worktree_path: Some(worktree_path.to_owned()),
+        worktree_branch: None,
+    }
+}
+
+/// A freshly registered live pane before cwd/channel capture lands.
+fn fresh_pane(kind: &str, raw_pane: &str) -> PaneAgent {
+    PaneAgent {
+        kind: AgentKind::new_unchecked(kind),
+        kind_ordinal: None,
+        name: None,
+        profile: None,
+        role: None,
+        team: None,
+        channel: None,
+        agent_id: None,
+        pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
+        worktree_path: None,
         worktree_branch: None,
     }
 }

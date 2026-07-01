@@ -626,6 +626,23 @@ pub fn agent_channel(agent: &AgentState) -> Option<String> {
     )
 }
 
+/// The lane a message is delivered into: the bound session's channel when known,
+/// else the live pane's channel, else the lane the address resolved within.
+///
+/// A freshly launched pane may not have captured its channel yet; the addressed
+/// scope keeps same-channel hand-offs from rendering a spurious `#channel` on
+/// the `from @sender:` prefix.
+pub fn recipient_channel(
+    target: &PaneAgent,
+    bound: Option<&AgentState>,
+    scope_channel: Option<&str>,
+) -> Option<String> {
+    bound
+        .and_then(agent_channel)
+        .or_else(|| target.channel())
+        .or_else(|| scope_channel.map(ToOwned::to_owned))
+}
+
 /// The canonical rendered address of an agent — the inverse of [`parse_target`].
 ///
 /// Returns the shortest mention that names exactly this agent among `peers`:

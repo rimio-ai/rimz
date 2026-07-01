@@ -156,6 +156,7 @@ pub(crate) fn message_for_target(
     workspace_id: WorkspaceId,
     target: &PaneAgent,
     bound: Option<&AgentState>,
+    scope_channel: Option<&str>,
     draft: MessageDraft,
 ) -> MessageRecord {
     let now = jiff::Timestamp::now();
@@ -172,7 +173,7 @@ pub(crate) fn message_for_target(
         kind: target.kind.clone(),
         agent_id,
         agent_name,
-        channel: target.channel(),
+        channel: rimz::target::recipient_channel(target, bound, scope_channel),
         sender: draft.sender,
         body: draft.body,
         text: draft.text,
@@ -307,7 +308,7 @@ pub(crate) fn send_to_live_pane(
             let payload = match rimz::target::sender_prefix(
                 &message.sender,
                 &peers,
-                target.channel().as_deref(),
+                message.channel.as_deref(),
             ) {
                 Some(prefix) => format!("{prefix}{}", message.text),
                 None => message.text.clone(),
@@ -369,6 +370,7 @@ pub(crate) fn compact_message_for_target(
         prompt.workspace_id.clone(),
         target,
         bound,
+        prompt.channel.as_deref(),
         MessageDraft {
             text: command.to_owned(),
             body: MessageBody::Command,

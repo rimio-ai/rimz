@@ -282,6 +282,7 @@ fn steer_message(
             workspace.workspace_id.clone(),
             target,
             bound,
+            channel.as_deref(),
             send::MessageDraft {
                 text: text.clone(),
                 body: rimz::message::MessageBody::Prompt,
@@ -673,6 +674,7 @@ fn add_message(
                 workspace.workspace_id.clone(),
                 pane,
                 bound,
+                channel.as_deref(),
                 send::MessageDraft {
                     text: text.clone(),
                     body: rimz::message::MessageBody::Prompt,
