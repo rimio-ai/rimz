@@ -338,21 +338,49 @@ fn transcript_exact_session_target_filters_same_handle_peers() {
 fn transcript_attributes_agent_messages_and_filters_agent_view() {
     let env = Env::new();
     let branch = "attribution-transcript";
-    let claude_path = env.home_root.join("claude-attribution.jsonl");
-    write_claude_transcript(&claude_path, "hidden claude draft", "hidden claude reply");
-    register_claude_turn(
+    append_transcript(
         &env,
-        "sess-attribution-claude",
-        branch,
-        &claude_path,
-        "from @codex: ack",
+        message_entry(
+            "claude",
+            "sess-attribution-claude",
+            branch,
+            "@codex",
+            "ack",
+            "2026-06-01T00:00:00Z",
+        ),
     );
-    register_codex_turn(
+    append_transcript(
         &env,
-        "sess-attribution-codex",
-        branch,
-        "from @claude: do the thing",
-        "hidden codex reply",
+        agent_entry(
+            "claude",
+            "sess-attribution-claude",
+            branch,
+            TranscriptKind::Assistant,
+            "visible claude reply",
+            "2026-06-01T00:00:01Z",
+        ),
+    );
+    append_transcript(
+        &env,
+        message_entry(
+            "codex",
+            "sess-attribution-codex",
+            branch,
+            "@claude",
+            "do the thing",
+            "2026-06-01T00:00:02Z",
+        ),
+    );
+    append_transcript(
+        &env,
+        agent_entry(
+            "codex",
+            "sess-attribution-codex",
+            branch,
+            TranscriptKind::Assistant,
+            "visible codex reply",
+            "2026-06-01T00:00:03Z",
+        ),
     );
 
     let channel = run_ok(env.rimz().args(["transcript", "#attribution-transcript"]));
@@ -361,8 +389,14 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
         "{channel}"
     );
     assert!(channel.contains("@codex\n    @claude, ack"), "{channel}");
-    assert!(!channel.contains("hidden codex reply"), "{channel}");
-    assert!(!channel.contains("hidden claude reply"), "{channel}");
+    assert!(
+        channel.contains("@claude\n    visible claude reply"),
+        "{channel}"
+    );
+    assert!(
+        channel.contains("@codex\n    visible codex reply"),
+        "{channel}"
+    );
 
     let codex = run_ok(
         env.rimz()
@@ -373,8 +407,52 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
         "{codex}"
     );
     assert!(codex.contains("@codex\n    @claude, ack"), "{codex}");
-    assert!(!codex.contains("hidden codex reply"), "{codex}");
-    assert!(!codex.contains("hidden claude reply"), "{codex}");
+    assert!(codex.contains("@codex\n    visible codex reply"), "{codex}");
+    assert!(!codex.contains("visible claude reply"), "{codex}");
+}
+
+#[test]
+fn transcript_hook_records_routed_prompt_as_message_entry() {
+    let env = Env::new();
+    let branch = "hook-routed-transcript";
+    register_codex_turn(
+        &env,
+        "sess-hook-routed",
+        branch,
+        "from @claude: ship it",
+        "codex reply",
+    );
+
+    let entries = rimz::ledger::transcript_log::read_all(env.ledger().paths()).expect("read log");
+    let message = entries
+        .iter()
+        .find(|entry| {
+            entry.agent_id.as_str() == "sess-hook-routed" && entry.entry == TranscriptKind::Message
+        })
+        .expect("message entry");
+    assert_eq!(message.from.as_deref(), Some("@claude"));
+    assert_eq!(message.text, "ship it");
+    assert!(entries.iter().all(|entry| {
+        entry.entry != TranscriptKind::Prompt || !entry.text.starts_with("from @claude:")
+    }));
+
+    let output = run_ok(env.rimz().args(["transcript", "#hook-routed-transcript"]));
+    assert!(output.contains("@claude\n    @codex, ship it"), "{output}");
+    assert!(output.contains("@codex\n    codex reply"), "{output}");
+}
+
+#[test]
+fn transcript_details_flag_is_gone() {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .args(["transcript", "--details"])
+        .output()
+        .expect("spawn transcript");
+
+    assert!(!output.status.success(), "--details should be rejected");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--details"), "{stderr}");
 }
 
 fn entry(
@@ -384,19 +462,43 @@ fn entry(
     text: &str,
     at: &str,
 ) -> TranscriptEntry {
+    agent_entry("claude", session_id, branch, kind, text, at)
+}
+
+fn agent_entry(
+    kind: &str,
+    session_id: &str,
+    branch: &str,
+    entry: TranscriptKind,
+    text: &str,
+    at: &str,
+) -> TranscriptEntry {
     TranscriptEntry {
         at: at.parse().expect("timestamp"),
-        kind: AgentKind::new_unchecked("claude"),
+        kind: AgentKind::new_unchecked(kind),
         agent_id: AgentSessionId::from(session_id),
         channel: Some(branch.to_owned()),
         name: None,
         profile: None,
         role: None,
-        entry: kind,
+        entry,
         request_id: None,
         from: None,
         text: text.to_owned(),
     }
+}
+
+fn message_entry(
+    kind: &str,
+    session_id: &str,
+    branch: &str,
+    from: &str,
+    text: &str,
+    at: &str,
+) -> TranscriptEntry {
+    let mut entry = agent_entry(kind, session_id, branch, TranscriptKind::Message, text, at);
+    entry.from = Some(from.to_owned());
+    entry
 }
 
 fn append_transcript(env: &Env, entry: TranscriptEntry) {

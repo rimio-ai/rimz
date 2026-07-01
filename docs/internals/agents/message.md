@@ -75,7 +75,7 @@ The discrete writes land one second apart after the first write: paste immediate
 
 ### Sender prefix
 
-By default a Rimz-launched agent's send arrives prefixed `from @sender: `, gaining `#channel` when it crosses channels. The recipient lane comes from its registered channel, live pane channel, or addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands. The handle uses the shortest unique selector: the role when unique in scope, then the profile when unique, else the kind, else the petname. `--no-from` delivers without the sender prefix. `parse_sender_prefix` is the shared inverse used by transcript reads and the chat-log build ([harness.md § Read the room](./harness.md#read-the-room)).
+By default a Rimz-launched agent's send arrives prefixed `from @sender: `, gaining `#channel` when it crosses channels. The recipient lane comes from its registered channel, live pane channel, or addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands. The handle uses the shortest unique selector: the role when unique in scope, then the profile when unique, else the kind, else the petname. `--no-from` delivers without the sender prefix. The receiver's turn-start hook parses the prefix once and records a first-class `Message` entry in the transcript log with structured `from`; the delivery queue record remains queue bookkeeping, not a transcript source.
 
 A fan-out also prefixes the text with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message.
 

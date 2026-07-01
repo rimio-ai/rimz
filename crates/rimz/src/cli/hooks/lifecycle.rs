@@ -515,13 +515,19 @@ fn record_transcript_conversation(
                 .map(str::trim)
                 .filter(|prompt| !prompt.is_empty())
             {
-                rimz::ledger::transcript_log::append(
-                    ledger.paths(),
-                    &entry_base(
+                let entry = if let Some((sender, body)) = rimz::target::parse_sender_prefix(prompt)
+                {
+                    let mut entry =
+                        entry_base(rimz::ledger::transcript_log::TranscriptKind::Message, body);
+                    entry.from = Some(sender);
+                    entry
+                } else {
+                    entry_base(
                         rimz::ledger::transcript_log::TranscriptKind::Prompt,
                         prompt.to_owned(),
-                    ),
-                )?;
+                    )
+                };
+                rimz::ledger::transcript_log::append(ledger.paths(), &entry)?;
             }
         }
         LifecycleSignal::TurnEnded { .. } => {

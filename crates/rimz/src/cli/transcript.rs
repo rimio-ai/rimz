@@ -1,6 +1,6 @@
 //! `rimz transcript` — inspect agent and channel conversations from local logs.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::io::Write;
 
 use anyhow::{Context, Result, bail};
@@ -11,7 +11,6 @@ use serde::Serialize;
 
 use super::{GlobalFlags, current_channel};
 use crate::cli::render;
-use rimz::agents::transcript::{self, AgentChat};
 use rimz::feed::FeedItem;
 use rimz::ids::{AgentKind, AgentSessionId, RequestId};
 use rimz::ledger::transcript_log::{TranscriptEntry, TranscriptKind};
@@ -27,9 +26,6 @@ pub struct TranscriptArgs {
     /// Keep the last N chat lines.
     #[arg(short = 'n', long)]
     last: Option<usize>,
-    /// Render every normalized message instead of turn summaries.
-    #[arg(long)]
-    details: bool,
     /// Emit JSON.
     #[arg(long)]
     json: bool,
@@ -99,78 +95,13 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         bail!("no transcripts on disk for this scope yet");
     }
 
-    let mut per_agent_messages: BTreeMap<AgentKey, Vec<rimz::agents::TranscriptMessage>> =
-        BTreeMap::new();
-    let mut direct = Vec::new();
-    for entry in filtered {
-        let key = entry_key(entry);
-        match entry.entry {
-            TranscriptKind::Prompt | TranscriptKind::Assistant => {
-                per_agent_messages
-                    .entry(key)
-                    .or_default()
-                    .push(rimz::agents::TranscriptMessage {
-                        role: match entry.entry {
-                            TranscriptKind::Prompt => rimz::agents::TranscriptRole::User,
-                            TranscriptKind::Assistant => rimz::agents::TranscriptRole::Assistant,
-                            TranscriptKind::Ask | TranscriptKind::Answer => unreachable!(),
-                        },
-                        at: Some(entry.at),
-                        text: entry.text.clone(),
-                    });
-            }
-            TranscriptKind::Ask => direct.push((
-                key,
-                rimz::agents::ChatEntry {
-                    from: handle_for(entry, &identities, scope.include_channel),
-                    to: None,
-                    at: Some(entry.at),
-                    text: entry.text.clone(),
-                },
-            )),
-            TranscriptKind::Answer => direct.push((
-                key,
-                rimz::agents::ChatEntry {
-                    from: entry.from.clone().unwrap_or_else(|| "resolver".to_owned()),
-                    to: Some(handle_for(entry, &identities, scope.include_channel)),
-                    at: Some(entry.at),
-                    text: entry.text.clone(),
-                },
-            )),
-        }
-    }
-
-    let mut entries = Vec::new();
-    for (key, mut messages) in per_agent_messages {
-        sort_transcript_messages(&mut messages);
-        let mut chat = transcript::build_chat(
-            vec![AgentChat {
-                handle: handle_for_key(&key, &identities, scope.include_channel),
-                messages,
-            }],
-            args.details,
-            rimz::target::parse_sender_prefix,
-        );
-        if let Some(focus) = scope.focus_keys.as_ref() {
-            chat.retain(|entry| {
-                focus.contains(&key)
-                    || sender_matches_focus(
-                        &entry.from,
-                        focus,
-                        &identities,
-                        scope.channel_filter.as_deref(),
-                    )
-            });
-        }
-        entries.extend(chat);
-    }
-    entries.extend(direct.into_iter().filter_map(|(key, entry)| {
-        scope
-            .focus_keys
-            .as_ref()
-            .is_none_or(|focus| focus.contains(&key))
-            .then_some(entry)
-    }));
+    let mut entries: Vec<_> = filtered
+        .into_iter()
+        .filter_map(|entry| {
+            let chat = chat_entry_for_log_entry(entry, &identities, scope.include_channel);
+            entry_matches_focus(entry, &chat, &scope, &identities).then_some(chat)
+        })
+        .collect();
     entries.sort_by(|left, right| compare_optional_timestamps(left.at, right.at));
 
     if entries.is_empty() {
@@ -191,10 +122,6 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-fn sort_transcript_messages(messages: &mut [rimz::agents::TranscriptMessage]) {
-    messages.sort_by(|left, right| compare_optional_timestamps(left.at, right.at));
-}
-
 fn compare_optional_timestamps(
     left: Option<jiff::Timestamp>,
     right: Option<jiff::Timestamp>,
@@ -205,6 +132,57 @@ fn compare_optional_timestamps(
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => std::cmp::Ordering::Equal,
     }
+}
+
+fn chat_entry_for_log_entry(
+    entry: &TranscriptEntry,
+    identities: &HashMap<AgentKey, Identity>,
+    include_channel: bool,
+) -> rimz::agents::ChatEntry {
+    let receiver = handle_for(entry, identities, include_channel);
+    match entry.entry {
+        TranscriptKind::Prompt => rimz::agents::ChatEntry {
+            from: "user".to_owned(),
+            to: Some(receiver),
+            at: Some(entry.at),
+            text: entry.text.clone(),
+        },
+        TranscriptKind::Message => rimz::agents::ChatEntry {
+            from: entry.from.clone().unwrap_or_else(|| "user".to_owned()),
+            to: Some(receiver),
+            at: Some(entry.at),
+            text: entry.text.clone(),
+        },
+        TranscriptKind::Assistant | TranscriptKind::Ask => rimz::agents::ChatEntry {
+            from: receiver,
+            to: None,
+            at: Some(entry.at),
+            text: entry.text.clone(),
+        },
+        TranscriptKind::Answer => rimz::agents::ChatEntry {
+            from: entry.from.clone().unwrap_or_else(|| "resolver".to_owned()),
+            to: Some(receiver),
+            at: Some(entry.at),
+            text: entry.text.clone(),
+        },
+    }
+}
+
+fn entry_matches_focus(
+    entry: &TranscriptEntry,
+    chat: &rimz::agents::ChatEntry,
+    scope: &Scope,
+    identities: &HashMap<AgentKey, Identity>,
+) -> bool {
+    scope.focus_keys.as_ref().is_none_or(|focus| {
+        focus.contains(&entry_key(entry))
+            || sender_matches_focus(
+                &chat.from,
+                focus,
+                identities,
+                scope.channel_filter.as_deref(),
+            )
+    })
 }
 
 fn sender_matches_focus(
@@ -480,21 +458,6 @@ fn handle_for(
     render_handle(&base, entry.channel.as_deref(), include_channel)
 }
 
-fn handle_for_key(
-    key: &AgentKey,
-    identities: &HashMap<AgentKey, Identity>,
-    include_channel: bool,
-) -> String {
-    let Some(identity) = identities.get(key) else {
-        return rimz::target::identity_handle(&key.0, None, None, None);
-    };
-    render_handle(
-        &identity.base_handle,
-        identity.channel.as_deref(),
-        include_channel,
-    )
-}
-
 fn render_handle(base: &str, channel: Option<&str>, include_channel: bool) -> String {
     if include_channel && let Some(channel) = channel.filter(|channel| !channel.is_empty()) {
         return format!("{base}#{channel}");
@@ -704,6 +667,78 @@ mod tests {
         let mut out = anstream::StripStream::new(Vec::new());
         render_chat_to(&mut out, None, entries, &tz, today).expect("render");
         String::from_utf8(out.into_inner()).expect("utf8")
+    }
+
+    fn log_entry(
+        kind: &str,
+        session_id: &str,
+        entry: TranscriptKind,
+        from: Option<&str>,
+        text: &str,
+    ) -> TranscriptEntry {
+        TranscriptEntry {
+            at: ts("2026-06-01T00:00:00Z"),
+            kind: AgentKind::new_unchecked(kind),
+            agent_id: AgentSessionId::from(session_id),
+            channel: Some("chat".to_owned()),
+            name: None,
+            profile: None,
+            role: None,
+            entry,
+            request_id: None,
+            from: from.map(ToOwned::to_owned),
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn message_entry_projects_structured_sender_and_receiver() {
+        let entry = log_entry(
+            "claude",
+            "receiver",
+            TranscriptKind::Message,
+            Some("@planner"),
+            "ship it",
+        );
+        let identities = build_identities(std::slice::from_ref(&entry));
+
+        let chat = chat_entry_for_log_entry(&entry, &identities, false);
+
+        assert_eq!(chat.from, "@planner");
+        assert_eq!(chat.to.as_deref(), Some("@claude"));
+        assert_eq!(chat.text, "ship it");
+    }
+
+    #[test]
+    fn focus_keeps_messages_sent_by_the_focal_agent() {
+        let focal = log_entry("claude", "sender", TranscriptKind::Prompt, None, "start");
+        let sent = log_entry(
+            "codex",
+            "receiver",
+            TranscriptKind::Message,
+            Some("@claude"),
+            "ack",
+        );
+        let local = log_entry("codex", "receiver", TranscriptKind::Prompt, None, "local");
+        let identities = build_identities(&[focal.clone(), sent.clone()]);
+        let scope = Scope {
+            channel: Some("chat".to_owned()),
+            channel_filter: Some("chat".to_owned()),
+            focus: Some("@claude".to_owned()),
+            focus_keys: Some(BTreeSet::from([entry_key(&focal)])),
+            include_channel: false,
+        };
+
+        let sent_chat = chat_entry_for_log_entry(&sent, &identities, false);
+        let local_chat = chat_entry_for_log_entry(&local, &identities, false);
+
+        assert!(entry_matches_focus(&sent, &sent_chat, &scope, &identities));
+        assert!(!entry_matches_focus(
+            &local,
+            &local_chat,
+            &scope,
+            &identities
+        ));
     }
 
     #[test]

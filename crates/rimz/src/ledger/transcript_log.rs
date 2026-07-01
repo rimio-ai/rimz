@@ -40,6 +40,7 @@ pub type Result<T> = std::result::Result<T, TranscriptLogErr>;
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptKind {
     Prompt,
+    Message,
     Assistant,
     Ask,
     Answer,
@@ -244,6 +245,7 @@ mod tests {
     fn transcript_entry_round_trips_and_skips_empty_optionals() {
         for kind in [
             TranscriptKind::Prompt,
+            TranscriptKind::Message,
             TranscriptKind::Assistant,
             TranscriptKind::Ask,
             TranscriptKind::Answer,

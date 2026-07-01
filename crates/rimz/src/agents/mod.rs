@@ -84,7 +84,7 @@ pub use state::{
 pub(crate) use state::{
     ResumeArm, display_turn_error, effective_turn_error_class, rate_limit_window_kinds, resume_park,
 };
-pub use transcript::{AgentChat, ChatEntry, TranscriptMessage, TranscriptRole, Turn};
+pub use transcript::{ChatEntry, TranscriptMessage, TranscriptRole};
 pub use transcript_fs::read_transcript_lines;
 pub(crate) use transcript_fs::read_transcript_tail;
 
