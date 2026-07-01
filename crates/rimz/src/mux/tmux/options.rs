@@ -98,11 +98,16 @@ pub(super) fn is_tmux_sidebar(pane: &PaneRef) -> bool {
 /// Group a pane list into per-window [`ViewSidebars`] for the reconcile planner:
 /// each window's sidebar panes and whether it holds a user-working pane. Daemon
 /// dashboard panes in `rimzd` are not work. Panes with no window id are skipped.
+/// tmux `list-panes -a` is server-wide even with `-t <session>`, so reconcile
+/// scopes here before planning against another room's windows.
 /// First-seen window order.
-pub(super) fn tmux_views_with_sidebars(panes: &[PaneRef]) -> Vec<ViewSidebars> {
+pub(super) fn tmux_views_with_sidebars(panes: &[PaneRef], session: &str) -> Vec<ViewSidebars> {
     let mut views: Vec<ViewSidebars> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     for pane in panes {
+        if pane.session_name != session {
+            continue;
+        }
         let Some(view) = pane.view_id.as_deref() else {
             continue;
         };
@@ -348,15 +353,30 @@ mod tests {
     fn views_with_sidebars_classifies_working_orphan_and_daemon_windows() {
         let mut host = tmux_pane("%5", "@2", "rimz");
         host.view_name = Some(crate::remote_control::VIEW_NAME.to_owned());
+        let mut foreign = tmux_pane("%6", "@9", SIDEBAR_PANE_TITLE);
+        foreign.session_name = "other-room".to_owned();
         let panes = vec![
             tmux_pane("%1", "@0", "sh"),               // working pane
             tmux_pane("%2", "@0", SIDEBAR_PANE_TITLE), // its sidebar
             tmux_pane("%3", "@0", SIDEBAR_PANE_TITLE), // a duplicate sidebar
             tmux_pane("%4", "@1", SIDEBAR_PANE_TITLE), // a sidebar-only window
             host,                                      // managed daemon host
+            foreign,                                   // another tmux session on the server
         ];
-        let views = tmux_views_with_sidebars(&panes);
+        let views = tmux_views_with_sidebars(&panes, "room");
         assert_eq!(views.len(), 3, "windows stay in first-seen order");
+        assert!(
+            views.iter().all(|view| view.view != "@9"),
+            "foreign-session windows are excluded before planning",
+        );
+        assert!(
+            views.iter().all(|view| {
+                !view
+                    .sidebar_panes
+                    .contains(&PaneId::from_parts(MuxName::Tmux, "%6"))
+            }),
+            "foreign-session sidebars are excluded before planning",
+        );
 
         assert_eq!(views[0].view, "@0");
         assert!(views[0].has_working);

@@ -22,6 +22,7 @@ use rimz::mux::{
     ClientFocusOptions, LayoutColumn, LayoutPanes, MuxBackend, NamedKey, PaneCmd, PaneListOptions,
     SessionOptions, SidebarPaneOptions, SidebarWidth, SplitPaneOptions, TabOptions, TmuxBackend,
 };
+use rimz::pane::PaneRef;
 use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed, write_heartbeat};
 use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
@@ -169,14 +170,7 @@ impl TmuxServer {
     /// settles off the launching shell.
     fn wait_for_pane_command(&self, session: &str, command: &str) {
         for _ in 0..40 {
-            let listed = self
-                .backend
-                .list_panes(PaneListOptions {
-                    session_name: Some(session.to_owned()),
-                    ..Default::default()
-                })
-                .expect("list_panes")
-                .panes;
+            let listed = list_session_panes(self, session);
             if listed
                 .iter()
                 .any(|pane| pane.command.as_deref() == Some(command))
@@ -356,6 +350,47 @@ impl TmuxServer {
         self.show_hooks(session)
             .lines()
             .any(|line| line.contains("after-new-window"))
+    }
+}
+
+fn list_session_panes(server: &TmuxServer, session: &str) -> Vec<PaneRef> {
+    server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some(session.to_owned()),
+            ..Default::default()
+        })
+        .expect("list_panes")
+        .panes
+        .into_iter()
+        .filter(|pane| pane.session_name == session)
+        .collect()
+}
+
+fn sidebar_pane_ids(server: &TmuxServer, session: &str, window_id: Option<&str>) -> Vec<PaneId> {
+    list_session_panes(server, session)
+        .into_iter()
+        .filter(|pane| {
+            pane.command.as_deref() == Some("rimz-sidebar")
+                && window_id.is_none_or(|window_id| pane.view_id.as_deref() == Some(window_id))
+        })
+        .map(|pane| pane.pane_id)
+        .collect()
+}
+
+fn wait_for_sidebar_pane(server: &TmuxServer, session: &str, window_id: Option<&str>) -> PaneId {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(pane) = sidebar_pane_ids(server, session, window_id)
+            .into_iter()
+            .next()
+        {
+            return pane;
+        }
+        if Instant::now() >= deadline {
+            panic!("no sidebar pane in `{session}` window {window_id:?} within the deadline");
+        }
+        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -783,6 +818,123 @@ fn reconcile_sidebars_reinstalls_after_new_window_hook() {
     assert!(
         server.has_after_new_window_hook("rimz-hook-reconcile"),
         "reconcile should re-install a missing hook"
+    );
+}
+
+#[test]
+fn reconcile_sidebars_ignores_other_tmux_sessions() {
+    require_tmux!();
+
+    let session_a = "rimz-reconcile-scope-a";
+    let session_b = "rimz-reconcile-scope-b";
+    let server = TmuxServer::new();
+    server.ensure_with_shell(session_a);
+    server.ensure_with_shell(session_b);
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let width = SidebarWidth::default();
+    let opts_a = SidebarPaneOptions {
+        session_name: session_a.to_owned(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-reconcile-scope-a")),
+        project_root: std::env::temp_dir(),
+        cwd: std::env::temp_dir(),
+        birth_size: width.birth_size(Some(80)),
+        rimz_bin: stub.clone(),
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    let opts_b = SidebarPaneOptions {
+        session_name: session_b.to_owned(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-reconcile-scope-b")),
+        project_root: std::env::temp_dir(),
+        cwd: std::env::temp_dir(),
+        birth_size: width.birth_size(Some(80)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+
+    server
+        .backend
+        .open_sidebar(&opts_a, None)
+        .expect("open_sidebar a");
+    server
+        .backend
+        .open_sidebar(&opts_b, None)
+        .expect("open_sidebar b");
+    let a_claimed = wait_for_sidebar_pane(&server, session_a, None);
+    let b_sidebar_before = wait_for_sidebar_pane(&server, session_b, None);
+
+    server.tmux(&["new-window", "-d", "-t", session_a, "-n", "corrupted", "sh"]);
+    let corrupt_target = format!("{session_a}:corrupted");
+    let corrupt_window = server.display(&corrupt_target, "#{window_id}");
+    let hook_sidebar = wait_for_sidebar_pane(&server, session_a, Some(&corrupt_window));
+    server.tmux(&["kill-pane", "-t", hook_sidebar.raw()]);
+    let work_pane = list_session_panes(&server, session_a)
+        .into_iter()
+        .find(|pane| {
+            pane.view_id.as_deref() == Some(corrupt_window.as_str())
+                && pane.command.as_deref() != Some("rimz-sidebar")
+        })
+        .expect("corrupted window work pane");
+    let foreign_command = vec![
+        opts_b.rimz_bin.to_string_lossy().into_owned(),
+        "sidebar".to_owned(),
+        "serve".to_owned(),
+        "--mux".to_owned(),
+        "tmux".to_owned(),
+        "--workspace-id".to_owned(),
+        opts_b.workspace_id.as_str().to_owned(),
+        "--session-name".to_owned(),
+        opts_b.session_name.clone(),
+    ];
+    server
+        .backend
+        .split_pane(SplitPaneOptions {
+            target_pane_id: Some(work_pane.pane_id),
+            cwd: None,
+            command: Some(foreign_command),
+            env: BTreeMap::new(),
+            focus: false,
+        })
+        .expect("plant foreign sidebar");
+    let foreign_sidebar = wait_for_sidebar_pane(&server, session_a, Some(&corrupt_window));
+
+    let report = server
+        .backend
+        .reconcile_sidebars(
+            &opts_a,
+            &rimz::mux::SidebarLiveness {
+                claimed_panes: [a_claimed].into(),
+                ..Default::default()
+            },
+        )
+        .expect("reconcile_sidebars");
+
+    assert_eq!(report.closed, 1, "foreign same-window sidebar is closed");
+    assert_eq!(
+        report.recovered, 1,
+        "session A window regains its own sidebar"
+    );
+    assert_eq!(report.failed, 0);
+    let healed_sidebar = wait_for_sidebar_pane(&server, session_a, Some(&corrupt_window));
+    assert_ne!(
+        healed_sidebar, foreign_sidebar,
+        "the planted foreign sidebar should be replaced in session A",
+    );
+    assert!(
+        !list_session_panes(&server, session_a)
+            .iter()
+            .any(|pane| pane.pane_id == foreign_sidebar),
+        "the foreign pane id should be gone from session A",
+    );
+    assert_eq!(
+        sidebar_pane_ids(&server, session_b, None),
+        vec![b_sidebar_before],
+        "session B's sidebar pane should not be closed or duplicated",
     );
 }
 

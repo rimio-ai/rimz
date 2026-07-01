@@ -394,7 +394,7 @@ impl MuxBackend for TmuxBackend {
             session_name: Some(opts.session_name.clone()),
             ..Default::default()
         })?;
-        let views = tmux_views_with_sidebars(&panes.panes);
+        let views = tmux_views_with_sidebars(&panes.panes, &opts.session_name);
         let plan = super::super::plan_reconcile(&views, live);
         let mut report = SidebarRecovery::default();
         let mut failed_stale_close_views = HashSet::new();
