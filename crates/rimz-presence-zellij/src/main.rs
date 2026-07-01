@@ -466,6 +466,10 @@ mod shell {
                 argv.push(self.commands_completed.to_string());
                 argv.push("--plugin-zellij-version".to_owned());
                 argv.push(get_zellij_version());
+                if let Some(session_name) = self.session_name.as_deref() {
+                    argv.push("--session-name".to_owned());
+                    argv.push(session_name.to_owned());
+                }
             }
             self.append_topology_arg(&mut argv, now);
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();

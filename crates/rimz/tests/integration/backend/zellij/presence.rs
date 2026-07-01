@@ -145,6 +145,12 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
          load-time configuration threaded through: {:?}",
         lines[0],
     );
+    assert_eq!(
+        logged_arg(&lines[0], "--session-name"),
+        Some(name.as_str()),
+        "the first poke carries the session name: {:?}",
+        lines[0],
+    );
     assert!(
         logged_arg(&lines[0], "--plugin-mem-pages")
             .expect("telemetry carries WASM pages")
