@@ -228,6 +228,39 @@ impl TmuxServer {
             .collect()
     }
 
+    fn wait_for_control_client(&self, session: &str) {
+        // `PresenceWatch::attach` returns once the control client *spawns*; tmux
+        // registers it a beat later, and commands fired before registration may
+        // still observe a clientless session.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let out = Command::new("tmux")
+                .scrub_session_env()
+                .args([
+                    "-S",
+                    self.socket.to_str().expect("utf8 socket"),
+                    "list-clients",
+                    "-t",
+                    session,
+                    "-F",
+                    "#{client_control_mode}",
+                ])
+                .output()
+                .expect("tmux list-clients");
+            if String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|line| line.trim() == "1")
+            {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "control client never registered with the tmux server"
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+
     /// Live geometry for every pane in `target` (a `session:window` address),
     /// polling until at least `want` panes are present or the budget elapses.
     /// Reads the left edge, top edge, size, and current path per pane —
@@ -2345,6 +2378,73 @@ fn paste_text_delivers_the_literal_payload() {
     );
 }
 
+/// Headless sends work with zero attached clients and while the presence watch
+/// is the sole attached client. The latter is the tmux 3.7 regression guard:
+/// the watch must stay writable so `send-keys` can resolve a writable client for
+/// `rimz message`, `pane send`, and resolver sends.
+#[test]
+fn headless_sends_work_with_no_client_and_presence_watch() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("headless");
+    let pane_id = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("headless".to_owned()),
+            ..Default::default()
+        })
+        .expect("list_panes")
+        .panes[0]
+        .pane_id
+        .clone();
+
+    server
+        .backend
+        .send_keys(&pane_id, "printf rimz-zero-client-send\n")
+        .expect("send_keys without clients");
+    let capture = capture_pane_until(
+        &server.backend,
+        &pane_id,
+        "rimz-zero-client-send",
+        Duration::from_secs(2),
+    );
+    assert!(
+        capture.contains("rimz-zero-client-send"),
+        "send_keys should work on a detached session with zero clients, got: {capture:?}",
+    );
+
+    let _watch = rimz::mux::tmux::PresenceWatch::attach(Some(&server.socket), "headless")
+        .expect("attach control client");
+    server.wait_for_control_client("headless");
+
+    server
+        .backend
+        .send_keys(&pane_id, "printf rimz-watch-send\n")
+        .expect("send_keys under presence watch");
+    let capture = capture_pane_until(
+        &server.backend,
+        &pane_id,
+        "rimz-watch-send",
+        Duration::from_secs(2),
+    );
+    assert!(
+        capture.contains("rimz-watch-send"),
+        "send_keys should work when the presence watch is the only client, got: {capture:?}",
+    );
+
+    let payload = "rimz-watch-paste";
+    server
+        .backend
+        .paste_text(&pane_id, payload)
+        .expect("paste_text under presence watch");
+    let capture = capture_pane_until(&server.backend, &pane_id, payload, Duration::from_secs(2));
+    assert!(
+        capture.contains(payload),
+        "paste_text should work when the presence watch is the only client, got: {capture:?}",
+    );
+}
+
 /// `focused_client_panes` reads each client's focused pane from `list-clients`.
 /// A detached session has no client, so it reports nothing; an attached client
 /// focuses the session's pane. Drives the hook-ingestion pane-recovery probe.
@@ -2654,38 +2754,7 @@ fn presence_watch_streams_typed_lines_and_ends_with_the_server() {
 
     let mut watch = rimz::mux::tmux::PresenceWatch::attach(Some(&server.socket), "presence")
         .expect("attach control client");
-    // `attach` returns once the control client *spawns*; tmux registers it a
-    // beat later, and a topology change firing before registration is invisible
-    // to the stream. Production tolerates that (the poll is truth) — the test
-    // must not race it, so wait until `list-clients` reports the control client
-    // before touching topology.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let out = Command::new("tmux")
-            .scrub_session_env()
-            .args([
-                "-S",
-                server.socket.to_str().expect("utf8 socket"),
-                "list-clients",
-                "-t",
-                "presence",
-                "-F",
-                "#{client_control_mode}",
-            ])
-            .output()
-            .expect("tmux list-clients");
-        if String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .any(|line| line.trim() == "1")
-        {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "control client never registered with the tmux server"
-        );
-        thread::sleep(Duration::from_millis(25));
-    }
+    server.wait_for_control_client("presence");
 
     // Drain on a helper thread so the main thread owns the timeout. Initial
     // subscription values race with the first stimulus, so each assertion
@@ -2698,9 +2767,9 @@ fn presence_watch_streams_typed_lines_and_ends_with_the_server() {
         let _ = tx.send(None);
     });
 
-    // tmux 3.7 rejects `send-keys` while the only attached client is read-only.
-    // `respawn-pane` still drives the same command-change subscription without
-    // weakening the production watch's read-only control client.
+    // `respawn-pane` drives a deterministic command-change subscription while
+    // send-path coverage lives in
+    // `headless_sends_work_with_no_client_and_presence_watch`.
     server.tmux(&["respawn-pane", "-k", "-t", "presence:0", "sleep 30"]);
     recv_presence_line_until(
         &rx,

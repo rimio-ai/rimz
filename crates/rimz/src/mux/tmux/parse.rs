@@ -182,7 +182,7 @@ mod tests {
         let view = parse_client_view(
             b"%10\t1700000000\t\n\
               %10\t1700000001\tattached\n\
-              %11\t1699999999\tread-only,ignore-size,no-output\n\
+              %11\t1699999999\tignore-size,no-output\n\
               %12\tbad\tattached\n\
               no-pane\t1700000002\tattached\n",
         );

@@ -44,11 +44,13 @@ pub enum ControlLine {
 
 /// A live tmux control-mode presence stream — the tmux fast path for pane
 /// topology and command/focus overlays (docs/internals/sidebar/multiplexers.md).
-/// Attaches a read-only (`-r`), output-suppressed (`-f no-output`) control
-/// client to one session, registers one read-only `refresh-client -B`
-/// subscription, and surfaces typed presence changes. Poll stays truth — a
-/// dropped stream loses only latency, never correctness, and the consumer
-/// respawns it.
+/// Attaches a writable, size-excluded (`ignore-size`), output-suppressed
+/// (`no-output`) control client to one session, registers one `refresh-client -B`
+/// subscription, and surfaces typed presence changes. Writable keeps tmux
+/// 3.7 `send-keys` usable when this watch is the sole attached client in a
+/// headless session; safety lives in the stdin allowlist, which writes only the
+/// subscription command. Poll stays truth — a dropped stream loses only latency,
+/// never correctness, and the consumer respawns it.
 pub struct PresenceWatch {
     child: std::process::Child,
     lines: std::io::Lines<std::io::BufReader<std::process::ChildStdout>>,
@@ -59,9 +61,10 @@ pub struct PresenceWatch {
 }
 
 impl PresenceWatch {
-    /// Attach a control client to `session` (on `socket` when given, else the
-    /// default server). `$TMUX` is dropped from the child's env so the nested
-    /// attach is deliberate rather than refused.
+    /// Attach a writable control client to `session` (on `socket` when given,
+    /// else the default server), excluding it from size negotiation and pane
+    /// output. `$TMUX` is dropped from the child's env so the nested attach is
+    /// deliberate rather than refused.
     pub fn attach(socket: Option<&std::path::Path>, session: &str) -> std::io::Result<Self> {
         let mut cmd = std::process::Command::new("tmux");
         if let Some(socket) = socket {
@@ -70,9 +73,8 @@ impl PresenceWatch {
         cmd.args([
             "-C",
             "attach-session",
-            "-r",
             "-f",
-            "no-output",
+            "ignore-size,no-output",
             "-t",
             session,
         ])
