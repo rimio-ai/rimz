@@ -24,31 +24,80 @@ pub(super) fn session_is_live(backend: &dyn MuxBackend, session_name: &str) -> b
 }
 
 #[cfg(target_os = "linux")]
-fn boot_id() -> Option<String> {
+fn boot_token() -> Option<String> {
     std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
         .ok()
-        .and_then(|id| non_empty_trimmed(&id))
+        .and_then(|id| tagged_boot_token("uuid", &id))
+        .or_else(|| {
+            std::fs::read_to_string("/proc/stat")
+                .ok()
+                .and_then(|stat| parse_proc_btime(&stat))
+                .and_then(|btime| tagged_boot_token("btime", &btime))
+        })
 }
 
 #[cfg(target_os = "macos")]
-fn boot_id() -> Option<String> {
+fn boot_token() -> Option<String> {
+    sysctl_value("kern.bootsessionuuid")
+        .and_then(|id| tagged_boot_token("uuid", &id))
+        .or_else(|| {
+            sysctl_value("kern.boottime")
+                .and_then(|out| parse_kern_boottime(&out))
+                .and_then(|btime| tagged_boot_token("btime", &btime))
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn sysctl_value(name: &str) -> Option<String> {
     std::process::Command::new("sysctl")
-        .args(["-n", "kern.bootsessionuuid"])
+        .args(["-n", name])
         .output()
         .ok()
         .filter(|output| output.status.success())
         .and_then(|output| String::from_utf8(output.stdout).ok())
-        .and_then(|id| non_empty_trimmed(&id))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn boot_id() -> Option<String> {
+fn boot_token() -> Option<String> {
     None
+}
+
+fn tagged_boot_token(source: &str, value: &str) -> Option<String> {
+    non_empty_trimmed(value).map(|value| format!("{source}:{value}"))
 }
 
 fn non_empty_trimmed(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn parse_proc_btime(stat: &str) -> Option<String> {
+    stat.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        if fields.next()? != "btime" {
+            return None;
+        }
+        let epoch = fields.next()?;
+        if fields.next().is_some() || !epoch.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        Some(epoch.to_owned())
+    })
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_kern_boottime(out: &str) -> Option<String> {
+    out.split([',', '{', '}']).find_map(|part| {
+        let (key, value) = part.split_once('=')?;
+        if key.trim() != "sec" {
+            return None;
+        }
+        let epoch = value.trim();
+        if epoch.is_empty() || !epoch.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        Some(epoch.to_owned())
+    })
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -78,7 +127,8 @@ fn write_boot_marker(path: &Path, boot_id: &str) {
 fn boot_changed(previous: Option<&str>, current: Option<&str>) -> bool {
     match (previous, current) {
         (Some(previous), Some(current)) => previous != current,
-        _ => true,
+        (None, Some(_)) => true,
+        (_, None) => false,
     }
 }
 
@@ -87,11 +137,13 @@ pub(super) fn reboot_since_last_birth(workspace_id: &rimz::WorkspaceId) -> bool 
         return true;
     };
     let previous = read_boot_marker(&paths.boot_marker);
-    let current = boot_id();
+    let current = boot_token();
     if let Some(current) = current.as_deref() {
         write_boot_marker(&paths.boot_marker, current);
     }
-    boot_changed(previous.as_deref(), current.as_deref())
+    let recover = boot_changed(previous.as_deref(), current.as_deref());
+    tracing::debug!(previous = ?previous, current = ?current, recover = recover, "reboot gate");
+    recover
 }
 
 /// Plan a reborn session. Prior agents are re-seeded only when the caller's
@@ -286,10 +338,35 @@ mod tests {
 
     #[test]
     fn boot_changed_opens_only_on_unknown_or_different_boot() {
+        assert!(boot_changed(None, Some("boot-a")));
         assert!(!boot_changed(Some("boot-a"), Some("boot-a")));
         assert!(boot_changed(Some("boot-a"), Some("boot-b")));
-        assert!(boot_changed(None, Some("boot-a")));
-        assert!(boot_changed(Some("boot-a"), None));
+        assert!(!boot_changed(Some("boot-a"), None));
+        assert!(!boot_changed(None, None));
+    }
+
+    #[test]
+    fn parse_proc_btime_reads_boot_epoch() {
+        let stat = "\
+cpu  7705 0 3770 842810 99 0 123 0 0 0
+intr 114930548
+btime 1780040667
+processes 2915
+";
+
+        assert_eq!(parse_proc_btime(stat), Some("1780040667".to_owned()));
+        assert_eq!(parse_proc_btime("cpu 1 2 3\nprocesses 2915\n"), None);
+        assert_eq!(parse_proc_btime("btime nope\n"), None);
+    }
+
+    #[test]
+    fn parse_kern_boottime_reads_boot_epoch() {
+        assert_eq!(
+            parse_kern_boottime("{ sec = 1780040667, usec = 0 } Thu Jan 1 00:00:00 2026"),
+            Some("1780040667".to_owned()),
+        );
+        assert_eq!(parse_kern_boottime("{ usec = 0 } Thu Jan 1"), None);
+        assert_eq!(parse_kern_boottime("{ sec = nope, usec = 0 }"), None);
     }
 
     #[test]
