@@ -63,23 +63,25 @@ struct Args {
 impl Args {
     fn parse() -> Result<Self> {
         let args: Vec<String> = std::env::args().collect();
-        let [_, fleet, scratch_root] = args.as_slice() else {
-            let [_, fleet, scratch_root, history_events] = args.as_slice() else {
-                bail!("usage: seed_perf_workspace <fleet> <scratch-root> [history-events]");
-            };
-            let fleet = parse_usize(fleet, "fleet")?;
-            return Ok(Self {
-                fleet,
-                scratch_root: Path::new(scratch_root).to_path_buf(),
-                history_events: parse_usize(history_events, "history-events")?,
-            });
-        };
-        let fleet = parse_usize(fleet, "fleet")?;
-        Ok(Self {
-            fleet,
-            scratch_root: Path::new(scratch_root).to_path_buf(),
-            history_events: fleet * EVENTS_PER_AGENT,
-        })
+        match args.as_slice() {
+            [_, fleet, scratch_root] => {
+                let fleet = parse_usize(fleet, "fleet")?;
+                Ok(Self {
+                    fleet,
+                    scratch_root: Path::new(scratch_root).to_path_buf(),
+                    history_events: fleet * EVENTS_PER_AGENT,
+                })
+            }
+            [_, fleet, scratch_root, history_events] => {
+                let fleet = parse_usize(fleet, "fleet")?;
+                Ok(Self {
+                    fleet,
+                    scratch_root: Path::new(scratch_root).to_path_buf(),
+                    history_events: parse_usize(history_events, "history-events")?,
+                })
+            }
+            _ => bail!("usage: seed_perf_workspace <fleet> <scratch-root> [history-events]"),
+        }
     }
 }
 
