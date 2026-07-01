@@ -131,6 +131,18 @@ impl EffectState {
         !self.oneshots.is_empty()
     }
 
+    #[cfg(test)]
+    pub(crate) fn seed_flash_for_test(&mut self, key: &str) {
+        let (target, fx) = build_oneshot(TransitionKind::Completed, &Theme::fixed(false));
+        self.oneshots.push(Oneshot {
+            key: key.to_owned(),
+            kind: TransitionKind::Completed,
+            target,
+            fx,
+            born: true,
+        });
+    }
+
     /// The whole pass: observe transitions against the previous frame, then
     /// paint every live effect onto the freshly composed buffer. Runs after
     /// the paragraph render inside the same draw, with the line map that draw
