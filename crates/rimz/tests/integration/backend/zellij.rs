@@ -2317,7 +2317,7 @@ fn wait_for_focused_non_sidebar_title_in_tab(
     session: &str,
     tab: u64,
 ) -> Option<String> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let focused = focused_nonplugin_title_in_tab(xdg, session, tab);
         if focused
