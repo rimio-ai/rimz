@@ -60,7 +60,7 @@ jobs:
 
       - name: Cargo registry cache
         # rust-cache keeps the registry and git index warm; sccache owns
-        # compiled artifact reuse.
+        # compiled output reuse.
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target/ci"
