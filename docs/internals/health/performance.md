@@ -73,7 +73,7 @@ Where the milliseconds are, and what bounds each. Reproducible figures come from
 
 The deterministic CI gates own exact integer budgets. `ledger_fsync.rs` pins the warm write path's fsync count, `ledger_bytes.rs` pins a lifecycle frame below 1KiB, `produce_budget.rs` pins zero subprocess spawns for warm produce with fresh inputs, and the incremental fold guards pin O(new bytes). The benches own wall-clock and allocation figures, which stay out of `ci` so a busy runner never fails a build on timing.
 
-Current local baseline from `cargo xtask perf` on July 1, 2026, captured on an AMD Ryzen 9 9950X host with 32 logical CPUs present / 28 online, governor `performance`, and `perf_event_paranoid=4`. The prior June 28 baseline did not record its host, so wall-clock deltas across that boundary are host/environment-sensitive; allocation deltas remain the steadier regression signal.
+Current local baseline from `cargo xtask perf` on July 1, 2026, captured on an AMD Ryzen 9 9950X host with 32 logical CPUs present / 28 online, governor `performance`, and `perf_event_paranoid=4`. The capture ran inside a loaded LXC, and the prior June 28 baseline did not record its host, so wall-clock deltas across that boundary are host/environment-sensitive; allocation deltas remain the steadier regression signal.
 
 | Bench | Median | Alloc/op |
 | --- | ---: | ---: |
@@ -108,6 +108,8 @@ Read profiles at two levels. `perf report --stdio` gives flat self-time and call
 Process-level RAM and CPU stay a manual profiling recipe because they are OS- and workload-shaped. Record CPU flamegraphs with `samply record -- cargo xtask perf` or `samply record -- target/profiling/rimz ...`, measure peak RSS with `/usr/bin/time -v cargo xtask perf`, and use `dhat` or the platform allocator profiler when an allocation regression needs ownership. Run the same commands against `rimz sidebar snapshot --json --no-produce` over a synthetic seeded workspace when the question is read-only process shape rather than microbench shape.
 
 July 1, 2026 process capture over a 100-agent seeded workspace: 200 read-only `rimz sidebar snapshot --json --no-produce` runs completed in 0.79s wall with 18MiB maximum RSS and one process `execve` per invocation; an attached `rimz sidebar serve` fixture idled at 0-1% CPU with 91MiB RSS, and attached syscall traces saw zero `clone`, `execve`, `fsync`, or `fdatasync` calls during idle and a 20-hook burst.
+
+July 1, 2026 retry after the git-probe fold used a 20-worktree seeded fixture with real pane `cwd`s: a cold producer snapshot dropped from 2400 git `execve` attempts / 240 successful `/usr/bin/git` execs at `47af1718` to 180 attempts / 180 successful execs after `3f419d87`, while `cargo xtask test performance` kept the `sidebar_diff_stats` guard green. `cargo xtask profile-build` plus `perf report --call-graph fp` produced demangled Rimz stacks for `produce_snapshot`, `enrich`, spending, and rollup fold ownership; the observed CPU sat in producer work and git children, not a render-thread fork/fsync path.
 
 ## The overhead, at fleet scale
 

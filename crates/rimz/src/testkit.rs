@@ -58,10 +58,37 @@ pub mod fleet {
         Ok(())
     }
 
+    /// Append lifecycle frames bound to synthetic panes with real worktree paths.
+    pub fn seed_fleet_ledger_with_panes(
+        paths: &StatePaths,
+        panes: &[PaneRef],
+        history_events: usize,
+    ) -> event_log::Result<()> {
+        if panes.is_empty() {
+            return Ok(());
+        }
+        for i in 0..history_events {
+            let slot = i % panes.len();
+            event_log::append(
+                &paths.events_log,
+                &registered_lifecycle_for_pane(&paths.workspace_id, slot, &panes[slot]),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Publish fresh pane, spending, and account sidecars for warm produce.
     pub fn publish_fresh_produce_inputs(runtime: &RuntimePaths, fleet: usize) -> io::Result<()> {
+        publish_fresh_produce_inputs_for_panes(runtime, synthetic_panes(fleet))
+    }
+
+    /// Publish fresh pane, spending, and account sidecars for custom pane shapes.
+    pub fn publish_fresh_produce_inputs_for_panes(
+        runtime: &RuntimePaths,
+        panes: Vec<PaneRef>,
+    ) -> io::Result<()> {
         let now_ms = sidebar::cache::unix_now_ms();
-        let frame = sidebar::frame::assemble_frame(synthetic_panes(fleet), now_ms, SESSION_NAME);
+        let frame = sidebar::frame::assemble_frame(panes, now_ms, SESSION_NAME);
         sidebar::produce::publish_test_pane_frame(runtime, &frame).map_err(io::Error::other)?;
 
         if !agents::spending::write_provider_spending_cache(
@@ -92,6 +119,23 @@ pub mod fleet {
             diag: None,
             heavy_lanes: HeavyLaneMode::Refresh,
         }
+    }
+
+    fn registered_lifecycle_for_pane(
+        workspace_id: &WorkspaceId,
+        slot: usize,
+        pane: &PaneRef,
+    ) -> EventEnvelope {
+        let mut observation = registered_observation(slot);
+        observation.worktree_path = pane.cwd.clone();
+        observation.pane_id = Some(pane.pane_id.clone());
+        EventEnvelope::agent_lifecycle(
+            workspace_id.clone(),
+            format!("sess-{slot}"),
+            "claude",
+            "SessionStart",
+            &observation,
+        )
     }
 
     fn registered_observation(slot: usize) -> AgentLifecycleObservation {
