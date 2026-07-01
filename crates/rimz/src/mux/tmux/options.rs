@@ -98,9 +98,10 @@ pub(super) fn is_tmux_sidebar(pane: &PaneRef) -> bool {
 /// Group a pane list into per-window [`ViewSidebars`] for the reconcile planner:
 /// each window's sidebar panes and whether it holds a user-working pane. Daemon
 /// dashboard panes in `rimzd` are not work. Panes with no window id are skipped.
+/// First-seen window order.
+///
 /// tmux `list-panes -a` is server-wide even with `-t <session>`, so reconcile
 /// scopes here before planning against another room's windows.
-/// First-seen window order.
 pub(super) fn tmux_views_with_sidebars(panes: &[PaneRef], session: &str) -> Vec<ViewSidebars> {
     let mut views: Vec<ViewSidebars> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
