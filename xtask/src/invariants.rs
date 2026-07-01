@@ -575,12 +575,15 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
             &[
                 "[agents]",
                 "[agents.worktree]",
-                "[agents.loop.tasks]",
                 "[agents.attention]",
                 "[agents.profiles]",
                 "[agents.commands]",
                 "[agents.teams]",
             ][..],
+        ),
+        (
+            root.join("crates/rimz/src/config/templates/loop.template.toml"),
+            &["[tasks]"][..],
         ),
     ];
     let mut missing = Vec::new();

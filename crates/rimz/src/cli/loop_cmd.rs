@@ -130,6 +130,13 @@ struct NameArgs {
     name: String,
 }
 
+struct AddTiming {
+    at: Option<String>,
+    days: Option<String>,
+    once: bool,
+    deadline: Option<Timestamp>,
+}
+
 pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         LoopSubcmd::Add(args) => add(*args),
@@ -197,7 +204,7 @@ fn add(args: AddArgs) -> Result<()> {
         parse_task_timeout(timeout).map_err(|err| anyhow::anyhow!("{err}"))?;
     }
     let on = args.on.as_deref().map(parse_check_on).transpose()?;
-    let (at, days, once, deadline) = resolve_add_timing(&args)?;
+    let timing = resolve_add_timing(&args)?;
     let prompt = if is_ping && args.prompt.is_none() && args.prompt_file.is_none() {
         Some("ping".to_owned())
     } else {
@@ -240,12 +247,12 @@ fn add(args: AddArgs) -> Result<()> {
         } else {
             None
         },
-        at,
-        days,
+        at: timing.at,
+        days: timing.days,
         every: args.every,
         cron: args.cron,
-        deadline,
-        once,
+        deadline: timing.deadline,
+        once: timing.once,
     };
     // Validate the firing time before writing, so a bad `--at`/`--days` fails here.
     let parsed = schedule::parse_schedule(&args.name, &entry)?;
@@ -982,12 +989,15 @@ fn is_ephemeral(entry: &TaskEntry) -> bool {
     entry.once || entry.deadline.is_some()
 }
 
-fn resolve_add_timing(
-    args: &AddArgs,
-) -> Result<(Option<String>, Option<String>, bool, Option<Timestamp>)> {
+fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
     let deadline = args.until.as_deref().map(resolve_deadline).transpose()?;
     let Some(raw) = args.in_after.as_deref() else {
-        return Ok((args.at.clone(), args.days.clone(), args.once, deadline));
+        return Ok(AddTiming {
+            at: args.at.clone(),
+            days: args.days.clone(),
+            once: args.once,
+            deadline,
+        });
     };
     let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
     if duration.is_zero() {
@@ -997,12 +1007,12 @@ fn resolve_add_timing(
         .to_zoned(MachineConfig::load_lenient().time_zone())
         .checked_add(duration)
         .context("resolving --in against the configured clock")?;
-    Ok((
-        Some(format!("{:02}:{:02}", target.hour(), target.minute())),
-        Some(weekday_name(target.weekday()).to_owned()),
-        true,
+    Ok(AddTiming {
+        at: Some(format!("{:02}:{:02}", target.hour(), target.minute())),
+        days: Some(weekday_name(target.weekday()).to_owned()),
+        once: true,
         deadline,
-    ))
+    })
 }
 
 fn resolve_deadline(raw: &str) -> Result<Timestamp> {

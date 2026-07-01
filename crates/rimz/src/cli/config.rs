@@ -446,9 +446,9 @@ fn file_for_key(path: &[String]) -> (PathBuf, &'static str) {
 }
 
 fn document_key_for_set(path: &[String]) -> Vec<String> {
-    if matches!(path, [root, child, ..] if root == "theme" && child == "colors") {
-        path[1..].to_vec()
-    } else if matches!(path, [root, ..] if root == "loop") {
+    if matches!(path, [root, child, ..] if root == "theme" && child == "colors")
+        || matches!(path, [root, ..] if root == "loop")
+    {
         path[1..].to_vec()
     } else {
         path.to_vec()
