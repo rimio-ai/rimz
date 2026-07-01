@@ -43,7 +43,6 @@ const KEPT_FIELDS: [&str; 4] = [
 fn main() {
     println!("cargo:rerun-if-env-changed=RIMZ_PRICING_JSON_PATH");
     println!("cargo:rerun-if-env-changed={PRESENCE_PLUGIN_ENV}");
-    println!("cargo:rerun-if-changed={GENERATED_SNAPSHOT}");
     println!("cargo:rerun-if-changed={THEME_CATALOG_DIR}");
     emit_build_version();
 
@@ -230,7 +229,10 @@ fn resolve_raw_json() -> String {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let generated = manifest.join(GENERATED_SNAPSHOT);
     match fs::read_to_string(&generated) {
-        Ok(raw) => raw,
+        Ok(raw) => {
+            println!("cargo:rerun-if-changed={}", generated.display());
+            raw
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => "{}".to_owned(),
         Err(err) => {
             panic!(
