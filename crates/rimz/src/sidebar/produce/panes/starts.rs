@@ -193,7 +193,7 @@ pub(super) fn carry_hosted_agent_stamps(
         ) else {
             continue;
         };
-        if !pane_start_matches_agent_stamp(prior, fresh) {
+        if !pane_state_start_allows_hosted_carry(prior, fresh) {
             continue;
         }
         if pane_process_agent_kind(&fresh.current).is_some_and(|kind| kind != prior_kind.as_str()) {
@@ -210,7 +210,7 @@ pub(super) fn carry_hosted_agent_stamps(
     }
 }
 
-fn pane_start_matches_agent_stamp(prior: &PaneState, fresh: &PaneState) -> bool {
+fn pane_state_start_allows_hosted_carry(prior: &PaneState, fresh: &PaneState) -> bool {
     match (prior.current.started_at, fresh.current.started_at) {
         (Some(prior), Some(fresh)) => prior <= fresh,
         _ => true,
