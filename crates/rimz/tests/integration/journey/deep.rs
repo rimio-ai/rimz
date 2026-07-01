@@ -240,9 +240,9 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     );
     tmux(&socket, &["split-window", "-h", "-t", "room", &serve]);
 
-    // Drive a real agent so the sidebar renders a complete frame; reaching that
-    // frame means a snapshot enumerated the live panes, so the self-close latch
-    // has seen its sibling (the codex pane). Now an empty tab means teardown.
+    // Drive a real agent until its row renders. That row means a snapshot
+    // enumerated the live panes, so the self-close latch has seen its sibling
+    // (the codex pane). Now an empty tab means teardown.
     env.install_agent_hooks("codex");
     let hook_env = [
         ("TMUX_PANE", codex_pane.as_str()),
@@ -266,12 +266,7 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
         "codex hook failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let latched = capture_until(
-        &socket,
-        "room",
-        |s| s.contains("coder") && s.contains("main"),
-        CAPTURE_BUDGET,
-    );
+    let latched = capture_until(&socket, "room", |s| s.contains("coder"), CAPTURE_BUDGET);
     assert!(
         latched.contains("coder"),
         "the sidebar must render its sibling before we test self-close:\n{latched}"
