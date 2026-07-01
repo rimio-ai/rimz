@@ -90,7 +90,7 @@ struct Oneshot {
     target: Target,
     fx: Effect,
     /// Set on the spawn frame so the first process starts the effect at t=0
-    /// (full flash) instead of skipping ahead by the frame's elapsed step.
+    /// instead of skipping ahead by the frame's elapsed step.
     born: bool,
 }
 
@@ -308,14 +308,13 @@ fn transition(seen: AgentStatus, status: AgentStatus) -> Option<TransitionKind> 
 }
 
 /// The one-shot's target and decay for `kind`, toned through the active
-/// palette. An actionable status-change card flash *settles*: the cue tone wipes
-/// in from the spine, then dissolves back to rest ([`directional_settle`]). A
-/// fresh card *develops in*, and a finished turn *announces once* the same gentle
-/// way — a uniform tone resolving back to rest ([`single_fade`]): the new card
-/// from the dim recede tone ([`Component::CardRecede`]), the completion from the
-/// positive [`Component::FlashCompleted`] crest. The spine flick under a landed
-/// selection stays a plain fade. Every effect is foreground-only and skips
-/// default-foreground (`Reset`) cells, whose true tone the terminal owns.
+/// palette. Actionable status changes and finished turns *settle*: the cue tone
+/// wipes in from the spine, then dissolves back to rest
+/// ([`directional_settle`]). A fresh card *develops in* from the dim recede tone
+/// ([`Component::CardRecede`]), and the spine flick under a landed selection
+/// stays a plain uniform fade ([`single_fade`]). Every effect is foreground-only
+/// and skips default-foreground (`Reset`) cells, whose true tone the terminal
+/// owns.
 fn build_oneshot(kind: TransitionKind, theme: &Theme) -> (Target, Effect) {
     let fx = match kind {
         TransitionKind::EnteredWaiting => {
@@ -330,7 +329,7 @@ fn build_oneshot(kind: TransitionKind, theme: &Theme) -> (Target, Effect) {
         TransitionKind::PausedLifted => {
             directional_settle(theme.component(Component::FlashLifted), FLASH_LIFTED_MS)
         }
-        TransitionKind::Completed => single_fade(
+        TransitionKind::Completed => directional_settle(
             theme.component(Component::FlashCompleted),
             FLASH_RESOLVED_MS,
         ),
@@ -662,6 +661,43 @@ mod tests {
         assert!(state.any_active(), "mid-decay the flash is still live");
         frame(&mut state, &waiting, None, 4);
         assert!(!state.any_active(), "a finished flash drains from the gate");
+    }
+
+    #[test]
+    fn completed_cue_does_not_open_as_a_uniform_card_wash() {
+        let theme = Theme::fixed(false);
+        let (target, mut fx) = build_oneshot(TransitionKind::Completed, &theme);
+        assert_eq!(target, Target::Card);
+
+        let area = Rect::new(0, 0, 8, 2);
+        let mut buf = Buffer::empty(area);
+        let rest = Color::Blue;
+        let flash = theme.component(Component::FlashCompleted);
+        assert_ne!(
+            rest, flash,
+            "test needs a resting color distinct from flash"
+        );
+        for y in 0..area.height {
+            for x in 0..area.width {
+                buf[(x, y)]
+                    .set_symbol("x")
+                    .set_style(ratatui::style::Style::default().fg(rest));
+            }
+        }
+
+        fx.process(Duration::ZERO, &mut buf, area);
+
+        let has_resting_cell = (0..area.height)
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .any(|(x, y)| buf[(x, y)].fg == rest);
+        assert!(
+            has_resting_cell,
+            "completion must wipe in from the spine instead of painting the whole card at t=0"
+        );
+        assert!(
+            fx.running(),
+            "the cue should keep settling after its first frame"
+        );
     }
 
     #[test]
