@@ -69,16 +69,10 @@ fn account_budgets_from_caches(
     now: Timestamp,
 ) -> BTreeMap<AgentKind, AccountBudget> {
     let rate_limits = rate_limits::read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let credits = credits::read_credits_cache(&runtime.shared_credits_path());
     rate_limits
         .windows
         .into_iter()
         .map(|(kind, limits)| {
-            let extra_credits = credits
-                .entries
-                .get(&kind)
-                .filter(|entry| entry.ok)
-                .and_then(|entry| entry.extra_credits.clone());
             (
                 AgentKind::new_unchecked(kind),
                 AccountBudget {
@@ -87,7 +81,6 @@ fn account_budgets_from_caches(
                         .into_iter()
                         .map(|window| window.projected_at(now))
                         .collect(),
-                    extra_credits,
                 },
             )
         })

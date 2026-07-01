@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
-use crate::agents::{AccountBudget, ExtraCredits, ResumeArm, resume_park};
+use crate::agents::{AccountBudget, ResumeArm, resume_park};
 
 /// The reset deadline the producer would durably arm for one agent this frame, or
 /// `None` when there is nothing to arm. Mirrors what `sidebar::enrich`
@@ -14,10 +14,7 @@ fn arm(agent: &AgentState, budget: Option<&AccountBudget>) -> Option<ResumeArm> 
 }
 
 fn budget(windows: Vec<RateLimitWindow>) -> AccountBudget {
-    AccountBudget {
-        windows,
-        extra_credits: None,
-    }
+    AccountBudget { windows }
 }
 
 /// The reset deadline `resets_in_secs` after the fixed epoch — the value `window`
@@ -51,13 +48,7 @@ fn arms_a_spend_limit_park_at_its_window_reset() {
         .active_ago(60)
         .spend_limit_turn_error(10, "You've hit your monthly spend limit.");
     assert_eq!(
-        arm(
-            &parked,
-            Some(&AccountBudget {
-                windows: vec![window(100, 3_600)],
-                extra_credits: Some(ExtraCredits::Disabled),
-            })
-        ),
+        arm(&parked, Some(&budget(vec![window(100, 3_600)]))),
         Some(ResumeArm::RateLimit {
             deadline: deadline(3_600)
         })

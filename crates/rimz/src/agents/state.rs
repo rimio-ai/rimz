@@ -15,7 +15,6 @@ use crate::pane::{PaneRef, RuntimeOwner};
 use super::context::{
     AgentContext, AgentTokenUsage, AgentTurnError, RateLimitWindow, TurnErrorClass,
 };
-use super::credits::ExtraCredits;
 use super::lifecycle::{LifecycleState, TurnPhase};
 
 /// One hour: the shared ceiling for attention heat and breath tempo, and the
@@ -290,15 +289,13 @@ fn label_indicates_rate_limit(label: Option<&str>) -> bool {
         || lower.contains("too many requests")
 }
 
-/// Account-scoped provider budget for one agent kind. Rate-limit windows are the
-/// included subscription budget that refills on its reset clock; extra credits
-/// are paid usage beyond that subscription budget. Park, resume, and display
-/// decisions read this fused account truth, never one paused session's frozen
-/// context reading.
+/// Account-scoped subscription budget for one agent kind. Rate-limit windows are
+/// the included budget that refills on its reset clock. Park, resume, and
+/// display decisions read this fused account truth, never one paused session's
+/// frozen context reading.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct AccountBudget {
     pub windows: Vec<RateLimitWindow>,
-    pub extra_credits: Option<ExtraCredits>,
 }
 
 impl AccountBudget {

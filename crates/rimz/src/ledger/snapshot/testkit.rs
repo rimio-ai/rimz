@@ -100,13 +100,7 @@ pub(super) fn account_budget(
     windows: Vec<RateLimitWindow>,
 ) -> std::collections::BTreeMap<AgentKind, AccountBudget> {
     let mut budgets = std::collections::BTreeMap::new();
-    budgets.insert(
-        AgentKind::new_unchecked(kind),
-        AccountBudget {
-            windows,
-            extra_credits: None,
-        },
-    );
+    budgets.insert(AgentKind::new_unchecked(kind), AccountBudget { windows });
     budgets
 }
 

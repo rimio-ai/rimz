@@ -31,7 +31,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
-use crate::agents::{AccountBudget, AgentState, ResumeArm, resume_park};
+use crate::agents::{
+    AccountBudget, AgentState, ResumeArm, TurnErrorClass, display_turn_error,
+    effective_turn_error_class, resume_park,
+};
 use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::ledger::atomic::write_temp_then_rename_cache;
@@ -114,9 +117,12 @@ pub(super) fn resume_parked(
             }
             _ => {
                 // No arm this frame means "no recovering window", not "forget
-                // the durable deadline". Clear only once the fused account
-                // budget proves the subscription bar has recovered.
-                if budget_recovered(budget, now) {
+                // the durable deadline". A still-active limit marker gets one
+                // chance to fire the persisted due record on the recovery
+                // frame; clear only stale records whose marker already moved on.
+                if limit_marker_active(agent) {
+                    fire_if_due(snapshot, runtime, agent, &path, now, text, config);
+                } else if budget_recovered(budget, now) {
                     remove_park(&path);
                 } else {
                     fire_if_due(snapshot, runtime, agent, &path, now, text, config);
@@ -128,6 +134,22 @@ pub(super) fn resume_parked(
 
 fn budget_recovered(budget: Option<&AccountBudget>, now: Timestamp) -> bool {
     budget.is_some_and(|budget| budget.subscription_budget_available(now))
+}
+
+fn limit_marker_active(agent: &AgentState) -> bool {
+    display_turn_error(
+        agent.status,
+        agent.context.as_ref(),
+        agent.last_activity,
+        agent.turn_started_at,
+    )
+    .map(effective_turn_error_class)
+    .is_some_and(|class| {
+        matches!(
+            class,
+            TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
+        )
+    })
 }
 
 /// Capture (or refresh) the park while the reading is still active. A new park
@@ -306,6 +328,7 @@ fn park_record_path(
 /// pane and writes the `agent.resumed` audit record. Best-effort: a spawn failure
 /// is logged and counted as a fired attempt so a broken helper path backs off
 /// instead of retrying every frame.
+#[cfg(not(test))]
 fn spawn_auto_continue(
     runtime: &RuntimePaths,
     kind: &AgentKind,
@@ -365,11 +388,25 @@ fn spawn_auto_continue(
 }
 
 #[cfg(test)]
+fn spawn_auto_continue(
+    runtime: &RuntimePaths,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    pane_id: &PaneId,
+    text: &str,
+    reason: &str,
+) {
+    let _ = (runtime, kind, agent_id, pane_id, text, reason);
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::agents::lifecycle::TurnPhase;
-    use crate::agents::{AgentRateLimits, AgentStatus, RateLimitWindow};
-    use crate::ids::WorkspaceId;
+    use crate::agents::{
+        AgentContext, AgentRateLimits, AgentStatus, AgentTurnError, RateLimitWindow, TurnErrorClass,
+    };
+    use crate::ids::{MuxName, WorkspaceId};
 
     fn ts(secs: i64) -> Timestamp {
         Timestamp::from_second(secs).expect("valid test timestamp")
@@ -475,6 +512,52 @@ mod tests {
             last_seen: ts(activity),
             last_activity: ts(activity),
             registered_at: Some(ts(activity)),
+        }
+    }
+
+    fn limit_agent(activity: i64, error_at: i64) -> AgentState {
+        let mut agent = agent(activity);
+        agent.context = Some(AgentContext {
+            source: "claude".to_owned(),
+            session_name: None,
+            session_preview: None,
+            model_id: None,
+            model_display_name: None,
+            effort: None,
+            thinking_enabled: None,
+            output_style: None,
+            vim_mode: None,
+            agent_version: None,
+            exceeds_200k_tokens: None,
+            cost: None,
+            tokens: None,
+            rate_limits: None,
+            pr: None,
+            account: None,
+            turn_error: Some(AgentTurnError {
+                class: TurnErrorClass::PausedRateLimit,
+                at: ts(error_at),
+                label: Some("You've hit your usage limit".to_owned()),
+            }),
+            turn_complete: None,
+            observed_at: ts(error_at),
+        });
+        agent
+    }
+
+    fn live_pane() -> PaneAgent {
+        PaneAgent {
+            kind: AgentKind::new_unchecked("claude"),
+            kind_ordinal: None,
+            name: None,
+            profile: None,
+            role: None,
+            team: None,
+            channel: None,
+            agent_id: Some("sess".into()),
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
+            worktree_path: None,
+            worktree_branch: None,
         }
     }
 
@@ -627,6 +710,49 @@ mod tests {
 
         let before_cap = overloaded_record(1_000, 100, Some(1_000), 9);
         assert!(due(&before_cap, 1_180, &[60, 120, 180], 10));
+    }
+
+    #[test]
+    fn recovered_budget_fires_due_rate_limit_record_before_clearing() {
+        let (_dir, runtime) = temp_runtime();
+        let path = park_path(&runtime);
+        write_park(&path, &rate_record(5_000, 1_000, None, 0));
+        super::super::rate_limits::write_rate_limits_cache(
+            &runtime.shared_rate_limits_path(),
+            &super::super::rate_limits::RateLimitsCache {
+                refreshed_at_ms: 0,
+                windows: [(
+                    "claude".to_owned(),
+                    AgentRateLimits {
+                        windows: vec![window(20, 9_000)],
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                pending: Default::default(),
+            },
+        );
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            Vec::new(),
+            vec![limit_agent(1_000, 5_990)],
+            ts(6_000),
+        );
+        snapshot.now = ts(6_000);
+        snapshot.agent_panes = vec![live_pane()];
+        resume_parked(
+            &snapshot,
+            &runtime,
+            &ResumeConfig {
+                auto_continue: true,
+                auto_continue_max_retries: 3,
+                ..ResumeConfig::default()
+            },
+        );
+        assert_eq!(
+            read_park(&path),
+            Some(rate_record(5_000, 1_000, Some(6_000), 1))
+        );
     }
 
     #[test]
