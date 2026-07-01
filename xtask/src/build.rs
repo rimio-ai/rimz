@@ -274,7 +274,8 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
 }
 
 pub(crate) fn install(root: &Path) -> Result<()> {
-    install_from_stage(stage_install(root)?)
+    let stage = stage_install(root)?;
+    install_from_stage(&stage)
 }
 
 /// Build host `rimz` with the dev-only `sentry` feature and install it. A debug
@@ -282,12 +283,14 @@ pub(crate) fn install(root: &Path) -> Result<()> {
 /// contributor telemetry stays off the production dashboard; opt in by resolving
 /// a DSN at runtime. See [observability](../../docs/internals/health/observability.md).
 pub(crate) fn install_dev(root: &Path) -> Result<()> {
-    install_from_stage(stage_dev_install(root)?)
+    let stage = stage_dev_install(root)?;
+    install_from_stage(&stage)?;
+    upload_debug_files(&stage.join("rimz"))
 }
 
 /// Copy the staged install artifacts onto the `cargo install` ladder and
 /// `/usr/local/bin`, then report the version the way `rimz --version` does.
-fn install_from_stage(stage: PathBuf) -> Result<()> {
+fn install_from_stage(stage: &Path) -> Result<()> {
     let dest_dirs = install_bin_dirs();
     for dest_dir in &dest_dirs {
         fs::create_dir_all(dest_dir).with_context(|| format!("creating {}", dest_dir.display()))?;
@@ -354,21 +357,77 @@ fn report_install(version: &str, paths: &[PathBuf]) {
     println!("Installed rimz {version} to {paths}");
 }
 
+#[expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "install-dev reports optional Sentry debug-file enrichment"
+)]
+fn upload_debug_files(binary: &Path) -> Result<()> {
+    if env::var_os("SENTRY_AUTH_TOKEN")
+        .as_deref()
+        .is_none_or(OsStr::is_empty)
+    {
+        println!(
+            "Sentry debug-file upload skipped; set SENTRY_AUTH_TOKEN with SENTRY_ORG and SENTRY_PROJECT to upload {}",
+            binary.display()
+        );
+        return Ok(());
+    }
+
+    match Command::new("sentry-cli")
+        .args(["debug-files", "upload"])
+        .arg(binary)
+        .status()
+    {
+        Ok(status) if status.success() => {
+            println!("Uploaded Sentry debug files for {}", binary.display());
+        }
+        Ok(status) => {
+            eprintln!(
+                "warning: sentry-cli debug-files upload failed with status {status}; install still succeeded"
+            );
+        }
+        Err(err) => {
+            eprintln!(
+                "warning: sentry-cli debug-files upload could not start: {err}; install still succeeded"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn stage_install(root: &Path) -> Result<PathBuf> {
-    stage_host_rimz(root, true, &[])
+    stage_host_rimz(root, true, &[], &[])
 }
 
 /// Stage a dev host `rimz`: a debug build with the `sentry` feature compiled in.
 fn stage_dev_install(root: &Path) -> Result<PathBuf> {
-    stage_host_rimz(root, false, &["sentry"])
+    // Cargo config beats the manifest profile for this one build, so the
+    // staged binary embeds line tables whose build id matches the upload.
+    stage_host_rimz(
+        root,
+        false,
+        &["sentry"],
+        &["--config", r#"profile.dev.split-debuginfo="off""#],
+    )
 }
 
 /// Build the host `rimz` binary for the given profile and feature set, then copy
 /// it into the install staging directory.
-fn stage_host_rimz(root: &Path, release: bool, features: &[&str]) -> Result<PathBuf> {
+fn stage_host_rimz(
+    root: &Path,
+    release: bool,
+    features: &[&str],
+    extra: &[&str],
+) -> Result<PathBuf> {
     build_plugin(root)?;
     let envs = presence_plugin_embed_env(root);
-    run_with_env(root, "cargo", host_build_args(release, features), &envs)?;
+    run_with_env(
+        root,
+        "cargo",
+        host_build_args(release, features, extra),
+        &envs,
+    )?;
     let profile_dir = if release { "release" } else { "debug" };
     let stage = stage_bin_dir(root);
     fs::create_dir_all(&stage).with_context(|| format!("creating {}", stage.display()))?;
@@ -383,7 +442,7 @@ fn stage_host_rimz(root: &Path, release: bool, features: &[&str]) -> Result<Path
 /// shipped binary; a debug build makes the installed binary's off-box reporting
 /// default to the `development` environment. `features` opts dev-only cargo
 /// features (`sentry`) in.
-fn host_build_args(release: bool, features: &[&str]) -> Vec<String> {
+fn host_build_args(release: bool, features: &[&str], extra: &[&str]) -> Vec<String> {
     let mut args = vec![
         "build".to_owned(),
         "-p".to_owned(),
@@ -399,6 +458,7 @@ fn host_build_args(release: bool, features: &[&str]) -> Vec<String> {
         args.push("--features".to_owned());
         args.push(features.join(","));
     }
+    args.extend(extra.iter().map(|arg| (*arg).to_owned()));
     args
 }
 
@@ -426,7 +486,7 @@ fn rustc_host_target(root: &Path) -> Result<String> {
 
 fn build_host_release(root: &Path) -> Result<()> {
     let envs = presence_plugin_embed_env(root);
-    run_with_env(root, "cargo", host_build_args(true, &[]), &envs)
+    run_with_env(root, "cargo", host_build_args(true, &[], &[]), &envs)
 }
 
 fn build_darwin_artifacts(root: &Path) -> Result<()> {

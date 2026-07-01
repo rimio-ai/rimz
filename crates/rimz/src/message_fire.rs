@@ -18,7 +18,7 @@ pub(crate) fn wake_due_messages(runtime: &RuntimePaths, now: &Zoned) {
     if !should_wake(read_stamp(&path), now.timestamp()) {
         return;
     }
-    spawn_message_sweep();
+    spawn_message_sweep(runtime);
 }
 
 fn should_wake(stamp: Option<Timestamp>, now: Timestamp) -> bool {
@@ -38,7 +38,7 @@ fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join(MESSAGE_WAKE_FILE)
 }
 
-fn spawn_message_sweep() {
+fn spawn_message_sweep(runtime: &RuntimePaths) {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(err) => {
@@ -55,6 +55,7 @@ fn spawn_message_sweep() {
         cmd.args(["--root", &root]);
     }
     cmd.args(["message", "sweep"])
+        .current_dir(&runtime.root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -63,7 +64,10 @@ fn spawn_message_sweep() {
         "sidebar: sweeping scheduled messages",
     );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "message-sweep") {
-        tracing::warn!(
+        // The CWD anchor clears gc'd-worktree ENOENT; missing/replaced `rimz`
+        // stays an environment fact. Keep it at debug! so Sentry ignores it,
+        // and the next elder tick retries.
+        tracing::debug!(
             tags.operation = "message_fire.spawn",
             error = &err as &dyn std::error::Error,
             "sidebar: failed to spawn scheduled-message sweep",

@@ -52,7 +52,7 @@ fn install_destinations_do_not_duplicate_usr_local_bin() {
 
 #[test]
 fn dev_install_builds_debug_with_the_sentry_feature() {
-    let args = host_build_args(false, &["sentry"]);
+    let args = host_build_args(false, &["sentry"], &[]);
 
     assert!(
         !args.iter().any(|arg| arg == "--release"),
@@ -67,10 +67,30 @@ fn dev_install_builds_debug_with_the_sentry_feature() {
 
 #[test]
 fn release_install_adds_no_extra_features() {
-    let args = host_build_args(true, &[]);
+    let args = host_build_args(true, &[], &[]);
 
     assert!(args.iter().any(|arg| arg == "--release"));
     assert!(!args.iter().any(|arg| arg == "--features"));
+    assert!(
+        !args
+            .iter()
+            .any(|arg| arg == r#"profile.dev.split-debuginfo="off""#)
+    );
+}
+
+#[test]
+fn dev_install_can_embed_debug_info_for_sentry_upload() {
+    let args = host_build_args(
+        false,
+        &["sentry"],
+        &["--config", r#"profile.dev.split-debuginfo="off""#],
+    );
+
+    assert!(args.iter().any(|arg| arg == "--config"));
+    assert!(
+        args.iter()
+            .any(|arg| arg == r#"profile.dev.split-debuginfo="off""#)
+    );
 }
 
 #[test]

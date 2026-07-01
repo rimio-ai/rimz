@@ -43,7 +43,7 @@ pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
     }
     for (name, action) in actions {
         if action == Action::Fire {
-            spawn_loop_run(&name);
+            spawn_loop_run(runtime, &name);
         }
     }
 }
@@ -107,7 +107,7 @@ fn state_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("loop-fire.json")
 }
 
-fn spawn_loop_run(name: &str) {
+fn spawn_loop_run(runtime: &RuntimePaths, name: &str) {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(err) => {
@@ -122,6 +122,7 @@ fn spawn_loop_run(name: &str) {
     };
     let mut cmd = Command::new(exe);
     cmd.args(["loop", "run", name])
+        .current_dir(&runtime.root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -131,7 +132,10 @@ fn spawn_loop_run(name: &str) {
         "sidebar: firing loop task",
     );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "loop-run") {
-        tracing::warn!(
+        // The CWD anchor clears gc'd-worktree ENOENT; missing/replaced `rimz`
+        // stays an environment fact. Keep it at debug! so Sentry ignores it,
+        // and the next elder tick retries.
+        tracing::debug!(
             task = name,
             tags.operation = "loop_fire.spawn",
             error = &err as &dyn std::error::Error,
