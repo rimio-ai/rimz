@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::json;
 
+use rimz::loop_run_log::{self, LoopRunRecord, LoopRunResult};
 use rimz::message::MessageStatus;
 
 use crate::common::Env;
@@ -58,6 +59,33 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
     assert_eq!(messages[0].kind.as_str(), "claude");
     assert_eq!(messages[0].agent_id.as_str(), "sess-loop-live");
     assert_eq!(messages[0].status, MessageStatus::Queued);
+
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].task, "wake");
+    assert_eq!(records[0].result, LoopRunResult::Delivered);
+
+    let list = env
+        .rimz()
+        .args(["loop", "list"])
+        .output()
+        .expect("loop list");
+    assert!(
+        list.status.success(),
+        "loop list failed: {}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        stdout.contains("RUNS") && stdout.contains("LAST RUN") && stdout.contains("RESULT"),
+        "loop list should show run-history columns: {stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| {
+            line.starts_with("wake") && line.contains("  1  ") && line.contains("delivered")
+        }),
+        "loop list should fold run history for wake: {stdout}"
+    );
 }
 
 #[test]
@@ -162,6 +190,37 @@ fn loop_run_bind_dead_session_reaps_schedule() {
 }
 
 #[test]
+fn loop_run_bind_tilde_root_queues_prompt() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-tilde", "feature-loop");
+    write_agents_config(
+        &env,
+        "[agents.loop.tasks.tilde]\n\
+         bind = { kind = \"claude\", session = \"sess-loop-tilde\", handle = \"@claude\" }\n\
+         prompt = \"tilde wake\"\n\
+         root = \"~/project\"\n\
+         every = \"15m\"\n",
+    );
+
+    let run = env
+        .rimz()
+        .args(["loop", "run", "tilde"])
+        .output()
+        .expect("loop run");
+    assert!(
+        run.status.success(),
+        "loop run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let messages = env.ledger().list_pending_messages().expect("messages");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].text, "tilde wake");
+    assert_eq!(messages[0].agent_id.as_str(), "sess-loop-tilde");
+}
+
+#[test]
 fn loop_add_bind_validates_mode_selection() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -255,6 +314,16 @@ fn write_agents_config(env: &Env, text: &str) {
     let path = agents_config_path(env);
     std::fs::create_dir_all(path.parent().expect("config dir")).expect("mkdir config");
     std::fs::write(path, text).expect("write agents config");
+}
+
+fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
+    let path = loop_run_log::log_path(&env.state_root());
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .map(|line| serde_json::from_str(line).expect("loop run record"))
+        .collect()
 }
 
 fn agents_config_path(env: &Env) -> std::path::PathBuf {

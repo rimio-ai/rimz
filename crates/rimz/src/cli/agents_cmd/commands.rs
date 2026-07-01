@@ -394,7 +394,7 @@ pub(super) fn run_placement(force_new_tab: bool, has_ambient_pane: bool) -> RunP
     }
 }
 
-pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Option<RunRecord>> {
     if args.json {
         bail!("on `-p`, choose output with `--output-format json` (`--json` is for `list`)");
     }
@@ -626,7 +626,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         {
             println!("{}", launch_identity.name);
         }
-        return Ok(());
+        return Ok(None);
     }
     let Some((sock, _sock_path)) = bound else {
         bail!("blocking run did not bind its completion socket");
@@ -663,7 +663,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         OutputFormat::StreamJson => {}
     }
     drop(socket_guard);
-    std::process::exit(record.status.exit_code());
+    Ok(Some(record))
 }
 
 /// Resolve the supervised prompt from text input or, for `--input-format

@@ -13,6 +13,7 @@ pub(crate) mod status;
 
 use std::io::Write;
 
+use jiff::Timestamp;
 use unicode_width::UnicodeWidthStr;
 
 /// Styled stdout for human command output. Lock it once and write the whole
@@ -62,6 +63,23 @@ pub(crate) fn fmt_bytes(bytes: u64) -> String {
         format!("{value:.1} {}", UNITS[unit])
     } else {
         format!("{value:.0} {}", UNITS[unit])
+    }
+}
+
+pub(crate) fn rel_age(ts: Timestamp, now: Timestamp) -> String {
+    let age = now.duration_since(ts);
+    if age.is_negative() {
+        return "now".to_owned();
+    }
+    let secs = age.as_secs().max(0) as u64;
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3_600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3_600)
+    } else {
+        format!("{}d ago", secs / 86_400)
     }
 }
 
@@ -362,6 +380,31 @@ mod tests {
         assert_eq!(fmt_bytes(13_018), "13 KB");
         assert_eq!(fmt_bytes(1_503_238_553), "1.4 GB");
         assert_eq!(fmt_bytes(18 * 1024 * 1024), "18 MB");
+    }
+
+    #[test]
+    fn rel_age_uses_seconds_minutes_hours_days_and_clamps_future() {
+        let now = Timestamp::from_second(200_000).expect("timestamp");
+        assert_eq!(
+            rel_age(Timestamp::from_second(199_959).expect("timestamp"), now),
+            "41s ago"
+        );
+        assert_eq!(
+            rel_age(Timestamp::from_second(199_880).expect("timestamp"), now),
+            "2m ago"
+        );
+        assert_eq!(
+            rel_age(Timestamp::from_second(192_800).expect("timestamp"), now),
+            "2h ago"
+        );
+        assert_eq!(
+            rel_age(Timestamp::from_second(27_200).expect("timestamp"), now),
+            "2d ago"
+        );
+        assert_eq!(
+            rel_age(Timestamp::from_second(200_001).expect("timestamp"), now),
+            "now"
+        );
     }
 
     #[test]

@@ -23,7 +23,7 @@ One-shot tasks remove their config row immediately before the supervised run or 
 
 The elder keeps a per-room `loop-fire.json` map of task name to last-fire `Timestamp` under the workspace runtime dir. First sight arms a task by recording `now` and does not fire; the next matching occurrence fires. A fire records `now` before spawning the detached helper, which guards against duplicate pane spawns on sub-interval ticks.
 
-Each room fires only tasks whose stored absolute `root` maps to its `WorkspaceId`. The root is canonicalized at add time, so workspace ownership is a pure hash comparison and two open rooms do not fire each other's tasks.
+Each room fires only tasks whose normalized `root` maps to its `WorkspaceId`. `rimz loop add` stores a canonical absolute root, and a hand-edited root may use `~` or a relative path; the elder and runner expand and canonicalize it before workspace ownership checks, display, and execution.
 
 The elder spawns `rimz loop run <name>` with fresh null stdio. The hidden runner resolves the task's recorded root, applies the same preflight as an immediate run, and then either launches the supervised pane or messages the pinned session.
 
@@ -45,6 +45,6 @@ The window is account-scoped, shared by every session of a provider kind ([provi
 
 ## Config and code
 
-Loop tasks live in per-machine `[agents.loop.tasks.*]`, outside the trust hash, and each entry runs the rimz-owned `loop run` rather than arbitrary shell. The config shape is in [configuration.md → Loop tasks](../../reference/configuration.md#loop-tasks); the `rimz loop add` / `remove` / `list` commands are in [agents.md → Schedule turns with loop](../../reference/cli/agents.md#schedule-turns-with-loop).
+Loop tasks live in per-machine `[agents.loop.tasks.*]`, outside the trust hash, and each entry runs the rimz-owned `loop run` rather than arbitrary shell. The user-global `loop-runs.log.jsonl` history under the state root records each fired task result; `rimz loop list` derives the run count, last-run age, and result columns from that log. The config shape is in [configuration.md → Loop tasks](../../reference/configuration.md#loop-tasks); the `rimz loop add` / `remove` / `list` commands are in [agents.md → Schedule turns with loop](../../reference/cli/agents.md#schedule-turns-with-loop).
 
 `schedule.rs` owns pure parsing, descriptions, and due evaluation. `cli/loop_cmd.rs` owns config editing plus the `list` and hidden `run` surfaces. `loop_fire.rs` owns elder firing and the `loop-fire.json` state.

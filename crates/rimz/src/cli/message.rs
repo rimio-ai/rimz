@@ -858,11 +858,11 @@ fn list_messages(
                 render::cell(message.status.as_str()).fg(render::status::message(message.status)),
                 render::cell(target).fg(render::palette::META),
                 render::cell(message.sender.render()).fg(render::palette::META),
-                render::cell(rel_age(message.enqueued_at, now)),
+                render::cell(render::rel_age(message.enqueued_at, now)),
                 render::cell(
                     message
                         .delivered_at
-                        .map(|delivered| rel_age(delivered, now))
+                        .map(|delivered| render::rel_age(delivered, now))
                         .unwrap_or_else(|| "-".to_owned()),
                 )
                 .dash(),
@@ -907,13 +907,16 @@ fn status_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
         "channel",
         render::cell(message.channel.clone().unwrap_or_else(|| "-".to_owned())).dash(),
     );
-    kv.push("created", render::cell(rel_age(message.enqueued_at, now)));
+    kv.push(
+        "created",
+        render::cell(render::rel_age(message.enqueued_at, now)),
+    );
     kv.push(
         "delivered",
         render::cell(
             message
                 .delivered_at
-                .map(|delivered| rel_age(delivered, now))
+                .map(|delivered| render::rel_age(delivered, now))
                 .unwrap_or_else(|| "-".to_owned()),
         )
         .dash(),
@@ -1410,23 +1413,6 @@ fn message_target(message: &MessageRecord, agents: &[&AgentState]) -> String {
         .find(|agent| message.same_agent_card(agent))
         .map(|agent| rimz::target::agent_handle(agent, agents, true))
         .unwrap_or_else(|| format!("{}:{}", message.kind, message.agent_id))
-}
-
-fn rel_age(ts: Timestamp, now: Timestamp) -> String {
-    let age = now.duration_since(ts);
-    if age.is_negative() {
-        return "now".to_owned();
-    }
-    let secs = age.as_secs().max(0) as u64;
-    if secs < 60 {
-        format!("{secs}s ago")
-    } else if secs < 3_600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h ago", secs / 3_600)
-    } else {
-        format!("{}d ago", secs / 86_400)
-    }
 }
 
 fn preview(text: &str) -> String {

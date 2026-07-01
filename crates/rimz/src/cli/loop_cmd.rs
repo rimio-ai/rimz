@@ -25,7 +25,8 @@ use rimz::agents_spec::{self, Cell, LayoutSpec};
 use rimz::config::{MachineConfig, TaskEntry, TaskTarget};
 use rimz::ids::WorkspaceId;
 use rimz::ledger::atomic::write_bytes_atomically;
-use rimz::ledger::paths::{RuntimePaths, config_home, runtime_home};
+use rimz::ledger::paths::{RuntimePaths, config_home, runtime_home, state_home};
+use rimz::loop_run_log::{self, LoopRunRecord, LoopRunResult};
 use rimz::message::DeliveryGate;
 use rimz::schedule;
 use rimz::sidebar::enrich::shortest_window_running;
@@ -243,29 +244,69 @@ fn list() -> Result<()> {
         writeln!(out, "no loop tasks; add one with `rimz loop add`")?;
         return Ok(());
     }
+    let stats = loop_run_log::stats(&state_home());
+    let now = Timestamp::now();
+    let mut table = ui::Table::new([
+        "NAME", "SPEC", "SCHEDULE", "ROOM", "RUNS", "LAST RUN", "RESULT", "ROOT",
+    ])
+    .right(&[4]);
     for (name, entry) in &tasks {
         let when = match schedule::parse_schedule(name, entry) {
             Ok(schedule) => schedule.describe(),
             Err(err) => format!("invalid: {err}"),
         };
-        let state = if room_open(&entry.root) {
-            "room open"
+        let root = entry.resolved_root();
+        let state = if room_open(&root) { "open" } else { "no room" };
+        let task_stats = stats.get(name);
+        let runs = task_stats.map_or(0, |stats| stats.runs);
+        let last_run = if let Some(stats) = task_stats {
+            ui::cell(ui::rel_age(stats.last.at, now))
         } else {
-            "no room"
+            ui::cell("-").dash()
         };
-        writeln!(
-            out,
-            "  {name:<16} {} {when:<24} [{state}] {}",
-            task_subject(entry),
-            entry.root.display()
-        )?;
+        let result = task_stats
+            .map(|stats| loop_result_cell(stats.last.result))
+            .unwrap_or_else(|| ui::cell("-").dash());
+        let root_text = root.to_string_lossy();
+        table.row([
+            ui::cell(name.as_str()).fg(ui::palette::ACCENT),
+            ui::cell(task_subject(entry)),
+            ui::cell(when),
+            ui::cell(state),
+            ui::cell(runs.to_string()),
+            last_run,
+            result,
+            ui::cell(ui::home_relative(root_text.as_ref())),
+        ]);
     }
+    table.render(&mut out)?;
     Ok(())
 }
 
 fn room_open(root: &Path) -> bool {
     RuntimePaths::for_workspace(WorkspaceId::from_project_root(root))
         .is_ok_and(|runtime| fresh_sidebar_present(&runtime))
+}
+
+fn loop_result_cell(result: LoopRunResult) -> ui::Cell {
+    let style = match result {
+        LoopRunResult::Completed | LoopRunResult::Delivered => ui::palette::GOOD,
+        LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::Errored => {
+            ui::palette::ALARM
+        }
+        LoopRunResult::Canceled | LoopRunResult::TargetGone | LoopRunResult::SkippedWindow => {
+            ui::palette::WARN
+        }
+    };
+    ui::cell(result.label()).fg(style)
+}
+
+fn loop_record(task: &str, result: LoopRunResult) -> LoopRunRecord {
+    LoopRunRecord {
+        task: task.to_owned(),
+        at: Timestamp::now(),
+        result,
+    }
 }
 
 // ---- run --------------------------------------------------------------------
@@ -287,6 +328,7 @@ fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
             "loop `{name}`: {} budget window already active; skipping ping",
             resolved.kind
         )?;
+        loop_run_log::append(&loop_record(name, LoopRunResult::SkippedWindow));
         return Ok(());
     }
     let prompt = resolve_task_prompt(&entry)?;
@@ -303,11 +345,10 @@ fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
         .transpose()
         .map_err(|err| anyhow::anyhow!("{err}"))?;
     let mut run_globals = globals.clone();
-    run_globals.root = Some(entry.root.clone());
+    run_globals.root = Some(entry.resolved_root());
     if entry.once {
-        // `run_blocking_task` exits with the supervised run status, so one-shot
-        // cleanup happens before the terminal run. A one-shot removed pre-fire
-        // that then fails to launch is not retried.
+        // One-shot cleanup happens before the terminal run. A one-shot removed
+        // pre-fire that then fails to launch is not retried.
         let _ = config_remove(name)?;
     }
     let effort = entry
@@ -324,9 +365,17 @@ fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
         system_prompt_file,
         timeout,
     });
-    // Drives the shared `agents -p` path; on success it exits with the run's
-    // status code and never returns here.
-    super::agents_cmd::run_blocking_task(args, &run_globals)
+    match super::agents_cmd::run_blocking_task(args, &run_globals) {
+        Ok(Some(status)) => {
+            loop_run_log::append(&loop_record(name, status.into()));
+            std::process::exit(status.exit_code());
+        }
+        Ok(None) => Ok(()),
+        Err(err) => {
+            loop_run_log::append(&loop_record(name, LoopRunResult::Errored));
+            Err(err)
+        }
+    }
 }
 
 fn run_delivery_task(
@@ -342,21 +391,26 @@ fn run_delivery_task(
             target.handle
         )?;
         let _ = config_remove(name)?;
+        loop_run_log::append(&loop_record(name, LoopRunResult::TargetGone));
         return Ok(());
     }
     let prompt = resolve_task_prompt(entry)?;
     if entry.once {
         let _ = config_remove(name)?;
     }
+    let root = entry.resolved_root();
     match super::message::to_session(
-        &entry.root,
+        &root,
         &target.kind,
         &target.session,
         prompt,
         DeliveryGate::Done,
         globals,
     ) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            loop_run_log::append(&loop_record(name, LoopRunResult::Delivered));
+            Ok(())
+        }
         Err(err) if queue_resolution_miss(&err) => {
             writeln!(
                 ui::out(),
@@ -364,6 +418,7 @@ fn run_delivery_task(
                 target.handle
             )?;
             let _ = config_remove(name)?;
+            loop_run_log::append(&loop_record(name, LoopRunResult::TargetGone));
             Ok(())
         }
         Err(err) => Err(err),
@@ -371,8 +426,9 @@ fn run_delivery_task(
 }
 
 fn delivery_target_alive(entry: &TaskEntry, target: &TaskTarget) -> Result<bool> {
-    let workspace = WorkspaceResolver::resolve(&entry.root, None)
-        .with_context(|| format!("resolving project root at {}", entry.root.display()))?;
+    let root = entry.resolved_root();
+    let workspace = WorkspaceResolver::resolve(&root, None)
+        .with_context(|| format!("resolving project root at {}", root.display()))?;
     let ledger = super::open_ledger(&workspace)?;
     let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
     Ok(snapshot.agents.iter().any(|agent| {
@@ -418,8 +474,9 @@ pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
 /// from the shared account-scoped cache. The window state is account-scoped, so
 /// the entry's workspace is resolved only to reach this user's runtime root.
 fn window_already_running(entry: &TaskEntry, kind: &str) -> Result<bool> {
-    let workspace = WorkspaceResolver::resolve(&entry.root, None)
-        .with_context(|| format!("resolving project root at {}", entry.root.display()))?;
+    let root = entry.resolved_root();
+    let workspace = WorkspaceResolver::resolve(&root, None)
+        .with_context(|| format!("resolving project root at {}", root.display()))?;
     let runtime = RuntimePaths::under(workspace.workspace_id, &runtime_home())
         .context("locating the runtime root")?;
     Ok(shortest_window_running(&runtime, kind, Timestamp::now()) == Some(true))
@@ -602,8 +659,9 @@ fn ping_kind_supported(kind: &str) -> Result<()> {
 /// The full precondition a fired task needs: installed and trusted hooks so the
 /// supervised turn can report completion. Ping tasks also require ping support.
 fn preflight_task(entry: &TaskEntry) -> Result<ResolvedTaskSpec> {
-    let workspace = WorkspaceResolver::resolve(&entry.root, None)
-        .with_context(|| format!("resolving project root at {}", entry.root.display()))?;
+    let root = entry.resolved_root();
+    let workspace = WorkspaceResolver::resolve(&root, None)
+        .with_context(|| format!("resolving project root at {}", root.display()))?;
     let spec = entry
         .spec
         .as_deref()

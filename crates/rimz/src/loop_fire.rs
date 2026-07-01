@@ -90,7 +90,9 @@ fn workspace_tasks(
 ) -> BTreeMap<String, TaskEntry> {
     tasks
         .into_iter()
-        .filter(|(_, entry)| WorkspaceId::from_project_root(&entry.root) == *workspace_id)
+        .filter(|(_, entry)| {
+            WorkspaceId::from_project_root(&entry.resolved_root()) == *workspace_id
+        })
         .collect()
 }
 
@@ -213,5 +215,18 @@ mod tests {
         ]);
         let filtered = workspace_tasks(tasks, &workspace_id);
         assert_eq!(filtered.keys().cloned().collect::<Vec<_>>(), vec!["owned"]);
+    }
+
+    #[test]
+    fn workspace_filter_expands_tilde_roots() {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        let workspace_id = WorkspaceId::from_project_root(&home);
+        let tasks = BTreeMap::from([("home".to_owned(), task("~", "5m"))]);
+
+        let filtered = workspace_tasks(tasks, &workspace_id);
+
+        assert_eq!(filtered.keys().cloned().collect::<Vec<_>>(), vec!["home"]);
     }
 }

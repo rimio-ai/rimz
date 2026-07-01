@@ -298,7 +298,8 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     }
     if args.print {
         return match run_print(args, globals) {
-            Ok(()) => Ok(()),
+            Ok(Some(record)) => std::process::exit(record.status.exit_code()),
+            Ok(None) => Ok(()),
             Err(err) => exit_print_usage_error(err),
         };
     }
@@ -411,8 +412,11 @@ fn parse_pr(raw: &str) -> std::result::Result<rimz::forge::PrTarget, String> {
 /// the same supervised `-p` path an interactive `rimz agents <spec> -p` uses.
 /// `globals` carries the task's `root`, so the workspace resolves with no mux
 /// pin.
-pub(crate) fn run_blocking_task(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
-    run_print(args, globals)
+pub(crate) fn run_blocking_task(
+    args: AgentsArgs,
+    globals: &GlobalFlags,
+) -> Result<Option<RunStatus>> {
+    Ok(run_print(args, globals)?.map(|record| record.status))
 }
 
 /// Launch a missing agent for `message --create`. A *type* handle — a kind
