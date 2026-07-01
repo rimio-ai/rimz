@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+use rimz::agents::{
+    AgentLifecycleObservation, AgentRateLimits, AgentTurnError, LifecycleSignal, RateLimitWindow,
+    TurnErrorClass,
+};
 use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
@@ -504,6 +507,135 @@ fn message_sweep_defers_ready_head_when_target_gate_is_closed() {
         serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
             .expect("wake stamp json");
     assert_eq!(wake, Some(retry_after));
+}
+
+#[test]
+fn resume_gate_delivers_only_after_recovered_paused_park() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-resume-ready", "feature-resume", pane_env);
+    seed_turn_error(&env, "sess-resume-ready", TurnErrorClass::PausedSpendLimit);
+    seed_rate_limit_budget(&env, 20);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-resume-ready")
+        .expect("agent");
+    let message = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "continue".to_owned(),
+        true,
+        DeliveryGate::Resume,
+    )
+    .with_pane_id(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+    let message_id = message.message_id.clone();
+    env.ledger()
+        .queue_message(&message, "rimz-test")
+        .expect("queue resume message");
+
+    let trace_log = env.project_root.join("zellij-resume-ready-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+        .args(["message", "deliver", "--message-id", message_id.as_str()])
+        .output()
+        .expect("message deliver");
+    assert!(
+        out.status.success(),
+        "resume deliver failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_text_then_enter(&trace_log, "continue");
+    let sent = env
+        .ledger()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| message.message_id == message_id)
+        .expect("sent resume");
+    assert_eq!(sent.status, MessageStatus::Sent);
+}
+
+#[test]
+fn resume_gate_defers_unrecovered_and_ordinary_parked_messages() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-resume-wait", "feature-resume-wait", pane_env);
+    seed_turn_error(&env, "sess-resume-wait", TurnErrorClass::PausedRateLimit);
+    seed_rate_limit_budget(&env, 100);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-resume-wait")
+        .expect("agent");
+    let resume = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "continue".to_owned(),
+        true,
+        DeliveryGate::Resume,
+    )
+    .with_pane_id(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+    let ordinary = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "ordinary".to_owned(),
+        true,
+        DeliveryGate::Any,
+    );
+    let resume_id = resume.message_id.clone();
+    let ordinary_id = ordinary.message_id.clone();
+    env.ledger()
+        .queue_message(&resume, "rimz-test")
+        .expect("queue resume message");
+    env.ledger()
+        .queue_message(&ordinary, "rimz-test")
+        .expect("queue ordinary message");
+
+    let trace_log = env.project_root.join("zellij-resume-wait-trace.log");
+    for message_id in [&resume_id, &ordinary_id] {
+        let out = env
+            .rimz()
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "deliver", "--message-id", message_id.as_str()])
+            .output()
+            .expect("message deliver");
+        assert!(
+            out.status.success(),
+            "deliver failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    assert!(
+        !trace_log.exists() || trace_lines(&trace_log).is_empty(),
+        "no paused message should be sent"
+    );
+    let messages = env.ledger().list_messages().expect("messages");
+    assert!(messages.iter().any(|message| {
+        message.message_id == resume_id
+            && message.status == MessageStatus::Queued
+            && message.attempts == 0
+    }));
+    assert!(messages.iter().any(|message| {
+        message.message_id == ordinary_id
+            && message.status == MessageStatus::Queued
+            && message.attempts == 0
+    }));
 }
 
 #[test]
@@ -2292,6 +2424,51 @@ fn seed_context_tokens(env: &Env, agent_id: &str, used: u64, window: u64) {
     let record = rimz::ledger::agent_context::new_record("claude", agent_id, context);
     rimz::ledger::agent_context::write_record(&env.runtime_paths(), &record)
         .expect("seed context sidecar");
+}
+
+fn seed_turn_error(env: &Env, agent_id: &str, class: TurnErrorClass) {
+    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == agent_id)
+        .expect("agent");
+    let at = agent.last_activity + jiff::SignedDuration::from_secs(1);
+    let mut context = rimz::ledger::agent_context::empty_context("claude", at);
+    context.turn_error = Some(AgentTurnError {
+        class,
+        at,
+        label: Some("provider parked".to_owned()),
+    });
+    let record = rimz::ledger::agent_context::new_record("claude", agent_id, context);
+    rimz::ledger::agent_context::write_record(&env.runtime_paths(), &record)
+        .expect("seed turn error");
+}
+
+fn seed_rate_limit_budget(env: &Env, used_percentage: u8) {
+    let window = RateLimitWindow {
+        used_percentage: Some(used_percentage),
+        resets_at: Some(jiff::Timestamp::now() + jiff::SignedDuration::from_secs(300)),
+        duration_mins: Some(300),
+        ..Default::default()
+    };
+    let cache = rimz::sidebar::enrich::RateLimitsCache {
+        refreshed_at_ms: 0,
+        windows: [(
+            "claude".to_owned(),
+            AgentRateLimits {
+                windows: vec![window],
+            },
+        )]
+        .into_iter()
+        .collect(),
+        pending: Default::default(),
+    };
+    rimz::ledger::atomic::write_temp_then_rename_cache(
+        &env.runtime_paths().shared_rate_limits_path(),
+        &cache,
+    )
+    .expect("seed rate-limit cache");
 }
 
 fn run_hook(env: &Env, payload: serde_json::Value, pane_env: &[(&str, &str)]) {

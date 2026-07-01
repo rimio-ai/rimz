@@ -82,6 +82,7 @@ impl MessageSender {
 pub enum DeliveryGate {
     Done,
     Any,
+    Resume,
 }
 
 impl DeliveryGate {
@@ -89,6 +90,18 @@ impl DeliveryGate {
         match self {
             Self::Done => "done",
             Self::Any => "any",
+            Self::Resume => "resume",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "done" => Ok(Self::Done),
+            "any" => Ok(Self::Any),
+            "resume" => Ok(Self::Resume),
+            other => Err(format!(
+                "unknown delivery gate `{other}`; expected done, any, or resume"
+            )),
         }
     }
 }
@@ -445,13 +458,15 @@ pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
             status,
             AgentStatus::Idle | AgentStatus::Success | AgentStatus::Failed
         ),
+        DeliveryGate::Resume => status == AgentStatus::Paused,
     }
 }
 
-/// The oldest queued message for one logical agent card, the next to deliver.
-/// FIFO spans a card's provisional `launch_*` id and the session id it registers
-/// as, so pass the stable `agent_name` when known: a message queued before
-/// registration still sorts ahead of one queued after.
+/// The oldest ordinary queued message for one logical agent card, the next to
+/// deliver at a turn boundary. FIFO spans a card's provisional `launch_*` id
+/// and the session id it registers as, so pass the stable `agent_name` when
+/// known: a message queued before registration still sorts ahead of one queued
+/// after. Hidden resume nudges live in a separate control lane.
 pub fn queue_head<'a>(
     pending: impl IntoIterator<Item = &'a MessageRecord>,
     kind: &AgentKind,
@@ -463,10 +478,41 @@ pub fn queue_head<'a>(
         .into_iter()
         .filter(|message| {
             message.status == MessageStatus::Queued
+                && message.gate != DeliveryGate::Resume
                 && message.same_card(kind, agent_id, agent_name)
                 && message.is_ready(now)
         })
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+}
+
+/// The oldest queued message in the candidate's delivery lane. Resume nudges
+/// are control traffic for a parked turn, so they do not wait behind ordinary
+/// user messages that can only deliver after the turn resumes.
+pub fn queue_head_for_message<'a>(
+    pending: impl IntoIterator<Item = &'a MessageRecord>,
+    candidate: &MessageRecord,
+    now: Timestamp,
+) -> Option<&'a MessageRecord> {
+    pending
+        .into_iter()
+        .filter(|message| {
+            message.status == MessageStatus::Queued
+                && message.same_card(
+                    &candidate.kind,
+                    &candidate.agent_id,
+                    candidate.agent_name.as_deref(),
+                )
+                && message.is_ready(now)
+                && same_delivery_lane(candidate.gate, message.gate)
+        })
+        .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+}
+
+fn same_delivery_lane(candidate: DeliveryGate, queued: DeliveryGate) -> bool {
+    match candidate {
+        DeliveryGate::Resume => queued == DeliveryGate::Resume,
+        DeliveryGate::Done | DeliveryGate::Any => queued != DeliveryGate::Resume,
+    }
 }
 
 pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, String> {

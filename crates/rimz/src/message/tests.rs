@@ -20,6 +20,24 @@ fn gates_open_only_on_resting_statuses() {
         assert!(!gate_open(DeliveryGate::Done, status));
         assert!(!gate_open(DeliveryGate::Any, status));
     }
+    assert!(gate_open(DeliveryGate::Resume, AgentStatus::Paused));
+    for status in [
+        AgentStatus::Running,
+        AgentStatus::Waiting,
+        AgentStatus::Idle,
+        AgentStatus::Success,
+        AgentStatus::Failed,
+    ] {
+        assert!(!gate_open(DeliveryGate::Resume, status));
+    }
+}
+
+#[test]
+fn delivery_gate_parse_round_trips_resume() {
+    for gate in [DeliveryGate::Done, DeliveryGate::Any, DeliveryGate::Resume] {
+        assert_eq!(DeliveryGate::parse(gate.as_str()).unwrap(), gate);
+    }
+    assert!(DeliveryGate::parse("bogus").is_err());
 }
 
 #[test]
@@ -473,6 +491,37 @@ fn queue_head_spans_provisional_and_registered_ids() {
     )
     .expect("the registered id still matches its own record");
     assert_eq!(exact.message_id, newer.message_id);
+}
+
+#[test]
+fn resume_queue_head_uses_a_control_lane() {
+    let agent = agent("real-session", Some("lucid-atlas"));
+    let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
+    let mut user = MessageRecord::new(
+        ws.clone(),
+        &agent,
+        "ordinary".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    let mut resume = MessageRecord::new(
+        ws,
+        &agent,
+        "continue".to_owned(),
+        true,
+        DeliveryGate::Resume,
+    );
+    user.message_id = MessageId::parse("msg_0000000000000001").unwrap();
+    resume.message_id = MessageId::parse("msg_0000000000000002").unwrap();
+    let pending = [user.clone(), resume.clone()];
+
+    let resume_head = queue_head_for_message(pending.iter(), &resume, Timestamp::now())
+        .expect("resume lane has a head");
+    assert_eq!(resume_head.message_id, resume.message_id);
+
+    let user_head = queue_head_for_message(pending.iter(), &user, Timestamp::now())
+        .expect("ordinary lane has a head");
+    assert_eq!(user_head.message_id, user.message_id);
 }
 
 #[test]

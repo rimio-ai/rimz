@@ -4,7 +4,8 @@ use jiff::Timestamp;
 
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::message::{
-    MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus, claim_expired, queue_head,
+    MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus, claim_expired,
+    queue_head_for_message,
 };
 use crate::schema::event::{EventEnvelope, MessageEventMethod};
 
@@ -170,13 +171,7 @@ impl Ledger {
         if !claim_expired(message.last_attempt_at, now) {
             return Ok(None);
         }
-        let Some(head) = queue_head(
-            queued.iter(),
-            &message.kind,
-            &message.agent_id,
-            message.agent_name.as_deref(),
-            now,
-        ) else {
+        let Some(head) = queue_head_for_message(queued.iter(), message, now) else {
             return Ok(None);
         };
         if head.message_id != *message_id {

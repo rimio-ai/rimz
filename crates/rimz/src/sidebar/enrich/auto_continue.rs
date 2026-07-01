@@ -1,4 +1,4 @@
-//! Producer-side auto-continue: resume a parked agent by nudging its live pane
+//! Producer-side auto-continue: resume a parked agent through the message queue
 //! after a rate-limit window resets or a retry backoff elapses.
 //!
 //! Opt-in ([`ResumeConfig::auto_continue`]). The producer arms the resume while
@@ -13,16 +13,17 @@
 //!   backoff record carries the turn-error marker time and retry state.
 //! - **Fire.** Once the window reset deadline or retry backoff is due and the
 //!   agent is still idle (`last_activity` unchanged), the producer spawns the
-//!   detached `rimz agents auto-continue` helper that types the nudge and writes
-//!   the `agent.resumed` audit record.
+//!   detached `rimz agents auto-continue` helper that queues and delivers a
+//!   resume-gated message record.
 //! - **Clear.** Any activity since the park (the nudge took, or the agent woke on
 //!   its own) advances `last_activity`, and the stale record is removed. A
-//!   recovered fused account budget also clears a clocked record whose resume
-//!   condition is moot.
+//!   delivered resume message also clears the record; an unconfirmed sent
+//!   message controls bounded retries.
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
 //! arm decision is the pure, unit-tested [`crate::agents::resume_park`].
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -36,9 +37,11 @@ use crate::agents::{
     effective_turn_error_class, resume_park,
 };
 use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use crate::ledger::atomic::write_temp_then_rename_cache;
 use crate::ledger::snapshot::PaneAgent;
+use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
+use crate::schema::event::EventKind;
 use crate::sidebar::timing::AUTO_CONTINUE_RETRY_INTERVAL;
 
 use super::SidebarSnapshot;
@@ -96,6 +99,7 @@ pub(super) fn resume_parked(
     let text = config.auto_continue_text.trim();
     let now = snapshot.now;
     let account_budgets = super::account_budgets_from_caches(runtime, now);
+    let resume_messages = read_resume_messages(runtime);
     for agent in &snapshot.agents {
         if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
             continue;
@@ -105,7 +109,18 @@ pub(super) fn resume_parked(
         match resume_park(agent, budget, now) {
             Some(ResumeArm::RateLimit { deadline }) => {
                 arm_park(&path, ParkKind::RateLimit { deadline }, agent.last_activity);
-                fire_if_due(snapshot, runtime, agent, &path, now, text, config);
+                fire_if_due(
+                    agent,
+                    &path,
+                    FireContext {
+                        snapshot,
+                        runtime,
+                        now,
+                        text,
+                        config,
+                        resume_messages: &resume_messages,
+                    },
+                );
             }
             Some(ResumeArm::Overloaded { overloaded_at }) => {
                 arm_park(
@@ -113,7 +128,18 @@ pub(super) fn resume_parked(
                     ParkKind::Overloaded { overloaded_at },
                     agent.last_activity,
                 );
-                fire_if_due(snapshot, runtime, agent, &path, now, text, config);
+                fire_if_due(
+                    agent,
+                    &path,
+                    FireContext {
+                        snapshot,
+                        runtime,
+                        now,
+                        text,
+                        config,
+                        resume_messages: &resume_messages,
+                    },
+                );
             }
             _ => {
                 // No arm this frame means "no recovering window", not "forget
@@ -121,15 +147,70 @@ pub(super) fn resume_parked(
                 // chance to fire the persisted due record on the recovery
                 // frame; clear only stale records whose marker already moved on.
                 if limit_marker_active(agent) {
-                    fire_if_due(snapshot, runtime, agent, &path, now, text, config);
+                    fire_if_due(
+                        agent,
+                        &path,
+                        FireContext {
+                            snapshot,
+                            runtime,
+                            now,
+                            text,
+                            config,
+                            resume_messages: &resume_messages,
+                        },
+                    );
                 } else if budget_recovered(budget, now) {
                     remove_park(&path);
                 } else {
-                    fire_if_due(snapshot, runtime, agent, &path, now, text, config);
+                    fire_if_due(
+                        agent,
+                        &path,
+                        FireContext {
+                            snapshot,
+                            runtime,
+                            now,
+                            text,
+                            config,
+                            resume_messages: &resume_messages,
+                        },
+                    );
                 }
             }
         }
     }
+}
+
+pub(super) fn exhausted_parks(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    config: &ResumeConfig,
+) -> BTreeSet<(AgentKind, AgentSessionId)> {
+    let mut exhausted = BTreeSet::new();
+    if !config.auto_continue {
+        return exhausted;
+    }
+    let resume_messages = read_resume_messages(runtime);
+    for agent in &snapshot.agents {
+        if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
+            continue;
+        }
+        let path = park_record_path(runtime, &agent.kind, &agent.agent_id);
+        let Some(record) = read_park(&path) else {
+            continue;
+        };
+        if !still_parked(&record, agent.last_activity) {
+            continue;
+        }
+        if latest_resume_message(&resume_messages, agent, &record)
+            .is_some_and(|message| message.status == MessageStatus::Delivered)
+        {
+            continue;
+        }
+        if record.retries >= config.auto_continue_max_retries {
+            exhausted.insert((agent.kind.clone(), agent.agent_id.clone()));
+        }
+    }
+    exhausted
 }
 
 fn budget_recovered(budget: Option<&AccountBudget>, now: Timestamp) -> bool {
@@ -184,18 +265,19 @@ fn same_park_class(left: &ParkKind, right: &ParkKind) -> bool {
     )
 }
 
+struct FireContext<'a> {
+    snapshot: &'a SidebarSnapshot,
+    runtime: &'a RuntimePaths,
+    now: Timestamp,
+    text: &'a str,
+    config: &'a ResumeConfig,
+    resume_messages: &'a [ResumeMessage],
+}
+
 /// Fire a parked agent's resume when its recorded condition is due and it is
 /// still idle. A woken agent (activity advanced) clears the record; a pane that
 /// has not appeared yet, a condition still ahead, or a recent nudge each waits.
-fn fire_if_due(
-    snapshot: &SidebarSnapshot,
-    runtime: &RuntimePaths,
-    agent: &AgentState,
-    path: &Path,
-    now: Timestamp,
-    text: &str,
-    config: &ResumeConfig,
-) {
+fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
     let Some(record) = read_park(path) else {
         return;
     };
@@ -203,33 +285,52 @@ fn fire_if_due(
         remove_park(path);
         return;
     }
+    if let Some(message) = latest_resume_message(ctx.resume_messages, agent, &record) {
+        match message.status {
+            MessageStatus::Delivered => {
+                remove_park(path);
+                return;
+            }
+            MessageStatus::Sent => {}
+            MessageStatus::Created
+            | MessageStatus::Queued
+            | MessageStatus::Claimed
+            | MessageStatus::TimedOut
+            | MessageStatus::Errored
+            | MessageStatus::Removed
+            | MessageStatus::Abandoned
+            | MessageStatus::Archived => return,
+        }
+    }
     let reason = match &record.kind {
         ParkKind::RateLimit { .. } => "rate_limit_window_reset",
         ParkKind::Overloaded { .. } => "overloaded_backoff_retry",
     };
-    if text.is_empty() {
+    if ctx.text.is_empty() {
         return;
     }
     if !nudge_due(
         &record,
-        now,
-        &config.auto_continue_backoff_secs,
-        config.auto_continue_max_retries,
+        ctx.now,
+        &ctx.config.auto_continue_backoff_secs,
+        ctx.config.auto_continue_max_retries,
     ) {
         return;
     }
-    let Some(pane_id) = live_pane(&snapshot.agent_panes, &agent.kind, &agent.agent_id) else {
+    let Some(pane_id) = live_pane(&ctx.snapshot.agent_panes, &agent.kind, &agent.agent_id) else {
         return;
     };
-    spawn_auto_continue(
-        runtime,
+    if !spawn_auto_continue(
+        ctx.runtime,
         &agent.kind,
         &agent.agent_id,
         &pane_id,
-        text,
+        ctx.text,
         reason,
-    );
-    write_park(path, &nudged_record(record, now));
+    ) {
+        return;
+    }
+    write_park(path, &nudged_record(record, ctx.now));
 }
 
 /// Whether the agent has done nothing since the park was armed — its rollup
@@ -278,6 +379,94 @@ fn nudge_due(record: &ParkRecord, now: Timestamp, backoff_secs: &[u64], max_retr
                 >= overload_backoff(record.retries, backoff_secs).as_secs() as i64
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResumeMessage {
+    message_id: MessageId,
+    kind: AgentKind,
+    agent_id: AgentSessionId,
+    agent_name: Option<String>,
+    status: MessageStatus,
+    enqueued_at: Timestamp,
+    updated_at: Timestamp,
+}
+
+impl ResumeMessage {
+    fn from_record(message: &MessageRecord) -> Option<Self> {
+        (message.gate == DeliveryGate::Resume && message.body == MessageBody::Prompt).then(|| {
+            Self {
+                message_id: message.message_id.clone(),
+                kind: message.kind.clone(),
+                agent_id: message.agent_id.clone(),
+                agent_name: message.agent_name.clone(),
+                status: message.status,
+                enqueued_at: message.enqueued_at,
+                updated_at: message.updated_at,
+            }
+        })
+    }
+
+    fn same_agent_card(&self, agent: &AgentState) -> bool {
+        self.kind == agent.kind
+            && (self.agent_id == agent.agent_id
+                || (agent.name.is_some() && self.agent_name.as_deref() == agent.name.as_deref()))
+    }
+}
+
+fn read_resume_messages(runtime: &RuntimePaths) -> Vec<ResumeMessage> {
+    let Ok(state) = crate::StatePaths::for_workspace(runtime.workspace_id.clone()) else {
+        return Vec::new();
+    };
+    let mut messages = crate::ledger::message_store::list(&state.messages_dir)
+        .map(|messages| {
+            messages
+                .iter()
+                .filter_map(ResumeMessage::from_record)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Ok(events) = crate::ledger::event_log::read_all(&state.events_log) {
+        messages.extend(events.into_iter().filter_map(|event| {
+            let EventKind::Message { payload, .. } = event.kind() else {
+                return None;
+            };
+            if payload.gate != DeliveryGate::Resume
+                || payload.body != MessageBody::Prompt
+                || !payload.status.is_terminal()
+            {
+                return None;
+            }
+            Some(ResumeMessage {
+                message_id: payload.message_id,
+                kind: payload.kind,
+                agent_id: payload.agent_id,
+                agent_name: payload.agent_name,
+                status: payload.status,
+                enqueued_at: payload.enqueued_at.unwrap_or(event.timestamp),
+                updated_at: event.timestamp,
+            })
+        }));
+    }
+    messages
+}
+
+fn latest_resume_message<'a>(
+    messages: &'a [ResumeMessage],
+    agent: &AgentState,
+    record: &ParkRecord,
+) -> Option<&'a ResumeMessage> {
+    messages
+        .iter()
+        .filter(|message| {
+            message.same_agent_card(agent) && message.enqueued_at >= record.parked_at_activity
+        })
+        .max_by(|left, right| {
+            left.enqueued_at
+                .cmp(&right.enqueued_at)
+                .then_with(|| left.updated_at.cmp(&right.updated_at))
+                .then_with(|| left.message_id.as_str().cmp(right.message_id.as_str()))
+        })
 }
 
 /// The live pane bound to one agent this frame, from the producer's pane fold. An
@@ -336,7 +525,7 @@ fn spawn_auto_continue(
     pane_id: &PaneId,
     text: &str,
     reason: &str,
-) {
+) -> bool {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(err) => {
@@ -346,7 +535,7 @@ fn spawn_auto_continue(
                 error = &err as &dyn std::error::Error,
                 "sidebar: cannot locate rimz to auto-continue agent",
             );
-            return;
+            return false;
         }
     };
     let mut cmd = super::detached_rimz_command(exe, runtime);
@@ -384,7 +573,9 @@ fn spawn_auto_continue(
             error = &err as &dyn std::error::Error,
             "sidebar: failed to spawn agent auto-continue",
         );
+        return false;
     }
+    true
 }
 
 #[cfg(test)]
@@ -395,8 +586,9 @@ fn spawn_auto_continue(
     pane_id: &PaneId,
     text: &str,
     reason: &str,
-) {
+) -> bool {
     let _ = (runtime, kind, agent_id, pane_id, text, reason);
+    true
 }
 
 #[cfg(test)]
@@ -406,7 +598,7 @@ mod tests {
     use crate::agents::{
         AgentContext, AgentRateLimits, AgentStatus, AgentTurnError, RateLimitWindow, TurnErrorClass,
     };
-    use crate::ids::{MuxName, WorkspaceId};
+    use crate::ids::{AgentSessionId, MuxName, WorkspaceId};
 
     fn ts(secs: i64) -> Timestamp {
         Timestamp::from_second(secs).expect("valid test timestamp")
@@ -446,6 +638,18 @@ mod tests {
 
     fn due(record: &ParkRecord, now: i64, backoff_secs: &[u64], max_retries: u32) -> bool {
         nudge_due(record, ts(now), backoff_secs, max_retries)
+    }
+
+    fn resume_message(id: u64, status: MessageStatus, enqueued_at: i64) -> ResumeMessage {
+        ResumeMessage {
+            message_id: MessageId::parse(&format!("msg_{id:016x}")).expect("message id"),
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "sess".into(),
+            agent_name: None,
+            status,
+            enqueued_at: ts(enqueued_at),
+            updated_at: ts(enqueued_at),
+        }
     }
 
     fn window(used: u8, reset: i64) -> RateLimitWindow {
@@ -798,5 +1002,93 @@ mod tests {
         let nudged = nudged_record(overloaded_record(1_000, 100, None, 2), ts(1_060));
         assert_eq!(nudged.last_nudge_at, Some(ts(1_060)));
         assert_eq!(nudged.retries, 3);
+    }
+
+    #[test]
+    fn sent_unconfirmed_resume_message_allows_retry_under_cap() {
+        let (_dir, runtime) = temp_runtime();
+        let path = park_path(&runtime);
+        write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 1));
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            Vec::new(),
+            vec![limit_agent(1_000, 5_990)],
+            ts(6_000),
+        );
+        snapshot.now = ts(6_000);
+        snapshot.agent_panes = vec![live_pane()];
+        let config = ResumeConfig {
+            auto_continue_max_retries: 3,
+            ..ResumeConfig::default()
+        };
+        let messages = [resume_message(1, MessageStatus::Sent, 5_900)];
+        fire_if_due(
+            &snapshot.agents[0],
+            &path,
+            FireContext {
+                snapshot: &snapshot,
+                runtime: &runtime,
+                now: ts(6_000),
+                text: "continue",
+                config: &config,
+                resume_messages: &messages,
+            },
+        );
+
+        assert_eq!(
+            read_park(&path),
+            Some(rate_record(5_000, 1_000, Some(6_000), 2))
+        );
+    }
+
+    #[test]
+    fn delivered_resume_message_clears_the_park() {
+        let (_dir, runtime) = temp_runtime();
+        let path = park_path(&runtime);
+        write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 1));
+        let snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            Vec::new(),
+            vec![limit_agent(1_000, 5_990)],
+            ts(6_000),
+        );
+        let config = ResumeConfig::default();
+        let messages = [resume_message(1, MessageStatus::Delivered, 5_900)];
+        fire_if_due(
+            &snapshot.agents[0],
+            &path,
+            FireContext {
+                snapshot: &snapshot,
+                runtime: &runtime,
+                now: ts(6_000),
+                text: "continue",
+                config: &config,
+                resume_messages: &messages,
+            },
+        );
+
+        assert_eq!(read_park(&path), None);
+    }
+
+    #[test]
+    fn exhausted_resume_attempts_report_actionable_key() {
+        let (_dir, runtime) = temp_runtime();
+        let path = park_path(&runtime);
+        write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 3));
+        let snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            Vec::new(),
+            vec![limit_agent(1_000, 5_990)],
+            ts(6_000),
+        );
+        let config = ResumeConfig {
+            auto_continue: true,
+            auto_continue_max_retries: 3,
+            ..ResumeConfig::default()
+        };
+        assert!(exhausted_parks(&snapshot, &runtime, &config).contains(&(
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("sess")
+        )));
     }
 }

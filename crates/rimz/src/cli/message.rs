@@ -18,7 +18,7 @@ use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use rimz::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus, gate_open,
     max_delivery_attempts_from_env, message_interval_from_env, parse_schedule_at, queue_head,
-    settle_duration_from_env,
+    queue_head_for_message, settle_duration_from_env,
 };
 use rimz::mux::MuxErr;
 use rimz::schema::event::{EventEnvelope, EventKind, MessageEventPayload};
@@ -535,7 +535,7 @@ impl QueueTarget<'_> {
         let open = match self.bound(snapshot) {
             None => true,
             Some(agent) => {
-                gate_open(gate, agent.status)
+                gate_open(gate, agent.effective_status())
                     && (force
                         || pending_ask_for(
                             agent,
@@ -671,7 +671,7 @@ fn agent_needs_live_queue_resolution(
 ) -> bool {
     agent.agent_id.is_provisional()
         || agent_kind_registers_lazily(agent)
-        || (gate_open(gate, agent.status)
+        || (gate_open(gate, agent.effective_status())
             && (force
                 || pending_ask_for(
                     agent,
@@ -1339,7 +1339,7 @@ fn sweep_messages(globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-fn deliver_one(
+pub(crate) fn deliver_one(
     workspace: &ResolvedWorkspace,
     ledger: &rimz::Ledger,
     message_id: &MessageId,
@@ -1444,13 +1444,7 @@ fn delivery_candidate(
     if !message.is_ready(now) {
         return Ok(None);
     }
-    let Some(head) = queue_head(
-        pending.iter(),
-        &message.kind,
-        &message.agent_id,
-        message.agent_name.as_deref(),
-        now,
-    ) else {
+    let Some(head) = queue_head_for_message(pending.iter(), &message, now) else {
         return Ok(None);
     };
     if head.message_id != *message_id {
@@ -1458,12 +1452,11 @@ fn delivery_candidate(
     }
     let mut snapshot = super::resolution_snapshot(workspace, ledger, globals)
         .context("reading delivery snapshot")?;
-    // `--smart-compact` reads context fill, which the resolution snapshot does
-    // not carry; fold the disposable context sidecars in for the freshest gauge.
-    if message.auto_compact.is_some()
-        && let Ok(runtime) = rimz::RuntimePaths::for_workspace(message.workspace_id.clone())
-    {
-        snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+    // The resolution snapshot carries live panes but not rich context sidecars.
+    // Fold them here for smart-compact gauges and parked-status delivery gates.
+    let runtime = rimz::RuntimePaths::for_workspace(message.workspace_id.clone()).ok();
+    if let Some(runtime) = runtime.as_ref() {
+        snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(runtime));
     }
     let Some(agent) = snapshot
         .agents
@@ -1472,7 +1465,15 @@ fn delivery_candidate(
     else {
         return Ok(None);
     };
-    if !gate_open(message.gate, agent.status) {
+    let status = agent.effective_status();
+    if !gate_open(message.gate, status) {
+        return Ok(None);
+    }
+    if message.gate == DeliveryGate::Resume
+        && !runtime.as_ref().is_some_and(|runtime| {
+            rimz::sidebar::enrich::resume_gate_recovered(runtime, agent, now)
+        })
+    {
         return Ok(None);
     }
     // A pending ask reserves the agent's next input, so it defers delivery —
@@ -1492,7 +1493,13 @@ fn delivery_candidate(
     let Some(target) = snapshot
         .agent_panes
         .iter()
-        .find(|pane| pane_matches_agent(pane, agent))
+        .find(|pane| {
+            pane_matches_agent(pane, agent)
+                && message
+                    .pane_id
+                    .as_ref()
+                    .is_none_or(|pane_id| pane.pane_id == *pane_id)
+        })
         .cloned()
     else {
         return Ok(None);

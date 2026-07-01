@@ -3,19 +3,22 @@
 //!
 //! The producer decides *which* agent and *when* (`sidebar::enrich`
 //! auto-continue, opt-in via `[resume] auto_continue*`); this helper performs the
-//! two side effects the sidebar's read-only import graph must not: it types the
-//! nudge into the agent's live pane through the shared pane-send primitive and
-//! writes the `agent.resumed` audit record. Best-effort by contract — it inherits
-//! the producer's frame-validated target, so a vanished pane just fails the send
-//! and no audit record is written.
+//! side effect the sidebar's read-only import graph must not: it queues and
+//! delivers a resume-gated message through the shared delivery pipeline.
+//! Best-effort by contract — it inherits the producer's frame-validated target,
+//! so a vanished pane leaves a message error instead of a false resume audit.
 
 use anyhow::{Context, Result};
 use clap::Args;
+use std::time::Duration;
 
 use rimz::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
-use rimz::ledger::{wakeup, workspace_record};
-use rimz::schema::event::EventEnvelope;
+use rimz::ledger::workspace_record;
+use rimz::message::{DeliveryGate, MessageRecord, MessageSender};
+use rimz::workspace::ResolvedWorkspace;
 use rimz::{Ledger, RuntimePaths, StatePaths};
+
+use crate::cli::{ColorWhen, GlobalFlags};
 
 #[derive(Debug, Args)]
 pub struct AutoContinueArgs {
@@ -48,31 +51,74 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         StatePaths::for_workspace(workspace_id.clone()).context("preparing ledger paths")?;
     let runtime =
         RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
-    let session_name = workspace_record::read(&paths.workspace_record)
-        .map(|record| record.session_name)
-        .unwrap_or_default();
+    let record = workspace_record::read(&paths.workspace_record).with_context(|| {
+        format!(
+            "reading workspace record `{}`",
+            paths.workspace_record.display()
+        )
+    })?;
     let ledger = Ledger::open(paths, runtime).context("opening ledger")?;
+    let workspace = ResolvedWorkspace {
+        workspace_id: workspace_id.clone(),
+        project_root: record.project_root.clone(),
+        root_class: record.root_class,
+        worktree_root: record.project_root.clone(),
+        worktree_branch: None,
+        session_name: record.session_name,
+        mux_hint: Some(pane_id.mux()),
+    };
+    let globals = GlobalFlags {
+        mux: Some(pane_id.mux()),
+        root: Some(workspace.project_root.clone()),
+        color: ColorWhen::Auto,
+    };
+    let mut snapshot = crate::cli::resolution_snapshot(&workspace, &ledger, &globals)
+        .context("reading auto-continue delivery snapshot")?;
+    snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(
+        ledger.runtime_paths(),
+    ));
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.kind == kind && agent.agent_id == agent_id)
+        .context("auto-continue target agent is no longer in the rollup")?;
+    snapshot
+        .agent_panes
+        .iter()
+        .find(|pane| {
+            pane.kind == kind
+                && pane.agent_id.as_ref() == Some(&agent_id)
+                && pane.pane_id == pane_id
+        })
+        .context("auto-continue target pane is no longer bound to the agent")?;
 
-    // Type the nudge into the live pane, then submit — the same bracketed-paste
-    // path `message --steer` uses, so the agent composer takes the text and the discrete
-    // Enter submits it rather than folding a newline into the composer.
-    let backend = rimz::mux::backend_for(pane_id.mux());
-    crate::cli::pane::submit_message(backend.as_ref(), &pane_id, text, true)
-        .context("sending auto-continue nudge")?;
-
-    // Audit only after a successful send, so a vanished pane leaves no false
-    // `resumed` record. The nudge text never enters the log, mirroring message sends.
-    let event = EventEnvelope::agent_resumed(
+    let message = MessageRecord::new(
         workspace_id,
-        session_name,
-        &kind,
-        &agent_id,
-        &pane_id,
-        &args.reason,
-    );
+        agent,
+        text.to_owned(),
+        true,
+        DeliveryGate::Resume,
+    )
+    .with_channel(rimz::target::agent_channel(agent))
+    .with_sender(MessageSender::Human)
+    .with_pane_id(pane_id);
+    let message_id = message.message_id.clone();
     ledger
-        .append_event(&event)
-        .context("recording agent.resumed")?;
-    let _ = wakeup::wake_sidebars(ledger.runtime_paths());
+        .queue_message(&message, &workspace.session_name)
+        .context("queueing auto-continue resume message")?;
+    let delivered = crate::cli::message::deliver_one(
+        &workspace,
+        &ledger,
+        &message_id,
+        Duration::ZERO,
+        &globals,
+    )
+    .context("delivering auto-continue resume message")?;
+    if !delivered {
+        let reason = format!("resume delivery gate closed ({})", args.reason);
+        ledger
+            .record_message_delivery_failure(&message_id, &reason, &workspace.session_name)
+            .context("recording auto-continue delivery miss")?;
+    }
     Ok(())
 }

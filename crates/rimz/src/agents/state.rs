@@ -649,6 +649,30 @@ impl AgentState {
         }
     }
 
+    /// Status after cheap, context-only projections that every read path can
+    /// share. A live turn with an active provider park certificate reads as
+    /// `paused` even when the lifecycle rollup is still `running`; budget-aware
+    /// callers may still upgrade that paused projection to `failed`.
+    pub fn effective_status(&self) -> AgentStatus {
+        if self.status != AgentStatus::Running {
+            return self.status;
+        }
+        let Some(error) = display_turn_error(
+            self.status,
+            self.context.as_ref(),
+            self.last_activity,
+            self.turn_started_at,
+        ) else {
+            return self.status;
+        };
+        match effective_turn_error_class(error) {
+            TurnErrorClass::PausedRateLimit
+            | TurnErrorClass::PausedSpendLimit
+            | TurnErrorClass::PausedOverloaded => AgentStatus::Paused,
+            TurnErrorClass::Failed => self.status,
+        }
+    }
+
     /// Tokens currently occupying the window: the folded statusline breakdown,
     /// else the per-call split (`cache_read + cache_write + fresh_input`) the lifecycle rail
     /// reduces. `None` when nothing has reported occupancy yet.
@@ -771,6 +795,106 @@ mod tests {
             effective_turn_error_class(&turn_error("API Error: Bad Request")),
             TurnErrorClass::Failed
         );
+    }
+
+    fn test_agent(status: AgentStatus, activity: i64) -> AgentState {
+        let at = Timestamp::from_second(activity).unwrap();
+        AgentState {
+            agent_id: "sess".into(),
+            kind: AgentKind::new_unchecked("claude"),
+            name: None,
+            kind_ordinal: None,
+            profile: None,
+            role: None,
+            team: None,
+            channel: None,
+            status,
+            phase: TurnPhase::Idle,
+            pane: None,
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            description: None,
+            transcript_path: None,
+            origin: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_seen: at,
+            last_activity: at,
+            registered_at: Some(at),
+        }
+    }
+
+    fn context_error(class: TurnErrorClass, at: i64) -> AgentContext {
+        AgentContext {
+            source: "claude".to_owned(),
+            session_name: None,
+            session_preview: None,
+            model_id: None,
+            model_display_name: None,
+            effort: None,
+            thinking_enabled: None,
+            output_style: None,
+            vim_mode: None,
+            agent_version: None,
+            exceeds_200k_tokens: None,
+            cost: None,
+            tokens: None,
+            rate_limits: None,
+            pr: None,
+            account: None,
+            turn_error: Some(AgentTurnError {
+                class,
+                at: Timestamp::from_second(at).unwrap(),
+                label: Some("provider parked".to_owned()),
+            }),
+            turn_complete: None,
+            observed_at: Timestamp::from_second(at).unwrap(),
+        }
+    }
+
+    #[test]
+    fn effective_status_projects_active_provider_parks_to_paused() {
+        for class in [
+            TurnErrorClass::PausedSpendLimit,
+            TurnErrorClass::PausedRateLimit,
+            TurnErrorClass::PausedOverloaded,
+        ] {
+            let mut agent = test_agent(AgentStatus::Running, 1_000);
+            agent.context = Some(context_error(class, 1_010));
+            assert_eq!(agent.effective_status(), AgentStatus::Paused, "{class:?}");
+        }
+    }
+
+    #[test]
+    fn effective_status_keeps_raw_status_without_active_park() {
+        let mut failed = test_agent(AgentStatus::Failed, 1_000);
+        failed.turn_started_at = Some(Timestamp::from_second(900).unwrap());
+        failed.context = Some(context_error(TurnErrorClass::PausedSpendLimit, 1_010));
+        assert_eq!(failed.effective_status(), AgentStatus::Failed);
+
+        let mut running = test_agent(AgentStatus::Running, 1_000);
+        running.context = Some(context_error(TurnErrorClass::Failed, 1_010));
+        assert_eq!(running.effective_status(), AgentStatus::Running);
     }
 
     /// The bands come from `[theme.display.context_meter]`, so a custom set moves every

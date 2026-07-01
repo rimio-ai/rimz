@@ -87,6 +87,41 @@ fn account_budgets_from_caches(
         .collect()
 }
 
+/// Whether a hidden resume-gated message may enter a paused agent now. The
+/// check stays beside the account-budget cache reader so CLI delivery can use
+/// the same fused budget projection as the sidebar producer without exposing
+/// the cache shape.
+pub fn resume_gate_recovered(
+    runtime: &RuntimePaths,
+    agent: &crate::agents::AgentState,
+    now: Timestamp,
+) -> bool {
+    use crate::agents::{ResumeArm, TurnErrorClass, effective_turn_error_class, resume_park};
+
+    if agent.effective_status() != AgentStatus::Paused {
+        return false;
+    }
+    let account_budgets = account_budgets_from_caches(runtime, now);
+    let budget = account_budgets.get(&agent.kind);
+    match resume_park(agent, budget, now) {
+        Some(ResumeArm::Overloaded { .. }) => true,
+        Some(ResumeArm::RateLimit { deadline }) => deadline <= now,
+        None => crate::agents::display_turn_error(
+            agent.status,
+            agent.context.as_ref(),
+            agent.last_activity,
+            agent.turn_started_at,
+        )
+        .map(effective_turn_error_class)
+        .is_some_and(|class| {
+            matches!(
+                class,
+                TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
+            ) && budget.is_some_and(|budget| budget.subscription_budget_available(now))
+        }),
+    }
+}
+
 /// Build a detached `rimz` helper command for the sidebar producer, anchored to
 /// Rimz-owned shared storage so a deleted launch CWD cannot ENOENT the spawn.
 pub(super) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {
@@ -575,6 +610,8 @@ pub fn enrich(
     }
 
     let account_budgets = account_budgets_from_caches(runtime, snapshot.now);
+    let exhausted_resumes =
+        auto_continue::exhausted_parks(&snapshot, runtime, &machine_config.resume);
 
     if let Some(frame) = frame {
         snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
@@ -621,6 +658,7 @@ pub fn enrich(
             &lazy_pairings,
             Some(&unread_row_ids),
             &account_budgets,
+            &exhausted_resumes,
         );
         snapshot = next_snapshot;
         for event in diagnostics {

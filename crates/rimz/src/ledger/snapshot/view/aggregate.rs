@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
 use crate::agents::{AccountBudget, AgentState};
-use crate::ids::AgentKind;
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
@@ -36,6 +36,7 @@ pub(super) struct AttentionWindows {
 pub(super) struct AgentProjection<'a> {
     pub agents: &'a [AgentState],
     pub account_budgets: &'a BTreeMap<AgentKind, AccountBudget>,
+    pub exhausted_resumes: &'a BTreeSet<(AgentKind, AgentSessionId)>,
 }
 
 pub(super) fn build_worktree_groups_from_rows(
@@ -60,6 +61,7 @@ pub(super) fn build_worktree_groups_from_rows(
         &mut rows,
         agent_projection.agents,
         agent_projection.account_budgets,
+        agent_projection.exhausted_resumes,
         now,
         windows.stalled_after_secs,
     );

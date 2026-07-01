@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 
 use super::GlobalFlags;
 use crate::cli::render;
-use rimz::agents::AgentState;
+use rimz::agents::{AgentState, TurnPhase};
 use rimz::ids::PaneId;
 use rimz::mux::{MuxBackend, NamedKey, PaneListOptions, SplitPaneOptions};
 use rimz::pane::PaneRef;
@@ -208,10 +208,11 @@ fn list(
 /// Best-effort snapshot for the agent overlay: the cached rollup the sidebar
 /// reads, or `None` when no ledger is reachable.
 fn load_agent_overlay(workspace: &ResolvedWorkspace) -> Option<rimz::SidebarSnapshot> {
-    crate::cli::open_ledger(workspace)
-        .ok()?
-        .snapshot_cached()
-        .ok()
+    let ledger = crate::cli::open_ledger(workspace).ok()?;
+    let mut snapshot = ledger.snapshot_cached().ok()?;
+    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone()).ok()?;
+    snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+    Some(snapshot)
 }
 
 /// One native tab/window and the panes inside it, in listing order.
@@ -271,7 +272,13 @@ fn pane_row(
     };
     let status_cell = match agent {
         Some(agent) => {
-            render::cell(agent.status.as_str()).fg(render::status::agent(agent.status, agent.phase))
+            let status = agent.effective_status();
+            let phase = if status == rimz::agents::AgentStatus::Running {
+                agent.phase
+            } else {
+                TurnPhase::Idle
+            };
+            render::cell(status.as_str()).fg(render::status::agent(status, phase))
         }
         None => render::cell("-").dash(),
     };
@@ -341,7 +348,7 @@ fn pane_json<'a>(
         agent: agent.map(|agent| AgentJson {
             kind: agent.kind.to_string(),
             handle: rimz::target::agent_handle(agent, peers, true),
-            status: agent.status.as_str().to_owned(),
+            status: agent.effective_status().as_str().to_owned(),
             worktree: rimz::target::agent_channel(agent),
         }),
         command: pane.command.as_deref(),
@@ -468,22 +475,6 @@ pub(super) fn send_key(backend: &dyn MuxBackend, pane: &PaneId, key: NamedKey) -
 /// line break, so the submit Enter never rides inside the text payload.
 pub(super) fn send_enter(backend: &dyn MuxBackend, pane: &PaneId) -> Result<()> {
     send_key(backend, pane, NamedKey::Enter)
-}
-
-/// Bracketed-paste `text` into an agent composer, then press Enter as a
-/// discrete keystroke that lands outside the paste — a real submit — unless
-/// suppressed.
-pub(super) fn submit_message(
-    backend: &dyn MuxBackend,
-    pane: &PaneId,
-    text: &str,
-    enter: bool,
-) -> Result<()> {
-    paste_text(backend, pane, text)?;
-    if enter {
-        send_enter(backend, pane)?;
-    }
-    Ok(())
 }
 
 fn send(

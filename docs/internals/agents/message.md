@@ -33,7 +33,7 @@ A record stores:
 | `body` | `Prompt` (default) or `Command` (a `/compact` or adapter command) |
 | `text` | the message content |
 | `enter` | whether to submit with Enter after the paste |
-| `gate` | `Done` or `Any` — the turn-boundary statuses that release delivery |
+| `gate` | `Done`, `Any`, or hidden `Resume` — the status gate that releases delivery |
 | `force` | deliver past a pending ask |
 | `pane_id` | pane address when known at enqueue time |
 | `status` | lifecycle state (see below) |
@@ -98,13 +98,15 @@ A petname, kind ordinal, or real session-id prefix names a bound session in ever
 
 A parked message delivers when all five conditions hold:
 
-1. **Gate is open.** `DeliveryGate::Done` opens on `Idle` or `Success`; `DeliveryGate::Any` also opens on `Failed`. `Running`, `Waiting`, and `Paused` keep delivery closed.
+1. **Gate is open.** `DeliveryGate::Done` opens on `Idle` or `Success`; `DeliveryGate::Any` also opens on `Failed`; hidden `DeliveryGate::Resume` opens only on `Paused` after the account-budget resume guard passes. `Running`, `Waiting`, and `Paused` keep ordinary delivery closed.
 2. **No pending ask.** A feed ask attached to the agent's bound session reserves the next input. `--force` bypasses the ask, mirroring `message --steer --force`.
-3. **FIFO head.** The message is the oldest *ready* queued record for its card. `msg_` id string order is FIFO order; scheduled messages whose `not_before` is still in the future are filtered out, so they never block a later ready message on the same card.
+3. **FIFO head.** The message is the oldest *ready* queued record for its card and lane. `msg_` id string order is FIFO order; scheduled messages whose `not_before` is still in the future are filtered out, so they never block a later ready message on the same card. Resume nudges use a control lane so a parked-turn wakeup does not wait behind ordinary user text that cannot deliver until after the wakeup.
 4. **Live pane exists.** The target must have a pane that can receive a paste.
 5. **Hooks are installed and trusted.** Parked delivery needs hooks, because hooks are the delivery signal.
 
 `--on done` (the default) and `--on any` set the gate; `--steer` has no gate because it sends immediately.
+
+`DeliveryGate::Resume` is internal. Auto-continue stamps it on the configured resume nudge, and delivery re-checks that the target still reads as a resumable `paused` park with a recovered subscription budget, or an overload park whose marker is still active. Ordinary `Done`/`Any` messages stay parked while an agent is paused.
 
 ## Delivery pipeline
 
@@ -114,7 +116,7 @@ A parked message delivers when all five conditions hold:
 
 ### Delivery trigger
 
-Only **unparked root turn ends** trigger parked delivery — `Registered`, subagent stops, compaction events, and parked background turn ends (`TurnEnded { parked_on_background: true }`) do not check the queue. The lifecycle hook records the event, loads pending messages, finds the FIFO head for the agent's card, and spawns a detached `rimz message deliver --message-id <id>` helper with nulled stdio.
+Only **unparked root turn ends** trigger ordinary parked delivery — `Registered`, subagent stops, compaction events, and parked background turn ends (`TurnEnded { parked_on_background: true }`) do not check the queue. The lifecycle hook records the event, loads pending messages, finds the FIFO head for the agent's card, and spawns a detached `rimz message deliver --message-id <id>` helper with nulled stdio. Auto-continue is the producer-driven exception: when a persisted park reaches its reset/backoff condition, the producer spawns `rimz agents auto-continue`, which queues a `Resume` message and immediately runs the same one-message delivery helper for that message id.
 
 ### The deliver helper
 

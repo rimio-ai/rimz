@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 
@@ -8,7 +8,7 @@ use crate::agents::{
     AgentState, AgentStatus, display_turn_error, effective_turn_error_class,
     rate_limit_window_kinds,
 };
-use crate::ids::AgentKind;
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::ledger::snapshot::row::SidebarRow;
 
 /// Project each agent row's *displayed* status from its raw lifecycle status,
@@ -17,6 +17,7 @@ pub(super) fn project_display_status(
     rows: &mut [SidebarRow],
     agents: &[AgentState],
     account_budgets: &BTreeMap<AgentKind, AccountBudget>,
+    exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     now: Timestamp,
     stalled_after_secs: u32,
 ) {
@@ -25,14 +26,10 @@ pub(super) fn project_display_status(
         let row_id = row.id.clone();
         let row_name = row.name.clone();
         let last_activity = row.last_activity;
-        let turn_started_at = agents
-            .iter()
-            .find(|state| {
-                state.parent_agent_id.is_none()
-                    && state.kind == row_name
-                    && state.agent_id == row_id
-            })
-            .and_then(|state| state.turn_started_at);
+        let source_agent = agents.iter().find(|state| {
+            state.parent_agent_id.is_none() && state.kind == row_name && state.agent_id == row_id
+        });
+        let turn_started_at = source_agent.and_then(|state| state.turn_started_at);
         let Some(agent) = row.as_agent_mut() else {
             continue;
         };
@@ -43,6 +40,12 @@ pub(super) fn project_display_status(
         if status == AgentStatus::Waiting {
             continue;
         }
+        let effective_status = source_agent
+            .map(AgentState::effective_status)
+            .unwrap_or(status);
+        let resume_exhausted = source_agent.is_some_and(|state| {
+            exhausted_resumes.contains(&(state.kind.clone(), state.agent_id.clone()))
+        });
         let has_live_child = agent
             .sub_agents
             .iter()
@@ -63,12 +66,12 @@ pub(super) fn project_display_status(
                         | TurnErrorClass::PausedOverloaded
                 )
             }) {
-            if matches!(
+            let reset_without_budget = matches!(
                 class,
                 TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
             ) && rate_limit_kinds.reset.contains(row_name.as_str())
-                && !rate_limit_kinds.spent.contains(row_name.as_str())
-            {
+                && !rate_limit_kinds.spent.contains(row_name.as_str());
+            if resume_exhausted || reset_without_budget {
                 agent.turn_error_label = error.label.clone();
                 AgentStatus::Failed
             } else {
@@ -92,7 +95,7 @@ pub(super) fn project_display_status(
             } else if stalled {
                 AgentStatus::Failed
             } else {
-                status
+                effective_status
             }
         };
         agent.status = Some(projected);

@@ -150,7 +150,7 @@ Compaction is a transient head over the status. The opening signal (`Compacting`
 
 ## Displayed status
 
-`snapshot.agents` keeps the agent-owned truth; the projection refines what the row *shows* on top of it, folding enrichment and liveness into the displayed cell. The refinements are one family with a pinned precedence — top rung wins:
+`snapshot.agents` keeps the agent-owned truth; read paths share a cheap `effective_status` projection so a still-`running` turn with an active provider-park marker reads as `paused` in `rimz pane list` and message delivery, then the sidebar row projection adds budget-aware refinements on top. The refinements are one family with a pinned precedence — top rung wins:
 
 1. **A human-blocked `waiting` row stays first** — a pending blocking ask outranks every refinement below.
 2. **`paused`** — an agent whose latest turn stopped on a provider limit or transient server error. Rimz derives this at projection (no hook emits it); it joins the cockpit tally and ranks just under the actionable attention states. The marker can refine a still-`running` row (the provider emitted no lifecycle end) or a same-turn `failed` row (the lifecycle recorded an errored end). The certificate is per-agent, but the budget decision is account-scoped: `rate_limit` and `spend_limit` read the fused per-kind account budget, park while a subscription mana bar is spent or has recovered into the auto-continue path, and stay resumable when extra credits are disabled or exhausted as long as that mana bar has a real future refill. `overloaded` covers provider overload and transient server errors, and stays paused until a newer hook event self-clears it ([provider.md → Spent windows](./provider.md#spent-windows-and-paused-rows)).

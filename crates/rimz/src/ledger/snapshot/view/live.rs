@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::agent_activity::AgentActivity;
 use crate::agents::{AccountBudget, AgentState};
-use crate::ids::{AgentKind, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::ledger::snapshot::panes::{
     LazyAgentPairingResult, pane_admits_card, row_from_frame_pane, stamped_agent_for_pane,
 };
@@ -27,7 +27,7 @@ impl SidebarSnapshot {
     /// building stays independent of any backend command.
     pub fn with_live_panes(mut self, panes: Vec<PaneRef>, exclude: Option<&PaneId>) -> Self {
         let panes = Self::card_admitted_live_panes(panes, exclude);
-        self.fold_admitted_live_panes(&panes, None, None, &BTreeMap::new());
+        self.fold_admitted_live_panes(&panes, None, None, &BTreeMap::new(), &BTreeSet::new());
         self
     }
 
@@ -39,7 +39,7 @@ impl SidebarSnapshot {
         account_budgets: &BTreeMap<AgentKind, AccountBudget>,
     ) -> Self {
         let panes = Self::card_admitted_live_panes(panes, exclude);
-        self.fold_admitted_live_panes(&panes, None, None, account_budgets);
+        self.fold_admitted_live_panes(&panes, None, None, account_budgets, &BTreeSet::new());
         self
     }
 
@@ -51,7 +51,13 @@ impl SidebarSnapshot {
         unread_row_ids: &BTreeSet<String>,
     ) -> Self {
         let panes = Self::card_admitted_live_panes(panes, exclude);
-        self.fold_admitted_live_panes(&panes, None, Some(unread_row_ids), &BTreeMap::new());
+        self.fold_admitted_live_panes(
+            &panes,
+            None,
+            Some(unread_row_ids),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
         self
     }
 
@@ -71,12 +77,14 @@ impl SidebarSnapshot {
         lazy_pairings: &LazyAgentPairingResult,
         unread_row_ids: Option<&BTreeSet<String>>,
         account_budgets: &BTreeMap<AgentKind, AccountBudget>,
+        exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     ) -> (Self, Vec<DiagEvent>) {
         let diagnostics = self.fold_admitted_live_panes(
             &panes,
             Some(lazy_pairings),
             unread_row_ids,
             account_budgets,
+            exhausted_resumes,
         );
         (self, diagnostics)
     }
@@ -87,6 +95,7 @@ impl SidebarSnapshot {
         lazy_pairings: Option<&LazyAgentPairingResult>,
         unread_row_ids: Option<&BTreeSet<String>>,
         account_budgets: &BTreeMap<AgentKind, AccountBudget>,
+        exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     ) -> Vec<DiagEvent> {
         let mut projection = rows_from_panes(
             &self.agents,
@@ -110,6 +119,7 @@ impl SidebarSnapshot {
             AgentProjection {
                 agents: &self.agents,
                 account_budgets,
+                exhausted_resumes,
             },
             self.project_root.as_deref(),
             &self.worktree_roots,
