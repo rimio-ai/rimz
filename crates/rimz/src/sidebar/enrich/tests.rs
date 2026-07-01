@@ -617,6 +617,59 @@ fn frame_fold_carries_presence_onto_snapshot() {
     assert_eq!(snapshot.presence, Some(crate::SidebarPresence::Detached));
 }
 
+fn stale_presence_frame() -> crate::sidebar::frame::PaneFrame {
+    let mut frame = crate::sidebar::frame::assemble_frame(Vec::new(), 1_000, "rimz-test");
+    frame.presence = Some(crate::PresenceSample {
+        human_clients: 1,
+        last_input_ms: Some(1_000),
+        sampled_at_ms: 1_000_000,
+    });
+    frame
+}
+
+fn enrich_presence_with_default_config(
+    snapshot: SidebarSnapshot,
+    frame: crate::sidebar::frame::PaneFrame,
+    runtime: &RuntimePaths,
+) -> SidebarSnapshot {
+    enrich(
+        snapshot,
+        Some(frame),
+        runtime,
+        None,
+        EnrichMode::Producing {
+            roots: None,
+            heavy: HeavyLanes::Project,
+            config: Box::new(crate::config::MachineConfig::default()),
+        },
+        None,
+    )
+}
+
+#[test]
+fn local_tmux_presence_keeps_idle_detection() {
+    let (_dir, runtime, snapshot) = runtime();
+
+    let snapshot = enrich_presence_with_default_config(snapshot, stale_presence_frame(), &runtime);
+
+    assert_eq!(
+        snapshot.presence,
+        Some(crate::SidebarPresence::Idle { idle_ms: 999_000 })
+    );
+}
+
+#[test]
+fn remote_tmux_presence_stays_active_while_attached() {
+    let (_dir, runtime, snapshot) = runtime();
+    let file = LinkStatsFile::new(unix_now_ms(), "client".to_owned(), stats(Some(42), 0));
+    atomic::write_temp_then_rename_cache(&crate::remote::link::stats_path(&runtime), &file)
+        .unwrap();
+
+    let snapshot = enrich_presence_with_default_config(snapshot, stale_presence_frame(), &runtime);
+
+    assert_eq!(snapshot.presence, Some(crate::SidebarPresence::Active));
+}
+
 #[test]
 fn root_pod_is_excluded_from_git_reads() {
     // The root pod of a non-repo room is a known non-repo: it never enters

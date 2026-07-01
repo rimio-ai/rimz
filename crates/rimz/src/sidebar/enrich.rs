@@ -560,9 +560,17 @@ pub fn enrich(
             .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
             .collect();
         snapshot.viewed_panes = frame.viewed_panes.clone();
+        // Remote rooms classify presence on the host, where tmux
+        // `client_activity` only advances on input that crosses SSH. Trust the
+        // idle threshold only for local rooms; an attached remote client is
+        // present until it detaches.
+        let idle_threshold_ms = snapshot
+            .link
+            .is_none()
+            .then(|| machine_config.sidebar.afk_after_ms());
         snapshot.presence = frame
             .presence
-            .map(|sample| SidebarPresence::classify(sample, machine_config.sidebar.afk_after_ms()));
+            .map(|sample| SidebarPresence::classify(sample, idle_threshold_ms));
         snapshot.truth_degraded = truth_notice_for_frame(&frame);
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_frame(own, &frame);
