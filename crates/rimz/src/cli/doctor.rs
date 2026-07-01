@@ -70,13 +70,16 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
     }
 }
 
-/// The configured loop tasks from the per-machine config. Read-only and
+/// The loop tasks from config plus transient instance state. Read-only and
 /// workspace-independent: it surfaces the scheduled-execution surface this box
 /// carries; `rimz loop list` reports whether each task's room is open.
 fn collect_loop() -> model::LoopTasks {
-    let tasks = rimz::config::MachineConfig::load()
-        .map(|config| config.r#loop.tasks.0)
-        .unwrap_or_default();
+    let mut tasks = rimz::loop_instances::load().0;
+    tasks.extend(
+        rimz::config::MachineConfig::load()
+            .map(|config| config.r#loop.tasks.0)
+            .unwrap_or_default(),
+    );
     let rows = tasks
         .into_iter()
         .map(|(name, entry)| {

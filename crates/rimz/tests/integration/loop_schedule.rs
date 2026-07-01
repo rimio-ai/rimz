@@ -5,6 +5,8 @@ use std::process::{Command, Stdio};
 
 use serde_json::json;
 
+use rimz::config::Tasks;
+use rimz::loop_instances;
 use rimz::loop_run_log::{self, LoopRunRecord, LoopRunResult};
 use rimz::message::MessageStatus;
 
@@ -77,7 +79,10 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
     );
     let stdout = String::from_utf8_lossy(&list.stdout);
     assert!(
-        stdout.contains("RUNS") && stdout.contains("LAST RUN") && stdout.contains("RESULT"),
+        stdout.contains("SOURCE")
+            && stdout.contains("RUNS")
+            && stdout.contains("LAST RUN")
+            && stdout.contains("RESULT"),
         "loop list should show run-history columns: {stdout}"
     );
     assert!(
@@ -85,6 +90,87 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
             line.starts_with("wake") && line.contains("  1  ") && line.contains("delivered")
         }),
         "loop list should fold run history for wake: {stdout}"
+    );
+}
+
+#[test]
+fn loop_add_ephemeral_tasks_use_instance_state() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-state", "feature-loop");
+
+    let add_later = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "later",
+            "--bind",
+            "@claude",
+            "--in",
+            "5m",
+            "--prompt",
+            "later wake",
+        ])
+        .output()
+        .expect("loop add --in");
+    assert!(
+        add_later.status.success(),
+        "loop add --in failed: {}",
+        String::from_utf8_lossy(&add_later.stderr)
+    );
+    assert!(
+        read_loop_instances(&env).0.contains_key("later"),
+        "--in should persist as state"
+    );
+    assert!(
+        !loop_config_path(&env).exists(),
+        "--in should not create loop.toml"
+    );
+
+    let run_later = env
+        .rimz()
+        .args(["loop", "run", "later"])
+        .output()
+        .expect("loop run later");
+    assert!(
+        run_later.status.success(),
+        "loop run failed: {}",
+        String::from_utf8_lossy(&run_later.stderr)
+    );
+    assert!(
+        !read_loop_instances(&env).0.contains_key("later"),
+        "fired one-shot should be removed from state"
+    );
+
+    let add_daily = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "daily",
+            "--bind",
+            "@claude",
+            "--at",
+            "07:00",
+            "--prompt",
+            "daily wake",
+        ])
+        .output()
+        .expect("loop add daily");
+    assert!(
+        add_daily.status.success(),
+        "loop add daily failed: {}",
+        String::from_utf8_lossy(&add_daily.stderr)
+    );
+    let loop_text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
+    assert!(
+        loop_text.contains("[tasks.daily]"),
+        "recurring task should persist in loop.toml: {loop_text}"
+    );
+    assert!(
+        !read_loop_instances(&env).0.contains_key("daily"),
+        "recurring task should not persist as state"
     );
 }
 
@@ -324,6 +410,14 @@ fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
     text.lines()
         .map(|line| serde_json::from_str(line).expect("loop run record"))
         .collect()
+}
+
+fn read_loop_instances(env: &Env) -> Tasks {
+    let path = loop_instances::path(&env.state_root());
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Tasks::default();
+    };
+    serde_json::from_str(&text).expect("loop instances")
 }
 
 fn loop_config_path(env: &Env) -> std::path::PathBuf {
