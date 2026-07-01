@@ -34,6 +34,10 @@ pub enum ControlLine {
         window: String,
         panes: Vec<String>,
     },
+    WindowPaneChanged {
+        window: String,
+        pane: String,
+    },
     SessionWindowChanged {
         session: String,
         window: String,
@@ -149,9 +153,10 @@ pub(super) fn control_socket_from(raw: &str) -> Option<PathBuf> {
     (!socket.is_empty()).then(|| PathBuf::from(socket))
 }
 
-/// Classify one tmux control-mode line. Reply blocks, pane output, and focus
-/// noise are ignored; topology notifications that lack identity stay as a
-/// producer-verification nudge.
+/// Classify one tmux control-mode line. Reply blocks, pane output, and
+/// identity-free focus noise are ignored; a window's active-pane notification
+/// is forwarded as a realtime focus overlay, and topology notifications that
+/// lack identity stay as a producer-verification nudge.
 pub(super) fn classify_control_line(line: &str) -> ControlLine {
     let verb = line.split_whitespace().next().unwrap_or_default();
     match verb {
@@ -165,6 +170,7 @@ pub(super) fn classify_control_line(line: &str) -> ControlLine {
             })
             .unwrap_or(ControlLine::Nudge),
         "%layout-change" => parse_layout_change(line).unwrap_or(ControlLine::Nudge),
+        "%window-pane-changed" => parse_window_pane_changed(line).unwrap_or(ControlLine::Ignore),
         "%session-window-changed" => {
             parse_session_window_changed(line).unwrap_or(ControlLine::Ignore)
         }
@@ -203,6 +209,17 @@ fn parse_session_window_changed(line: &str) -> Option<ControlLine> {
     Some(ControlLine::SessionWindowChanged {
         session: session.to_owned(),
         window: window.to_owned(),
+    })
+}
+
+fn parse_window_pane_changed(line: &str) -> Option<ControlLine> {
+    let mut fields = line.split_whitespace();
+    (fields.next()? == "%window-pane-changed").then_some(())?;
+    let window = fields.next().filter(|value| value.starts_with('@'))?;
+    let pane = fields.next().filter(|value| value.starts_with('%'))?;
+    Some(ControlLine::WindowPaneChanged {
+        window: window.to_owned(),
+        pane: pane.to_owned(),
     })
 }
 
@@ -403,6 +420,21 @@ mod tests {
     }
 
     #[test]
+    fn control_line_classifies_window_pane_changed() {
+        assert_eq!(
+            classify_control_line("%window-pane-changed @1 %2"),
+            ControlLine::WindowPaneChanged {
+                window: "@1".to_owned(),
+                pane: "%2".to_owned(),
+            }
+        );
+        assert_eq!(
+            classify_control_line("%window-pane-changed @1"),
+            ControlLine::Ignore
+        );
+    }
+
+    #[test]
     fn malformed_layout_change_falls_back_to_nudge() {
         assert_eq!(
             classify_control_line("%layout-change @1 b25d,208x60,0,0{104x60,0,0"),
@@ -417,7 +449,6 @@ mod tests {
             "%end 1622 0 1",
             "%error 1622 0 1",
             "%output %1 aGVsbG8=",
-            "%window-pane-changed @1 %2",
             "%client-session-changed /dev/pts/3 $1 main",
             "%pane-mode-changed %2",
             "%window-renamed @1 build",

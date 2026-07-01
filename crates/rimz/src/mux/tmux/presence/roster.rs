@@ -19,6 +19,7 @@ struct PaneEntry {
     command: Option<String>,
     active: bool,
     overlay_suppressed: bool,
+    is_sidebar: bool,
 }
 
 impl PresenceRoster {
@@ -33,6 +34,9 @@ impl PresenceRoster {
             } => self.apply_subscription(pane, window, command, active, title, seeding),
             ControlLine::WindowClosed { window } => self.close_window(&window),
             ControlLine::LayoutChange { window, panes } => self.apply_layout(&window, panes),
+            ControlLine::WindowPaneChanged { window, pane } => {
+                self.window_pane_changed(window, pane, seeding)
+            }
             ControlLine::SessionWindowChanged { session, window } => {
                 self.switch_window(session, window, seeding)
             }
@@ -87,36 +91,15 @@ impl PresenceRoster {
 
         let became_active = active && old.as_ref().is_none_or(|entry| !entry.active);
         if became_active {
-            if !seeding && !suppress_overlay {
-                let pending = self.pending_unfocused.remove(&window);
-                let unfocused = self
-                    .prior_active_working_pane(&window, &pane)
-                    .or(pending)
-                    .filter(|raw| raw != &pane)
-                    .map(|raw| pane_id(raw.as_str()))
-                    .into_iter()
-                    .collect();
-                events.push(SidebarEvent::FocusChanged {
-                    focused: vec![pane_id(&pane)],
-                    unfocused,
-                });
-            } else {
-                let pending = self.pending_unfocused.remove(&window);
-                if is_sidebar && !seeding {
-                    let unfocused = self
-                        .prior_active_working_pane(&window, &pane)
-                        .or(pending)
-                        .filter(|raw| raw != &pane)
-                        .map(|raw| pane_id(raw.as_str()))
-                        .into_iter()
-                        .collect();
-                    events.push(SidebarEvent::FocusChanged {
-                        focused: vec![pane_id(&pane)],
-                        unfocused,
-                    });
-                }
-            }
-            self.clear_active_in_window(&window, &pane);
+            let pending = self.pending_unfocused.remove(&window);
+            events.extend(self.focus_became_active(
+                &window,
+                &pane,
+                suppress_overlay,
+                is_sidebar,
+                seeding,
+                pending,
+            ));
         }
 
         self.panes.insert(
@@ -126,8 +109,60 @@ impl PresenceRoster {
                 command,
                 active,
                 overlay_suppressed: suppress_overlay,
+                is_sidebar,
             },
         );
+        events
+    }
+
+    fn window_pane_changed(
+        &mut self,
+        window: String,
+        pane: String,
+        seeding: bool,
+    ) -> Vec<SidebarEvent> {
+        let Some(entry) = self.panes.get(&pane) else {
+            // The active pane can win the race before its first subscription
+            // line. Nudge now; the subscription names it shortly.
+            return vec![SidebarEvent::PanesChanged];
+        };
+        if entry.active {
+            return Vec::new();
+        }
+        let suppress_overlay = entry.overlay_suppressed;
+        let is_sidebar = entry.is_sidebar;
+        let events =
+            self.focus_became_active(&window, &pane, suppress_overlay, is_sidebar, seeding, None);
+        if let Some(entry) = self.panes.get_mut(&pane) {
+            entry.active = true;
+        }
+        events
+    }
+
+    fn focus_became_active(
+        &mut self,
+        window: &str,
+        pane: &str,
+        suppress_overlay: bool,
+        is_sidebar: bool,
+        seeding: bool,
+        pending: Option<String>,
+    ) -> Vec<SidebarEvent> {
+        let mut events = Vec::new();
+        if !seeding && (!suppress_overlay || is_sidebar) {
+            let unfocused = self
+                .prior_active_working_pane(window, pane)
+                .or(pending)
+                .filter(|raw| raw != pane)
+                .map(|raw| pane_id(raw.as_str()))
+                .into_iter()
+                .collect();
+            events.push(SidebarEvent::FocusChanged {
+                focused: vec![pane_id(pane)],
+                unfocused,
+            });
+        }
+        self.clear_active_in_window(window, pane);
         events
     }
 
@@ -268,6 +303,13 @@ mod tests {
         ControlLine::SessionWindowChanged {
             session: session.to_owned(),
             window: window.to_owned(),
+        }
+    }
+
+    fn wpane(window: &str, pane: &str) -> ControlLine {
+        ControlLine::WindowPaneChanged {
+            window: window.to_owned(),
+            pane: pane.to_owned(),
         }
     }
 
@@ -420,6 +462,75 @@ mod tests {
                 unfocused: vec![pane_id("%1")],
             }]
         );
+    }
+
+    #[test]
+    fn window_pane_change_focuses_new_active_working_pane() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        roster.apply(sub("%2", "@1", Some("claude"), false), true);
+        assert_eq!(
+            roster.apply(wpane("@1", "%2"), false),
+            vec![SidebarEvent::FocusChanged {
+                focused: vec![pane_id("%2")],
+                unfocused: vec![pane_id("%1")],
+            }]
+        );
+        assert!(!roster.panes.get("%1").is_some_and(|entry| entry.active));
+        assert!(roster.panes.get("%2").is_some_and(|entry| entry.active));
+    }
+
+    #[test]
+    fn window_pane_change_for_already_active_pane_emits_nothing() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        assert!(roster.apply(wpane("@1", "%1"), false).is_empty());
+        assert!(roster.panes.get("%1").is_some_and(|entry| entry.active));
+    }
+
+    #[test]
+    fn window_pane_change_for_unknown_pane_falls_back_to_panes_changed() {
+        let mut roster = PresenceRoster::default();
+        assert_eq!(
+            roster.apply(wpane("@1", "%2"), false),
+            vec![SidebarEvent::PanesChanged]
+        );
+    }
+
+    #[test]
+    fn window_pane_change_can_focus_sidebar_pane() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        roster.apply(sidebar_sub("%9", "@1", false), true);
+        assert_eq!(
+            roster.apply(wpane("@1", "%9"), false),
+            vec![SidebarEvent::FocusChanged {
+                focused: vec![pane_id("%9")],
+                unfocused: vec![pane_id("%1")],
+            }]
+        );
+        assert!(!roster.panes.get("%1").is_some_and(|entry| entry.active));
+        assert!(roster.panes.get("%9").is_some_and(|entry| entry.active));
+    }
+
+    #[test]
+    fn window_pane_change_suppresses_untitled_rimz_overlay() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        roster.apply(untitled_rimz_sub("%9", "@1", false), true);
+        assert!(roster.apply(wpane("@1", "%9"), false).is_empty());
+        assert!(!roster.panes.get("%1").is_some_and(|entry| entry.active));
+        assert!(roster.panes.get("%9").is_some_and(|entry| entry.active));
+    }
+
+    #[test]
+    fn window_pane_change_seeds_state_without_events() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        roster.apply(sub("%2", "@1", Some("claude"), false), true);
+        assert!(roster.apply(wpane("@1", "%2"), true).is_empty());
+        assert!(!roster.panes.get("%1").is_some_and(|entry| entry.active));
+        assert!(roster.panes.get("%2").is_some_and(|entry| entry.active));
     }
 
     #[test]

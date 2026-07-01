@@ -251,7 +251,7 @@ The server copies its spawn environment into the **global environment**; each se
 | `%layout-change` | `%layout-change @id <layout> <visible-layout> <raw-flags>` | a split opened/closed/resized in a window; old releases sent two fields — accept ≥ 2 | ✓ |
 | `%sessions-changed` | bare | a session was created or destroyed | ✓ |
 | `%window-renamed` | `@id name` | | |
-| `%window-pane-changed` | `@id %id` | a window's active pane changed | |
+| `%window-pane-changed` | `@id %id` | a window's active pane changed; forwarded as a realtime `FocusChanged` overlay for the window's new active pane | ✓ |
 | `%session-changed` | `$id name` | this client switched session | |
 | `%session-renamed` | **wire: `$id name`** — the man documents the name only; parse id-then-name | | |
 | `%session-window-changed` | `$id @id` | a session's current window changed; forwarded as a `FocusChanged` overlay for the switched-to window's active pane | ✓ |
