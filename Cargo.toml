@@ -178,6 +178,13 @@ divan = "0.1"
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
 
+# Optimized like release but with line-tables debug info, for perf/samply
+# profiling. Built by `cargo xtask profile-build`, output in target/profiling/.
+# force-frame-pointers and symbol-mangling-version=v0 come from xtask RUSTFLAGS.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+
 # The integration suite spawns the `rimz` binary hundreds of times; an
 # unoptimized dependency tree (serde, clap, jiff, ratatui) dominates per-spawn
 # startup. Optimize dependencies even in dev/test builds — they

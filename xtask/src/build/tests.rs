@@ -94,6 +94,19 @@ fn dev_install_can_embed_debug_info_for_sentry_upload() {
 }
 
 #[test]
+fn profile_build_uses_custom_profile_and_rustflags() {
+    let args = profiling_build_args();
+
+    assert!(!args.iter().any(|arg| arg == "--release"));
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--profile" && pair[1] == "profiling")
+    );
+    assert!(PROFILING_RUSTFLAGS.contains("force-frame-pointers=yes"));
+    assert!(PROFILING_RUSTFLAGS.contains("symbol-mangling-version=v0"));
+}
+
+#[test]
 fn macos_sdkroot_acceptance_matches_rustc_shape() {
     let cwd = env::current_dir().unwrap();
 

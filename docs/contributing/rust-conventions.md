@@ -265,6 +265,7 @@ CI compiles through `sccache` backed by the Actions cache in compile jobs, while
 - `cargo llvm-cov nextest --workspace --all-features --locked --lcov --output-path target/ci/coverage/lcov.info` — scheduled coverage. The `rimz-ci` image provides tmux and Zellij before this gate, so the same pass exercises live backend tests under nextest's live groups.
 - `cargo semver-checks` — release-time API check; skipped while the workspace version is the unpublished pre-release `0.0.0`. Runs through `cargo xtask externals` alongside `cargo vet`, since it fetches the published crates.io baseline directly and bypasses the mirror.
 - `cargo xtask perf` — non-gating divan benchmarks for the measured performance model; accepts cargo bench filters such as `cargo xtask perf fleet`.
+- `cargo xtask profile-build` — optimized host `rimz` build for `perf`/`samply` profiling; writes `target/profiling/rimz` with line tables, frame pointers, and v0 symbol names without installing it.
 
 `cargo xtask gate` runs `cargo fmt --all` in fix mode, then invariants, docs-links, lint, doctests, and `cargo nextest run --profile gate --workspace --all-features --locked`. The `gate` nextest profile excludes live-backend and journey tiers, keeps deterministic performance tests, captures each step's output, prints one compact success line per step, and fails fast with a trimmed excerpt plus a `NEXT:` hint. Use `cargo xtask test -P live` when a change needs live-backend or deep-mux-smoke coverage, `cargo xtask test -P journey` when it needs non-deep journey coverage, `cargo xtask checks` when it needs registry-free deps/plugin/lint gates, `cargo xtask externals` when it touches dependencies or the public API (deny, supply-chain audit, and semver), and `cargo xtask ci` when it needs both checks and the full suite.
 
@@ -278,7 +279,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 ### Contributor command surface
 
-`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `hooks`, `fmt`, `lint`, `test`, `test-archive`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `invariants`, `docs-links`, `gate`, `checks`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. `install-dev` is the contributor opt-in to [off-box reporting](../internals/health/observability.md): a debug host `rimz` built `--features sentry`, so its reporting defaults to the `development` environment. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
+`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `profile-build`, `hooks`, `fmt`, `lint`, `test`, `test-archive`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `invariants`, `docs-links`, `gate`, `checks`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. `install-dev` is the contributor opt-in to [off-box reporting](../internals/health/observability.md): a debug host `rimz` built `--features sentry`, so its reporting defaults to the `development` environment. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
 
 ## Reading order for new contributors
 

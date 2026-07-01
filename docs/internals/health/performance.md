@@ -86,7 +86,24 @@ Current local baseline from `cargo xtask perf` on June 28, 2026:
 | `hotpath::spending_walk_cold` 20k retained entries | 24.11ms | 42.26MB |
 | `hotpath::spending_walk_warm_no_change` 20k retained entries | 8.28ms | 8.06MB |
 
-Process-level RAM and CPU stay a manual profiling recipe because they are OS- and workload-shaped. Record CPU flamegraphs with `samply record -- cargo xtask perf`, measure peak RSS with `/usr/bin/time -v cargo xtask perf`, and use `dhat` or the platform allocator profiler when an allocation regression needs ownership. Run the same commands against `rimz sidebar snapshot --json` over a synthetic seeded workspace when the question is process shape rather than microbench shape.
+## Profiling
+
+Pick the tool by the question. Use `strace -f -c -p <pid>` first when a process is busy for unclear reasons: it shows syscall shape, fork/exec storms, lock contention, and IO without rebuilding or restarting a live process. Use `strace -f -e execve -p <pid>` when fork rate or PATH lookup is suspect. Use `samply` or `perf record --call-graph fp` when the question is which Rimz functions burn CPU on render, fold, parse, or enrichment work. Use `/usr/bin/time -v`, `heaptrack`, DHAT, or the platform allocator profiler when RSS or allocation churn is the suspect. This sidebar git-fork pass came from `strace`; `perf` confirmed the shape but was not the first signal.
+
+Build a profilable binary with:
+
+```sh
+cargo xtask profile-build
+target/profiling/rimz --version
+```
+
+`cargo xtask profile-build` writes `target/profiling/rimz`: optimized like release, with line tables, frame pointers, and v0 symbol mangling for demangled call trees. The shipped release binary keeps no frame-pointer/debug-info cost, and `cargo xtask install-dev` is a debug build, so neither is the right CPU-profile target for optimized hot paths.
+
+Attach to the right process. A workspace elects one producer sidebar and the younger renderers idle; find the busy process with `top`, `ps -T -p <pid>`, or `pidstat`, then record that PID with `samply record -p <pid>` or `perf record --call-graph fp -p <pid> -- sleep 10`. For a reproducible command-shaped profile, run the profiling binary directly against the path under test, for example `samply record target/profiling/rimz sidebar snapshot --json`.
+
+Local host settings affect the tool more than Rimz. `perf` needs `sudo` or a lower `kernel.perf_event_paranoid` when the value is `3` or higher. Hardware LBR call graphs may be unavailable under virtualization; use `--call-graph fp` with the profiling build. Keep `strace` windows short, usually a few seconds, because syscall tracing perturbs the process it observes.
+
+Read profiles at two levels. `perf report --stdio` gives flat self-time and callees; `samply` opens a Firefox-Profiler call tree that is easier for Rust stacks. Turn recurring discoveries into deterministic guards where possible: `proc::testkit::spawn_count`, the `git-trace` shim tests, fsync/byte counters, and parse-cache tests pin exact behavior better than wall-clock profiles.
 
 ## The overhead, at fleet scale
 

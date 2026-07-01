@@ -16,6 +16,7 @@ use crate::runner::{run, run_with_env};
 const PRESENCE_PLUGIN_TARGET: &str = "wasm32-wasip1";
 const DARWIN_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 const SYSTEM_INSTALL_BIN_DIR: &str = "/usr/local/bin";
+const PROFILING_RUSTFLAGS: &str = "-C force-frame-pointers=yes -C symbol-mangling-version=v0";
 pub(crate) const WASM_MAGIC: [u8; 4] = *b"\0asm";
 
 pub(crate) fn build(root: &Path) -> Result<()> {
@@ -288,6 +289,18 @@ pub(crate) fn install_dev(root: &Path) -> Result<()> {
     upload_debug_files(&stage.join("rimz"))
 }
 
+/// Build an optimized host `rimz` with line-tables debug info, frame pointers,
+/// and v0 symbol mangling for perf/samply profiling. The artifact stays under
+/// `target/profiling/` and is never installed over the everyday binary.
+pub(crate) fn profile_build(root: &Path) -> Result<()> {
+    build_plugin(root)?;
+    let mut envs = presence_plugin_embed_env(root);
+    envs.push(("RUSTFLAGS", PathBuf::from(PROFILING_RUSTFLAGS)));
+    run_with_env(root, "cargo", profiling_build_args(), &envs)?;
+    report_profile_build(&profile_artifact(root, "profiling", "rimz"));
+    Ok(())
+}
+
 /// Copy the staged install artifacts onto the `cargo install` ladder and
 /// `/usr/local/bin`, then report the version the way `rimz --version` does.
 fn install_from_stage(stage: &Path) -> Result<()> {
@@ -396,6 +409,14 @@ fn upload_debug_files(binary: &Path) -> Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::print_stdout,
+    reason = "profile-build summary is the command's stdout contract"
+)]
+fn report_profile_build(artifact: &Path) {
+    println!("Built profiling rimz at {}", artifact.display());
+}
+
 pub(crate) fn stage_install(root: &Path) -> Result<PathBuf> {
     stage_host_rimz(root, true, &[], &[])
 }
@@ -460,6 +481,22 @@ fn host_build_args(release: bool, features: &[&str], extra: &[&str]) -> Vec<Stri
     }
     args.extend(extra.iter().map(|arg| (*arg).to_owned()));
     args
+}
+
+fn profiling_build_args() -> Vec<String> {
+    [
+        "build",
+        "-p",
+        "rimz",
+        "--bin",
+        "rimz",
+        "--locked",
+        "--profile",
+        "profiling",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
 }
 
 fn presence_plugin_embed_env(root: &Path) -> Vec<(&'static str, PathBuf)> {

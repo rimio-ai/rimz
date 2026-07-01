@@ -100,3 +100,15 @@ fn screenshot_subcommand_help_reaches_the_task_parser() {
         },
     );
 }
+
+#[test]
+fn profile_build_is_a_first_class_no_arg_task() {
+    assert!(task_info("profile-build").is_some());
+    assert_eq!(
+        parse_args(&args(&["profile-build"])).unwrap(),
+        Action::Run {
+            task: "profile-build",
+            args: &[],
+        },
+    );
+}

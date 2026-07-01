@@ -59,6 +59,11 @@ const TASKS: &[TaskInfo] = &[
         runs: "build-plugin, debug host rimz with --features sentry, atomically installs to Cargo bin and /usr/local/bin, then uploads debug files when SENTRY_AUTH_TOKEN is set",
     },
     TaskInfo {
+        name: "profile-build",
+        summary: "Build an optimized host rimz for perf/samply profiling.",
+        runs: "build-plugin, then host rimz with --profile profiling and profiling RUSTFLAGS; writes target/profiling/rimz",
+    },
+    TaskInfo {
         name: "stage-install",
         summary: "Build host install artifacts.",
         runs: "build-plugin, host rimz release",
@@ -262,6 +267,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "plugin-refresh" => build::plugin_refresh(root),
         "install" => build::install(root),
         "install-dev" => build::install_dev(root),
+        "profile-build" => build::profile_build(root),
         "stage-install" => build::stage_install(root).map(|_| ()),
         "dist" => build::dist(root),
         "brew-formula" => brew::brew_formula(root),
