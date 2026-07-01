@@ -518,6 +518,7 @@ impl LoopState {
             // highlight moves only when the derived baseline catches up on a
             // later fold — late, never wrong — and any make-up filter clears
             // as focus leaves the tab.
+            self.record_focus_anchor(&pane);
             spawn_pane_focus(pane.clone(), &config.session_name);
             self.record_focus_intent(config, pane, anim_start, diag)?;
         }
@@ -815,9 +816,39 @@ impl LoopState {
         )?;
         self.should_exit = applied.should_exit;
         self.tab_emptied |= applied.tab_emptied;
+        self.apply_focus_anchor();
         self.observe_commit();
         self.dirty = true;
         Ok(applied.rejected)
+    }
+
+    fn record_focus_anchor(&self, pane: &PaneId) {
+        let anchor = crate::sidebar::focus_anchor::FocusAnchor {
+            pane_id: pane.clone(),
+            offset: self.ui.scroll_offset,
+            stamp_ms: crate::sidebar::cache::unix_now_ms(),
+        };
+        if let Err(err) = crate::sidebar::focus_anchor::store(self.read_marks.runtime(), &anchor) {
+            debug!(error = %err, "focus anchor write failed");
+        }
+    }
+
+    fn apply_focus_anchor(&mut self) {
+        let Some(selected) = self.ui.selected_pane.clone() else {
+            return;
+        };
+        let Some(anchor) = crate::sidebar::focus_anchor::load(self.read_marks.runtime()) else {
+            return;
+        };
+        let now_ms = crate::sidebar::cache::unix_now_ms();
+        if anchor.stamp_ms > self.ui.last_focus_anchor_ms
+            && anchor.pane_id == selected
+            && crate::sidebar::focus_anchor::is_fresh(anchor.stamp_ms, now_ms)
+        {
+            self.ui.scroll_offset = anchor.offset;
+            self.ui.manual_scroll = None;
+            self.ui.last_focus_anchor_ms = anchor.stamp_ms;
+        }
     }
 
     fn record_focus_intent(

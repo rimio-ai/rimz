@@ -33,6 +33,11 @@ pub const BACKGROUND_PAINT_MIN_INTERVAL: Duration = Duration::from_secs(1);
 /// a rapid triage burst holds one stable list and it tidies once you settle.
 pub const REORDER_HOLD: Duration = Duration::from_millis(2500);
 
+/// How long a jump scroll anchor stays applicable. Long enough for the
+/// destination tab to refold and adopt the focus after the jump's
+/// `FocusChanged` broadcast; an older anchor is a stale jump and is ignored.
+pub const FOCUS_ANCHOR_FRESH: Duration = Duration::from_millis(2500);
+
 /// Coalescing window for the shared snapshot cache — the **poll-mode** pane
 /// TTL, in effect whenever the presence push channel is dead or absent. Just
 /// under the default 1s data tick: when one ledger-delta wakeup wakes every

@@ -268,6 +268,14 @@ impl RuntimePaths {
         self.root.join("unread.json")
     }
 
+    /// The workspace's last jump scroll anchor: the pane a jump focused plus the
+    /// viewport offset that keeps its card where the user clicked. Renderers read
+    /// it on the fold that adopts the focus, so a cross-tab jump lands the card at
+    /// the same on-screen row. Display-only runtime state, TTL-gated.
+    pub fn focus_anchor_path(&self) -> PathBuf {
+        self.root.join("focus-anchor.json")
+    }
+
     /// The per-session Codex app-server broker socket. The broker
     /// ([`crate::agents::codex::broker`]) binds it; the enrichment client
     /// ([`crate::agents::codex::app_server`]) connects to it. Both derive it from

@@ -15,6 +15,7 @@ pub mod cache;
 pub mod consumer;
 pub mod enrich;
 pub mod events;
+pub mod focus_anchor;
 pub mod frame;
 pub mod fuse;
 pub mod notify;

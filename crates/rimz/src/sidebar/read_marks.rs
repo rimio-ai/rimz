@@ -116,6 +116,10 @@ impl ReadMarkStore {
         }
     }
 
+    pub(crate) fn runtime(&self) -> &RuntimePaths {
+        &self.runtime
+    }
+
     pub(crate) fn load_merged(&self) -> ReadMarks {
         ReadMarks::load_merged(&self.runtime)
     }

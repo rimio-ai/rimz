@@ -83,6 +83,23 @@ fn own_view(own_is_active: bool, active_pane_is_viewed: bool) -> crate::SidebarO
     }
 }
 
+fn snapshot_with_active_pane(ws: &WorkspaceId, active: PaneId) -> SidebarSnapshot {
+    let first = pane("terminal_1", "tab_0", false);
+    let second = pane("terminal_2", "tab_0", false);
+    let working_pane_ids = vec![first.pane_id.clone(), second.pane_id.clone()];
+    let mut snapshot = snapshot_with_panes(ws, vec![first, second]);
+    snapshot.own_view = Some(crate::SidebarOwnView {
+        sibling_count: 2,
+        own_is_active: false,
+        active_pane_id: Some(active),
+        active_pane_is_viewed: true,
+        working_pane_ids,
+        focus_contested: false,
+        own_view_is_daemon: false,
+    });
+    snapshot
+}
+
 fn fold_snapshot(
     state: &mut LoopState,
     config: &ServeConfig,
@@ -400,6 +417,172 @@ fn input_browse_arms_order_hold_before_next_fold() {
         state.ui.order_hold.is_some(),
         "arrow-key browse arms the order hold immediately, without waiting for a fold"
     );
+}
+
+#[test]
+fn focus_anchor_write_carries_current_scroll_offset() {
+    let ws = workspace();
+    let (dir, mut state) = loop_state(&ws);
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
+    state.ui.scroll_offset = 11;
+
+    state.record_focus_anchor(&pane);
+
+    let anchor = crate::sidebar::focus_anchor::load(&runtime).expect("focus anchor");
+    assert_eq!(anchor.pane_id, pane);
+    assert_eq!(anchor.offset, 11);
+    assert!(crate::sidebar::focus_anchor::is_fresh(
+        anchor.stamp_ms,
+        crate::sidebar::cache::unix_now_ms(),
+    ));
+}
+
+#[test]
+fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let (dir, mut state) = loop_state(&ws);
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    let target = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
+    let stamp_ms = crate::sidebar::cache::unix_now_ms();
+    crate::sidebar::focus_anchor::store(
+        &runtime,
+        &crate::sidebar::focus_anchor::FocusAnchor {
+            pane_id: target.clone(),
+            offset: 7,
+            stamp_ms,
+        },
+    )
+    .expect("store anchor");
+    state.ui.scroll_offset = 2;
+    state.ui.manual_scroll = Some(crate::sidebar_pane::render::ManualScroll {
+        selection_at_start: Some(PaneId::from_parts(crate::MuxName::Zellij, "terminal_1")),
+    });
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    fold_snapshot(
+        &mut state,
+        &config,
+        &mut fetch,
+        snapshot_with_active_pane(&ws, target.clone()),
+        true,
+    );
+
+    assert_eq!(state.ui.selected_pane, Some(target));
+    assert_eq!(state.ui.scroll_offset, 7);
+    assert_eq!(state.ui.manual_scroll, None);
+    assert_eq!(state.ui.last_focus_anchor_ms, stamp_ms);
+}
+
+#[test]
+fn focus_anchor_for_other_pane_leaves_scroll_untouched() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let (dir, mut state) = loop_state(&ws);
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    let selected = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
+    crate::sidebar::focus_anchor::store(
+        &runtime,
+        &crate::sidebar::focus_anchor::FocusAnchor {
+            pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_1"),
+            offset: 7,
+            stamp_ms: crate::sidebar::cache::unix_now_ms(),
+        },
+    )
+    .expect("store anchor");
+    state.ui.scroll_offset = 3;
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    fold_snapshot(
+        &mut state,
+        &config,
+        &mut fetch,
+        snapshot_with_active_pane(&ws, selected.clone()),
+        true,
+    );
+
+    assert_eq!(state.ui.selected_pane, Some(selected));
+    assert_eq!(state.ui.scroll_offset, 3);
+    assert_eq!(state.ui.last_focus_anchor_ms, 0);
+}
+
+#[test]
+fn focus_anchor_stamp_applies_once() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let (dir, mut state) = loop_state(&ws);
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    let target = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
+    let stamp_ms = crate::sidebar::cache::unix_now_ms();
+    crate::sidebar::focus_anchor::store(
+        &runtime,
+        &crate::sidebar::focus_anchor::FocusAnchor {
+            pane_id: target.clone(),
+            offset: 7,
+            stamp_ms,
+        },
+    )
+    .expect("store anchor");
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    fold_snapshot(
+        &mut state,
+        &config,
+        &mut fetch,
+        snapshot_with_active_pane(&ws, target.clone()),
+        true,
+    );
+    assert_eq!(state.ui.scroll_offset, 7);
+
+    state.ui.scroll_offset = 4;
+    state.ui.manual_scroll = Some(crate::sidebar_pane::render::ManualScroll {
+        selection_at_start: Some(target.clone()),
+    });
+    fold_snapshot(
+        &mut state,
+        &config,
+        &mut fetch,
+        snapshot_with_active_pane(&ws, target),
+        true,
+    );
+
+    assert_eq!(state.ui.scroll_offset, 4);
+    assert!(state.ui.manual_scroll.is_some());
+}
+
+#[test]
+fn stale_focus_anchor_is_ignored() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let (dir, mut state) = loop_state(&ws);
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    let target = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
+    let ttl_ms = crate::sidebar::timing::FOCUS_ANCHOR_FRESH.as_millis() as u64;
+    let stale_stamp = crate::sidebar::cache::unix_now_ms().saturating_sub(ttl_ms + 1);
+    crate::sidebar::focus_anchor::store(
+        &runtime,
+        &crate::sidebar::focus_anchor::FocusAnchor {
+            pane_id: target.clone(),
+            offset: 7,
+            stamp_ms: stale_stamp,
+        },
+    )
+    .expect("store anchor");
+    state.ui.scroll_offset = 3;
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    fold_snapshot(
+        &mut state,
+        &config,
+        &mut fetch,
+        snapshot_with_active_pane(&ws, target.clone()),
+        true,
+    );
+
+    assert_eq!(state.ui.selected_pane, Some(target));
+    assert_eq!(state.ui.scroll_offset, 3);
+    assert_eq!(state.ui.last_focus_anchor_ms, 0);
 }
 
 #[test]

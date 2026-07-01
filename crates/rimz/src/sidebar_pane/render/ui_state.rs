@@ -74,6 +74,9 @@ pub struct UiState {
     /// selected card stays in view unless a [`ManualScroll`] pin holds it —
     /// and written back as a byproduct of the draw, like `line_map`.
     pub(crate) scroll_offset: usize,
+    /// Stamp of the last jump scroll anchor this renderer applied, so a given
+    /// anchor seeds the viewport at most once. `0` before any jump handoff.
+    pub(crate) last_focus_anchor_ms: u64,
     /// The transient wheel-scroll pin riding above the auto-follow, or `None`
     /// while the viewport follows the selection (see [`ManualScroll`]).
     pub(crate) manual_scroll: Option<ManualScroll>,

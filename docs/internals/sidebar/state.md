@@ -62,7 +62,7 @@ Producer **enrichment lanes** fold onto the admitted cards. The fetch worker han
 
 Per-session **sidecars** (`agent_context/`, `subagent_context/`, `agent-activity/`) are the exception to producer ownership: CLI hook and statusline runs write them latest-wins, and the elder's transcript watcher refreshes Codex context between hooks ([Push Channels](#push-channels)). Every node reads them fresh behind stat-gated parse caches.
 
-The remaining files are **coordination and receipts**, terse by design: `heartbeat/sidebar.<instance>.json` (election and wakeup fanout — the eldest fresh heartbeat is the producer), `sock/sidebar.<instance>.sock` (the node's wakeup datagram socket), `loop-fire.json` (elder loop-task arm/fire stamps for this room), `unread.json` and `read-marks/…` (open unread episodes and per-row read receipts that every fold reads), `binding.log.jsonl` (append-only pane-bind decisions; [sidebar.md](./sidebar.md)), and `diag.log.jsonl` (typed anomaly records; [diagnostics.md](../health/diagnostics.md)). The ledger's own `snapshots/latest.json` and `snapshots/rollup.json` are state-dir files owned by the ledger write tail — [ledger.md](./ledger.md) owns them.
+The remaining files are **coordination and receipts**, terse by design: `heartbeat/sidebar.<instance>.json` (election and wakeup fanout — the eldest fresh heartbeat is the producer), `sock/sidebar.<instance>.sock` (the node's wakeup datagram socket), `loop-fire.json` (elder loop-task arm/fire stamps for this room), `unread.json` and `read-marks/…` (open unread episodes and per-row read receipts that every fold reads), `focus-anchor.json` (a TTL-gated jump viewport hint that every renderer reads on focus adoption), `binding.log.jsonl` (append-only pane-bind decisions; [sidebar.md](./sidebar.md)), and `diag.log.jsonl` (typed anomaly records; [diagnostics.md](../health/diagnostics.md)). The ledger's own `snapshots/latest.json` and `snapshots/rollup.json` are state-dir files owned by the ledger write tail — [ledger.md](./ledger.md) owns them.
 
 ## Realtime Events
 
@@ -134,6 +134,8 @@ The table names staleness-budget semantics; exact values and rationale live in [
 Money rolls sample on `refresh_ms * CLICK_PHASES`, matching the odometer phase counter; row animations sample on `BREATH_ANIMATION_FRAME`, clamped to at least the base. Input paints synchronously off-grid, an overlay event fuses on arrival and paints on the spot, and a burst of events still coalesces to one paint per base frame. The data backstop remains `rimz sidebar serve --tick-seconds`: changing `refresh_ms` changes paint cadence, not pull cadence.
 
 The serve loop also wakes at the renderer-local order-hold expiry to fire the releasing fold that lets rows and groups settle back to live rank after the user goes idle.
+
+The jump scroll anchor is a display-only runtime file, TTL-gated by `FOCUS_ANCHOR_FRESH`, carried renderer-to-renderer on the existing `FocusChanged` wakeup.
 
 An attached sidebar in an unviewed tab keeps animation suspended and repaints only when its glanceable roster/status/unread projection changes, throttled by `BACKGROUND_PAINT_MIN_INTERVAL`; turn phase, gauges, `/proc` metrics, spend, git facts, and animation phase stay off the hidden paint trigger.
 
