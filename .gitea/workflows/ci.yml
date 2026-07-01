@@ -267,37 +267,28 @@ jobs:
             echo "ACTIONS_RUNTIME_TOKEN=${ACTIONS_RUNTIME_TOKEN:-}"
           } >> "$GITHUB_ENV"
 
-      - name: cargo xtask test-archive
+      - name: cargo xtask test (gate)
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test-archive --archive-file target/ci/nextest-archive.tar.zst
+          mold -run cargo xtask test --profile gate
 
-      - name: cargo nextest run (gate)
-        run: |
-          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          unset NO_COLOR
-          cargo nextest run --profile gate --archive-file target/ci/nextest-archive.tar.zst
-
-      - name: cargo nextest run (live-tmux)
+      - name: cargo xtask test (live-tmux)
         if: ${{ !cancelled() }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          unset NO_COLOR
-          cargo nextest run --profile live-tmux --archive-file target/ci/nextest-archive.tar.zst
+          mold -run cargo xtask test --profile live-tmux
 
-      - name: cargo nextest run (live-zellij)
+      - name: cargo xtask test (live-zellij)
         if: ${{ !cancelled() }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          unset NO_COLOR
-          cargo nextest run --profile live-zellij --archive-file target/ci/nextest-archive.tar.zst
+          mold -run cargo xtask test --profile live-zellij
 
-      - name: cargo nextest run (journey)
+      - name: cargo xtask test (journey)
         if: ${{ !cancelled() }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          unset NO_COLOR
-          cargo nextest run --profile journey --archive-file target/ci/nextest-archive.tar.zst
+          mold -run cargo xtask test --profile journey
 
       - name: sccache stats
         if: always()
