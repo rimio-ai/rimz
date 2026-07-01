@@ -41,6 +41,10 @@ setw -g mode-keys vi
 bind -T copy-mode-vi v send -X begin-selection
 bind -T copy-mode-vi y send -X copy-pipe-no-clear
 bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel
+# Anchor the selection the instant a drag opens copy-mode, so the first drag
+# copies instead of stranding a highlight. Keep tmux's guard that forwards the
+# drag to a mouse-aware app or an already-open mode.
+bind -T root MouseDrag1Pane if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { copy-mode -M ; send -X begin-selection }
 bind -T copy-mode-vi WheelUpPane   send -X -N 3 scroll-up
 bind -T copy-mode-vi WheelDownPane send -X -N 3 scroll-down
 
@@ -59,6 +63,8 @@ bind | split-window -h -c "#{pane_current_path}"
 bind - split-window -v -c "#{pane_current_path}"
 bind c new-window      -c "#{pane_current_path}"
 ```
+
+The root `MouseDrag1Pane` override opens copy-mode and begins the selection in one step. tmux's default opens copy-mode with `copy-mode -M` alone, which can leave the first drag unanchored — the highlight appears but the release copies nothing, so you press `q` and drag again to get it. Beginning the selection on entry makes the first drag copy and exit like the rest. The `pane_in_mode`/`mouse_any_flag` guard keeps the defaults intact: a drag inside a mouse-aware TUI or an already-open copy-mode still forwards to that app.
 
 `pane-border-status top` labels each pane's border with its index and running command, so a grid of agents stays legible at a glance — the closest tmux gets to Zellij's titled frames. Rimz inherits this setting when its [`[tmux] pane_border_status`](../reference/configuration.md#multiplexer-room-options) override is unset; when you set that override, Rimz titles work panes and blanks the sidebar's own border row. tmux does not draw a pane's outer window edge, so panes are not fully boxed like Zellij frames.
 
