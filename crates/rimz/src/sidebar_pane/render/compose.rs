@@ -105,12 +105,23 @@ pub(crate) fn compose_lines(
 
     // The `↑ N need you` jump banner appears only while the lead-unread card is
     // scrolled out of the window — on screen (e.g. at the top) it's redundant.
-    let show_banner = viewport_hidden > 0
-        && lead_unread_row(&snapshot.worktree_groups).is_some()
-        && !lead_unread_visible(snapshot, ui, &scroll_map, offset_hidden, viewport_hidden);
+    let lead = lead_unread_row(&snapshot.worktree_groups);
+    let show_banner = if let Some(lead) = lead {
+        viewport_hidden > 0
+            && !lead_unread_visible(
+                snapshot,
+                ui,
+                &lead.id,
+                &scroll_map,
+                offset_hidden,
+                viewport_hidden,
+            )
+    } else {
+        false
+    };
 
     let mut banner_line = None;
-    if show_banner && let Some(lead) = lead_unread_row(&snapshot.worktree_groups) {
+    if show_banner && let Some(lead) = lead {
         let count = snapshot
             .worktree_groups
             .iter()
@@ -139,9 +150,6 @@ pub(crate) fn compose_lines(
     // base to add — but a degenerate-height frame can truncate the cockpit, so
     // a hit on a clipped line is dropped rather than left aimed at the body.
     make_up_hits.retain(|hit| hit.line < top_shown);
-    if banner_line.is_some_and(|line| line >= top_shown) {
-        banner_line = None;
-    }
     let offset = if show_banner {
         resolve_scroll_offset(snapshot, ui, &scroll_map, scroll_len, viewport)
     } else {
@@ -382,11 +390,12 @@ fn resolve_scroll_offset(
 /// True when the lead-unread row (oldest actionable unread — it ranks to the
 /// very top) has a line inside the window `[offset, offset + viewport)`. The
 /// banner is the "get back to it" affordance, so it shows only when this is
-/// false. A zero-height viewport, no lead, or a lead the make-up filter hides
-/// all read as not visible.
+/// false. A zero-height viewport or a lead the make-up filter hides reads as
+/// not visible.
 fn lead_unread_visible(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
+    lead_id: &str,
     scroll_map: &[Option<usize>],
     offset: usize,
     viewport: usize,
@@ -394,10 +403,7 @@ fn lead_unread_visible(
     if viewport == 0 {
         return false;
     }
-    let Some(lead) = lead_unread_row(&snapshot.worktree_groups) else {
-        return false;
-    };
-    let Some(ordinal) = visible_row_ordinal(snapshot, ui, &lead.id) else {
+    let Some(ordinal) = visible_row_ordinal(snapshot, ui, lead_id) else {
         return false;
     };
     let end = (offset + viewport).min(scroll_map.len());
