@@ -169,6 +169,7 @@ fn transcript_ask_entry(
     let agent_id = item
         .agent_session_id()
         .map(rimz::ids::AgentSessionId::from)?;
+    let question = agent.ask_question_summary(event_name, &item.payload)?;
     let mut observation =
         AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::TurnStarted);
     observation.worktree_path = item.worktree_path.clone();
@@ -184,14 +185,9 @@ fn transcript_ask_entry(
         .last_assistant_message(event_name, &item.payload, &observation)
         .map(|message| message.trim().to_owned())
         .filter(|message| !message.is_empty());
-    let questions = agent
-        .ask_question_summary(event_name, &item.payload)
-        .unwrap_or_else(|| {
-            rimz::feed::ask_summary(&item.title, item.body.as_deref(), &item.options)
-        });
     let text = match last {
-        Some(last) => format!("{last}\n\n{questions}"),
-        None => questions,
+        Some(last) => format!("{last}\n\n{question}"),
+        None => question,
     };
     let channel = rimz::target::compose_channel(
         None,

@@ -531,6 +531,7 @@ const AGENT_TONES: [anstyle::Style; 3] = [
     render::palette::ACCENT,
     render::palette::GOOD,
 ];
+const BODY_INDENT: &str = "    ";
 
 #[derive(Default)]
 struct AgentTones {
@@ -593,13 +594,19 @@ fn render_chat_to(
     let grouped = channel.is_some();
     let mut tones = AgentTones::default();
     let mut last_date = Some(today);
+    let mut first_entry = true;
+    let mut follows_day_delimiter = false;
     for entry in entries {
         if let Some(at) = entry.at {
             let date = at.to_zoned(tz.clone()).date();
             if Some(date) != last_date {
                 write_day_delimiter(out, date, today)?;
                 last_date = Some(date);
+                follows_day_delimiter = true;
             }
+        }
+        if !first_entry && !follows_day_delimiter {
+            writeln!(out)?;
         }
         let from = if entry.from == "user" {
             render::paint(render::palette::COOL, "user")
@@ -615,6 +622,8 @@ fn render_chat_to(
             .map(|to| format!("{}, ", display_handle(to, grouped)))
             .unwrap_or_default();
         write_chat_line(out, entry.at, &from, &format!("{to}{}", entry.text), tz)?;
+        first_entry = false;
+        follows_day_delimiter = false;
     }
     Ok(())
 }
@@ -646,14 +655,13 @@ fn write_chat_line(
         |at| at.to_zoned(tz.clone()).strftime("%H:%M:%S").to_string(),
     );
     let time = render::paint(render::palette::FAINT, &time);
-    let mut lines = text.lines();
-    match lines.next() {
-        Some(first) => writeln!(out, "{time} {from}: {first}")?,
-        None => writeln!(out, "{time} {from}:")?,
-    }
-    let padding = render::paint(render::palette::FAINT, "        ");
-    for line in lines {
-        writeln!(out, "{padding}   {line}")?;
+    writeln!(out, "{time}  {from}")?;
+    for line in text.lines() {
+        if line.is_empty() {
+            writeln!(out)?;
+        } else {
+            writeln!(out, "{BODY_INDENT}{line}")?;
+        }
     }
     Ok(())
 }
@@ -698,6 +706,23 @@ mod tests {
         String::from_utf8(out).expect("utf8")
     }
 
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' {
+                for ch in chars.by_ref() {
+                    if ch == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
     #[test]
     fn chat_renders_configured_zone_and_day_boundaries() {
         let today = jiff::civil::date(2026, 6, 28);
@@ -730,6 +755,24 @@ mod tests {
 
         assert!(!out.contains("────"));
         assert!(out.contains("00:30:00"));
+    }
+
+    #[test]
+    fn chat_renders_speaker_headers_and_body_indent() {
+        let out = render(
+            &[
+                entry("2026-06-28T04:00:00Z", "hello\n\nagain"),
+                ask_entry("2026-06-28T04:00:01Z", "answer"),
+            ],
+            jiff::civil::date(2026, 6, 28),
+        );
+        let out = strip_ansi(&out);
+
+        assert!(
+            out.contains("00:00:00  user\n    hello\n\n    again\n\n00:00:01  claude\n    answer"),
+            "{out}"
+        );
+        assert!(!out.contains("user:"), "{out}");
     }
 
     #[test]

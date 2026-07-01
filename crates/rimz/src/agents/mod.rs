@@ -528,8 +528,8 @@ pub trait AgentAdapter: Send + Sync {
     }
 
     /// Human-readable question/options text for a blocking ask hook, parsed from
-    /// the agent-native payload. `None` means the caller falls back to the generic
-    /// feed title.
+    /// the agent-native payload. `None` means the hook carries no native question
+    /// text.
     fn ask_question_summary(&self, _event_name: &str, _payload: &Value) -> Option<String> {
         None
     }
