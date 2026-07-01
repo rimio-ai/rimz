@@ -29,6 +29,16 @@ pub(crate) fn err() -> anstream::AutoStream<std::io::StderrLock<'static>> {
     anstream::AutoStream::auto(std::io::stderr().lock())
 }
 
+/// Finish a stdout emission, treating a consumer that stopped reading as a
+/// clean end rather than a fault. Any other write error propagates.
+pub(crate) fn finish(write: std::io::Result<()>) -> anyhow::Result<()> {
+    match write {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
+        Err(err) => Err(err.into()),
+    }
+}
+
 /// Wrap `text` in `style`'s ANSI for inline use inside a larger line — the
 /// `anstream` stream strips it when color is off. Cells in [`Table`]/[`KeyVals`]
 /// carry their own style; reach for this only when one styled span sits within
@@ -329,6 +339,17 @@ mod tests {
         let mut stream = anstream::StripStream::new(Vec::new());
         render_one(&mut stream).expect("render to in-memory buffer");
         String::from_utf8(stream.into_inner()).expect("utf-8")
+    }
+
+    #[test]
+    fn finish_passes_success_through() {
+        assert!(finish(Ok(())).is_ok());
+    }
+
+    #[test]
+    fn finish_propagates_a_non_broken_pipe_error() {
+        let err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(finish(Err(err)).is_err());
     }
 
     #[test]

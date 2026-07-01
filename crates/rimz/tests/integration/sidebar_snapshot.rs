@@ -118,6 +118,47 @@ fn claude_remote_control_value(
 }
 
 #[test]
+fn snapshot_exits_cleanly_when_the_consumer_closes_the_pipe() {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    let env = Env::new();
+    inject_lifecycle(&env, "claude", "claude-session-epipe");
+
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+
+    let mut child = env
+        .rimz()
+        .args([
+            "sidebar",
+            "snapshot",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--json",
+        ])
+        .stdout(Stdio::from(writer))
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn sidebar snapshot");
+
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr piped")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    let status = child.wait().expect("wait");
+
+    assert!(status.success(), "expected clean exit; stderr: {stderr}");
+    assert!(
+        !stderr.contains("panicked"),
+        "broken pipe must not panic; stderr: {stderr}"
+    );
+}
+
+#[test]
 fn sidebar_lights_claude_rc_badge_from_claude_startup_setting() {
     let env = Env::new();
     let settings = write_claude_settings(&env, r#"{ "remoteControlAtStartup": true }"#);

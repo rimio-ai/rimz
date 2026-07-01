@@ -7,7 +7,7 @@
 //! elder renderer produces in process on its fetch worker, so this arm serves
 //! inspection and scripting.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -480,10 +480,8 @@ fn emit_rollup_snapshot(
 fn emit_snapshot(snapshot: &rimz::SidebarSnapshot, json: bool) -> Result<()> {
     if json {
         let rendered = serde_json::to_string_pretty(snapshot)?;
-        #[expect(clippy::print_stdout, reason = "json emitter for sidebar")]
-        {
-            println!("{rendered}");
-        }
+        let mut stdout = io::stdout().lock();
+        render::finish(writeln!(stdout, "{rendered}"))
     } else {
         let waiting = status_tally(snapshot, rimz::agents::AgentStatus::Waiting);
         let failed = status_tally(snapshot, rimz::agents::AgentStatus::Failed);
@@ -511,9 +509,8 @@ fn emit_snapshot(snapshot: &rimz::SidebarSnapshot, json: bool) -> Result<()> {
             render::cell(waiting.to_string()).fg(waiting_style),
         );
         kv.push("Failed", render::cell(failed.to_string()).fg(failed_style));
-        kv.render(&mut render::out())?;
+        render::finish(kv.render(&mut render::out()))
     }
-    Ok(())
 }
 
 fn status_tally(snapshot: &rimz::SidebarSnapshot, status: rimz::agents::AgentStatus) -> usize {
