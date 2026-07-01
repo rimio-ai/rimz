@@ -580,23 +580,29 @@ fn render_cockpit_unread_count() {
     );
 }
 
-/// While an agent awaits you, the cockpit closes with a pinned `↑ N need you`
-/// jump banner — the count of agents needing an answer, toned by the lead.
+/// The `↑ N need you` jump banner appears when the lead leaves the viewport and
+/// stays hidden while scroll-to-top already shows it.
 #[test]
-fn render_unread_jump_banner() {
-    let mut snapshot = make_up_snapshot();
-    snapshot
-        .worktree_groups
-        .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
-        .find(|row| row.status() == Some(AgentStatus::Failed))
-        .expect("failed row")
-        .unread = true;
+fn unread_jump_banner_shows_only_when_the_lead_is_scrolled_off() {
+    let snapshot = overflowing_fleet_with_unread_lead();
 
     let screen = snapshot_to_screen(&snapshot, 38, 20);
     assert!(
-        screen.lines().any(|line| line.contains("↑ 1 need you")),
-        "the unread jump banner pins under the cockpit:\n{screen}"
+        !screen.contains("need you"),
+        "banner stays hidden when the top-ranked lead is visible:\n{screen}"
+    );
+
+    let ui = UiState {
+        scroll_offset: 99,
+        manual_scroll: Some(ManualScroll {
+            selection_at_start: None,
+        }),
+        ..UiState::default()
+    };
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    assert!(
+        screen.contains("↑ 1 need you"),
+        "banner appears when wheel-pinned past the lead:\n{screen}"
     );
 }
 

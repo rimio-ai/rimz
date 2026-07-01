@@ -259,6 +259,15 @@ pub(super) fn handle_mouse_click(
             InputOutcome::default()
         };
     }
+    // The unread jump banner owns its whole line: a click scrolls the cards back
+    // to the top, where the lead ranks, and pins the view there against
+    // auto-follow. No focus: the inbox key owns the jump. `unread_focus` is
+    // already cleared above.
+    if ui.banner_line == Some(usize::from(row)) {
+        pin_manual_scroll(ui);
+        ui.scroll_offset = 0;
+        return InputOutcome::redraw();
+    }
     if let Some(index) = row_index_at_screen_position(ui, row)
         && let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, index)
     {

@@ -263,6 +263,29 @@ fn wheel_scroll_pins_the_viewport_and_steps_the_offset() {
         "the pin outlives the round trip"
     );
 }
+
+#[test]
+fn banner_click_scrolls_to_top_and_pins_without_focusing() {
+    let ws = workspace();
+    let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
+    let mut ui = UiState {
+        scroll_offset: 42,
+        banner_line: Some(2),
+        selected_pane: Some(target),
+        ..Default::default()
+    };
+
+    let outcome = handle_mouse_click(0, 2, &mut ui, &snapshot);
+
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.scroll_offset, 0);
+    assert!(
+        ui.manual_scroll.is_some(),
+        "banner click pins the scroll-to-top position"
+    );
+    assert_eq!(outcome.focus, None);
+}
 #[test]
 fn selection_change_snaps_a_wheel_pin_back() {
     // The pin holds across folds that keep the selection, and ends the moment

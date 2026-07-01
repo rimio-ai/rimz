@@ -211,6 +211,7 @@ fn draw_into(
     ui.line_map = composed.line_map;
     ui.tab_hits = composed.tab_hits;
     ui.make_up_hits = composed.make_up_hits;
+    ui.banner_line = composed.banner_line;
     ui.pet_pixel_rect = composed.pet_pixel_rect.map(|mut rect| {
         rect.x = rect.x.saturating_add(area.x);
         rect.y = rect.y.saturating_add(area.y);

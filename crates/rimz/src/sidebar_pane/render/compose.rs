@@ -21,14 +21,15 @@ use super::{
 };
 
 /// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
-/// summary, make-up line, and fixed separator), a scroll viewport over the
-/// agent cards, and the bottom chrome pinned to the bottom edge like a status
-/// bar — the provider dashboard, ledger, centered navigation footer, and
-/// beneath them the sticky health alert. Space for the pinned zones is always
-/// reserved — including the fixed separators under the cockpit and above the
-/// provider dashboard — so the scroll zone is windowed before either pinned
-/// edge is ever clipped. While an alert is *active* the body is a stale/empty
-/// fetch, so the footer steps aside and the alert speaks alone.
+/// summary, make-up line, the conditional unread banner, and fixed separator),
+/// a scroll viewport over the agent cards, and the bottom chrome pinned to the
+/// bottom edge like a status bar — the provider dashboard, ledger, centered
+/// navigation footer, and beneath them the sticky health alert. Space for the
+/// pinned zones is always reserved — including the fixed separators under the
+/// cockpit and above the provider dashboard — so the scroll zone is windowed
+/// before either pinned edge is ever clipped. While an alert is *active* the
+/// body is a stale/empty fetch, so the footer steps aside and the alert speaks
+/// alone.
 ///
 /// The viewport window is `UiState::scroll_offset`, resolved here each frame:
 /// clamped to the zone, then minimally auto-scrolled so the selected card — its
@@ -43,13 +44,13 @@ use super::{
 /// Returns the composed frame with its hit-test maps and the effective scroll
 /// offset ([`ComposedFrame`]). Row-map entry `i` is the visible row index that
 /// on-screen content line `i` belongs to (`app::visible_rows()` order), or
-/// `None` for structural lines (cockpit header, gaps, the external divider,
-/// `+K more`, help, footer, alert); a worktree header routes to the row it
-/// jumps into. The dashboard tab and make-up bucket hits ride beside it in
-/// absolute screen coordinates. The maps are the single authority on hit
-/// geometry — built from the same final line vector that is rendered, so they
-/// stay 1:1 with what the user sees through every clip and every scroll
-/// position.
+/// `None` for structural lines (cockpit header, unread banner, gaps, the
+/// external divider, `+K more`, help, footer, alert); a worktree header routes
+/// to the row it jumps into. The dashboard tab, make-up bucket hits, and unread
+/// banner screen row ride beside it in absolute screen coordinates. The maps
+/// are the single authority on hit geometry — built from the same final line
+/// vector that is rendered, so they stay 1:1 with what the user sees through
+/// every clip and every scroll position.
 pub(crate) fn compose_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
@@ -91,6 +92,44 @@ pub(crate) fn compose_lines(
     // and the scroll viewport takes what remains — zero on a degenerate frame,
     // so the cards give way before either pinned zone is ever clipped.
     let after_bottom = height.saturating_sub(bottom_height);
+    let scroll_len = scroll.len();
+
+    // Pass 1 — size the top zone and resolve the offset as if the banner is
+    // hidden. Its row is added only when shown, so the viewport is a byproduct of
+    // the decision rather than a fixed reservation.
+    let top_base_len = lines.len();
+    let top_shown_hidden = top_base_len.min(after_bottom);
+    let viewport_hidden = after_bottom - top_shown_hidden;
+    let offset_hidden =
+        resolve_scroll_offset(snapshot, ui, &scroll_map, scroll_len, viewport_hidden);
+
+    // The `↑ N need you` jump banner appears only while the lead-unread card is
+    // scrolled out of the window — on screen (e.g. at the top) it's redundant.
+    let show_banner = viewport_hidden > 0
+        && lead_unread_row(&snapshot.worktree_groups).is_some()
+        && !lead_unread_visible(snapshot, ui, &scroll_map, offset_hidden, viewport_hidden);
+
+    let mut banner_line = None;
+    if show_banner && let Some(lead) = lead_unread_row(&snapshot.worktree_groups) {
+        let count = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .filter(|row| row.unread && row.status().is_some_and(AgentStatus::is_actionable))
+            .count();
+        let status = lead.status().unwrap_or(AgentStatus::Waiting);
+        // Above the pinned separator blank (last top-zone line) so cards keep
+        // their breathing row. Structural in the row map — the click scrolls to
+        // the top via `banner_line`, not a row jump.
+        let at = top_base_len - 1;
+        lines.insert(at, pad_chrome(unread_banner_line(&theme, status, count)));
+        map.insert(at, None);
+        banner_line = Some(at);
+    }
+
+    // Pass 2 — final top height (with the banner if any), then re-resolve for the
+    // possibly-smaller viewport. `show_banner` implies `viewport_hidden > 0`, i.e.
+    // `after_bottom >= top_base_len + 1`, so the banner never truncates here.
     let top_shown = lines.len().min(after_bottom);
     let viewport = after_bottom - top_shown;
     lines.truncate(top_shown);
@@ -100,34 +139,14 @@ pub(crate) fn compose_lines(
     // base to add — but a degenerate-height frame can truncate the cockpit, so
     // a hit on a clipped line is dropped rather than left aimed at the body.
     make_up_hits.retain(|hit| hit.line < top_shown);
-
-    // Resolve the viewport offset: clamp to the zone, then — unless a manual
-    // wheel pin holds the window — minimally auto-scroll the selected card
-    // fully into view.
-    let scroll_len = scroll.len();
-    let max_offset = scroll_len.saturating_sub(viewport);
-    let mut offset = ui.scroll_offset.min(max_offset);
-    if ui.manual_scroll.is_none() {
-        offset = if let Some(target) = unread_focus_ordinal(snapshot, ui) {
-            // A freshly-arrived unread outranks everything: it ranks to the top,
-            // so targeting it scrolls to the top.
-            auto_scroll_to_selection(&scroll_map, target, offset, viewport)
-        } else if ui.focus_group_reveal
-            && let Some(group_first) =
-                selected_group_first_ordinal(snapshot, ui.make_up_filter, ui.selected_index)
-        {
-            auto_scroll_reveal_group(
-                &scroll_map,
-                group_first,
-                ui.selected_index,
-                offset,
-                viewport,
-            )
-        } else {
-            auto_scroll_to_selection(&scroll_map, ui.selected_index, offset, viewport)
-        }
-        .min(max_offset);
+    if banner_line.is_some_and(|line| line >= top_shown) {
+        banner_line = None;
     }
+    let offset = if show_banner {
+        resolve_scroll_offset(snapshot, ui, &scroll_map, scroll_len, viewport)
+    } else {
+        offset_hidden
+    };
 
     // Window the scroll zone, riding the scrollbar glyph on each visible line's
     // right rail column when the cards overflow the viewport — gated by the
@@ -188,6 +207,7 @@ pub(crate) fn compose_lines(
         tab_hits,
         make_up_hits,
         pet_pixel_rect,
+        banner_line,
         scroll_offset: offset,
         bottom_height,
     }
@@ -318,17 +338,70 @@ pub(super) fn build_bottom_chrome(
 }
 
 /// One draw's composed output: the final line vector plus the byproducts the
-/// caller writes back onto [`UiState`] — the row hit-test map, the dashboard
-/// tab and make-up bucket hit maps (absolute screen coordinates), and the
-/// resolved viewport offset.
+/// caller writes back onto [`UiState`] — the row hit-test map, the dashboard tab
+/// and make-up bucket hit maps (absolute screen coordinates), the unread banner
+/// line, and the resolved viewport offset.
 pub(crate) struct ComposedFrame {
     pub(crate) lines: Vec<Line<'static>>,
     pub(crate) line_map: Vec<Option<usize>>,
     pub(crate) tab_hits: Vec<ProviderTabHit>,
     pub(crate) make_up_hits: Vec<MakeUpHit>,
     pub(crate) pet_pixel_rect: Option<Rect>,
+    pub(crate) banner_line: Option<usize>,
     pub(crate) scroll_offset: usize,
     pub(crate) bottom_height: usize,
+}
+
+fn resolve_scroll_offset(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+    scroll_map: &[Option<usize>],
+    scroll_len: usize,
+    viewport: usize,
+) -> usize {
+    let max_offset = scroll_len.saturating_sub(viewport);
+    let offset = ui.scroll_offset.min(max_offset);
+    if ui.manual_scroll.is_some() {
+        return offset;
+    }
+    let resolved = if let Some(target) = unread_focus_ordinal(snapshot, ui) {
+        // A freshly-arrived unread outranks everything: it ranks to the top,
+        // so targeting it scrolls to the top.
+        auto_scroll_to_selection(scroll_map, target, offset, viewport)
+    } else if ui.focus_group_reveal
+        && let Some(group_first) =
+            selected_group_first_ordinal(snapshot, ui.make_up_filter, ui.selected_index)
+    {
+        auto_scroll_reveal_group(scroll_map, group_first, ui.selected_index, offset, viewport)
+    } else {
+        auto_scroll_to_selection(scroll_map, ui.selected_index, offset, viewport)
+    };
+    resolved.min(max_offset)
+}
+
+/// True when the lead-unread row (oldest actionable unread — it ranks to the
+/// very top) has a line inside the window `[offset, offset + viewport)`. The
+/// banner is the "get back to it" affordance, so it shows only when this is
+/// false. A zero-height viewport, no lead, or a lead the make-up filter hides
+/// all read as not visible.
+fn lead_unread_visible(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+    scroll_map: &[Option<usize>],
+    offset: usize,
+    viewport: usize,
+) -> bool {
+    if viewport == 0 {
+        return false;
+    }
+    let Some(lead) = lead_unread_row(&snapshot.worktree_groups) else {
+        return false;
+    };
+    let Some(ordinal) = visible_row_ordinal(snapshot, ui, &lead.id) else {
+        return false;
+    };
+    let end = (offset + viewport).min(scroll_map.len());
+    scroll_map[offset..end].contains(&Some(ordinal))
 }
 
 /// Minimally nudge the viewport so the selected row's full line range — its
@@ -444,11 +517,10 @@ fn unread_focus_ordinal(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<usiz
     visible_row_ordinal(snapshot, ui, ui.unread_focus.as_deref()?)
 }
 
-/// The pinned `↑ N need you` jump banner, toned by the lead's status (`failed`
-/// the alarm red, else the caution warn). The persistent, always-visible
-/// companion to the viewport snap: rendered while an actionable unread waits and
-/// routed — through the line map, like a worktree header — to the lead (oldest)
-/// row, so the agent needing you is one click away even after you scroll off it.
+/// The `↑ N need you` jump banner, toned by the lead's status (`failed` the
+/// alarm red, else the caution warn). Rendered only while the lead is scrolled
+/// out of view; its click scrolls the card list back to the top, where the lead
+/// ranks.
 fn unread_banner_line(theme: &Theme, lead_status: AgentStatus, count: usize) -> Line<'static> {
     let style = if lead_status == AgentStatus::Failed {
         theme.alarm(Modifier::empty())
@@ -514,9 +586,7 @@ pub(super) fn scroll_thumb(offset: usize, scroll_len: usize, viewport: usize) ->
 /// Identity, summary, and the make-up line are never jump targets, so they map to
 /// `None`; the make-up line's status buckets are *filter* targets, returned as
 /// [`MakeUpHit`]s already translated to this zone's line indices and the
-/// chrome-gutter column space. The one row-map exception is the `↑ N need you`
-/// unread banner, whose entry is the lead row's ordinal so a click routes there
-/// like a worktree header. Fixed height for a given room population, never
+/// chrome-gutter column space. Fixed height for a given room population, never
 /// windowed, so the scroll zone below starts at a stable row.
 pub(super) fn top_lines(
     snapshot: &SidebarSnapshot,
@@ -596,23 +666,6 @@ pub(super) fn top_lines(
         hit.col_end += 1;
     }
     extend_inert(&mut lines, &mut map, fleet_lines);
-    // The unread jump banner: a pinned, always-visible `↑ N need you` line while
-    // an actionable unread waits — the persistent companion to the viewport snap.
-    // Its line-map entry is the lead row's ordinal, so a click routes there like a
-    // worktree header; the agent needing you stays one click away even after the
-    // user scrolls or navigates off it.
-    if let Some(lead) = lead_unread_row(&snapshot.worktree_groups) {
-        let count = snapshot
-            .worktree_groups
-            .iter()
-            .flat_map(|group| &group.rows)
-            .filter(|row| row.unread && row.status().is_some_and(AgentStatus::is_actionable))
-            .count();
-        let status = lead.status().unwrap_or(AgentStatus::Waiting);
-        let ordinal = visible_row_ordinal(snapshot, ui, &lead.id);
-        lines.push(pad_chrome(unread_banner_line(theme, status, count)));
-        map.push(ordinal);
-    }
     if !snapshot.worktree_groups.is_empty() {
         lines.push(Line::from(""));
         map.push(None);

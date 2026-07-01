@@ -730,6 +730,38 @@ fn overflowing_fleet() -> SidebarSnapshot {
     snapshot_with(Vec::new(), agents)
 }
 
+/// One top-ranked unread lead plus enough calm rows in a single worktree to
+/// overflow the small sidebar frames. The lead ranks to visible row 0, so a
+/// scroll-to-top reveals it.
+fn overflowing_fleet_with_unread_lead() -> SidebarSnapshot {
+    let now = fixed_now();
+    let mut lead = agent(
+        "lead",
+        "claude",
+        AgentStatus::Waiting,
+        Some("/repo/main"),
+        Some("main"),
+        Some("answer me"),
+    );
+    lead.last_activity = now - Duration::from_secs(10 * 60);
+    let mut agents = vec![lead];
+    for i in 0..8 {
+        let mut codex = agent(
+            &format!("codex-{i}"),
+            "codex",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            Some(&format!("task-{i}")),
+        );
+        codex.last_activity = now - Duration::from_secs(8);
+        agents.push(codex);
+    }
+    let mut snapshot = snapshot_with(Vec::new(), agents);
+    snapshot.worktree_groups[0].rows[0].unread = true;
+    snapshot
+}
+
 /// A fade in the mid-scroll state — its last draw resolved `offset` with the
 /// move stamped at `phase` — built through the real observe path, since the
 /// fade's fields are the scrollbar module's own.
@@ -816,69 +848,44 @@ fn lead_unread_is_none_without_an_actionable_unread_row() {
 }
 
 #[test]
-fn unread_jump_banner_renders_and_routes_to_the_lead_row() {
-    // An unread waiting agent makes the pinned banner appear; its line-map entry
-    // routes a click to the lead (oldest actionable) row, like a worktree header.
-    let mut waiting = agent(
-        "a",
-        "claude",
-        AgentStatus::Waiting,
-        Some("/repo/main"),
-        Some("main"),
-        Some("a"),
-    );
-    waiting.last_activity = fixed_now() - Duration::from_secs(10 * 60);
-    let calm = agent(
-        "b",
-        "claude",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
-        Some("b"),
-    );
-    let mut snapshot = snapshot_with(Vec::new(), vec![waiting, calm]);
-    // 'a' is the actionable unread lead.
-    for row in snapshot.worktree_groups[0].rows.iter_mut() {
-        if row.id == "a" {
-            row.unread = true;
-        }
-    }
-
-    let composed = compose_lines(&snapshot, None, &UiState::default(), 54, 40);
+fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
+    let snapshot = overflowing_fleet_with_unread_lead();
+    let ui = UiState {
+        scroll_offset: 99,
+        manual_scroll: Some(ManualScroll {
+            selection_at_start: None,
+        }),
+        ..UiState::default()
+    };
+    let composed = compose_lines(&snapshot, None, &ui, 54, 20);
     let banner = composed
-        .lines
-        .iter()
-        .position(|line| line_texts(std::slice::from_ref(line))[0].contains("need you"))
-        .expect("the unread banner renders while an actionable unread waits");
-    let lead_ordinal = snapshot.worktree_groups[0]
-        .rows
-        .iter()
-        .position(|row| row.id == "a")
-        .expect("the lead row is in the room");
+        .banner_line
+        .expect("the unread banner renders once the lead scrolls out of view");
+    assert!(
+        line_texts(std::slice::from_ref(&composed.lines[banner]))[0].contains("need you"),
+        "banner line carries the unread jump text",
+    );
     assert_eq!(
-        composed.line_map[banner],
-        Some(lead_ordinal),
-        "the banner routes a click to the lead row, like a worktree header",
+        composed.line_map[banner], None,
+        "banner is structural; its click is handled through banner_line",
     );
 
-    // No actionable unread → no banner line.
-    let calm_only = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "b",
-            "claude",
-            AgentStatus::Running,
-            Some("/repo/main"),
-            Some("main"),
-            Some("b"),
-        )],
+    let composed = compose_lines(&snapshot, None, &UiState::default(), 54, 20);
+    assert_eq!(
+        composed.banner_line, None,
+        "lead visible at the top makes the banner redundant",
     );
-    let composed = compose_lines(&calm_only, None, &UiState::default(), 54, 40);
     assert!(
         !composed
             .lines
             .iter()
             .any(|line| line_texts(std::slice::from_ref(line))[0].contains("need you")),
+        "no banner text while the lead is already visible",
+    );
+
+    let composed = compose_lines(&overflowing_fleet(), None, &UiState::default(), 54, 20);
+    assert_eq!(
+        composed.banner_line, None,
         "no banner without an actionable unread",
     );
 }

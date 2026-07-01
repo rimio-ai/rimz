@@ -140,6 +140,11 @@ pub struct UiState {
     /// bucket's footprint, written as a byproduct of every draw like
     /// `line_map` and `tab_hits`. Empty when no make-up line is on screen.
     pub(crate) make_up_hits: Vec<MakeUpHit>,
+    /// Screen row of the `↑ N need you` jump banner in the most recently drawn
+    /// frame, or `None` when the lead-unread card is in view and the banner is
+    /// hidden. The mouse hit-test reads it to scroll the cards to the top;
+    /// written as a draw byproduct like `line_map`.
+    pub(crate) banner_line: Option<usize>,
     /// Renderer-local status for a successful fetch that the regression gate is
     /// holding behind the last good frame. It is display-only evidence for the
     /// bottom chrome; the durable record is `gate_hold`/`gate_release`.
