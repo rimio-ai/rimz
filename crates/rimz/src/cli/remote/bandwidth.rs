@@ -16,7 +16,8 @@ use crate::cli::render;
 const DEFAULT_LABEL_WIDTH: usize = 56;
 const UNAVAILABLE_NOTICE: &str =
     "rimz remote bandwidth needs /proc on the host serving the room (Linux host).";
-const NO_PANE_PIDS_NOTICE: &str = concat!(
+const NO_PANE_PIDS_NOTICE: &str = "rimz remote bandwidth could not resolve any pane root process.";
+const ZELLIJ_NO_PANE_PIDS_NOTICE: &str = concat!(
     "rimz remote bandwidth could not resolve any pane root process. ",
     "On Zellij, a pane resolves only while it runs a live, uniquely named foreground process; ",
     "idle look-alike shells are skipped."
@@ -101,7 +102,7 @@ pub(super) fn run(secs: u64, json: bool, globals: &GlobalFlags) -> Result<()> {
 
     let profiles = pane_profiles(panes, &children);
     if profiles.is_empty() {
-        return emit_unavailable(secs as f64, json, NO_PANE_PIDS_NOTICE);
+        return emit_unavailable(secs as f64, json, no_pane_pids_notice(mux));
     }
     let (t0, t0_reads) = sample_panes(&profiles);
     std::thread::sleep(Duration::from_secs(secs));
@@ -358,6 +359,13 @@ fn emit_unavailable(secs: f64, json: bool, notice: &'static str) -> Result<()> {
     writeln!(out, "{notice}").context("writing bandwidth notice")
 }
 
+fn no_pane_pids_notice(mux: MuxName) -> &'static str {
+    match mux {
+        MuxName::Zellij => ZELLIJ_NO_PANE_PIDS_NOTICE,
+        MuxName::Tmux => NO_PANE_PIDS_NOTICE,
+    }
+}
+
 fn print_json(
     available: bool,
     sample_secs: f64,
@@ -429,6 +437,16 @@ mod tests {
     #[test]
     fn subtree_pids_includes_missing_root() {
         assert_eq!(subtree_pids(&HashMap::new(), 42), vec![42]);
+    }
+
+    #[test]
+    fn no_pane_pids_notice_matches_backend_resolution_path() {
+        assert_eq!(
+            no_pane_pids_notice(MuxName::Zellij),
+            ZELLIJ_NO_PANE_PIDS_NOTICE
+        );
+        assert_eq!(no_pane_pids_notice(MuxName::Tmux), NO_PANE_PIDS_NOTICE);
+        assert!(!no_pane_pids_notice(MuxName::Tmux).contains("Zellij"));
     }
 
     #[test]
