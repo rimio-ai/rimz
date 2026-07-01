@@ -5,12 +5,11 @@
 //!
 //! Self-skips when `python3` is not on PATH or the sandbox forbids AF_UNIX.
 
-use std::time::{Duration, Instant};
-
 use serde_json::{Value, json};
 
 use crate::common::{
-    Env, pi_tool_call_payload, skip_preconditions, spawn_example_resolver, wait_for_heartbeat,
+    Env, pi_tool_call_payload, skip_preconditions, spawn_example_resolver,
+    wait_for_example_resolver,
 };
 
 #[test]
@@ -22,7 +21,7 @@ fn python_resolver_allow_path_renders_pi_decision() {
     env.enrol("demo", 10, "30s");
 
     let mut resolver = spawn_example_resolver(&env, "hook_bridge_resolver.py", "demo", 8.0, None);
-    wait_for_heartbeat(&env, "demo", Instant::now() + Duration::from_secs(3));
+    wait_for_example_resolver(&env, "demo");
 
     // `read` is on the resolver's allowlist (pi's lowercase tool vocabulary).
     let output = env.run_hook("pi", &pi_tool_call_payload("read"));

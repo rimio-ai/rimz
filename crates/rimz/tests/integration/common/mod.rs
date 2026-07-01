@@ -24,7 +24,7 @@ pub use harness::Harness;
 pub use payloads::{
     claude_pre_tool_use_payload, codex_permission_payload, codex_pre_tool_use_payload,
     lifecycle_event, permission_payload, pi_tool_call_payload, skip_preconditions,
-    spawn_example_resolver, wait_for_heartbeat,
+    spawn_example_resolver, wait_for_example_resolver,
 };
 #[cfg(unix)]
 pub use shim::cargo_bin;

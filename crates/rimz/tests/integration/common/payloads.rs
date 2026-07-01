@@ -233,3 +233,9 @@ pub fn wait_for_heartbeat(env: &Env, resolver_id: &str, until: Instant) {
     }
     panic!("python resolver never wrote a fresh heartbeat at {path:?}");
 }
+
+/// Wait for a spawned example resolver to write its first heartbeat before a
+/// test fires the hook or polls the feed path it owns.
+pub fn wait_for_example_resolver(env: &Env, resolver_id: &str) {
+    wait_for_heartbeat(env, resolver_id, Instant::now() + Duration::from_secs(10));
+}

@@ -5,12 +5,10 @@
 //!
 //! Self-skips when `python3` is not on PATH or the sandbox forbids AF_UNIX.
 
-use std::time::{Duration, Instant};
-
 use serde_json::Value;
 
 use crate::common::{
-    Env, permission_payload, skip_preconditions, spawn_example_resolver, wait_for_heartbeat,
+    Env, permission_payload, skip_preconditions, spawn_example_resolver, wait_for_example_resolver,
 };
 
 #[test]
@@ -26,7 +24,7 @@ fn python_resolver_allow_path_renders_claude_decision() {
     // Give the resolver a beat to lay down its first heartbeat. The hook
     // bridge engages on the first fresh sample, so without this beat the
     // hook may take the no-resolver native_ui path.
-    wait_for_heartbeat(&env, "demo", Instant::now() + Duration::from_secs(3));
+    wait_for_example_resolver(&env, "demo");
 
     let output = env.run_hook("claude", &permission_payload("Read"));
     let _ = resolver.kill();

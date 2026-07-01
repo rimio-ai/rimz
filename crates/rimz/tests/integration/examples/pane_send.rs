@@ -17,7 +17,7 @@ use rimz::pane::RuntimeOwnerKind;
 
 use crate::common::{
     Env, ScrubSessionEnvExt, permission_payload, skip_preconditions, spawn_example_resolver,
-    wait_for_heartbeat,
+    wait_for_example_resolver,
 };
 
 /// Isolated `TMUX_TMPDIR` so the live-pane happy path never collides with the
@@ -42,7 +42,7 @@ fn pane_send_resolver_abstains_when_item_has_no_pane() {
 
     let mut resolver =
         spawn_example_resolver(&env, "pane_send_resolver.py", "pane-demo", 8.0, None);
-    wait_for_heartbeat(&env, "pane-demo", Instant::now() + Duration::from_secs(3));
+    wait_for_example_resolver(&env, "pane-demo");
 
     let output = env.run_hook("claude", &permission_payload("Bash"));
     let _ = resolver.kill();
@@ -247,7 +247,7 @@ fn pane_send_resolver_completes_full_round_trip() {
         10.0,
         Some(&pane_raw),
     );
-    wait_for_heartbeat(&env, resolver_id, Instant::now() + Duration::from_secs(3));
+    wait_for_example_resolver(&env, resolver_id);
 
     let resolved = poll_until_resolved(&env, &request_id, Instant::now() + Duration::from_secs(10));
 
