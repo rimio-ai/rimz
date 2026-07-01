@@ -31,7 +31,7 @@ Self-paced loops use ordinary one-shots. The agent schedules its next wake with 
 
 ## Delivering to a living instance
 
-Bind-mode pins a schedule to one exact agent session. `rimz loop add <name> --bind @<handle> --prompt "<text>" ...` resolves the address against the live rollup immediately, records `bind = { kind, session, handle }`, and rejects `spec` and supervised-run flags because delivery does not launch a new pane.
+Bind-mode pins a schedule to one exact agent session. `rimz loop add <name> --bind @<handle> --prompt "<text>" ...` resolves the address against the live rollup immediately, records a `bind` sub-table with `kind`, `session`, and `handle`, and rejects `spec` and supervised-run flags because delivery does not launch a new pane.
 
 On fire, `loop run` resolves the recorded `root`, checks that the root agent session still exists, and sends the prompt through the same message path as `rimz message`. An idle agent receives the text immediately; a running agent parks the message for the next `done` turn boundary; a missing session is skipped and the schedule is removed because that exact conversation cannot return.
 

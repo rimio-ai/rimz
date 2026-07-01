@@ -18,7 +18,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use jiff::Timestamp;
-use toml_edit::{DocumentMut, InlineTable, Item, Table, Value, value};
+use toml_edit::{DocumentMut, Item, Table, value};
 
 use rimz::agents::{find_adapter, hook_trust_fix};
 use rimz::agents_spec::{self, Cell, LayoutSpec};
@@ -773,7 +773,7 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
         table["spec"] = value(spec);
     }
     if let Some(target) = &entry.bind {
-        table["bind"] = Item::Value(Value::InlineTable(task_target_inline(target)));
+        table["bind"] = Item::Table(task_target_table(target));
     }
     if let Some(prompt) = &entry.prompt {
         table["prompt"] = value(prompt);
@@ -822,12 +822,11 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
     Ok(())
 }
 
-fn task_target_inline(target: &TaskTarget) -> InlineTable {
-    let mut table = InlineTable::new();
-    table.insert("kind", Value::from(target.kind.as_str()));
-    table.insert("session", Value::from(target.session.as_str()));
-    table.insert("handle", Value::from(target.handle.as_str()));
-    table.fmt();
+fn task_target_table(target: &TaskTarget) -> Table {
+    let mut table = Table::new();
+    table["kind"] = value(target.kind.as_str());
+    table["session"] = value(target.session.as_str());
+    table["handle"] = value(target.handle.as_str());
     table
 }
 

@@ -218,6 +218,41 @@ layout = "planner,coder"
 }
 
 #[test]
+fn set_document_value_renders_inline_tables_as_table_blocks() {
+    let mut doc = DocumentMut::new();
+    let path = parse_key("agents.loop.tasks").expect("key");
+    let value = parse_edit_value(
+        r#"{ pr_watch = { spec = "codex", prompt = "check CI", root = "/r", every = "15m" }, self_wake = { bind = { kind = "claude", session = "s1", handle = "@planner" }, prompt = "resume", root = "/r", at = "09:30" } }"#,
+    );
+
+    set_document_value(&mut doc, &path, value).expect("set tasks");
+
+    let rendered = doc.to_string();
+    assert!(
+        rendered.contains("[agents.loop.tasks.pr_watch]"),
+        "scalar-only task should render as a table block:\n{rendered}"
+    );
+    let task = rendered
+        .find("[agents.loop.tasks.self_wake]")
+        .unwrap_or_else(|| panic!("task should render as a table block:\n{rendered}"));
+    let bind = rendered
+        .find("[agents.loop.tasks.self_wake.bind]")
+        .unwrap_or_else(|| panic!("bind should render as a nested table block:\n{rendered}"));
+    assert!(
+        task < bind,
+        "task table should render before bind table:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("= { "),
+        "inline tables should not survive:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("tasks = {"),
+        "tasks should not collapse to one inline table:\n{rendered}"
+    );
+}
+
+#[test]
 fn set_document_value_keeps_scalar_arrays_inline() {
     let mut doc = DocumentMut::new();
     let path = parse_key("agents.profiles.codex.args").expect("key");

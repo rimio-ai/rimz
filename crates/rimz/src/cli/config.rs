@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use rimz::config::{GlyphRole, MachineConfig, validate_glyph_cells};
 use rimz::ledger::atomic::write_bytes_atomically;
-use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
+use toml_edit::{ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
 use super::GlobalFlags;
 
@@ -984,21 +984,39 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
     Ok(())
 }
 
-/// Render arrays of inline tables as TOML array-of-tables blocks so multi-field
-/// rows like team roles stay readable. Other values keep their inline form.
+/// Re-emit structured values as TOML table blocks so multi-field config stays
+/// readable: an inline table expands to `[header]` tables and an array of
+/// inline tables to array-of-tables blocks, recursing through nested inline
+/// tables. Scalars and scalar arrays keep their inline form.
 fn value_to_item(value: Value) -> Item {
     match value {
+        Value::InlineTable(inline) => Item::Table(expand_inline_table(inline)),
         Value::Array(array) if !array.is_empty() && array.iter().all(Value::is_inline_table) => {
             let mut tables = ArrayOfTables::new();
             for element in array {
                 if let Value::InlineTable(inline) = element {
-                    tables.push(inline.into_table());
+                    tables.push(expand_inline_table(inline));
                 }
             }
             Item::ArrayOfTables(tables)
         }
         other => Item::Value(other),
     }
+}
+
+/// Convert an inline table to a standard table, recursively re-emitting any
+/// nested inline tables or inline-table arrays as their block forms.
+fn expand_inline_table(inline: InlineTable) -> Table {
+    let mut table = inline.into_table();
+    for (_, item) in table.iter_mut() {
+        // `InlineTable::into_table` leaves every child as a value; nested
+        // inline tables are values here and expand through `value_to_item`.
+        let value = std::mem::replace(item, Item::None)
+            .into_value()
+            .expect("inline-table child is a value");
+        *item = value_to_item(value);
+    }
+    table
 }
 
 #[expect(clippy::print_stdout, reason = "config command stdout")]

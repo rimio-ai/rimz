@@ -359,6 +359,57 @@ profile = "helper"
 }
 
 #[test]
+fn setup_yes_merges_loop_tasks_as_table_blocks() {
+    let env = Env::new();
+    write_machine_file(
+        &agents_config_path(&env),
+        r#"
+[agents.loop.tasks.self_wake]
+bind = { kind = "claude", session = "s1", handle = "@planner" }
+prompt = "resume"
+root = "/r"
+
+[agents.loop.tasks.pr_watch]
+spec = "codex"
+prompt = "check CI"
+root = "/r"
+every = "15m"
+"#,
+    );
+
+    env.rimz()
+        .args(["setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(contains("Merged"))
+        .stdout(contains("No hooks or trust grants were changed"));
+
+    let text = std::fs::read_to_string(agents_config_path(&env)).expect("read merged agents");
+    assert!(
+        text.contains("[agents.loop.tasks.self_wake]"),
+        "task should render as a table block:\n{text}"
+    );
+    assert!(
+        text.contains("[agents.loop.tasks.pr_watch]"),
+        "bind-less task should render as a table block:\n{text}"
+    );
+    assert!(
+        text.contains("[agents.loop.tasks.self_wake.bind]"),
+        "bind should render as a nested table block:\n{text}"
+    );
+    assert!(
+        !text.contains("tasks = {"),
+        "tasks should not collapse to one inline table:\n{text}"
+    );
+    assert!(
+        text.contains("spec = \"codex\"")
+            && text.contains("every = \"15m\"")
+            && text.contains("session = \"s1\""),
+        "task fields should survive:\n{text}"
+    );
+}
+
+#[test]
 fn setup_yes_merges_agents_team_referencing_later_profile() {
     let env = Env::new();
     write_machine_file(

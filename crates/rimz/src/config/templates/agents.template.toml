@@ -39,10 +39,13 @@
 ## mode = "auto"                       # auto, ask, or yolo
 ##
 ## [agents.loop.tasks.self_wake]
-## bind = { kind = "claude", session = "sess-abc123", handle = "@planner" }
 ## prompt = "resume the review and fix the next blocking comment"
 ## root = "/home/you/code/app"
 ## at = "09:30"
+## [agents.loop.tasks.self_wake.bind]
+## kind = "claude"
+## session = "sess-abc123"
+## handle = "@planner"
 
 [agents.attention]
 # stalled_after_secs = 1800            # silent running agent becomes actionable after this many seconds
