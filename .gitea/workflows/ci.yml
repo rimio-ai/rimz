@@ -25,7 +25,6 @@ env:
 
 jobs:
   checks:
-    name: cargo xtask checks
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
     # The rimz-ci image keeps the no-persistence job container model while
@@ -96,7 +95,6 @@ jobs:
         run: sccache --show-stats
 
   externals:
-    name: cargo xtask externals
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
     # Supply-chain gates run off the checks/test critical path, one step each.
@@ -223,7 +221,6 @@ jobs:
         run: sccache --show-stats
 
   tests:
-    name: tests
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 60
     container:
