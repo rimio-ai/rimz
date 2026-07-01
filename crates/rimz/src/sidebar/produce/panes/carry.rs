@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ids::PaneId;
 use crate::sidebar::frame::{CarriedPane, PaneFrame, PaneState, TabFrame};
 use crate::sidebar::produce::metrics::PaneRootBinding;
-use crate::sidebar::timing::PANE_CARRY_TTL;
+use crate::sidebar::timing;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct CarryOutcome {
@@ -300,7 +300,7 @@ fn expired_carry(
 }
 
 pub(super) fn expired_at(carried_since_ms: u64, now_ms: u64) -> bool {
-    now_ms.saturating_sub(carried_since_ms) > PANE_CARRY_TTL.as_millis() as u64
+    now_ms.saturating_sub(carried_since_ms) > timing::pane_carry_ttl().as_millis() as u64
 }
 
 fn insert_carried_pane(fresh: &mut PaneFrame, prior_tab: &TabFrame, prior_pane: &PaneState) {

@@ -64,6 +64,20 @@ pub const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 /// source cannot freeze the room indefinitely.
 pub const PANE_CARRY_TTL: Duration = Duration::from_secs(30);
 
+/// Runtime pane-carry TTL. Tests may set `RIMZ_TEST_PANE_CARRY_MS` to shorten
+/// the liveness carry window around a spawned sidebar process.
+pub(crate) fn pane_carry_ttl() -> Duration {
+    let Some(value) = std::env::var_os("RIMZ_TEST_PANE_CARRY_MS").filter(|value| !value.is_empty())
+    else {
+        return PANE_CARRY_TTL;
+    };
+    value
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(PANE_CARRY_TTL)
+}
+
 /// Tolerance when comparing a pane's recorded process start against the live
 /// `/proc` start. The check works at whole-second granularity, so this absorbs
 /// timestamp-source rounding without letting reused pids keep stale identity.

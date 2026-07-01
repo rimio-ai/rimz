@@ -25,10 +25,21 @@ const CAPTURE_BUDGET: Duration = Duration::from_secs(30);
 
 /// Shell line that runs the renderer over `env`'s ledger but with its own short
 /// `XDG_RUNTIME_DIR` (the wakeup socket must stay under the AF_UNIX limit).
-fn sidebar_serve_line(env: &Env, rimz: &Path, runtime: &Path, mux: &str, session: &str) -> String {
+fn sidebar_serve_line(
+    env: &Env,
+    rimz: &Path,
+    runtime: &Path,
+    mux: &str,
+    session: &str,
+    extra_env: &[(&str, &str)],
+) -> String {
+    let extra_env = extra_env
+        .iter()
+        .map(|(key, value)| format!("{key}={value} "))
+        .collect::<String>();
     format!(
         "XDG_STATE_HOME={state} XDG_CONFIG_HOME={config} XDG_RUNTIME_DIR={runtime} HOME={home} \
-         RIMZ_BIN={rimz} exec {rimz} sidebar serve --mux {mux} --workspace-id {ws} \
+         {extra_env}RIMZ_BIN={rimz} exec {rimz} sidebar serve --mux {mux} --workspace-id {ws} \
          --session-name {session} --tick-seconds 1",
         state = env.state_root().display(),
         config = env.config_root().display(),
@@ -110,7 +121,7 @@ fn tmux_room_shows_agent_after_hook() {
     // hook stamps it exactly as TMUX_PANE would inside that pane, binding the
     // agent row to its live pane.
     let codex_pane = tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
-    let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "tmux", "room");
+    let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "tmux", "room", &[]);
     tmux(&socket, &["split-window", "-h", "-t", "room", &serve]);
 
     // Wire codex the way the user does, then run it through its installed
@@ -219,7 +230,14 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
         ],
     );
     let codex_pane = tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
-    let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "tmux", "room");
+    let serve = sidebar_serve_line(
+        &env,
+        &rimz,
+        runtime.path(),
+        "tmux",
+        "room",
+        &[("RIMZ_TEST_PANE_CARRY_MS", "3000")],
+    );
     tmux(&socket, &["split-window", "-h", "-t", "room", &serve]);
 
     // Drive a real agent so the sidebar renders a complete frame; reaching that
@@ -266,16 +284,19 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     let flash_ceiling = split_width + 5;
 
     tmux(&socket, &["kill-pane", "-t", &codex_pane]);
-    let flash_guard_deadline = Instant::now() + rimz::sidebar::timing::RESIZE_PAINT_HOLD_CEILING;
+    let killed_at = Instant::now();
+    let flash_guard_deadline = killed_at + rimz::sidebar::timing::RESIZE_PAINT_HOLD_CEILING;
 
     // Sample fast until the sidebar pane is gone (it self-closed) or the budget
     // elapses. Every frame we see before the hold ceiling must stay within the
     // split width; after the ceiling, wide paint is the designed escape hatch.
     let deadline = Instant::now() + CAPTURE_BUDGET;
     let mut closed = false;
+    let mut closed_after = None;
     while Instant::now() < deadline {
         if !tmux_pane_alive(&socket, "room", &sidebar_pane) {
             closed = true;
+            closed_after = Some(killed_at.elapsed());
             break;
         }
         let frame = capture_until(&socket, &sidebar_pane, |_| true, Duration::from_millis(0));
@@ -293,6 +314,12 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     assert!(
         closed,
         "the sidebar never self-closed after its last sibling died"
+    );
+    let closed_after = closed_after.expect("closed path records elapsed time");
+    assert!(
+        closed_after < Duration::from_secs(10),
+        "the sidebar self-closed after {closed_after:?}; the test carry TTL override should keep \
+         this path well below the 30s production carry window"
     );
 }
 
@@ -327,7 +354,7 @@ fn zellij_room_shows_agent_after_hook() {
 
     // Birth a background session whose left pane is a real renderer over the
     // shared ledger (the self-close layout shape from `backend/zellij.rs`).
-    let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "zellij", name);
+    let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "zellij", name, &[]);
     let layout = format!(
         r#"layout {{
     tab name="room" {{
