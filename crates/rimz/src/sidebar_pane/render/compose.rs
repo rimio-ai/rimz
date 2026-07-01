@@ -1,6 +1,6 @@
 use crate::agents::AgentStatus;
 use crate::config::ScrollbarMode;
-use crate::{SidebarSnapshot, SidebarWorktreeGroup, lead_unread_row};
+use crate::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, lead_unread_row};
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -417,7 +417,7 @@ fn selected_group_first_ordinal(
             continue;
         }
         if selected < start + len {
-            return Some(start);
+            return (group.kind != SidebarWorktreeKind::External).then_some(start);
         }
         start += len;
     }

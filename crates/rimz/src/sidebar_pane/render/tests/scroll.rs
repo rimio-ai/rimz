@@ -220,6 +220,28 @@ fn focus_group_reveal_brings_selected_worktree_header_on_screen() {
 }
 
 #[test]
+fn focus_group_reveal_falls_back_to_card_follow_for_external_group() {
+    // The external divider maps to chrome (`None`), not a header target. A
+    // focus reveal there should behave exactly like ordinary card-follow rather
+    // than treating the group's first card as a header surrogate.
+    let snapshot = external_overflowing_fleet();
+    let mut following_ui = UiState {
+        selected_index: 1,
+        scroll_offset: 99,
+        ..Default::default()
+    };
+    let following = compose_lines(&snapshot, None, &following_ui, 38, 21).scroll_offset;
+
+    following_ui.focus_group_reveal = true;
+    let revealed = compose_lines(&snapshot, None, &following_ui, 38, 21).scroll_offset;
+
+    assert_eq!(
+        revealed, following,
+        "external groups have no worktree header to reveal, so card-follow wins"
+    );
+}
+
+#[test]
 fn render_scroll_pins_tall_expanded_card_top() {
     // A selected card whose expanded subagent list outgrows the viewport pins
     // its first line — the group header — to the top of the scroll zone.
@@ -352,4 +374,29 @@ fn line_containing<'a>(rendered: &'a str, needle: &str) -> &'a str {
 
 fn ends_with_rail(line: &str) -> bool {
     matches!(line.chars().last(), Some('▐' | '▕'))
+}
+
+fn external_overflowing_fleet() -> SidebarSnapshot {
+    let mut snapshot = overflowing_fleet();
+    let mut group = snapshot.worktree_groups.remove(0);
+    let beta = snapshot.worktree_groups.remove(0);
+    group.key = "external".to_owned();
+    group.label = "external".to_owned();
+    group.kind = crate::SidebarWorktreeKind::External;
+    group.status_counts = vec![crate::SidebarStatusCount {
+        status: AgentStatus::Running,
+        count: group.rows.len() + beta.rows.len(),
+    }];
+    group.rows.extend(beta.rows);
+    group.diff_added = None;
+    group.diff_removed = None;
+    group.commits_ahead = None;
+    group.commits_behind = None;
+    group.trunk = None;
+    group.clean = None;
+    group.landed = None;
+    group.trunk_sync = None;
+    group.pr_state = None;
+    snapshot.worktree_groups = vec![group];
+    snapshot
 }
