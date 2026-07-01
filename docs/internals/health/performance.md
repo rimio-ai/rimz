@@ -73,7 +73,7 @@ Where the milliseconds are, and what bounds each. Reproducible figures come from
 
 The deterministic CI gates own exact integer budgets. `ledger_fsync.rs` pins the warm write path's fsync count, `ledger_bytes.rs` pins a lifecycle frame below 1KiB, `produce_budget.rs` pins zero subprocess spawns for warm produce with fresh inputs, and the incremental fold guards pin O(new bytes). The benches own wall-clock and allocation figures, which stay out of `ci` so a busy runner never fails a build on timing.
 
-Current local baseline from `cargo xtask perf` on July 1, 2026:
+Current local baseline from `cargo xtask perf` on July 1, 2026, captured on an AMD Ryzen 9 9950X host with 32 logical CPUs present / 28 online, governor `performance`, and `perf_event_paranoid=4`. The prior June 28 baseline did not record its host, so wall-clock deltas across that boundary are host/environment-sensitive; allocation deltas remain the steadier regression signal.
 
 | Bench | Median | Alloc/op |
 | --- | ---: | ---: |
