@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
 #[derive(Debug, Default, Deserialize)]
@@ -23,8 +23,11 @@ struct AskOption {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct AskUserQuestionResponse {
+    #[serde(deserialize_with = "null_to_default")]
     annotations: Map<String, Value>,
+    #[serde(deserialize_with = "null_to_default")]
     answers: Map<String, Value>,
+    #[serde(deserialize_with = "null_to_default")]
     questions: Vec<AskQuestion>,
 }
 
@@ -179,6 +182,14 @@ fn non_empty(text: Option<&str>) -> Option<String> {
     (!text.is_empty()).then(|| text.to_owned())
 }
 
+fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,6 +325,20 @@ mod tests {
         );
 
         assert_eq!(answer.as_deref(), Some("safe (note: use prod window)"));
+    }
+
+    #[test]
+    fn ask_user_question_answer_tolerates_null_live_fields() {
+        let answer = answer_summary(
+            "AskUserQuestion",
+            &json!({
+                "annotations": null,
+                "answers": { "Choose deployment path?": "safe" },
+                "questions": null
+            }),
+        );
+
+        assert_eq!(answer.as_deref(), Some("safe"));
     }
 
     #[test]
