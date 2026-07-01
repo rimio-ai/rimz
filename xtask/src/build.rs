@@ -425,12 +425,14 @@ pub(crate) fn stage_install(root: &Path) -> Result<PathBuf> {
 fn stage_dev_install(root: &Path) -> Result<PathBuf> {
     // Cargo config beats the manifest profile for this one build, so the
     // staged binary embeds line tables whose build id matches the upload.
-    stage_host_rimz(
+    let stage = stage_host_rimz(
         root,
         false,
         &["sentry"],
         &["--config", r#"profile.dev.split-debuginfo="off""#],
-    )
+    )?;
+    upload_debug_files(&profile_artifact(root, "debug", "rimz"))?;
+    Ok(stage)
 }
 
 /// Build the host `rimz` binary for the given profile and feature set, then copy

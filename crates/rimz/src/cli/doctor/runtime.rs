@@ -660,6 +660,19 @@ fn diagnostic_summary(event: &rimz::schema::diag::DiagEvent) -> String {
             own_build,
         } => format!("prior frame from build {prior_build}; this producer is {own_build}"),
         DiagEvent::RendererPanic { message, .. } => message.clone(),
+        DiagEvent::RendererSignalDeath {
+            signal,
+            exit_code,
+            stderr_excerpt,
+        } => {
+            let reason = match (signal, exit_code) {
+                (Some(signal), _) => format!("signal {signal}"),
+                (None, Some(code)) => format!("exit {code}"),
+                (None, None) => "unknown termination".to_owned(),
+            };
+            let excerpt = stderr_excerpt.lines().last().unwrap_or(stderr_excerpt);
+            format!("render worker died by {reason}: {excerpt}")
+        }
         DiagEvent::FrameAnomaly {
             anomaly,
             suppressed_since_last,

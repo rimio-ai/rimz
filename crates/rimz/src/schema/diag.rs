@@ -194,6 +194,13 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         backtrace: Option<String>,
     },
+    RendererSignalDeath {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signal: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        stderr_excerpt: String,
+    },
     FrameAnomaly {
         role: ObserveRole,
         anomaly: AnomalyKind,
@@ -231,6 +238,7 @@ impl DiagEvent {
             | Self::ForeignSessionPane { .. } => DiagSeverity::Warn,
             Self::FrameAnomaly { .. } => DiagSeverity::Warn,
             Self::RendererPanic { .. } => DiagSeverity::Error,
+            Self::RendererSignalDeath { .. } => DiagSeverity::Error,
             Self::FrameShrinkVerified { .. }
             | Self::PaneCarryRefuted { .. }
             | Self::GateRelease { .. }
@@ -273,6 +281,7 @@ impl DiagEvent {
             Self::NewbornQuarantined { .. } => "newborn_quarantined",
             Self::MixedBuildWriters { .. } => "mixed_build_writers",
             Self::RendererPanic { .. } => "renderer_panic",
+            Self::RendererSignalDeath { .. } => "renderer_signal_death",
             Self::FrameAnomaly { .. } => "frame_anomaly",
         }
     }
@@ -367,6 +376,11 @@ impl DiagEvent {
             | Self::ProducerDemoted { .. }
             | Self::FrameShrinkVerified { .. }
             | Self::RendererPanic { .. } => self.kind_name().to_owned(),
+            Self::RendererSignalDeath {
+                signal, exit_code, ..
+            } => {
+                format!("{}:{signal:?}:{exit_code:?}", self.kind_name())
+            }
         }
     }
 }
@@ -757,6 +771,11 @@ mod tests {
             DiagEvent::RendererPanic {
                 message: "boom".to_owned(),
                 backtrace: None,
+            },
+            DiagEvent::RendererSignalDeath {
+                signal: Some(6),
+                exit_code: None,
+                stderr_excerpt: "memory allocation failed".to_owned(),
             },
             DiagEvent::FrameAnomaly {
                 role: ObserveRole::Elder,

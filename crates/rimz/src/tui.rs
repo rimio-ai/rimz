@@ -154,7 +154,7 @@ fn enable_mouse(mouse: MouseCapture) -> io::Result<()> {
     }
 }
 
-fn restore_terminal(mouse: MouseCapture) {
+pub(crate) fn restore_terminal(mouse: MouseCapture) {
     match mouse {
         MouseCapture::Off => {}
         MouseCapture::Stdout => {

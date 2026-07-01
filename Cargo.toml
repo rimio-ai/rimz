@@ -185,6 +185,12 @@ split-debuginfo = "unpacked"
 inherits = "release"
 debug = "line-tables-only"
 
+# Keep release arithmetic fail-fast: a sidebar width/count underflow should
+# panic at the faulting expression and enter the normal recovery/diagnostic
+# path rather than wrap into a huge allocation and abort silently.
+[profile.release]
+overflow-checks = true
+
 # The integration suite spawns the `rimz` binary hundreds of times; an
 # unoptimized dependency tree (serde, clap, jiff, ratatui) dominates per-spawn
 # startup. Optimize dependencies even in dev/test builds — they

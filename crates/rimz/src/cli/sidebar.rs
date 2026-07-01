@@ -15,7 +15,7 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use super::{GlobalFlags, current_channel, open_ledger};
 use crate::cli::render;
-use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, SidebarInstanceId, WorkspaceId};
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::ledger::paths::env_path;
 use rimz::ledger::workspace_record;
 use rimz::schema::sidebar_event::SidebarEvent;
@@ -540,19 +540,23 @@ fn serve(
         None => rimz::mux::auto_detect_backend(globals.mux)?,
     };
     let machine_config = rimz::config::MachineConfig::load().unwrap_or_default();
-    rimz::sidebar_pane::app::serve(rimz::sidebar_pane::app::ServeConfig {
+    let config = rimz::sidebar_pane::app::ServeConfig {
         workspace_id,
         mux,
         session_name,
-        instance_id: SidebarInstanceId::new(),
+        instance_id: rimz::sidebar_pane::supervise::instance_id(),
         tick_seconds,
         refresh_ms_override: refresh_ms,
         timezone: machine_config.time_zone(),
         notification_prefs: machine_config.notifications,
         pet_glyphs: machine_config.theme.pets.glyphs,
         own_pane: rimz::mux::own_pane_id(mux),
-    })
-    .context("serving sidebar")
+    };
+    if rimz::sidebar_pane::supervise::is_worker() {
+        rimz::sidebar_pane::supervise::run_worker(config).context("serving sidebar")
+    } else {
+        rimz::sidebar_pane::supervise::run(config).context("supervising sidebar")
+    }
 }
 
 fn resolve_serve_identity(

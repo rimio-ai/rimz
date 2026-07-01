@@ -165,8 +165,14 @@ fn before_send() -> Arc<dyn Fn(Event<'static>) -> Option<Event<'static>> + Send 
         event
             .tags
             .insert("fault".to_owned(), fault_for(&logger).to_owned());
-        let operation = event.tags.get("operation").map(String::as_str);
-        let parts = fingerprint_components(&logger, operation, event.message.as_deref());
+        let operation = operation_tag(&event);
+        if let Some(operation) = operation.as_ref() {
+            event
+                .tags
+                .entry("operation".to_owned())
+                .or_insert_with(|| operation.clone());
+        }
+        let parts = fingerprint_components(&logger, operation.as_deref(), event.message.as_deref());
         let key = hash_parts(&parts);
         event.fingerprint = parts.into_iter().map(Cow::Owned).collect::<Vec<_>>().into();
         let now_ms = u64::try_from(base.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -178,6 +184,16 @@ fn before_send() -> Arc<dyn Fn(Event<'static>) -> Option<Event<'static>> + Send 
             return None;
         }
         Some(event)
+    })
+}
+
+fn operation_tag(event: &Event<'_>) -> Option<String> {
+    event.tags.get("operation").cloned().or_else(|| {
+        event
+            .extra
+            .get("operation")?
+            .as_str()
+            .map(ToOwned::to_owned)
     })
 }
 
@@ -725,5 +741,55 @@ mod tests {
                 .any(|part| part.as_ref() == "rimz::agent::lifecycle")),
             "the callsite is pinned to a stable fingerprint",
         );
+    }
+
+    #[test]
+    fn sidebar_crash_report_carries_signal_stderr_and_stable_fingerprint() {
+        let mut event = sentry::protocol::Event {
+            level: sentry::Level::Error,
+            logger: Some("rimz::sidebar::crash".into()),
+            message: Some("sidebar render worker terminated abnormally".into()),
+            ..Default::default()
+        };
+        event
+            .extra
+            .insert("operation".to_owned(), "sidebar.render_crash".into());
+        event
+            .extra
+            .insert("signal".to_owned(), serde_json::Value::from(6));
+        event
+            .extra
+            .insert("stderr".to_owned(), "rimz test sidebar worker abort".into());
+
+        let event = before_send()(event).expect("event kept");
+
+        assert_eq!(event.level, sentry::Level::Error);
+        assert_eq!(event.tags.get("fault").map(String::as_str), Some("rimz"));
+        assert_eq!(
+            event.tags.get("operation").map(String::as_str),
+            Some("sidebar.render_crash")
+        );
+        assert_eq!(
+            event.extra.get("stderr").and_then(|value| value.as_str()),
+            Some("rimz test sidebar worker abort")
+        );
+        assert_eq!(
+            event.extra.get("signal").and_then(|value| value.as_u64()),
+            Some(6)
+        );
+        for expected in [
+            "rimz::sidebar::crash",
+            "op:sidebar.render_crash",
+            "msg:sidebar render worker terminated abnormally",
+        ] {
+            assert!(
+                event
+                    .fingerprint
+                    .iter()
+                    .any(|part| part.as_ref() == expected),
+                "fingerprint missing {expected}: {:?}",
+                event.fingerprint
+            );
+        }
     }
 }

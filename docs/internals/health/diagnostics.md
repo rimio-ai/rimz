@@ -22,6 +22,7 @@ Records are anomaly-only. Routine fetch ticks, successful paints, and stable cac
 | --- | --- | --- |
 | `frame_rejected`, `frame_shrink_verified`, `pane_count_drop`, `pane_carry_forward`, `pane_carry_refuted`, `carry_forward_expired`, `duplicate_pane_id`, `focus_contested`, `foreign_session_pane` | `sidebar::produce::panes` / `sidebar::frame` | Ok-but-empty frames, missing-own-pane reads, large pane drops, liveness-guarded carried panes, forced re-pulls that refute an initial omission, carry expiry, duplicate ids, multi-valued focus candidates, foreign-session leaks |
 | `gate_hold`, `gate_release`, `fetch_failure`, `health_alert`, `link_alert`, `producer_elected`, `producer_demoted`, `renderer_panic` | `sidebar_pane::app` | Renderer-side holds, degraded refresh episodes, remote-link degraded/recovered episodes, producer handoff, panics that would otherwise disappear with the pane |
+| `renderer_signal_death` | `sidebar_pane::supervise` | Abnormal signal or non-panic exit from the render worker, with the captured stderr tail |
 | `row_conflict`, `newborn_quarantined`, `group_migration` | `ledger::snapshot::view` via `sidebar::enrich` and renderer state diffing | duplicate agent identity suppression, newborn known-command unknown-cwd quarantine, rows moving between groups |
 | `frame_anomaly` | `sidebar::observe` writer thread | rendered-stream detector verdicts — flaps, oscillations, resets, per-frame consistency violations, elder cross-checks — each carrying its detector key, evidence, frame stamp, and the writer's elder/consumer role ([observe.md](./observe.md)) |
 | `mixed_build_writers` | `sidebar::produce::panes` | a prior published frame stamped by a different build than the producing process — the upgrade-overlap window where stale writers regress fresh state |
@@ -52,6 +53,7 @@ jq -r '[(.at_ms|tostring), .severity, .event.kind, (.instance_id // "-")] | join
 jq -r '.event.kind' "$DIAG" | sort | uniq -c | sort -rn                                         # kind census
 jq 'select(.at_ms > 1781070540000 and .at_ms < 1781070550000)' "$DIAG"                          # window slice
 jq 'select(.event.kind == "frame_anomaly") | .event.anomaly' "$DIAG"                            # observer evidence
+jq 'select(.event.kind == "renderer_signal_death") | .event.stderr_excerpt' "$DIAG"             # crash tail
 jq 'select(.event.kind == "gate_hold")' "$DIAG"
 ```
 

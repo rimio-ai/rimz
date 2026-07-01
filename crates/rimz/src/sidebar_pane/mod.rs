@@ -11,3 +11,4 @@ pub mod app;
 mod osc;
 pub mod pets;
 pub mod render;
+pub mod supervise;
