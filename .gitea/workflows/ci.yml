@@ -36,6 +36,7 @@ jobs:
     # Gitea package pulls with a dedicated read:package PAT.
     container:
       image: ${{ vars.RIMZ_CI_IMAGE }}
+      options: --init
       credentials:
         username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
         password: ${{ secrets.REGISTRY_PULL_TOKEN }}
@@ -107,6 +108,7 @@ jobs:
     # All three gates block the job.
     container:
       image: ${{ vars.RIMZ_CI_IMAGE }}
+      options: --init
       credentials:
         username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
         password: ${{ secrets.REGISTRY_PULL_TOKEN }}
@@ -226,6 +228,7 @@ jobs:
     timeout-minutes: 30
     container:
       image: ${{ vars.RIMZ_CI_IMAGE }}
+      options: --init
       credentials:
         username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
         password: ${{ secrets.REGISTRY_PULL_TOKEN }}
@@ -285,22 +288,19 @@ jobs:
         if: always()
         run: sccache --show-stats
 
-  tests:
-    name: cargo nextest run (${{ matrix.profile }})
+  tests-gate:
+    name: cargo nextest run (gate)
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
     needs: build-tests
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: [gate, live-tmux, live-zellij, journey]
     container:
       image: ${{ vars.RIMZ_CI_IMAGE }}
+      options: --init
       credentials:
         username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
         password: ${{ secrets.REGISTRY_PULL_TOKEN }}
     concurrency:
-      group: ci-commit-${{ github.sha }}-tests-${{ matrix.profile }}
+      group: ci-commit-${{ github.sha }}-tests-gate
       cancel-in-progress: ${{ github.event_name == 'push' }}
     steps:
       - name: Assert running in the rimz-ci image
@@ -323,32 +323,79 @@ jobs:
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           unset NO_COLOR
-          cargo nextest run --profile ${{ matrix.profile }} --archive-file nextest-archive.tar.zst
+          cargo nextest run --profile gate --archive-file nextest-archive.tar.zst
+
+  tests-live:
+    name: cargo nextest run (live)
+    runs-on: [linux_amd64, debian-13]
+    timeout-minutes: 45
+    needs: build-tests
+    container:
+      image: ${{ vars.RIMZ_CI_IMAGE }}
+      options: --init
+      credentials:
+        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
+        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+    concurrency:
+      group: ci-commit-${{ github.sha }}-tests-live
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Assert running in the rimz-ci image
+        run: |
+          test -f /etc/rimz-ci || {
+            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            exit 1
+          }
+
+      - uses: actions/checkout@v6
+
+      - name: Download nextest archive
+        # Gitea's GHES-compatible artifact API does not support artifact v4.
+        uses: actions/download-artifact@v3
+        with:
+          name: nextest-archive
+          path: .
+
+      - name: cargo nextest run (live-tmux)
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          unset NO_COLOR
+          cargo nextest run --profile live-tmux --archive-file nextest-archive.tar.zst
+
+      - name: cargo nextest run (live-zellij)
+        if: ${{ !cancelled() }}
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          unset NO_COLOR
+          cargo nextest run --profile live-zellij --archive-file nextest-archive.tar.zst
+
+      - name: cargo nextest run (journey)
+        if: ${{ !cancelled() }}
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          unset NO_COLOR
+          cargo nextest run --profile journey --archive-file nextest-archive.tar.zst
 
   tests-complete:
     name: cargo nextest run (all tiers)
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 10
-    needs: tests
+    needs: [tests-gate, tests-live]
     # Aggregate gate: the single check to require in branch protection. `always()`
     # runs it even when a tier is skipped or cancelled, then the guard fails unless
-    # every matrix leg succeeded. A leg the scheduler drops under runner pressure
-    # lands as `skipped`, which reduces `needs.tests.result` below `success`, so a
-    # tier that never ran can no longer pass as a green PR the way it did before.
+    # every tier succeeded. A tier the scheduler drops under runner pressure lands
+    # as `skipped`, which reduces its result below `success`, so a tier that never
+    # ran can no longer pass as a green PR the way it did before.
     if: ${{ always() }}
-    container:
-      image: ${{ vars.RIMZ_CI_IMAGE }}
-      credentials:
-        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
-        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
     concurrency:
       group: ci-commit-${{ github.sha }}-tests-complete
       cancel-in-progress: ${{ github.event_name == 'push' }}
     steps:
       - name: Require every test tier to succeed
         run: |
-          result='${{ needs.tests.result }}'
-          if [ "$result" != "success" ]; then
-            echo "::error::test tiers did not all succeed (needs.tests.result=$result) — a tier failed, was cancelled, or was skipped/never scheduled; re-run so every tier executes"
+          gate='${{ needs['tests-gate'].result }}'
+          live='${{ needs['tests-live'].result }}'
+          if [ "$gate" != "success" ] || [ "$live" != "success" ]; then
+            echo "::error::test tiers did not all succeed (tests-gate=$gate, tests-live=$live) — a tier failed, was cancelled, or was skipped/never scheduled; re-run so every tier executes"
             exit 1
           fi
