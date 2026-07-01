@@ -9,6 +9,7 @@ use super::ControlLine;
 #[derive(Default)]
 pub(crate) struct PresenceRoster {
     panes: BTreeMap<String, PaneEntry>,
+    current_window: BTreeMap<String, String>,
     pending_unfocused: BTreeMap<String, String>,
 }
 
@@ -32,6 +33,9 @@ impl PresenceRoster {
             } => self.apply_subscription(pane, window, command, active, title, seeding),
             ControlLine::WindowClosed { window } => self.close_window(&window),
             ControlLine::LayoutChange { window, panes } => self.apply_layout(&window, panes),
+            ControlLine::SessionWindowChanged { session, window } => {
+                self.switch_window(session, window, seeding)
+            }
             ControlLine::Nudge => vec![SidebarEvent::PanesChanged],
             ControlLine::Ignore => Vec::new(),
         }
@@ -168,6 +172,39 @@ impl PresenceRoster {
             .collect()
     }
 
+    fn switch_window(
+        &mut self,
+        session: String,
+        window: String,
+        seeding: bool,
+    ) -> Vec<SidebarEvent> {
+        let previous = self.current_window.insert(session, window.clone());
+        if seeding || previous.as_deref() == Some(window.as_str()) {
+            return Vec::new();
+        }
+        let Some(focused) = self.active_pane_in_window(&window) else {
+            return vec![SidebarEvent::PanesChanged];
+        };
+        let unfocused = previous
+            .as_deref()
+            .and_then(|prev| self.active_pane_in_window(prev))
+            .filter(|prev_active| prev_active != &focused)
+            .map(|raw| pane_id(&raw))
+            .into_iter()
+            .collect();
+        vec![SidebarEvent::FocusChanged {
+            focused: vec![pane_id(&focused)],
+            unfocused,
+        }]
+    }
+
+    fn active_pane_in_window(&self, window: &str) -> Option<String> {
+        self.panes
+            .iter()
+            .find(|(_, entry)| entry.window == window && entry.active)
+            .map(|(pane, _)| pane.clone())
+    }
+
     fn prior_active_working_pane(&self, window: &str, new_active: &str) -> Option<String> {
         self.panes
             .iter()
@@ -227,6 +264,13 @@ mod tests {
         }
     }
 
+    fn swin(session: &str, window: &str) -> ControlLine {
+        ControlLine::SessionWindowChanged {
+            session: session.to_owned(),
+            window: window.to_owned(),
+        }
+    }
+
     #[test]
     fn seed_updates_roster_without_events() {
         let mut roster = PresenceRoster::default();
@@ -274,6 +318,75 @@ mod tests {
             }]
         );
         assert!(roster.apply(sub("%1", "@1", None, false), false).is_empty());
+    }
+
+    #[test]
+    fn seed_window_switch_records_current_window_without_events() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        roster.apply(sub("%2", "@2", Some("claude"), true), true);
+        assert!(roster.apply(swin("$1", "@1"), true).is_empty());
+        assert_eq!(
+            roster.current_window.get("$1").map(String::as_str),
+            Some("@1")
+        );
+        assert_eq!(
+            roster.apply(swin("$1", "@2"), false),
+            vec![SidebarEvent::FocusChanged {
+                focused: vec![pane_id("%2")],
+                unfocused: vec![pane_id("%1")],
+            }]
+        );
+    }
+
+    #[test]
+    fn window_switch_focuses_new_active_pane_and_unfocuses_previous() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        roster.apply(sub("%2", "@2", Some("claude"), true), true);
+        roster.apply(swin("$1", "@1"), true);
+        assert_eq!(
+            roster.apply(swin("$1", "@2"), false),
+            vec![SidebarEvent::FocusChanged {
+                focused: vec![pane_id("%2")],
+                unfocused: vec![pane_id("%1")],
+            }]
+        );
+    }
+
+    #[test]
+    fn window_switch_can_focus_sidebar_pane() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        roster.apply(sidebar_sub("%9", "@2", true), true);
+        roster.apply(swin("$1", "@1"), true);
+        assert_eq!(
+            roster.apply(swin("$1", "@2"), false),
+            vec![SidebarEvent::FocusChanged {
+                focused: vec![pane_id("%9")],
+                unfocused: vec![pane_id("%1")],
+            }]
+        );
+    }
+
+    #[test]
+    fn window_switch_with_unknown_active_pane_falls_back_to_panes_changed() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        roster.apply(sub("%2", "@2", Some("claude"), false), true);
+        roster.apply(swin("$1", "@1"), true);
+        assert_eq!(
+            roster.apply(swin("$1", "@2"), false),
+            vec![SidebarEvent::PanesChanged]
+        );
+    }
+
+    #[test]
+    fn window_switch_to_current_window_emits_nothing() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        roster.apply(swin("$1", "@1"), true);
+        assert!(roster.apply(swin("$1", "@1"), false).is_empty());
     }
 
     #[test]

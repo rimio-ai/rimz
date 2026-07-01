@@ -34,6 +34,10 @@ pub enum ControlLine {
         window: String,
         panes: Vec<String>,
     },
+    SessionWindowChanged {
+        session: String,
+        window: String,
+    },
     Nudge,
     Ignore,
 }
@@ -159,6 +163,9 @@ pub(super) fn classify_control_line(line: &str) -> ControlLine {
             })
             .unwrap_or(ControlLine::Nudge),
         "%layout-change" => parse_layout_change(line).unwrap_or(ControlLine::Nudge),
+        "%session-window-changed" => {
+            parse_session_window_changed(line).unwrap_or(ControlLine::Ignore)
+        }
         "%window-add" | "%unlinked-window-add" | "%sessions-changed" => ControlLine::Nudge,
         _ => ControlLine::Ignore,
     }
@@ -184,6 +191,17 @@ fn parse_subscription(line: &str) -> Option<ControlLine> {
 fn nonempty(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn parse_session_window_changed(line: &str) -> Option<ControlLine> {
+    let mut fields = line.split_whitespace();
+    (fields.next()? == "%session-window-changed").then_some(())?;
+    let session = fields.next().filter(|value| value.starts_with('$'))?;
+    let window = fields.next().filter(|value| value.starts_with('@'))?;
+    Some(ControlLine::SessionWindowChanged {
+        session: session.to_owned(),
+        window: window.to_owned(),
+    })
 }
 
 fn parse_layout_change(line: &str) -> Option<ControlLine> {
@@ -364,6 +382,21 @@ mod tests {
                 "aabb,200x60,0,0{100x60,0,0[100x30,0,0,3,100x29,0,31,4],99x60,101,0,5}"
             ),
             Some(vec!["%3".to_owned(), "%4".to_owned(), "%5".to_owned()])
+        );
+    }
+
+    #[test]
+    fn control_line_classifies_session_window_changed() {
+        assert_eq!(
+            classify_control_line("%session-window-changed $1 @2"),
+            ControlLine::SessionWindowChanged {
+                session: "$1".to_owned(),
+                window: "@2".to_owned(),
+            }
+        );
+        assert_eq!(
+            classify_control_line("%session-window-changed $1"),
+            ControlLine::Ignore
         );
     }
 

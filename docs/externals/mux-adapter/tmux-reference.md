@@ -254,7 +254,7 @@ The server copies its spawn environment into the **global environment**; each se
 | `%window-pane-changed` | `@id %id` | a window's active pane changed | |
 | `%session-changed` | `$id name` | this client switched session | |
 | `%session-renamed` | **wire: `$id name`** — the man documents the name only; parse id-then-name | | |
-| `%session-window-changed` | `$id @id` | a session's current window changed | |
+| `%session-window-changed` | `$id @id` | a session's current window changed; forwarded as a `FocusChanged` overlay for the switched-to window's active pane | ✓ |
 | `%client-session-changed` | `<client> $id name` | another client switched session | |
 | `%client-detached` | `<client>` | (3.2) | |
 | `%output` | `%output %id <value>` | pane output; bytes < 0x20 and `\` escape as octal `\nnn`, bytes ≥ 0x80 pass raw — the escaping is byte-wise, so a line may split a UTF-8 sequence | suppressed |
