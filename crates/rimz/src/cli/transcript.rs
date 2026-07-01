@@ -701,26 +701,9 @@ mod tests {
 
     fn render(entries: &[rimz::agents::ChatEntry], today: Date) -> String {
         let tz = TimeZone::get("America/New_York").expect("timezone");
-        let mut out = Vec::new();
+        let mut out = anstream::StripStream::new(Vec::new());
         render_chat_to(&mut out, None, entries, &tz, today).expect("render");
-        String::from_utf8(out).expect("utf8")
-    }
-
-    fn strip_ansi(s: &str) -> String {
-        let mut out = String::new();
-        let mut chars = s.chars();
-        while let Some(ch) = chars.next() {
-            if ch == '\x1b' {
-                for ch in chars.by_ref() {
-                    if ch == 'm' {
-                        break;
-                    }
-                }
-            } else {
-                out.push(ch);
-            }
-        }
-        out
+        String::from_utf8(out.into_inner()).expect("utf8")
     }
 
     #[test]
@@ -766,7 +749,6 @@ mod tests {
             ],
             jiff::civil::date(2026, 6, 28),
         );
-        let out = strip_ansi(&out);
 
         assert!(
             out.contains("00:00:00  user\n    hello\n\n    again\n\n00:00:01  claude\n    answer"),
