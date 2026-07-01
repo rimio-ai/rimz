@@ -40,9 +40,6 @@ pub(crate) fn should_wrap<S: AsRef<OsStr>>(program: &str, args: &[S]) -> bool {
     if !is_sccache_subcommand(subcommand.as_ref()) {
         return false;
     }
-    if crate::rtk::is_doctest(args) {
-        return false;
-    }
     decide(mode(), sccache_on_path)
 }
 
@@ -137,14 +134,5 @@ mod tests {
                 "{subcommand}"
             );
         }
-    }
-
-    #[test]
-    fn cargo_doctests_are_not_wrapped() {
-        assert!(crate::rtk::is_doctest(&["test", "--workspace", "--doc"]));
-        assert!(crate::rtk::is_doctest(&["test", "--doc", "--all-features"]));
-        assert!(!should_wrap("cargo", &["test", "--workspace", "--doc"]));
-        assert!(!crate::rtk::is_doctest(&["test", "--workspace"]));
-        assert!(!crate::rtk::is_doctest(&["nextest", "run", "--doc"]));
     }
 }

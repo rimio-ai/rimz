@@ -39,9 +39,6 @@ pub(crate) fn wrap_cargo<S: AsRef<OsStr>>(program: &str, args: &[S]) -> bool {
     if !is_rtk_subcommand(subcommand.as_ref()) {
         return false;
     }
-    if is_doctest(args) {
-        return false;
-    }
     decide(mode(), rtk_on_path)
 }
 
@@ -49,12 +46,6 @@ fn is_rtk_subcommand(subcommand: &OsStr) -> bool {
     RTK_SUBCOMMANDS
         .iter()
         .any(|name| OsStr::new(name) == subcommand)
-}
-
-pub(crate) fn is_doctest<S: AsRef<OsStr>>(args: &[S]) -> bool {
-    args.first()
-        .is_some_and(|arg| arg.as_ref() == OsStr::new("test"))
-        && args.iter().any(|arg| arg.as_ref() == OsStr::new("--doc"))
 }
 
 fn decide(mode: Mode, rtk_present: impl Fn() -> bool) -> bool {
@@ -134,13 +125,5 @@ mod tests {
         for subcommand in ["fmt", "llvm-cov", "deny", "machete", "zigbuild"] {
             assert!(!is_rtk_subcommand(OsStr::new(subcommand)), "{subcommand}");
         }
-    }
-
-    #[test]
-    fn cargo_doctests_are_not_wrapped() {
-        assert!(is_doctest(&["test", "--workspace", "--doc"]));
-        assert!(is_doctest(&["test", "--doc", "--all-features"]));
-        assert!(!is_doctest(&["test", "--workspace"]));
-        assert!(!is_doctest(&["nextest", "run", "--doc"]));
     }
 }

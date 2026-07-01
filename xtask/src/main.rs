@@ -104,11 +104,6 @@ const TASKS: &[TaskInfo] = &[
         runs: "cargo nextest archive --workspace --all-features --locked --archive-file <path>",
     },
     TaskInfo {
-        name: "doctest",
-        summary: "Run workspace doctests.",
-        runs: "cargo test --workspace --doc --all-features --locked",
-    },
-    TaskInfo {
         name: "deny",
         summary: "Run cargo-deny policy checks.",
         runs: "cargo deny check -D warnings",
@@ -171,12 +166,12 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "gate",
         summary: "Run the fast pre-PR gate stack.",
-        runs: "fmt --all (fix), invariants, docs-links, lint, doctest, test (nextest -P gate)",
+        runs: "fmt --all (fix), invariants, docs-links, lint, test (nextest -P gate)",
     },
     TaskInfo {
         name: "checks",
         summary: "Run the non-test CI gate stack.",
-        runs: "fmt, invariants, docs-links, deps, build-plugin, lint, doctest",
+        runs: "fmt, invariants, docs-links, deps, build-plugin, lint",
     },
     TaskInfo {
         name: "ci",
@@ -276,7 +271,6 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "lint" => gates::lint(root),
         "test" => gates::test(root, args),
         "test-archive" => gates::test_archive(root, args),
-        "doctest" => gates::doctest(root),
         "deny" => gates::deny(root),
         "deps" => gates::deps(root),
         "vet" => gates::vet(root),

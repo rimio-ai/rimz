@@ -103,13 +103,6 @@ impl WorkspaceId {
     }
 
     /// Parse a canonical workspace identifier.
-    ///
-    /// ```
-    /// use rimz::ids::WorkspaceId;
-    /// let id = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
-    /// assert_eq!(id.as_str(), "ws_0123456789abcdef01234567");
-    /// assert!(WorkspaceId::parse("not-a-workspace-id").is_err());
-    /// ```
     pub fn parse(value: &str) -> Result<Self, InvalidWorkspaceId> {
         let Some(hex) = value.strip_prefix("ws_") else {
             return Err(InvalidWorkspaceId(value.to_owned()));
@@ -622,17 +615,6 @@ impl PaneId {
     }
 
     /// Parse a normalized pane identifier of the form `<mux>:<raw_pane_id>`.
-    ///
-    /// ```
-    /// use rimz::ids::{MuxName, PaneId};
-    /// let zellij: PaneId = "zellij:terminal_3".parse().unwrap();
-    /// assert_eq!(zellij.mux(), MuxName::Zellij);
-    /// assert_eq!(zellij.raw(), "terminal_3");
-    ///
-    /// let tmux: PaneId = "tmux:%3".parse().unwrap();
-    /// assert_eq!(tmux.mux(), MuxName::Tmux);
-    /// assert_eq!(tmux.raw(), "%3");
-    /// ```
     pub fn parse(value: &str) -> Result<Self, InvalidPaneId> {
         let (head, tail) = value
             .split_once(':')
@@ -713,6 +695,7 @@ mod tests {
     fn workspace_id_parser_accepts_only_canonical_shape() {
         let id = WorkspaceId::parse("ws_0123456789abcdefABCDEF01").expect("valid");
         assert_eq!(id.as_str(), "ws_0123456789abcdefABCDEF01");
+        assert!(WorkspaceId::parse("not-a-workspace-id").is_err());
         assert!(WorkspaceId::parse("0123456789abcdefABCDEF01").is_err());
         assert!(WorkspaceId::parse("ws_short").is_err());
         assert!(WorkspaceId::parse("ws_0123456789abcdefABCDEFG").is_err());
@@ -836,6 +819,10 @@ mod tests {
         assert_eq!(id.as_str(), "zellij:terminal_3");
         assert_eq!(id.mux(), MuxName::Zellij);
         assert_eq!(id.raw(), "terminal_3");
+
+        let parsed_zellij: PaneId = "zellij:terminal_3".parse().expect("valid pane id");
+        assert_eq!(parsed_zellij.mux(), MuxName::Zellij);
+        assert_eq!(parsed_zellij.raw(), "terminal_3");
 
         let parsed: PaneId = "tmux:%5".parse().expect("valid pane id");
         assert_eq!(parsed.mux(), MuxName::Tmux);

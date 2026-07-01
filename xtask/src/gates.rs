@@ -10,10 +10,7 @@ use anyhow::{Context, Result, bail};
 use crate::build::build_plugin;
 use crate::docs_links::docs_links;
 use crate::invariants::invariants;
-use crate::runner::{
-    ensure_success, run, run_captured, run_captured_with_env_and_removed, run_with_env_and_removed,
-    run_with_env_removed,
-};
+use crate::runner::{ensure_success, run, run_captured, run_with_env_removed};
 
 const LINT_ARGS: &[&str] = &[
     "clippy",
@@ -25,16 +22,6 @@ const LINT_ARGS: &[&str] = &[
     "-D",
     "warnings",
 ];
-const DOCTEST_ARGS: &[&str] = &[
-    "--config",
-    "build.rustc-wrapper=\"\"",
-    "test",
-    "--workspace",
-    "--doc",
-    "--all-features",
-    "--locked",
-];
-const DOCTEST_REMOVED_ENVS: &[&str] = &["RUSTC_WRAPPER"];
 const GATE_TEST_ARGS: &[&str] = &[
     "nextest",
     "run",
@@ -64,25 +51,6 @@ pub(crate) fn fmt(root: &Path) -> Result<()> {
 
 pub(crate) fn lint(root: &Path) -> Result<()> {
     run(root, "cargo", LINT_ARGS.iter().copied())
-}
-
-pub(crate) fn doctest(root: &Path) -> Result<()> {
-    // rustdoc doctest compilation can ask for transitive deps in rlib form
-    // immediately after clippy refreshed wrapper-managed artifacts. rtk skips
-    // `cargo test --doc`; isolate doctest artifacts from clippy/check artifacts
-    // and clear RUSTC_WRAPPER when the caller set it.
-    let target_dir = doctest_target_dir(root);
-    run_with_env_and_removed(
-        root,
-        "cargo",
-        DOCTEST_ARGS.iter().copied(),
-        &[("CARGO_TARGET_DIR", target_dir)],
-        DOCTEST_REMOVED_ENVS,
-    )
-}
-
-fn doctest_target_dir(root: &Path) -> PathBuf {
-    root.join("target").join("doctest")
 }
 
 pub(crate) fn deny(root: &Path) -> Result<()> {
@@ -172,8 +140,7 @@ const COVERAGE_LCOV_PATH: &str = "target/ci/coverage/lcov.info";
 //      overlaps the compile gates on its own thread.
 //   3. The compile gates run sequentially on this thread: two concurrent cargo
 //      builds only serialize on the target-dir lock, so parallelizing them buys
-//      nothing. Doctests stay last so cheaper host and plugin compile failures
-//      land first.
+//      nothing.
 //
 // `deny`, `vet`, and `semver` stay out of `checks`: `deny` runs offline against
 // the baked advisory DB and a mirror-rebuilt index aliased to the canonical
@@ -195,7 +162,6 @@ pub(crate) fn gate(root: &Path) -> Result<()> {
         ("invariants", gate_invariants),
         ("docs-links", gate_docs_links),
         ("lint", gate_lint),
-        ("doctest", gate_doctest),
         ("test", gate_test),
     ] {
         match step(root)? {
@@ -226,17 +192,6 @@ fn gate_lint(root: &Path) -> Result<GateResult> {
     captured_cargo_gate(root, LINT_ARGS.iter().copied(), &[], None)
 }
 
-fn gate_doctest(root: &Path) -> Result<GateResult> {
-    let target_dir = doctest_target_dir(root);
-    captured_cargo_gate_with_env(
-        root,
-        DOCTEST_ARGS.iter().copied(),
-        &[("CARGO_TARGET_DIR", target_dir)],
-        DOCTEST_REMOVED_ENVS,
-        None,
-    )
-}
-
 fn gate_test(root: &Path) -> Result<GateResult> {
     captured_cargo_gate(
         root,
@@ -257,28 +212,6 @@ where
     S: AsRef<std::ffi::OsStr>,
 {
     let captured = run_captured(root, "cargo", args, removed_envs)?;
-    if captured.status.success() {
-        return Ok(GateResult::Pass {
-            note: note.and_then(|extract| extract(&captured.output)),
-        });
-    }
-    Ok(GateResult::Fail {
-        detail: failure_detail(&captured.output),
-    })
-}
-
-fn captured_cargo_gate_with_env<I, S>(
-    root: &Path,
-    args: I,
-    envs: &[(&str, PathBuf)],
-    removed_envs: &[&str],
-    note: Option<fn(&str) -> Option<String>>,
-) -> Result<GateResult>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    let captured = run_captured_with_env_and_removed(root, "cargo", args, envs, removed_envs)?;
     if captured.status.success() {
         return Ok(GateResult::Pass {
             note: note.and_then(|extract| extract(&captured.output)),
@@ -329,14 +262,10 @@ pub(crate) fn checks(root: &Path) -> Result<()> {
         .collect();
 
     // Compile gates serialize on the build lock, so run them sequentially. The
-    // wasm plugin compile is the cheapest compile gate; it fails fast before the
-    // host lint and doctest builds are paid for.
+    // wasm plugin compile is the cheapest compile gate; it fails fast before
+    // the host lint build is paid for.
     let mut first_err: Option<anyhow::Error> = None;
-    for (name, gate) in [
-        ("build-plugin", build_plugin as Gate),
-        ("lint", lint),
-        ("doctest", doctest),
-    ] {
+    for (name, gate) in [("build-plugin", build_plugin as Gate), ("lint", lint)] {
         let (name, elapsed, result) = timed(name, || gate(root));
         timings.push((name, elapsed));
         if let Err(err) = result {
