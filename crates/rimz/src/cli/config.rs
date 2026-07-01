@@ -74,6 +74,7 @@ pub(crate) fn write_default_config(force: bool) -> Result<bool> {
             MachineConfig::agents_path(),
             MachineConfig::template_agents(),
         ),
+        (MachineConfig::loop_path(), MachineConfig::template_loop()),
     ];
     if !force && files.iter().any(|(path, _)| path.exists()) {
         return Ok(false);
@@ -123,6 +124,7 @@ pub(crate) fn merge_default_config() -> Result<MergeReport> {
             MachineConfig::agents_path(),
             MachineConfig::template_agents(),
         ),
+        (MachineConfig::loop_path(), MachineConfig::template_loop()),
     ];
     let mut outcomes = Vec::new();
     for (path, template) in files {
@@ -196,6 +198,7 @@ fn init(args: InitArgs) -> Result<()> {
         MachineConfig::config_path(),
         MachineConfig::theme_path(),
         MachineConfig::agents_path(),
+        MachineConfig::loop_path(),
     ];
     if !args.force && files.iter().any(|path| path.exists()) {
         bail!(
@@ -287,6 +290,7 @@ enum FileKind {
     Core,
     Theme,
     Agents,
+    Loop,
 }
 
 impl FileKind {
@@ -294,6 +298,7 @@ impl FileKind {
         match path.file_name().and_then(|name| name.to_str()) {
             Some("theme.toml") => Self::Theme,
             Some("agents.toml") => Self::Agents,
+            Some("loop.toml") => Self::Loop,
             _ => Self::Core,
         }
     }
@@ -375,6 +380,9 @@ fn to_logical(kind: FileKind, doc_path: &[String]) -> Vec<String> {
                 .chain(doc_path.iter().cloned())
                 .collect()
         }
+        FileKind::Loop => std::iter::once("loop".to_owned())
+            .chain(doc_path.iter().cloned())
+            .collect(),
         _ => doc_path.to_vec(),
     }
 }
@@ -417,10 +425,11 @@ fn as_toml_value(value: &Value) -> Option<toml::Value> {
 
 fn render_all_templates() -> String {
     format!(
-        "# === config.toml ===\n{}# === theme.toml ===\n{}# === agents.toml ===\n{}",
+        "# === config.toml ===\n{}# === theme.toml ===\n{}# === agents.toml ===\n{}# === loop.toml ===\n{}",
         MachineConfig::template_core(),
         MachineConfig::template_theme(),
-        MachineConfig::template_agents()
+        MachineConfig::template_agents(),
+        MachineConfig::template_loop()
     )
 }
 
@@ -431,12 +440,15 @@ fn file_for_key(path: &[String]) -> (PathBuf, &'static str) {
             MachineConfig::agents_path(),
             MachineConfig::template_agents(),
         ),
+        Some("loop") => (MachineConfig::loop_path(), MachineConfig::template_loop()),
         _ => (MachineConfig::config_path(), MachineConfig::template_core()),
     }
 }
 
 fn document_key_for_set(path: &[String]) -> Vec<String> {
     if matches!(path, [root, child, ..] if root == "theme" && child == "colors") {
+        path[1..].to_vec()
+    } else if matches!(path, [root, ..] if root == "loop") {
         path[1..].to_vec()
     } else {
         path.to_vec()
@@ -516,8 +528,10 @@ fn is_known_get_key(path: &[String]) -> bool {
     let prefix = format!("{joined}.");
     exact_set_keys().iter().any(|key| key.starts_with(&prefix))
         || matches!(path, [root] if root == "agents")
+        || matches!(path, [root] if root == "loop")
         || matches!(path, [root] if root == "accounts")
-        || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "commands" | "teams" | "worktree" | "loop" | "attention"))
+        || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "commands" | "teams" | "worktree" | "attention"))
+        || matches!(path, [root, child] if root == "loop" && child == "tasks")
         || is_account_usage_limit_get_key(path)
         || is_sidebar_animation_get_key(path)
         || is_sidebar_glyph_get_key(path)
@@ -530,6 +544,7 @@ fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
     let joined = path.join(".");
     exact_set_keys().contains(&joined)
         || is_agents_key(path)
+        || is_loop_key(path)
         || is_account_usage_limit_key(path)
         || is_provider_style_key(path)
         || is_sidebar_animation_set_key(path)
@@ -550,45 +565,45 @@ fn is_agents_key(path: &[String]) -> bool {
                     && child == "profiles"
                     && matches!(leaf.as_str(), "agent" | "mode" | "model" | "effort" | "args" | "system-prompt-file")
         )
-        || matches!(
-            path,
-            [root, loop_, tasks, _, leaf]
-                if root == "agents"
-                    && loop_ == "loop"
-                    && tasks == "tasks"
-                    && matches!(
-                        leaf.as_str(),
-                        "spec"
-                            | "prompt"
-                            | "prompt-file"
-                            | "root"
-                            | "worktree"
-                            | "mode"
-                            | "effort"
-                            | "system-prompt-file"
-                            | "timeout"
-                            | "at"
-                            | "days"
-                            | "every"
-                            | "cron"
-                            | "once"
-                            | "bind"
-                    )
-        )
-        || matches!(
-            path,
-            [root, loop_, tasks, _, target, leaf]
-                if root == "agents"
-                    && loop_ == "loop"
-                    && tasks == "tasks"
-                    && target == "bind"
-                    && matches!(
-                        leaf.as_str(),
-                        "kind"
-                            | "session"
-                            | "handle"
-                    )
-        )
+}
+
+fn is_loop_key(path: &[String]) -> bool {
+    matches!(
+        path,
+        [root, tasks, _, leaf]
+            if root == "loop"
+                && tasks == "tasks"
+                && matches!(
+                    leaf.as_str(),
+                    "spec"
+                        | "prompt"
+                        | "prompt-file"
+                        | "root"
+                        | "worktree"
+                        | "mode"
+                        | "effort"
+                        | "system-prompt-file"
+                        | "timeout"
+                        | "at"
+                        | "days"
+                        | "every"
+                        | "cron"
+                        | "once"
+                        | "bind"
+                )
+    ) || matches!(
+        path,
+        [root, tasks, _, target, leaf]
+            if root == "loop"
+                && tasks == "tasks"
+                && target == "bind"
+                && matches!(
+                    leaf.as_str(),
+                    "kind"
+                        | "session"
+                        | "handle"
+                )
+    )
 }
 
 fn is_provider_style_key(path: &[String]) -> bool {
@@ -769,7 +784,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "theme.pets.pet",
         "theme.pets.glyphs",
         "theme.pets.voice",
-        "agents.loop.tasks",
+        "loop.tasks",
         "theme.animations.unread",
         "theme.glyphs.set",
         "theme.colors.primary.background",

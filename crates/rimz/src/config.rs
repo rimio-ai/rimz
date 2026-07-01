@@ -1,5 +1,5 @@
 //! Per-machine settings, loaded from `~/.config/rimz/config.toml`,
-//! `theme.toml`, and `agents.toml`. Agent and team fragments discovered under
+//! `theme.toml`, `agents.toml`, and `loop.toml`. Agent and team fragments discovered under
 //! `~/.agents/{agents,teams}` are the base layer for `agents.toml`, whose
 //! entries take precedence on name clashes.
 //!
@@ -93,6 +93,7 @@ pub use worktree::{WorktreeBase, WorktreeConfig};
 const CONFIG_FILE: &str = "config.toml";
 const THEME_FILE: &str = "theme.toml";
 const AGENTS_FILE: &str = "agents.toml";
+const LOOP_FILE: &str = "loop.toml";
 const RIMZ_CONFIG_SUBDIR: &str = "rimz";
 const AGENTS_HOME_AGENTS_SUBDIR: &str = "agents";
 const AGENTS_HOME_TEAMS_SUBDIR: &str = "teams";
@@ -101,6 +102,7 @@ const TEAM_FRAGMENT_FILE: &str = "team.toml";
 pub const MACHINE_CONFIG_TEMPLATE: &str = include_str!("config/templates/config.template.toml");
 pub const MACHINE_THEME_TEMPLATE: &str = include_str!("config/templates/theme.template.toml");
 pub const MACHINE_AGENTS_TEMPLATE: &str = include_str!("config/templates/agents.template.toml");
+pub const MACHINE_LOOP_TEMPLATE: &str = include_str!("config/templates/loop.template.toml");
 
 static LOAD_MEMO: OnceLock<Mutex<Option<(ConfigStamp, MachineConfig)>>> = OnceLock::new();
 
@@ -162,6 +164,8 @@ pub struct MachineConfig {
     #[serde(skip_serializing_if = "ThemeConfig::is_unset")]
     pub theme: ThemeConfig,
     pub agents: AgentsConfig,
+    #[serde(default, skip_serializing_if = "LoopConfig::is_empty")]
+    pub r#loop: LoopConfig,
 }
 
 impl MachineConfig {
@@ -180,6 +184,11 @@ impl MachineConfig {
         MACHINE_AGENTS_TEMPLATE
     }
 
+    /// The generated loop per-machine config reference.
+    pub fn template_loop() -> &'static str {
+        MACHINE_LOOP_TEMPLATE
+    }
+
     /// The core per-machine config path: `$XDG_CONFIG_HOME/rimz/config.toml`.
     pub fn config_path() -> PathBuf {
         config_home().join(RIMZ_CONFIG_SUBDIR).join(CONFIG_FILE)
@@ -193,6 +202,11 @@ impl MachineConfig {
     /// The agents per-machine config path: `$XDG_CONFIG_HOME/rimz/agents.toml`.
     pub fn agents_path() -> PathBuf {
         config_home().join(RIMZ_CONFIG_SUBDIR).join(AGENTS_FILE)
+    }
+
+    /// The loop per-machine config path: `$XDG_CONFIG_HOME/rimz/loop.toml`.
+    pub fn loop_path() -> PathBuf {
+        config_home().join(RIMZ_CONFIG_SUBDIR).join(LOOP_FILE)
     }
 
     /// Load from the default per-machine paths. Missing files are defaults —
@@ -226,12 +240,14 @@ impl MachineConfig {
         let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
         let theme_path = dir.join(THEME_FILE);
         let agents_path = dir.join(AGENTS_FILE);
+        let loop_path = dir.join(LOOP_FILE);
 
         let core = load_optional(config_path, parse_core_text)?.unwrap_or_default();
         let theme = load_optional(&theme_path, parse_theme_text)?.unwrap_or_default();
         let agents = load_optional(&agents_path, parse_agents_text)?.unwrap_or_default();
+        let loop_ = load_optional(&loop_path, parse_loop_text)?.unwrap_or_default();
 
-        let mut config = Self::assemble(core, theme, agents);
+        let mut config = Self::assemble(core, theme, agents, loop_);
         validate_notifications_config(&config.notifications, config_path)?;
         validate_agents_config(&mut config.agents, &agents_path)?;
         Ok(config)
@@ -241,12 +257,14 @@ impl MachineConfig {
         let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
         let theme_path = dir.join(THEME_FILE);
         let agents_path = dir.join(AGENTS_FILE);
+        let loop_path = dir.join(LOOP_FILE);
 
         let core = recover(load_optional(config_path, parse_core_text)).unwrap_or_default();
         let theme = recover(load_optional(&theme_path, parse_theme_text)).unwrap_or_default();
         let agents = recover(load_optional(&agents_path, parse_agents_text)).unwrap_or_default();
+        let loop_ = recover(load_optional(&loop_path, parse_loop_text)).unwrap_or_default();
 
-        let mut config = Self::assemble(core, theme, agents);
+        let mut config = Self::assemble(core, theme, agents, loop_);
         if let Err(err) = validate_notifications_config(&config.notifications, config_path) {
             tracing::warn!(
                 error = %err,
@@ -270,6 +288,7 @@ impl MachineConfig {
                 CoreConfig::default(),
                 parse_theme_text(path, text)?,
                 AgentsConfig::default(),
+                LoopConfig::default(),
             )),
             Some(AGENTS_FILE) => {
                 let mut agents = parse_agents_text(path, text)?;
@@ -278,8 +297,15 @@ impl MachineConfig {
                     CoreConfig::default(),
                     ThemeConfig::default(),
                     agents,
+                    LoopConfig::default(),
                 ))
             }
+            Some(LOOP_FILE) => Ok(Self::assemble(
+                CoreConfig::default(),
+                ThemeConfig::default(),
+                AgentsConfig::default(),
+                parse_loop_text(path, text)?,
+            )),
             _ => {
                 let core = parse_core_text(path, text)?;
                 validate_notifications_config(&core.notifications, path)?;
@@ -287,12 +313,18 @@ impl MachineConfig {
                     core,
                     ThemeConfig::default(),
                     AgentsConfig::default(),
+                    LoopConfig::default(),
                 ))
             }
         }
     }
 
-    fn assemble(core: CoreConfig, theme: ThemeConfig, agents: AgentsConfig) -> Self {
+    fn assemble(
+        core: CoreConfig,
+        theme: ThemeConfig,
+        agents: AgentsConfig,
+        loop_: LoopConfig,
+    ) -> Self {
         Self {
             timezone: core.timezone,
             accounts: core.accounts,
@@ -308,6 +340,7 @@ impl MachineConfig {
             sentry: core.sentry,
             theme,
             agents,
+            r#loop: loop_,
         }
     }
 
@@ -346,6 +379,7 @@ struct ConfigStamp {
     core: StampedPath,
     theme: StampedPath,
     agents: StampedPath,
+    loop_: StampedPath,
     fragments: Vec<StampedPath>,
 }
 
@@ -369,6 +403,7 @@ impl ConfigStamp {
             core: stamped_path(config_path),
             theme: stamped_path(&sibling_path(config_path, THEME_FILE)),
             agents: stamped_path(&sibling_path(config_path, AGENTS_FILE)),
+            loop_: stamped_path(&sibling_path(config_path, LOOP_FILE)),
             fragments,
         })
     }
@@ -530,6 +565,13 @@ fn parse_agents_text(path: &Path, text: &str) -> Result<AgentsConfig> {
     Ok(file.agents)
 }
 
+fn parse_loop_text(path: &Path, text: &str) -> Result<LoopConfig> {
+    toml::from_str(text).map_err(|source| ConfigErr::Parse {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
 /// Tables the `[agents]` redesign removed. Serde tolerates unknown keys so a
 /// newer config never breaks an older binary, but a *renamed* table is not a
 /// forward-compatible unknown — silently dropping it would launch a surface the
@@ -557,6 +599,11 @@ fn check_removed_agents_tables(path: &Path, text: &str) -> Result<()> {
         if agents.contains_key("layouts") {
             return Err(removed(
                 "`[agents.layouts]` was renamed to `[agents.teams]`",
+            ));
+        }
+        if agents.contains_key("loop") {
+            return Err(removed(
+                "`[agents.loop]` moved to its own `loop.toml` — move `[agents.loop.tasks.*]` entries to `[tasks.*]` there, or re-add with `rimz loop add`",
             ));
         }
     }

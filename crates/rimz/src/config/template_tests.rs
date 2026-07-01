@@ -40,6 +40,11 @@ fn template_defaults_deserialize_to_machine_defaults() {
         uncomment_default_lines(MachineConfig::template_agents()),
     )
     .expect("write agents template");
+    std::fs::write(
+        dir.path().join("loop.toml"),
+        uncomment_default_lines(MachineConfig::template_loop()),
+    )
+    .expect("write loop template");
     let parsed =
         MachineConfig::load_from(&dir.path().join("config.toml")).expect("template defaults parse");
 
@@ -113,6 +118,11 @@ fn all_template_default_paths() -> BTreeSet<String> {
             }),
     );
     out.extend(template_default_paths(MachineConfig::template_agents()));
+    out.extend(
+        template_default_paths(MachineConfig::template_loop())
+            .into_iter()
+            .map(|path| format!("loop.{path}")),
+    );
     out
 }
 

@@ -699,7 +699,7 @@ fn preflight_kind(kind: &str) -> Result<()> {
 }
 
 fn load_tasks() -> std::collections::BTreeMap<String, TaskEntry> {
-    MachineConfig::load_lenient().agents.r#loop.tasks.0
+    MachineConfig::load_lenient().r#loop.tasks.0
 }
 
 fn load_entry(name: &str) -> Result<TaskEntry> {
@@ -789,8 +789,8 @@ fn resolve_config_path(path: &Path) -> Result<PathBuf> {
     if expanded.is_absolute() {
         return Ok(expanded);
     }
-    let agents_path = MachineConfig::agents_path();
-    let config_dir = agents_path.parent().unwrap_or_else(|| Path::new("."));
+    let loop_path = MachineConfig::loop_path();
+    let config_dir = loop_path.parent().unwrap_or_else(|| Path::new("."));
     Ok(config_dir.join(expanded))
 }
 
@@ -814,11 +814,11 @@ fn home_dir() -> PathBuf {
 // ---- config editing (toml_edit, comment-preserving) -------------------------
 
 fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
-    let path = MachineConfig::agents_path();
+    let path = MachineConfig::loop_path();
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            MachineConfig::template_agents().to_owned()
+            MachineConfig::template_loop().to_owned()
         }
         Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
     };
@@ -870,11 +870,11 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
     if entry.once {
         table["once"] = value(true);
     }
-    tasks_table(&mut doc)?.insert(name, Item::Table(table));
+    root_tasks_table(&mut doc)?.insert(name, Item::Table(table));
 
     let rendered = doc.to_string();
     MachineConfig::parse_text(&path, &rendered)
-        .with_context(|| format!("validating `agents.loop.tasks.{name}`"))?;
+        .with_context(|| format!("validating `loop.tasks.{name}`"))?;
     write_bytes_atomically(&path, rendered.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
@@ -888,29 +888,19 @@ fn task_target_table(target: &TaskTarget) -> Table {
     table
 }
 
-fn tasks_table(doc: &mut DocumentMut) -> Result<&mut Table> {
-    let agents = doc
+fn root_tasks_table(doc: &mut DocumentMut) -> Result<&mut Table> {
+    let tasks = doc
         .as_table_mut()
-        .entry("agents")
-        .or_insert_with(|| Item::Table(Table::new()))
-        .as_table_mut()
-        .context("`agents` is not a table")?;
-    let loop_ = agents
-        .entry("loop")
-        .or_insert_with(|| Item::Table(Table::new()))
-        .as_table_mut()
-        .context("`agents.loop` is not a table")?;
-    let tasks = loop_
         .entry("tasks")
         .or_insert_with(|| Item::Table(Table::new()))
         .as_table_mut()
-        .context("`agents.loop.tasks` is not a table")?;
+        .context("`tasks` is not a table")?;
     tasks.set_implicit(true);
     Ok(tasks)
 }
 
 fn config_remove(name: &str) -> Result<bool> {
-    let path = MachineConfig::agents_path();
+    let path = MachineConfig::loop_path();
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };
@@ -918,11 +908,7 @@ fn config_remove(name: &str) -> Result<bool> {
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
     let removed = doc
-        .get_mut("agents")
-        .and_then(Item::as_table_mut)
-        .and_then(|agents| agents.get_mut("loop"))
-        .and_then(Item::as_table_mut)
-        .and_then(|loop_| loop_.get_mut("tasks"))
+        .get_mut("tasks")
         .and_then(Item::as_table_mut)
         .map(|tasks| tasks.remove(name).is_some())
         .unwrap_or(false);

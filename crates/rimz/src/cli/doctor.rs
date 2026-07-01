@@ -75,7 +75,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
 /// carries; `rimz loop list` reports whether each task's room is open.
 fn collect_loop() -> model::LoopTasks {
     let tasks = rimz::config::MachineConfig::load()
-        .map(|config| config.agents.r#loop.tasks.0)
+        .map(|config| config.r#loop.tasks.0)
         .unwrap_or_default();
     let rows = tasks
         .into_iter()

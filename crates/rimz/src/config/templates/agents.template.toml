@@ -18,35 +18,6 @@
 # base = "head"                        # "head", "fresh", or any Git ref for new worktrees
 # Project files .worktreeinclude and .worktreelink seed copied files and shared symlink dirs.
 
-[agents.loop]
-# Scheduled loop tasks. Each entry drives one `rimz loop run <name>` wake-up,
-# fired by the sidebar elder while a room for the task's project is open. Use
-# either `spec` to spawn a supervised turn or `bind` to wake one pinned live
-# session. Edit entries here or with `rimz loop add`; a running room fires them.
-# [agents.loop.tasks]
-## [agents.loop.tasks.morning]
-## spec = "claude-ping"                # `<kind>-ping` primes the provider window
-## root = "/home/you/code/app"         # absolute project root whose room hosts the turn
-## at = "07:00"                        # 24h firing time in the configured timezone
-## days = "weekdays"                   # "daily", "weekdays", "weekends", or "mon,wed,fri"
-## worktree = "main"                   # optional channel to host the transient pane
-##
-## [agents.loop.tasks.pr_watch]
-## spec = "codex"                      # kind, profile, or virtual single-agent cell
-## prompt = "check CI on the release PR"
-## root = "/home/you/code/app"
-## every = "15m"                       # interval; `cron = "*/15 * * * *"` uses raw cron syntax
-## mode = "auto"                       # auto, ask, or yolo
-##
-## [agents.loop.tasks.self_wake]
-## prompt = "resume the review and fix the next blocking comment"
-## root = "/home/you/code/app"
-## at = "09:30"
-## [agents.loop.tasks.self_wake.bind]
-## kind = "claude"
-## session = "sess-abc123"
-## handle = "@planner"
-
 [agents.attention]
 # stalled_after_secs = 1800            # silent running agent becomes actionable after this many seconds
 # inactive_after_secs = 3600           # a card idle this many seconds sinks below live work (the prompt-cache window)

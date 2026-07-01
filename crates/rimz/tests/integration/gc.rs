@@ -130,11 +130,11 @@ fn gc_reaps_dead_loop_delivery_schedule() {
     let env = Env::new();
     let config_dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
-    let config_path = config_dir.join("agents.toml");
+    let config_path = config_dir.join("loop.toml");
     std::fs::write(
         &config_path,
         format!(
-            "[agents.loop.tasks.dead]\n\
+            "[tasks.dead]\n\
              bind = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
@@ -152,7 +152,7 @@ fn gc_reaps_dead_loop_delivery_schedule() {
 
     let config = std::fs::read_to_string(config_path).expect("read agents config");
     assert!(
-        !config.contains("[agents.loop.tasks.dead]"),
+        !config.contains("[tasks.dead]"),
         "dead schedule should be removed"
     );
 }
@@ -255,17 +255,17 @@ fn gc_keeps_spawn_and_live_loop_schedules() {
     register_running_agent(&env, "sess-live", "feature-live");
     let config_dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
-    let config_path = config_dir.join("agents.toml");
+    let config_path = config_dir.join("loop.toml");
     std::fs::write(
         &config_path,
         format!(
-            "[agents.loop.tasks.spawn]\n\
+            "[tasks.spawn]\n\
              spec = \"claude\"\n\
              prompt = \"spawn wake\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n\
              \n\
-             [agents.loop.tasks.live]\n\
+             [tasks.live]\n\
              bind = {{ kind = \"claude\", session = \"sess-live\", handle = \"@claude\" }}\n\
              prompt = \"live wake\"\n\
              root = \"{}\"\n\
@@ -283,11 +283,11 @@ fn gc_keeps_spawn_and_live_loop_schedules() {
 
     let config = std::fs::read_to_string(config_path).expect("read agents config");
     assert!(
-        config.contains("[agents.loop.tasks.spawn]"),
+        config.contains("[tasks.spawn]"),
         "spawn schedule should be kept: {config}"
     );
     assert!(
-        config.contains("[agents.loop.tasks.live]"),
+        config.contains("[tasks.live]"),
         "live delivery schedule should be kept: {config}"
     );
 }

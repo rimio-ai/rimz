@@ -36,7 +36,7 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
         "loop add failed: {}",
         String::from_utf8_lossy(&add.stderr)
     );
-    let config = std::fs::read_to_string(agents_config_path(&env)).expect("read agents config");
+    let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
         config.contains("session = \"sess-loop-live\""),
         "task should pin the live session id: {config}"
@@ -155,10 +155,10 @@ fn loop_run_bind_git_worktree_session_queues_prompt() {
 #[test]
 fn loop_run_bind_dead_session_reaps_schedule() {
     let env = Env::new();
-    write_agents_config(
+    write_loop_config(
         &env,
         &format!(
-            "[agents.loop.tasks.dead]\n\
+            "[tasks.dead]\n\
              bind = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
@@ -182,9 +182,9 @@ fn loop_run_bind_dead_session_reaps_schedule() {
         "dead target should be reported: {}",
         String::from_utf8_lossy(&run.stdout)
     );
-    let config = std::fs::read_to_string(agents_config_path(&env)).expect("read agents config");
+    let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
-        !config.contains("[agents.loop.tasks.dead]"),
+        !config.contains("[tasks.dead]"),
         "dead schedule should be removed: {config}"
     );
 }
@@ -194,9 +194,9 @@ fn loop_run_bind_tilde_root_queues_prompt() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-tilde", "feature-loop");
-    write_agents_config(
+    write_loop_config(
         &env,
-        "[agents.loop.tasks.tilde]\n\
+        "[tasks.tilde]\n\
          bind = { kind = \"claude\", session = \"sess-loop-tilde\", handle = \"@claude\" }\n\
          prompt = \"tilde wake\"\n\
          root = \"~/project\"\n\
@@ -310,10 +310,10 @@ fn run_hook(env: &Env, payload: serde_json::Value, cwd: &Path) {
     );
 }
 
-fn write_agents_config(env: &Env, text: &str) {
-    let path = agents_config_path(env);
+fn write_loop_config(env: &Env, text: &str) {
+    let path = loop_config_path(env);
     std::fs::create_dir_all(path.parent().expect("config dir")).expect("mkdir config");
-    std::fs::write(path, text).expect("write agents config");
+    std::fs::write(path, text).expect("write loop config");
 }
 
 fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
@@ -326,8 +326,8 @@ fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
         .collect()
 }
 
-fn agents_config_path(env: &Env) -> std::path::PathBuf {
-    env.config_root().join("rimz").join("agents.toml")
+fn loop_config_path(env: &Env) -> std::path::PathBuf {
+    env.config_root().join("rimz").join("loop.toml")
 }
 
 fn init_git_repo(root: &Path) -> bool {

@@ -4,11 +4,17 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// `[agents.loop]`: scheduled and automated agent-loop helpers.
+/// `loop.toml`: scheduled and automated agent-loop helpers.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct LoopConfig {
     pub tasks: Tasks,
+}
+
+impl LoopConfig {
+    pub fn is_empty(&self) -> bool {
+        self.tasks.0.is_empty()
+    }
 }
 
 /// Named loop tasks, ordered by name. A map keeps `rimz loop add/remove/run`

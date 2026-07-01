@@ -1,0 +1,33 @@
+# Rimz per-machine loop configuration.
+#
+# Save as ~/.config/rimz/loop.toml, or run `rimz config init`.
+# Durable recurring loop tasks live here. One-shots and self-wakes created by
+# Rimz live in the state store instead, so this file stays hand-editable.
+
+# Scheduled loop tasks. Each entry drives one `rimz loop run <name>` wake-up,
+# fired by the sidebar elder while a room for the task's project is open. Use
+# either `spec` to spawn a supervised turn or `bind` to wake one pinned live
+# session. Edit entries here or with `rimz loop add`; a running room fires them.
+# [tasks]
+## [tasks.morning]
+## spec = "claude-ping"                # `<kind>-ping` primes the provider window
+## root = "/home/you/code/app"         # absolute project root whose room hosts the turn
+## at = "07:00"                        # 24h firing time in the configured timezone
+## days = "weekdays"                   # "daily", "weekdays", "weekends", or "mon,wed,fri"
+## worktree = "main"                   # optional channel to host the transient pane
+##
+## [tasks.pr_watch]
+## spec = "codex"                      # kind, profile, or virtual single-agent cell
+## prompt = "check CI on the release PR"
+## root = "/home/you/code/app"
+## every = "15m"                       # interval; `cron = "*/15 * * * *"` uses raw cron syntax
+## mode = "auto"                       # auto, ask, or yolo
+##
+## [tasks.self_wake]
+## prompt = "resume the review and fix the next blocking comment"
+## root = "/home/you/code/app"
+## at = "09:30"
+## [tasks.self_wake.bind]
+## kind = "claude"
+## session = "sess-abc123"
+## handle = "@planner"

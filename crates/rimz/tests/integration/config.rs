@@ -17,6 +17,10 @@ fn agents_config_path(env: &Env) -> std::path::PathBuf {
     env.config_root().join("rimz").join("agents.toml")
 }
 
+fn loop_config_path(env: &Env) -> std::path::PathBuf {
+    env.config_root().join("rimz").join("loop.toml")
+}
+
 fn write_machine_file(path: &std::path::Path, text: &str) {
     std::fs::create_dir_all(path.parent().expect("config file parent")).expect("mkdir config");
     std::fs::write(path, text).expect("write config seed");
@@ -40,7 +44,9 @@ fn config_init_prints_and_writes_the_template() {
         .stdout(contains("# === config.toml ==="))
         .stdout(contains("# === theme.toml ==="))
         .stdout(contains("# === agents.toml ==="))
+        .stdout(contains("# === loop.toml ==="))
         .stdout(contains("[agents.worktree]"))
+        .stdout(contains("# [tasks]"))
         .stdout(contains("[theme.display]"));
 
     env.rimz()
@@ -59,7 +65,8 @@ fn config_init_prints_and_writes_the_template() {
     let agents_text =
         std::fs::read_to_string(agents_config_path(&env)).expect("read agents config");
     assert!(agents_text.contains("[agents.worktree]"));
-    assert!(agents_text.contains("[agents.loop.tasks]"));
+    let loop_text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
+    assert!(loop_text.contains("# [tasks]"));
 
     env.rimz()
         .args(["config", "init"])
@@ -235,6 +242,7 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
     assert!(text.contains("# on_rebirth = true"));
     assert!(theme_config_path(&env).exists());
     assert!(agents_config_path(&env).exists());
+    assert!(loop_config_path(&env).exists());
 }
 
 #[test]
@@ -279,6 +287,7 @@ on_force_close = "explode"
     );
     assert!(theme_config_path(&env).exists());
     assert!(agents_config_path(&env).exists());
+    assert!(loop_config_path(&env).exists());
 }
 
 #[test]
@@ -362,14 +371,14 @@ profile = "helper"
 fn setup_yes_merges_loop_tasks_as_table_blocks() {
     let env = Env::new();
     write_machine_file(
-        &agents_config_path(&env),
+        &loop_config_path(&env),
         r#"
-[agents.loop.tasks.self_wake]
+[tasks.self_wake]
 bind = { kind = "claude", session = "s1", handle = "@planner" }
 prompt = "resume"
 root = "/r"
 
-[agents.loop.tasks.pr_watch]
+[tasks.pr_watch]
 spec = "codex"
 prompt = "check CI"
 root = "/r"
@@ -384,17 +393,17 @@ every = "15m"
         .stdout(contains("Merged"))
         .stdout(contains("No hooks or trust grants were changed"));
 
-    let text = std::fs::read_to_string(agents_config_path(&env)).expect("read merged agents");
+    let text = std::fs::read_to_string(loop_config_path(&env)).expect("read merged loop");
     assert!(
-        text.contains("[agents.loop.tasks.self_wake]"),
+        text.contains("[tasks.self_wake]"),
         "task should render as a table block:\n{text}"
     );
     assert!(
-        text.contains("[agents.loop.tasks.pr_watch]"),
+        text.contains("[tasks.pr_watch]"),
         "bind-less task should render as a table block:\n{text}"
     );
     assert!(
-        text.contains("[agents.loop.tasks.self_wake.bind]"),
+        text.contains("[tasks.self_wake.bind]"),
         "bind should render as a nested table block:\n{text}"
     );
     assert!(

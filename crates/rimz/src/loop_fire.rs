@@ -24,7 +24,7 @@ enum Action {
 
 pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
     let tasks = workspace_tasks(
-        MachineConfig::load_lenient().agents.r#loop.tasks.0,
+        MachineConfig::load_lenient().r#loop.tasks.0,
         &runtime.workspace_id,
     );
     let path = state_path(runtime);

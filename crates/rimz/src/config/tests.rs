@@ -424,13 +424,13 @@ fn profile_system_prompt_file_resolves_against_the_config_dir() {
 fn loop_tasks_parse_and_default_empty() {
     let dir = tempdir().expect("tempdir");
     assert!(
-        MachineConfig::default().agents.r#loop.tasks.0.is_empty(),
+        MachineConfig::default().r#loop.tasks.0.is_empty(),
         "no loop tasks ship by default",
     );
     let config = MachineConfig::load_from(&write_named(
         &dir,
-        "agents.toml",
-        "[agents.loop.tasks.morning]\n\
+        "loop.toml",
+        "[tasks.morning]\n\
              spec = \"claude-ping\"\n\
              prompt = \"ping\"\n\
              root = \"/home/me/app\"\n\
@@ -442,20 +442,14 @@ fn loop_tasks_parse_and_default_empty() {
              system-prompt-file = \"/prompts/primer.md\"\n\
              timeout = \"5m\"\n\
              once = true\n\
-             [agents.loop.tasks.pr_watch]\n\
+             [tasks.pr_watch]\n\
              spec = \"codex\"\n\
              prompt-file = \"prompts/pr-watch.md\"\n\
              root = \"/home/me/app\"\n\
              every = \"15m\"\n",
     ))
     .expect("load");
-    let entry = config
-        .agents
-        .r#loop
-        .tasks
-        .0
-        .get("morning")
-        .expect("morning task");
+    let entry = config.r#loop.tasks.0.get("morning").expect("morning task");
     assert_eq!(entry.spec.as_deref(), Some("claude-ping"));
     assert_eq!(entry.bind, None);
     assert_eq!(entry.prompt.as_deref(), Some("ping"));
@@ -472,13 +466,7 @@ fn loop_tasks_parse_and_default_empty() {
     assert_eq!(entry.timeout.as_deref(), Some("5m"));
     assert_eq!(entry.cron, None);
     assert!(entry.once);
-    let general = config
-        .agents
-        .r#loop
-        .tasks
-        .0
-        .get("pr_watch")
-        .expect("general task");
+    let general = config.r#loop.tasks.0.get("pr_watch").expect("general task");
     assert_eq!(general.spec.as_deref(), Some("codex"));
     assert_eq!(
         general.prompt_file.as_deref(),
@@ -492,26 +480,42 @@ fn loop_task_bind_mode_parses() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write_named(
         &dir,
-        "agents.toml",
-        "[agents.loop.tasks.self_wake]\n\
+        "loop.toml",
+        "[tasks.self_wake]\n\
              bind = { kind = \"claude\", session = \"sess-1\", handle = \"@planner\" }\n\
              prompt = \"pick up the review\"\n\
              root = \"/home/me/app\"\n\
              at = \"07:00\"\n",
     ))
     .expect("load");
-    let entry = config
-        .agents
-        .r#loop
-        .tasks
-        .0
-        .get("self_wake")
-        .expect("bind task");
+    let entry = config.r#loop.tasks.0.get("self_wake").expect("bind task");
     assert_eq!(entry.spec, None);
     let target = entry.bind.as_ref().expect("target");
     assert_eq!(target.kind, "claude");
     assert_eq!(target.session, "sess-1");
     assert_eq!(target.handle, "@planner");
+}
+
+#[test]
+fn agents_loop_table_reports_the_loop_toml_migration() {
+    let dir = tempdir().expect("tempdir");
+    let err = MachineConfig::load_from(&write_named(
+        &dir,
+        "agents.toml",
+        "[agents.loop.tasks.old]\n\
+             spec = \"claude\"\n\
+             prompt = \"wake\"\n\
+             root = \"/repo\"\n\
+             at = \"07:00\"\n",
+    ))
+    .expect_err("old loop table should fail");
+
+    match err {
+        ConfigErr::RemovedTable { detail, .. } => {
+            assert!(detail.contains("loop.toml"), "{detail}");
+        }
+        other => panic!("expected RemovedTable, got {other:?}"),
+    }
 }
 
 #[test]
