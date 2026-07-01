@@ -168,6 +168,29 @@ fn not_before_defaults_ready_and_round_trips_when_set() {
 }
 
 #[test]
+fn retry_after_defaults_absent_and_round_trips_when_set() {
+    let mut message = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        &agent("s1", None),
+        "next".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    let retry_at = Timestamp::now() + jiff::SignedDuration::from_secs(30);
+    assert_eq!(message.retry_after, None);
+
+    message.retry_after = Some(retry_at);
+    let json = serde_json::to_string(&message).unwrap();
+    let back: MessageRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.retry_after, Some(retry_at));
+
+    let mut legacy = serde_json::to_value(&back).unwrap();
+    legacy.as_object_mut().unwrap().remove("retry_after");
+    let back: MessageRecord = serde_json::from_value(legacy).unwrap();
+    assert_eq!(back.retry_after, None);
+}
+
+#[test]
 fn sent_reconcile_deadline_uses_updated_at_only_for_sent_records() {
     let mut message = MessageRecord::new(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
@@ -202,7 +225,7 @@ fn wake_deadline_arms_queued_and_sent_records() {
     );
     let now = Timestamp::from_second(1_000).unwrap();
     let updated_at = now - jiff::SignedDuration::from_secs(5);
-    let last_attempt_at = now - jiff::SignedDuration::from_secs(10);
+    let retry_after = now + jiff::SignedDuration::from_secs(30);
     let window = Duration::from_secs(30);
     let mut message = base.clone();
     message.updated_at = updated_at;
@@ -210,24 +233,27 @@ fn wake_deadline_arms_queued_and_sent_records() {
         (message.clone(), Some(updated_at)),
         (
             MessageRecord {
-                last_attempt_at: Some(last_attempt_at),
+                retry_after: Some(retry_after),
                 ..message.clone()
             },
-            Some(last_attempt_at + window),
+            Some(retry_after),
         ),
         (
-            message
-                .clone()
-                .with_not_before(Some(now + jiff::SignedDuration::from_secs(60))),
+            MessageRecord {
+                retry_after: Some(retry_after),
+                ..message
+                    .clone()
+                    .with_not_before(Some(now + jiff::SignedDuration::from_secs(60)))
+            },
             Some(now + jiff::SignedDuration::from_secs(60)),
         ),
         (
             MessageRecord {
-                last_attempt_at: Some(last_attempt_at),
+                retry_after: Some(retry_after),
                 not_before: Some(now - jiff::SignedDuration::from_secs(60)),
                 ..message.clone()
             },
-            Some(last_attempt_at + window),
+            Some(retry_after),
         ),
         (
             MessageRecord {
@@ -455,6 +481,36 @@ fn queue_head_skips_not_yet_ready_scheduled_messages() {
     .expect("ready message is selected");
 
     assert_eq!(head.message_id, ready.message_id);
+}
+
+#[test]
+fn queue_head_does_not_treat_retry_after_as_readiness() {
+    let agent = agent("real-session", Some("lucid-atlas"));
+    let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
+    let now = Timestamp::now();
+    let mut deferred = MessageRecord::new(
+        ws.clone(),
+        &agent,
+        "old".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    deferred.retry_after = Some(now + jiff::SignedDuration::from_secs(60));
+    let mut newer = MessageRecord::new(ws, &agent, "new".to_owned(), true, DeliveryGate::Done);
+    deferred.message_id = MessageId::parse("msg_0000000000000001").unwrap();
+    newer.message_id = MessageId::parse("msg_0000000000000002").unwrap();
+    let pending = [deferred.clone(), newer];
+
+    let head = queue_head(
+        pending.iter(),
+        &agent.kind,
+        &agent.agent_id,
+        agent.name.as_deref(),
+        now,
+    )
+    .expect("retry_after does not hide the FIFO head");
+
+    assert_eq!(head.message_id, deferred.message_id);
 }
 
 #[test]

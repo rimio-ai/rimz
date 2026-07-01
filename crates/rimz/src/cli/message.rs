@@ -429,6 +429,8 @@ struct MessageListRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     not_before: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    retry_after: Option<Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     auto_compact: Option<AutoCompact>,
     #[serde(skip_serializing_if = "Option::is_none")]
     compacted_context_tokens: Option<u64>,
@@ -457,6 +459,7 @@ impl MessageListRow {
             last_error: message.last_error,
             delivered_at: message.delivered_at,
             not_before: message.not_before,
+            retry_after: message.retry_after,
             auto_compact: message.auto_compact,
             compacted_context_tokens: message.compacted_context_tokens,
         }
@@ -490,6 +493,7 @@ impl MessageListRow {
             last_error: payload.reason,
             delivered_at,
             not_before: None,
+            retry_after: None,
             auto_compact: None,
             compacted_context_tokens: payload.compacted_context_tokens,
         })
@@ -1292,10 +1296,11 @@ fn sweep_messages(globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
     let now = Timestamp::now();
+    let delivery_window = rimz::message::delivery_window_from_env();
     ledger.reconcile_stale_sent_messages(
         &workspace.session_name,
         now,
-        rimz::message::delivery_window_from_env(),
+        delivery_window,
         max_delivery_attempts_from_env(),
     )?;
     let pending = ledger.list_pending_messages()?;
@@ -1311,13 +1316,16 @@ fn sweep_messages(globals: &GlobalFlags) -> Result<()> {
             continue;
         };
         if heads_seen.insert(head.message_id.to_string()) {
-            deliver_one(
+            let delivered = deliver_one(
                 &workspace,
                 &ledger,
                 &head.message_id,
                 Duration::ZERO,
                 globals,
             )?;
+            if !delivered {
+                ledger.defer_message_wake(&head.message_id, now + delivery_window)?;
+            }
         }
     }
     register_message_wake(&workspace, &ledger)?;

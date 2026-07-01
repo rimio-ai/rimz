@@ -276,6 +276,11 @@ pub struct MessageRecord {
     /// has passed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_before: Option<Timestamp>,
+    /// Wake-only retry floor set by the elder sweep when a ready queued head
+    /// cannot deliver. This never gates FIFO readiness or turn-boundary
+    /// delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after: Option<Timestamp>,
     /// When set, deliver a `/compact` ahead of the text if the agent's context
     /// fill has reached this threshold at delivery time, so the message lands
     /// against a fresh window instead of racing the agent's own auto-compaction.
@@ -320,6 +325,7 @@ impl MessageRecord {
             last_error: None,
             delivered_at: None,
             not_before: None,
+            retry_after: None,
             auto_compact: None,
             compacted_context_tokens: None,
         }
@@ -415,10 +421,8 @@ impl MessageRecord {
             MessageStatus::Queued => Some(
                 self.not_before
                     .filter(|not_before| *not_before > now)
-                    .unwrap_or_else(|| {
-                        self.last_attempt_at
-                            .map_or(self.updated_at, |last| last + window)
-                    }),
+                    .or(self.retry_after)
+                    .unwrap_or(self.updated_at),
             ),
             MessageStatus::Sent => self.sent_reconcile_deadline(window),
             _ => None,

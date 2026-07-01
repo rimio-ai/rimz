@@ -472,6 +472,41 @@ fn message_sweep_delivers_ready_queued_message_without_schedule() {
 }
 
 #[test]
+fn message_sweep_defers_ready_head_when_target_gate_is_closed() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-sweep-busy", "feature-sweep-busy", &[]);
+    let message_id = queue_add(&env, "@claude", "wait for idle");
+    let before = jiff::Timestamp::now();
+
+    let out = env
+        .rimz()
+        .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "10000")
+        .args(["message", "sweep"])
+        .output()
+        .expect("message sweep");
+    assert!(
+        out.status.success(),
+        "message sweep failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message_id.as_str(), message_id);
+    assert_eq!(pending[0].status, MessageStatus::Queued);
+    assert_eq!(pending[0].attempts, 0, "gate-closed miss must not claim");
+    assert!(pending[0].last_attempt_at.is_none());
+    let retry_after = pending[0].retry_after.expect("retry floor");
+    assert!(retry_after > before);
+
+    let wake: Option<jiff::Timestamp> =
+        serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
+            .expect("wake stamp json");
+    assert_eq!(wake, Some(retry_after));
+}
+
+#[test]
 fn queue_add_for_bound_agent_does_not_enumerate_panes() {
     let env = Env::new();
     env.install_agent_hooks("claude");

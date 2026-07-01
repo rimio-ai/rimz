@@ -40,6 +40,7 @@ A record stores:
 | `enqueued_at`, `updated_at`, `delivered_at` | timestamps |
 | `attempts`, `last_attempt_at`, `last_error` | retry bookkeeping |
 | `not_before` | earliest delivery time for scheduled messages |
+| `retry_after` | wake-only retry floor set by the elder sweep; it never gates FIFO readiness |
 | `auto_compact` | context-fill threshold that triggers a `/compact` before delivery |
 | `compacted_context_tokens` | baseline reading that suppresses duplicate compaction |
 
@@ -159,13 +160,13 @@ Lifecycle `Ended` archives receiver messages in realtime; worktree create/remove
 
 FIFO scans filter out messages whose `not_before` is still in the future, so a scheduled message cannot block a later ready message on the same card. The FIFO head is the oldest **ready** queued record for that card.
 
-Scheduled messages need an open room for wakeups:
+Scheduled and parked messages need an open room for wakeups:
 
-1. The CLI writes `message-wake.json` under the runtime root with the earliest future `not_before` or unconfirmed `Sent` reconcile deadline.
+1. The CLI writes `message-wake.json` under the runtime root with the earliest future `not_before`, `Queued` retry floor, ready queued backstop, or unconfirmed `Sent` reconcile deadline.
 2. The elected sidebar elder reads that cache and, when due, spawns a detached `rimz message sweep`.
 3. The sweep helper reconciles stale `Sent` records, finds ready FIFO heads whose gates are open, calls the same one-message delivery path as lifecycle hooks, then rewrites the wake cache to the next future schedule, ready queued retry, or reconcile deadline or removes it.
 
-Ready `Queued` heads arm the wake stamp as a backstop even when `not_before` is absent or already elapsed. A never-attempted ready message contributes its `updated_at` timestamp, so the elder sweep recovers an idle-agent message that missed the live send path; after a claim, `last_attempt_at + RIMZ_MESSAGE_DELIVERY_WINDOW_MS` throttles repeated pre-send failures. Future scheduled messages still arm their `not_before`, and `Sent` records still arm their reconcile deadline.
+Ready `Queued` heads arm the wake stamp as a backstop even when `not_before` is absent or already elapsed. A fresh ready message contributes its `updated_at` timestamp, so the elder sweep recovers an idle-agent message that missed the live send path. When a sweep cannot deliver the FIFO head because the gate is closed, a pending ask reserves input, or the pane is unavailable, it writes `retry_after = now + RIMZ_MESSAGE_DELIVERY_WINDOW_MS`; the elder then retries at most once per delivery window instead of every tick. `retry_after` is a wake hint only: it does not affect `is_ready`, FIFO, claim leases, or the turn-end hook, so lifecycle delivery still runs immediately when the target finishes. Future scheduled messages still arm their `not_before`, and `Sent` records still arm their reconcile deadline.
 
 ## Smart compaction
 
@@ -231,7 +232,7 @@ The payload carries `message_id`, `kind`, `agent_id`, `agent_name`, `channel`, `
 **Hidden helpers** (spawned by hooks and the sidebar elder, not for human use):
 
 - `message deliver --message-id <id>` — the detached delivery subprocess spawned by lifecycle hooks at unparked root turn ends.
-- `message sweep` — the detached helper spawned by the sidebar elder when a scheduled wake stamp comes due; finds ready FIFO heads, delivers, rewrites the wake cache.
+- `message sweep` — the detached helper spawned by the sidebar elder when a message wake stamp comes due; finds ready FIFO heads, delivers, backs off blocked heads, rewrites the wake cache.
 
 ## Hazards
 

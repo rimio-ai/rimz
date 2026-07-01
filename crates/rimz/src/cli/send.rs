@@ -190,6 +190,7 @@ pub(crate) fn message_for_target(
         last_error: None,
         delivered_at: None,
         not_before: None,
+        retry_after: None,
         auto_compact: draft.auto_compact,
         compacted_context_tokens: None,
     }
