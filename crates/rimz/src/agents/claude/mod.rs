@@ -18,6 +18,7 @@
 //! broad `PreToolUse` hook and self-classify from `tool_name`.
 
 pub(crate) mod account;
+mod ask;
 mod install;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
@@ -44,9 +45,9 @@ use self::payloads::{
     ClaudeCommon, ClaudePermissionBehavior, ClaudePermissionDecisionOutput,
     ClaudePermissionHookOutput, ClaudePostCompact, ClaudePreToolUseDecisionOutput,
     ClaudePreToolUseHookOutput, ClaudeSessionStart, ClaudeStop, ClaudeSubagentStart,
-    ClaudeSubagentStop, ClaudeUserPromptSubmit, parse_post_compact, parse_pre_tool_use,
-    parse_session_start, parse_stop, parse_stop_failure, parse_subagent_start, parse_subagent_stop,
-    parse_user_prompt_submit,
+    ClaudeSubagentStop, ClaudeUserPromptSubmit, parse_post_compact, parse_post_tool_use,
+    parse_pre_tool_use, parse_session_start, parse_stop, parse_stop_failure, parse_subagent_start,
+    parse_subagent_stop, parse_user_prompt_submit,
 };
 use super::RemoteControlStatus;
 #[cfg(test)]
@@ -693,6 +694,22 @@ impl AgentAdapter for ClaudeAdapter {
         // the child and the lifecycle channel drops the event entirely
         // (`resolve_root_identity`) — neither can settle the parent's ask.
         matches!(event_name, "Stop" | "UserPromptSubmit")
+    }
+
+    fn ask_question_summary(&self, event_name: &str, payload: &Value) -> Option<String> {
+        if event_name != "PreToolUse" {
+            return None;
+        }
+        let parsed = parse_pre_tool_use(payload);
+        ask::question_summary(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
+    }
+
+    fn native_ask_answer(&self, event_name: &str, payload: &Value) -> Option<String> {
+        if event_name != "PostToolUse" {
+            return None;
+        }
+        let parsed = parse_post_tool_use(payload);
+        ask::answer_summary(parsed.tool_name.as_deref()?, parsed.tool_response.as_ref()?)
     }
 
     fn observe_lifecycle(

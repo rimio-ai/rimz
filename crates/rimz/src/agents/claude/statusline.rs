@@ -302,7 +302,9 @@ pub(crate) fn last_assistant_message(tail: &str) -> Option<String> {
         if value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true) {
             return None;
         }
-        return conversation_text(&value);
+        if let Some(text) = conversation_text(&value) {
+            return Some(text);
+        }
     }
     None
 }
@@ -761,9 +763,19 @@ mod tests {
         let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n{sidechain}\n");
         assert_eq!(last_assistant_message(&tail).as_deref(), Some("done"));
 
+        let tool_only = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[]}}]}}"#;
+        let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n{tool_only}\n");
+        assert_eq!(last_assistant_message(&tail).as_deref(), Some("done"));
+
         let prior_turn = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"previous turn"}]}}"#;
         let user =
             r#"{"type":"user","message":{"content":[{"type":"text","text":"current prompt"}]}}"#;
+        let tail = format!("{prior_turn}\n{user}\n{tool_only}\n");
+        assert!(last_assistant_message(&tail).is_none());
+
+        let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n{API_ERROR_ENTRY}\n");
+        assert!(last_assistant_message(&tail).is_none());
+
         let tail = format!("{prior_turn}\n{user}\n{API_ERROR_ENTRY}\n{TURN_DURATION_ENTRY}\n");
 
         assert!(last_assistant_message(&tail).is_none());

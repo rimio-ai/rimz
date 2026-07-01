@@ -184,7 +184,11 @@ fn transcript_ask_entry(
         .last_assistant_message(event_name, &item.payload, &observation)
         .map(|message| message.trim().to_owned())
         .filter(|message| !message.is_empty());
-    let questions = rimz::feed::ask_summary(&item.title, item.body.as_deref(), &item.options);
+    let questions = agent
+        .ask_question_summary(event_name, &item.payload)
+        .unwrap_or_else(|| {
+            rimz::feed::ask_summary(&item.title, item.body.as_deref(), &item.options)
+        });
     let text = match last {
         Some(last) => format!("{last}\n\n{questions}"),
         None => questions,

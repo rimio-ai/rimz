@@ -126,6 +126,83 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
 }
 
 #[test]
+fn transcript_records_native_ask_question_context_and_answer() {
+    let env = Env::new();
+    let branch = "native-ask-transcript";
+    let session_id = "sess-native-ask";
+    let claude_path = env.home_root.join("native-ask-chat.jsonl");
+    write_claude_ask_transcript(&claude_path, "here is my read");
+    let transcript = claude_path.to_string_lossy().into_owned();
+
+    run_hook(
+        &env,
+        "claude",
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": session_id,
+            "worktree_branch": branch,
+            "transcript_path": transcript.as_str(),
+        }),
+    );
+    run_hook(
+        &env,
+        "claude",
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": session_id,
+            "prompt": "review deployment options",
+            "worktree_branch": branch,
+            "transcript_path": transcript.as_str(),
+        }),
+    );
+    run_hook(
+        &env,
+        "claude",
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": session_id,
+            "tool_name": "AskUserQuestion",
+            "tool_input": {
+                "questions": [{
+                    "question": "Choose deployment path?",
+                    "options": [{ "label": "safe" }, { "label": "fast" }]
+                }]
+            },
+            "worktree_branch": branch,
+            "transcript_path": transcript.as_str(),
+        }),
+    );
+    run_hook(
+        &env,
+        "claude",
+        json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": session_id,
+            "tool_name": "AskUserQuestion",
+            "tool_response": { "answers": ["safe"] },
+            "worktree_branch": branch,
+            "transcript_path": transcript.as_str(),
+        }),
+    );
+
+    let output = run_ok(env.rimz().args(["transcript", &format!("#{branch}")]));
+    assert!(output.contains("here is my read"), "{output}");
+    assert!(
+        output.contains("Choose deployment path? [safe, fast]"),
+        "{output}"
+    );
+    assert!(output.contains("you: @claude, safe"), "{output}");
+    assert!(!output.contains("claude needs attention"), "{output}");
+
+    let feed = env.feed_list_json();
+    let items = feed.as_array().expect("feed items");
+    assert!(
+        items.iter().all(|item| item["status"] != "pending"),
+        "{feed}"
+    );
+}
+
+#[test]
 fn transcript_groups_chronological_entries_across_append_order() {
     let env = Env::new();
     let branch = "chronological-transcript";
@@ -327,6 +404,18 @@ fn write_claude_transcript(path: &std::path::Path, draft: &str, final_message: &
             + "\n",
     )
     .expect("write claude transcript");
+}
+
+fn write_claude_ask_transcript(path: &std::path::Path, message: &str) {
+    std::fs::write(
+        path,
+        format!(
+            r#"{{"type":"assistant","timestamp":"2026-06-01T00:00:01Z","message":{{"content":[{{"type":"text","text":"{message}"}}]}}}}"#
+        ) + "\n"
+            + r#"{"type":"assistant","timestamp":"2026-06-01T00:00:02Z","message":{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[]}}]}}"#
+            + "\n",
+    )
+    .expect("write claude ask transcript");
 }
 
 fn register_claude_turn(

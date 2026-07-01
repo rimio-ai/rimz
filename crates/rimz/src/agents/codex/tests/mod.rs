@@ -133,6 +133,38 @@ fn codex_descriptor_declares_lazy_registration_and_idle_card_fallbacks() {
 }
 
 #[test]
+fn codex_question_summary_reads_request_user_input_questions() {
+    let summary = CodexAdapter.ask_question_summary(
+        "PreToolUse",
+        &json!({
+            "tool_name": "request_user_input",
+            "tool_input": {
+                "questions": [
+                    { "question": "Pick a migration path?" },
+                    { "question": "Notify users?" }
+                ]
+            }
+        }),
+    );
+
+    assert_eq!(
+        summary.as_deref(),
+        Some("Pick a migration path?\nNotify users?")
+    );
+    assert!(
+        CodexAdapter
+            .ask_question_summary(
+                "PreToolUse",
+                &json!({
+                    "tool_name": "shell",
+                    "tool_input": { "questions": [{ "question": "ignored" }] }
+                }),
+            )
+            .is_none()
+    );
+}
+
+#[test]
 fn configured_model_and_reasoning_effort_read_codex_config() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");

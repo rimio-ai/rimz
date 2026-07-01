@@ -25,6 +25,7 @@ pub(super) fn handle_lifecycle_hook(
         globals,
         fallback_expiry,
     );
+    record_native_answer(workspace, ledger, agent, event_name, payload);
     let model_hint = recorded
         .as_ref()
         .and_then(|recorded| recorded.model_hint.as_deref());
@@ -90,6 +91,86 @@ pub(super) fn handle_lifecycle_hook(
         }
     }
     Ok(())
+}
+
+fn record_native_answer(
+    workspace: &ResolvedWorkspace,
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    payload: &Value,
+) {
+    let Some(answer) = agent
+        .native_ask_answer(event_name, payload)
+        .map(|answer| answer.trim().to_owned())
+        .filter(|answer| !answer.is_empty())
+    else {
+        return;
+    };
+    let Some(agent_id) = payload_agent_id(payload) else {
+        return;
+    };
+
+    // Bridge asks already record resolver answers when resolved. A native answer
+    // is recorded only when there is a pending native_ui ask to clear.
+    match ledger.expire_agent_native_ui_asks(
+        agent.descriptor().kind,
+        agent_id,
+        &workspace.session_name,
+    ) {
+        Ok(0) => return,
+        Ok(_) => {}
+        Err(err) => {
+            warn!(
+                agent = agent.descriptor().kind,
+                event = %event_name,
+                agent_id,
+                error = %err,
+                "lifecycle: failed to expire the answered native ask",
+            );
+            return;
+        }
+    }
+
+    let worktree_path = payload
+        .get("worktree_path")
+        .or_else(|| payload.get("cwd"))
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| Cow::Owned(workspace.worktree_root.display().to_string()));
+    let channel = rimz::target::compose_channel(
+        None,
+        payload
+            .get("worktree_branch")
+            .and_then(Value::as_str)
+            .filter(|branch| !branch.is_empty())
+            .or(workspace.worktree_branch.as_deref()),
+        path_basename(&worktree_path),
+        None,
+    );
+    let entry = rimz::ledger::transcript_log::TranscriptEntry {
+        at: jiff::Timestamp::now(),
+        kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+        agent_id: rimz::ids::AgentSessionId::from(agent_id),
+        channel,
+        name: None,
+        profile: None,
+        role: None,
+        entry: rimz::ledger::transcript_log::TranscriptKind::Answer,
+        request_id: None,
+        from: Some("you".to_owned()),
+        text: answer,
+    };
+    if let Err(err) = rimz::ledger::transcript_log::append(ledger.paths(), &entry) {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = %event_name,
+            agent_id,
+            error = %err,
+            "lifecycle: failed to record native ask answer",
+        );
+    }
 }
 
 struct RecordedLifecycle {

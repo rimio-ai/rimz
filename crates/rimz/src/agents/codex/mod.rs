@@ -36,6 +36,7 @@ mod transcript;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde::Deserialize;
 use serde_json::Value;
 
 use jiff::Timestamp;
@@ -118,6 +119,32 @@ pub const ENV_INTERNAL_APP_SERVER: &str = "RIMZ_CODEX_INTERNAL_APP_SERVER";
 /// non-empty). The hook entrypoint reads this to suppress re-entrant feeds.
 pub fn spawned_as_internal_app_server() -> bool {
     std::env::var_os(ENV_INTERNAL_APP_SERVER).is_some_and(|value| !value.is_empty())
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct CodexQuestionInput {
+    questions: Vec<CodexQuestion>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct CodexQuestion {
+    question: Option<String>,
+}
+
+fn codex_question_summary(tool_name: &str, tool_input: &Value) -> Option<String> {
+    if tool_name != "request_user_input" {
+        return None;
+    }
+    let parsed: CodexQuestionInput = serde_json::from_value(tool_input.clone()).ok()?;
+    let text = parsed
+        .questions
+        .into_iter()
+        .filter_map(|question| question.question.as_deref().and_then(non_empty_trimmed))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
 }
 
 /// Everything `const` about Codex, in one place. See [`AgentDescriptor`] for
@@ -652,6 +679,14 @@ impl AgentAdapter for CodexAdapter {
         // the agent's own UI then asks the human. Per docs/internals/agents/agent.md:
         // never emit `updatedInput` / `interrupt` for Codex permission hooks.
         Ok(None)
+    }
+
+    fn ask_question_summary(&self, event_name: &str, payload: &Value) -> Option<String> {
+        if event_name != "PreToolUse" {
+            return None;
+        }
+        let parsed = parse_pre_tool_use(payload);
+        codex_question_summary(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
     }
 
     fn moves_on(&self, event_name: &str) -> bool {

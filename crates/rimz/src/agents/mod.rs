@@ -527,6 +527,20 @@ pub trait AgentAdapter: Send + Sync {
         false
     }
 
+    /// Human-readable question/options text for a blocking ask hook, parsed from
+    /// the agent-native payload. `None` means the caller falls back to the generic
+    /// feed title.
+    fn ask_question_summary(&self, _event_name: &str, _payload: &Value) -> Option<String> {
+        None
+    }
+
+    /// Answer text reported when a native ask completes in the agent's own UI.
+    /// `Some` drives both the transcript answer entry and pending native ask
+    /// expiry; `None` means this event carries no native ask answer.
+    fn native_ask_answer(&self, _event_name: &str, _payload: &Value) -> Option<String> {
+        None
+    }
+
     /// A detached `rimz` helper to spawn after this lifecycle event is
     /// recorded — the out-of-band enrichment lane (Codex refreshes its
     /// app-server context on turn boundaries). The CLI spawns it with fresh,
