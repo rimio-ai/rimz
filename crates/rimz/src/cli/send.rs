@@ -186,6 +186,7 @@ pub(crate) fn message_for_target(
         enqueued_at: now,
         updated_at: now,
         attempts: 0,
+        unconfirmed_sends: 0,
         last_attempt_at: None,
         last_error: None,
         delivered_at: None,

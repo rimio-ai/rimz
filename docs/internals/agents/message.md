@@ -38,7 +38,9 @@ A record stores:
 | `pane_id` | pane address when known at enqueue time |
 | `status` | lifecycle state (see below) |
 | `enqueued_at`, `updated_at`, `delivered_at` | timestamps |
-| `attempts`, `last_attempt_at`, `last_error` | retry bookkeeping |
+| `attempts`, `last_attempt_at` | pre-send claim retry bookkeeping; `attempts` gates `Abandoned` |
+| `unconfirmed_sends` | unconfirmed `Sent` retry count; gates `TimedOut` |
+| `last_error` | latest delivery or reconciliation error |
 | `not_before` | earliest delivery time for scheduled messages |
 | `retry_after` | wake-only retry floor set by the elder sweep; it never gates FIFO readiness |
 | `auto_compact` | context-fill threshold that triggers a `/compact` before delivery |
@@ -120,7 +122,7 @@ The helper follows a strict sequence:
 
 1. **Settle** — wait a short delay (400 ms default, `RIMZ_MESSAGE_SETTLE_MS` overrides for tests) for the agent state to stabilize.
 2. **Candidate check** — read the queued head, verify `not_before` has passed, gate is open against a fresh snapshot, pending-ask predicate holds (skipped under `force`), and a live pane exists.
-3. **Claim** — under the workspace lock, transition the record from `Queued` to `Claimed` and increment the attempt count. The claim moves the record out of the queued scan immediately before sending.
+3. **Claim** — under the workspace lock, transition the record from `Queued` to `Claimed` and increment the pre-send attempt count. The claim moves the record out of the queued scan immediately before sending.
 4. **Send** — write text to the live pane through the same bracketed-paste path as `--steer`. Smart compaction prepends a fresh `Command` record at delivery time before the claimed prompt.
 5. **Record send** — a successful pane write moves the record to `Sent`, still live until the agent confirms it or the reconciler times it out.
 
@@ -131,13 +133,13 @@ The agent's next body-matching lifecycle hook confirms the oldest `Sent` record 
 - `TurnStarted` confirms a `Prompt` body → `Delivered`.
 - `Compacting` confirms a `Command` body → `Delivered`.
 
-One cannot confirm the other. A smart-compact send owns two records: the `/compact` command confirms on `Compacting`, and the prompt confirms on `TurnStarted`. A `Sent` record that remains unconfirmed for `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` returns to `Queued` through the sweep reconciler up to `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` attempts (3 by default), then becomes `TimedOut`.
+One cannot confirm the other. A smart-compact send owns two records: the `/compact` command confirms on `Compacting`, and the prompt confirms on `TurnStarted`. A `Sent` record that remains unconfirmed for `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` returns to `Queued` through the sweep reconciler while incrementing `unconfirmed_sends` up to `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` (3 by default), then becomes `TimedOut`. The pre-send `attempts` counter stays separate.
 
 ### Retry and failure
 
-- **Pre-send failure** (pane gone, gate closed, pending ask blocks): revert the record to `Queued` with `last_error` and the claim timestamp as throttle. The next qualifying turn boundary retries.
-- **Unconfirmed send** (bytes were written but no matching lifecycle confirmation arrives): the sweep reconciler clears the pane id, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. After the unconfirmed-send cap, the record becomes `TimedOut`.
-- **Pre-send retry cap**: after `MAX_DELIVERY_ATTEMPTS` (5) pre-send failures become `Abandoned`.
+- **Pre-send failure** (pane gone, gate closed, pending ask blocks): a claim increments `attempts`, then the failure reverts the record to `Queued` with `last_error` and the claim timestamp as throttle. The next qualifying turn boundary retries.
+- **Unconfirmed send** (bytes were written but no matching lifecycle confirmation arrives): the sweep reconciler clears the pane id, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. After the unconfirmed-send cap, the record becomes `TimedOut`.
+- **Independent caps**: `unconfirmed_sends` gates the unconfirmed-send cap (`RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS`, 3 by default); `attempts` gates the pre-send cap (`MAX_DELIVERY_ATTEMPTS`, 5). A claim increments `attempts` only, and a stale-`Sent` requeue increments `unconfirmed_sends` only.
 - **Claim TTL**: a `Claimed` record older than 15 s (`CLAIM_TTL`) is treated as expired, so a crash after claim leaves a redeliverable record. `message list --all` surfaces it.
 - A state miss — the message is queued but the agent has not reached a qualifying boundary — leaves the message queued for a later transition.
 
@@ -146,7 +148,7 @@ One cannot confirm the other. A smart-compact send owns two records: the `/compa
 | Trigger | Terminal status |
 | --- | --- |
 | Agent's next lifecycle hook confirms the body | `Delivered` |
-| Unconfirmed `Sent` record reaches the reconcile attempt cap | `TimedOut` |
+| Unconfirmed `Sent` record reaches the unconfirmed-send cap | `TimedOut` |
 | Pane write fails after bytes were written | `Errored` |
 | User runs `message remove` | `Removed` |
 | Retry cap exceeded | `Abandoned` |
@@ -218,14 +220,14 @@ Every status transition appends a typed event to `events.log.jsonl`. The event m
 
 `message.queued` · `message.sent` · `message.delivered` · `message.timed_out` · `message.errored` · `message.removed` · `message.abandoned` · `message.archived`
 
-The payload carries `message_id`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body` (Prompt or Command), `pane_id` (when known), `forced` flag, `sender` attribution, `text_len`, `attempts`, timestamps, compaction baseline, and `reason` (on error or abandon). **Message content stays in the live message record, never in the event.**
+The payload carries `message_id`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body` (Prompt or Command), `pane_id` (when known), `forced` flag, `sender` attribution, `text_len`, `attempts`, `unconfirmed_sends`, timestamps, compaction baseline, and `reason` (on error or abandon). **Message content stays in the live message record, never in the event.**
 
 ## Subcommands
 
 **User-facing:**
 
-- `message list` — defaults to the current channel, hides archived records, sorts newest first, renders `ID STATUS TARGET FROM CREATED DELIVERED TEXT`. Live rows come from `messages/messages.jsonl` and include text; terminal rows come from the event log and omit text. `--all` widens the view, `--channel <NAME>` selects one channel, `--status <STATUS>` filters exactly, `--json` emits the merged projection including attempts.
-- `message status <msg_id>` — prints one live record or terminal projection as key/value detail: status, target, sender, channel, timestamps, attempts, last error, and text preview when the live record still exists.
+- `message list` — defaults to the current channel, hides archived records, sorts newest first, renders `ID STATUS TARGET FROM CREATED DELIVERED TEXT`. Live rows come from `messages/messages.jsonl` and include text; terminal rows come from the event log and omit text. `--all` widens the view, `--channel <NAME>` selects one channel, `--status <STATUS>` filters exactly, `--json` emits the merged projection including attempts and unconfirmed sends.
+- `message status <msg_id>` — prints one live record or terminal projection as key/value detail: status, target, sender, channel, timestamps, attempts, unconfirmed sends, last error, and text preview when the live record still exists.
 - `message remove <msg_id>` — removes a queued or claimed message → `Removed`.
 - `message clear <target>` — removes every open message for one agent card. Accepts `--worktree` and `--channel` for scoping.
 

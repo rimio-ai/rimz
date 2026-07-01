@@ -138,6 +138,8 @@ pub struct MessageEventPayload {
     pub text_len: usize,
     pub enter: bool,
     pub attempts: u32,
+    #[serde(default)]
+    pub unconfirmed_sends: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<MessageSender>,
     #[serde(default)]
@@ -166,6 +168,7 @@ impl MessageEventPayload {
             text_len: message.text.len(),
             enter: message.enter,
             attempts: message.attempts,
+            unconfirmed_sends: message.unconfirmed_sends,
             sender: message.sender.attributed(),
             reason: reason.map(ToOwned::to_owned),
             enqueued_at: Some(message.enqueued_at),

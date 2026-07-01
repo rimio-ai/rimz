@@ -420,6 +420,7 @@ struct MessageListRow {
     enqueued_at: Timestamp,
     updated_at: Timestamp,
     attempts: u32,
+    unconfirmed_sends: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_attempt_at: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -455,6 +456,7 @@ impl MessageListRow {
             enqueued_at: message.enqueued_at,
             updated_at: message.updated_at,
             attempts: message.attempts,
+            unconfirmed_sends: message.unconfirmed_sends,
             last_attempt_at: message.last_attempt_at,
             last_error: message.last_error,
             delivered_at: message.delivered_at,
@@ -489,6 +491,7 @@ impl MessageListRow {
             enqueued_at: payload.enqueued_at.unwrap_or(event.timestamp),
             updated_at: event.timestamp,
             attempts: payload.attempts,
+            unconfirmed_sends: payload.unconfirmed_sends,
             last_attempt_at: None,
             last_error: payload.reason,
             delivered_at,
@@ -1081,6 +1084,10 @@ fn status_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
         .dash(),
     );
     kv.push("attempts", render::cell(message.attempts.to_string()));
+    kv.push(
+        "unconfirmed_sends",
+        render::cell(message.unconfirmed_sends.to_string()),
+    );
     kv.push(
         "last_error",
         render::cell(message.last_error.clone().unwrap_or_else(|| "-".to_owned())).dash(),

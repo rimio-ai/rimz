@@ -342,7 +342,8 @@ fn stale_sent_message_requeues_before_attempt_cap() {
     let messages = ledger.list_messages().unwrap();
     assert_eq!(messages[0].status, MessageStatus::Queued);
     assert_eq!(messages[0].pane_id, None);
-    assert_eq!(messages[0].attempts, 1);
+    assert_eq!(messages[0].attempts, 0);
+    assert_eq!(messages[0].unconfirmed_sends, 1);
     assert_eq!(messages[0].last_attempt_at, None);
     assert_eq!(
         messages[0].last_error.as_deref(),
@@ -361,7 +362,7 @@ fn stale_sent_message_requeues_before_attempt_cap() {
 fn stale_sent_message_times_out_at_attempt_cap() {
     let (_dir, ledger, workspace_id) = ledger();
     let mut message = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
-    message.attempts = 3;
+    message.unconfirmed_sends = 3;
     ledger.record_sent_message(&message, "session").unwrap();
 
     let report = ledger

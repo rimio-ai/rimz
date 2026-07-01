@@ -1022,7 +1022,8 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
         .find(|message| message.message_id.as_str() == message_id)
         .expect("redelivered message");
     assert_eq!(sent.status, MessageStatus::Sent);
-    assert!(sent.attempts >= 2, "requeue plus claim counted attempts");
+    assert_eq!(sent.attempts, 1, "redelivery claim counted attempts");
+    assert_eq!(sent.unconfirmed_sends, 1);
 
     run_hook(
         &env,

@@ -341,6 +341,7 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
         enqueued_at: now,
         updated_at: now,
         attempts: 0,
+        unconfirmed_sends: 0,
         last_attempt_at: None,
         last_error: None,
         delivered_at: None,
@@ -368,6 +369,7 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
             "text_len": "secret prompt body".len(),
             "enter": true,
             "attempts": 0,
+            "unconfirmed_sends": 0,
             "reason": null,
             "enqueued_at": now,
         }),
@@ -386,6 +388,7 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
     assert_eq!(method, MessageEventMethod::Queued);
     assert_eq!(payload.message_id, message.message_id);
     assert_eq!(payload.text_len, "secret prompt body".len());
+    assert_eq!(payload.unconfirmed_sends, 0);
     assert_eq!(payload.reason, None);
     assert_eq!(payload.agent_name.as_deref(), Some("lucid-atlas"));
     assert_eq!(payload.enqueued_at, Some(now));

@@ -332,10 +332,10 @@ impl Ledger {
                 if !age.is_negative() && age.as_millis() < window.as_millis() as i128 {
                     continue;
                 }
-                let (method, reason) = if message.attempts < max_attempts {
+                let (method, reason) = if message.unconfirmed_sends < max_attempts {
                     message.status = MessageStatus::Queued;
                     message.pane_id = None;
-                    message.attempts = message.attempts.saturating_add(1);
+                    message.unconfirmed_sends = message.unconfirmed_sends.saturating_add(1);
                     message.last_attempt_at = None;
                     message.retry_after = None;
                     message.last_error = Some("delivery unconfirmed; re-queued".to_owned());
@@ -344,7 +344,7 @@ impl Ledger {
                 } else {
                     message.status = MessageStatus::TimedOut;
                     message.last_error = Some(format!(
-                        "delivery unconfirmed after {max_attempts} attempts"
+                        "delivery unconfirmed after {max_attempts} unconfirmed sends"
                     ));
                     removed_ids.insert(message.message_id.to_string());
                     report.timed_out += 1;

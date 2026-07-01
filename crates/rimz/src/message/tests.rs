@@ -191,6 +191,28 @@ fn retry_after_defaults_absent_and_round_trips_when_set() {
 }
 
 #[test]
+fn unconfirmed_sends_defaults_absent_and_round_trips_when_set() {
+    let mut message = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        &agent("s1", None),
+        "next".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    assert_eq!(message.unconfirmed_sends, 0);
+
+    message.unconfirmed_sends = 2;
+    let json = serde_json::to_string(&message).unwrap();
+    let back: MessageRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.unconfirmed_sends, 2);
+
+    let mut legacy = serde_json::to_value(&back).unwrap();
+    legacy.as_object_mut().unwrap().remove("unconfirmed_sends");
+    let back: MessageRecord = serde_json::from_value(legacy).unwrap();
+    assert_eq!(back.unconfirmed_sends, 0);
+}
+
+#[test]
 fn sent_reconcile_deadline_uses_updated_at_only_for_sent_records() {
     let mut message = MessageRecord::new(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),

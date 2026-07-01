@@ -263,8 +263,15 @@ pub struct MessageRecord {
     pub status: MessageStatus,
     pub enqueued_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Delivery claims made against this record. Claim/pre-send failures use
+    /// this as the `MAX_DELIVERY_ATTEMPTS` guard.
     #[serde(default)]
     pub attempts: u32,
+    /// Sends that reached a pane but were not confirmed by a lifecycle hook.
+    /// Stale-`Sent` reconciliation uses this as the
+    /// `DEFAULT_MAX_DELIVERY_ATTEMPTS` guard.
+    #[serde(default)]
+    pub unconfirmed_sends: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_attempt_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,6 +328,7 @@ impl MessageRecord {
             enqueued_at: now,
             updated_at: now,
             attempts: 0,
+            unconfirmed_sends: 0,
             last_attempt_at: None,
             last_error: None,
             delivered_at: None,
