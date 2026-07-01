@@ -204,17 +204,19 @@ Pane capture is untrusted terminal text — scripts and resolvers match bounded 
 
 ## Schedule turns with loop
 
-`rimz loop` schedules one wake-up from the room's sidebar elder while a room for the task's project is open. A task uses either `--spec` to spawn one supervised transient pane, or `--bind` to deliver a prompt to one live agent session through the message path.
+`rimz loop` schedules work from the room's sidebar elder while a room for the task's project is open. A task uses `--spec` to spawn one supervised transient pane, `--bind` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action.
 
 ```sh
 rimz loop add morning --spec claude-ping --at 07:00 --days weekdays
 rimz loop add pr-watch --spec codex --prompt "check CI on the release PR" --every 15m --mode auto --root .
 rimz loop add self-wake --bind @planner --prompt "resume the review and fix the next blocking comment" --in 30m --root .
+rimz loop add watchdog --check "cargo test" --on fail --spec codex --prompt "fix the failing test" --every 15m
+rimz loop add ci-green --check "gh run watch --exit-status" --on success --until 30m --every 2m --bind @planner --prompt "CI is green; merge"
 rimz loop list
 rimz loop remove pr-watch
 ```
 
-Schedules come in four shapes: calendar (`--at` plus optional `--days`), interval (`--every 15m`), raw cron (`--cron`), and one-shot (`--once` or `--in 30m`). Calendar, cron, and `--in` wall-clock resolution use the top-level `timezone`, falling back to the system zone when unset. A `<kind>-ping` spec is the window-primer — `add` defaults its prompt to `ping`, and the run skips when the provider's window is already counting down. `--bind @<handle>` resolves the address immediately and pins the exact session id; if that session is gone when the task fires, Rimz skips delivery and removes the schedule. `loop add` records the intent and makes it live immediately for any open room rooted at that project. `loop list` shows the schedule, room state, run count, last-run age, and last result from the loop run history. The task model and config shape are in [loop.md](../../internals/agents/loop.md).
+Schedules come in five shapes: calendar (`--at` plus optional `--days`), interval (`--every 15m`), raw cron (`--cron`), one-shot (`--once` or `--in 30m`), and poll-until (`--every`, `--check`, `--on`, `--until`, plus an agent action). Calendar, cron, `--in`, and `--until` resolution use the top-level `timezone`, falling back to the system zone when unset. A `<kind>-ping` spec is the window-primer — `add` defaults its prompt to `ping`, and the run skips when the provider's window is already counting down. `--bind @<handle>` resolves the address immediately and pins the exact session id; if that session is gone when the task fires, Rimz skips delivery and removes the schedule. `--check` runs at the project root; `--on fail` wakes on non-zero exit or timeout, while `--on success` wakes on zero exit. Rimz-generated `--in`, `--once`, and `--until` tasks persist as state, not `loop.toml` config. `loop list` shows source, schedule, room state, run count, last-run age, and last result from the loop run history. The task model and config shape are in [loop.md](../../internals/agents/loop.md).
 
 ## Manage Rimz-owned worktrees
 

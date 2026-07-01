@@ -1,19 +1,21 @@
-//! `rimz loop` — schedule agent wake-ups from the room's sidebar elder.
+//! `rimz loop` — schedule wake-ups and command checks from the room's sidebar elder.
 //!
 //! The elected sidebar elder keeps time while a room for the task's project is
-//! open and fires `rimz loop run <name>`, which drives one configured prompt
-//! through either the supervised `agents -p` seam or the message path to a pinned
-//! live session. A `<kind>-ping` virtual cell is the window-priming special case
-//! and gets the budget-window skip optimization.
+//! open and fires `rimz loop run <name>`, which runs an optional shell check and
+//! then drives one configured prompt through either the supervised `agents -p`
+//! seam or the message path to a pinned live session. A `<kind>-ping` virtual
+//! cell is the window-priming special case and gets the budget-window skip
+//! optimization.
 //!
 //! This handler parses and edits the per-machine config, lists room-open state,
 //! and owns the hidden runner the elder spawns. The pure schedule parsing and
 //! due evaluation live in [`rimz::schedule`]; delivery mode reuses the shared
-//! message seam.
+//! message seam, and ephemeral self-wakes live in [`rimz::loop_instances`].
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -22,7 +24,7 @@ use toml_edit::{DocumentMut, Item, Table, value};
 
 use rimz::agents::{find_adapter, hook_trust_fix};
 use rimz::agents_spec::{self, Cell, LayoutSpec};
-use rimz::config::{MachineConfig, TaskEntry, TaskTarget};
+use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use rimz::ids::WorkspaceId;
 use rimz::ledger::atomic::write_bytes_atomically;
 use rimz::ledger::paths::{RuntimePaths, config_home, runtime_home, state_home};
@@ -36,6 +38,10 @@ use rimz::workspace::WorkspaceResolver;
 
 use super::GlobalFlags;
 use super::render as ui;
+
+const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
+const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const CHECK_OUTPUT_CAP: usize = 16 * 1024;
 
 #[derive(Debug, Args)]
 pub struct LoopArgs {
@@ -72,6 +78,15 @@ struct AddArgs {
     /// File whose contents are used as the scheduled prompt.
     #[arg(long = "prompt-file", value_name = "PATH")]
     prompt_file: Option<PathBuf>,
+    /// Shell command to run before any agent action.
+    #[arg(long, value_name = "CMD")]
+    check: Option<String>,
+    /// Guard polarity for --check: fail wakes on non-zero exit, success wakes on zero exit.
+    #[arg(long, value_name = "fail|success")]
+    on: Option<String>,
+    /// Poll-until deadline as a duration such as `30m`; resolves at add time.
+    #[arg(long, value_name = "DUR")]
+    until: Option<String>,
     /// Daily firing time, 24-hour `HH:MM` in the configured timezone.
     #[arg(long, conflicts_with_all = ["every", "cron", "in_after"])]
     at: Option<String>,
@@ -128,11 +143,34 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
 
 fn add(args: AddArgs) -> Result<()> {
     schedule::validate_name(&args.name)?;
+    let has_agent_action = args.spec.is_some() || args.bind.is_some();
+    if !has_agent_action && args.check.is_none() {
+        bail!("loop task `{}` needs --spec, --bind, or --check", args.name);
+    }
+    if args.on.is_some() && args.check.is_none() {
+        bail!("--on requires --check");
+    }
+    if args.until.is_some() {
+        if args.check.is_none() {
+            bail!("--until requires --check");
+        }
+        if args.every.is_none() {
+            bail!("--until requires --every");
+        }
+        if !has_agent_action {
+            bail!("--until requires --spec or --bind");
+        }
+        if args.once {
+            bail!("--until conflicts with --once");
+        }
+        if args.in_after.is_some() {
+            bail!("--until conflicts with --in");
+        }
+    }
     let workspace = WorkspaceResolver::resolve(&args.root, None)
         .with_context(|| format!("resolving project root at {}", args.root.display()))?;
     let target = match args.bind.as_deref() {
         Some(address) => Some(resolve_delivery_target(&workspace, &args, address)?),
-        None if args.spec.is_none() => bail!("loop task `{}` needs --spec or --bind", args.name),
         None => None,
     };
     let resolved = match args.spec.as_deref() {
@@ -149,29 +187,37 @@ fn add(args: AddArgs) -> Result<()> {
     let mode = if target.is_some() {
         reject_delivery_spawn_flags(&args)?;
         None
+    } else if resolved.is_none() {
+        reject_check_only_agent_flags(&args)?;
+        None
     } else {
         args.mode.as_deref().map(parse_mode).transpose()?
     };
     if let Some(timeout) = args.timeout.as_deref() {
         parse_task_timeout(timeout).map_err(|err| anyhow::anyhow!("{err}"))?;
     }
-    let (at, days, once) = resolve_add_timing(&args)?;
+    let on = args.on.as_deref().map(parse_check_on).transpose()?;
+    let (at, days, once, deadline) = resolve_add_timing(&args)?;
     let prompt = if is_ping && args.prompt.is_none() && args.prompt_file.is_none() {
         Some("ping".to_owned())
     } else {
         args.prompt
     };
-    if prompt.is_none() && args.prompt_file.is_none() {
+    if has_agent_action && prompt.is_none() && args.prompt_file.is_none() {
         bail!(
             "loop task `{}` needs a prompt; pass --prompt or --prompt-file",
             args.name
         );
     }
+    let check = args.check;
+    let uses_check_timeout = check.is_some();
     let entry = TaskEntry {
         spec: args.spec,
         bind: target,
         prompt,
         prompt_file: args.prompt_file,
+        check,
+        on,
         root: workspace.project_root,
         worktree: if resolved.is_some() {
             args.worktree
@@ -189,7 +235,7 @@ fn add(args: AddArgs) -> Result<()> {
         } else {
             None
         },
-        timeout: if resolved.is_some() {
+        timeout: if resolved.is_some() || uses_check_timeout {
             args.timeout
         } else {
             None
@@ -198,11 +244,14 @@ fn add(args: AddArgs) -> Result<()> {
         days,
         every: args.every,
         cron: args.cron,
+        deadline,
         once,
     };
     // Validate the firing time before writing, so a bad `--at`/`--days` fails here.
     let parsed = schedule::parse_schedule(&args.name, &entry)?;
-    preflight_entry(&args.name, &entry, resolved.as_ref())?;
+    if has_agent_action {
+        preflight_entry(&args.name, &entry, resolved.as_ref())?;
+    }
     if is_ephemeral(&entry) {
         loop_instances::insert(&args.name, &entry)?;
     } else {
@@ -300,9 +349,11 @@ fn loop_result_cell(result: LoopRunResult) -> ui::Cell {
         LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::Errored => {
             ui::palette::ALARM
         }
-        LoopRunResult::Canceled | LoopRunResult::TargetGone | LoopRunResult::SkippedWindow => {
-            ui::palette::WARN
-        }
+        LoopRunResult::Expired
+        | LoopRunResult::Canceled
+        | LoopRunResult::TargetGone
+        | LoopRunResult::SkippedWindow => ui::palette::WARN,
+        LoopRunResult::CheckSkipped => ui::palette::MUTED,
     };
     ui::cell(result.label()).fg(style)
 }
@@ -319,11 +370,45 @@ fn loop_record(task: &str, result: LoopRunResult) -> LoopRunRecord {
 
 fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
     let (entry, source) = load_entry(name)?;
-    if let TaskMode::Deliver(target) = task_mode(name, &entry)? {
-        return run_delivery_task(name, &entry, source, target, globals);
+    let action = task_action(name, &entry)?;
+    if deadline_expired(&entry) {
+        let _ = remove_task(name, source)?;
+        loop_run_log::append(&loop_record(name, LoopRunResult::Expired));
+        return Ok(());
     }
+    let prompt_override = match entry.check.as_deref() {
+        Some(cmd) => {
+            let outcome = run_check(
+                &entry.resolved_root(),
+                cmd,
+                check_timeout(&entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
+            )?;
+            match action {
+                TaskAction::CheckOnly => {
+                    if is_ephemeral(&entry) {
+                        let _ = remove_task(name, source)?;
+                    }
+                    loop_run_log::append(&loop_record(name, check_only_result(&outcome)));
+                    return Ok(());
+                }
+                TaskAction::Spawn(_) | TaskAction::Deliver(_) => {
+                    if !polarity_fires(entry.on, &outcome) {
+                        loop_run_log::append(&loop_record(name, LoopRunResult::CheckSkipped));
+                        return Ok(());
+                    }
+                    Some(augment_prompt(resolve_task_prompt(&entry)?, cmd, &outcome))
+                }
+            }
+        }
+        None => None,
+    };
+    let TaskAction::Spawn(spec) = action else {
+        if let TaskAction::Deliver(target) = action {
+            return run_delivery_task(name, &entry, source, target, prompt_override, globals);
+        }
+        unreachable!("check-only task without check is rejected by task_action");
+    };
     let resolved = preflight_task(&entry)?;
-    let spec = spawn_spec(name, &entry)?;
     let is_ping = agents_spec::virtual_ping_shape(spec);
     // The ping exists only to *start* a sliding budget window, so a token spent on
     // one already counting down buys nothing — skip it. Best-effort: an unknown or
@@ -337,7 +422,10 @@ fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
         loop_run_log::append(&loop_record(name, LoopRunResult::SkippedWindow));
         return Ok(());
     }
-    let prompt = resolve_task_prompt(&entry)?;
+    let prompt = match prompt_override {
+        Some(prompt) => prompt,
+        None => resolve_task_prompt(&entry)?,
+    };
     let system_prompt_file = entry
         .system_prompt_file
         .as_deref()
@@ -389,6 +477,7 @@ fn run_delivery_task(
     entry: &TaskEntry,
     source: TaskSource,
     target: &TaskTarget,
+    prompt_override: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
     if !delivery_target_alive(entry, target)? {
@@ -401,7 +490,10 @@ fn run_delivery_task(
         loop_run_log::append(&loop_record(name, LoopRunResult::TargetGone));
         return Ok(());
     }
-    let prompt = resolve_task_prompt(entry)?;
+    let prompt = match prompt_override {
+        Some(prompt) => prompt,
+        None => resolve_task_prompt(entry)?,
+    };
     if is_ephemeral(entry) {
         let _ = remove_task(name, source)?;
     }
@@ -452,12 +544,121 @@ fn queue_resolution_miss(err: &anyhow::Error) -> bool {
     )
 }
 
+struct CheckOutcome {
+    passed: bool,
+    timed_out: bool,
+    output: String,
+    code: Option<i32>,
+}
+
+fn deadline_expired(entry: &TaskEntry) -> bool {
+    entry
+        .deadline
+        .is_some_and(|deadline| Timestamp::now() >= deadline)
+}
+
+fn check_timeout(entry: &TaskEntry) -> Result<Option<Duration>> {
+    entry
+        .timeout
+        .as_deref()
+        .map(parse_task_timeout)
+        .transpose()
+        .map_err(|err| anyhow::anyhow!("{err}"))
+}
+
+fn check_only_result(outcome: &CheckOutcome) -> LoopRunResult {
+    if outcome.timed_out {
+        LoopRunResult::TimedOut
+    } else if outcome.passed {
+        LoopRunResult::Completed
+    } else {
+        LoopRunResult::Failed
+    }
+}
+
+fn polarity_fires(on: Option<CheckOn>, outcome: &CheckOutcome) -> bool {
+    match on.unwrap_or_default() {
+        CheckOn::Fail => !outcome.passed,
+        CheckOn::Success => outcome.passed,
+    }
+}
+
+fn augment_prompt(base: String, cmd: &str, outcome: &CheckOutcome) -> String {
+    let status = if outcome.timed_out {
+        "timeout".to_owned()
+    } else {
+        outcome
+            .code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "signal".to_owned())
+    };
+    format!(
+        "{base}\n\n--- check `{cmd}` exited {status} ---\n{}",
+        outcome.output
+    )
+}
+
+fn run_check(dir: &Path, cmd: &str, timeout: Duration) -> Result<CheckOutcome> {
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("running loop check `{cmd}` in {}", dir.display()))?;
+    let stdout = drain_pipe(child.stdout.take());
+    let stderr = drain_pipe(child.stderr.take());
+    let deadline = Instant::now() + timeout;
+    let (status, timed_out) = loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("waiting for loop check `{cmd}`"))?
+        {
+            break (status, false);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let status = child
+                .wait()
+                .with_context(|| format!("reaping timed-out loop check `{cmd}`"))?;
+            break (status, true);
+        }
+        std::thread::sleep(CHECK_POLL_INTERVAL);
+    };
+    let mut output = stdout.join().unwrap_or_default();
+    output.extend(stderr.join().unwrap_or_default());
+    let output = tail_output(&output, CHECK_OUTPUT_CAP);
+    Ok(CheckOutcome {
+        passed: status.success() && !timed_out,
+        timed_out,
+        output,
+        code: status.code(),
+    })
+}
+
+fn drain_pipe(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    })
+}
+
+fn tail_output(bytes: &[u8], cap: usize) -> String {
+    let start = bytes.len().saturating_sub(cap);
+    String::from_utf8_lossy(&bytes[start..]).into_owned()
+}
+
 pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
     let mut reaped = 0;
     for (name, (entry, source)) in load_all() {
-        let target = match task_mode(&name, &entry) {
-            Ok(TaskMode::Deliver(target)) => target,
-            Ok(TaskMode::Spawn(_)) => continue,
+        let target = match task_action(&name, &entry) {
+            Ok(TaskAction::Deliver(target)) => target,
+            Ok(TaskAction::Spawn(_) | TaskAction::CheckOnly) => continue,
             Err(err) => {
                 tracing::debug!(task = %name, error = %err, "invalid loop task skipped by schedule gc");
                 continue;
@@ -495,9 +696,11 @@ struct ResolvedTaskSpec {
     kind: String,
 }
 
-enum TaskMode<'a> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TaskAction<'a> {
     Spawn(&'a str),
     Deliver(&'a TaskTarget),
+    CheckOnly,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -515,21 +718,15 @@ impl TaskSource {
     }
 }
 
-fn task_mode<'a>(name: &str, entry: &'a TaskEntry) -> Result<TaskMode<'a>> {
+fn task_action<'a>(name: &str, entry: &'a TaskEntry) -> Result<TaskAction<'a>> {
     match (entry.spec.as_deref(), entry.bind.as_ref()) {
-        (Some(spec), None) if !spec.trim().is_empty() => Ok(TaskMode::Spawn(spec)),
-        (None, Some(target)) => Ok(TaskMode::Deliver(target)),
+        (Some(spec), None) if !spec.trim().is_empty() => Ok(TaskAction::Spawn(spec)),
+        (None, Some(target)) => Ok(TaskAction::Deliver(target)),
+        (None, None) if entry.check.is_some() => Ok(TaskAction::CheckOnly),
         (Some(_), Some(_)) => {
             bail!("loop task `{name}` sets both `spec` and `bind`; keep exactly one")
         }
-        _ => bail!("loop task `{name}` needs `spec` or `bind`"),
-    }
-}
-
-fn spawn_spec<'a>(name: &str, entry: &'a TaskEntry) -> Result<&'a str> {
-    match task_mode(name, entry)? {
-        TaskMode::Spawn(spec) => Ok(spec),
-        TaskMode::Deliver(_) => bail!("loop task `{name}` targets a live instance, not a spec"),
+        _ => bail!("loop task `{name}` needs `spec`, `bind`, or `check`"),
     }
 }
 
@@ -538,13 +735,14 @@ fn preflight_entry(
     entry: &TaskEntry,
     resolved: Option<&ResolvedTaskSpec>,
 ) -> Result<()> {
-    match task_mode(name, entry)? {
-        TaskMode::Spawn(spec) => {
+    match task_action(name, entry)? {
+        TaskAction::Spawn(spec) => {
             let resolved = resolved
                 .with_context(|| format!("missing resolved loop task spec for `{spec}`"))?;
             preflight_resolved_task(spec, resolved)?;
         }
-        TaskMode::Deliver(target) => preflight_kind(&target.kind)?,
+        TaskAction::Deliver(target) => preflight_kind(&target.kind)?,
+        TaskAction::CheckOnly => {}
     }
     Ok(())
 }
@@ -554,6 +752,7 @@ fn task_subject(entry: &TaskEntry) -> String {
         .spec
         .clone()
         .or_else(|| entry.bind.as_ref().map(|target| target.handle.clone()))
+        .or_else(|| entry.check.as_ref().map(|_| "check".to_owned()))
         .unwrap_or_else(|| "<invalid>".to_owned())
 }
 
@@ -604,7 +803,7 @@ fn reject_delivery_spawn_flags(args: &AddArgs) -> Result<()> {
     if args.system_prompt_file.is_some() {
         flags.push("--system-prompt-file");
     }
-    if args.timeout.is_some() {
+    if args.timeout.is_some() && args.check.is_none() {
         flags.push("--timeout");
     }
     if flags.is_empty() {
@@ -612,6 +811,30 @@ fn reject_delivery_spawn_flags(args: &AddArgs) -> Result<()> {
     }
     bail!(
         "`{}` uses --bind, so {} only apply to --spec tasks",
+        args.name,
+        flags.join(", ")
+    )
+}
+
+fn reject_check_only_agent_flags(args: &AddArgs) -> Result<()> {
+    let mut flags = Vec::new();
+    if args.worktree.is_some() {
+        flags.push("--worktree");
+    }
+    if args.mode.is_some() {
+        flags.push("--mode");
+    }
+    if args.effort.is_some() {
+        flags.push("--effort");
+    }
+    if args.system_prompt_file.is_some() {
+        flags.push("--system-prompt-file");
+    }
+    if flags.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "`{}` uses --check without an agent action, so {} only apply to --spec tasks",
         args.name,
         flags.join(", ")
     )
@@ -756,12 +979,15 @@ fn remove_task(name: &str, source: TaskSource) -> Result<bool> {
 }
 
 fn is_ephemeral(entry: &TaskEntry) -> bool {
-    entry.once
+    entry.once || entry.deadline.is_some()
 }
 
-fn resolve_add_timing(args: &AddArgs) -> Result<(Option<String>, Option<String>, bool)> {
+fn resolve_add_timing(
+    args: &AddArgs,
+) -> Result<(Option<String>, Option<String>, bool, Option<Timestamp>)> {
+    let deadline = args.until.as_deref().map(resolve_deadline).transpose()?;
     let Some(raw) = args.in_after.as_deref() else {
-        return Ok((args.at.clone(), args.days.clone(), args.once));
+        return Ok((args.at.clone(), args.days.clone(), args.once, deadline));
     };
     let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
     if duration.is_zero() {
@@ -775,7 +1001,20 @@ fn resolve_add_timing(args: &AddArgs) -> Result<(Option<String>, Option<String>,
         Some(format!("{:02}:{:02}", target.hour(), target.minute())),
         Some(weekday_name(target.weekday()).to_owned()),
         true,
+        deadline,
     ))
+}
+
+fn resolve_deadline(raw: &str) -> Result<Timestamp> {
+    let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
+    if duration.is_zero() {
+        bail!("--until must be greater than zero");
+    }
+    Ok(Timestamp::now()
+        .to_zoned(MachineConfig::load_lenient().time_zone())
+        .checked_add(duration)
+        .context("resolving --until against the configured clock")?
+        .timestamp())
 }
 
 fn weekday_name(day: jiff::civil::Weekday) -> &'static str {
@@ -796,6 +1035,14 @@ fn parse_mode(raw: &str) -> Result<String> {
         "ask" => Ok("ask".to_owned()),
         "yolo" => Ok("yolo".to_owned()),
         other => bail!("unknown loop mode `{other}`; use auto, ask, or yolo"),
+    }
+}
+
+fn parse_check_on(raw: &str) -> Result<CheckOn> {
+    match raw.trim() {
+        "fail" => Ok(CheckOn::Fail),
+        "success" => Ok(CheckOn::Success),
+        other => bail!("unknown loop check polarity `{other}`; use fail or success"),
     }
 }
 
@@ -890,6 +1137,15 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
     if let Some(prompt_file) = &entry.prompt_file {
         table["prompt-file"] = value(prompt_file.to_string_lossy().into_owned());
     }
+    if let Some(check) = &entry.check {
+        table["check"] = value(check);
+    }
+    if let Some(on) = entry.on {
+        table["on"] = value(match on {
+            CheckOn::Fail => "fail",
+            CheckOn::Success => "success",
+        });
+    }
     table["root"] = value(entry.root.to_string_lossy().into_owned());
     if let Some(worktree) = &entry.worktree {
         table["worktree"] = value(worktree);
@@ -917,6 +1173,9 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
     }
     if let Some(cron) = &entry.cron {
         table["cron"] = value(cron);
+    }
+    if let Some(deadline) = entry.deadline {
+        table["deadline"] = value(deadline.to_string());
     }
     if entry.once {
         table["once"] = value(true);
@@ -969,4 +1228,72 @@ fn config_remove(name: &str) -> Result<bool> {
             .with_context(|| format!("writing {}", path.display()))?;
     }
     Ok(removed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_polarity_truth_table() {
+        let passed = CheckOutcome {
+            passed: true,
+            timed_out: false,
+            output: String::new(),
+            code: Some(0),
+        };
+        let failed = CheckOutcome {
+            passed: false,
+            timed_out: false,
+            output: String::new(),
+            code: Some(1),
+        };
+        let timed_out = CheckOutcome {
+            passed: false,
+            timed_out: true,
+            output: String::new(),
+            code: None,
+        };
+
+        assert!(!polarity_fires(Some(CheckOn::Fail), &passed));
+        assert!(polarity_fires(Some(CheckOn::Fail), &failed));
+        assert!(polarity_fires(Some(CheckOn::Fail), &timed_out));
+        assert!(polarity_fires(Some(CheckOn::Success), &passed));
+        assert!(!polarity_fires(Some(CheckOn::Success), &failed));
+        assert!(!polarity_fires(Some(CheckOn::Success), &timed_out));
+    }
+
+    #[test]
+    fn run_check_captures_output_and_status() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let passed = run_check(
+            dir.path(),
+            "printf out; printf err >&2",
+            Duration::from_secs(1),
+        )
+        .expect("passed check");
+        assert!(passed.passed);
+        assert_eq!(passed.code, Some(0));
+        assert!(passed.output.contains("out"));
+        assert!(passed.output.contains("err"));
+
+        let failed = run_check(dir.path(), "printf nope; exit 1", Duration::from_secs(1))
+            .expect("failed check");
+        assert!(!failed.passed);
+        assert!(!failed.timed_out);
+        assert_eq!(failed.code, Some(1));
+        assert!(failed.output.contains("nope"));
+    }
+
+    #[test]
+    fn run_check_honours_timeout() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let outcome =
+            run_check(dir.path(), "sleep 1", Duration::from_millis(50)).expect("timed-out check");
+
+        assert!(!outcome.passed);
+        assert!(outcome.timed_out);
+    }
 }

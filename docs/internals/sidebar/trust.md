@@ -29,7 +29,7 @@ Every field that can cause a process to run enters the hash. The current project
 
 The hash input is canonical JSON over `ExecutableSurface`. Struct field order is fixed, `BTreeMap` keys sort, `Option::None` serializes as `null`. The wire format is `sha256:<hex>`.
 
-Per-machine commands such as `[[notifications.handler]]` and `[notifications].command` in `~/.config/rimz/config.toml` and per-machine `[agents.profiles]` / `[agents.teams]` in `~/.config/rimz/agents.toml` are outside this hash. They are personal machine policy, not cloned project policy. Repo `[profiles]` and `[agents.teams]` are hash-covered and inert until trusted; repo profiles may inherit only repo profiles or built-in kinds, and repo team roles bind repo profiles so the shared launch shape stays closed over the hashed config.
+Per-machine commands such as `[[notifications.handler]]` and `[notifications].command` in `~/.config/rimz/config.toml`, per-machine `[agents.profiles]` / `[agents.teams]` in `~/.config/rimz/agents.toml`, and loop `check` commands in `~/.config/rimz/loop.toml` are outside this hash. They are personal machine policy, not cloned project policy. Repo `[profiles]` and `[agents.teams]` are hash-covered and inert until trusted; repo profiles may inherit only repo profiles or built-in kinds, and repo team roles bind repo profiles so the shared launch shape stays closed over the hashed config.
 
 ## Launch-time application
 

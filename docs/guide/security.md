@@ -35,7 +35,7 @@ The **executable surface** is every project field that can cause a process to ru
 
 Per-machine notification handlers (`[[notifications.handler]]` and legacy `[notifications].command`) live in `~/.config/rimz/config.toml`, outside project trust. They are personal routing on this host, often with local push credentials, and a cloned repository never supplies them.
 
-The per-machine `[agents.loop.tasks]` schedules also live outside project trust: each entry runs only the rimz-owned `rimz loop run`, never arbitrary shell, so a clone supplies nothing executable. The scheduled-execution surface stays visible — `rimz loop add` runs hook preflight before recording a task, `rimz loop list` shows whether the task's room is open, and `rimz doctor` carries the configured tasks.
+The per-machine `loop.toml` schedules also live outside project trust. A `check = "<shell>"` entry is the user's own scheduled command, stored under `~/.config/rimz/` or Rimz-owned state, so a clone cannot supply it and the project trust hash stays scoped to `.rimz/config.toml`. The scheduled-execution surface stays visible — `rimz loop add` runs hook preflight before recording an agent action, `rimz loop list` shows whether the task's room is open, and `rimz doctor` carries the configured tasks.
 
 ## Resolver trust
 

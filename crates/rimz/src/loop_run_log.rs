@@ -34,6 +34,8 @@ pub enum LoopRunResult {
     Delivered,
     TargetGone,
     SkippedWindow,
+    CheckSkipped,
+    Expired,
     Errored,
 }
 
@@ -47,6 +49,8 @@ impl LoopRunResult {
             Self::Delivered => "delivered",
             Self::TargetGone => "target gone",
             Self::SkippedWindow => "skipped",
+            Self::CheckSkipped => "skipped",
+            Self::Expired => "expired",
             Self::Errored => "error",
         }
     }

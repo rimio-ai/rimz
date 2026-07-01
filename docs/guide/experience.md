@@ -22,7 +22,7 @@ rimz
 
 The first command is `rimz`, and it auto-detects the multiplexer (Zellij or tmux) and the agents (Claude, Codex), writes the per-machine config templates under `~/.config/rimz/`, and discovers or asks for everything else in flow — no wizard, hand-created config file, or account between the reader and the first frame.
 
-The first run on a machine writes `config.toml`, `theme.toml`, `agents.toml`, and `remote.toml` when they are missing, prints where to customize them, then opens with one consent gate before the room: showing what an agent is doing means adding reporting hooks to the agent's config. The gate is a terminal-native transcript left in scrollback, so the summary, choice, and result read top-to-bottom.
+The first run on a machine writes `config.toml`, `theme.toml`, `agents.toml`, `loop.toml`, and `remote.toml` when they are missing, prints where to customize them, then opens with one consent gate before the room: showing what an agent is doing means adding reporting hooks to the agent's config. The gate is a terminal-native transcript left in scrollback, so the summary, choice, and result read top-to-bottom.
 
 ```
 rimz: initialized config under ~/.config/rimz — customize files there (`rimz config path`).

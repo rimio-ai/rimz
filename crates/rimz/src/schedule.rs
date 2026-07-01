@@ -513,6 +513,8 @@ mod tests {
             bind: None,
             prompt: Some("do it".to_owned()),
             prompt_file: None,
+            check: None,
+            on: None,
             root: PathBuf::from("/home/me/app"),
             worktree: None,
             mode: None,
@@ -523,6 +525,7 @@ mod tests {
             days: days.map(ToOwned::to_owned),
             every: every.map(ToOwned::to_owned),
             cron: cron.map(ToOwned::to_owned),
+            deadline: None,
             once,
         }
     }

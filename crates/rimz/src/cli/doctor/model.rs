@@ -210,8 +210,9 @@ impl HookStatus {
     }
 }
 
-/// Configured loop tasks: the scheduled-execution surface this machine carries,
-/// surfaced so it is visible. Room-open state lives in `rimz loop list`.
+/// Loop tasks from config plus transient state: the scheduled-execution surface
+/// this machine carries, surfaced so it is visible. Room-open state lives in
+/// `rimz loop list`.
 #[derive(Debug, Serialize)]
 pub(super) struct LoopTasks {
     pub(super) tasks: Vec<LoopTaskRow>,

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::ops::Not;
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// `loop.toml`: scheduled and automated agent-loop helpers.
@@ -37,6 +38,10 @@ pub struct TaskEntry {
     pub prompt: Option<String>,
     #[serde(rename = "prompt-file", skip_serializing_if = "Option::is_none")]
     pub prompt_file: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on: Option<CheckOn>,
     pub root: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
@@ -56,6 +61,8 @@ pub struct TaskEntry {
     pub every: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cron: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Not::not")]
     pub once: bool,
 }
@@ -77,6 +84,14 @@ pub struct TaskTarget {
     pub kind: String,
     pub session: String,
     pub handle: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckOn {
+    #[default]
+    Fail,
+    Success,
 }
 
 fn resolve_root_with(root: &Path, home: PathBuf) -> PathBuf {
@@ -126,5 +141,53 @@ mod tests {
             resolve_root_with(&dotted, PathBuf::from("/home/dev")),
             nested.canonicalize().expect("canonical nested")
         );
+    }
+
+    #[test]
+    fn task_entry_check_fields_round_trip_toml_and_json() {
+        let deadline = Timestamp::from_second(1_783_000_000).expect("deadline");
+        let entry = TaskEntry {
+            bind: Some(TaskTarget {
+                kind: "claude".to_owned(),
+                session: "sess-1".to_owned(),
+                handle: "@claude".to_owned(),
+            }),
+            prompt: Some("wake".to_owned()),
+            check: Some("cargo test".to_owned()),
+            on: Some(CheckOn::Success),
+            root: PathBuf::from("/repo"),
+            every: Some("2m".to_owned()),
+            deadline: Some(deadline),
+            ..TaskEntry::default()
+        };
+        let tasks = Tasks(BTreeMap::from([("ci".to_owned(), entry.clone())]));
+        let loop_config = LoopConfig { tasks };
+
+        let toml = toml::to_string(&loop_config).expect("toml");
+        let toml_round: LoopConfig = toml::from_str(&toml).expect("toml round trip");
+        assert_eq!(
+            toml_round
+                .tasks
+                .0
+                .get("ci")
+                .and_then(|entry| entry.check.as_deref()),
+            Some("cargo test")
+        );
+        assert_eq!(
+            toml_round.tasks.0.get("ci").and_then(|entry| entry.on),
+            Some(CheckOn::Success)
+        );
+        assert_eq!(
+            toml_round
+                .tasks
+                .0
+                .get("ci")
+                .and_then(|entry| entry.deadline),
+            Some(deadline)
+        );
+
+        let json = serde_json::to_string(&loop_config.tasks).expect("json");
+        let json_round: Tasks = serde_json::from_str(&json).expect("json round trip");
+        assert_eq!(json_round.0.get("ci"), Some(&entry));
     }
 }

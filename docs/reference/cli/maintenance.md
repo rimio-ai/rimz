@@ -11,7 +11,7 @@ rimz config get [KEY] [--json]
 rimz config set <KEY> <VALUE>
 ```
 
-`rimz config` reads and edits the per-machine config set at `~/.config/rimz/` (`config.toml`, `theme.toml`, `agents.toml`). `init` writes the commented templates — `--print` sends them to stdout instead, `--force` replaces an existing set. `path` prints the resolved `config.toml` path. `get` loads the effective config (no key prints the whole config, a dotted key prints one value, `--json` emits JSON). `set` edits one dotted key, preserves comments, rejects unknown keys, validates, and writes durably; a bare value becomes a TOML value when it parses and a string otherwise.
+`rimz config` reads and edits the per-machine config set at `~/.config/rimz/` (`config.toml`, `theme.toml`, `agents.toml`, `loop.toml`). `init` writes the commented templates — `--print` sends them to stdout instead, `--force` replaces an existing set. `path` prints the resolved `config.toml` path. `get` loads the effective config (no key prints the whole config, a dotted key prints one value, `--json` emits JSON). `set` edits one dotted key, preserves comments, rejects unknown keys, validates, and writes durably; a bare value becomes a TOML value when it parses and a string otherwise.
 
 The full field model, dotted-key examples, and merge order are in [configuration.md](../configuration.md).
 

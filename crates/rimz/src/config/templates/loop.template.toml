@@ -23,6 +23,26 @@
 ## every = "15m"                       # interval; `cron = "*/15 * * * *"` uses raw cron syntax
 ## mode = "auto"                       # auto, ask, or yolo
 ##
+## [tasks.watchdog]
+## spec = "codex"
+## prompt = "tests are failing; fix the next failure"
+## root = "/home/you/code/app"
+## every = "15m"
+## check = "cargo test"                # shell command runs at the project root before the agent
+## on = "fail"                         # "fail" wakes on non-zero/timeout; "success" wakes on zero
+##
+## [tasks.ci_green]
+## prompt = "CI is green; merge the PR"
+## root = "/home/you/code/app"
+## every = "2m"
+## check = "gh run watch --exit-status"
+## on = "success"
+## deadline = "2026-07-01T12:00:00Z"   # `rimz loop add --until 30m` stores this as state
+## [tasks.ci_green.bind]
+## kind = "claude"
+## session = "sess-abc123"
+## handle = "@planner"
+##
 ## [tasks.self_wake]
 ## prompt = "resume the review and fix the next blocking comment"
 ## root = "/home/you/code/app"

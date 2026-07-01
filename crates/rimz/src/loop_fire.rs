@@ -1,6 +1,6 @@
 //! Elder-owned loop task firing.
 //!
-//! The elected sidebar elder keeps time for configured loop tasks while a room
+//! The elected sidebar elder keeps time for loop tasks while a room
 //! is open. The durable state arms tasks on first sight and records each fire
 //! before spawning the detached `rimz loop run <name>` helper, so a hot tick does
 //! not spawn the same occurrence twice.

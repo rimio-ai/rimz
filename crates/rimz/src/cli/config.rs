@@ -578,6 +578,8 @@ fn is_loop_key(path: &[String]) -> bool {
                     "spec"
                         | "prompt"
                         | "prompt-file"
+                        | "check"
+                        | "on"
                         | "root"
                         | "worktree"
                         | "mode"
@@ -588,6 +590,7 @@ fn is_loop_key(path: &[String]) -> bool {
                         | "days"
                         | "every"
                         | "cron"
+                        | "deadline"
                         | "once"
                         | "bind"
                 )

@@ -68,7 +68,7 @@ pub use display::{
 };
 pub use glyphs::{GlyphGroup, GlyphNamespaces, GlyphRole, ThemeGlyphsConfig, is_named_glyph_set};
 pub use harness::{HarnessConfig, RtkMode};
-pub use loop_::{LoopConfig, TaskEntry, TaskTarget, Tasks};
+pub use loop_::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
 pub use mux::{
     MultiplexerConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,

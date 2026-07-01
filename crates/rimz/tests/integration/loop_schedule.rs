@@ -1,11 +1,13 @@
 //! Integration coverage for `rimz loop` instance-bound delivery.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use jiff::Timestamp;
 use serde_json::json;
 
-use rimz::config::Tasks;
+use rimz::config::{CheckOn, TaskEntry, TaskTarget, Tasks};
 use rimz::loop_instances;
 use rimz::loop_run_log::{self, LoopRunRecord, LoopRunResult};
 use rimz::message::MessageStatus;
@@ -175,6 +177,235 @@ fn loop_add_ephemeral_tasks_use_instance_state() {
 }
 
 #[test]
+fn loop_run_check_only_logs_command_result() {
+    let env = Env::new();
+
+    for (name, command, expected) in [
+        ("check-ok", "printf ok", LoopRunResult::Completed),
+        ("check-fail", "printf fail; exit 1", LoopRunResult::Failed),
+    ] {
+        let add = env
+            .rimz()
+            .args(["loop", "add", name, "--check", command, "--every", "15m"])
+            .output()
+            .expect("loop add check-only");
+        assert!(
+            add.status.success(),
+            "loop add failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+        let run = env
+            .rimz()
+            .args(["loop", "run", name])
+            .output()
+            .expect("loop run check-only");
+        assert!(
+            run.status.success(),
+            "loop run failed: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let records = read_loop_run_records(&env);
+        assert_eq!(
+            records.last().map(|record| record.result),
+            Some(expected),
+            "{name} should log {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn loop_run_check_guard_skips_or_delivers_with_output() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-check", "feature-loop");
+
+    let add_healthy = env
+        .rimz()
+        .args([
+            "loop", "add", "healthy", "--bind", "@claude", "--every", "15m", "--check", "true",
+            "--on", "fail", "--prompt", "fix it",
+        ])
+        .output()
+        .expect("loop add healthy");
+    assert!(
+        add_healthy.status.success(),
+        "loop add healthy failed: {}",
+        String::from_utf8_lossy(&add_healthy.stderr)
+    );
+    let run_healthy = env
+        .rimz()
+        .args(["loop", "run", "healthy"])
+        .output()
+        .expect("loop run healthy");
+    assert!(
+        run_healthy.status.success(),
+        "loop run healthy failed: {}",
+        String::from_utf8_lossy(&run_healthy.stderr)
+    );
+    assert!(
+        env.ledger()
+            .list_pending_messages()
+            .expect("messages")
+            .is_empty(),
+        "healthy check should not queue a message"
+    );
+    assert_eq!(
+        read_loop_run_records(&env)
+            .last()
+            .map(|record| record.result),
+        Some(LoopRunResult::CheckSkipped)
+    );
+
+    let add_broken = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "broken",
+            "--bind",
+            "@claude",
+            "--every",
+            "15m",
+            "--check",
+            "printf boom; exit 1",
+            "--prompt",
+            "fix it",
+        ])
+        .output()
+        .expect("loop add broken");
+    assert!(
+        add_broken.status.success(),
+        "loop add broken failed: {}",
+        String::from_utf8_lossy(&add_broken.stderr)
+    );
+    let run_broken = env
+        .rimz()
+        .args(["loop", "run", "broken"])
+        .output()
+        .expect("loop run broken");
+    assert!(
+        run_broken.status.success(),
+        "loop run broken failed: {}",
+        String::from_utf8_lossy(&run_broken.stderr)
+    );
+    let messages = env.ledger().list_pending_messages().expect("messages");
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].text.contains("fix it"));
+    assert!(
+        messages[0]
+            .text
+            .contains("check `printf boom; exit 1` exited 1")
+    );
+    assert!(messages[0].text.contains("boom"));
+}
+
+#[test]
+fn loop_run_poll_until_fires_once_and_expires() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-until", "feature-loop");
+
+    let add = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "green",
+            "--bind",
+            "@claude",
+            "--every",
+            "2m",
+            "--check",
+            "true",
+            "--on",
+            "success",
+            "--until",
+            "30m",
+            "--prompt",
+            "merge now",
+        ])
+        .output()
+        .expect("loop add poll-until");
+    assert!(
+        add.status.success(),
+        "loop add poll-until failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    assert!(
+        read_loop_instances(&env).0.contains_key("green"),
+        "poll-until should persist as state"
+    );
+    let run = env
+        .rimz()
+        .args(["loop", "run", "green"])
+        .output()
+        .expect("loop run green");
+    assert!(
+        run.status.success(),
+        "loop run green failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        env.ledger()
+            .list_pending_messages()
+            .expect("messages")
+            .len(),
+        1
+    );
+    assert!(
+        !read_loop_instances(&env).0.contains_key("green"),
+        "poll-until should be removed after firing"
+    );
+
+    let expired = Env::new();
+    write_loop_instances(
+        &expired,
+        Tasks(BTreeMap::from([(
+            "expired".to_owned(),
+            TaskEntry {
+                bind: Some(TaskTarget {
+                    kind: "claude".to_owned(),
+                    session: "sess-expired".to_owned(),
+                    handle: "@claude".to_owned(),
+                }),
+                prompt: Some("too late".to_owned()),
+                check: Some("true".to_owned()),
+                on: Some(CheckOn::Success),
+                root: expired.project_root.clone(),
+                every: Some("2m".to_owned()),
+                deadline: Some(Timestamp::from_second(1).expect("timestamp")),
+                ..TaskEntry::default()
+            },
+        )])),
+    );
+    let run = expired
+        .rimz()
+        .args(["loop", "run", "expired"])
+        .output()
+        .expect("loop run expired");
+    assert!(
+        run.status.success(),
+        "loop run expired failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(read_loop_instances(&expired).0.is_empty());
+    assert_eq!(
+        read_loop_run_records(&expired)
+            .last()
+            .map(|record| record.result),
+        Some(LoopRunResult::Expired)
+    );
+    assert!(
+        expired
+            .ledger()
+            .list_pending_messages()
+            .expect("messages")
+            .is_empty(),
+        "expired poll-until should not queue"
+    );
+}
+
+#[test]
 fn loop_run_bind_git_worktree_session_queues_prompt() {
     let env = Env::new();
     if !init_git_repo(&env.project_root) {
@@ -319,7 +550,7 @@ fn loop_add_bind_validates_mode_selection() {
         .expect("loop add missing mode");
     assert!(!missing.status.success(), "missing mode should fail");
     assert!(
-        String::from_utf8_lossy(&missing.stderr).contains("needs --spec or --bind"),
+        String::from_utf8_lossy(&missing.stderr).contains("needs --spec, --bind, or --check"),
         "unexpected stderr: {}",
         String::from_utf8_lossy(&missing.stderr)
     );
@@ -418,6 +649,13 @@ fn read_loop_instances(env: &Env) -> Tasks {
         return Tasks::default();
     };
     serde_json::from_str(&text).expect("loop instances")
+}
+
+fn write_loop_instances(env: &Env, tasks: Tasks) {
+    let path = loop_instances::path(&env.state_root());
+    std::fs::create_dir_all(path.parent().expect("instances parent")).expect("mkdir state");
+    std::fs::write(path, serde_json::to_vec_pretty(&tasks).expect("json"))
+        .expect("write loop instances");
 }
 
 fn loop_config_path(env: &Env) -> std::path::PathBuf {

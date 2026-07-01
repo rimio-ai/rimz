@@ -12,7 +12,8 @@ Configuration comes in two tiers. **Per-machine** config under `~/.config/rimz/`
 | --- | --- | --- |
 | `~/.config/rimz/config.toml` | per-machine | room behavior: accounts, notifications, remote-control launch, multiplexer defaults, resume, smart-compact, optional Sentry |
 | `~/.config/rimz/theme.toml` | per-machine | sidebar appearance: palette, slots, glyphs, animations, provider styling, pets ([theme.md](./theme.md)) |
-| `~/.config/rimz/agents.toml` | per-machine | agent profiles, command cells, teams, worktree defaults, loop tasks, attention timing |
+| `~/.config/rimz/agents.toml` | per-machine | agent profiles, command cells, teams, worktree defaults, attention timing |
+| `~/.config/rimz/loop.toml` | per-machine | durable recurring loop task definitions and scheduled command checks |
 | `~/.agents/agents/<name>/agent.toml`, `~/.agents/teams/<name>/team.toml` | per-machine | drop-in profile and team fragments merged under `agents.toml` |
 | `~/.config/rimz/resolvers.toml` | per-machine | resolver allowlist and chain order (`rimz resolver`) |
 | `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases (`rimz remote`) |
@@ -28,7 +29,7 @@ Per-machine settings load leniently: a missing file is the default config, unkno
 ```sh
 rimz                       # first start writes missing config and opens the room
 rimz setup                 # detect this machine and write or refresh config
-rimz config init           # write config.toml, theme.toml, and agents.toml
+rimz config init           # write config.toml, theme.toml, agents.toml, and loop.toml
 rimz config init --print   # print the commented templates without writing
 ```
 
@@ -36,7 +37,7 @@ Most people run `rimz` inside a project or `rimz setup` once, then edit the few 
 
 **The generated template is the field reference.** Every persisted section and default scalar ships as commented TOML with an inline note, so `rimz config init --print` is the authoritative, always-current list of keys and defaults. This page explains the *model and the knobs that are easy to misread*, and leaves the full field list to the template. Leaving a line commented keeps following the defaults shipped by future Rimz versions; uncommenting makes it this machine's override.
 
-The three per-machine files map to the in-memory config the same way: core behavior from `config.toml`, appearance from `theme.toml`, agent behavior from `agents.toml`. `rimz config set` routes a dotted key to the file that owns it.
+The per-machine files map to the in-memory config the same way: core behavior from `config.toml`, appearance from `theme.toml`, agent behavior from `agents.toml`, and durable loop definitions from `loop.toml`. `rimz config set` routes a dotted key to the file that owns it.
 
 ## Read and change values
 
@@ -59,7 +60,7 @@ Later layers win:
 
 1. built-in defaults,
 2. project config (`.rimz/config.toml`),
-3. per-machine config (`~/.config/rimz/{config,theme,agents}.toml`),
+3. per-machine config (`~/.config/rimz/{config,theme,agents,loop}.toml`),
 4. CLI flags and `RIMZ_*` environment variables.
 
 Today the per-machine layer is live, CLI/env overrides apply where the commands define them, and the project layer is read for trust. **Launch names invert this on purpose:** trusted project `[profiles]` and `[agents.teams]` overlay machine config and win on a name collision, so a repository can pin the launch surface it hashes (see [Project config](#project-config)).
@@ -159,31 +160,48 @@ base = "fresh"
 ## Loop tasks
 
 ```toml
-[agents.loop.tasks.morning]
+[tasks.morning]
 spec = "claude-ping"     # `<kind>-ping` primes a provider window
 root = "/home/you/code/app"
 at = "07:00"             # 24h time in the configured timezone
 days = "weekdays"        # daily | weekdays | weekends | mon,wed,fri
 
-[agents.loop.tasks.pr_watch]
+[tasks.pr_watch]
 spec = "codex"
 prompt = "check CI on the release PR"
 root = "/home/you/code/app"
 every = "15m"
 mode = "auto"
+check = "cargo test"
+on = "fail"              # fail | success
 
-[agents.loop.tasks.self_wake]
+[tasks.ci_green]
+prompt = "CI is green; merge the PR"
+root = "/home/you/code/app"
+every = "2m"
+check = "gh run watch --exit-status"
+on = "success"
+deadline = "2026-07-01T12:00:00Z"
+
+[tasks.ci_green.bind]
+kind = "claude"
+session = "sess-abc123"
+handle = "@planner"
+
+[tasks.self_wake]
 prompt = "resume the review: inspect the latest comments and fix the next blocking item"
 root = "/home/you/code/app"
 at = "09:30"
 
-[agents.loop.tasks.self_wake.bind]
+[tasks.self_wake.bind]
 kind = "claude"
 session = "sess-abc123"
 handle = "@planner"
 ```
 
-Each task chooses either `spec` or `bind`. `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset. A `<kind>-ping` spec is the window-primer: it defaults the prompt to `ping` and skips when that provider's budget window is already counting down. Bind-mode pins delivery to one live agent session and sends the prompt through the message path; `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only. The config records the intent; a running room for the task's project fires it from the sidebar elder. Each task carries a `root`; `rimz loop add` writes an absolute path, and hand-edited `~` or relative roots are normalized before room matching, firing, and display. The full model is in [loop.md](../internals/agents/loop.md), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
+Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`. Each task chooses `spec`, `bind`, `check`, or `check` plus one agent action. `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. Bind-mode pins delivery to one live agent session and sends the prompt through the message path; `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only. `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, and `on = "success"` wakes on zero exit. Check output is appended to the agent prompt when the guard fires. `deadline` is normally written by `rimz loop add --until 30m` into the instance state store for poll-until tasks, not hand-authored in `loop.toml`.
+
+Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset. A `<kind>-ping` spec is the window-primer: it defaults the prompt to `ping` and skips when that provider's budget window is already counting down. Each task carries a `root`; `rimz loop add` writes an absolute path, and hand-edited `~` or relative roots are normalized before room matching, firing, and display. Rimz-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file. The full model is in [loop.md](../internals/agents/loop.md), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
 
 ## Behavior settings
 
