@@ -843,6 +843,153 @@ fn reconcile_sidebars_redocks_sidebar_full_height_in_split_window() {
 }
 
 #[test]
+fn reconcile_sidebars_redocks_sidebar_without_skewing_work_columns() {
+    require_tmux!();
+
+    let session = "rimz-reconcile-no-skew";
+    let target = format!("{session}:0");
+    let server = TmuxServer::new();
+    let width = SidebarWidth::default();
+    let birth_size = width.birth_size(Some(80));
+    let sidebar_cols = birth_size.cols.to_string();
+    server.ensure_with_shell(session);
+    let main_pane = server.display(&target, "#{pane_id}");
+    server.tmux(&[
+        "split-window",
+        "-h",
+        "-b",
+        "-l",
+        &sidebar_cols,
+        "-t",
+        &main_pane,
+    ]);
+    let sidebar_pane = server.display(&target, "#{pane_id}");
+    server.tmux(&["split-window", "-h", "-t", &main_pane]);
+    let right_pane = server.display(&target, "#{pane_id}");
+    server.tmux(&["split-window", "-v", "-t", &right_pane]);
+    server.tmux(&["kill-pane", "-t", &sidebar_pane]);
+    let initial_panes = server.wait_for_panes(&target, 3);
+    assert_eq!(
+        initial_panes.len(),
+        3,
+        "test setup should remove the sidebar from a main/right-column layout: {initial_panes:?}",
+    );
+    let full_top = initial_panes
+        .iter()
+        .map(|pane| pane.top)
+        .min()
+        .expect("top pane");
+    let full_height = initial_panes
+        .iter()
+        .map(|pane| pane.top + pane.height)
+        .max()
+        .expect("bottom pane")
+        - full_top;
+    let absorbed_main = initial_panes
+        .iter()
+        .find(|pane| pane.left == 0 && pane.height == full_height)
+        .expect("full-height main pane after sidebar removal");
+    let right_width = initial_panes
+        .iter()
+        .filter(|pane| pane.left > absorbed_main.left)
+        .map(|pane| pane.width)
+        .max()
+        .expect("right-column pane after sidebar removal");
+    assert!(
+        absorbed_main.width > right_width,
+        "test setup should give the main pane the removed sidebar columns, got main={} right={} panes={initial_panes:?}",
+        absorbed_main.width,
+        right_width,
+    );
+
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let opts = SidebarPaneOptions {
+        session_name: session.to_owned(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-reconcile-no-skew")),
+        project_root: std::env::temp_dir(),
+        cwd: std::env::temp_dir(),
+        birth_size,
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+
+    let report = server
+        .backend
+        .reconcile_sidebars(&opts, &rimz::mux::SidebarLiveness::default())
+        .expect("reconcile_sidebars");
+
+    assert_eq!(report.recovered, 1);
+    server.wait_for_pane_command(session, "rimz-sidebar");
+    let panes = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some(session.to_owned()),
+            ..Default::default()
+        })
+        .expect("list_panes")
+        .panes;
+    let sidebar = panes
+        .iter()
+        .find(|pane| pane.command.as_deref() == Some("rimz-sidebar"))
+        .expect("sidebar pane");
+    let raw_id = sidebar.pane_id.raw();
+
+    assert_eq!(
+        server
+            .display(raw_id, "#{pane_left}")
+            .parse::<u64>()
+            .expect("sidebar left"),
+        0
+    );
+    assert_eq!(
+        server
+            .display(raw_id, "#{pane_top}")
+            .parse::<u64>()
+            .expect("sidebar top"),
+        full_top
+    );
+    assert_eq!(
+        server
+            .display(raw_id, "#{pane_height}")
+            .parse::<u64>()
+            .expect("sidebar height"),
+        full_height
+    );
+
+    let healed_panes = server.wait_for_panes(&target, 4);
+    let work_panes: Vec<_> = healed_panes
+        .iter()
+        .filter(|pane| pane.id.as_str() != raw_id)
+        .collect();
+    assert_eq!(
+        work_panes.len(),
+        3,
+        "healed window should have three work panes plus the sidebar: {healed_panes:?}",
+    );
+    let main = work_panes
+        .iter()
+        .copied()
+        .find(|pane| pane.left > 0 && pane.top == full_top && pane.height == full_height)
+        .expect("full-height main pane");
+    let right_width = work_panes
+        .iter()
+        .copied()
+        .filter(|pane| pane.left > main.left)
+        .map(|pane| pane.width)
+        .max()
+        .expect("right-column pane");
+    assert!(
+        main.width.abs_diff(right_width) <= 1,
+        "re-added sidebar should keep work columns even, got main={} right={} panes={healed_panes:?}",
+        main.width,
+        right_width,
+    );
+}
+
+#[test]
 fn launch_sidebar_skipped_by_foreign_heartbeat_still_ensures_tmux_session_view() {
     require_tmux!();
 

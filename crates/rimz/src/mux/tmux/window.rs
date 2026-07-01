@@ -35,30 +35,41 @@ impl TmuxBackend {
             .map(|_| ())
     }
 
-    /// Split a left sidebar into a specific window in place: `-f` spans the full
-    /// window height even when reload heals a multi-pane layout, `-b` places the
-    /// pane before/left, `-l <size>` fixes its width, and `-d` keeps the caller's
-    /// focus. The `-t <window_id>` target leaves every other window untouched. The
-    /// heal uses the session's fixed birth width, recovered from the live hook on
-    /// reload.
+    /// Split a left sidebar into a specific window in place. When the leftmost
+    /// pane already spans the full window height, target that pane so the
+    /// sidebar is carved from it alone and the work columns keep their widths.
+    /// The `-f` fallback spans the full window edge for split-column left edges,
+    /// where tmux can only create a full-height sidebar by redistributing the
+    /// remaining width proportionally across the work panes. `-b` places the
+    /// pane before/left, `-l <size>` fixes its width, and `-d` keeps the
+    /// caller's focus.
     pub(super) fn add_sidebar_to_window(
         &self,
         opts: &SidebarPaneOptions,
         window_id: &str,
     ) -> Result<()> {
         let size = opts.birth_size.cols.to_string();
-        self.cmd()
-            .args([
-                "split-window".to_owned(),
-                "-d".to_owned(),
-                "-h".to_owned(),
+        let mut args = vec!["split-window".to_owned(), "-d".to_owned(), "-h".to_owned()];
+        if let Some(pane) = self.leftmost_full_height_pane(window_id) {
+            args.extend([
+                "-b".to_owned(),
+                "-l".to_owned(),
+                size,
+                "-t".to_owned(),
+                pane,
+            ]);
+        } else {
+            args.extend([
                 "-f".to_owned(),
                 "-b".to_owned(),
                 "-l".to_owned(),
                 size,
                 "-t".to_owned(),
                 window_id.to_owned(),
-            ])
+            ]);
+        }
+        self.cmd()
+            .args(args)
             .args(sidebar_serve_command(opts))
             .run()
             .map(|_| ())
@@ -244,6 +255,31 @@ impl TmuxBackend {
         String::from_utf8_lossy(&output.stdout)
             .lines()
             .find_map(|line| line.strip_prefix("1 ").map(|id| id.trim().to_owned()))
+    }
+
+    /// The window's leftmost pane when it spans the full window height.
+    fn leftmost_full_height_pane(&self, window_id: &str) -> Option<String> {
+        let output = self
+            .cmd()
+            .args([
+                "list-panes",
+                "-t",
+                window_id,
+                "-F",
+                "#{pane_at_left} #{pane_at_top} #{pane_at_bottom} #{pane_id}",
+            ])
+            .run()
+            .ok()?;
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| {
+                let mut fields = line.split_whitespace();
+                let at_left = fields.next()?;
+                let at_top = fields.next()?;
+                let at_bottom = fields.next()?;
+                let id = fields.next()?;
+                (at_left == "1" && at_top == "1" && at_bottom == "1").then(|| id.to_owned())
+            })
     }
 
     /// Whether `session` already holds a window named `name`. A Rimz background
