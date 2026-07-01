@@ -2,11 +2,9 @@
 //! after a rate-limit window resets or a retry backoff elapses.
 //!
 //! Opt-in ([`ResumeConfig::auto_continue`]). The producer arms the resume while
-//! the park is fresh, or recreates a due rate-limit arm from a still-active
-//! post-reset marker if the producer missed the earlier frame, and fires it once
-//! the class-specific clock is due. The durable record carries everything needed
-//! between arm and fire so the decision never depends on the ephemeral
-//! per-session context surviving the wait:
+//! the park is fresh and fires it once the class-specific clock is due. The
+//! durable record carries everything needed between arm and fire so the decision
+//! never depends on the ephemeral per-session context surviving the wait:
 //!
 //! - **Arm.** Each frame an agent is parked on a resumable certificate
 //!   ([`crate::agents::resume_park`]), the producer writes a durable [`ParkRecord`]
@@ -18,7 +16,9 @@
 //!   detached `rimz agents auto-continue` helper that types the nudge and writes
 //!   the `agent.resumed` audit record.
 //! - **Clear.** Any activity since the park (the nudge took, or the agent woke on
-//!   its own) advances `last_activity`, and the stale record is removed.
+//!   its own) advances `last_activity`, and the stale record is removed. A
+//!   recovered fused account budget also clears a clocked record whose resume
+//!   condition is moot.
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
 //! arm decision is the pure, unit-tested [`crate::agents::resume_park`].
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
-use crate::agents::{AgentState, ResumeArm, resume_park};
+use crate::agents::{AccountBudget, AgentState, ResumeArm, resume_park};
 use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::ledger::atomic::write_temp_then_rename_cache;
@@ -57,8 +57,8 @@ struct ParkRecord {
     /// working one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_nudge_at: Option<Timestamp>,
-    /// Auto-continue attempts for this park. Rate-limit records use it only for
-    /// durable accounting symmetry; backoff records use it for the retry cap.
+    /// Auto-continue attempts for this park. Rate-limit and backoff records both
+    /// use it for the retry cap.
     #[serde(default)]
     retries: u32,
 }
@@ -92,12 +92,14 @@ pub(super) fn resume_parked(
     }
     let text = config.auto_continue_text.trim();
     let now = snapshot.now;
+    let account_budgets = super::account_budgets_from_caches(runtime, now);
     for agent in &snapshot.agents {
         if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
             continue;
         }
         let path = park_record_path(runtime, &agent.kind, &agent.agent_id);
-        match resume_park(agent, now) {
+        let budget = account_budgets.get(&agent.kind);
+        match resume_park(agent, budget, now) {
             Some(ResumeArm::RateLimit { deadline }) => {
                 arm_park(&path, ParkKind::RateLimit { deadline }, agent.last_activity);
                 fire_if_due(snapshot, runtime, agent, &path, now, text, config);
@@ -110,9 +112,22 @@ pub(super) fn resume_parked(
                 );
                 fire_if_due(snapshot, runtime, agent, &path, now, text, config);
             }
-            _ => fire_if_due(snapshot, runtime, agent, &path, now, text, config),
+            _ => {
+                // No arm this frame means "no recovering window", not "forget
+                // the durable deadline". Clear only once the fused account
+                // budget proves the subscription bar has recovered.
+                if budget_recovered(budget, now) {
+                    remove_park(&path);
+                } else {
+                    fire_if_due(snapshot, runtime, agent, &path, now, text, config);
+                }
+            }
         }
     }
+}
+
+fn budget_recovered(budget: Option<&AccountBudget>, now: Timestamp) -> bool {
+    budget.is_some_and(|budget| budget.subscription_budget_available(now))
 }
 
 /// Capture (or refresh) the park while the reading is still active. A new park
@@ -223,6 +238,9 @@ fn overload_backoff(retries: u32, backoff_secs: &[u64]) -> Duration {
 fn nudge_due(record: &ParkRecord, now: Timestamp, backoff_secs: &[u64], max_retries: u32) -> bool {
     match &record.kind {
         ParkKind::RateLimit { deadline } => {
+            if record.retries >= max_retries {
+                return false;
+            }
             now >= *deadline
                 && record.last_nudge_at.is_none_or(|at| {
                     now.as_second() - at.as_second()
@@ -349,6 +367,8 @@ fn spawn_auto_continue(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::lifecycle::TurnPhase;
+    use crate::agents::{AgentRateLimits, AgentStatus, RateLimitWindow};
     use crate::ids::WorkspaceId;
 
     fn ts(secs: i64) -> Timestamp {
@@ -391,6 +411,15 @@ mod tests {
         nudge_due(record, ts(now), backoff_secs, max_retries)
     }
 
+    fn window(used: u8, reset: i64) -> RateLimitWindow {
+        RateLimitWindow {
+            used_percentage: Some(used),
+            resets_at: Some(ts(reset)),
+            duration_mins: Some(300),
+            ..Default::default()
+        }
+    }
+
     fn temp_runtime() -> (tempfile::TempDir, RuntimePaths) {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
@@ -401,6 +430,52 @@ mod tests {
 
     fn park_path(runtime: &RuntimePaths) -> PathBuf {
         park_record_path(runtime, &AgentKind::new_unchecked("claude"), &"sess".into())
+    }
+
+    fn agent(activity: i64) -> AgentState {
+        AgentState {
+            agent_id: "sess".into(),
+            kind: AgentKind::new_unchecked("claude"),
+            name: None,
+            kind_ordinal: None,
+            profile: None,
+            role: None,
+            team: None,
+            channel: None,
+            status: AgentStatus::Running,
+            phase: TurnPhase::Idle,
+            pane: None,
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            description: None,
+            transcript_path: None,
+            origin: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_seen: ts(activity),
+            last_activity: ts(activity),
+            registered_at: Some(ts(activity)),
+        }
     }
 
     #[test]
@@ -497,16 +572,25 @@ mod tests {
     #[test]
     fn rate_limit_nudge_waits_for_the_deadline_then_fires() {
         let record = rate_record(5_000, 1_000, None, 0);
-        assert!(!due(&record, 4_999, &[], 0));
-        assert!(due(&record, 5_000, &[], 0));
+        assert!(!due(&record, 4_999, &[], 10));
+        assert!(due(&record, 5_000, &[], 10));
     }
 
     #[test]
     fn rate_limit_recent_nudge_throttles_the_next() {
         // Last nudge at 5_000; the retry interval is 120s.
         let record = rate_record(5_000, 1_000, Some(5_000), 1);
-        assert!(!due(&record, 5_060, &[], 0));
-        assert!(due(&record, 5_200, &[], 0));
+        assert!(!due(&record, 5_060, &[], 10));
+        assert!(due(&record, 5_200, &[], 10));
+    }
+
+    #[test]
+    fn rate_limit_retry_cap_stops_further_nudges() {
+        let at_cap = rate_record(5_000, 1_000, Some(5_000), 3);
+        assert!(!due(&at_cap, 9_000, &[], 3));
+
+        let before_cap = rate_record(5_000, 1_000, Some(5_000), 2);
+        assert!(due(&before_cap, 5_200, &[], 3));
     }
 
     #[test]
@@ -543,6 +627,44 @@ mod tests {
 
         let before_cap = overloaded_record(1_000, 100, Some(1_000), 9);
         assert!(due(&before_cap, 1_180, &[60, 120, 180], 10));
+    }
+
+    #[test]
+    fn recovered_budget_clears_a_stale_rate_limit_record() {
+        let (_dir, runtime) = temp_runtime();
+        let path = park_path(&runtime);
+        write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 1));
+        super::super::rate_limits::write_rate_limits_cache(
+            &runtime.shared_rate_limits_path(),
+            &super::super::rate_limits::RateLimitsCache {
+                refreshed_at_ms: 0,
+                windows: [(
+                    "claude".to_owned(),
+                    AgentRateLimits {
+                        windows: vec![window(20, 9_000)],
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                pending: Default::default(),
+            },
+        );
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            Vec::new(),
+            vec![agent(1_000)],
+            ts(6_000),
+        );
+        snapshot.now = ts(6_000);
+        resume_parked(
+            &snapshot,
+            &runtime,
+            &ResumeConfig {
+                auto_continue: true,
+                ..ResumeConfig::default()
+            },
+        );
+        assert_eq!(read_park(&path), None);
     }
 
     #[test]

@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use fs4::FileExt;
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentRateLimits, RateLimitWindow};
@@ -166,18 +166,7 @@ pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: Ag
 /// reads sensibly until a live reading overwrites it. A window with no reset, or
 /// no known duration to roll by, shows as-is.
 pub(crate) fn project_window(cached: RateLimitWindow, now: Timestamp) -> RateLimitWindow {
-    match (cached.resets_at, cached.duration_mins) {
-        (Some(resets_at), Some(mins)) if resets_at <= now => RateLimitWindow {
-            used_percentage: Some(0),
-            resets_at: now
-                .checked_add(SignedDuration::from_secs(i64::from(mins) * 60))
-                .ok(),
-            duration_mins: Some(mins),
-            observed_at: cached.observed_at,
-            source: cached.source,
-        },
-        _ => cached,
-    }
+    cached.projected_at(now)
 }
 
 /// Whether the cached account reading has aged past its longest dated window.

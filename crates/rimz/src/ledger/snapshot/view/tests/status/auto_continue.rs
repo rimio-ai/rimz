@@ -4,13 +4,20 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
-use crate::agents::{ResumeArm, resume_park};
+use crate::agents::{AccountBudget, ExtraCredits, ResumeArm, resume_park};
 
 /// The reset deadline the producer would durably arm for one agent this frame, or
 /// `None` when there is nothing to arm. Mirrors what `sidebar::enrich`
 /// auto-continue records while a park is fresh, before the live reading turns over.
-fn arm(agent: &AgentState) -> Option<ResumeArm> {
-    resume_park(agent, epoch())
+fn arm(agent: &AgentState, budget: Option<&AccountBudget>) -> Option<ResumeArm> {
+    resume_park(agent, budget, epoch())
+}
+
+fn budget(windows: Vec<RateLimitWindow>) -> AccountBudget {
+    AccountBudget {
+        windows,
+        extra_credits: None,
+    }
 }
 
 /// The reset deadline `resets_in_secs` after the fixed epoch — the value `window`
@@ -28,10 +35,9 @@ fn arms_a_rate_limit_park_at_its_window_reset() {
     let parked = agent("claude", "limited", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .active_ago(60)
-        .limits(vec![window(100, 3_600)])
         .paused_turn_error(10, "You've hit your usage limit");
     assert_eq!(
-        arm(&parked),
+        arm(&parked, Some(&budget(vec![window(100, 3_600)]))),
         Some(ResumeArm::RateLimit {
             deadline: deadline(3_600)
         })
@@ -43,10 +49,15 @@ fn arms_a_spend_limit_park_at_its_window_reset() {
     let parked = agent("claude", "limited", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .active_ago(60)
-        .limits(vec![window(100, 3_600)])
         .spend_limit_turn_error(10, "You've hit your monthly spend limit.");
     assert_eq!(
-        arm(&parked),
+        arm(
+            &parked,
+            Some(&AccountBudget {
+                windows: vec![window(100, 3_600)],
+                extra_credits: Some(ExtraCredits::Disabled),
+            })
+        ),
         Some(ResumeArm::RateLimit {
             deadline: deadline(3_600)
         })
@@ -59,7 +70,7 @@ fn spend_limit_with_no_window_arms_nothing() {
         .worktree("/repo/main")
         .active_ago(60)
         .spend_limit_turn_error(10, "You've hit your monthly spend limit.");
-    assert_eq!(arm(&parked), None);
+    assert_eq!(arm(&parked, None), None);
 }
 
 #[test]
@@ -67,10 +78,9 @@ fn legacy_session_limit_marker_arms_a_rate_limit_park() {
     let parked = agent("claude", "limited", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .active_ago(60)
-        .limits(vec![window(100, 3_600)])
         .turn_error(10, "You've hit your session limit · resets 10:50am (UTC)");
     assert_eq!(
-        arm(&parked),
+        arm(&parked, Some(&budget(vec![window(100, 3_600)]))),
         Some(ResumeArm::RateLimit {
             deadline: deadline(3_600)
         })
@@ -84,10 +94,12 @@ fn arms_for_the_latest_of_several_spent_windows() {
     let parked = agent("claude", "limited", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .active_ago(60)
-        .limits(vec![window(100, 3_600), window(100, 86_400)])
         .paused_turn_error(10, "You've hit your usage limit");
     assert_eq!(
-        arm(&parked),
+        arm(
+            &parked,
+            Some(&budget(vec![window(100, 3_600), window(100, 86_400)]))
+        ),
         Some(ResumeArm::RateLimit {
             deadline: deadline(86_400)
         })
@@ -95,21 +107,16 @@ fn arms_for_the_latest_of_several_spent_windows() {
 }
 
 #[test]
-fn arms_after_reset_when_the_park_marker_is_still_active() {
-    // A producer can miss the pre-reset frame during a reload or elder change.
-    // While the same parked turn-error marker remains active, a spent window that
-    // has crossed its reset recreates a due arm so live auto-continue still fires.
+fn does_not_arm_from_a_recovered_fused_budget() {
+    // The fused account budget is the decision input. A paused agent can keep a
+    // frozen per-session 100% reading, but once the account bar has recovered
+    // there is no new reset deadline to arm.
     let parked = agent("claude", "limited", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .active_ago(60)
         .limits(vec![window(100, -60)])
         .paused_turn_error(10, "You've hit your usage limit");
-    assert_eq!(
-        arm(&parked),
-        Some(ResumeArm::RateLimit {
-            deadline: deadline(-60)
-        })
-    );
+    assert_eq!(arm(&parked, Some(&budget(vec![window(0, 3_600)]))), None);
 }
 
 #[test]
@@ -121,7 +128,7 @@ fn does_not_recreate_an_arm_from_a_refilled_reading() {
         .active_ago(60)
         .limits(vec![window(20, -60)])
         .paused_turn_error(10, "You've hit your usage limit");
-    assert_eq!(arm(&parked), None);
+    assert_eq!(arm(&parked, Some(&budget(vec![window(20, -60)]))), None);
 }
 
 #[test]
@@ -132,7 +139,7 @@ fn does_not_arm_a_calm_agent_with_a_spent_window() {
         .worktree("/repo/main")
         .active_ago(5)
         .limits(vec![window(100, 3_600)]);
-    assert_eq!(arm(&calm), None);
+    assert_eq!(arm(&calm, Some(&budget(vec![window(100, 3_600)]))), None);
 }
 
 #[test]
@@ -143,7 +150,7 @@ fn arms_an_overloaded_park() {
         .limits(vec![window(100, 3_600)])
         .overloaded_turn_error(10, "API Error: Overloaded");
     assert_eq!(
-        arm(&parked),
+        arm(&parked, Some(&budget(vec![window(100, 3_600)]))),
         Some(ResumeArm::Overloaded {
             overloaded_at: ago(10)
         })
@@ -160,7 +167,7 @@ fn overloaded_arm_ignores_spent_windows() {
         .limits(vec![window(100, -60)])
         .overloaded_turn_error(10, "API Error: Overloaded");
     assert_eq!(
-        arm(&parked),
+        arm(&parked, Some(&budget(vec![window(0, 3_600)]))),
         Some(ResumeArm::Overloaded {
             overloaded_at: ago(10)
         })
@@ -173,7 +180,7 @@ fn does_not_arm_a_failed_park() {
         .worktree("/repo/main")
         .active_ago(60)
         .turn_error(10, "API Error: Bad Request");
-    assert_eq!(arm(&failed), None);
+    assert_eq!(arm(&failed, Some(&budget(vec![window(100, 3_600)]))), None);
 }
 
 #[test]
@@ -187,7 +194,7 @@ fn arms_a_server_error_park() {
         .active_ago(60)
         .overloaded_turn_error(10, temporary_500);
     assert_eq!(
-        arm(&parked),
+        arm(&parked, None),
         Some(ResumeArm::Overloaded {
             overloaded_at: ago(10)
         })

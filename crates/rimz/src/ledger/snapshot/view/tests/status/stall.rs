@@ -62,8 +62,11 @@ fn displayed_status_precedence_ladder_holds() {
         if rung.with_live_child {
             agents.push(child_state("root", "child-1", AgentStatus::Running, 5));
         }
-        let snapshot =
-            room(Vec::new(), agents).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+        let snapshot = room(Vec::new(), agents).with_live_panes_and_account_budgets(
+            vec![pane("%1", "node", "/repo/main")],
+            None,
+            &account_budget("claude", rung.budget_windows),
+        );
         let row = row(&snapshot, "root");
         assert_eq!(
             row.status(),
@@ -84,6 +87,7 @@ struct StatusRung {
     name: &'static str,
     agent: AgentState,
     with_live_child: bool,
+    budget_windows: Vec<RateLimitWindow>,
     expect: AgentStatus,
     expect_error_label: bool,
 }
@@ -99,6 +103,7 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .limits(spent_windows())
                 .paused_turn_error(10, "You've hit your usage limit"),
             with_live_child: true,
+            budget_windows: spent_windows(),
             expect: AgentStatus::Waiting,
             expect_error_label: false,
         },
@@ -110,6 +115,7 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .limits(spent_windows())
                 .paused_turn_error(10, "You've hit your usage limit"),
             with_live_child: true,
+            budget_windows: spent_windows(),
             expect: AgentStatus::Paused,
             expect_error_label: false,
         },
@@ -120,6 +126,7 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .active_ago(60)
                 .overloaded_turn_error(10, "API Error: Overloaded"),
             with_live_child: false,
+            budget_windows: Vec::new(),
             expect: AgentStatus::Paused,
             expect_error_label: false,
         },
@@ -131,6 +138,7 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .limits(vec![window(100, -60)])
                 .paused_turn_error(10, "You've hit your usage limit"),
             with_live_child: false,
+            budget_windows: vec![unprojectable_spent_window(-60)],
             expect: AgentStatus::Failed,
             expect_error_label: true,
         },
@@ -141,6 +149,7 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .active_ago(stalled_secs)
                 .turn_error(10, "API Error: Bad Request"),
             with_live_child: true,
+            budget_windows: Vec::new(),
             expect: AgentStatus::Running,
             expect_error_label: false,
         },
@@ -151,6 +160,7 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .active_ago(stalled_secs)
                 .turn_error(10, "API Error: Bad Request"),
             with_live_child: false,
+            budget_windows: Vec::new(),
             expect: AgentStatus::Failed,
             expect_error_label: true,
         },
@@ -161,6 +171,7 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .active_ago(stalled_secs)
                 .limits(spent_windows()),
             with_live_child: false,
+            budget_windows: spent_windows(),
             expect: AgentStatus::Paused,
             expect_error_label: false,
         },
@@ -170,6 +181,7 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
                 .worktree("/repo/main")
                 .active_ago(stalled_secs),
             with_live_child: false,
+            budget_windows: Vec::new(),
             expect: AgentStatus::Failed,
             expect_error_label: false,
         },
@@ -178,4 +190,11 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
 
 fn spent_windows() -> Vec<RateLimitWindow> {
     vec![window(100, 3_600)]
+}
+
+fn unprojectable_spent_window(resets_in_secs: i64) -> RateLimitWindow {
+    RateLimitWindow {
+        duration_mins: None,
+        ..window(100, resets_in_secs)
+    }
 }

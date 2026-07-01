@@ -4,7 +4,7 @@
 //! sidebar projects. Feed items reference agents by session id, but the
 //! rollup itself lives with the agent integration layer.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,7 @@ use crate::pane::{PaneRef, RuntimeOwner};
 use super::context::{
     AgentContext, AgentTokenUsage, AgentTurnError, RateLimitWindow, TurnErrorClass,
 };
+use super::credits::ExtraCredits;
 use super::lifecycle::{LifecycleState, TurnPhase};
 
 /// One hour: the shared ceiling for attention heat and breath tempo, and the
@@ -289,55 +290,87 @@ fn label_indicates_rate_limit(label: Option<&str>) -> bool {
         || lower.contains("too many requests")
 }
 
-/// Each agent kind's rate-limit window standing, summarized across every session
-/// of that kind (the windows are account-scoped, so any session's reading speaks
-/// for the kind). A kind lands in `spent` while it has a window that is exhausted
-/// and not yet reset, and in `reset` once a window it had spent has refilled — the
-/// signal that lifts a `rate_limit` park.
+/// Account-scoped provider budget for one agent kind. Rate-limit windows are the
+/// included subscription budget that refills on its reset clock; extra credits
+/// are paid usage beyond that subscription budget. Park, resume, and display
+/// decisions read this fused account truth, never one paused session's frozen
+/// context reading.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct AccountBudget {
+    pub windows: Vec<RateLimitWindow>,
+    pub extra_credits: Option<ExtraCredits>,
+}
+
+impl AccountBudget {
+    fn projected_windows(&self, now: Timestamp) -> impl Iterator<Item = RateLimitWindow> + '_ {
+        self.windows
+            .iter()
+            .cloned()
+            .map(move |window| window.projected_at(now))
+    }
+
+    /// Latest reset among subscription windows that are spent now and have a
+    /// future reset. This is the only local clock a rate/spend-limit park can
+    /// safely auto-continue against.
+    pub(crate) fn latest_spent_window_reset(&self, now: Timestamp) -> Option<Timestamp> {
+        self.projected_windows(now)
+            .filter(|window| window_spent_unreset(window, now))
+            .filter_map(|window| window.resets_at)
+            .max()
+    }
+
+    /// Whether the fused subscription budget has a known, available reading.
+    /// Auto-continue uses this to retire stale persisted deadlines after the
+    /// mana bar has recovered; a cold or unknown cache keeps the record for the
+    /// durability path.
+    pub(crate) fn subscription_budget_available(&self, now: Timestamp) -> bool {
+        let mut has_known_available = false;
+        for window in self.projected_windows(now) {
+            if window_spent_unreset(&window, now) {
+                return false;
+            }
+            has_known_available |= window.used_percentage.is_some() && !window.is_spent();
+        }
+        has_known_available
+    }
+}
+
+/// Each agent kind's rate-limit window standing, summarized from the fused
+/// account budget. A kind lands in `spent` while it has a window that is
+/// exhausted and not yet reset, and in `reset` only for a known spent reading
+/// that cannot be projected to a refilled window.
 #[derive(Default)]
 pub(crate) struct RateLimitKindSummary {
     pub spent: BTreeSet<AgentKind>,
     pub reset: BTreeSet<AgentKind>,
 }
 
-/// Summarize every kind's spent/reset window standing from the agents' own
-/// rate-limit readings. Drives the displayed-status projection: a `rate_limit`
-/// park lifts to `failed` once its windows reset. The park resume planner derives
-/// its own per-agent deadline ([`resume_park`]) so it can persist it before the
-/// ephemeral reading turns over.
+/// Summarize every kind's spent/reset window standing from the fused account
+/// budget. Drives the displayed-status projection; the per-agent context
+/// windows are only an input to the fusion pipeline and do not make decisions.
 pub(crate) fn rate_limit_window_kinds(
-    agents: &[AgentState],
+    account_budgets: &BTreeMap<AgentKind, AccountBudget>,
     now: Timestamp,
 ) -> RateLimitKindSummary {
     let mut summary = RateLimitKindSummary::default();
-    for agent in agents {
-        if agent.parent_agent_id.is_some() {
-            continue;
-        }
-        let Some(limits) = agent
-            .context
-            .as_ref()
-            .and_then(|ctx| ctx.rate_limits.as_ref())
-        else {
-            continue;
-        };
+    for (kind, budget) in account_budgets {
         let mut has_spent = false;
         let mut has_reset = false;
-        for window in &limits.windows {
+        for window in budget.projected_windows(now) {
             if !window.is_spent() {
                 continue;
             }
-            if window_spent_unreset(window, now) {
+            if window_spent_unreset(&window, now) {
                 has_spent = true;
             } else {
                 has_reset = true;
             }
         }
         if has_spent {
-            summary.spent.insert(agent.kind.clone());
+            summary.spent.insert(kind.clone());
         }
         if has_reset {
-            summary.reset.insert(agent.kind.clone());
+            summary.reset.insert(kind.clone());
         }
     }
     summary
@@ -350,20 +383,15 @@ fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
 
 /// How a parked root agent's turn may resume, or `None` when nothing is armed.
 /// The producer persists the arm so the resume outlives the ephemeral context it
-/// was first seen through; a still-active post-reset marker can also recreate a
-/// due arm if the producer missed the pre-reset frame. A Rimz-derived projection
-/// over enrichment, never a status the agent reports.
+/// was first seen through, and clears it only once the fused account budget
+/// proves the subscription bar has recovered. A Rimz-derived projection over
+/// enrichment, never a status the agent reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ResumeArm {
-    /// A `rate_limit` park: the turn may resume at the latest reset among the
-    /// windows still spent *now* — the instant the displayed-status projection
-    /// would lift the park from `paused` to `failed`. If every spent window has
-    /// already reset while the same turn-error marker is still active, the latest
-    /// already-reset window becomes an immediate deadline. Persisting this
-    /// deadline keeps the resume alive once the reading turns over: neither a
-    /// context-sidecar TTL expiry (a 5h/7d window outlasts the 3h context TTL) nor
-    /// a fresh non-spent reading (Codex's app-server refresh rolls the window
-    /// forward) can erase it.
+    /// A `rate_limit` or `spend_limit` park backed by a recovering subscription
+    /// window. Extra credits may be disabled or exhausted; the refillable mana
+    /// bar is the local clock, and the producer persists this deadline so the
+    /// resume survives context TTL expiry or a later non-spent reading.
     RateLimit { deadline: Timestamp },
     /// A non-clocked park: the provider was overloaded or returned a transient
     /// server error, so there is no local reset window to wait on. The producer
@@ -378,12 +406,16 @@ pub(crate) enum ResumeArm {
 
 /// What kind of resume, if any, this root agent's parked turn is armed for. It
 /// stopped its last turn on a provider park certificate ([`display_turn_error`]):
-/// a `rate_limit` or spend-limit park arms for the latest reset of the windows
-/// still spent now and recreates an immediate arm from a still-active marker
-/// once every spent window has reset, while a non-clocked backoff park arms
-/// while its marker stays active. Every other class — and a clocked park whose
-/// budget has already refilled into a non-spent reading — arms nothing.
-pub(crate) fn resume_park(agent: &AgentState, now: Timestamp) -> Option<ResumeArm> {
+/// a `rate_limit` or `spend_limit` park arms from the fused account budget when
+/// a subscription window is still spent and has a future reset, regardless of
+/// whether extra paid credits are exhausted. A limit park with no recovering
+/// subscription window arms nothing; a non-clocked overload/server-error park
+/// arms on retry backoff while its marker stays active.
+pub(crate) fn resume_park(
+    agent: &AgentState,
+    budget: Option<&AccountBudget>,
+    now: Timestamp,
+) -> Option<ResumeArm> {
     if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
         return None;
     }
@@ -395,29 +427,7 @@ pub(crate) fn resume_park(agent: &AgentState, now: Timestamp) -> Option<ResumeAr
     )?;
     match effective_turn_error_class(error) {
         TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit => {
-            let mut spent_unreset = false;
-            let mut unreset_deadline = None;
-            let mut reset_deadline = None;
-            for window in agent
-                .context
-                .as_ref()
-                .and_then(|ctx| ctx.rate_limits.as_ref())
-                .into_iter()
-                .flat_map(|limits| limits.windows.iter())
-                .filter(|window| window.is_spent())
-            {
-                if window_spent_unreset(window, now) {
-                    spent_unreset = true;
-                    unreset_deadline = unreset_deadline.max(window.resets_at);
-                } else {
-                    reset_deadline = reset_deadline.max(window.resets_at);
-                }
-            }
-            let deadline = if spent_unreset {
-                unreset_deadline
-            } else {
-                reset_deadline
-            }?;
+            let deadline = budget?.latest_spent_window_reset(now)?;
             Some(ResumeArm::RateLimit { deadline })
         }
         TurnErrorClass::PausedOverloaded => Some(ResumeArm::Overloaded {

@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
-use crate::agents::AgentState;
+use crate::agents::{AccountBudget, AgentState};
+use crate::ids::AgentKind;
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
@@ -32,9 +33,14 @@ pub(super) struct AttentionWindows {
     pub inactive_after_secs: u32,
 }
 
+pub(super) struct AgentProjection<'a> {
+    pub agents: &'a [AgentState],
+    pub account_budgets: &'a BTreeMap<AgentKind, AccountBudget>,
+}
+
 pub(super) fn build_worktree_groups_from_rows(
     mut rows: Vec<SidebarRow>,
-    agents: &[AgentState],
+    agent_projection: AgentProjection<'_>,
     project_root: Option<&Path>,
     worktree_roots: &[PathBuf],
     root_class: RootClass,
@@ -44,13 +50,19 @@ pub(super) fn build_worktree_groups_from_rows(
     // Nest each subagent under its parent root row before grouping. This is the
     // one chokepoint every live (`rows_from_panes`) card flows through, so
     // nesting behaves identically for process, agent, and attention rows.
-    attach_sub_agents(&mut rows, agents, now);
+    attach_sub_agents(&mut rows, agent_projection.agents, now);
     // A delegating parent's work is its children's, so their activity advances
     // the parent row's displayed clock before the stall check reads it.
     subagents::fold_child_activity_onto_parents(&mut rows);
     // Project the displayed status now that each row knows its subagents and
     // the full agent set is in hand.
-    status::project_display_status(&mut rows, agents, now, windows.stalled_after_secs);
+    status::project_display_status(
+        &mut rows,
+        agent_projection.agents,
+        agent_projection.account_budgets,
+        now,
+        windows.stalled_after_secs,
+    );
     stamp_inactive(&mut rows, now, windows.inactive_after_secs);
 
     let multi_branch = multi_branch_paths(

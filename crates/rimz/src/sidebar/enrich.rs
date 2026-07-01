@@ -11,12 +11,13 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
-use crate::agents::AgentStatus;
 use crate::agents::spending::{
     HeadlineSpec, ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
     compute_scoped_tally, discover_spending_files, read_provider_spending_cache,
     read_spending_cache, read_workspace_spending_cache, unix_secs_now,
 };
+use crate::agents::{AccountBudget, AgentStatus};
+use crate::ids::AgentKind;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::ledger::snapshot::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, SidebarPresence,
@@ -62,6 +63,36 @@ use codex_refresh::refresh_codex_sessions;
 use forge::{produce_pr_states, read_pr_state_cache};
 use live_spend::refresh_live_spend_baselines;
 use usage_refresh::refresh_account_usage;
+
+fn account_budgets_from_caches(
+    runtime: &RuntimePaths,
+    now: Timestamp,
+) -> BTreeMap<AgentKind, AccountBudget> {
+    let rate_limits = rate_limits::read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let credits = credits::read_credits_cache(&runtime.shared_credits_path());
+    rate_limits
+        .windows
+        .into_iter()
+        .map(|(kind, limits)| {
+            let extra_credits = credits
+                .entries
+                .get(&kind)
+                .filter(|entry| entry.ok)
+                .and_then(|entry| entry.extra_credits.clone());
+            (
+                AgentKind::new_unchecked(kind),
+                AccountBudget {
+                    windows: limits
+                        .windows
+                        .into_iter()
+                        .map(|window| window.projected_at(now))
+                        .collect(),
+                    extra_credits,
+                },
+            )
+        })
+        .collect()
+}
 
 /// Build a detached `rimz` helper command for the sidebar producer, anchored to
 /// Rimz-owned shared storage so a deleted launch CWD cannot ENOENT the spawn.
@@ -550,6 +581,8 @@ pub fn enrich(
         snapshot.drop_cleared_codex_sessions(&admitted_panes);
     }
 
+    let account_budgets = account_budgets_from_caches(runtime, snapshot.now);
+
     if let Some(frame) = frame {
         snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
         snapshot.panes_observed_at_ms = Some(frame.observed_or_produced_at_ms());
@@ -594,6 +627,7 @@ pub fn enrich(
             admitted_panes,
             &lazy_pairings,
             Some(&unread_row_ids),
+            &account_budgets,
         );
         snapshot = next_snapshot;
         for event in diagnostics {

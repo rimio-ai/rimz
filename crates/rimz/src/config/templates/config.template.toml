@@ -99,7 +99,7 @@ aggressive_resize = true
 # max = 8                             # cap auto-resumed agents per rebirth
 # auto_continue = false               # resume rate-limit, overload, and transient server-error parks
 # auto_continue_backoff_secs = [60, 180, 300] # retry ramp; the last value repeats
-# auto_continue_max_retries = 13      # stop attempting after this many backoff retries
+# auto_continue_max_retries = 13      # stop attempting after this many auto-continue tries
 # auto_continue_text = "continue"     # the nudge typed into the parked pane on resume
 
 [harness]

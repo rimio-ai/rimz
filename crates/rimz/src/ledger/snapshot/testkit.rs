@@ -13,11 +13,11 @@ use jiff::Timestamp;
 use super::row::SidebarRow;
 use super::view::SidebarSnapshot;
 use crate::agents::lifecycle::{self, TurnPhase};
+use crate::agents::{AccountBudget, AgentState, AgentStatus};
 use crate::agents::{
     AgentContext, AgentLifecycleObservation, AgentRateLimits, AgentTurnError, RateLimitWindow,
     TurnErrorClass,
 };
-use crate::agents::{AgentState, AgentStatus};
 use crate::feed::FeedItem;
 use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
@@ -53,7 +53,15 @@ pub(super) fn room(items: Vec<FeedItem>, agents: Vec<AgentState>) -> SidebarSnap
 /// display status use this instead of the frameless [`room`] constructor.
 pub(super) fn room_with_agent_panes(
     items: Vec<FeedItem>,
+    agents: Vec<AgentState>,
+) -> SidebarSnapshot {
+    room_with_agent_panes_and_budgets(items, agents, std::collections::BTreeMap::new())
+}
+
+pub(super) fn room_with_agent_panes_and_budgets(
+    items: Vec<FeedItem>,
     mut agents: Vec<AgentState>,
+    account_budgets: std::collections::BTreeMap<AgentKind, AccountBudget>,
 ) -> SidebarSnapshot {
     let mut panes = Vec::new();
     for (idx, agent) in agents.iter_mut().enumerate() {
@@ -84,7 +92,22 @@ pub(super) fn room_with_agent_panes(
         panes.push(pane);
     }
     SidebarSnapshot::build_with_agents(workspace(), items, agents, epoch())
-        .with_live_panes(panes, None)
+        .with_live_panes_and_account_budgets(panes, None, &account_budgets)
+}
+
+pub(super) fn account_budget(
+    kind: &str,
+    windows: Vec<RateLimitWindow>,
+) -> std::collections::BTreeMap<AgentKind, AccountBudget> {
+    let mut budgets = std::collections::BTreeMap::new();
+    budgets.insert(
+        AgentKind::new_unchecked(kind),
+        AccountBudget {
+            windows,
+            extra_credits: None,
+        },
+    );
+    budgets
 }
 
 /// Every projected row across every worktree group, in render order.

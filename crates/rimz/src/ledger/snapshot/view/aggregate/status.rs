@@ -1,11 +1,14 @@
+use std::collections::BTreeMap;
+
 use jiff::Timestamp;
 
-use crate::agents::TurnErrorClass;
 use crate::agents::lifecycle::TurnPhase;
+use crate::agents::{AccountBudget, TurnErrorClass};
 use crate::agents::{
     AgentState, AgentStatus, display_turn_error, effective_turn_error_class,
     rate_limit_window_kinds,
 };
+use crate::ids::AgentKind;
 use crate::ledger::snapshot::row::SidebarRow;
 
 /// Project each agent row's *displayed* status from its raw lifecycle status,
@@ -13,10 +16,11 @@ use crate::ledger::snapshot::row::SidebarRow;
 pub(super) fn project_display_status(
     rows: &mut [SidebarRow],
     agents: &[AgentState],
+    account_budgets: &BTreeMap<AgentKind, AccountBudget>,
     now: Timestamp,
     stalled_after_secs: u32,
 ) {
-    let rate_limit_kinds = rate_limit_window_kinds(agents, now);
+    let rate_limit_kinds = rate_limit_window_kinds(account_budgets, now);
     for row in rows.iter_mut() {
         let row_id = row.id.clone();
         let row_name = row.name.clone();

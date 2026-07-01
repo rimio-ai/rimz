@@ -48,7 +48,7 @@ pub struct ResumeConfig {
     /// repeats until [`auto_continue_max_retries`](Self::auto_continue_max_retries)
     /// is reached.
     pub auto_continue_backoff_secs: Vec<u64>,
-    /// Number of backoff auto-continue attempts before leaving the row paused.
+    /// Number of auto-continue attempts before leaving the row paused.
     pub auto_continue_max_retries: u32,
     /// The text the producer nudges a parked agent with when `auto_continue` is
     /// on. Sent as a bracketed paste plus a submit Enter, the same pane-send path

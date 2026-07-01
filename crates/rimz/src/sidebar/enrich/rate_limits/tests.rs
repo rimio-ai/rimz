@@ -3,6 +3,7 @@ use crate::ids::WorkspaceId;
 use crate::sidebar::test_support::{
     provider_panel, rl_window, rl_window_mins, snapshot_with_panels,
 };
+use jiff::SignedDuration;
 
 #[test]
 fn idle_window_projection_ages_only_known_elapsed_windows() {

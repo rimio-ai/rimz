@@ -48,32 +48,46 @@ fn codex_stop_over_rate_limit_terminal_row_parks_until_budget_resets() {
         (
             "spent window parks a failed Stop over the rollout marker",
             vec![window(100, 3_600)],
+            vec![window(100, 3_600)],
             AgentStatus::Paused,
             None,
         ),
         (
-            "after reset the terminal marker becomes an actionable failure",
+            "recovered fused budget does not turn a live park into an actionable failure",
             vec![window(100, -60)],
-            AgentStatus::Failed,
-            Some("You've hit your usage limit"),
+            vec![window(0, 3_600)],
+            AgentStatus::Paused,
+            None,
         ),
         (
             "a reset short window still waits on a longer spent window",
             vec![window(100, -60), window(100, 86_400)],
+            vec![window(100, -60), window(100, 86_400)],
             AgentStatus::Paused,
             None,
         ),
+        (
+            "a spent window with no recovery clock becomes actionable",
+            vec![window(100, -60)],
+            vec![unprojectable_spent_window(-60)],
+            AgentStatus::Failed,
+            Some("You've hit your usage limit"),
+        ),
     ] {
-        let (label, windows, expected_status, expected_error_label) = case;
+        let (label, agent_windows, budget_windows, expected_status, expected_error_label) = case;
         let session = agent("codex", "codex-stop-error", AgentStatus::Failed, 0)
             .worktree("/repo/main")
             .in_pane("%1")
             .turn_started_ago(120)
             .active_ago(5)
-            .limits(windows)
+            .limits(agent_windows)
             .paused_turn_error(10, "You've hit your usage limit");
 
-        let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+        let snapshot = room_with_agent_panes_and_budgets(
+            Vec::new(),
+            vec![session],
+            account_budget("codex", budget_windows),
+        );
         let row = row(&snapshot, "codex-stop-error");
         assert_eq!(row.status(), Some(expected_status), "{label}");
         assert_eq!(row.turn_error_label(), expected_error_label, "{label}");
@@ -86,32 +100,39 @@ fn codex_stop_over_spend_limit_terminal_row_parks_until_budget_resets() {
         (
             "spent window parks a failed Stop over the rollout marker",
             vec![window(100, 3_600)],
+            vec![window(100, 3_600)],
             AgentStatus::Paused,
             None,
         ),
         (
-            "after reset the terminal marker becomes an actionable failure",
+            "recovered fused budget keeps the spend-limit park non-actionable",
             vec![window(100, -60)],
+            vec![window(0, 3_600)],
+            AgentStatus::Paused,
+            None,
+        ),
+        (
+            "a spent window with no recovery clock becomes actionable",
+            vec![window(100, -60)],
+            vec![unprojectable_spent_window(-60)],
             AgentStatus::Failed,
             Some("You've hit your monthly spend limit."),
         ),
-        (
-            "no budget window keeps the spend-limit marker parked",
-            Vec::new(),
-            AgentStatus::Paused,
-            None,
-        ),
     ] {
-        let (label, windows, expected_status, expected_error_label) = case;
+        let (label, agent_windows, budget_windows, expected_status, expected_error_label) = case;
         let session = agent("codex", "codex-stop-error", AgentStatus::Failed, 0)
             .worktree("/repo/main")
             .in_pane("%1")
             .turn_started_ago(120)
             .active_ago(5)
-            .limits(windows)
+            .limits(agent_windows)
             .spend_limit_turn_error(10, "You've hit your monthly spend limit.");
 
-        let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+        let snapshot = room_with_agent_panes_and_budgets(
+            Vec::new(),
+            vec![session],
+            account_budget("codex", budget_windows),
+        );
         let row = row(&snapshot, "codex-stop-error");
         assert_eq!(row.status(), Some(expected_status), "{label}");
         assert_eq!(row.turn_error_label(), expected_error_label, "{label}");
@@ -127,7 +148,11 @@ fn legacy_session_limit_marker_parks_while_budget_is_spent() {
         .limits(vec![window(100, 3_600)])
         .turn_error(10, "You've hit your session limit · resets 10:50am (UTC)");
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let snapshot = room_with_agent_panes_and_budgets(
+        Vec::new(),
+        vec![session],
+        account_budget("claude", vec![window(100, 3_600)]),
+    );
     let row = row(&snapshot, "session-limited");
     assert_eq!(
         row.status(),
@@ -138,6 +163,13 @@ fn legacy_session_limit_marker_parks_while_budget_is_spent() {
         row.turn_error_label().is_none(),
         "a parked limit keeps the upstream text out of the actionable-failure line"
     );
+}
+
+fn unprojectable_spent_window(resets_in_secs: i64) -> RateLimitWindow {
+    RateLimitWindow {
+        duration_mins: None,
+        ..window(100, resets_in_secs)
+    }
 }
 
 #[test]

@@ -355,6 +355,24 @@ impl WindowSource {
 const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
 
 impl RateLimitWindow {
+    /// Project this cached reading to `now`: before its reset the reading stands
+    /// unchanged; once the reset passes, a dated sliding window refills and its
+    /// next reset rolls forward by the window length.
+    pub fn projected_at(self, now: Timestamp) -> Self {
+        match (self.resets_at, self.duration_mins) {
+            (Some(resets_at), Some(mins)) if resets_at <= now => Self {
+                used_percentage: Some(0),
+                resets_at: now
+                    .checked_add(SignedDuration::from_secs(i64::from(mins) * 60))
+                    .ok(),
+                duration_mins: Some(mins),
+                observed_at: self.observed_at,
+                source: self.source,
+            },
+            _ => self,
+        }
+    }
+
     /// Whether this window's budget is spent — the provider reports the cap as
     /// `used_percentage == 100` once the window is exhausted. Display code
     /// combines this with a per-agent pause certificate or a stalled running
@@ -388,15 +406,14 @@ impl RateLimitWindow {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnErrorClass {
-    /// The turn stopped on a spent rate-limit window. It projects to paused
-    /// while any known spent window remains unreset, then to failed once all
-    /// known spent windows have reset if no newer hook event self-clears it.
+    /// The turn stopped on a spent rate-limit window. It projects and
+    /// auto-continues from the fused account budget: a recovering subscription
+    /// window parks the row until its reset deadline, independent of one
+    /// paused session's frozen context reading.
     PausedRateLimit,
-    /// The turn stopped on a monthly spend cap. It projects like
-    /// [`Self::PausedRateLimit`]: paused while any known spent window remains
-    /// unreset, then to failed once all known spent windows have reset if no
-    /// newer hook event self-clears it. With no known window it stays paused
-    /// until the cap resets or the user raises it.
+    /// The turn stopped on a paid extra-credit/spend cap. It remains resumable
+    /// when the fused account budget still has a recovering subscription mana
+    /// bar; disabled or exhausted extra credits do not make that park terminal.
     PausedSpendLimit,
     /// The provider was overloaded or returned a transient server error. There
     /// is no local reset window to wait for, so the row stays paused until a
