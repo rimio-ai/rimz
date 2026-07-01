@@ -323,3 +323,24 @@ jobs:
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           unset NO_COLOR
           cargo nextest run --profile journey --archive-file nextest-archive.tar.zst
+
+  tests-complete:
+    name: cargo nextest run (all tiers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [tests-gate, tests-live]
+    # Aggregate gate: the single check to require in branch protection. `always()`
+    # runs it even when a tier is skipped or cancelled, then the guard fails unless
+    # every tier succeeded. A tier the scheduler drops under runner pressure lands
+    # as `skipped`, which reduces its result below `success`, so a tier that never
+    # ran can no longer pass as a green PR the way it did before.
+    if: ${{ always() }}
+    steps:
+      - name: Require every test tier to succeed
+        run: |
+          gate='${{ needs['tests-gate'].result }}'
+          live='${{ needs['tests-live'].result }}'
+          if [ "$gate" != "success" ] || [ "$live" != "success" ]; then
+            echo "::error::test tiers did not all succeed (tests-gate=$gate, tests-live=$live) — a tier failed, was cancelled, or was skipped/never scheduled; re-run so every tier executes"
+            exit 1
+          fi
