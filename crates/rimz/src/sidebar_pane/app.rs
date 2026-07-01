@@ -690,16 +690,18 @@ fn reload_or_refetch(
 /// focused directly — no `rimz pane focus` child, no per-click `list-panes`
 /// re-validation; a pane recycled in the sub-second window since the snapshot
 /// self-corrects on the next refresh.
-/// Errors are logged, not surfaced — a missed jump is a retriable annoyance,
-/// never a reason to block the UI. The command is the whole jump: no local
-/// state changes, and the highlight converges on the next data fold (the
-/// backstop tick or a ledger wakeup) once the mux reports the new focus.
+/// Errors are logged at `debug!`, not surfaced: a pane recycled in the
+/// sub-second window since the snapshot is a benign, self-correcting race, so
+/// the line stays local under `RUST_LOG=debug` and off the off-box error
+/// channel. The command is the whole jump: no local state changes, and the
+/// highlight converges on the next data fold (the backstop tick or a ledger
+/// wakeup) once the mux reports the new focus.
 fn spawn_pane_focus(pane_id: PaneId, session_name: &str) {
     let session_name = session_name.to_owned();
     std::thread::spawn(move || {
         let backend = crate::mux::backend_for(pane_id.mux());
         if let Err(err) = backend.focus_pane(&pane_id, Some(&session_name)) {
-            warn!(pane = %pane_id, error = %err, "sidebar pane focus failed");
+            debug!(pane = %pane_id, error = %err, "sidebar pane focus failed");
         }
     });
 }
