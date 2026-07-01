@@ -235,6 +235,8 @@ fn draw_into(
             frame.buffer_mut(),
             area,
         );
+    } else {
+        ui.effects.clear_active();
     }
     if ui.help_visible {
         draw_help_overlay(

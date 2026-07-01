@@ -180,6 +180,36 @@ fn glow_gates_transition_flashes_not_the_steady_pulse() {
         "glow = \"never\" skips transition observation and painting"
     );
 }
+
+#[test]
+fn disabling_glow_clears_live_transition_effects() {
+    let mut snapshot = snapshot_with(
+        Vec::new(),
+        vec![agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Waiting,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        )],
+    );
+    snapshot.theme.display.glow = crate::config::GlowMode::Never;
+    let mut bytes = Vec::new();
+    let backend = CrosstermBackend::new(&mut bytes);
+    let viewport = Viewport::Fixed(Rect::new(0, 0, 44, 18));
+    let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
+    let mut ui = UiState::default();
+    ui.effects.seed_flash_for_test("claude-1");
+
+    draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
+
+    assert!(
+        !ui.effects.any_active(),
+        "disabled glow drains live effects so the serve loop can return to idle"
+    );
+}
+
 #[test]
 fn animation_cadence_separates_fast_work_from_breath_motion() {
     let running = snapshot_with(

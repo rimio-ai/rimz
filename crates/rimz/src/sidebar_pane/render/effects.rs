@@ -131,6 +131,10 @@ impl EffectState {
         !self.oneshots.is_empty()
     }
 
+    pub(crate) fn clear_active(&mut self) {
+        self.oneshots.clear();
+    }
+
     #[cfg(test)]
     pub(crate) fn seed_flash_for_test(&mut self, key: &str) {
         let (target, fx) = build_oneshot(TransitionKind::Completed, &Theme::fixed(false));
@@ -141,6 +145,13 @@ impl EffectState {
             fx,
             born: true,
         });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn flash_born_for_test(&self, key: &str) -> bool {
+        self.oneshots
+            .iter()
+            .any(|shot| shot.key == key && shot.born)
     }
 
     /// The whole pass: observe transitions against the previous frame, then

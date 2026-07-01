@@ -630,10 +630,12 @@ fn unwatched_transition_flash_paints_its_decay() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane));
     state.current = animating_agent_snapshot(&ws);
+    state.current.theme.display.glow = crate::config::GlowMode::Always;
     state.current.own_view = Some(own_view(false, false));
     state.current.viewed_panes.clear();
     state.dirty = false;
     state.ui.effects.seed_flash_for_test("agent-1");
+    assert!(state.ui.effects.flash_born_for_test("agent-1"));
     state.next_frame = Instant::now() - Duration::from_millis(1);
     state.ui.animation_phase = 0;
 
@@ -647,8 +649,8 @@ fn unwatched_transition_flash_paints_its_decay() {
         .expect("transition flash paint");
 
     assert!(
-        state.ui.animation_phase > 0,
-        "unwatched transition flash paints its decay frame"
+        !state.ui.effects.flash_born_for_test("agent-1"),
+        "unwatched transition flash advances through the effects pass"
     );
 }
 
