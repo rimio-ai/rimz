@@ -168,6 +168,7 @@ pub(super) fn carry_hosted_agent_stamps(
     frame: &mut PaneFrame,
     prior: Option<&PaneFrame>,
     now_ms: u64,
+    hosted_absent: &dyn Fn(&str, u32) -> bool,
 ) {
     let Some(prior) = prior else {
         return;
@@ -201,6 +202,11 @@ pub(super) fn carry_hosted_agent_stamps(
         }
         let carried_since_ms = prior.hosted_carry_since_ms.unwrap_or(now_ms);
         if expired_at(carried_since_ms, now_ms) {
+            continue;
+        }
+        if let Some(pid) = fresh.current.pid
+            && hosted_absent(prior_kind.as_str(), pid)
+        {
             continue;
         }
 

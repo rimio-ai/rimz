@@ -167,7 +167,12 @@ fn repair_pane_frame(
         &crate::remote_control::in_pane_agent_start_for_root,
         &crate::remote_control::in_pane_agent_starts,
     );
-    carry_hosted_agent_stamps(frame, prior, unix_now_ms());
+    carry_hosted_agent_stamps(
+        frame,
+        prior,
+        unix_now_ms(),
+        &crate::remote_control::hosted_agent_absent_under_root,
+    );
     if crate::proc::process_start(std::process::id()).is_some() {
         drop_reused_pid_bindings(
             frame,

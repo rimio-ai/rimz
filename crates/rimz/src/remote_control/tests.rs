@@ -565,14 +565,8 @@ fn in_pane_agent_process_walks_wrapper_shell_chain() {
     let found = in_pane_agent_process_for_root_with(
         "codex",
         10,
-        &|pid| fixture.nodes.get(&pid).map(|node| node.cmdline.to_owned()),
-        &|pid| {
-            fixture
-                .nodes
-                .get(&pid)
-                .map(|node| node.children.to_vec())
-                .unwrap_or_default()
-        },
+        &|pid| fixture.cmdline(pid),
+        &|pid| fixture.children(pid),
         &|pid| (pid == 40).then_some(start),
         &|pid| (pid == 40).then_some(cwd.clone()),
     );
@@ -598,14 +592,8 @@ fn in_pane_agent_process_abstains_on_branching_tree() {
         in_pane_agent_process_for_root_with(
             "codex",
             10,
-            &|pid| fixture.nodes.get(&pid).map(|node| node.cmdline.to_owned()),
-            &|pid| {
-                fixture
-                    .nodes
-                    .get(&pid)
-                    .map(|node| node.children.to_vec())
-                    .unwrap_or_default()
-            },
+            &|pid| fixture.cmdline(pid),
+            &|pid| fixture.children(pid),
             &|_| panic!("branching tree must not read process starts"),
             &|_| panic!("branching tree must not read cwds"),
         ),
@@ -613,11 +601,154 @@ fn in_pane_agent_process_abstains_on_branching_tree() {
     );
 }
 
+#[test]
+fn hosted_agent_absent_detects_clean_linear_trees_without_agent() {
+    let bare = ProcFixture::new([ProcNode::new(10, 1_000, "zsh", &[])]);
+    assert!(bare.hosted_absent("codex", 10));
+
+    let wrapped = ProcFixture::new([
+        ProcNode::new(10, 1_000, "zsh", &[20]),
+        ProcNode::new(20, 1_000, "chezmoi cd", &[30]),
+        ProcNode::new(30, 1_000, "/bin/zsh", &[]),
+    ]);
+    assert!(wrapped.hosted_absent("codex", 10));
+}
+
+#[test]
+fn hosted_agent_absent_abstains_when_agent_may_be_present() {
+    let wrapper_with_codex = ProcFixture::new([
+        ProcNode::new(10, 1_000, "zsh", &[20]),
+        ProcNode::new(20, 1_000, "chezmoi cd", &[30]),
+        ProcNode::new(30, 1_000, "/bin/zsh", &[40]),
+        ProcNode::new(40, 1_000, "codex", &[]),
+    ]);
+    assert!(!wrapper_with_codex.hosted_absent("codex", 10));
+
+    let codex_with_child = ProcFixture::new([
+        ProcNode::new(10, 1_000, "zsh", &[20]),
+        ProcNode::new(20, 1_000, "codex", &[30]),
+        ProcNode::new(30, 1_000, "bash", &[]),
+    ]);
+    assert!(!codex_with_child.hosted_absent("codex", 10));
+
+    let branch = ProcFixture::new([
+        ProcNode::new(10, 1_000, "zsh", &[20, 30]),
+        ProcNode::new(20, 1_000, "codex", &[]),
+        ProcNode::new(30, 1_000, "make", &[]),
+    ]);
+    assert!(!branch.hosted_absent("codex", 10));
+}
+
+#[test]
+fn hosted_agent_absent_abstains_on_indeterminate_scans() {
+    assert!(!hosted_agent_absent_under_root_with(
+        "codex",
+        10,
+        &|_| None,
+        &|pid| panic!("unreadable cmdline must not descend into {pid}"),
+    ));
+
+    let deep = ProcFixture::new([
+        ProcNode::new(10, 1_000, "zsh", &[11]),
+        ProcNode::new(11, 1_000, "zsh", &[12]),
+        ProcNode::new(12, 1_000, "zsh", &[13]),
+        ProcNode::new(13, 1_000, "zsh", &[14]),
+        ProcNode::new(14, 1_000, "zsh", &[15]),
+        ProcNode::new(15, 1_000, "zsh", &[16]),
+        ProcNode::new(16, 1_000, "zsh", &[17]),
+        ProcNode::new(17, 1_000, "zsh", &[18]),
+        ProcNode::new(18, 1_000, "zsh", &[19]),
+        ProcNode::new(19, 1_000, "zsh", &[]),
+    ]);
+    assert!(!deep.hosted_absent("codex", 10));
+
+    let unsupported = ProcFixture::new([ProcNode::new(10, 1_000, "claude", &[])]);
+    assert!(!unsupported.hosted_absent("claude", 10));
+}
+
+#[test]
+fn in_pane_agent_process_and_absent_probe_are_mutually_exclusive() {
+    let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
+    let cases = vec![
+        (
+            "direct present",
+            ProcFixture::new([ProcNode::new(10, 1_000, "codex", &[])]),
+            false,
+        ),
+        (
+            "wrapper present",
+            ProcFixture::new([
+                ProcNode::new(10, 1_000, "zsh", &[20]),
+                ProcNode::new(20, 1_000, "codex", &[]),
+            ]),
+            false,
+        ),
+        (
+            "clean absent",
+            ProcFixture::new([ProcNode::new(10, 1_000, "zsh", &[])]),
+            false,
+        ),
+        (
+            "branch indeterminate",
+            ProcFixture::new([
+                ProcNode::new(10, 1_000, "zsh", &[20, 30]),
+                ProcNode::new(20, 1_000, "codex", &[]),
+                ProcNode::new(30, 1_000, "make", &[]),
+            ]),
+            true,
+        ),
+        (
+            "unreadable indeterminate",
+            ProcFixture::new([
+                ProcNode::new(10, 1_000, "zsh", &[20]),
+                ProcNode::new(20, 1_000, "codex", &[]).with_unreadable_cmdline(),
+            ]),
+            true,
+        ),
+        (
+            "depth indeterminate",
+            ProcFixture::new([
+                ProcNode::new(10, 1_000, "zsh", &[11]),
+                ProcNode::new(11, 1_000, "zsh", &[12]),
+                ProcNode::new(12, 1_000, "zsh", &[13]),
+                ProcNode::new(13, 1_000, "zsh", &[14]),
+                ProcNode::new(14, 1_000, "zsh", &[15]),
+                ProcNode::new(15, 1_000, "zsh", &[16]),
+                ProcNode::new(16, 1_000, "zsh", &[17]),
+                ProcNode::new(17, 1_000, "zsh", &[18]),
+                ProcNode::new(18, 1_000, "zsh", &[19]),
+                ProcNode::new(19, 1_000, "zsh", &[]),
+            ]),
+            true,
+        ),
+    ];
+
+    for (name, fixture, indeterminate) in cases {
+        let present = in_pane_agent_process_for_root_with(
+            "codex",
+            10,
+            &|pid| fixture.cmdline(pid),
+            &|pid| fixture.children(pid),
+            &|pid| fixture.nodes.contains_key(&pid).then_some(start),
+            &|_| None,
+        );
+        let absent = fixture.hosted_absent("codex", 10);
+        assert!(
+            !(present.is_some() && absent),
+            "{name}: present={present:?} absent={absent}"
+        );
+        if indeterminate {
+            assert_eq!(present, None, "{name}");
+            assert!(!absent, "{name}");
+        }
+    }
+}
+
 struct ProcNode {
     pid: u32,
     uid: u32,
     comm: Option<&'static str>,
-    cmdline: &'static str,
+    cmdline: Option<&'static str>,
     children: &'static [u32],
 }
 
@@ -627,13 +758,18 @@ impl ProcNode {
             pid,
             uid,
             comm: None,
-            cmdline,
+            cmdline: Some(cmdline),
             children,
         }
     }
 
     const fn with_comm(mut self, comm: &'static str) -> Self {
         self.comm = Some(comm);
+        self
+    }
+
+    const fn with_unreadable_cmdline(mut self) -> Self {
+        self.cmdline = None;
         self
     }
 }
@@ -649,17 +785,31 @@ impl ProcFixture {
         }
     }
 
+    fn cmdline(&self, pid: u32) -> Option<String> {
+        self.nodes
+            .get(&pid)
+            .and_then(|node| node.cmdline.map(str::to_owned))
+    }
+
+    fn children(&self, pid: u32) -> Vec<u32> {
+        self.nodes
+            .get(&pid)
+            .map(|node| node.children.to_vec())
+            .unwrap_or_default()
+    }
+
+    fn hosted_absent(&self, kind: &str, root: u32) -> bool {
+        hosted_agent_absent_under_root_with(kind, root, &|pid| self.cmdline(pid), &|pid| {
+            self.children(pid)
+        })
+    }
+
     fn elevated_agent(&self, root: u32, own_uid: u32) -> Option<ElevatedAgent> {
         elevated_in_pane_agent_with(
             root,
             own_uid,
-            &|pid| {
-                self.nodes
-                    .get(&pid)
-                    .map(|node| node.children.to_vec())
-                    .unwrap_or_default()
-            },
-            &|pid| self.nodes.get(&pid).map(|node| node.cmdline.to_owned()),
+            &|pid| self.children(pid),
+            &|pid| self.cmdline(pid),
             &|pid| {
                 self.nodes
                     .get(&pid)

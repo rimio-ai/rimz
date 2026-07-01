@@ -616,6 +616,19 @@ pub fn in_pane_agent_process_for_root(kind: &str, root_pid: u32) -> Option<InPan
     )
 }
 
+/// Whether a lazy-hosted agent is authoritatively absent below a pane root.
+/// This is stricter than [`in_pane_agent_process_for_root`]: unreadable
+/// cmdlines, branching trees, and depth exhaustion are indeterminate, so they
+/// return `false` and keep callers on their transient-miss path.
+pub fn hosted_agent_absent_under_root(kind: &str, root_pid: u32) -> bool {
+    hosted_agent_absent_under_root_with(
+        kind,
+        root_pid,
+        &crate::proc::cmdline,
+        &crate::proc::children,
+    )
+}
+
 fn in_pane_agent_process_for_root_with(
     kind: &str,
     root_pid: u32,
@@ -645,6 +658,33 @@ fn in_pane_agent_process_for_root_with(
         pid = *child;
     }
     None
+}
+
+fn hosted_agent_absent_under_root_with(
+    kind: &str,
+    root_pid: u32,
+    cmdline: &dyn Fn(u32) -> Option<String>,
+    children: &dyn Fn(u32) -> Vec<u32>,
+) -> bool {
+    if !in_pane_agent_probe_supported(kind) {
+        return false;
+    }
+    let mut pid = root_pid;
+    for _ in 0..=ELEVATED_AGENT_DESCENT_DEPTH {
+        let Some(cmdline) = cmdline(pid) else {
+            return false;
+        };
+        if in_pane_agent_cmdline_matches(kind, &cmdline) {
+            return false;
+        }
+        let children = children(pid);
+        match children.as_slice() {
+            [] => return true,
+            [child] => pid = *child,
+            _ => return false,
+        }
+    }
+    false
 }
 
 fn in_pane_agent_cmdline_matches(kind: &str, cmdline: &str) -> bool {
