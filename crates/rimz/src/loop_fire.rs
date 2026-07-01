@@ -222,6 +222,7 @@ mod tests {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/"));
+        let home = home.canonicalize().unwrap_or(home);
         let workspace_id = WorkspaceId::from_project_root(&home);
         let tasks = BTreeMap::from([("home".to_owned(), task("~", "5m"))]);
 
