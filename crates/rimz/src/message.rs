@@ -17,6 +17,10 @@ pub const DEFAULT_MESSAGE_INTERVAL: Duration = Duration::from_secs(1);
 pub const MESSAGE_INTERVAL_ENV: &str = "RIMZ_MESSAGE_INTERVAL_MS";
 pub const DEFAULT_DELIVERY_WINDOW: Duration = Duration::from_secs(30);
 pub const DELIVERY_WINDOW_ENV: &str = "RIMZ_MESSAGE_DELIVERY_WINDOW_MS";
+/// Default cap for unconfirmed `Sent` reconciliation attempts.
+pub const DEFAULT_MAX_DELIVERY_ATTEMPTS: u32 = 3;
+pub const MAX_DELIVERY_ATTEMPTS_ENV: &str = "RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS";
+/// Cap for pre-send delivery failures after a queued claim.
 pub const MAX_DELIVERY_ATTEMPTS: u32 = 5;
 pub const CLAIM_TTL: Duration = Duration::from_secs(15);
 
@@ -404,6 +408,10 @@ impl MessageRecord {
     pub fn is_ready(&self, now: Timestamp) -> bool {
         self.not_before.is_none_or(|not_before| not_before <= now)
     }
+
+    pub fn sent_reconcile_deadline(&self, window: Duration) -> Option<Timestamp> {
+        (self.status == MessageStatus::Sent).then_some(self.updated_at + window)
+    }
 }
 
 pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
@@ -510,6 +518,14 @@ pub fn delivery_window_from_env() -> Duration {
         .and_then(|raw| raw.parse::<u64>().ok())
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT_DELIVERY_WINDOW)
+}
+
+pub fn max_delivery_attempts_from_env() -> u32 {
+    std::env::var(MAX_DELIVERY_ATTEMPTS_ENV)
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .filter(|attempts| *attempts > 0)
+        .unwrap_or(DEFAULT_MAX_DELIVERY_ATTEMPTS)
 }
 
 pub fn claim_expired(last_attempt_at: Option<Timestamp>, now: Timestamp) -> bool {
@@ -686,6 +702,30 @@ mod tests {
         legacy.as_object_mut().unwrap().remove("not_before");
         let back: MessageRecord = serde_json::from_value(legacy).unwrap();
         assert_eq!(back.not_before, None);
+    }
+
+    #[test]
+    fn sent_reconcile_deadline_uses_updated_at_only_for_sent_records() {
+        let mut message = MessageRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+            &agent("s1", None),
+            "next".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        let updated_at = Timestamp::from_second(1_000).unwrap();
+        message.updated_at = updated_at;
+
+        assert_eq!(
+            message.sent_reconcile_deadline(Duration::from_secs(30)),
+            None
+        );
+
+        message.status = MessageStatus::Sent;
+        assert_eq!(
+            message.sent_reconcile_deadline(Duration::from_secs(30)),
+            Some(updated_at + Duration::from_secs(30))
+        );
     }
 
     #[test]

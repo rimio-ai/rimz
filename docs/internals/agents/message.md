@@ -9,7 +9,7 @@
 Three modes cover the timing axis. All three resolve the target through the same address parser, ride the same bracketed-paste primitive, and write the same audit events.
 
 - **`--steer`** — interrupt the live pane immediately. Writes a durable `sent` record and prints `sent to @handle (msg_...)`. Conflicts with `--schedule` and `--on`, because it has no later boundary.
-- **Default** — send now when the target has a live pane, the gate is open, no pending ask reserves input unless `--force`, and no older ready queued message owns that card's FIFO head. When any condition fails, the text parks as a `queued` record for the next qualifying turn boundary. A successful send-now writes the same durable `sent` record as `--steer`.
+- **Default** — send now when the target has a live pane, the gate is open, no pending ask reserves input unless `--force`, and no older ready queued message owns that card's FIFO head. When any condition fails, the text parks as a `queued` record for the next qualifying turn boundary. A mux timeout before a durable `sent` record exists parks the text for a durable agent target; `--steer` reports the timeout because it asks for the live pane now. A successful send-now writes the same durable `sent` record as `--steer`.
 - **`--schedule <DUR|HH:MM>`** — always parks and stores a `not_before` timestamp. The room must be open so the sidebar elder can spawn `message sweep` when the wake stamp comes due.
 
 ## The message record
@@ -130,13 +130,13 @@ The agent's next body-matching lifecycle hook confirms the oldest `Sent` record 
 - `TurnStarted` confirms a `Prompt` body → `Delivered`.
 - `Compacting` confirms a `Command` body → `Delivered`.
 
-One cannot confirm the other. A smart-compact send owns two records: the `/compact` command confirms on `Compacting`, and the prompt confirms on `TurnStarted`.
+One cannot confirm the other. A smart-compact send owns two records: the `/compact` command confirms on `Compacting`, and the prompt confirms on `TurnStarted`. A `Sent` record that remains unconfirmed for `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` returns to `Queued` through the sweep reconciler up to `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` attempts (3 by default), then becomes `TimedOut`.
 
 ### Retry and failure
 
 - **Pre-send failure** (pane gone, gate closed, pending ask blocks): revert the record to `Queued` with `last_error` and the claim timestamp as throttle. The next qualifying turn boundary retries.
-- **Post-send failure** (bytes were written but confirmation never arrives): the record becomes `Errored` to avoid duplicate retry text.
-- **Retry cap**: after `MAX_DELIVERY_ATTEMPTS` (5) the record becomes `Abandoned`.
+- **Unconfirmed send** (bytes were written but no matching lifecycle confirmation arrives): the sweep reconciler clears the pane id, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. After the unconfirmed-send cap, the record becomes `TimedOut`.
+- **Pre-send retry cap**: after `MAX_DELIVERY_ATTEMPTS` (5) pre-send failures become `Abandoned`.
 - **Claim TTL**: a `Claimed` record older than 15 s (`CLAIM_TTL`) is treated as expired, so a crash after claim leaves a redeliverable record. `message list --all` surfaces it.
 - A state miss — the message is queued but the agent has not reached a qualifying boundary — leaves the message queued for a later transition.
 
@@ -145,13 +145,13 @@ One cannot confirm the other. A smart-compact send owns two records: the `/compa
 | Trigger | Terminal status |
 | --- | --- |
 | Agent's next lifecycle hook confirms the body | `Delivered` |
-| Delivery window expires on a `Sent` record | `TimedOut` |
+| Unconfirmed `Sent` record reaches the reconcile attempt cap | `TimedOut` |
 | Pane write fails after bytes were written | `Errored` |
 | User runs `message remove` | `Removed` |
 | Retry cap exceeded | `Abandoned` |
 | Receiver session `Ended` or channel teardown | `Archived` |
 
-Lifecycle `Ended` archives receiver messages in realtime; worktree create/remove archives records keyed to that channel; `rimz gc` is the durable backstop and times out `Sent` records older than `RIMZ_MESSAGE_DELIVERY_WINDOW_MS`. `Archived` is distinct from retry exhaustion (`Abandoned`) and explicit user removal (`Removed`).
+Lifecycle `Ended` archives receiver messages in realtime; worktree create/remove archives records keyed to that channel; the message sweep is the primary reconciler for unconfirmed `Sent` records and `rimz gc` is the durable backstop. `Archived` is distinct from retry exhaustion (`Abandoned`) and explicit user removal (`Removed`).
 
 ## Scheduling
 
@@ -161,9 +161,9 @@ FIFO scans filter out messages whose `not_before` is still in the future, so a s
 
 Scheduled messages need an open room for wakeups:
 
-1. The CLI writes `message-wake.json` under the runtime root with the earliest future `not_before`.
+1. The CLI writes `message-wake.json` under the runtime root with the earliest future `not_before` or unconfirmed `Sent` reconcile deadline.
 2. The elected sidebar elder reads that cache and, when due, spawns a detached `rimz message sweep`.
-3. The sweep helper finds ready FIFO heads whose gates are open, calls the same one-message delivery path as lifecycle hooks, then rewrites the wake cache to the next future schedule or removes it.
+3. The sweep helper reconciles stale `Sent` records, finds ready FIFO heads whose gates are open, calls the same one-message delivery path as lifecycle hooks, then rewrites the wake cache to the next future schedule or reconcile deadline or removes it.
 
 Past-due-but-blocked messages (closed gate, pending ask) are not kept in the wake stamp, so a blocked scheduled message does not spawn a helper every tick; the next turn-end hook and `gc` backstop own them.
 

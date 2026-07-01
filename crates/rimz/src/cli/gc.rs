@@ -29,7 +29,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     spinner.set("sweeping runtime hints…");
     let report = gc::collect_runtime(args.older_than).context("collecting runtime garbage")?;
     spinner.set("repairing ledger…");
-    let (abandoned, messages_archived, messages_timed_out, repaired) =
+    let (abandoned, messages_archived, messages_reconciled, repaired) =
         match WorkspaceResolver::resolve(".", globals.root.clone()) {
             Ok(workspace) => match open_ledger(&workspace) {
                 Ok(ledger) => {
@@ -48,17 +48,18 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                     let messages_archived = ledger
                         .archive_orphan_messages(&workspace.session_name)
                         .context("archiving orphan messages")?;
-                    let messages_timed_out = ledger
-                        .timeout_sent_messages(
+                    let reconcile = ledger
+                        .reconcile_stale_sent_messages(
                             &workspace.session_name,
                             jiff::Timestamp::now(),
                             rimz::message::delivery_window_from_env(),
+                            rimz::message::max_delivery_attempts_from_env(),
                         )
-                        .context("timing out sent messages")?;
+                        .context("reconciling sent messages")?;
                     (
                         abandoned,
                         messages_archived,
-                        messages_timed_out,
+                        reconcile.requeued + reconcile.timed_out,
                         Some(repaired),
                     )
                 }
@@ -87,7 +88,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         repaired,
         feed_abandoned: abandoned,
         queue_archived: messages_archived,
-        queue_timed_out: messages_timed_out,
+        queue_reconciled: messages_reconciled,
         schedules_reaped,
         prune,
         worktrees,
@@ -106,7 +107,7 @@ struct GcOutcome {
     repaired: Option<RepairOutcome>,
     feed_abandoned: usize,
     queue_archived: usize,
-    queue_timed_out: usize,
+    queue_reconciled: usize,
     schedules_reaped: usize,
     prune: gc::WorkspacePruneReport,
     worktrees: WorktreeSweep,
@@ -230,7 +231,7 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         || out.temps.files_removed > 0
         || out.feed_abandoned > 0
         || out.queue_archived > 0
-        || out.queue_timed_out > 0
+        || out.queue_reconciled > 0
         || out.schedules_reaped > 0
         || out.repaired.as_ref().is_some_and(RepairOutcome::truncated)
         || !out.prune.removed.is_empty()
@@ -311,8 +312,8 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     if out.queue_archived > 0 {
         report_note(w, &format!("messages archived: {}", out.queue_archived))?;
     }
-    if out.queue_timed_out > 0 {
-        report_note(w, &format!("queue timed out: {}", out.queue_timed_out))?;
+    if out.queue_reconciled > 0 {
+        report_note(w, &format!("messages reconciled: {}", out.queue_reconciled))?;
     }
     if out.schedules_reaped > 0 {
         report_note(w, &format!("schedules reaped: {}", out.schedules_reaped))?;
@@ -462,7 +463,7 @@ mod tests {
             repaired: None,
             feed_abandoned: 3,
             queue_archived: 0,
-            queue_timed_out: 0,
+            queue_reconciled: 0,
             schedules_reaped: 0,
             prune: gc::WorkspacePruneReport {
                 removed: vec![gc::RemovedWorkspace {

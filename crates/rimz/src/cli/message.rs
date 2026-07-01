@@ -15,9 +15,11 @@ use rimz::agents::AgentState;
 use rimz::feed::pending_ask_for;
 use rimz::ids::MessageId;
 use rimz::message::{
-    AutoCompact, DeliveryGate, MessageRecord, MessageStatus, gate_open, message_interval_from_env,
-    parse_schedule_at, queue_head, settle_duration_from_env,
+    AutoCompact, DeliveryGate, MessageRecord, MessageStatus, gate_open,
+    max_delivery_attempts_from_env, message_interval_from_env, parse_schedule_at, queue_head,
+    settle_duration_from_env,
 };
+use rimz::mux::MuxErr;
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 use rimz::{PaneAgent, RuntimePaths, SidebarSnapshot};
 
@@ -304,12 +306,24 @@ fn steer_message(
         ) {
             Ok(sent) => sent,
             Err(err) => {
+                if message_recorded_as_sent(&ledger, &message.message_id)? {
+                    register_message_wake(&workspace, &ledger)?;
+                    outcomes.push(send::Outcome::Sent {
+                        label: handle,
+                        message_id: message.message_id.clone(),
+                    });
+                    continue;
+                }
                 ledger.record_send_error(&message, &err.to_string(), &workspace.session_name)?;
+                register_message_wake(&workspace, &ledger)?;
                 return Err(err);
             }
         };
         if sent.compacted.is_some() {
             compacted.push(handle);
+        }
+        if sent_prompt_has_sent_record(&sent) {
+            register_message_wake(&workspace, &ledger)?;
         }
         outcomes.push(sent.outcome);
     }
@@ -699,6 +713,7 @@ fn add_message(
                         if sent.compacted.is_some() {
                             compacted.push(handle.clone());
                         }
+                        register_message_wake(&workspace, &ledger)?;
                         outputs.push(AddOutput {
                             label: handle,
                             message_id,
@@ -709,12 +724,26 @@ fn add_message(
                     send::Outcome::SkippedPending { .. } => park = true,
                 },
                 Err(err) => {
-                    ledger.record_send_error(
-                        &message,
-                        &err.to_string(),
-                        &workspace.session_name,
-                    )?;
-                    return Err(err);
+                    if message_recorded_as_sent(&ledger, &message.message_id)? {
+                        register_message_wake(&workspace, &ledger)?;
+                        outputs.push(AddOutput {
+                            label: handle,
+                            message_id: message.message_id.clone(),
+                            status: MessageStatus::Sent,
+                        });
+                        continue;
+                    }
+                    if is_mux_timeout(&err) && target.agent.is_some() {
+                        park = true;
+                    } else {
+                        ledger.record_send_error(
+                            &message,
+                            &err.to_string(),
+                            &workspace.session_name,
+                        )?;
+                        register_message_wake(&workspace, &ledger)?;
+                        return Err(err);
+                    }
                 }
             }
         }
@@ -755,11 +784,7 @@ fn add_message(
             status: MessageStatus::Queued,
         });
     }
-    if spec.not_before.is_some() {
-        let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
-            .context("preparing scheduled-message wake cache")?;
-        refresh_wake_stamp(&runtime, &pending, Timestamp::now())?;
-    }
+    register_message_wake(&workspace, &ledger)?;
     for label in &compacted {
         #[expect(clippy::print_stdout, reason = "command result")]
         {
@@ -1126,8 +1151,14 @@ fn deliver_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
 fn sweep_messages(globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
-    let pending = ledger.list_pending_messages()?;
     let now = Timestamp::now();
+    ledger.reconcile_stale_sent_messages(
+        &workspace.session_name,
+        now,
+        rimz::message::delivery_window_from_env(),
+        max_delivery_attempts_from_env(),
+    )?;
+    let pending = ledger.list_pending_messages()?;
     let mut heads_seen = std::collections::BTreeSet::new();
     for message in pending.iter().filter(|message| message.is_ready(now)) {
         let Some(head) = queue_head(
@@ -1149,10 +1180,7 @@ fn sweep_messages(globals: &GlobalFlags) -> Result<()> {
             )?;
         }
     }
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing scheduled-message wake cache")?;
-    let pending = ledger.list_pending_messages()?;
-    refresh_wake_stamp(&runtime, &pending, Timestamp::now())?;
+    register_message_wake(&workspace, &ledger)?;
     Ok(())
 }
 
@@ -1197,7 +1225,10 @@ fn deliver_one(
         Ok(send::SentPrompt {
             outcome: send::Outcome::Sent { .. },
             ..
-        }) => Ok(true),
+        }) => {
+            register_message_wake(workspace, ledger)?;
+            Ok(true)
+        }
         Ok(send::SentPrompt {
             outcome: send::Outcome::SkippedPending { request_id, .. },
             ..
@@ -1210,6 +1241,10 @@ fn deliver_one(
             Ok(false)
         }
         Err(err) => {
+            if message_recorded_as_sent(ledger, &message.message_id)? {
+                register_message_wake(workspace, ledger)?;
+                return Ok(false);
+            }
             if ledger
                 .record_message_delivery_failure(
                     &message.message_id,
@@ -1224,6 +1259,7 @@ fn deliver_one(
                     &workspace.session_name,
                 )?;
             }
+            register_message_wake(workspace, ledger)?;
             Ok(false)
         }
     }
@@ -1322,36 +1358,49 @@ fn workspace_ledger_snapshot(
     Ok((workspace, ledger, snapshot))
 }
 
-fn refresh_wake_stamp(
-    runtime: &RuntimePaths,
-    pending: &[MessageRecord],
-    now: Timestamp,
-) -> Result<()> {
+fn register_message_wake(workspace: &ResolvedWorkspace, ledger: &rimz::Ledger) -> Result<()> {
+    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing message wake cache")?;
+    refresh_wake_stamp(&runtime, ledger, Timestamp::now())
+}
+
+fn refresh_wake_stamp(runtime: &RuntimePaths, ledger: &rimz::Ledger, now: Timestamp) -> Result<()> {
     let path = wake_stamp_path(runtime);
-    let next = pending
-        .iter()
-        .filter(|message| message.status == MessageStatus::Queued)
-        .filter_map(|message| message.not_before)
-        .filter(|not_before| *not_before > now)
-        .min();
+    let next = ledger.earliest_message_wake(now, rimz::message::delivery_window_from_env())?;
     match next {
         Some(not_before) => {
             rimz::ledger::atomic::write_temp_then_rename_cache(&path, &Some(not_before))
-                .with_context(|| {
-                    format!("writing scheduled-message wake cache `{}`", path.display())
-                })?;
+                .with_context(|| format!("writing message wake cache `{}`", path.display()))?;
         }
         None => match std::fs::remove_file(&path) {
             Ok(()) => {}
             Err(err) if err.kind() == ErrorKind::NotFound => {}
             Err(err) => {
-                return Err(err).with_context(|| {
-                    format!("removing scheduled-message wake cache `{}`", path.display())
-                });
+                return Err(err)
+                    .with_context(|| format!("removing message wake cache `{}`", path.display()));
             }
         },
     }
     Ok(())
+}
+
+fn sent_prompt_has_sent_record(sent: &send::SentPrompt) -> bool {
+    sent.compacted.is_some() || matches!(sent.outcome, send::Outcome::Sent { .. })
+}
+
+fn message_recorded_as_sent(ledger: &rimz::Ledger, message_id: &MessageId) -> Result<bool> {
+    Ok(ledger
+        .list_messages()?
+        .iter()
+        .any(|message| message.message_id == *message_id && message.status == MessageStatus::Sent))
+}
+
+fn is_mux_timeout(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<MuxErr>()
+            .is_some_and(|err| matches!(err, MuxErr::Timeout { .. }))
+    })
 }
 
 fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
@@ -1541,6 +1590,19 @@ mod tests {
         );
         let agents: Vec<&AgentState> = snapshot.agents.iter().collect();
         assert_eq!(message_target(&message, &agents), "@coder#project");
+    }
+
+    #[test]
+    fn mux_timeout_detection_walks_error_context() {
+        let err = anyhow::Error::new(MuxErr::Timeout {
+            program: "tmux".to_owned(),
+            args: "send-keys %1".to_owned(),
+            seconds: 30,
+        })
+        .context("sending prompt");
+
+        assert!(is_mux_timeout(&err));
+        assert!(!is_mux_timeout(&anyhow::anyhow!("ordinary failure")));
     }
 
     fn workspace_id() -> WorkspaceId {

@@ -334,7 +334,7 @@ fn future_scheduled_message_does_not_block_later_send_now_message() {
 }
 
 #[test]
-fn message_sweep_delivers_due_message_and_clears_wake_stamp() {
+fn message_sweep_delivers_due_message_and_registers_reconcile_wake() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
@@ -387,7 +387,6 @@ fn message_sweep_delivers_due_message_and_clears_wake_stamp() {
     );
 
     assert_text_then_enter(&trace_log, "due now");
-    assert!(!wake_stamp_path(&env).exists(), "wake stamp cleared");
     let sent = env
         .ledger()
         .list_messages()
@@ -396,6 +395,14 @@ fn message_sweep_delivers_due_message_and_clears_wake_stamp() {
         .find(|message| message.message_id == message_id)
         .expect("swept message");
     assert_eq!(sent.status, MessageStatus::Sent);
+    let wake: Option<jiff::Timestamp> =
+        serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
+            .expect("wake stamp json");
+    assert_eq!(
+        wake,
+        sent.sent_reconcile_deadline(Duration::from_secs(30)),
+        "wake stamp tracks the sent reconcile deadline"
+    );
 }
 
 #[test]
@@ -798,6 +805,87 @@ fn queue_delivery_presses_enter_as_discrete_key() {
         "an idle agent with a bound pane should receive queue text immediately"
     );
     assert_text_then_enter(&trace_log, "go");
+}
+
+#[test]
+fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-reconcile", "feature-reconcile", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-reconcile",
+            "worktree_branch": "feature-reconcile",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+
+    let first_trace = env.project_root.join("zellij-reconcile-first-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &first_trace)
+        .args(["message", "@claude", "--", "recover me"])
+        .output()
+        .expect("send-now message");
+    assert!(
+        out.status.success(),
+        "send-now failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let message_id = sent_id_from_stdout(&out.stdout);
+    assert_text_then_enter(&first_trace, "recover me");
+
+    let second_trace = env.project_root.join("zellij-reconcile-second-trace.log");
+    let sweep = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &second_trace)
+        .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
+        .args(["message", "sweep"])
+        .output()
+        .expect("message sweep");
+    assert!(
+        sweep.status.success(),
+        "message sweep failed: {}",
+        String::from_utf8_lossy(&sweep.stderr)
+    );
+    assert_text_then_enter(&second_trace, "recover me");
+
+    let sent = env
+        .ledger()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| message.message_id.as_str() == message_id)
+        .expect("redelivered message");
+    assert_eq!(sent.status, MessageStatus::Sent);
+    assert!(sent.attempts >= 2, "requeue plus claim counted attempts");
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-reconcile",
+            "prompt": "recover me",
+            "worktree_branch": "feature-reconcile",
+        }),
+        pane_env,
+    );
+    let delivered = env
+        .ledger()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| message.message_id.as_str() == message_id)
+        .expect("delivered message");
+    assert_eq!(delivered.status, MessageStatus::Delivered);
 }
 
 #[test]
@@ -2167,6 +2255,17 @@ fn queued_id_from_stdout(stdout: &[u8]) -> String {
         .and_then(|(_, id)| id.strip_suffix(')'))
         .map(str::to_owned)
         .unwrap_or_else(|| panic!("expected `queued for @target (msg_...)`, got `{trimmed}`"))
+}
+
+fn sent_id_from_stdout(stdout: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stdout);
+    let trimmed = text.trim();
+    trimmed
+        .strip_prefix("sent to ")
+        .and_then(|rest| rest.rsplit_once('('))
+        .and_then(|(_, id)| id.strip_suffix(')'))
+        .map(str::to_owned)
+        .unwrap_or_else(|| panic!("expected `sent to @target (msg_...)`, got `{trimmed}`"))
 }
 
 fn assert_single_sigil_sent(stdout: &[u8]) {

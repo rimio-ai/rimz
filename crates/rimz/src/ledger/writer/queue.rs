@@ -10,6 +10,12 @@ use crate::schema::event::{EventEnvelope, MessageEventMethod};
 
 use super::super::{Ledger, Result, event_log, lock, message_store};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReconcileReport {
+    pub requeued: usize,
+    pub timed_out: usize,
+}
+
 impl Ledger {
     pub fn list_messages(&self) -> Result<Vec<MessageRecord>> {
         Ok(message_store::list(&self.inner.paths.messages_dir)?)
@@ -242,13 +248,14 @@ impl Ledger {
     }
 
     #[must_use = "durability barrier; check the result"]
-    pub fn timeout_sent_messages(
+    pub fn reconcile_stale_sent_messages(
         &self,
         session_name: &str,
         now: Timestamp,
         window: Duration,
-    ) -> Result<usize> {
-        let mut timed_out = Vec::new();
+        max_attempts: u32,
+    ) -> Result<ReconcileReport> {
+        let mut report = ReconcileReport::default();
         let mut events = Vec::new();
         {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
@@ -260,28 +267,54 @@ impl Ledger {
                 if !age.is_negative() && age.as_millis() < window.as_millis() as i128 {
                     continue;
                 }
-                message.status = MessageStatus::TimedOut;
-                message.last_error = Some("delivery window elapsed".to_owned());
+                let (method, reason) = if message.attempts < max_attempts {
+                    message.status = MessageStatus::Queued;
+                    message.pane_id = None;
+                    message.attempts = message.attempts.saturating_add(1);
+                    message.last_attempt_at = None;
+                    message.last_error = Some("delivery unconfirmed; re-queued".to_owned());
+                    report.requeued += 1;
+                    (MessageEventMethod::Queued, "reconcile")
+                } else {
+                    message.status = MessageStatus::TimedOut;
+                    message.last_error = Some(format!(
+                        "delivery unconfirmed after {max_attempts} attempts"
+                    ));
+                    report.timed_out += 1;
+                    (MessageEventMethod::TimedOut, "reconcile")
+                };
                 message.updated_at = now;
                 message_store::write(&self.inner.paths.messages_dir, &message)?;
-                let event = EventEnvelope::message_event(
-                    &message,
-                    session_name,
-                    MessageEventMethod::TimedOut,
-                    Some("gc"),
-                );
+                let event =
+                    EventEnvelope::message_event(&message, session_name, method, Some(reason));
                 event_log::append(&self.inner.paths.events_log, &event)?;
                 events.push(event);
-                timed_out.push(message);
             }
         }
         for event in &events {
             self.wake_sidebars_for_event_best_effort(event);
         }
-        if !timed_out.is_empty() {
+        if !events.is_empty() {
             self.publish_snapshot_forced();
         }
-        Ok(timed_out.len())
+        Ok(report)
+    }
+
+    pub fn earliest_message_wake(
+        &self,
+        now: Timestamp,
+        window: Duration,
+    ) -> Result<Option<Timestamp>> {
+        let next = message_store::list(&self.inner.paths.messages_dir)?
+            .into_iter()
+            .filter_map(|message| {
+                if message.status == MessageStatus::Queued {
+                    return message.not_before.filter(|not_before| *not_before > now);
+                }
+                message.sent_reconcile_deadline(window)
+            })
+            .min();
+        Ok(next)
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -298,16 +331,14 @@ impl Ledger {
                     Ok(existing)
                         if matches!(
                             existing.status,
-                            MessageStatus::Created
-                                | MessageStatus::Queued
-                                | MessageStatus::Claimed
-                                | MessageStatus::Sent
+                            MessageStatus::Created | MessageStatus::Queued | MessageStatus::Claimed
                         ) =>
                     {
                         let mut existing = existing;
                         existing.pane_id = message.pane_id.clone();
                         existing
                     }
+                    Ok(existing) if existing.status == MessageStatus::Sent => return Ok(None),
                     Ok(_) => return Ok(None),
                     Err(message_store::MessageStoreErr::NotFound(_)) => message.clone(),
                     Err(err) => return Err(err.into()),
@@ -830,18 +861,98 @@ mod tests {
     }
 
     #[test]
-    fn sent_message_times_out_after_window() {
+    fn stale_sent_message_requeues_before_attempt_cap() {
         let (_dir, ledger, workspace_id) = ledger();
         let message = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
         ledger.record_sent_message(&message, "session").unwrap();
 
-        let timed_out = ledger
-            .timeout_sent_messages("session", Timestamp::now(), Duration::ZERO)
+        let report = ledger
+            .reconcile_stale_sent_messages("session", Timestamp::now(), Duration::ZERO, 3)
             .unwrap();
 
-        assert_eq!(timed_out, 1);
+        assert_eq!(report.requeued, 1);
+        assert_eq!(report.timed_out, 0);
+        let messages = ledger.list_messages().unwrap();
+        assert_eq!(messages[0].status, MessageStatus::Queued);
+        assert_eq!(messages[0].pane_id, None);
+        assert_eq!(messages[0].attempts, 1);
+        assert_eq!(messages[0].last_attempt_at, None);
+        assert_eq!(
+            messages[0].last_error.as_deref(),
+            Some("delivery unconfirmed; re-queued")
+        );
+        let events = event_log::read_all(&ledger.inner.paths.events_log).unwrap();
+        let queued = events
+            .iter()
+            .find(|event| event.method == "message.queued")
+            .expect("reconcile queued event");
+        let params: serde_json::Value = serde_json::from_str(queued.params.get()).unwrap();
+        assert_eq!(params["reason"], "reconcile");
+    }
+
+    #[test]
+    fn stale_sent_message_times_out_at_attempt_cap() {
+        let (_dir, ledger, workspace_id) = ledger();
+        let mut message =
+            message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+        message.attempts = 3;
+        ledger.record_sent_message(&message, "session").unwrap();
+
+        let report = ledger
+            .reconcile_stale_sent_messages("session", Timestamp::now(), Duration::ZERO, 3)
+            .unwrap();
+
+        assert_eq!(report.requeued, 0);
+        assert_eq!(report.timed_out, 1);
         let messages = ledger.list_messages().unwrap();
         assert_eq!(messages[0].status, MessageStatus::TimedOut);
+        assert_eq!(
+            messages[0].last_error.as_deref(),
+            Some("delivery unconfirmed after 3 attempts")
+        );
+        let events = event_log::read_all(&ledger.inner.paths.events_log).unwrap();
+        let timed_out = events
+            .iter()
+            .find(|event| event.method == "message.timed_out")
+            .expect("reconcile timed_out event");
+        let params: serde_json::Value = serde_json::from_str(timed_out.params.get()).unwrap();
+        assert_eq!(params["reason"], "reconcile");
+    }
+
+    #[test]
+    fn fresh_sent_message_waits_for_reconcile_deadline() {
+        let (_dir, ledger, workspace_id) = ledger();
+        let message = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+        ledger.record_sent_message(&message, "session").unwrap();
+
+        let report = ledger
+            .reconcile_stale_sent_messages("session", Timestamp::now(), Duration::from_secs(60), 3)
+            .unwrap();
+
+        assert_eq!(report, ReconcileReport::default());
+        let messages = ledger.list_messages().unwrap();
+        assert_eq!(messages[0].status, MessageStatus::Sent);
+    }
+
+    #[test]
+    fn earliest_message_wake_includes_sent_reconcile_deadline() {
+        let (_dir, ledger, workspace_id) = ledger();
+        let sent = ledger
+            .record_sent_message(
+                &message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1")),
+                "session",
+            )
+            .unwrap()
+            .expect("sent");
+        let scheduled_at = sent.updated_at + Duration::from_secs(120);
+        let scheduled = message(&workspace_id).with_not_before(Some(scheduled_at));
+        ledger.queue_message(&scheduled, "session").unwrap();
+
+        let wake = ledger
+            .earliest_message_wake(sent.updated_at, Duration::from_secs(30))
+            .unwrap();
+
+        assert_eq!(wake, Some(sent.updated_at + Duration::from_secs(30)));
     }
 
     fn ledger() -> (tempfile::TempDir, Ledger, WorkspaceId) {
