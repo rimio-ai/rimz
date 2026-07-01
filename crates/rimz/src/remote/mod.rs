@@ -212,6 +212,8 @@ pub fn ssh_attach_spec_with_control(
             "ServerAliveCountMax=3",
             "-o",
             "ConnectTimeout=10",
+            "-o",
+            "Compression=yes",
         ])
         .args(control.into_iter().flat_map(link::control_options))
         .args(["-t", "--"])
@@ -706,7 +708,7 @@ mod tests {
         let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep);
         assert_eq!(spec.program, "ssh");
         assert_eq!(
-            spec.args[..8],
+            spec.args[..10],
             [
                 "-o",
                 "ServerAliveInterval=5",
@@ -714,13 +716,15 @@ mod tests {
                 "ServerAliveCountMax=3",
                 "-o",
                 "ConnectTimeout=10",
+                "-o",
+                "Compression=yes",
                 "-t",
                 "--",
             ]
         );
-        assert_eq!(spec.args[8], "dev-box");
-        let snippet = &spec.args[9];
-        assert_eq!(spec.args.len(), 10, "snippet is a single argv element");
+        assert_eq!(spec.args[10], "dev-box");
+        let snippet = &spec.args[11];
+        assert_eq!(spec.args.len(), 12, "snippet is a single argv element");
         assert!(snippet.starts_with("PATH=\"$HOME/.cargo/bin"));
         assert!(snippet.contains("command -v rimz"));
         assert!(snippet.contains("rimz not found on dev-box"));
@@ -740,9 +744,9 @@ mod tests {
             Some(Path::new("/tmp/rimz.sock")),
         );
 
-        assert_eq!(plain.args[..6], control.args[..6]);
+        assert_eq!(plain.args[..8], control.args[..8]);
         assert_eq!(
-            control.args[6..10],
+            control.args[8..12],
             [
                 "-o",
                 "ControlMaster=auto",
@@ -750,9 +754,9 @@ mod tests {
                 "ControlPath=/tmp/rimz.sock",
             ]
         );
-        assert_eq!(control.args[10], "-t");
-        assert_eq!(control.args[11], "--");
-        assert_eq!(control.args[12], "dev-box");
+        assert_eq!(control.args[12], "-t");
+        assert_eq!(control.args[13], "--");
+        assert_eq!(control.args[14], "dev-box");
     }
 
     #[test]

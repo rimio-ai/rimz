@@ -422,12 +422,12 @@ mod tests {
 
         let raw = resolve_connect("raw-box:session", false, false, None, &aliases).unwrap();
         let raw_spec = ssh_attach_spec(&raw.target, raw.no_resume, raw.mux, &TermPlan::Keep);
-        assert_eq!(raw_spec.args[8], "raw-box");
+        assert_eq!(raw_spec.args[10], "raw-box");
 
         let named = resolve_connect("prod", false, false, None, &aliases).unwrap();
         let named_spec =
             ssh_attach_spec(&named.target, named.no_resume, named.mux, &TermPlan::Keep);
-        assert_eq!(named_spec.args[8], "prod-box");
+        assert_eq!(named_spec.args[10], "prod-box");
 
         let fresh = resolve_connect("fresh", false, false, None, &aliases).unwrap();
         assert!(fresh.no_resume);

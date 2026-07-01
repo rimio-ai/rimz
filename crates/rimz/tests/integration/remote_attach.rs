@@ -16,14 +16,16 @@ fn ssh_shim() -> PathBuf {
     crate::common::cargo_bin("ssh-trace", env!("CARGO_BIN_EXE_ssh-trace"))
 }
 
-/// The keepalive prefix shared by supervised and one-shot remote attaches.
-const SSH_KEEPALIVES: [&str; 6] = [
+/// The transport options shared by supervised and one-shot remote attaches.
+const SSH_TRANSPORT_OPTS: [&str; 8] = [
     "-o",
     "ServerAliveInterval=5",
     "-o",
     "ServerAliveCountMax=3",
     "-o",
     "ConnectTimeout=10",
+    "-o",
+    "Compression=yes",
 ];
 
 /// One `Vec<argv>` per shim invocation, from the tab-joined trace log.
@@ -166,18 +168,18 @@ fn exec_hands_ssh_the_expected_argv() {
     let invocations = shim_invocations(&log);
     assert_eq!(invocations.len(), 1, "one ssh run");
     let argv = &invocations[0];
-    assert_eq!(argv.len(), 15, "snippet is a single argv element: {argv:?}");
+    assert_eq!(argv.len(), 17, "snippet is a single argv element: {argv:?}");
     assert!(argv[0].ends_with("ssh-trace"));
-    assert_eq!(argv[1..7], SSH_KEEPALIVES);
-    assert_eq!(argv[7], "-o");
-    assert_eq!(argv[8], "ControlMaster=auto");
+    assert_eq!(argv[1..9], SSH_TRANSPORT_OPTS);
     assert_eq!(argv[9], "-o");
-    assert!(argv[10].starts_with("ControlPath="), "{argv:?}");
-    assert_eq!(argv[11], "-t");
-    assert_eq!(argv[12], "--");
-    assert_eq!(argv[13], "dev-box");
-    assert!(argv[14].starts_with("PATH=\"$HOME/.cargo/bin"));
-    assert!(argv[14].ends_with("exec rimz attach --attach -- 'query-engine'"));
+    assert_eq!(argv[10], "ControlMaster=auto");
+    assert_eq!(argv[11], "-o");
+    assert!(argv[12].starts_with("ControlPath="), "{argv:?}");
+    assert_eq!(argv[13], "-t");
+    assert_eq!(argv[14], "--");
+    assert_eq!(argv[15], "dev-box");
+    assert!(argv[16].starts_with("PATH=\"$HOME/.cargo/bin"));
+    assert!(argv[16].ends_with("exec rimz attach --attach -- 'query-engine'"));
 }
 
 #[test]

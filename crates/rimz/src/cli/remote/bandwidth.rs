@@ -1,6 +1,8 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::io::Write as _;
+use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -26,8 +28,16 @@ const IO_UNREADABLE_NOTICE: &str = concat!(
     "rimz remote bandwidth resolved pane processes but could not read /proc/<pid>/io. ",
     "The room may be served by another user, or the kernel lacks CONFIG_TASK_IO_ACCOUNTING."
 );
-const REPORT_CAVEAT: &str =
-    "process write-rate includes non-pty writes; muxes diff/throttle, so wire bytes <= this.";
+const REPORT_CAVEAT: &str = concat!(
+    "per-pane rows are producer write-rate; muxes diff the focused tab and SSH compresses it, ",
+    "so WIRE(ssh) is the actual TCP payload on this room's SSH socket, usually far below the ",
+    "per-pane sum. WIRE is absent for local rooms."
+);
+const SSH_CONNECTION_ENV: &str = "SSH_CONNECTION";
+const WIRE_TX_PANE: &str = "WIRE(ssh↑)";
+const WIRE_RX_PANE: &str = "WIRE(ssh↓)";
+const WIRE_TX_LABEL: &str = "ssh egress → client(s)";
+const WIRE_RX_LABEL: &str = "ssh ingress ← client(s)";
 
 struct PaneProfile {
     pane_id: PaneId,
@@ -40,6 +50,28 @@ struct PaneSample {
     pane_id: PaneId,
     label: String,
     write_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SshConn {
+    local: SocketEndpoint,
+    peer: SocketEndpoint,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SocketEndpoint {
+    addr: String,
+    port: u16,
+}
+
+impl SocketEndpoint {
+    fn ss_filter_text(&self) -> String {
+        if self.addr.contains(':') && !(self.addr.starts_with('[') && self.addr.ends_with(']')) {
+            format!("[{}]:{}", self.addr, self.port)
+        } else {
+            format!("{}:{}", self.addr, self.port)
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -55,6 +87,10 @@ struct BandwidthJson<'a> {
     available: bool,
     sample_secs: f64,
     total_bps: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wire_tx_bps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wire_rx_bps: Option<u64>,
     panes: &'a [PaneRate],
     caveat: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -104,8 +140,11 @@ pub(super) fn run(secs: u64, json: bool, globals: &GlobalFlags) -> Result<()> {
     if profiles.is_empty() {
         return emit_unavailable(secs as f64, json, no_pane_pids_notice(mux));
     }
+    let conns = session_ssh_conns(mux, &workspace.session_name, &proc_snapshot);
     let (t0, t0_reads) = sample_panes(&profiles);
+    let socket_t0 = socket_io(&conns);
     std::thread::sleep(Duration::from_secs(secs));
+    let socket_t1 = socket_io(&conns);
     let (t1, t1_reads) = sample_panes(&profiles);
     if t0_reads == 0 && t1_reads == 0 {
         return emit_unavailable(secs as f64, json, IO_UNREADABLE_NOTICE);
@@ -113,10 +152,11 @@ pub(super) fn run(secs: u64, json: bool, globals: &GlobalFlags) -> Result<()> {
 
     let rows = sorted_rates(rates(&t0, &t1, secs as f64));
     let total = total_bps(&rows);
+    let wire = wire_rates(socket_t0, socket_t1, secs as f64);
     if json {
-        print_json(true, secs as f64, total, &rows, None)
+        print_json(true, secs as f64, total, wire, &rows, None)
     } else {
-        let report = format_report(&rows, total, secs as f64);
+        let report = format_report(&rows, total, wire, secs as f64);
         let mut out = render::out();
         out.write_all(report.as_bytes())
             .context("writing bandwidth report")
@@ -189,6 +229,155 @@ fn sample_panes(profiles: &[PaneProfile]) -> (Vec<PaneSample>, usize) {
     (samples, readable)
 }
 
+fn session_ssh_conns(mux: MuxName, session: &str, procs: &[ProcInfo]) -> Vec<SshConn> {
+    let pids = match mux {
+        MuxName::Zellij => zellij_client_pids(procs, session, rimz::proc::own_uid()),
+        MuxName::Tmux => tmux_client_pids(session),
+    };
+    ssh_conns_for_client_pids(&pids, &|pid| rimz::proc::env_var(pid, SSH_CONNECTION_ENV))
+}
+
+fn zellij_client_pids(procs: &[ProcInfo], session: &str, own_uid: Option<u32>) -> Vec<u32> {
+    let Some(own_uid) = own_uid else {
+        return Vec::new();
+    };
+    procs
+        .iter()
+        .filter(|proc| proc.real_uid == own_uid)
+        .filter(|proc| zellij_client_cmdline(&proc.cmdline, session))
+        .map(|proc| proc.pid)
+        .collect()
+}
+
+fn zellij_client_cmdline(cmdline: &str, session: &str) -> bool {
+    let mut tokens = cmdline.split_whitespace();
+    let Some(program) = tokens.next() else {
+        return false;
+    };
+    if Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some("zellij")
+    {
+        return false;
+    }
+    let mut has_session = false;
+    for token in tokens {
+        if token == "--server" {
+            return false;
+        }
+        let file_name = Path::new(token).file_name().and_then(|name| name.to_str());
+        has_session |= token == session || file_name == Some(session);
+    }
+    has_session
+}
+
+fn tmux_client_pids(session: &str) -> Vec<u32> {
+    let Some(output) = rimz::mux::CommandSpec::new("tmux")
+        .args(["list-clients", "-t", session, "-F", "#{client_pid}"])
+        .run()
+        .ok()
+    else {
+        return Vec::new();
+    };
+    parse_tmux_client_pids(&output.stdout)
+}
+
+fn parse_tmux_client_pids(raw: &[u8]) -> Vec<u32> {
+    String::from_utf8_lossy(raw)
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect()
+}
+
+fn ssh_conns_for_client_pids(
+    pids: &[u32],
+    read_env: &dyn Fn(u32) -> Option<String>,
+) -> Vec<SshConn> {
+    pids.iter()
+        .filter_map(|&pid| read_env(pid))
+        .filter_map(|raw| parse_ssh_connection(&raw))
+        .collect()
+}
+
+fn parse_ssh_connection(raw: &str) -> Option<SshConn> {
+    let mut fields = raw.split_whitespace();
+    let client_addr = fields.next()?;
+    let client_port = parse_port(fields.next()?)?;
+    let server_addr = fields.next()?;
+    let server_port = parse_port(fields.next()?)?;
+    if fields.next().is_some() {
+        return None;
+    }
+    Some(SshConn {
+        local: SocketEndpoint {
+            addr: server_addr.to_owned(),
+            port: server_port,
+        },
+        peer: SocketEndpoint {
+            addr: client_addr.to_owned(),
+            port: client_port,
+        },
+    })
+}
+
+fn parse_port(raw: &str) -> Option<u16> {
+    raw.parse().ok()
+}
+
+fn socket_io(conns: &[SshConn]) -> Option<(u64, u64)> {
+    if conns.is_empty() {
+        return None;
+    }
+
+    let mut saw_counter = false;
+    let mut tx = 0_u64;
+    let mut rx = 0_u64;
+    for conn in conns {
+        let filter = format!(
+            "src {} dst {}",
+            conn.local.ss_filter_text(),
+            conn.peer.ss_filter_text()
+        );
+        let output = Command::new("ss").args(["-tieHn", &filter]).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        if let Some((conn_tx, conn_rx)) =
+            parse_ss_counters(&String::from_utf8_lossy(&output.stdout))
+        {
+            saw_counter = true;
+            tx = tx.saturating_add(conn_tx);
+            rx = rx.saturating_add(conn_rx);
+        }
+    }
+    saw_counter.then_some((tx, rx))
+}
+
+fn parse_ss_counters(out: &str) -> Option<(u64, u64)> {
+    let mut saw_counter = false;
+    let mut tx = 0_u64;
+    let mut rx = 0_u64;
+    for token in out.split_whitespace() {
+        if let Some(value) = parse_ss_counter_token(token, "bytes_acked:") {
+            saw_counter = true;
+            tx = tx.saturating_add(value);
+        } else if let Some(value) = parse_ss_counter_token(token, "bytes_received:") {
+            saw_counter = true;
+            rx = rx.saturating_add(value);
+        }
+    }
+    saw_counter.then_some((tx, rx))
+}
+
+fn parse_ss_counter_token(token: &str, prefix: &str) -> Option<u64> {
+    token
+        .strip_prefix(prefix)?
+        .trim_end_matches([',', ';'])
+        .parse()
+        .ok()
+}
+
 fn children_by_parent(procs: &[ProcInfo]) -> HashMap<u32, Vec<u32>> {
     let mut children = HashMap::new();
     for proc in procs {
@@ -235,6 +424,18 @@ fn rates(t0: &[PaneSample], t1: &[PaneSample], secs: f64) -> Vec<PaneRate> {
         .collect()
 }
 
+fn wire_rates(t0: Option<(u64, u64)>, t1: Option<(u64, u64)>, secs: f64) -> Option<(u64, u64)> {
+    if secs <= 0.0 {
+        return None;
+    }
+    let (tx0, rx0) = t0?;
+    let (tx1, rx1) = t1?;
+    Some((
+        bps(tx1.saturating_sub(tx0), secs),
+        bps(rx1.saturating_sub(rx0), secs),
+    ))
+}
+
 fn bps(delta: u64, secs: f64) -> u64 {
     let rate = (delta as f64 / secs).round();
     if rate >= u64::MAX as f64 {
@@ -273,12 +474,19 @@ fn fmt_bps(bps: u64) -> String {
     }
 }
 
-fn format_report(rows: &[PaneRate], total: u64, secs: f64) -> String {
+fn format_report(rows: &[PaneRate], total: u64, wire: Option<(u64, u64)>, secs: f64) -> String {
     let rows = sorted_rates(rows.to_vec());
     let rate_text: Vec<String> = rows.iter().map(|row| fmt_bps(row.bps)).collect();
+    let total_label = format!("{} sample", fmt_secs(secs));
+    let mut wire_rows = Vec::new();
+    if let Some((tx, rx)) = wire {
+        wire_rows.push((WIRE_TX_PANE, WIRE_TX_LABEL, fmt_bps(tx)));
+        wire_rows.push((WIRE_RX_PANE, WIRE_RX_LABEL, fmt_bps(rx)));
+    }
     let pane_w = rows
         .iter()
         .map(|row| row.pane_id.as_str().len())
+        .chain(wire_rows.iter().map(|(pane, _, _)| pane.len()))
         .max()
         .unwrap_or(0)
         .max("PANE".len())
@@ -286,12 +494,15 @@ fn format_report(rows: &[PaneRate], total: u64, secs: f64) -> String {
     let label_w = rows
         .iter()
         .map(|row| row.label.len())
+        .chain(wire_rows.iter().map(|(_, label, _)| label.len()))
+        .chain(std::iter::once(total_label.len()))
         .max()
         .unwrap_or(0)
         .max("LABEL".len());
     let rate_w = rate_text
         .iter()
         .map(String::len)
+        .chain(wire_rows.iter().map(|(_, _, rate)| rate.len()))
         .max()
         .unwrap_or(0)
         .max("WRITE/S".len())
@@ -312,10 +523,13 @@ fn format_report(rows: &[PaneRate], total: u64, secs: f64) -> String {
             rate_w,
         );
     }
+    for (pane, label, rate) in &wire_rows {
+        write_report_row(&mut out, pane, label, rate, pane_w, label_w, rate_w);
+    }
     write_report_row(
         &mut out,
         "TOTAL",
-        &format!("{} sample", fmt_secs(secs)),
+        &total_label,
         &fmt_bps(total),
         pane_w,
         label_w,
@@ -353,7 +567,7 @@ fn fmt_secs(secs: f64) -> String {
 fn emit_unavailable(secs: f64, json: bool, notice: &'static str) -> Result<()> {
     let rows = Vec::new();
     if json {
-        return print_json(false, secs, 0, &rows, Some(notice));
+        return print_json(false, secs, 0, None, &rows, Some(notice));
     }
     let mut out = render::out();
     writeln!(out, "{notice}").context("writing bandwidth notice")
@@ -370,17 +584,11 @@ fn print_json(
     available: bool,
     sample_secs: f64,
     total_bps: u64,
+    wire: Option<(u64, u64)>,
     panes: &[PaneRate],
     message: Option<&'static str>,
 ) -> Result<()> {
-    let rendered = serde_json::to_string_pretty(&BandwidthJson {
-        available,
-        sample_secs,
-        total_bps,
-        panes,
-        caveat: REPORT_CAVEAT,
-        message,
-    })?;
+    let rendered = render_json(available, sample_secs, total_bps, wire, panes, message)?;
     #[expect(clippy::print_stdout, reason = "json emitter")]
     {
         println!("{rendered}");
@@ -388,16 +596,40 @@ fn print_json(
     Ok(())
 }
 
+fn render_json(
+    available: bool,
+    sample_secs: f64,
+    total_bps: u64,
+    wire: Option<(u64, u64)>,
+    panes: &[PaneRate],
+    message: Option<&'static str>,
+) -> Result<String> {
+    Ok(serde_json::to_string_pretty(&BandwidthJson {
+        available,
+        sample_secs,
+        total_bps,
+        wire_tx_bps: wire.map(|(tx, _)| tx),
+        wire_rx_bps: wire.map(|(_, rx)| rx),
+        panes,
+        caveat: REPORT_CAVEAT,
+        message,
+    })?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn proc(pid: u32, ppid: u32) -> ProcInfo {
+        proc_with(pid, ppid, 1000, &format!("proc-{pid}"))
+    }
+
+    fn proc_with(pid: u32, ppid: u32, real_uid: u32, cmdline: &str) -> ProcInfo {
         ProcInfo {
             pid,
             ppid,
-            real_uid: 1000,
-            cmdline: format!("proc-{pid}"),
+            real_uid,
+            cmdline: cmdline.to_owned(),
         }
     }
 
@@ -450,6 +682,100 @@ mod tests {
     }
 
     #[test]
+    fn parse_ssh_connection_maps_remote_socket_to_client_peer() {
+        assert_eq!(
+            parse_ssh_connection("203.0.113.10 54321 10.0.0.5 22"),
+            Some(SshConn {
+                local: SocketEndpoint {
+                    addr: "10.0.0.5".to_owned(),
+                    port: 22
+                },
+                peer: SocketEndpoint {
+                    addr: "203.0.113.10".to_owned(),
+                    port: 54321
+                },
+            })
+        );
+        assert_eq!(parse_ssh_connection("203.0.113.10 54321 10.0.0.5"), None);
+        assert_eq!(
+            parse_ssh_connection("203.0.113.10 not-a-port 10.0.0.5 22"),
+            None
+        );
+        assert_eq!(
+            parse_ssh_connection("203.0.113.10 54321 10.0.0.5 22 extra"),
+            None
+        );
+    }
+
+    #[test]
+    fn socket_endpoint_brackets_ipv6_for_ss_filter() {
+        let conn = parse_ssh_connection("2001:db8::1 54321 2001:db8::2 22").unwrap();
+
+        assert_eq!(conn.local.ss_filter_text(), "[2001:db8::2]:22");
+        assert_eq!(conn.peer.ss_filter_text(), "[2001:db8::1]:54321");
+    }
+
+    #[test]
+    fn parse_ss_counters_sums_tcp_info_tokens() {
+        let out = "\
+ESTAB 0 0 10.0.0.5:22 203.0.113.10:54321
+\t cubic wscale:7,7 rto:204 bytes_acked:4096 bytes_received:2048
+ESTAB 0 0 10.0.0.5:22 203.0.113.11:54322
+\t cubic wscale:7,7 rto:204 bytes_acked:6 bytes_received:2
+";
+
+        assert_eq!(parse_ss_counters(out), Some((4_102, 2_050)));
+        assert_eq!(parse_ss_counters(""), None);
+        assert_eq!(parse_ss_counters("ESTAB no counters here"), None);
+    }
+
+    #[test]
+    fn zellij_client_pids_filter_session_clients() {
+        let procs = [
+            proc_with(10, 1, 1000, "/usr/bin/zellij attach --create rimz-room"),
+            proc_with(11, 1, 1000, "zellij --server /tmp/rimz-room"),
+            proc_with(12, 1, 1001, "zellij attach --create rimz-room"),
+            proc_with(13, 1, 1000, "zellij attach --create other-room"),
+            proc_with(14, 1, 1000, "bash -lc zellijish rimz-room"),
+            proc_with(
+                15,
+                1,
+                1000,
+                "rimz sidebar serve --mux zellij --session-name rimz-room",
+            ),
+        ];
+
+        assert_eq!(
+            zellij_client_pids(&procs, "rimz-room", Some(1000)),
+            vec![10]
+        );
+        assert!(zellij_client_pids(&procs, "rimz-room", None).is_empty());
+    }
+
+    #[test]
+    fn ssh_conns_for_client_pids_reads_ssh_connection_env() {
+        let read_env = |pid| match pid {
+            10 => Some("203.0.113.10 54321 10.0.0.5 22".to_owned()),
+            11 => Some("malformed".to_owned()),
+            _ => None,
+        };
+
+        assert_eq!(
+            ssh_conns_for_client_pids(&[10, 11, 12], &read_env),
+            vec![SshConn {
+                local: SocketEndpoint {
+                    addr: "10.0.0.5".to_owned(),
+                    port: 22
+                },
+                peer: SocketEndpoint {
+                    addr: "203.0.113.10".to_owned(),
+                    port: 54321
+                },
+            }]
+        );
+    }
+
+    #[test]
     fn rates_match_existing_panes_and_saturate_delta() {
         let t0 = [
             pane_sample("tmux:%1", "btop", 1_000),
@@ -484,6 +810,19 @@ mod tests {
     }
 
     #[test]
+    fn wire_rates_require_two_socket_snapshots() {
+        assert_eq!(
+            wire_rates(Some((100, 200)), Some((600, 250)), 5.0),
+            Some((100, 10))
+        );
+        assert_eq!(wire_rates(None, Some((600, 250)), 5.0), None);
+        assert_eq!(
+            wire_rates(Some((100, 200)), Some((50, 150)), 5.0),
+            Some((0, 0))
+        );
+    }
+
+    #[test]
     fn fmt_bps_matches_sidebar_io_shape() {
         assert_eq!(fmt_bps(999), "999B/s");
         assert_eq!(fmt_bps(1_000), "1k/s");
@@ -498,12 +837,42 @@ mod tests {
             pane_rate("tmux:%2", "sidebar", 12),
             pane_rate("tmux:%1", "btop", 40_000),
         ];
-        let report = format_report(&rows, 40_012, 5.0);
+        let report = format_report(&rows, 40_012, None, 5.0);
 
-        assert!(report.contains("PANE     LABEL    WRITE/S\n"));
+        let header = report.lines().next().expect("header");
+        assert!(header.contains("PANE"));
+        assert!(header.contains("LABEL"));
+        assert!(header.contains("WRITE/S"));
         assert!(report.find("tmux:%1  btop").unwrap() < report.find("tmux:%2  sidebar").unwrap());
         assert!(report.contains("TOTAL    5s sample"));
         assert!(report.contains(REPORT_CAVEAT));
+    }
+
+    #[test]
+    fn format_report_includes_wire_rows_before_total() {
+        let rows = [pane_rate("tmux:%1", "codex", 40_000)];
+        let report = format_report(&rows, 40_000, Some((8_192, 1_024)), 5.0);
+
+        assert!(report.contains(WIRE_TX_PANE));
+        assert!(report.contains(WIRE_TX_LABEL));
+        assert!(report.contains(WIRE_RX_PANE));
+        assert!(report.contains(WIRE_RX_LABEL));
+        assert!(report.find(WIRE_TX_PANE).unwrap() < report.find("TOTAL").unwrap());
+    }
+
+    #[test]
+    fn render_json_carries_wire_fields_when_present() {
+        let rows = [pane_rate("tmux:%1", "codex", 40_000)];
+        let rendered = render_json(true, 5.0, 40_000, Some((8_192, 1_024)), &rows, None).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+
+        assert_eq!(value["wire_tx_bps"], 8_192);
+        assert_eq!(value["wire_rx_bps"], 1_024);
+
+        let rendered = render_json(true, 5.0, 40_000, None, &rows, None).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert!(value.get("wire_tx_bps").is_none());
+        assert!(value.get("wire_rx_bps").is_none());
     }
 
     #[test]
