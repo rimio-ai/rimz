@@ -28,6 +28,44 @@ fn auto_scroll_nudges_the_selection_minimally_into_view() {
     // Degenerate zero-height viewport: hold.
     assert_eq!(auto_scroll_to_selection(&map, 1, 2, 0), 2);
 }
+
+#[test]
+fn auto_scroll_reveals_the_selected_group_header_minimally() {
+    // Header lines carry the ordinal of the group's first row. Row 1 is a
+    // two-line card in group 0; row 3 is a three-line card in group 1.
+    let map = vec![
+        None,
+        Some(0),
+        Some(0),
+        Some(1),
+        Some(1),
+        None,
+        Some(2),
+        Some(2),
+        Some(3),
+        Some(3),
+        Some(3),
+    ];
+    // Group above the window: pin the header to the top.
+    assert_eq!(auto_scroll_reveal_group(&map, 0, 1, 4, 4), 1);
+    // Group below the window: card lands at the bottom, header visible above.
+    assert_eq!(auto_scroll_reveal_group(&map, 2, 3, 0, 5), 6);
+    // Fully visible: the window doesn't move.
+    assert_eq!(auto_scroll_reveal_group(&map, 0, 1, 1, 4), 1);
+    // Taller than the viewport: fall back to card-follow.
+    assert_eq!(
+        auto_scroll_reveal_group(&map, 2, 3, 0, 4),
+        auto_scroll_to_selection(&map, 3, 0, 4)
+    );
+    // Missing header target, as with external catch-all chrome: fall back.
+    assert_eq!(
+        auto_scroll_reveal_group(&map, 4, 1, 4, 4),
+        auto_scroll_to_selection(&map, 1, 4, 4)
+    );
+    // Degenerate zero-height viewport: hold.
+    assert_eq!(auto_scroll_reveal_group(&map, 0, 1, 4, 0), 4);
+}
+
 #[test]
 fn scroll_thumb_reads_top_and_bottom_true() {
     // 10 zone lines through a 5-row viewport: the thumb spans half the track.
@@ -133,6 +171,54 @@ fn render_scroll_offset_follows_selection_to_bottom() {
     );
     assert_snapshot("scroll_offset_follows_selection_to_bottom", rendered);
 }
+
+#[test]
+fn focus_group_reveal_brings_selected_worktree_header_on_screen() {
+    // Card-follow alone can reveal a non-first row while leaving its worktree
+    // header just above the window. The focus reveal widens the target span to
+    // include the header on an external focus switch.
+    let following = snapshot_to_screen_with_alert_and_ui(
+        &overflowing_fleet(),
+        None,
+        &UiState {
+            selected_index: 1,
+            scroll_offset: 99,
+            ..Default::default()
+        },
+        38,
+        21,
+    );
+    assert!(
+        following.contains("task-1"),
+        "card-follow still reaches the focused card:\n{following}"
+    );
+    assert!(
+        !following.contains("⑂ alpha"),
+        "card-follow leaves the worktree header above the window:\n{following}"
+    );
+
+    let revealed = snapshot_to_screen_with_alert_and_ui(
+        &overflowing_fleet(),
+        None,
+        &UiState {
+            selected_index: 1,
+            scroll_offset: 99,
+            focus_group_reveal: true,
+            ..Default::default()
+        },
+        38,
+        21,
+    );
+    assert!(
+        revealed.contains("task-1"),
+        "the focused card remains visible:\n{revealed}"
+    );
+    assert!(
+        revealed.contains("⑂ alpha"),
+        "the focus reveal brings the worktree header into view:\n{revealed}"
+    );
+}
+
 #[test]
 fn render_scroll_pins_tall_expanded_card_top() {
     // A selected card whose expanded subagent list outgrows the viewport pins

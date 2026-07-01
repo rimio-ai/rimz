@@ -488,7 +488,48 @@ fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
     assert_eq!(state.ui.selected_pane, Some(target));
     assert_eq!(state.ui.scroll_offset, 7);
     assert_eq!(state.ui.manual_scroll, None);
+    assert!(
+        !state.ui.focus_group_reveal,
+        "a sidebar jump's fresh anchor suppresses external-focus group reveal"
+    );
     assert_eq!(state.ui.last_focus_anchor_ms, stamp_ms);
+}
+
+#[test]
+fn external_focus_change_arms_group_reveal_once() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let (_dir, mut state) = loop_state(&ws);
+    let target = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    fold_snapshot(
+        &mut state,
+        &config,
+        &mut fetch,
+        snapshot_with_active_pane(&ws, target.clone()),
+        true,
+    );
+
+    assert_eq!(state.ui.selected_pane, Some(target.clone()));
+    assert!(
+        state.ui.focus_group_reveal,
+        "the first active pane learned on attach arms a one-shot group reveal"
+    );
+
+    state.ui.focus_group_reveal = false;
+    fold_snapshot(
+        &mut state,
+        &config,
+        &mut fetch,
+        snapshot_with_active_pane(&ws, target),
+        true,
+    );
+
+    assert!(
+        !state.ui.focus_group_reveal,
+        "unchanged active pane refolds leave the consumed reveal off"
+    );
 }
 
 #[test]

@@ -854,6 +854,9 @@ impl LoopState {
         {
             self.ui.scroll_offset = anchor.offset;
             self.ui.manual_scroll = None;
+            // A sidebar jump freezes the clicked row; suppress the group reveal
+            // armed for the same selection change.
+            self.ui.focus_group_reveal = false;
             self.ui.last_focus_anchor_ms = anchor.stamp_ms;
         }
     }

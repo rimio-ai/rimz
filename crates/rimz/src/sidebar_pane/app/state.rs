@@ -252,7 +252,15 @@ pub(super) fn apply_fetch_outcome(
     // the make-up filter — the active pane is real however the body is
     // narrowed, so a hidden baseline holds rather than blanks.
     let derived = focused_pane.filter(|pane| row_index_of_pane(current, None, pane).is_some());
+    let derived_active_pane = derived.is_some();
     reconcile_selection(ui, current, derived);
+    // A fresh active-pane derivation that moved the highlight is an external
+    // focus switch. Arm a one-shot reveal so the next paint brings the focused
+    // card's worktree header on-screen with it. A sidebar jump also lands here,
+    // but its fresh focus anchor cancels this in `apply_focus_anchor`.
+    if derived_active_pane && ui.selected_pane.is_some() && ui.selected_pane != prev_selected {
+        ui.focus_group_reveal = true;
+    }
     let interacted = !clear.ids.is_empty() || ui.selected_pane != prev_selected;
     order_hold::apply_order_hold(ui, current, interacted, now.as_millisecond());
     ui.last_order = order_hold::capture_order(current);

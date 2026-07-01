@@ -77,6 +77,12 @@ pub struct UiState {
     /// Stamp of the last jump scroll anchor this renderer applied, so a given
     /// anchor seeds the viewport at most once. `0` before any jump handoff.
     pub(crate) last_focus_anchor_ms: u64,
+    /// Armed for one paint when a fold adopts an external focus change — a tab
+    /// switch, or the first active pane learned on attach. The next draw scrolls
+    /// the focused card's worktree header into view alongside the card, then
+    /// consumes the flag. A sidebar-initiated jump clears it in
+    /// `apply_focus_anchor`, because the fresh anchor freezes the clicked row.
+    pub(crate) focus_group_reveal: bool,
     /// The transient wheel-scroll pin riding above the auto-follow, or `None`
     /// while the viewport follows the selection (see [`ManualScroll`]).
     pub(crate) manual_scroll: Option<ManualScroll>,

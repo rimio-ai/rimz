@@ -36,7 +36,10 @@ use self::chrome::{hairline_rule, help_lines};
 pub(crate) use self::compose::compose_lines;
 use self::compose::lead_unread;
 #[cfg(test)]
-use self::compose::{auto_scroll_to_selection, build_bottom_chrome, pad_chrome, scroll_thumb};
+use self::compose::{
+    auto_scroll_reveal_group, auto_scroll_to_selection, build_bottom_chrome, pad_chrome,
+    scroll_thumb,
+};
 pub use self::ui_state::{Alert, AnimationCadence, UiState};
 pub(crate) use self::ui_state::{
     BodyFilter, Browse, DashboardTab, FrozenOrder, GateNotice, ManualScroll, OrderHold,
@@ -216,6 +219,9 @@ fn draw_into(
     ui.scrollbar
         .observe(composed.scroll_offset, ui.animation_phase);
     ui.scroll_offset = composed.scroll_offset;
+    // One paint consumes the focus reveal; later folds with unchanged selection
+    // leave the viewport free to follow the card or scroll by hand.
+    ui.focus_group_reveal = false;
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
     let theme = Theme::for_sidebar(&snapshot.theme);

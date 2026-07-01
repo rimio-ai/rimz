@@ -16,7 +16,7 @@ use super::sections::{
 };
 use super::theme::Theme;
 use super::{
-    Alert, UiState, active_dashboard_tab, dashboard_present, dashboard_tabbed, labels,
+    Alert, BodyFilter, UiState, active_dashboard_tab, dashboard_present, dashboard_tabbed, labels,
     row_passes_filter,
 };
 
@@ -31,9 +31,10 @@ use super::{
 /// fetch, so the footer steps aside and the alert speaks alone.
 ///
 /// The viewport window is `UiState::scroll_offset`, resolved here each frame:
-/// clamped to the zone, then minimally auto-scrolled so the selected card —
-/// its expanded subagent lines included — sits fully in view, unless a manual
-/// wheel pin ([`ManualScroll`]) holds the window. The effective
+/// clamped to the zone, then minimally auto-scrolled so the selected card — its
+/// expanded subagent lines included — sits fully in view, unless a manual wheel
+/// pin ([`ManualScroll`]) holds the window. A one-shot external-focus reveal can
+/// widen that span to include the selected row's worktree header. The effective
 /// offset is returned for the caller to write back, a draw byproduct like the
 /// hit-test map. When the cards overflow the viewport, each visible scroll line
 /// carries a track/thumb glyph in the right rail column — part of the composed
@@ -107,11 +108,25 @@ pub(crate) fn compose_lines(
     let max_offset = scroll_len.saturating_sub(viewport);
     let mut offset = ui.scroll_offset.min(max_offset);
     if ui.manual_scroll.is_none() {
-        // A freshly-arrived unread outranks the selection: target its row (which
-        // ranks to the top, so this scrolls to top) while the snap is armed and
-        // on screen, otherwise follow the selected card as usual.
-        let target = unread_focus_ordinal(snapshot, ui).unwrap_or(ui.selected_index);
-        offset = auto_scroll_to_selection(&scroll_map, target, offset, viewport).min(max_offset);
+        offset = if let Some(target) = unread_focus_ordinal(snapshot, ui) {
+            // A freshly-arrived unread outranks everything: it ranks to the top,
+            // so targeting it scrolls to the top.
+            auto_scroll_to_selection(&scroll_map, target, offset, viewport)
+        } else if ui.focus_group_reveal
+            && let Some(group_first) =
+                selected_group_first_ordinal(snapshot, ui.make_up_filter, ui.selected_index)
+        {
+            auto_scroll_reveal_group(
+                &scroll_map,
+                group_first,
+                ui.selected_index,
+                offset,
+                viewport,
+            )
+        } else {
+            auto_scroll_to_selection(&scroll_map, ui.selected_index, offset, viewport)
+        }
+        .min(max_offset);
     }
 
     // Window the scroll zone, riding the scrollbar glyph on each visible line's
@@ -348,6 +363,65 @@ pub(super) fn auto_scroll_to_selection(
         return last + 1 - viewport;
     }
     offset
+}
+
+/// Minimally scroll so the selected row and its worktree header sit in view
+/// together. `group_first` is the visible-row ordinal of the group's first row,
+/// which the header line carries in the map. When that span outgrows the
+/// viewport — or the header line can't be located — fall back to revealing the
+/// card alone, so the focused row stays on-screen.
+pub(super) fn auto_scroll_reveal_group(
+    map: &[Option<usize>],
+    group_first: usize,
+    selected: usize,
+    offset: usize,
+    viewport: usize,
+) -> usize {
+    if viewport == 0 {
+        return offset;
+    }
+    let Some(top) = map.iter().position(|entry| *entry == Some(group_first)) else {
+        return auto_scroll_to_selection(map, selected, offset, viewport);
+    };
+    let Some(bottom) = map.iter().rposition(|entry| *entry == Some(selected)) else {
+        return offset;
+    };
+    if bottom < top || bottom - top + 1 > viewport {
+        return auto_scroll_to_selection(map, selected, offset, viewport);
+    }
+    if top < offset {
+        top
+    } else if bottom >= offset + viewport {
+        bottom + 1 - viewport
+    } else {
+        offset
+    }
+}
+
+/// The visible-row ordinal of the first row of the group containing `selected`,
+/// in the filtered body order the `line_map` indexes. `None` when `selected` is
+/// out of range.
+fn selected_group_first_ordinal(
+    snapshot: &SidebarSnapshot,
+    filter: Option<BodyFilter>,
+    selected: usize,
+) -> Option<usize> {
+    let mut start = 0;
+    for group in &snapshot.worktree_groups {
+        let len = group
+            .rows
+            .iter()
+            .filter(|row| row_passes_filter(row, filter))
+            .count();
+        if len == 0 {
+            continue;
+        }
+        if selected < start + len {
+            return Some(start);
+        }
+        start += len;
+    }
+    None
 }
 
 /// The visible-row ordinal of `id`, in the filtered body order the `line_map`
