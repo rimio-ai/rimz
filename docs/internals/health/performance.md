@@ -47,7 +47,7 @@ Where the milliseconds are, and what bounds each. Reproducible figures come from
 | git diff-stats per group root | ~6 direct `git` forks per group root, plus optional landed-verdict probes and a byte-budgeted untracked read; the git binary resolves once per process, each root's chain is sequential, and roots run bounded-parallel (`MAX_PARALLEL_GIT`) | activity-tiered TTLs (hot vs idle) keyed on root, single-flighted (`diff-stats.lock`); a non-repo room's root pod costs zero forks. Input set scales with active git-backed rows and enumerated repo worktrees, so a directory room does not cold-scan idle child repos |
 | PR state per worktree | one `gh` or `tea` CLI call per worktree when due, plus one best-effort `tea pr <n>` detail read for closed Gitea PRs; may use the network and existing forge auth | producer-only, single-flighted (`pr-state.lock`), long success TTL and short retry TTL; unsupported forges and branches without PRs publish absence, consumers fork zero subprocesses |
 | group-root enumeration | 1 `git worktree list` fork per `WORKTREE_ROOTS_TTL` in a repo room; zero child scans in a directory room | cached in the diff-stats cache; a session-boundary `--min-pane-cache-ms` floor re-enumerates a new checkout immediately |
-| snapshot rollup | O(1) from `snapshots/latest.json` lock-free; O(delta bytes) when writes outran the cache; full synthetic cold-produce medians, including rollup, pane assembly, and enrichment: 7.4ms / 16.6ms / 36.9ms at 20 / 50 / 100 agents | the `(generation, offset)` freshness stamp; a miss folds only the unfolded log tail; rotation caps the active log ([ledger.md](../sidebar/ledger.md#durable-state)); `cargo xtask perf fleet` regenerates the fleet table |
+| snapshot rollup | O(1) from `snapshots/latest.json` lock-free; O(delta bytes) when writes outran the cache; full synthetic cold-produce medians, including rollup, pane assembly, and enrichment: 5.04ms / 7.93ms / 12.61ms at 20 / 50 / 100 agents | the `(generation, offset)` freshness stamp; a miss folds only the unfolded log tail; rotation caps the active log ([ledger.md](../sidebar/ledger.md#durable-state)); `cargo xtask perf fleet` regenerates the fleet table |
 | event-log reader fold | warm cursor: one stat + the appended compact lifecycle frames | the extent stamp and a long-lived `RollupCursor` per fetch worker; perf guard `delta_fold_is_o_new_bytes` pins O(new bytes) |
 | ledger write critical section | feed rename + one event-log `write()`, zero fsyncs, one compact lifecycle frame under 1KiB | the flock covers truth mutation only; durability and publish run off-lock ([ledger.md](../sidebar/ledger.md#durable-state)); perf tier `ledger_fsync.rs` pins zero fsyncs and `ledger_bytes.rs` pins bytes/turn |
 | dead-owner abandon sweep | O(pending) scan + per-dead-item writes | debounced to ~once per 2s (one stamp stat); read-side expel hides a dead-owner item instantly; `rimz gc` is the operator trigger |
@@ -73,18 +73,18 @@ Where the milliseconds are, and what bounds each. Reproducible figures come from
 
 The deterministic CI gates own exact integer budgets. `ledger_fsync.rs` pins the warm write path's fsync count, `ledger_bytes.rs` pins a lifecycle frame below 1KiB, `produce_budget.rs` pins zero subprocess spawns for warm produce with fresh inputs, and the incremental fold guards pin O(new bytes). The benches own wall-clock and allocation figures, which stay out of `ci` so a busy runner never fails a build on timing.
 
-Current local baseline from `cargo xtask perf` on June 28, 2026:
+Current local baseline from `cargo xtask perf` on July 1, 2026:
 
 | Bench | Median | Alloc/op |
 | --- | ---: | ---: |
-| `fleet::produce_cold` 20 / 50 / 100 agents | 2.60ms / 5.03ms / 9.39ms | 4.00MB / 8.12MB / 15.16MB |
-| `fleet::produce_warm` 20 / 50 / 100 agents | 534µs / 756µs / 1.15ms | 1.53MB / 2.10MB / 3.02MB |
-| `hotpath::fuse` 40 agents | 77.5µs | 79.4KB |
-| `hotpath::rollup_fold_warm` 40 agents | 104µs | 631.3KB |
-| `hotpath::enrich_cached` 40 agents | 504µs | 1.19MB |
-| `hotpath::render_fixed` 40 agents | 425µs | 947.1KB |
-| `hotpath::spending_walk_cold` 20k retained entries | 24.11ms | 42.26MB |
-| `hotpath::spending_walk_warm_no_change` 20k retained entries | 8.28ms | 8.06MB |
+| `fleet::produce_cold` 20 / 50 / 100 agents | 5.04ms / 7.93ms / 12.61ms | 4.15MB / 8.26MB / 15.30MB |
+| `fleet::produce_warm` 20 / 50 / 100 agents | 710µs / 936µs / 1.44ms | 1.56MB / 2.14MB / 3.05MB |
+| `hotpath::fuse` 40 agents | 125µs | 79.4KB |
+| `hotpath::rollup_fold_warm` 40 agents | 141µs | 631.3KB |
+| `hotpath::enrich_cached` 40 agents | 718µs | 1.21MB |
+| `hotpath::render_fixed` 40 agents | 507µs | 947.1KB |
+| `hotpath::spending_walk_cold` 20k retained entries | 24.65ms | 42.26MB |
+| `hotpath::spending_walk_warm_no_change` 20k retained entries | 8.86ms | 8.06MB |
 
 ## Profiling
 
@@ -104,6 +104,10 @@ Attach to the right process. A workspace elects one producer sidebar and the you
 Local host settings affect the tool more than Rimz. `perf` needs `sudo` or a lower `kernel.perf_event_paranoid` when the value is `3` or higher. Hardware LBR call graphs may be unavailable under virtualization; use `--call-graph fp` with the profiling build. Keep `strace` windows short, usually a few seconds, because syscall tracing perturbs the process it observes.
 
 Read profiles at two levels. `perf report --stdio` gives flat self-time and callees; `samply` opens a Firefox-Profiler call tree that is easier for Rust stacks. Turn recurring discoveries into deterministic guards where possible: `proc::testkit::spawn_count`, the `git-trace` shim tests, fsync/byte counters, and parse-cache tests pin exact behavior better than wall-clock profiles.
+
+Process-level RAM and CPU stay a manual profiling recipe because they are OS- and workload-shaped. Record CPU flamegraphs with `samply record -- cargo xtask perf` or `samply record -- target/profiling/rimz ...`, measure peak RSS with `/usr/bin/time -v cargo xtask perf`, and use `dhat` or the platform allocator profiler when an allocation regression needs ownership. Run the same commands against `rimz sidebar snapshot --json --no-produce` over a synthetic seeded workspace when the question is read-only process shape rather than microbench shape.
+
+July 1, 2026 process capture over a 100-agent seeded workspace: 200 read-only `rimz sidebar snapshot --json --no-produce` runs completed in 0.79s wall with 18MiB maximum RSS and one process `execve` per invocation; an attached `rimz sidebar serve` fixture idled at 0-1% CPU with 91MiB RSS, and attached syscall traces saw zero `clone`, `execve`, `fsync`, or `fdatasync` calls during idle and a 20-hook burst.
 
 ## The overhead, at fleet scale
 

@@ -49,7 +49,8 @@ impl BenchWorkspace {
     }
 
     fn publish_inputs(&self, fleet: usize) {
-        publish_fresh_produce_inputs(&self.runtime, fleet);
+        rimz::testkit::fleet::publish_fresh_produce_inputs(&self.runtime, fleet)
+            .expect("publish produce inputs");
     }
 }
 
@@ -86,46 +87,6 @@ struct SpendingFixture {
     walker: rimz::agents::spending::SpendingWalker,
 }
 
-fn publish_fresh_produce_inputs(runtime: &rimz::RuntimePaths, fleet: usize) {
-    let now_ms = rimz::sidebar::cache::unix_now_ms();
-    let frame = rimz::sidebar::frame::assemble_frame(
-        rimz::testkit::fleet::synthetic_panes(fleet),
-        now_ms,
-        rimz::testkit::fleet::SESSION_NAME,
-    );
-    std::fs::write(
-        runtime.root.join("snapshot.json"),
-        serde_json::to_vec(&frame).expect("serialize pane frame"),
-    )
-    .expect("publish pane frame");
-    rimz::agents::spending::write_provider_spending_cache(
-        &runtime.shared_provider_spending_path(),
-        now_ms,
-        &rimz::agents::spending::Spending::default(),
-    );
-    let accounts = rimz::sidebar::cache::AccountsCache {
-        refreshed_at_ms: now_ms,
-        accounts: Default::default(),
-        ok: false,
-    };
-    std::fs::write(
-        runtime.shared_accounts_path(),
-        serde_json::to_vec(&accounts).expect("serialize accounts"),
-    )
-    .expect("publish accounts");
-}
-
-fn produce_options() -> rimz::sidebar::produce::ProduceOptions {
-    rimz::sidebar::produce::ProduceOptions {
-        mux: rimz::MuxName::Zellij,
-        session_name: rimz::testkit::fleet::SESSION_NAME.to_owned(),
-        exclude: None,
-        min_pane_cache_ms: None,
-        diag: None,
-        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
-    }
-}
-
 fn snapshot_fixture() -> SnapshotFixture {
     let workspace = BenchWorkspace::new();
     workspace.seed_fleet(FLEET, HISTORY_EVENTS);
@@ -135,7 +96,7 @@ fn snapshot_fixture() -> SnapshotFixture {
         &mut cursor,
         &workspace.paths,
         &workspace.runtime,
-        &produce_options(),
+        &rimz::testkit::fleet::produce_options(),
     )
     .expect("produce snapshot");
     SnapshotFixture {

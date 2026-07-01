@@ -27,7 +27,8 @@ impl ProduceFixture {
         let ledger_bytes = std::fs::metadata(&paths.events_log)
             .expect("log metadata")
             .len();
-        publish_fresh_produce_inputs(&runtime, fleet);
+        rimz::testkit::fleet::publish_fresh_produce_inputs(&runtime, fleet)
+            .expect("publish produce inputs");
         Self {
             _tempdir: tempdir,
             paths,
@@ -41,10 +42,16 @@ impl ProduceFixture {
         let (tempdir, paths, runtime) = workspace();
         rimz::testkit::fleet::seed_fleet_ledger(&paths, fleet, fleet * EVENTS_PER_AGENT)
             .expect("seed fleet");
-        publish_fresh_produce_inputs(&runtime, fleet);
+        rimz::testkit::fleet::publish_fresh_produce_inputs(&runtime, fleet)
+            .expect("publish produce inputs");
         let mut cursor = rimz::sidebar::consumer::RollupCursor::new();
-        rimz::sidebar::produce::produce_snapshot(&mut cursor, &paths, &runtime, &produce_options())
-            .expect("cold produce");
+        rimz::sidebar::produce::produce_snapshot(
+            &mut cursor,
+            &paths,
+            &runtime,
+            &rimz::testkit::fleet::produce_options(),
+        )
+        .expect("cold produce");
 
         let log_len = std::fs::metadata(&paths.events_log)
             .expect("log metadata")
@@ -58,7 +65,8 @@ impl ProduceFixture {
             .expect("log metadata")
             .len()
             - log_len;
-        publish_fresh_produce_inputs(&runtime, fleet);
+        rimz::testkit::fleet::publish_fresh_produce_inputs(&runtime, fleet)
+            .expect("publish produce inputs");
         Self {
             _tempdir: tempdir,
             paths,
@@ -82,46 +90,6 @@ fn workspace() -> (TempDir, rimz::StatePaths, rimz::RuntimePaths) {
     (tempdir, paths, runtime)
 }
 
-fn publish_fresh_produce_inputs(runtime: &rimz::RuntimePaths, fleet: usize) {
-    let now_ms = rimz::sidebar::cache::unix_now_ms();
-    let frame = rimz::sidebar::frame::assemble_frame(
-        rimz::testkit::fleet::synthetic_panes(fleet),
-        now_ms,
-        rimz::testkit::fleet::SESSION_NAME,
-    );
-    std::fs::write(
-        runtime.root.join("snapshot.json"),
-        serde_json::to_vec(&frame).expect("serialize pane frame"),
-    )
-    .expect("publish pane frame");
-    rimz::agents::spending::write_provider_spending_cache(
-        &runtime.shared_provider_spending_path(),
-        now_ms,
-        &rimz::agents::spending::Spending::default(),
-    );
-    let accounts = rimz::sidebar::cache::AccountsCache {
-        refreshed_at_ms: now_ms,
-        accounts: Default::default(),
-        ok: false,
-    };
-    std::fs::write(
-        runtime.shared_accounts_path(),
-        serde_json::to_vec(&accounts).expect("serialize accounts"),
-    )
-    .expect("publish accounts");
-}
-
-fn produce_options() -> rimz::sidebar::produce::ProduceOptions {
-    rimz::sidebar::produce::ProduceOptions {
-        mux: rimz::MuxName::Zellij,
-        session_name: rimz::testkit::fleet::SESSION_NAME.to_owned(),
-        exclude: None,
-        min_pane_cache_ms: None,
-        diag: None,
-        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
-    }
-}
-
 #[divan::bench(args = [20, 50, 100], sample_count = 10, sample_size = 1, skip_ext_time)]
 fn produce_cold(bencher: Bencher, fleet: usize) {
     bencher
@@ -133,7 +101,7 @@ fn produce_cold(bencher: Bencher, fleet: usize) {
                     &mut fixture.cursor,
                     &fixture.paths,
                     &fixture.runtime,
-                    &produce_options(),
+                    &rimz::testkit::fleet::produce_options(),
                 )
                 .expect("cold produce"),
             );
@@ -151,7 +119,7 @@ fn produce_warm(bencher: Bencher, fleet: usize) {
                     &mut fixture.cursor,
                     &fixture.paths,
                     &fixture.runtime,
-                    &produce_options(),
+                    &rimz::testkit::fleet::produce_options(),
                 )
                 .expect("warm produce"),
             );

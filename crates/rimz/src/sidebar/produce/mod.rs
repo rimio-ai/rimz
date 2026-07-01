@@ -77,6 +77,14 @@ pub enum HeavyLaneMode {
     Project,
 }
 
+#[cfg(feature = "testkit")]
+pub(crate) fn publish_test_pane_frame(
+    runtime: &RuntimePaths,
+    frame: &PaneFrame,
+) -> crate::ledger::atomic::Result<()> {
+    crate::ledger::atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), frame)
+}
+
 /// Produce the full sidebar snapshot: rollup base + live pane frame + producer
 /// enrichments. Inline `Refresh` publishes every shared cache consumers read;
 /// live `Project` publishes pane/root truth and projects the cache refresher's

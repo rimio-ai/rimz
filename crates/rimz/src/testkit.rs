@@ -15,6 +15,11 @@ pub mod fleet {
     use crate::ledger::{StatePaths, event_log};
     use crate::pane::PaneRef;
     use crate::schema::event::EventEnvelope;
+    use crate::sidebar::cache::AccountsCache;
+    use crate::sidebar::produce::{HeavyLaneMode, ProduceOptions};
+    use crate::{RuntimePaths, agents, sidebar};
+
+    use std::io;
 
     pub const SESSION_NAME: &str = "rimz-perf";
 
@@ -51,6 +56,42 @@ pub mod fleet {
             )?;
         }
         Ok(())
+    }
+
+    /// Publish fresh pane, spending, and account sidecars for warm produce.
+    pub fn publish_fresh_produce_inputs(runtime: &RuntimePaths, fleet: usize) -> io::Result<()> {
+        let now_ms = sidebar::cache::unix_now_ms();
+        let frame = sidebar::frame::assemble_frame(synthetic_panes(fleet), now_ms, SESSION_NAME);
+        sidebar::produce::publish_test_pane_frame(runtime, &frame).map_err(io::Error::other)?;
+
+        if !agents::spending::write_provider_spending_cache(
+            &runtime.shared_provider_spending_path(),
+            now_ms,
+            &agents::spending::Spending::default(),
+        ) {
+            return Err(io::Error::other("provider spending cache write failed"));
+        }
+
+        let accounts = AccountsCache {
+            refreshed_at_ms: now_ms,
+            accounts: Default::default(),
+            ok: false,
+        };
+        let accounts = serde_json::to_vec(&accounts).map_err(io::Error::other)?;
+        std::fs::write(runtime.shared_accounts_path(), accounts)?;
+        Ok(())
+    }
+
+    /// Zellij-shaped produce options for the synthetic fleet.
+    pub fn produce_options() -> ProduceOptions {
+        ProduceOptions {
+            mux: MuxName::Zellij,
+            session_name: SESSION_NAME.to_owned(),
+            exclude: None,
+            min_pane_cache_ms: None,
+            diag: None,
+            heavy_lanes: HeavyLaneMode::Refresh,
+        }
     }
 
     fn registered_observation(slot: usize) -> AgentLifecycleObservation {

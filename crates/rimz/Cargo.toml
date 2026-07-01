@@ -76,6 +76,11 @@ required-features = ["testkit"]
 test = false
 bench = false
 
+[[example]]
+name = "seed_perf_workspace"
+path = "examples/seed_perf_workspace.rs"
+required-features = ["testkit"]
+
 # Test-only fixture: an `ssh`-shaped shim that logs argv to
 # `$RIMZ_TEST_SSH_LOG` and exits per the scripted `$RIMZ_TEST_SSH_PLAN`. Used
 # by `tests/integration/remote_attach.rs` to assert the exec'd ssh argv and
