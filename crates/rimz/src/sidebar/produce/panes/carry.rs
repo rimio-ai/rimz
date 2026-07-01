@@ -299,7 +299,7 @@ fn expired_carry(
     })
 }
 
-fn expired_at(carried_since_ms: u64, now_ms: u64) -> bool {
+pub(super) fn expired_at(carried_since_ms: u64, now_ms: u64) -> bool {
     now_ms.saturating_sub(carried_since_ms) > PANE_CARRY_TTL.as_millis() as u64
 }
 
@@ -696,6 +696,7 @@ mod tests {
                 panes: vec![PaneState {
                     pane_id: pane_id("terminal_9"),
                     first_seen_at_ms: Some(1),
+                    hosted_carry_since_ms: None,
                     is_floating: false,
                     current: PaneProcess {
                         pid: Some(909),

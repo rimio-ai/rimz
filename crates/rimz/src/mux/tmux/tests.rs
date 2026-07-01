@@ -169,3 +169,18 @@ fn version_serves_the_memoized_probe() {
     // verbatim — no `tmux -V` fork, no overwrite by a real binary.
     assert_eq!(backend.version().expect("cached version"), "tmux 9.9");
 }
+
+#[test]
+fn list_panes_scopes_session_without_server_wide_flag() {
+    let backend = TmuxBackend::default();
+
+    let session_args = backend.list_panes_command(Some("rimz-room")).args;
+    assert_eq!(
+        &session_args[..5],
+        ["list-panes", "-s", "-t", "rimz-room", "-F"]
+    );
+    assert!(!session_args.iter().any(|arg| arg == "-a"));
+
+    let server_args = backend.list_panes_command(None).args;
+    assert_eq!(&server_args[..3], ["list-panes", "-a", "-F"]);
+}

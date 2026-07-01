@@ -8,31 +8,25 @@ fn tmux_pane(command: &str) -> crate::pane::PaneRef {
 }
 
 #[test]
-fn rotate_from_cache_repairs_raced_nulls_from_disk() {
-    let dir = tempfile::tempdir().unwrap();
-    let cache_path = dir.path().join("snapshot.json");
+fn rotate_from_prior_repairs_raced_nulls() {
     let prior = frame(vec![pane("terminal_1", Some("claude"), Some("/repo"))]);
-    atomic::write_temp_then_rename_cache(&cache_path, &prior).unwrap();
     let mut fresh = frame(vec![pane("terminal_1", None, None)]);
 
-    rotate_from_cache(&mut fresh, &cache_path, "s");
+    rotate_from_prior(&mut fresh, Some(&prior));
 
     assert_eq!(first(&fresh).current.command.as_deref(), Some("claude"));
     assert_eq!(first(&fresh).current.cwd.as_deref(), Some("/repo"));
 }
 
 #[test]
-fn rotate_from_cache_repairs_plain_shell_empty_command_before_row_gate() {
-    let dir = tempfile::tempdir().unwrap();
-    let cache_path = dir.path().join("snapshot.json");
+fn rotate_from_prior_repairs_plain_shell_empty_command_before_row_gate() {
     let mut prior = frame(vec![pane("terminal_5", Some("zsh"), Some("/repo"))]);
     first_mut(&mut prior).current.pid = Some(3324242);
-    atomic::write_temp_then_rename_cache(&cache_path, &prior).unwrap();
     let mut fresh_pane = pane("terminal_5", None, Some("/repo"));
     fresh_pane.pane_pid = Some(3324242);
     let mut fresh = frame(vec![fresh_pane]);
 
-    rotate_from_cache(&mut fresh, &cache_path, "s");
+    rotate_from_prior(&mut fresh, Some(&prior));
 
     assert_eq!(first(&fresh).current.command.as_deref(), Some("zsh"));
     assert!(
@@ -354,6 +348,145 @@ fn hosted_agent_process_fills_empty_cwd_for_wrapped_shell_pane() {
     );
     assert_eq!(pane.current.hosted_agent_process_start, Some(start));
     assert_eq!(pane.current.cwd.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn hosted_agent_stamp_carries_across_transient_pidless_scan_miss() {
+    let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
+    let mut prior = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
+    first_mut(&mut prior).current.started_at = Some(start);
+    first_mut(&mut prior).current.hosted_agent_kind =
+        Some(crate::ids::AgentKind::new_unchecked("codex"));
+    first_mut(&mut prior).current.hosted_agent_process_start = Some(start);
+    let mut fresh = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
+
+    carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10);
+
+    let pane = first(&fresh);
+    assert_eq!(
+        pane.current
+            .hosted_agent_kind
+            .as_ref()
+            .map(|kind| kind.as_str()),
+        Some("codex")
+    );
+    assert_eq!(pane.current.hosted_agent_process_start, Some(start));
+    assert_eq!(pane.hosted_carry_since_ms, Some(10));
+}
+
+#[test]
+fn hosted_agent_stamp_carry_anchor_does_not_advance_and_expires() {
+    let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
+    let mut prior = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
+    first_mut(&mut prior).current.hosted_agent_kind =
+        Some(crate::ids::AgentKind::new_unchecked("codex"));
+    first_mut(&mut prior).current.hosted_agent_process_start = Some(start);
+    first_mut(&mut prior).hosted_carry_since_ms = Some(10);
+    let ttl_ms = crate::sidebar::timing::PANE_CARRY_TTL.as_millis() as u64;
+
+    let mut still_fresh = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
+    carry_hosted_agent_stamps(&mut still_fresh, Some(&prior), 10 + ttl_ms);
+    assert_eq!(first(&still_fresh).hosted_carry_since_ms, Some(10));
+    assert_eq!(
+        first(&still_fresh)
+            .current
+            .hosted_agent_kind
+            .as_ref()
+            .map(|kind| kind.as_str()),
+        Some("codex")
+    );
+
+    let mut expired = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
+    carry_hosted_agent_stamps(&mut expired, Some(&prior), 11 + ttl_ms);
+    assert!(first(&expired).current.hosted_agent_kind.is_none());
+    assert!(first(&expired).current.hosted_agent_process_start.is_none());
+    assert_eq!(first(&expired).hosted_carry_since_ms, None);
+}
+
+#[test]
+fn hosted_agent_stamp_carry_respects_foreground_agent_kind() {
+    let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
+    let mut prior = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
+    first_mut(&mut prior).current.hosted_agent_kind =
+        Some(crate::ids::AgentKind::new_unchecked("codex"));
+    first_mut(&mut prior).current.hosted_agent_process_start = Some(start);
+    let mut fresh = frame(vec![pane("terminal_30", Some("claude"), Some("/repo"))]);
+
+    carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10);
+
+    assert!(first(&fresh).current.hosted_agent_kind.is_none());
+    assert!(first(&fresh).current.hosted_agent_process_start.is_none());
+}
+
+#[test]
+fn carried_hosted_stamp_survives_tmux_scan_miss_until_ttl() {
+    let agent_start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
+    let mut prior = frame(vec![tmux_pane("git")]);
+    first_mut(&mut prior).current.pid = Some(100);
+    first_mut(&mut prior).current.started_at = Some(agent_start);
+    first_mut(&mut prior).current.hosted_agent_kind =
+        Some(crate::ids::AgentKind::new_unchecked("codex"));
+    first_mut(&mut prior).current.hosted_agent_process_start = Some(agent_start);
+    let mut fresh = frame(vec![tmux_pane("git")]);
+    first_mut(&mut fresh).current.pid = Some(100);
+    fresh.rotate_against_prior(&prior);
+
+    stamp_hosted_agent_processes(&mut fresh, &|_, _| None);
+    carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10);
+    drop_reused_pid_bindings(
+        &mut fresh,
+        &|kind, pid| {
+            assert_eq!(kind, "codex");
+            assert_eq!(pid, 100);
+            None
+        },
+        &|pid| -> Option<jiff::Timestamp> {
+            panic!("carried hosted stamp must not fall back to root start {pid}")
+        },
+    );
+
+    let pane = first(&fresh);
+    assert_eq!(pane.current.pid, Some(100));
+    assert_eq!(
+        pane.current
+            .hosted_agent_kind
+            .as_ref()
+            .map(|kind| kind.as_str()),
+        Some("codex")
+    );
+    assert_eq!(pane.current.hosted_agent_process_start, Some(agent_start));
+    assert_eq!(pane.hosted_carry_since_ms, Some(10));
+}
+
+#[test]
+fn carried_hosted_stamp_drops_on_positive_child_start_mismatch() {
+    let expected: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
+    let actual: jiff::Timestamp = "2026-06-30T11:30:03Z".parse().unwrap();
+    let mut frame = frame(vec![tmux_pane("git")]);
+    first_mut(&mut frame).current.pid = Some(100);
+    first_mut(&mut frame).current.started_at = Some(expected);
+    first_mut(&mut frame).current.hosted_agent_kind =
+        Some(crate::ids::AgentKind::new_unchecked("codex"));
+    first_mut(&mut frame).current.hosted_agent_process_start = Some(expected);
+    first_mut(&mut frame).hosted_carry_since_ms = Some(10);
+
+    drop_reused_pid_bindings(
+        &mut frame,
+        &|kind, pid| {
+            assert_eq!(kind, "codex");
+            assert_eq!(pid, 100);
+            Some(actual)
+        },
+        &|pid| -> Option<jiff::Timestamp> {
+            panic!("hosted agent child owns the live identity: {pid}")
+        },
+    );
+
+    let pane = first(&frame);
+    assert_eq!(pane.current.pid, None);
+    assert!(pane.current.hosted_agent_kind.is_none());
+    assert!(pane.current.hosted_agent_process_start.is_none());
+    assert_eq!(pane.hosted_carry_since_ms, None);
 }
 
 #[test]

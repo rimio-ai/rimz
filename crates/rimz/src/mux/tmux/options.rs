@@ -100,8 +100,8 @@ pub(super) fn is_tmux_sidebar(pane: &PaneRef) -> bool {
 /// dashboard panes in `rimzd` are not work. Panes with no window id are skipped.
 /// First-seen window order.
 ///
-/// tmux `list-panes -a` is server-wide even with `-t <session>`, so reconcile
-/// scopes here before planning against another room's windows.
+/// Session-scoped pane reads should already contain only this room; the guard
+/// keeps reconcile safe against fixture leaks and backend regressions.
 pub(super) fn tmux_views_with_sidebars(panes: &[PaneRef], session: &str) -> Vec<ViewSidebars> {
     let mut views: Vec<ViewSidebars> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();

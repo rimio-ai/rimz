@@ -155,15 +155,7 @@ impl MuxBackend for TmuxBackend {
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
         let observed_at_ms = crate::sidebar::cache::unix_now_ms();
-        let mut spec = self.cmd().args([
-            "list-panes",
-            "-a",
-            "-F",
-            "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_active}\t#{window_name}\t#{pane_title}",
-        ]);
-        if let Some(session) = opts.session_name {
-            spec = spec.args(["-t".to_owned(), session]);
-        }
+        let spec = self.list_panes_command(opts.session_name.as_deref());
         let output = spec.run_with_timeout(timeout)?;
         let panes = String::from_utf8_lossy(&output.stdout)
             .lines()
@@ -697,5 +689,17 @@ impl MuxBackend for TmuxBackend {
 
     fn version(&self) -> Result<String> {
         memoized_version(&self.version, &self.cmd().arg("-V"))
+    }
+}
+
+impl TmuxBackend {
+    pub(super) fn list_panes_command(&self, session_name: Option<&str>) -> CommandSpec {
+        let format = "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_active}\t#{window_name}\t#{pane_title}";
+        match session_name {
+            Some(session) => self
+                .cmd()
+                .args(["list-panes", "-s", "-t", session, "-F", format]),
+            None => self.cmd().args(["list-panes", "-a", "-F", format]),
+        }
     }
 }

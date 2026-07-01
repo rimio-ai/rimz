@@ -80,6 +80,10 @@ pub struct PaneState {
     pub pane_id: PaneId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_seen_at_ms: Option<u64>,
+    /// Non-advancing TTL anchor for a hosted-agent stamp restored from the
+    /// prior frame after a transient process scan miss.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosted_carry_since_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_floating: bool,
     pub current: PaneProcess,
@@ -419,6 +423,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         tab.panes.push(PaneState {
             pane_id: pane.pane_id,
             first_seen_at_ms: pane.first_seen_at_ms,
+            hosted_carry_since_ms: None,
             is_floating: pane.is_floating,
             current: PaneProcess {
                 pid: pane.pane_pid,

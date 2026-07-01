@@ -245,8 +245,10 @@ fn pane_start_matches_agent_stamp(expected: &PaneRef, actual: &PaneRef) -> bool 
 mod tests {
     use super::*;
 
-    use crate::ids::{MuxName, PaneId};
+    use crate::agents::AgentStatus;
+    use crate::ids::{AgentKind, MuxName, PaneId};
     use crate::ledger::snapshot::SidebarSnapshot;
+    use crate::ledger::snapshot::testkit::{AgentStateFx, agent, ago};
 
     /// A pane fixture with an explicit command and optional window name, so a
     /// test can build daemon hosts, sidebars, and working shells across views.
@@ -399,5 +401,26 @@ mod tests {
             !pane_start_matches(&stamped, &live),
             "standalone item pane refs still require exact start identity"
         );
+    }
+
+    #[test]
+    fn stamped_lazy_agent_binds_with_carried_hosted_stamp_and_pidless_pane() {
+        let agent = agent("codex", "sess-1", AgentStatus::Running, 1_000)
+            .worktree("/repo/main")
+            .in_pane("%1");
+        let live = PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
+            command: Some("git".to_owned()),
+            pane_pid: None,
+            hosted_agent_kind: Some(AgentKind::new_unchecked("codex")),
+            hosted_agent_process_start: Some(ago(120)),
+            ..pane_cmd("%1", "tab_0", "git", None)
+        };
+
+        assert!(stamped_agent_matches_live_pane(
+            &agent,
+            agent.pane.as_ref().expect("stamped pane"),
+            &live,
+        ));
     }
 }

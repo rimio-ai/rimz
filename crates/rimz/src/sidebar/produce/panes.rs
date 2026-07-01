@@ -24,7 +24,10 @@ mod starts;
 mod validate;
 
 use carry::{CarryOutcome, apply_carry_forward};
-use starts::{drop_reused_pid_bindings, stamp_hosted_agent_processes, stamp_pane_process_starts};
+use starts::{
+    carry_hosted_agent_stamps, drop_reused_pid_bindings, stamp_hosted_agent_processes,
+    stamp_pane_process_starts,
+};
 use validate::{PublishVerdict, frame_publish_verdict, pane_count, shrink_needs_verification};
 
 /// How a non-producing sidebar waits for the single producer's cache write
@@ -82,9 +85,9 @@ fn list_session_panes(
 /// fields repair only when the process identity stayed stable; a command or
 /// root-pid change rotates the prior current process to `previous` and keeps
 /// the fresh process record clean.
-fn rotate_from_cache(frame: &mut PaneFrame, cache_path: &Path, session: &str) {
-    if let Some(prev) = read_snapshot_cache(cache_path, session) {
-        frame.rotate_against_prior(&prev);
+fn rotate_from_prior(frame: &mut PaneFrame, prior: Option<&PaneFrame>) {
+    if let Some(prev) = prior {
+        frame.rotate_against_prior(prev);
     }
 }
 
@@ -131,12 +134,12 @@ fn stamp_pane_resumed_session_ids(
 fn repair_pane_frame(
     frame: &mut PaneFrame,
     runtime: &crate::RuntimePaths,
-    cache_path: &Path,
+    prior: Option<&PaneFrame>,
     session: &str,
     enrich_metrics: bool,
 ) {
     let unstamped = natively_unstamped(frame);
-    rotate_from_cache(frame, cache_path, session);
+    rotate_from_prior(frame, prior);
     if enrich_metrics {
         super::metrics::enrich_pane_metrics(frame, session, runtime);
     } else {
@@ -164,6 +167,7 @@ fn repair_pane_frame(
         &crate::remote_control::in_pane_agent_start_for_root,
         &crate::remote_control::in_pane_agent_starts,
     );
+    carry_hosted_agent_stamps(frame, prior, unix_now_ms());
     if crate::proc::process_start(std::process::id()).is_some() {
         drop_reused_pid_bindings(
             frame,
@@ -232,6 +236,7 @@ pub fn repaired_pane_frame_for_binding(
             Some(command_timeout),
         )?,
     };
+    let prior = read_snapshot_cache(&cache_path, session);
     let (mut frame, diagnostics) = crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
         panes: listing.panes,
         produced_at_ms: unix_now_ms(),
@@ -240,7 +245,7 @@ pub fn repaired_pane_frame_for_binding(
         client_viewed: &[],
         source_active: listing.source_active,
         source_active_authoritative: listing.source_active_authoritative,
-        prior: read_snapshot_cache(&cache_path, session).as_ref(),
+        prior: prior.as_ref(),
     });
     let diag = crate::diag::DiagSink::for_workspace(
         runtime.workspace_id.clone(),
@@ -248,7 +253,7 @@ pub fn repaired_pane_frame_for_binding(
         None,
     );
     emit_frame_diagnostics(diag.as_ref(), diagnostics);
-    repair_pane_frame(&mut frame, runtime, &cache_path, session, false);
+    repair_pane_frame(&mut frame, runtime, prior.as_ref(), session, false);
     Ok(frame)
 }
 
@@ -590,7 +595,7 @@ pub(super) fn cached_panes_or_produce(
             frame.viewed_panes = viewed_panes;
             frame.presence = presence;
             emit_frame_diagnostics(diag, diagnostics);
-            repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
+            repair_pane_frame(&mut frame, runtime, prior.as_ref(), session, enrich_metrics);
             Ok(frame)
         };
     match single_flight::coalesce(

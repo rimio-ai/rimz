@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use super::carry::expired_at;
 use crate::ids::{AgentKind, PaneId};
 use crate::remote_control::InPaneAgentProcess;
-use crate::sidebar::frame::{PaneFrame, PaneMetrics};
+use crate::sidebar::frame::{PaneFrame, PaneMetrics, PaneState};
 use crate::sidebar::timing::PROCESS_START_MATCH_TOLERANCE;
 
 fn pane_process_agent_kind(process: &crate::sidebar::frame::PaneProcess) -> Option<&'static str> {
@@ -139,6 +140,7 @@ pub(super) fn stamp_hosted_agent_processes(
     for pane in frame.pane_states_mut() {
         pane.current.hosted_agent_kind = None;
         pane.current.hosted_agent_process_start = None;
+        pane.hosted_carry_since_ms = None;
         let Some(pid) = pane.current.pid else {
             continue;
         };
@@ -156,6 +158,62 @@ pub(super) fn stamp_hosted_agent_processes(
                 pane.current.cwd = Some(cwd);
             }
         }
+    }
+}
+
+/// Restore a hosted lazy-agent stamp across a transient root-process scan miss.
+/// The carry is bounded by the same pane-carry TTL and anchored to the first
+/// missed scan, so a real exit demotes once the miss stops being transient.
+pub(super) fn carry_hosted_agent_stamps(
+    frame: &mut PaneFrame,
+    prior: Option<&PaneFrame>,
+    now_ms: u64,
+) {
+    let Some(prior) = prior else {
+        return;
+    };
+    let prior_by_pane = prior
+        .pane_states()
+        .map(|pane| (pane.pane_id.clone(), pane))
+        .collect::<HashMap<_, _>>();
+
+    for fresh in frame.pane_states_mut() {
+        if fresh.current.hosted_agent_kind.is_some()
+            || fresh.current.hosted_agent_process_start.is_some()
+        {
+            fresh.hosted_carry_since_ms = None;
+            continue;
+        }
+        let Some(prior) = prior_by_pane.get(&fresh.pane_id) else {
+            continue;
+        };
+        let (Some(prior_kind), Some(prior_start)) = (
+            prior.current.hosted_agent_kind.as_ref(),
+            prior.current.hosted_agent_process_start,
+        ) else {
+            continue;
+        };
+        if !pane_start_matches_agent_stamp(prior, fresh) {
+            continue;
+        }
+        if pane_process_agent_kind(&fresh.current).is_some_and(|kind| kind != prior_kind.as_str()) {
+            continue;
+        }
+        let carried_since_ms = prior.hosted_carry_since_ms.unwrap_or(now_ms);
+        if expired_at(carried_since_ms, now_ms) {
+            continue;
+        }
+
+        fresh.current.hosted_agent_kind = Some(prior_kind.clone());
+        fresh.current.hosted_agent_process_start = Some(prior_start);
+        fresh.hosted_carry_since_ms = Some(carried_since_ms);
+    }
+}
+
+fn pane_start_matches_agent_stamp(prior: &PaneState, fresh: &PaneState) -> bool {
+    match (prior.current.started_at, fresh.current.started_at) {
+        (Some(prior), Some(fresh)) => prior <= fresh,
+        _ => true,
     }
 }
 
@@ -186,17 +244,26 @@ pub(super) fn drop_reused_pid_bindings(
         else {
             continue;
         };
-        let live_start = pane_process_agent_kind(&pane.current)
-            .or_else(|| {
-                pane.current
-                    .hosted_agent_kind
-                    .as_ref()
-                    .map(|kind| kind.as_str())
-            })
-            .and_then(|kind| root_start(kind, pid))
-            .or_else(|| process_start(pid));
+        let hosted_kind = pane
+            .current
+            .hosted_agent_kind
+            .as_ref()
+            .map(|kind| kind.as_str());
+        let live_start_from_hosted_root = pane_process_agent_kind(&pane.current)
+            .or(hosted_kind)
+            .and_then(|kind| root_start(kind, pid));
+        let missing_carried_hosted_scan = pane.hosted_carry_since_ms.is_some()
+            && pane.current.hosted_agent_process_start.is_some()
+            && hosted_kind.is_some()
+            && live_start_from_hosted_root.is_none();
+        let live_start = if missing_carried_hosted_scan {
+            None
+        } else {
+            live_start_from_hosted_root.or_else(|| process_start(pid))
+        };
         let stale = match live_start {
             Some(actual) => process_start_diff_gt(expected, actual),
+            None if missing_carried_hosted_scan => false,
             None => true,
         };
         if stale {
@@ -204,6 +271,7 @@ pub(super) fn drop_reused_pid_bindings(
             pane.current.started_at = None;
             pane.current.hosted_agent_kind = None;
             pane.current.hosted_agent_process_start = None;
+            pane.hosted_carry_since_ms = None;
             pane.previous = None;
             pane.children.clear();
             pane.metrics = PaneMetrics::default();
