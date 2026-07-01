@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -18,6 +18,14 @@ struct AskQuestion {
 #[serde(default)]
 struct AskOption {
     label: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct AskUserQuestionResponse {
+    annotations: Map<String, Value>,
+    answers: Map<String, Value>,
+    questions: Vec<AskQuestion>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -78,34 +86,82 @@ fn ask_user_question_answer(tool_response: &Value) -> Option<String> {
     // Claude Code has not documented this PostToolUse shape yet
     // (anthropics/claude-code#12605); refine these fields as the wire settles.
     value_text(tool_response)
+        .or_else(|| answers_map_summary(tool_response))
         .or_else(|| object_answer_field(tool_response, "answers"))
         .or_else(|| object_answer_field(tool_response, "choices"))
         .or_else(|| object_answer_field(tool_response, "selectedOptions"))
         .or_else(|| serde_json::to_string(tool_response).ok())
 }
 
+fn answers_map_summary(tool_response: &Value) -> Option<String> {
+    let parsed: AskUserQuestionResponse = serde_json::from_value(tool_response.clone()).ok()?;
+    if parsed.answers.is_empty() {
+        return None;
+    }
+
+    let mut answers = parsed.answers;
+    let mut lines = Vec::new();
+    for question in parsed.questions {
+        let Some(question_text) = non_empty(question.question.as_deref()) else {
+            continue;
+        };
+        if let Some(value) = answers.remove(&question_text)
+            && let Some(line) = answer_line(&question_text, &value, &parsed.annotations)
+        {
+            lines.push(line);
+        }
+    }
+    for (question, value) in answers {
+        if let Some(line) = answer_line(&question, &value, &parsed.annotations) {
+            lines.push(line);
+        }
+    }
+
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+fn answer_line(question: &str, value: &Value, annotations: &Map<String, Value>) -> Option<String> {
+    let mut line = answer_value_text(value)?;
+    if let Some(note) = answer_note(question, annotations) {
+        line.push_str(" (note: ");
+        line.push_str(&note);
+        line.push(')');
+    }
+    Some(line)
+}
+
+fn answer_note(question: &str, annotations: &Map<String, Value>) -> Option<String> {
+    annotations
+        .get(question)?
+        .get("notes")
+        .and_then(Value::as_str)
+        .and_then(|notes| non_empty(Some(notes)))
+}
+
 fn object_answer_field(value: &Value, key: &str) -> Option<String> {
     let field = value.get(key)?;
-    answer_value_text(field).or_else(|| {
-        let values = field
-            .as_array()?
-            .iter()
-            .filter_map(answer_value_text)
-            .collect::<Vec<_>>();
-        (!values.is_empty()).then(|| values.join(", "))
-    })
+    answer_value_text(field)
 }
 
 fn answer_value_text(value: &Value) -> Option<String> {
     value_text(value).or_else(|| {
-        value.as_object()?.iter().find_map(|(key, value)| {
-            matches!(
-                key.as_str(),
-                "answer" | "choice" | "label" | "text" | "value" | "name"
-            )
-            .then(|| value_text(value))
-            .flatten()
-        })
+        if let Some(values) = value.as_array() {
+            let rendered = values
+                .iter()
+                .filter_map(answer_value_text)
+                .collect::<Vec<_>>()
+                .join(", ");
+            (!rendered.is_empty()).then_some(rendered)
+        } else {
+            value.as_object()?.iter().find_map(|(key, value)| {
+                matches!(
+                    key.as_str(),
+                    "answer" | "choice" | "label" | "text" | "value" | "name"
+                )
+                .then(|| answer_value_text(value))
+                .flatten()
+            })
+        }
     })
 }
 
@@ -186,6 +242,78 @@ mod tests {
             answer_summary("AskUserQuestion", &json!({ "unexpected": ["shape"] })).as_deref(),
             Some(r#"{"unexpected":["shape"]}"#)
         );
+    }
+
+    #[test]
+    fn ask_user_question_answer_renders_live_answer_map() {
+        let answer = answer_summary(
+            "AskUserQuestion",
+            &json!({
+                "annotations": {},
+                "answers": { "Choose deployment path?": "Live repro first" },
+                "questions": [{
+                    "question": "Choose deployment path?",
+                    "header": "Path",
+                    "options": [{ "label": "safe" }, { "label": "fast" }]
+                }]
+            }),
+        );
+
+        assert_eq!(answer.as_deref(), Some("Live repro first"));
+    }
+
+    #[test]
+    fn ask_user_question_answer_orders_live_answer_map_by_questions() {
+        let answer = answer_summary(
+            "AskUserQuestion",
+            &json!({
+                "annotations": {},
+                "answers": {
+                    "Notify team?": "yes",
+                    "Choose deployment path?": "safe"
+                },
+                "questions": [
+                    { "question": "Choose deployment path?" },
+                    { "question": "Notify team?" }
+                ]
+            }),
+        );
+
+        assert_eq!(answer.as_deref(), Some("safe\nyes"));
+    }
+
+    #[test]
+    fn ask_user_question_answer_renders_multiselect_arrays() {
+        let answer = answer_summary(
+            "AskUserQuestion",
+            &json!({
+                "annotations": {},
+                "answers": {
+                    "Choose scopes?": ["a", { "label": "b" }]
+                },
+                "questions": [{ "question": "Choose scopes?" }]
+            }),
+        );
+
+        assert_eq!(answer.as_deref(), Some("a, b"));
+    }
+
+    #[test]
+    fn ask_user_question_answer_appends_annotation_notes() {
+        let answer = answer_summary(
+            "AskUserQuestion",
+            &json!({
+                "annotations": {
+                    "Choose deployment path?": { "notes": "use prod window" }
+                },
+                "answers": {
+                    "Choose deployment path?": "safe"
+                },
+                "questions": [{ "question": "Choose deployment path?" }]
+            }),
+        );
+
+        assert_eq!(answer.as_deref(), Some("safe (note: use prod window)"));
     }
 
     #[test]

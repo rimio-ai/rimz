@@ -181,7 +181,15 @@ fn transcript_records_native_ask_question_context_and_answer() {
             "hook_event_name": "PostToolUse",
             "session_id": session_id,
             "tool_name": "AskUserQuestion",
-            "tool_response": { "answers": ["safe"] },
+            "tool_response": {
+                "annotations": {},
+                "answers": { "Choose deployment path?": "safe" },
+                "questions": [{
+                    "question": "Choose deployment path?",
+                    "header": "Path",
+                    "options": [{ "label": "safe" }, { "label": "fast" }]
+                }]
+            },
             "worktree_branch": branch,
             "transcript_path": transcript.as_str(),
         }),
@@ -194,6 +202,7 @@ fn transcript_records_native_ask_question_context_and_answer() {
         "{output}"
     );
     assert!(output.contains("you\n    @claude, safe"), "{output}");
+    assert!(!output.contains("\"answers\""), "{output}");
     assert!(!output.contains("claude needs attention"), "{output}");
 
     let feed = env.feed_list_json();
@@ -525,7 +534,11 @@ fn write_claude_ask_transcript(path: &std::path::Path, message: &str) {
         format!(
             r#"{{"type":"assistant","timestamp":"2026-06-01T00:00:01Z","message":{{"content":[{{"type":"text","text":"{message}"}}]}}}}"#
         ) + "\n"
-            + r#"{"type":"assistant","timestamp":"2026-06-01T00:00:02Z","message":{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[]}}]}}"#
+            + r#"{"type":"assistant","timestamp":"2026-06-01T00:00:02Z","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"pwd"}}]}}"#
+            + "\n"
+            + r#"{"type":"user","timestamp":"2026-06-01T00:00:03Z","message":{"content":[{"type":"tool_result","content":"/tmp/project"}]}}"#
+            + "\n"
+            + r#"{"type":"assistant","timestamp":"2026-06-01T00:00:04Z","message":{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[]}}]}}"#
             + "\n",
     )
     .expect("write claude ask transcript");

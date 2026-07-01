@@ -284,9 +284,10 @@ pub(crate) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
 }
 
 /// Extract Claude's latest main-thread assistant message from a transcript
-/// tail. Sidechain entries are child-agent replay and ignored. A provider API
-/// error marker is decisive but not product output, so it returns `None`
-/// instead of walking back into an earlier turn.
+/// tail. Sidechain entries are child-agent replay and ignored. A genuine user
+/// prompt bounds the walk; tool results and meta entries are mid-turn plumbing
+/// and skipped. A provider API error marker is decisive but not product output,
+/// so it returns `None` instead of walking back into an earlier turn.
 pub(crate) fn last_assistant_message(tail: &str) -> Option<String> {
     for line in tail.lines().rev() {
         let Some(value) = conversation_entry(line) else {
@@ -297,6 +298,11 @@ pub(crate) fn last_assistant_message(tail: &str) -> Option<String> {
             continue;
         }
         if entry_type == Some("user") {
+            if value.get("isMeta").and_then(Value::as_bool) == Some(true)
+                || tool_result_entry(&value)
+            {
+                continue;
+            }
             return None;
         }
         if value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true) {
@@ -373,6 +379,20 @@ fn turn_error_label(entry: &Value) -> Option<String> {
 fn conversation_text(entry: &Value) -> Option<String> {
     let content = entry.get("message")?.get("content")?;
     content_text(content)
+}
+
+/// A `user`-typed transcript entry that carries a tool_result block is the
+/// harness returning tool output mid-turn, not the human speaking.
+fn tool_result_entry(entry: &Value) -> bool {
+    entry
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+        .is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+        })
 }
 
 fn timestamp(entry: &Value) -> Option<Timestamp> {
@@ -765,6 +785,16 @@ mod tests {
 
         let tool_only = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[]}}]}}"#;
         let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n{tool_only}\n");
+        assert_eq!(last_assistant_message(&tail).as_deref(), Some("done"));
+
+        let tool_call = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"pwd"}}]}}"#;
+        let tool_result =
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#;
+        let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n{tool_call}\n{tool_result}\n{tool_only}\n");
+        assert_eq!(last_assistant_message(&tail).as_deref(), Some("done"));
+
+        let meta = r#"{"type":"user","isMeta":true,"message":{"content":"generated context"}}"#;
+        let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n{meta}\n{tool_only}\n");
         assert_eq!(last_assistant_message(&tail).as_deref(), Some("done"));
 
         let prior_turn = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"previous turn"}]}}"#;
