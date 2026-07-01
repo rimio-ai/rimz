@@ -42,7 +42,7 @@ pub struct ResumeConfig {
     /// [`auto_continue_text`](Self::auto_continue_text) into its pane: rate
     /// limits at the spent-window reset, overloads and transient server errors on
     /// the backoff ramp. Off by default: Rimz types into a pane on its own only
-    /// once you opt in. Best-effort and audited (`agent.resumed`).
+    /// once you opt in. Best-effort and traced through message records.
     pub auto_continue: bool,
     /// Retry ramp, in seconds, for non-clocked auto-continue. The last value
     /// repeats until [`auto_continue_max_retries`](Self::auto_continue_max_retries)

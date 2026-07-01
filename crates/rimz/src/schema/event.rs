@@ -400,35 +400,6 @@ impl EventEnvelope {
         )
     }
 
-    /// Audit record for an automated rate-limit resume: the producer typed the
-    /// configured nudge into a parked agent's live pane the moment its 5h/7d
-    /// window reset. A plain audit event — it rides the [`EventKind::Other`]
-    /// carrier like `feed.*`, never folded into the agent rollup, because the
-    /// agent's own next hook drives its state back to `running`. The nudge text
-    /// never enters the log, mirroring `message.sent`.
-    pub fn agent_resumed(
-        workspace_id: WorkspaceId,
-        session_name: impl Into<String>,
-        kind: &AgentKind,
-        agent_id: &AgentSessionId,
-        pane_id: &PaneId,
-        reason: &str,
-    ) -> Self {
-        Self::new(
-            workspace_id,
-            session_name,
-            "rimz",
-            "cli",
-            "agent.resumed",
-            json!({
-                "kind": kind,
-                "agent_id": agent_id,
-                "pane_id": pane_id,
-                "reason": reason,
-            }),
-        )
-    }
-
     pub fn message_event(
         message: &MessageRecord,
         session_name: impl Into<String>,

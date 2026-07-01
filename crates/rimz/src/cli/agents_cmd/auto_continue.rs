@@ -3,8 +3,8 @@
 //!
 //! The producer decides *which* agent and *when* (`sidebar::enrich`
 //! auto-continue, opt-in via `[resume] auto_continue*`); this helper performs the
-//! side effect the sidebar's read-only import graph must not: it queues and
-//! delivers a resume-gated message through the shared delivery pipeline.
+//! side effect the sidebar's read-only import graph must not: it queues or
+//! redelivers a resume-gated message through the shared delivery pipeline.
 //! Best-effort by contract — it inherits the producer's frame-validated target,
 //! so a vanished pane leaves a message error instead of a false resume audit.
 
@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use std::time::Duration;
 
-use rimz::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use rimz::ledger::workspace_record;
 use rimz::message::{DeliveryGate, MessageRecord, MessageSender};
 use rimz::workspace::ResolvedWorkspace;
@@ -35,6 +35,8 @@ pub struct AutoContinueArgs {
     text: String,
     #[arg(long)]
     reason: String,
+    #[arg(long)]
+    message_id: Option<String>,
 }
 
 pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
@@ -42,6 +44,12 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
     let pane_id = PaneId::parse(&args.pane).context("parsing pane id")?;
     let kind = AgentKind::new_unchecked(args.kind);
     let agent_id = AgentSessionId::from(args.agent_id.as_str());
+    let retry_message_id = args
+        .message_id
+        .as_deref()
+        .map(MessageId::parse)
+        .transpose()
+        .context("parsing message id")?;
     let text = args.text.trim();
     if text.is_empty() {
         return Ok(());
@@ -92,20 +100,25 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         })
         .context("auto-continue target pane is no longer bound to the agent")?;
 
-    let message = MessageRecord::new(
-        workspace_id,
-        agent,
-        text.to_owned(),
-        true,
-        DeliveryGate::Resume,
-    )
-    .with_channel(rimz::target::agent_channel(agent))
-    .with_sender(MessageSender::Human)
-    .with_pane_id(pane_id);
-    let message_id = message.message_id.clone();
-    ledger
-        .queue_message(&message, &workspace.session_name)
-        .context("queueing auto-continue resume message")?;
+    let message_id = if let Some(message_id) = retry_message_id {
+        message_id
+    } else {
+        let message = MessageRecord::new(
+            workspace_id,
+            agent,
+            text.to_owned(),
+            true,
+            DeliveryGate::Resume,
+        )
+        .with_channel(rimz::target::agent_channel(agent))
+        .with_sender(MessageSender::Human)
+        .with_pane_id(pane_id);
+        let message_id = message.message_id.clone();
+        ledger
+            .queue_message(&message, &workspace.session_name)
+            .context("queueing auto-continue resume message")?;
+        message_id
+    };
     let delivered = crate::cli::message::deliver_one(
         &workspace,
         &ledger,

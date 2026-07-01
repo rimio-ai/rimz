@@ -295,32 +295,6 @@ fn session_rebirth_constructor_keeps_the_existing_wire_shape() {
 }
 
 #[test]
-fn agent_resumed_records_an_audit_event_on_the_other_carrier() {
-    // Auto-continue is audit-only: the event rides the generic `Other`
-    // carrier (it never folds into the agent rollup), so the rollup reduce
-    // and wakeup paths skip it untouched while `feed list --audit` still
-    // surfaces it by method.
-    let event = EventEnvelope::agent_resumed(
-        workspace(),
-        "session",
-        &AgentKind::new_unchecked("claude"),
-        &AgentSessionId::from("sess-1"),
-        &PaneId::from_parts(MuxName::Tmux, "%1"),
-        "rate_limit_window_reset",
-    );
-    assert_eq!(event.method, "agent.resumed");
-    let EventKind::Other { method, params } = event.kind() else {
-        panic!("agent.resumed rides the Other audit carrier");
-    };
-    let params = raw_params_value(params);
-    assert_eq!(method, "agent.resumed");
-    assert_eq!(params["kind"], "claude");
-    assert_eq!(params["agent_id"], "sess-1");
-    assert_eq!(params["pane_id"], "tmux:%1");
-    assert_eq!(params["reason"], "rate_limit_window_reset");
-}
-
-#[test]
 fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
     let now = Timestamp::now();
     let message = MessageRecord {

@@ -17,8 +17,8 @@
 //!   resume-gated message record.
 //! - **Clear.** Any activity since the park (the nudge took, or the agent woke on
 //!   its own) advances `last_activity`, and the stale record is removed. A
-//!   delivered resume message also clears the record; an unconfirmed sent
-//!   message controls bounded retries.
+//!   delivered resume message also clears the record; unconfirmed or failed
+//!   resume messages control bounded retries.
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
 //! arm decision is the pure, unit-tested [`crate::agents::resume_park`].
@@ -92,6 +92,7 @@ pub(super) fn resume_parked(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &ResumeConfig,
+    resume_messages: &[ResumeMessage],
 ) {
     if !config.auto_continue {
         return;
@@ -99,7 +100,6 @@ pub(super) fn resume_parked(
     let text = config.auto_continue_text.trim();
     let now = snapshot.now;
     let account_budgets = super::account_budgets_from_caches(runtime, now);
-    let resume_messages = read_resume_messages(runtime);
     for agent in &snapshot.agents {
         if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
             continue;
@@ -118,7 +118,7 @@ pub(super) fn resume_parked(
                         now,
                         text,
                         config,
-                        resume_messages: &resume_messages,
+                        resume_messages,
                     },
                 );
             }
@@ -137,7 +137,7 @@ pub(super) fn resume_parked(
                         now,
                         text,
                         config,
-                        resume_messages: &resume_messages,
+                        resume_messages,
                     },
                 );
             }
@@ -156,7 +156,7 @@ pub(super) fn resume_parked(
                             now,
                             text,
                             config,
-                            resume_messages: &resume_messages,
+                            resume_messages,
                         },
                     );
                 } else if budget_recovered(budget, now) {
@@ -171,7 +171,7 @@ pub(super) fn resume_parked(
                             now,
                             text,
                             config,
-                            resume_messages: &resume_messages,
+                            resume_messages,
                         },
                     );
                 }
@@ -184,12 +184,12 @@ pub(super) fn exhausted_parks(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &ResumeConfig,
+    resume_messages: &[ResumeMessage],
 ) -> BTreeSet<(AgentKind, AgentSessionId)> {
     let mut exhausted = BTreeSet::new();
     if !config.auto_continue {
         return exhausted;
     }
-    let resume_messages = read_resume_messages(runtime);
     for agent in &snapshot.agents {
         if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
             continue;
@@ -201,7 +201,7 @@ pub(super) fn exhausted_parks(
         if !still_parked(&record, agent.last_activity) {
             continue;
         }
-        if latest_resume_message(&resume_messages, agent, &record)
+        if latest_resume_message(resume_messages, agent, &record)
             .is_some_and(|message| message.status == MessageStatus::Delivered)
         {
             continue;
@@ -285,23 +285,25 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
         remove_park(path);
         return;
     }
-    if let Some(message) = latest_resume_message(ctx.resume_messages, agent, &record) {
-        match message.status {
-            MessageStatus::Delivered => {
-                remove_park(path);
-                return;
+    let retry_message_id =
+        if let Some(message) = latest_resume_message(ctx.resume_messages, agent, &record) {
+            match message.status {
+                MessageStatus::Delivered => {
+                    remove_park(path);
+                    return;
+                }
+                MessageStatus::Queued | MessageStatus::Claimed => Some(message.message_id.clone()),
+                MessageStatus::Created
+                | MessageStatus::Sent
+                | MessageStatus::TimedOut
+                | MessageStatus::Errored
+                | MessageStatus::Removed
+                | MessageStatus::Abandoned
+                | MessageStatus::Archived => None,
             }
-            MessageStatus::Sent => {}
-            MessageStatus::Created
-            | MessageStatus::Queued
-            | MessageStatus::Claimed
-            | MessageStatus::TimedOut
-            | MessageStatus::Errored
-            | MessageStatus::Removed
-            | MessageStatus::Abandoned
-            | MessageStatus::Archived => return,
-        }
-    }
+        } else {
+            None
+        };
     let reason = match &record.kind {
         ParkKind::RateLimit { .. } => "rate_limit_window_reset",
         ParkKind::Overloaded { .. } => "overloaded_backoff_retry",
@@ -325,6 +327,7 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
         &agent.kind,
         &agent.agent_id,
         &pane_id,
+        retry_message_id.as_ref(),
         ctx.text,
         reason,
     ) {
@@ -382,7 +385,7 @@ fn nudge_due(record: &ParkRecord, now: Timestamp, backoff_secs: &[u64], max_retr
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ResumeMessage {
+pub(crate) struct ResumeMessage {
     message_id: MessageId,
     kind: AgentKind,
     agent_id: AgentSessionId,
@@ -414,7 +417,7 @@ impl ResumeMessage {
     }
 }
 
-fn read_resume_messages(runtime: &RuntimePaths) -> Vec<ResumeMessage> {
+pub(crate) fn read_resume_messages(runtime: &RuntimePaths) -> Vec<ResumeMessage> {
     let Ok(state) = crate::StatePaths::for_workspace(runtime.workspace_id.clone()) else {
         return Vec::new();
     };
@@ -513,16 +516,17 @@ fn park_record_path(
         .join(format!("auto-continue.{}.json", &digest[..32]))
 }
 
-/// Spawn the detached, fresh-stdio helper that types the nudge into the parked
-/// pane and writes the `agent.resumed` audit record. Best-effort: a spawn failure
-/// is logged and counted as a fired attempt so a broken helper path backs off
-/// instead of retrying every frame.
+/// Spawn the detached, fresh-stdio helper that queues or redelivers the
+/// resume-gated message. Best-effort: a spawn failure is logged and counted as a
+/// fired attempt so a broken helper path backs off instead of retrying every
+/// frame.
 #[cfg(not(test))]
 fn spawn_auto_continue(
     runtime: &RuntimePaths,
     kind: &AgentKind,
     agent_id: &AgentSessionId,
     pane_id: &PaneId,
+    message_id: Option<&MessageId>,
     text: &str,
     reason: &str,
 ) -> bool {
@@ -555,6 +559,9 @@ fn spawn_auto_continue(
         "--reason",
         reason,
     ]);
+    if let Some(message_id) = message_id {
+        cmd.args(["--message-id", message_id.as_str()]);
+    }
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         workspace = %runtime.workspace_id,
@@ -584,10 +591,11 @@ fn spawn_auto_continue(
     kind: &AgentKind,
     agent_id: &AgentSessionId,
     pane_id: &PaneId,
+    message_id: Option<&MessageId>,
     text: &str,
     reason: &str,
 ) -> bool {
-    let _ = (runtime, kind, agent_id, pane_id, text, reason);
+    let _ = (runtime, kind, agent_id, pane_id, message_id, text, reason);
     true
 }
 
@@ -952,6 +960,7 @@ mod tests {
                 auto_continue_max_retries: 3,
                 ..ResumeConfig::default()
             },
+            &[],
         );
         assert_eq!(
             read_park(&path),
@@ -993,6 +1002,7 @@ mod tests {
                 auto_continue: true,
                 ..ResumeConfig::default()
             },
+            &[],
         );
         assert_eq!(read_park(&path), None);
     }
@@ -1004,8 +1014,7 @@ mod tests {
         assert_eq!(nudged.retries, 3);
     }
 
-    #[test]
-    fn sent_unconfirmed_resume_message_allows_retry_under_cap() {
+    fn fire_with_resume_message(status: MessageStatus) -> Option<ParkRecord> {
         let (_dir, runtime) = temp_runtime();
         let path = park_path(&runtime);
         write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 1));
@@ -1021,7 +1030,7 @@ mod tests {
             auto_continue_max_retries: 3,
             ..ResumeConfig::default()
         };
-        let messages = [resume_message(1, MessageStatus::Sent, 5_900)];
+        let messages = [resume_message(1, status, 5_900)];
         fire_if_due(
             &snapshot.agents[0],
             &path,
@@ -1034,40 +1043,27 @@ mod tests {
                 resume_messages: &messages,
             },
         );
+        read_park(&path)
+    }
 
-        assert_eq!(
-            read_park(&path),
-            Some(rate_record(5_000, 1_000, Some(6_000), 2))
-        );
+    #[test]
+    fn undelivered_resume_messages_allow_retry_under_cap() {
+        for status in [
+            MessageStatus::Sent,
+            MessageStatus::Queued,
+            MessageStatus::Abandoned,
+        ] {
+            assert_eq!(
+                fire_with_resume_message(status),
+                Some(rate_record(5_000, 1_000, Some(6_000), 2)),
+                "{status:?}"
+            );
+        }
     }
 
     #[test]
     fn delivered_resume_message_clears_the_park() {
-        let (_dir, runtime) = temp_runtime();
-        let path = park_path(&runtime);
-        write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 1));
-        let snapshot = SidebarSnapshot::build_with_agents(
-            runtime.workspace_id.clone(),
-            Vec::new(),
-            vec![limit_agent(1_000, 5_990)],
-            ts(6_000),
-        );
-        let config = ResumeConfig::default();
-        let messages = [resume_message(1, MessageStatus::Delivered, 5_900)];
-        fire_if_due(
-            &snapshot.agents[0],
-            &path,
-            FireContext {
-                snapshot: &snapshot,
-                runtime: &runtime,
-                now: ts(6_000),
-                text: "continue",
-                config: &config,
-                resume_messages: &messages,
-            },
-        );
-
-        assert_eq!(read_park(&path), None);
+        assert_eq!(fire_with_resume_message(MessageStatus::Delivered), None);
     }
 
     #[test]
@@ -1086,9 +1082,11 @@ mod tests {
             auto_continue_max_retries: 3,
             ..ResumeConfig::default()
         };
-        assert!(exhausted_parks(&snapshot, &runtime, &config).contains(&(
-            AgentKind::new_unchecked("claude"),
-            AgentSessionId::from("sess")
-        )));
+        assert!(
+            exhausted_parks(&snapshot, &runtime, &config, &[]).contains(&(
+                AgentKind::new_unchecked("claude"),
+                AgentSessionId::from("sess")
+            ))
+        );
     }
 }

@@ -116,7 +116,7 @@ A parked message delivers when all five conditions hold:
 
 ### Delivery trigger
 
-Only **unparked root turn ends** trigger ordinary parked delivery — `Registered`, subagent stops, compaction events, and parked background turn ends (`TurnEnded { parked_on_background: true }`) do not check the queue. The lifecycle hook records the event, loads pending messages, finds the FIFO head for the agent's card, and spawns a detached `rimz message deliver --message-id <id>` helper with nulled stdio. Auto-continue is the producer-driven exception: when a persisted park reaches its reset/backoff condition, the producer spawns `rimz agents auto-continue`, which queues a `Resume` message and immediately runs the same one-message delivery helper for that message id.
+Only **unparked root turn ends** trigger ordinary parked delivery — `Registered`, subagent stops, compaction events, and parked background turn ends (`TurnEnded { parked_on_background: true }`) do not check the queue. The lifecycle hook records the event, loads pending messages, finds the FIFO head for the agent's card, and spawns a detached `rimz message deliver --message-id <id>` helper with nulled stdio. Auto-continue is the producer-driven exception: when a persisted park reaches its reset/backoff condition, the producer spawns `rimz agents auto-continue`, which queues a `Resume` message or redelivers the prior queued resume message, then runs the same one-message delivery helper for that message id.
 
 ### The deliver helper
 

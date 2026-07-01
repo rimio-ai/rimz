@@ -47,6 +47,7 @@ mod rate_limits;
 mod tests;
 mod usage_refresh;
 
+pub(crate) use auto_continue::ResumeMessage;
 pub use codex_refresh::refresh_codex_transcript_context;
 pub(crate) use credits::apply_credits_cache;
 pub use credits::{
@@ -105,7 +106,11 @@ pub fn resume_gate_recovered(
     let budget = account_budgets.get(&agent.kind);
     match resume_park(agent, budget, now) {
         Some(ResumeArm::Overloaded { .. }) => true,
-        Some(ResumeArm::RateLimit { deadline }) => deadline <= now,
+        Some(ResumeArm::RateLimit { .. }) => {
+            // A still-spent window is not recovered; the recovered-budget path
+            // is the `None` arm below.
+            false
+        }
         None => crate::agents::display_turn_error(
             agent.status,
             agent.context.as_ref(),
@@ -142,6 +147,17 @@ pub fn cached_worktree_roots(runtime: &RuntimePaths) -> Vec<PathBuf> {
         .worktrees
         .map(|cache| cache.roots)
         .unwrap_or_default()
+}
+
+pub(crate) fn read_auto_continue_resume_messages(
+    runtime: &RuntimePaths,
+    config: &crate::config::ResumeConfig,
+) -> Vec<ResumeMessage> {
+    if config.auto_continue {
+        auto_continue::read_resume_messages(runtime)
+    } else {
+        Vec::new()
+    }
 }
 
 /// The checkout path a group's git reads run against. A path-keyed group —
@@ -610,8 +626,13 @@ pub fn enrich(
     }
 
     let account_budgets = account_budgets_from_caches(runtime, snapshot.now);
-    let exhausted_resumes =
-        auto_continue::exhausted_parks(&snapshot, runtime, &machine_config.resume);
+    let resume_messages = read_auto_continue_resume_messages(runtime, &machine_config.resume);
+    let exhausted_resumes = auto_continue::exhausted_parks(
+        &snapshot,
+        runtime,
+        &machine_config.resume,
+        &resume_messages,
+    );
 
     if let Some(frame) = frame {
         snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
@@ -704,6 +725,7 @@ pub fn enrich(
                 runtime,
                 &spending.provider.spending.by_provider,
                 *config,
+                &resume_messages,
             );
             refresh_git(&mut snapshot);
             spending
@@ -819,6 +841,7 @@ pub(crate) fn fold_machine_config_producing(
     runtime: &RuntimePaths,
     provider_spending: &BTreeMap<String, crate::agents::SpendTally>,
     config: crate::config::MachineConfig,
+    resume_messages: &[ResumeMessage],
 ) -> SidebarSnapshot {
     let accounts_config = config.accounts.clone();
     let resume_config = config.resume.clone();
@@ -839,7 +862,7 @@ pub(crate) fn fold_machine_config_producing(
     // Opt-in: nudge a parked agent when its resume condition is due, so a turn
     // that stopped on a budget limit or overload picks itself back up while you
     // are away.
-    auto_continue::resume_parked(&snapshot, runtime, &resume_config);
+    auto_continue::resume_parked(&snapshot, runtime, &resume_config, resume_messages);
     snapshot
 }
 

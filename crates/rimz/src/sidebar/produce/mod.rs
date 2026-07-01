@@ -169,6 +169,8 @@ pub fn refresh_producer_caches(
     let config = crate::config::MachineConfig::load().unwrap_or_default();
     let trunk = config.sidebar.trunk.clone();
     let headline_spec = config.headline_spec();
+    let resume_messages =
+        crate::sidebar::enrich::read_auto_continue_resume_messages(runtime, &config.resume);
     let spending = spending::compute_fleet_spending_with_walker(
         spending_walker,
         runtime,
@@ -180,6 +182,7 @@ pub fn refresh_producer_caches(
         runtime,
         &spending.provider.spending.by_provider,
         config,
+        &resume_messages,
     );
     let mut git_snapshot = base;
     git::enrich_worktree_groups(&mut git_snapshot, runtime, trunk.as_deref());
