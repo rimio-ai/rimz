@@ -1,6 +1,40 @@
 use super::SidebarFixtureState;
 use super::fixture::sidebar_fixture_snapshot;
 
+#[test]
+fn plugin_focus_argv_parses_without_workspace_id() {
+    use clap::Parser;
+
+    crate::cli::Cli::try_parse_from([
+        "rimz",
+        "sidebar",
+        "focus",
+        "--toggle",
+        "--session-name",
+        "s",
+        "--mux",
+        "zellij",
+    ])
+    .expect("plugin focus argv must parse");
+
+    assert!(
+        crate::cli::Cli::try_parse_from([
+            "rimz",
+            "sidebar",
+            "focus",
+            "--toggle",
+            "--workspace-id",
+            "ws_0123456789abcdef01234567",
+            "--session-name",
+            "s",
+            "--mux",
+            "zellij",
+        ])
+        .is_err(),
+        "sidebar focus intentionally accepts no workspace id",
+    );
+}
+
 fn strip_sgr(ansi: &[u8]) -> String {
     let text = String::from_utf8_lossy(ansi);
     let mut stripped = String::new();

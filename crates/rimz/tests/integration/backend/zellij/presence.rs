@@ -26,11 +26,21 @@ fn seed_presence_permissions(xdg: &Path, wasm: &Path) {
     .expect("seed permission grant");
 }
 
-fn write_poke_shim(dir: &Path, log: &Path) -> PathBuf {
+fn write_poke_shim(dir: &Path, log: &Path, real_rimz: &Path, focus_exec_log: &Path) -> PathBuf {
     let rimz_shim = dir.join("rimz-poke-shim");
     std::fs::write(
         &rimz_shim,
-        format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n", log.display()),
+        format!(
+            "#!/bin/sh\n\
+             printf '%s\\n' \"$*\" >> {log}\n\
+             if [ \"${{1:-}}\" = \"sidebar\" ] && [ \"${{2:-}}\" = \"focus\" ]; then\n\
+               {real_rimz} \"$@\" >> {focus_exec_log} 2>&1\n\
+               printf 'exit=%s\\n' \"$?\" >> {focus_exec_log}\n\
+             fi\n",
+            log = sh_quote(&log.display().to_string()),
+            real_rimz = sh_quote(&real_rimz.display().to_string()),
+            focus_exec_log = sh_quote(&focus_exec_log.display().to_string()),
+        ),
     )
     .expect("write poke shim");
     #[cfg(unix)]
@@ -43,6 +53,10 @@ fn write_poke_shim(dir: &Path, log: &Path) -> PathBuf {
         std::fs::set_permissions(&rimz_shim, perms).expect("chmod");
     }
     rimz_shim
+}
+
+fn sh_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 /// Poll `log` until it holds at least `at_least` lines (or panic at the
@@ -69,6 +83,23 @@ fn poke_lines(log: &Path) -> Vec<String> {
     std::fs::read_to_string(log)
         .map(|s| s.lines().map(str::to_owned).collect())
         .unwrap_or_default()
+}
+
+fn wait_for_focus_exec_log(log: &Path) -> String {
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    loop {
+        let contents = std::fs::read_to_string(log).unwrap_or_default();
+        if contents.lines().any(|line| line.starts_with("exit=")) {
+            return contents;
+        }
+        if Instant::now() > deadline {
+            panic!(
+                "expected focus exec result in {}; got {contents:?}",
+                log.display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn logged_arg<'a>(line: &'a str, flag: &str) -> Option<&'a str> {
@@ -112,7 +143,9 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
 
     // A `rimz` stand-in that logs its argv: the poke's whole host surface.
     let poke_log = xdg.path().join("poke.log");
-    let rimz_shim = write_poke_shim(xdg.path(), &poke_log);
+    let focus_exec_log = xdg.path().join("focus-exec.log");
+    let real_rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    let rimz_shim = write_poke_shim(xdg.path(), &poke_log, &real_rimz, &focus_exec_log);
 
     // Born on the pre-seeded dir with a PTY client attached: application
     // state flows only while a client is connected, and the cached grant is
@@ -215,7 +248,9 @@ fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
     let xdg = scoped_runtime_dir();
     seed_presence_permissions(xdg.path(), &wasm);
     let poke_log = xdg.path().join("poke.log");
-    let rimz_shim = write_poke_shim(xdg.path(), &poke_log);
+    let focus_exec_log = xdg.path().join("focus-exec.log");
+    let real_rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    let rimz_shim = write_poke_shim(xdg.path(), &poke_log, &real_rimz, &focus_exec_log);
     let name = unique_session_name("focuskey");
     let mut session = ZellijSession::attach_pty(xdg, name.clone(), true);
 
@@ -291,5 +326,15 @@ fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
     assert!(
         focus_line.contains("--mux zellij"),
         "focus pipe should force the Zellij backend; got {focus_line:?}",
+    );
+    assert!(
+        !focus_line.contains("--workspace-id"),
+        "focus pipe should not pass a flag sidebar focus rejects; got {focus_line:?}",
+    );
+
+    let focus_exec_log = wait_for_focus_exec_log(&focus_exec_log);
+    assert!(
+        !focus_exec_log.contains("unexpected argument"),
+        "real rimz clap rejected the plugin focus argv: {focus_exec_log}",
     );
 }

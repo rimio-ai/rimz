@@ -498,7 +498,7 @@ mod shell {
 
         /// Run `rimz sidebar focus --toggle` for the focus-key pipe. The command
         /// resolves and focuses the room's sidebar pane (or toggles back), built
-        /// from the same load config the wake poke uses. Fire-and-forget through
+        /// from the session name the wake poke uses. Fire-and-forget through
         /// the granted `RunCommands` capability.
         fn run_focus_sidebar(&self) {
             if !self.granted {
@@ -511,10 +511,6 @@ mod shell {
                 "focus".to_owned(),
                 "--toggle".to_owned(),
             ];
-            if let Some(workspace_id) = self.workspace_id.as_deref() {
-                argv.push("--workspace-id".to_owned());
-                argv.push(workspace_id.to_owned());
-            }
             if let Some(session_name) = self.session_name.as_deref() {
                 argv.push("--session-name".to_owned());
                 argv.push(session_name.to_owned());
