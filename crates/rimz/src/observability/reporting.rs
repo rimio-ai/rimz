@@ -165,14 +165,11 @@ fn before_send() -> Arc<dyn Fn(Event<'static>) -> Option<Event<'static>> + Send 
         event
             .tags
             .insert("fault".to_owned(), fault_for(&logger).to_owned());
-        let operation = operation_tag(&event);
-        if let Some(operation) = operation.as_ref() {
-            event
-                .tags
-                .entry("operation".to_owned())
-                .or_insert_with(|| operation.clone());
-        }
-        let parts = fingerprint_components(&logger, operation.as_deref(), event.message.as_deref());
+        let parts = fingerprint_components(
+            &logger,
+            event.tags.get("operation").map(String::as_str),
+            event.message.as_deref(),
+        );
         let key = hash_parts(&parts);
         event.fingerprint = parts.into_iter().map(Cow::Owned).collect::<Vec<_>>().into();
         let now_ms = u64::try_from(base.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -184,16 +181,6 @@ fn before_send() -> Arc<dyn Fn(Event<'static>) -> Option<Event<'static>> + Send 
             return None;
         }
         Some(event)
-    })
-}
-
-fn operation_tag(event: &Event<'_>) -> Option<String> {
-    event.tags.get("operation").cloned().or_else(|| {
-        event
-            .extra
-            .get("operation")?
-            .as_str()
-            .map(ToOwned::to_owned)
     })
 }
 
@@ -752,7 +739,7 @@ mod tests {
             ..Default::default()
         };
         event
-            .extra
+            .tags
             .insert("operation".to_owned(), "sidebar.render_crash".into());
         event
             .extra

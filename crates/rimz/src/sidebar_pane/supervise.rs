@@ -68,8 +68,6 @@ pub fn run(config: ServeConfig) -> Result<()> {
         .args(args)
         .env(WORKER_ENV, "1")
         .env(INSTANCE_ENV, config.instance_id.as_str())
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|source| SidebarSuperviseErr::Spawn {
@@ -129,10 +127,12 @@ fn record_signal_death(
 fn report_sentry_signal_death(signal: Option<i32>, exit_code: Option<i32>, stderr_excerpt: &str) {
     tracing::error!(
         target: "rimz::sidebar::crash",
-        operation = "sidebar.render_crash",
-        signal = signal.unwrap_or(0),
-        exit_code = exit_code.unwrap_or(0),
-        stderr = %stderr_excerpt,
+        {
+            tags.operation = "sidebar.render_crash",
+            signal = signal.unwrap_or(0),
+            exit_code = exit_code.unwrap_or(0),
+            stderr = %stderr_excerpt,
+        },
         "sidebar render worker terminated abnormally",
     );
 }

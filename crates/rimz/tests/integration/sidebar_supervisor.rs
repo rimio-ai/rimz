@@ -37,10 +37,13 @@ fn sidebar_supervisor_records_worker_abort() {
         "supervisor should tee worker stderr"
     );
 
-    let diag_path = env
-        .state_path_for(&env.project_root)
-        .root
-        .join("diag.log.jsonl");
+    let diag_path = rimz::diag::DiagSink::under(
+        env.state_path_for(&env.project_root).root,
+        env.workspace_id.clone(),
+        "rimz-test",
+        None,
+    )
+    .log_path();
     let text = std::fs::read_to_string(&diag_path)
         .unwrap_or_else(|err| panic!("read {}: {err}", diag_path.display()));
     let record: DiagEnvelope = text
