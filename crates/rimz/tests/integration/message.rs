@@ -2717,6 +2717,8 @@ fn seed_provisional_codex_launch_with_prompt(
             agent_name: agent_name.to_owned(),
             profile: None,
             role: role.map(ToOwned::to_owned),
+            model: None,
+            effort: None,
             team: None,
             channel: None,
             kind_ordinal: Some(1),

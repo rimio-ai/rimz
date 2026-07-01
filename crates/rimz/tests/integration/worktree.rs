@@ -1093,6 +1093,8 @@ fn seed_agent_launch(
             agent_name: agent_name.to_owned(),
             profile: None,
             role: None,
+            model: None,
+            effort: None,
             team: None,
             channel: None,
             kind_ordinal: None,

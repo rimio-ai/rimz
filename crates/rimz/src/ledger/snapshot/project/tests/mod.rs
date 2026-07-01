@@ -67,6 +67,8 @@ fn raw_launch_with_description(
             agent_name: agent_name.to_owned(),
             profile: None,
             role: None,
+            model: None,
+            effort: None,
             team: None,
             channel: None,
             kind_ordinal: None,
@@ -312,6 +314,8 @@ fn launch_description_without_prompt_creates_idle_card() {
             agent_name: "lucid-atlas".to_owned(),
             profile: None,
             role: None,
+            model: None,
+            effort: None,
             team: None,
             channel: None,
             kind_ordinal: None,
@@ -333,6 +337,56 @@ fn launch_description_without_prompt_creates_idle_card() {
 }
 
 #[test]
+fn launch_seeds_model_and_effort_until_lifecycle_observes_them() {
+    let launch = EventEnvelope::agent_launched(
+        workspace(),
+        "session",
+        &AgentKind::new_unchecked("codex"),
+        AgentLaunchPayload {
+            agent_id: "launch_a".into(),
+            agent_name: "lucid-atlas".to_owned(),
+            profile: None,
+            role: None,
+            model: Some("gpt-5.5-codex".to_owned()),
+            effort: Some("xhigh".to_owned()),
+            team: None,
+            channel: None,
+            kind_ordinal: None,
+            state: AgentLaunchState::Bound,
+            run_id: None,
+            pane_id: None,
+            runtime_owner: None,
+            worktree_path: Some("/tmp/x".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            prompt: None,
+            description: None,
+        },
+    );
+
+    let launched = reduce_agent_states(std::slice::from_ref(&launch));
+    assert_eq!(launched.len(), 1);
+    assert_eq!(launched[0].model.as_deref(), Some("gpt-5.5-codex"));
+    assert_eq!(launched[0].effort.as_deref(), Some("xhigh"));
+
+    let lifecycle = raw_lifecycle(
+        "codex",
+        json!({
+            "agent_id": "sess-1",
+            "agent_name": "lucid-atlas",
+            "signal": { "signal": "registered" },
+            "model": "gpt-6-codex",
+            "effort": "medium",
+        }),
+    );
+    let observed = reduce_agent_states(&[launch, lifecycle]);
+
+    assert_eq!(observed.len(), 1);
+    assert_eq!(observed[0].agent_id.as_str(), "sess-1");
+    assert_eq!(observed[0].model.as_deref(), Some("gpt-6-codex"));
+    assert_eq!(observed[0].effort.as_deref(), Some("medium"));
+}
+
+#[test]
 fn launch_role_and_profile_survive_roleless_lifecycle() {
     let launch = EventEnvelope::agent_launched(
         workspace(),
@@ -343,6 +397,8 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
             agent_name: "lucid-atlas".to_owned(),
             profile: Some("codex-coder".to_owned()),
             role: Some("coder".to_owned()),
+            model: None,
+            effort: None,
             team: Some("pcr".to_owned()),
             channel: None,
             kind_ordinal: None,
@@ -385,6 +441,8 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
             agent_name: "lucid-atlas".to_owned(),
             profile: Some("codex-coder".to_owned()),
             role: Some("coder".to_owned()),
+            model: None,
+            effort: None,
             team: Some("pcr".to_owned()),
             channel: None,
             kind_ordinal: None,

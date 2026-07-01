@@ -792,6 +792,8 @@ pub(super) fn launch_identity_requests(
             kind,
             profile,
             role,
+            model,
+            effort,
             ..
         } = cell
         else {
@@ -816,6 +818,8 @@ pub(super) fn launch_identity_requests(
             name,
             profile: profile.clone(),
             role: role.clone(),
+            model: model.clone(),
+            effort: effort.clone(),
             team: team.map(ToOwned::to_owned),
             channel: channel.map(ToOwned::to_owned),
             run_id: None,
@@ -863,6 +867,8 @@ pub(super) fn append_launch_event(
             agent_name: identity.name.clone(),
             profile: identity.profile.clone(),
             role: identity.role.clone(),
+            model: identity.model.clone(),
+            effort: identity.effort.clone(),
             team: identity.team.clone(),
             channel: identity
                 .channel

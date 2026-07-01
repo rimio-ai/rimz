@@ -1100,7 +1100,7 @@ fn generated_worktree_name_is_soft_agent_name_candidate() {
 }
 
 #[test]
-fn launch_identity_requests_carry_cell_profile_role_and_team() {
+fn launch_identity_requests_carry_cell_identity() {
     let layout = LayoutSpec::single(Cell::Agent {
         kind: AgentKind::new_unchecked("codex"),
         args: Vec::new(),
@@ -1119,6 +1119,8 @@ fn launch_identity_requests_carry_cell_profile_role_and_team() {
     assert_eq!(requests[0].kind.as_str(), "codex");
     assert_eq!(requests[0].profile.as_deref(), Some("codex-coder"));
     assert_eq!(requests[0].role.as_deref(), Some("coder"));
+    assert_eq!(requests[0].model.as_deref(), Some("gpt-5-codex"));
+    assert_eq!(requests[0].effort.as_deref(), Some("high"));
     assert_eq!(requests[0].team.as_deref(), Some("pcr"));
 }
 

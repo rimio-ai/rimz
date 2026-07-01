@@ -12,6 +12,8 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
             agent_name: "lucid-atlas".to_owned(),
             profile: Some("codex-coder".to_owned()),
             role: Some("coder".to_owned()),
+            model: None,
+            effort: None,
             team: Some("pcr".to_owned()),
             channel: None,
             kind_ordinal: None,

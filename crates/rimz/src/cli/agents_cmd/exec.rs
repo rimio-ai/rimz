@@ -359,6 +359,8 @@ fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
                 name: name.to_owned(),
                 profile: args.agent_profile.clone(),
                 role: args.agent_role.clone(),
+                model: args.agent_model.clone(),
+                effort: args.agent_effort.clone(),
                 team: args.agent_team.clone(),
                 channel: args.agent_channel.clone(),
                 run_id: args.run_id.clone(),

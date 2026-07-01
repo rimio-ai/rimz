@@ -820,8 +820,15 @@ fn assemble_launch_state(
         transcript_path: prior.and_then(|state| state.transcript_path.clone()),
         origin: prior.and_then(|state| state.origin),
         recent_prompts,
-        model: prior.and_then(|state| state.model.clone()),
-        effort: prior.and_then(|state| state.effort.clone()),
+        model: payload
+            .model
+            .as_deref()
+            .map(canonical_model)
+            .or_else(|| prior.and_then(|state| state.model.clone())),
+        effort: payload
+            .effort
+            .clone()
+            .or_else(|| prior.and_then(|state| state.effort.clone())),
         context_pct: prior.and_then(|state| state.context_pct),
         context_window: prior.and_then(|state| state.context_window),
         total_tokens: prior.and_then(|state| state.total_tokens),

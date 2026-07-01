@@ -226,9 +226,18 @@ pub(super) fn agent_identity_line(
 /// out-of-band runtime reading and falls back to the row's carried/default
 /// window.
 pub(super) fn display_context_window(row: &SidebarRow) -> Option<u64> {
-    ctx(row)
-        .and_then(|context| context.tokens.as_ref())
-        .and_then(|tokens| tokens.context_window_size)
-        .or_else(|| agent(row).and_then(|agent| agent.context_window))
+    agent(row)
+        .and_then(|agent| {
+            agent
+                .context
+                .as_ref()
+                .and_then(|context| context.tokens.as_ref())
+                .and_then(|tokens| tokens.context_window_size)
+                .or(agent.context_window)
+                .or_else(|| {
+                    crate::agents::descriptor_by_kind(row.name.as_str())
+                        .and_then(|descriptor| descriptor.default_context_window)
+                })
+        })
         .filter(|window| *window > 0)
 }

@@ -79,6 +79,30 @@ fn render_agent_capability_and_window() {
 }
 
 #[test]
+fn render_agent_capability_uses_descriptor_default_window() {
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("resting"),
+    );
+    codex.model = Some("gpt-5.5-codex".to_owned());
+    codex.effort = Some("xhigh".to_owned());
+    assert!(codex.context_window.is_none());
+    assert!(codex.context.is_none());
+    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+
+    let rendered = snapshot_to_screen(&snapshot, 44, 15);
+
+    assert!(
+        rendered.contains("GPT 5.5 Codex · 272k"),
+        "the identity line falls back to the Codex descriptor window:\n{rendered}"
+    );
+}
+
+#[test]
 fn capability_cluster_requires_a_resolved_model() {
     // The window is the model's window and effort configures that model, so with
     // no model resolved yet (a Codex session before its app-server context
