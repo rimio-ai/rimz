@@ -16,23 +16,23 @@ pub const DEFAULT_AUTO_CONTINUE_BACKOFF_SECS: &[u64] = &[60, 180, 300];
 /// and leaves the row parked.
 pub const DEFAULT_AUTO_CONTINUE_MAX_RETRIES: u32 = 13;
 
-/// Resume behavior, in two tenses. On an involuntary session *rebirth* —
-/// reboot, multiplexer crash, or a Rimz-initiated rebirth of a stuck room —
-/// Rimz offers to re-seed prior agents from the durable rollup; the prompt
-/// defaults to recovery, and non-interactive starts recover. A deliberate
-/// agent close — clean quit, or tab/pane close while the room remains live —
-/// records the end trace and runs marked-worktree cleanup when present; only
-/// mux loss keeps the agent recoverable. Manual `rimz reset` starts fresh.
-/// While the room is *live*,
+/// Resume behavior, in two tenses. On session *rebirth* after a machine reboot
+/// — the machine boot id changed since the room was last alive — Rimz offers
+/// to re-seed prior agents from the durable rollup; the prompt defaults to
+/// recovery, and non-interactive starts recover. A deliberate agent close —
+/// clean quit, tab/pane close while the room remains live, or a whole-room
+/// close down to `rimzd` while the machine stays up — keeps agents out of
+/// recovery. A multiplexer crash without a reboot starts bare. Empty named
+/// channel tabs still reopen, and manual `rimz reset` starts fresh. While the room is *live*,
 /// opt-in auto-continue picks a parked agent's turn back up after a rate-limit
 /// window resets or a non-clocked retry backoff elapses. Backend-neutral product
 /// behavior the cli and producer read directly, not a multiplexer preference.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ResumeConfig {
-    /// Offer to re-seed prior agents on session birth. The interactive prompt
-    /// defaults yes, non-interactive starts recover, and `--no-resume` overrides
-    /// it per-invocation for a deliberately fresh start.
+    /// Offer to re-seed prior agents on session birth after a machine reboot.
+    /// The interactive prompt defaults yes, non-interactive starts recover, and
+    /// `--no-resume` overrides it per-invocation for a deliberately fresh start.
     pub on_rebirth: bool,
     /// Ceiling on agents auto-resumed into one reborn session, bounding the
     /// processes a long-lived workspace launches at birth. Overflow is reported,

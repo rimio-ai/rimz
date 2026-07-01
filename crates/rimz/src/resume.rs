@@ -1,10 +1,10 @@
 //! Resume-on-rebirth planning: turn the durable agent rollup into the tabs a
 //! reborn session re-seeds.
 //!
-//! When a multiplexer session dies — reboot, server crash, or a Rimz-initiated
-//! rebirth of a stuck room — the agents' processes are gone, but the ledger
-//! remembers them. This module reads that memory (the audit rollup, which keeps
-//! the dead-process agents the runtime projection would expel) and plans one
+//! When the CLI admits agent recovery for a reborn room — a machine reboot by
+//! default — the agents' processes are gone, but the ledger remembers them.
+//! This module reads that memory (the audit rollup, which keeps the
+//! dead-process agents the runtime projection would expel) and plans one
 //! `#channel` tab per worktree, with one resume pane per prior root agent, so
 //! the next birth can recover where the user left off instead of empty.
 //!

@@ -66,7 +66,10 @@ use attach_exec::{
 };
 use daemon_view::{build_daemon_view, maybe_launch_remote_control};
 use hook_install::ensure_detected_agent_hooks;
-use resume::{plan_room_resume, record_rebirth_boundary, report_resume, session_is_healthy_live};
+use resume::{
+    plan_room_resume, reboot_since_last_birth, record_rebirth_boundary, report_resume,
+    session_is_healthy_live,
+};
 use room_recovery::gate_room_before_attach;
 use session_record::{pick_mux_for_session, retire_renamed_session, workspace_record_for_session};
 use start_notice::report_start_notices;
@@ -993,17 +996,24 @@ fn resume_plan_for_birth(
     if was_live {
         return Ok(rimz::resume::ResumePlan::default());
     }
-    let plan = plan_room_resume(workspace_id, session_name, resume_cfg, no_resume);
+    let recover_agents = reboot_since_last_birth(workspace_id);
+    let plan = plan_room_resume(
+        workspace_id,
+        session_name,
+        resume_cfg,
+        no_resume,
+        recover_agents,
+    );
     let plan = prompt_recover_or_fresh(plan)?;
     record_rebirth_boundary(workspace_id, session_name);
     Ok(plan)
 }
 
 fn prompt_recover_or_fresh(plan: rimz::resume::ResumePlan) -> Result<rimz::resume::ResumePlan> {
-    if plan.is_empty() || !std::io::stdin().is_terminal() {
+    let agents = plan.tabs.iter().map(|tab| tab.panes.len()).sum::<usize>();
+    if agents == 0 || !std::io::stdin().is_terminal() {
         return Ok(plan);
     }
-    let agents = plan.tabs.iter().map(|tab| tab.panes.len()).sum::<usize>();
     let labels = plan
         .tabs
         .iter()

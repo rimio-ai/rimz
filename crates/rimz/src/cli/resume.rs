@@ -23,16 +23,88 @@ pub(super) fn session_is_live(backend: &dyn MuxBackend, session_name: &str) -> b
         .unwrap_or(false)
 }
 
-/// Plan the agents a reborn session re-seeds, reading the durable *audit*
-/// rollup — the one that keeps the dead-process agents a runtime read would
-/// expel, which is exactly the set a rebirth must bring back. Best-effort: a
-/// disabled feature, the `--no-resume` override, or any ledger read error yields
-/// an empty plan (the birth comes up bare) and never blocks the launch.
+#[cfg(target_os = "linux")]
+fn boot_id() -> Option<String> {
+    std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .ok()
+        .and_then(|id| non_empty_trimmed(&id))
+}
+
+#[cfg(target_os = "macos")]
+fn boot_id() -> Option<String> {
+    std::process::Command::new("sysctl")
+        .args(["-n", "kern.bootsessionuuid"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|id| non_empty_trimmed(&id))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn boot_id() -> Option<String> {
+    None
+}
+
+fn non_empty_trimmed(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct BootMarker {
+    boot_id: String,
+}
+
+fn read_boot_marker(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let marker = serde_json::from_slice::<BootMarker>(&bytes).ok()?;
+    non_empty_trimmed(&marker.boot_id)
+}
+
+fn write_boot_marker(path: &Path, boot_id: &str) {
+    let marker = BootMarker {
+        boot_id: boot_id.to_owned(),
+    };
+    if let Err(err) = rimz::ledger::atomic::write_temp_then_rename_cache(path, &marker) {
+        tracing::debug!(
+            path = %path.display(),
+            error = %err,
+            "boot marker write skipped",
+        );
+    }
+}
+
+fn boot_changed(previous: Option<&str>, current: Option<&str>) -> bool {
+    match (previous, current) {
+        (Some(previous), Some(current)) => previous != current,
+        _ => true,
+    }
+}
+
+pub(super) fn reboot_since_last_birth(workspace_id: &rimz::WorkspaceId) -> bool {
+    let Ok(paths) = StatePaths::for_workspace(workspace_id.clone()) else {
+        return true;
+    };
+    let previous = read_boot_marker(&paths.boot_marker);
+    let current = boot_id();
+    if let Some(current) = current.as_deref() {
+        write_boot_marker(&paths.boot_marker, current);
+    }
+    boot_changed(previous.as_deref(), current.as_deref())
+}
+
+/// Plan a reborn session. Prior agents are re-seeded only when the caller's
+/// reboot gate is open, using the durable *audit* rollup — the one that keeps
+/// the dead-process agents a runtime read would expel. Empty named channel tabs
+/// restore on every ordinary rebirth. Best-effort: disabled recovery,
+/// `--no-resume`, or any planning read error never blocks the launch.
 pub(super) fn plan_room_resume(
     workspace_id: &rimz::WorkspaceId,
     session_name: &str,
     resume_cfg: &rimz::config::ResumeConfig,
     disabled: bool,
+    recover_agents: bool,
 ) -> rimz::resume::ResumePlan {
     if disabled || !resume_cfg.on_rebirth {
         return rimz::resume::ResumePlan::default();
@@ -40,25 +112,57 @@ pub(super) fn plan_room_resume(
     let planned = (|| -> Result<rimz::resume::ResumePlan> {
         let paths = StatePaths::for_workspace(workspace_id.clone())?;
         let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
-        let ledger = Ledger::open(paths.clone(), runtime)?;
-        let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
-        let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
-        let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
-        let mut plan = rimz::resume::plan_resume(
-            &projection.agents,
-            &ended,
-            resume_cfg.max,
-            |path| path.is_dir(),
-            &rimz_bin,
-        );
-        add_empty_named_channel_tabs(&paths, &mut plan);
-        record_worktree_gone_tombstones(&ledger, workspace_id, session_name, &plan);
-        Ok(plan)
+        plan_room_resume_at(&paths, &runtime, session_name, resume_cfg, recover_agents)
     })();
     planned.unwrap_or_else(|err| {
         tracing::warn!(workspace = %workspace_id, error = %err, "resume planning skipped");
         rimz::resume::ResumePlan::default()
     })
+}
+
+fn plan_room_resume_at(
+    paths: &StatePaths,
+    runtime: &RuntimePaths,
+    session_name: &str,
+    resume_cfg: &rimz::config::ResumeConfig,
+    recover_agents: bool,
+) -> Result<rimz::resume::ResumePlan> {
+    let mut plan = rimz::resume::ResumePlan::default();
+    if recover_agents {
+        match plan_agent_resume_at(paths, runtime, session_name, resume_cfg) {
+            Ok(agent_plan) => plan = agent_plan,
+            Err(err) => {
+                tracing::warn!(
+                    workspace = %paths.workspace_id,
+                    error = %err,
+                    "agent resume planning skipped",
+                );
+            }
+        }
+    }
+    add_empty_named_channel_tabs(paths, &mut plan);
+    Ok(plan)
+}
+
+fn plan_agent_resume_at(
+    paths: &StatePaths,
+    runtime: &RuntimePaths,
+    session_name: &str,
+    resume_cfg: &rimz::config::ResumeConfig,
+) -> Result<rimz::resume::ResumePlan> {
+    let ledger = Ledger::open(paths.clone(), runtime.clone())?;
+    let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
+    let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
+    let plan = rimz::resume::plan_resume(
+        &projection.agents,
+        &ended,
+        resume_cfg.max,
+        |path| path.is_dir(),
+        &rimz_bin,
+    );
+    record_worktree_gone_tombstones(&ledger, &paths.workspace_id, session_name, &plan);
+    Ok(plan)
 }
 
 fn add_empty_named_channel_tabs(paths: &StatePaths, plan: &mut rimz::resume::ResumePlan) {
@@ -171,5 +275,87 @@ fn record_worktree_gone_tombstones(
                 "resume: could not tombstone missing-worktree agent",
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::ids::{MuxName, PaneId};
+
+    #[test]
+    fn boot_changed_opens_only_on_unknown_or_different_boot() {
+        assert!(!boot_changed(Some("boot-a"), Some("boot-a")));
+        assert!(boot_changed(Some("boot-a"), Some("boot-b")));
+        assert!(boot_changed(None, Some("boot-a")));
+        assert!(boot_changed(Some("boot-a"), None));
+    }
+
+    #[test]
+    fn boot_marker_round_trips_and_ignores_unreadable_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("boot.json");
+
+        assert_eq!(read_boot_marker(&path), None);
+        write_boot_marker(&path, "boot-a");
+        assert_eq!(read_boot_marker(&path), Some("boot-a".to_owned()));
+
+        std::fs::write(&path, b"not-json").expect("write garbage");
+        assert_eq!(read_boot_marker(&path), None);
+    }
+
+    #[test]
+    fn plan_room_resume_at_recovery_gate_controls_agent_seeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
+        let state_root = dir.path().join("state");
+        let runtime_root = dir.path().join("runtime");
+        let paths = StatePaths::under(workspace_id.clone(), &state_root).expect("state paths");
+        let runtime =
+            RuntimePaths::under(workspace_id.clone(), &runtime_root).expect("runtime paths");
+        paths.ensure_dirs().expect("state dirs");
+        let ledger = Ledger::open(paths.clone(), runtime.clone()).expect("open ledger");
+        let worktree = dir.path().join("worktree");
+        std::fs::create_dir_all(&worktree).expect("worktree");
+        let mut observation =
+            AgentLifecycleObservation::new(Some("sess-claude".into()), LifecycleSignal::Registered);
+        observation.agent_name = Some("warm-drift".to_owned());
+        observation.worktree_path = Some(worktree.display().to_string());
+        observation.worktree_branch = Some("feature".to_owned());
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%99"));
+        ledger
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                workspace_id,
+                "rimz-test",
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .expect("append registered agent");
+
+        let blocked = plan_room_resume_at(
+            &paths,
+            &runtime,
+            "rimz-test",
+            &rimz::config::ResumeConfig::default(),
+            false,
+        )
+        .expect("plan with gate closed");
+        assert_eq!(agent_count(&blocked), 0);
+
+        let allowed = plan_room_resume_at(
+            &paths,
+            &runtime,
+            "rimz-test",
+            &rimz::config::ResumeConfig::default(),
+            true,
+        )
+        .expect("plan with gate open");
+        assert_eq!(agent_count(&allowed), 1);
+    }
+
+    fn agent_count(plan: &rimz::resume::ResumePlan) -> usize {
+        plan.tabs.iter().map(|tab| tab.panes.len()).sum()
     }
 }
