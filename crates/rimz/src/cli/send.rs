@@ -455,24 +455,12 @@ pub(crate) fn wait_for_message_until(
             .into_iter()
             .find(|message| message.message_id == *message_id)
         {
-            match message.status {
-                MessageStatus::Delivered
-                | MessageStatus::Errored
-                | MessageStatus::TimedOut
-                | MessageStatus::Removed
-                | MessageStatus::Abandoned
-                | MessageStatus::Archived => return Ok(message.status),
-                MessageStatus::Sent if Instant::now() >= deadline => {
-                    let timed_out =
-                        ledger.mark_message_timed_out(message_id, session_name, Some("wait"))?;
-                    return Ok(timed_out
-                        .map(|message| message.status)
-                        .unwrap_or(MessageStatus::TimedOut));
-                }
-                MessageStatus::Created
-                | MessageStatus::Queued
-                | MessageStatus::Claimed
-                | MessageStatus::Sent => {}
+            if message.status == MessageStatus::Sent && Instant::now() >= deadline {
+                let timed_out =
+                    ledger.mark_message_timed_out(message_id, session_name, Some("wait"))?;
+                return Ok(timed_out
+                    .map(|message| message.status)
+                    .unwrap_or(MessageStatus::TimedOut));
             }
         } else if let Some(status) = latest_terminal_message_status(ledger, message_id)? {
             return Ok(status);

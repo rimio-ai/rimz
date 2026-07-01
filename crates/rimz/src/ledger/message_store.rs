@@ -18,11 +18,6 @@ const LEGACY_TERMINAL_DIR: &str = "terminal";
 pub enum MessageStoreErr {
     #[error("message {0} not found")]
     NotFound(MessageId),
-    #[error("message {message_id} is not queued (status = {status})")]
-    NotPending {
-        message_id: MessageId,
-        status: MessageStatus,
-    },
     #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
     #[error("io error on {path}: {source}")]
