@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use rimz::ids::PaneId;
+use rimz::ids::{MuxName, PaneId};
 use rimz::mux::PaneListOptions;
 use rimz::pane::PaneRef;
 use rimz::proc::ProcInfo;
@@ -16,6 +16,15 @@ use crate::cli::render;
 const DEFAULT_LABEL_WIDTH: usize = 56;
 const UNAVAILABLE_NOTICE: &str =
     "rimz remote bandwidth needs /proc on the host serving the room (Linux host).";
+const NO_PANE_PIDS_NOTICE: &str = concat!(
+    "rimz remote bandwidth could not resolve any pane root process. ",
+    "On Zellij, a pane resolves only while it runs a live, uniquely named foreground process; ",
+    "idle look-alike shells are skipped."
+);
+const IO_UNREADABLE_NOTICE: &str = concat!(
+    "rimz remote bandwidth resolved pane processes but could not read /proc/<pid>/io. ",
+    "The room may be served by another user, or the kernel lacks CONFIG_TASK_IO_ACCOUNTING."
+);
 const REPORT_CAVEAT: &str =
     "process write-rate includes non-pty writes; muxes diff/throttle, so wire bytes <= this.";
 
@@ -60,7 +69,7 @@ pub(super) fn run(secs: u64, json: bool, globals: &GlobalFlags) -> Result<()> {
         .context("resolving the current room")?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
-    let panes = backend
+    let mut panes = backend
         .list_panes(PaneListOptions {
             session_name: Some(workspace.session_name.clone()),
             ..Default::default()
@@ -68,15 +77,37 @@ pub(super) fn run(secs: u64, json: bool, globals: &GlobalFlags) -> Result<()> {
         .panes;
     let proc_snapshot = rimz::proc::list_processes();
     if proc_snapshot.is_empty() {
-        return emit_unavailable(secs as f64, json);
+        return emit_unavailable(secs as f64, json, UNAVAILABLE_NOTICE);
     }
 
-    let profiles = pane_profiles(panes, &proc_snapshot);
+    let children = children_by_parent(&proc_snapshot);
+    if mux == MuxName::Zellij
+        && let Some(mut resolver) = rimz::mux::zellij::ZellijPaneResolver::new(
+            &proc_snapshot,
+            &children,
+            &workspace.session_name,
+            rimz::proc::own_uid(),
+        )
+    {
+        for pane in &mut panes {
+            if pane.pane_pid.is_none()
+                && let Some(command) = pane.command.as_deref()
+            {
+                pane.pane_pid =
+                    resolver.resolve(command, pane.cwd.as_deref(), &|pid| rimz::proc::cwd(pid));
+            }
+        }
+    }
+
+    let profiles = pane_profiles(panes, &children);
+    if profiles.is_empty() {
+        return emit_unavailable(secs as f64, json, NO_PANE_PIDS_NOTICE);
+    }
     let (t0, t0_reads) = sample_panes(&profiles);
     std::thread::sleep(Duration::from_secs(secs));
     let (t1, t1_reads) = sample_panes(&profiles);
     if t0_reads == 0 && t1_reads == 0 {
-        return emit_unavailable(secs as f64, json);
+        return emit_unavailable(secs as f64, json, IO_UNREADABLE_NOTICE);
     }
 
     let rows = sorted_rates(rates(&t0, &t1, secs as f64));
@@ -91,7 +122,7 @@ pub(super) fn run(secs: u64, json: bool, globals: &GlobalFlags) -> Result<()> {
     }
 }
 
-fn pane_profiles(panes: Vec<PaneRef>, procs: &[ProcInfo]) -> Vec<PaneProfile> {
+fn pane_profiles(panes: Vec<PaneRef>, children: &HashMap<u32, Vec<u32>>) -> Vec<PaneProfile> {
     panes
         .into_iter()
         .filter_map(|pane| {
@@ -100,7 +131,7 @@ fn pane_profiles(panes: Vec<PaneRef>, procs: &[ProcInfo]) -> Vec<PaneProfile> {
             Some(PaneProfile {
                 pane_id: pane.pane_id,
                 label,
-                pids: subtree_pids(procs, root),
+                pids: subtree_pids(children, root),
             })
         })
         .collect()
@@ -157,15 +188,18 @@ fn sample_panes(profiles: &[PaneProfile]) -> (Vec<PaneSample>, usize) {
     (samples, readable)
 }
 
-fn subtree_pids(procs: &[ProcInfo], root: u32) -> Vec<u32> {
-    let mut children_by_parent: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+fn children_by_parent(procs: &[ProcInfo]) -> HashMap<u32, Vec<u32>> {
+    let mut children = HashMap::new();
     for proc in procs {
-        children_by_parent
+        children
             .entry(proc.ppid)
-            .or_default()
+            .or_insert_with(Vec::new)
             .push(proc.pid);
     }
+    children
+}
 
+fn subtree_pids(children_by_parent: &HashMap<u32, Vec<u32>>, root: u32) -> Vec<u32> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     let mut queue = VecDeque::from([root]);
@@ -315,13 +349,13 @@ fn fmt_secs(secs: f64) -> String {
     format!("{text}s")
 }
 
-fn emit_unavailable(secs: f64, json: bool) -> Result<()> {
+fn emit_unavailable(secs: f64, json: bool, notice: &'static str) -> Result<()> {
     let rows = Vec::new();
     if json {
-        return print_json(false, secs, 0, &rows, Some(UNAVAILABLE_NOTICE));
+        return print_json(false, secs, 0, &rows, Some(notice));
     }
     let mut out = render::out();
-    writeln!(out, "{UNAVAILABLE_NOTICE}").context("writing bandwidth notice")
+    writeln!(out, "{notice}").context("writing bandwidth notice")
 }
 
 fn print_json(
@@ -386,12 +420,15 @@ mod tests {
             proc(21, 20),
         ];
 
-        assert_eq!(subtree_pids(&procs, 10), vec![10, 11, 13, 12]);
+        assert_eq!(
+            subtree_pids(&children_by_parent(&procs), 10),
+            vec![10, 11, 13, 12]
+        );
     }
 
     #[test]
     fn subtree_pids_includes_missing_root() {
-        assert_eq!(subtree_pids(&[], 42), vec![42]);
+        assert_eq!(subtree_pids(&HashMap::new(), 42), vec![42]);
     }
 
     #[test]

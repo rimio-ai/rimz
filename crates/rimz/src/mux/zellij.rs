@@ -11,6 +11,7 @@
 
 mod backend;
 mod layout;
+mod pane_pid;
 mod parse;
 mod presence;
 mod raw_pane;
@@ -18,6 +19,8 @@ mod session;
 mod sidebar;
 pub mod socket;
 
+#[doc(hidden)]
+pub use pane_pid::ZellijPaneResolver;
 pub use presence::presence_plugin_path;
 pub use socket::{socket_headroom, socket_preflight};
 

@@ -14,9 +14,9 @@ use crate::sidebar::timing::{METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMP
 
 mod zellij;
 
-pub(super) use zellij::backfill_zellij_pane_pids_from_proc;
 #[cfg(test)]
-use zellij::{backfill_zellij_pane_pids, resolve_candidate_root};
+use zellij::backfill_zellij_pane_pids;
+pub(super) use zellij::backfill_zellij_pane_pids_from_proc;
 
 const METRICS_SAMPLE_VERSION: u8 = 2;
 

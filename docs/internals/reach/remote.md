@@ -32,13 +32,13 @@ The schema is versioned as `rimz.link.v1`. The remote ingest writes `<runtime>/<
 
 ## Bandwidth Attribution
 
-`rimz remote bandwidth --secs 5` samples the room it runs in and reports each pane's process write-rate. Run it on the host serving the room: locally for a local room, or inside a remote shell/pane after attaching over SSH. The command resolves the current workspace session, lists panes through the selected backend, pins each pane's root process tree at the start of the window, reads `/proc/<pid>/io` `wchar` before and after the sleep, and prints per-pane bytes/s plus a total.
+`rimz remote bandwidth --secs 5` samples the room it runs in and reports each pane's process write-rate. Run it on the host serving the room as the room's user: locally for a local room, or inside a remote shell/pane after attaching over SSH. The command resolves the current workspace session, lists panes through the selected backend, pins each pane's root process tree at the start of the window, reads `/proc/<pid>/io` `wchar` before and after the sleep, and prints per-pane bytes/s plus a total. Run it without `sudo`, because privilege escalation resets backend and socket resolution away from the room.
 
-The report is best-effort Linux host observability. Hosts without `/proc`, unreadable proc entries, or panes without reported process ids return a clear notice or omit the unreadable process from that pane's sum. The sampler pins the process tree at the first snapshot, so short-lived children born during the window can escape the sample; a longer window catches persistent high-churn TUIs.
+The report is best-effort Linux host observability. Hosts without `/proc` return the Linux-host notice. A room whose panes cannot be resolved to root processes returns the no-pane-pids notice; on Zellij the resolver uses the same `/proc` matcher as the sidebar, so active uniquely named foreground commands bind and idle look-alike shells abstain. A room whose root processes resolve but whose `/proc/<pid>/io` entries cannot be read returns the io-unreadable notice; otherwise unreadable child entries are omitted from that pane's sum. The sampler pins the process tree at the first snapshot, so short-lived children born during the window can escape the sample; a longer window catches persistent high-churn TUIs.
 
 The figures are process write-rate, including terminal output and non-pty writes such as transcript files. Multiplexers diff and throttle the final render stream, so SSH wire bytes are at or below the per-pane sum. The number still identifies the culprit pane for the usual remote-bandwidth problem: hosted full-screen TUIs repainting while visible.
 
-Tmux can provide a pty-exact future path with `pipe-pane`, but that precision is tmux-only. The current command keeps the backend-parity path by using the per-pane process id both Zellij and tmux expose.
+Tmux fills pane root pids natively. Zellij pane pids are resolved from `/proc` by matching each pane's foreground command inside the session server's process forest, shared with the sidebar metrics path. Tmux can provide a pty-exact future path with `pipe-pane`, but that precision is tmux-only; the current command keeps the backend-parity path by sampling per-pane process trees.
 
 ## User Signals
 

@@ -60,7 +60,7 @@ A raw target is `[user@]host:<session-or-path>`. After the colon, a value contai
 - `remote connect --reset` and `remote reset` pass `--no-resume` to the remote `rimz`, so a remote room comes up empty instead of recovering; `remote add --no-resume` saves that birth behavior.
 - `--attach`, `--no-attach`, and `--print` mirror local behavior; `--print` emits the SSH command instead of running it.
 - For `remote add` and `remote update`, `--mux` is saved on the alias only when scoped to `remote`, `add`, or `update` (`rimz remote add --mux tmux …`); a top-level `rimz --mux tmux remote add …` affects only that invocation.
-- `rimz remote bandwidth [--secs N] [--json]` runs on the host serving the room and samples `/proc` to attribute per-pane process write-rate. Use it inside the room when a remote attach looks chatty; full-screen TUIs such as agents mid-turn or system monitors should dominate the report.
+- `rimz remote bandwidth [--secs N] [--json]` runs on the host serving the room and samples `/proc` to attribute per-pane process write-rate on both backends; tmux reports pane pids natively, and Zellij pane pids resolve through `/proc`. Use it inside the room when a remote attach looks chatty; full-screen TUIs such as agents mid-turn or system monitors should dominate the report.
 
 Link-health, reconnect mechanics, and bandwidth attribution are in [remote.md](../../internals/reach/remote.md).
 

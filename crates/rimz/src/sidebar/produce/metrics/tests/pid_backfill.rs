@@ -1,33 +1,6 @@
 use super::*;
 
 #[test]
-fn resolve_candidate_root_handles_empty_unique_and_cwd_narrowing() {
-    assert_eq!(
-        resolve_candidate_root(&[], Some("/repo"), &|_| {
-            panic!("empty candidates do not need cwd")
-        }),
-        None
-    );
-
-    assert_eq!(
-        resolve_candidate_root(&[(300, 200), (301, 200)], None, &|_| {
-            panic!("one root does not need cwd")
-        }),
-        Some(200)
-    );
-
-    let candidates = [(300, 200), (310, 210)];
-    assert_eq!(
-        resolve_candidate_root(&candidates, Some("/repo/feature"), &|pid| match pid {
-            300 => Some(PathBuf::from("/repo/main")),
-            310 => Some(PathBuf::from("/repo/feature")),
-            _ => None,
-        }),
-        Some(210)
-    );
-}
-
-#[test]
 fn unique_foreground_match_backfills_the_pane_root() {
     // The htop pane: Zellij reports the foreground cmdline; the matcher
     // finds the one forest process with it and binds the pane to its root
