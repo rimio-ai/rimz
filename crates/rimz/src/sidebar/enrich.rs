@@ -507,15 +507,12 @@ fn log_lazy_pairing_ambiguities(
     lazy_pairings: &LazyAgentPairingResult,
 ) {
     for pairing in lazy_pairings.diagnostics() {
-        crate::diag::binding::append(
-            runtime,
-            &ProducerBindingFallbackLog {
-                event: "producer_lazy_agent_pairing",
-                at: Timestamp::now(),
-                workspace_id: &snapshot.workspace_id,
-                pairing,
-            },
-        );
+        crate::diag::binding::log(runtime).append(&ProducerBindingFallbackLog {
+            event: "producer_lazy_agent_pairing",
+            at: Timestamp::now(),
+            workspace_id: &snapshot.workspace_id,
+            pairing,
+        });
     }
 }
 

@@ -11,14 +11,16 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::ids::{PaneId, SidebarInstanceId, WorkspaceId};
-use crate::schema::diag::{DiagEnvelope, DiagEvent, GroupIdentity};
+use crate::ids::{SidebarInstanceId, WorkspaceId};
+use crate::schema::diag::{DiagEnvelope, DiagEvent};
 use crate::schema::notify_trace::{NotifyTraceEnvelope, NotifyTraceEvent};
 
 pub mod binding;
 mod notify;
 pub mod plugin_presence;
 pub(crate) mod rotating;
+
+pub use rotating::JsonlLog;
 
 const DIAG_LOG_NAME: &str = "diag.log.jsonl";
 const DIAG_LOG_MAX_BYTES: u64 = 1_048_576;
@@ -35,13 +37,52 @@ pub struct DiagSink {
     workspace_id: WorkspaceId,
     session_name: String,
     instance_id: Option<SidebarInstanceId>,
-    limiter: Arc<Mutex<HashMap<String, LimiterEntry>>>,
+    limiter: Arc<Mutex<Limiter>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Limiter {
+    window: Duration,
+    entries: HashMap<String, LimiterEntry>,
 }
 
 #[derive(Clone, Debug, Default)]
 struct LimiterEntry {
     last_emit_ms: Option<u64>,
     suppressed: u32,
+}
+
+impl Limiter {
+    pub(crate) fn new(window: Duration) -> Self {
+        Self {
+            window,
+            entries: HashMap::new(),
+        }
+    }
+
+    /// Returns `Some(suppressed_since_last)` when `key` may emit now; `None`
+    /// when the emission is suppressed.
+    pub(crate) fn allow(&mut self, key: &str, at_ms: u64) -> Option<u32> {
+        let window_ms = self.window.as_millis() as u64;
+        self.entries.retain(|entry_key, entry| {
+            entry_key == key
+                || entry.suppressed > 0
+                || entry
+                    .last_emit_ms
+                    .is_some_and(|last| at_ms.saturating_sub(last) < window_ms)
+        });
+        let entry = self.entries.entry(key.to_owned()).or_default();
+        if entry
+            .last_emit_ms
+            .is_some_and(|last| at_ms.saturating_sub(last) < window_ms)
+        {
+            entry.suppressed = entry.suppressed.saturating_add(1);
+            return None;
+        }
+        let suppressed = std::mem::take(&mut entry.suppressed);
+        entry.last_emit_ms = Some(at_ms);
+        Some(suppressed)
+    }
 }
 
 impl DiagSink {
@@ -76,7 +117,7 @@ impl DiagSink {
             workspace_id,
             session_name: session_name.into(),
             instance_id,
-            limiter: Arc::new(Mutex::new(HashMap::new())),
+            limiter: Arc::new(Mutex::new(Limiter::new(DIAG_RATE_LIMIT_WINDOW))),
         }
     }
 
@@ -128,7 +169,7 @@ impl DiagSink {
             at_ms,
             event,
         );
-        notify::append(&self.state_root, &envelope);
+        notify::log(&self.state_root).append(&envelope);
     }
 
     pub fn capture_frame_pair<T: Serialize>(
@@ -159,7 +200,6 @@ impl DiagSink {
     }
 
     fn append(&self, event: DiagEvent, at_ms: u64, suppressed_since_last: u32) {
-        let path = self.log_path();
         let envelope = DiagEnvelope::new(
             self.workspace_id.clone(),
             self.session_name.clone(),
@@ -168,9 +208,7 @@ impl DiagSink {
             event,
         )
         .with_suppressed(suppressed_since_last);
-        if let Err(err) = rotating::append_rotating_jsonl(&path, DIAG_LOG_MAX_BYTES, &envelope) {
-            tracing::debug!(path = %path.display(), error = %err, "diagnostic append failed");
-        }
+        rotating::JsonlLog::new(self.log_path(), DIAG_LOG_MAX_BYTES).append(&envelope);
     }
 
     fn suppression(&self, event: &DiagEvent, at_ms: u64) -> Option<u32> {
@@ -178,25 +216,7 @@ impl DiagSink {
         let Ok(mut limiter) = self.limiter.lock() else {
             return Some(0);
         };
-        let window_ms = DIAG_RATE_LIMIT_WINDOW.as_millis() as u64;
-        limiter.retain(|entry_key, entry| {
-            entry_key == &key
-                || entry.suppressed > 0
-                || entry
-                    .last_emit_ms
-                    .is_some_and(|last| at_ms.saturating_sub(last) < window_ms)
-        });
-        let entry = limiter.entry(key).or_default();
-        if entry
-            .last_emit_ms
-            .is_some_and(|last| at_ms.saturating_sub(last) < window_ms)
-        {
-            entry.suppressed = entry.suppressed.saturating_add(1);
-            return None;
-        }
-        let suppressed = std::mem::take(&mut entry.suppressed);
-        entry.last_emit_ms = Some(at_ms);
-        Some(suppressed)
+        limiter.allow(&key, at_ms)
     }
 }
 
@@ -235,73 +255,6 @@ pub fn recent_records(
         records.drain(..records.len() - limit);
     }
     Some((path, records))
-}
-
-pub fn diff_group_migrations(
-    prev: &crate::SidebarSnapshot,
-    next: &crate::SidebarSnapshot,
-) -> Vec<DiagEvent> {
-    let prev_rows = rows_by_pane(prev);
-    let next_rows = rows_by_pane(next);
-    let mut events = Vec::new();
-    for (pane_id, next_group) in next_rows {
-        let Some(prev_group) = prev_rows.get(&pane_id) else {
-            continue;
-        };
-        // A group migration is a row moving between groups. A cwd that changes
-        // while the group identity holds (e.g. a worktree pane whose cwd flaps
-        // between two paths that both fold to `external`) is not a migration —
-        // gating on cwd here recorded spurious `external -> external` self-moves.
-        if prev_group.group == next_group.group {
-            continue;
-        }
-        events.push(DiagEvent::GroupMigration {
-            pane_id,
-            from: prev_group.group.clone(),
-            to: next_group.group,
-            cwd_before: prev_group.cwd.clone(),
-            cwd_after: next_group.cwd,
-        });
-    }
-    events
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RowLocation {
-    group: GroupIdentity,
-    cwd: Option<String>,
-}
-
-fn rows_by_pane(snapshot: &crate::SidebarSnapshot) -> HashMap<PaneId, RowLocation> {
-    let mut rows = HashMap::new();
-    for group in &snapshot.worktree_groups {
-        let identity = GroupIdentity {
-            kind: worktree_kind_name(group.kind).to_owned(),
-            key: group.key.clone(),
-        };
-        for row in &group.rows {
-            let Some(pane) = row.pane.as_ref() else {
-                continue;
-            };
-            rows.insert(
-                pane.pane_id.clone(),
-                RowLocation {
-                    group: identity.clone(),
-                    cwd: pane.cwd.clone(),
-                },
-            );
-        }
-    }
-    rows
-}
-
-fn worktree_kind_name(kind: crate::SidebarWorktreeKind) -> &'static str {
-    match kind {
-        crate::SidebarWorktreeKind::Channel => "channel",
-        crate::SidebarWorktreeKind::Worktree => "worktree",
-        crate::SidebarWorktreeKind::Root => "root",
-        crate::SidebarWorktreeKind::External => "external",
-    }
 }
 
 fn ensure_private_dir(path: &Path) -> std::io::Result<()> {
@@ -366,7 +319,7 @@ fn rotated_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::{MuxName, WorkspaceId};
+    use crate::ids::{MuxName, PaneId, WorkspaceId};
     use crate::schema::diag::FrameRejectReason;
 
     fn sink(dir: &Path) -> DiagSink {
@@ -523,85 +476,6 @@ mod tests {
 
         let text = std::fs::read_to_string(sink.log_path()).unwrap();
         assert_eq!(text.lines().count(), 2);
-    }
-
-    fn snapshot_in_group(
-        kind: crate::SidebarWorktreeKind,
-        key: &str,
-        pane: &str,
-        cwd: Option<&str>,
-    ) -> crate::SidebarSnapshot {
-        let mut pane_ref = crate::pane::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, pane));
-        pane_ref.cwd = cwd.map(ToOwned::to_owned);
-        let row = crate::SidebarRow {
-            id: pane.to_owned(),
-            name: pane.to_owned(),
-            pane: Some(pane_ref),
-            worktree_path: None,
-            worktree_branch: None,
-            channel: None,
-            unread: false,
-            inactive: false,
-            last_activity: jiff::Timestamp::from_second(1_000).unwrap(),
-            card: crate::RowCard::Process(crate::ProcessCard::default()),
-        };
-        let group = crate::SidebarWorktreeGroup {
-            key: key.to_owned(),
-            label: key.to_owned(),
-            kind,
-            status_counts: Vec::new(),
-            rows: vec![row],
-            hidden_count: 0,
-            diff_added: None,
-            diff_removed: None,
-            commits_ahead: None,
-            commits_behind: None,
-            trunk: None,
-            clean: None,
-            landed: None,
-            trunk_sync: None,
-            pr_state: None,
-        };
-        let mut snapshot = crate::SidebarSnapshot::build_with_agents(
-            WorkspaceId::from_project_root(Path::new("/repo")),
-            Vec::new(),
-            Vec::new(),
-            jiff::Timestamp::from_second(1_000).unwrap(),
-        );
-        snapshot.worktree_groups = vec![group];
-        snapshot
-    }
-
-    #[test]
-    fn cwd_flap_within_one_group_is_not_a_migration() {
-        use crate::SidebarWorktreeKind::External;
-        // The pane stays in the `external` group while its cwd flaps between two
-        // out-of-project paths — a cwd change, not a row moving between groups.
-        let prev = snapshot_in_group(External, "external", "terminal_1", Some("/tmp/a"));
-        let next = snapshot_in_group(External, "external", "terminal_1", Some("/tmp/b"));
-
-        assert!(diff_group_migrations(&prev, &next).is_empty());
-    }
-
-    #[test]
-    fn moving_between_groups_records_one_migration() {
-        let prev = snapshot_in_group(
-            crate::SidebarWorktreeKind::External,
-            "external",
-            "terminal_1",
-            Some("/tmp/a"),
-        );
-        let next = snapshot_in_group(
-            crate::SidebarWorktreeKind::Worktree,
-            "/repo/feature",
-            "terminal_1",
-            Some("/repo/feature"),
-        );
-
-        assert!(matches!(
-            diff_group_migrations(&prev, &next).as_slice(),
-            [DiagEvent::GroupMigration { pane_id, .. }] if pane_id.raw() == "terminal_1"
-        ));
     }
 
     #[test]

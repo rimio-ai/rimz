@@ -124,6 +124,54 @@ fn row_snapshot_at(
     snap
 }
 
+fn snapshot_in_group(
+    kind: crate::SidebarWorktreeKind,
+    key: &str,
+    pane: &str,
+    cwd: Option<&str>,
+) -> SidebarSnapshot {
+    let mut pane_ref =
+        crate::pane::PaneRef::from_id(PaneId::from_parts(crate::MuxName::Zellij, pane));
+    pane_ref.cwd = cwd.map(ToOwned::to_owned);
+    let row = crate::SidebarRow {
+        id: pane.to_owned(),
+        name: pane.to_owned(),
+        pane: Some(pane_ref),
+        worktree_path: None,
+        worktree_branch: None,
+        channel: None,
+        unread: false,
+        inactive: false,
+        last_activity: jiff::Timestamp::from_second(1_000).unwrap(),
+        card: crate::RowCard::Process(crate::ProcessCard::default()),
+    };
+    let group = SidebarWorktreeGroup {
+        key: key.to_owned(),
+        label: key.to_owned(),
+        kind,
+        status_counts: Vec::new(),
+        rows: vec![row],
+        hidden_count: 0,
+        diff_added: None,
+        diff_removed: None,
+        commits_ahead: None,
+        commits_behind: None,
+        trunk: None,
+        clean: None,
+        landed: None,
+        trunk_sync: None,
+        pr_state: None,
+    };
+    let mut snapshot = SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        Vec::new(),
+        Vec::new(),
+        jiff::Timestamp::from_second(1_000).unwrap(),
+    );
+    snapshot.worktree_groups = vec![group];
+    snapshot
+}
+
 fn runtime_for(ws: &WorkspaceId) -> (tempfile::TempDir, RuntimePaths) {
     let dir = tempfile::TempDir::new().unwrap();
     let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
@@ -354,6 +402,38 @@ fn focus_event_resolves_contest_then_republished_contest_holds_clicked_baseline(
         Some(second),
         "after the focus event expires, a still-contested pull holds the clicked baseline",
     );
+}
+
+#[test]
+fn cwd_flap_within_one_group_is_not_a_migration() {
+    use crate::SidebarWorktreeKind::External;
+    // The pane stays in the `external` group while its cwd flaps between two
+    // out-of-project paths — a cwd change, not a row moving between groups.
+    let prev = snapshot_in_group(External, "external", "terminal_1", Some("/tmp/a"));
+    let next = snapshot_in_group(External, "external", "terminal_1", Some("/tmp/b"));
+
+    assert!(diff_group_migrations(&prev, &next).is_empty());
+}
+
+#[test]
+fn moving_between_groups_records_one_migration() {
+    let prev = snapshot_in_group(
+        crate::SidebarWorktreeKind::External,
+        "external",
+        "terminal_1",
+        Some("/tmp/a"),
+    );
+    let next = snapshot_in_group(
+        crate::SidebarWorktreeKind::Worktree,
+        "/repo/feature",
+        "terminal_1",
+        Some("/repo/feature"),
+    );
+
+    assert!(matches!(
+        diff_group_migrations(&prev, &next).as_slice(),
+        [DiagEvent::GroupMigration { pane_id, .. }] if pane_id.raw() == "terminal_1"
+    ));
 }
 
 #[test]

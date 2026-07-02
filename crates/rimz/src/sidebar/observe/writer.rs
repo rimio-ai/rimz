@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use jiff::Timestamp;
 
-use crate::diag::DiagSink;
+use crate::diag::{DiagSink, Limiter};
 use crate::ids::SidebarInstanceId;
 use crate::ledger::paths::RuntimePaths;
 use crate::schema::diag::DiagEvent;
@@ -32,7 +32,7 @@ pub fn spawn(
             runtime,
             sink,
             instance,
-            cooldowns: Cooldowns::default(),
+            cooldowns: Limiter::new(OBSERVE_COOLDOWN),
             latest_roster: None,
             last_crosscheck: Instant::now(),
             role: RoleCache::default(),
@@ -50,7 +50,7 @@ struct Writer {
     runtime: RuntimePaths,
     sink: DiagSink,
     instance: SidebarInstanceId,
-    cooldowns: Cooldowns,
+    cooldowns: Limiter,
     latest_roster: Option<RosterSig>,
     last_crosscheck: Instant,
     role: RoleCache,
@@ -74,7 +74,8 @@ impl Writer {
     }
 
     fn emit_anomaly(&mut self, draft: AnomalyDraft) {
-        let Some(suppressed_since_last) = self.cooldowns.allow(&draft.kind, draft.at_ms) else {
+        let Some(suppressed_since_last) = self.cooldowns.allow(draft.kind.key(), draft.at_ms)
+        else {
             return;
         };
         let role = self.role.current(&self.runtime, &self.instance);
@@ -140,34 +141,6 @@ impl RoleCache {
         }
         self.role.unwrap_or(ObserveRole::Consumer)
     }
-}
-
-#[derive(Default)]
-struct Cooldowns {
-    by_kind: BTreeMap<&'static str, Cooldown>,
-}
-
-impl Cooldowns {
-    fn allow(&mut self, kind: &AnomalyKind, at_ms: u64) -> Option<u32> {
-        let cooldown = self.by_kind.entry(kind.key()).or_default();
-        let window = OBSERVE_COOLDOWN.as_millis() as u64;
-        if cooldown
-            .last_emit_ms
-            .is_some_and(|last| at_ms.saturating_sub(last) < window)
-        {
-            cooldown.suppressed = cooldown.suppressed.saturating_add(1);
-            return None;
-        }
-        let suppressed = std::mem::take(&mut cooldown.suppressed);
-        cooldown.last_emit_ms = Some(at_ms);
-        Some(suppressed)
-    }
-}
-
-#[derive(Default)]
-struct Cooldown {
-    last_emit_ms: Option<u64>,
-    suppressed: u32,
 }
 
 pub fn compare_roster_to_frame(roster: &RosterSig, frame: &PaneFrame) -> Vec<AnomalyKind> {
@@ -380,15 +353,15 @@ mod tests {
 
     #[test]
     fn cooldown_suppresses_per_kind_and_flushes_count() {
-        let mut cooldowns = Cooldowns::default();
+        let mut cooldowns = Limiter::new(OBSERVE_COOLDOWN);
         let kind = AnomalyKind::DuplicateRowId {
             row_id: "a".to_owned(),
             count: 2,
         };
 
-        assert_eq!(cooldowns.allow(&kind, 1_000), Some(0));
-        assert_eq!(cooldowns.allow(&kind, 2_000), None);
-        assert_eq!(cooldowns.allow(&kind, 31_001), Some(1));
+        assert_eq!(cooldowns.allow(kind.key(), 1_000), Some(0));
+        assert_eq!(cooldowns.allow(kind.key(), 2_000), None);
+        assert_eq!(cooldowns.allow(kind.key(), 31_001), Some(1));
     }
 
     #[test]

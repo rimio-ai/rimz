@@ -7,22 +7,18 @@
 
 use std::path::PathBuf;
 
-use serde::Serialize;
-
+use super::JsonlLog;
 use crate::ledger::paths::RuntimePaths;
 
 const BINDING_LOG_NAME: &str = "binding.log.jsonl";
 const BINDING_LOG_MAX_BYTES: u64 = 1_048_576;
 
-pub fn path(runtime: &RuntimePaths) -> PathBuf {
+fn path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join(BINDING_LOG_NAME)
 }
 
-pub fn append<T: Serialize>(runtime: &RuntimePaths, record: &T) {
-    let path = path(runtime);
-    if let Err(err) = super::rotating::append_rotating_jsonl(&path, BINDING_LOG_MAX_BYTES, record) {
-        tracing::debug!(path = %path.display(), error = %err, "binding log append failed");
-    }
+pub fn log(runtime: &RuntimePaths) -> JsonlLog {
+    JsonlLog::new(path(runtime), BINDING_LOG_MAX_BYTES)
 }
 
 #[cfg(test)]
@@ -37,9 +33,10 @@ mod tests {
         let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
             .expect("runtime");
 
-        append(&runtime, &serde_json::json!({ "event": "selected" }));
+        let log = log(&runtime);
+        log.append(&serde_json::json!({ "event": "selected" }));
 
-        let bytes = std::fs::read_to_string(path(&runtime)).unwrap();
+        let bytes = std::fs::read_to_string(log.path()).unwrap();
         assert_eq!(bytes, "{\"event\":\"selected\"}\n");
     }
 }

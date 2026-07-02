@@ -14,6 +14,28 @@ use crate::ledger::atomic;
 
 const ROTATE_LOCK_STALE: Duration = Duration::from_secs(60);
 
+pub struct JsonlLog {
+    path: PathBuf,
+    max_bytes: u64,
+}
+
+impl JsonlLog {
+    pub fn new(path: PathBuf, max_bytes: u64) -> Self {
+        Self { path, max_bytes }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Appends best-effort; failures log at debug with the path.
+    pub fn append<T: Serialize>(&self, record: &T) {
+        if let Err(err) = append_rotating_jsonl(&self.path, self.max_bytes, record) {
+            tracing::debug!(path = %self.path.display(), error = %err, "diagnostic log append failed");
+        }
+    }
+}
+
 pub fn append_rotating_jsonl<T: Serialize>(
     path: &Path,
     max_bytes: u64,

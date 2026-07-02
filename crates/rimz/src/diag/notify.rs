@@ -8,22 +8,15 @@
 //! [`super::DiagSink`], which already carries the workspace identity to
 //! every emission site.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use serde::Serialize;
+use super::JsonlLog;
 
 const NOTIFY_LOG_NAME: &str = "notify.log.jsonl";
 const NOTIFY_LOG_MAX_BYTES: u64 = 1_048_576;
 
-pub fn path(state_root: &Path) -> PathBuf {
-    state_root.join(NOTIFY_LOG_NAME)
-}
-
-pub fn append<T: Serialize>(state_root: &Path, record: &T) {
-    let path = path(state_root);
-    if let Err(err) = super::rotating::append_rotating_jsonl(&path, NOTIFY_LOG_MAX_BYTES, record) {
-        tracing::debug!(path = %path.display(), error = %err, "notify trace append failed");
-    }
+pub fn log(state_root: &Path) -> JsonlLog {
+    JsonlLog::new(state_root.join(NOTIFY_LOG_NAME), NOTIFY_LOG_MAX_BYTES)
 }
 
 #[cfg(test)]
@@ -33,9 +26,10 @@ mod tests {
     #[test]
     fn append_writes_jsonl_record() {
         let dir = tempfile::tempdir().unwrap();
-        append(dir.path(), &serde_json::json!({ "event": "bell_ring" }));
+        let log = log(dir.path());
+        log.append(&serde_json::json!({ "event": "bell_ring" }));
 
-        let bytes = std::fs::read_to_string(path(dir.path())).unwrap();
+        let bytes = std::fs::read_to_string(log.path()).unwrap();
         assert_eq!(bytes, "{\"event\":\"bell_ring\"}\n");
     }
 }

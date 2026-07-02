@@ -124,15 +124,12 @@ pub fn log_path(state_root: &Path) -> PathBuf {
 
 pub fn append(record: &LoopRunRecord) {
     let state_root = state_home();
-    let path = log_path(&state_root);
-    if let Err(err) = append_to(&state_root, record) {
-        tracing::debug!(path = %path.display(), error = %err, "loop run log append failed");
-    }
+    append_to(&state_root, record);
 }
 
-fn append_to(state_root: &Path, record: &LoopRunRecord) -> std::io::Result<()> {
+fn append_to(state_root: &Path, record: &LoopRunRecord) {
     let capped = capped_record(record);
-    crate::diag::rotating::append_rotating_jsonl(&log_path(state_root), MAX_BYTES, &capped)
+    crate::diag::rotating::JsonlLog::new(log_path(state_root), MAX_BYTES).append(&capped);
 }
 
 pub fn stats(state_root: &Path) -> BTreeMap<String, LoopRunStats> {
@@ -242,8 +239,8 @@ mod tests {
     fn append_then_stats_round_trips_records() {
         let dir = tempfile::tempdir().expect("tempdir");
 
-        append_to(dir.path(), &record("wake", 10, LoopRunResult::Delivered)).expect("append 1");
-        append_to(dir.path(), &record("wake", 12, LoopRunResult::TargetGone)).expect("append 2");
+        append_to(dir.path(), &record("wake", 10, LoopRunResult::Delivered));
+        append_to(dir.path(), &record("wake", 12, LoopRunResult::TargetGone));
 
         let stats = stats(dir.path());
         let wake = stats.get("wake").expect("wake stats");
@@ -290,9 +287,8 @@ mod tests {
         with_detail.run_id = Some("run_0123456789abcdef0123456789abcdef".to_owned());
         with_detail.last_message = Some("last words".to_owned());
         with_detail.target = Some("@coder".to_owned());
-        append_to(dir.path(), &with_detail).expect("append detail");
-        append_to(dir.path(), &record("other", 11, LoopRunResult::Completed))
-            .expect("append other");
+        append_to(dir.path(), &with_detail);
+        append_to(dir.path(), &record("other", 11, LoopRunResult::Completed));
 
         assert_eq!(task_records(dir.path(), "wake"), vec![with_detail]);
     }
@@ -319,7 +315,7 @@ mod tests {
             output: "o".repeat(CHECK_OUTPUT_CAP + 20),
         });
 
-        append_to(dir.path(), &record).expect("append capped");
+        append_to(dir.path(), &record);
         let stored = task_records(dir.path(), "wake")
             .pop()
             .expect("stored record");

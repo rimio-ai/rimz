@@ -3,6 +3,10 @@
 //! `LoopState` owns fetch-outcome application; this module keeps the testable
 //! state reducer, diagnostics projection, and read-receipt helpers it calls.
 
+use std::collections::HashMap;
+
+use crate::ids::PaneId;
+use crate::schema::diag::{DiagEvent, GroupIdentity};
 use crate::{SidebarSnapshot, WorkspaceId};
 use jiff::Timestamp;
 
@@ -185,8 +189,72 @@ pub(super) fn emit_diagnostics(
         }
         _ => {}
     }
-    for event in crate::diag::diff_group_migrations(prev_snapshot, next_snapshot) {
+    for event in diff_group_migrations(prev_snapshot, next_snapshot) {
         diag.emit(event);
+    }
+}
+
+fn diff_group_migrations(prev: &SidebarSnapshot, next: &SidebarSnapshot) -> Vec<DiagEvent> {
+    let prev_rows = rows_by_pane(prev);
+    let next_rows = rows_by_pane(next);
+    let mut events = Vec::new();
+    for (pane_id, next_group) in next_rows {
+        let Some(prev_group) = prev_rows.get(&pane_id) else {
+            continue;
+        };
+        // A group migration is a row moving between groups. A cwd that changes
+        // while the group identity holds (e.g. a worktree pane whose cwd flaps
+        // between two paths that both fold to `external`) is not a migration —
+        // gating on cwd here recorded spurious `external -> external` self-moves.
+        if prev_group.group == next_group.group {
+            continue;
+        }
+        events.push(DiagEvent::GroupMigration {
+            pane_id,
+            from: prev_group.group.clone(),
+            to: next_group.group,
+            cwd_before: prev_group.cwd.clone(),
+            cwd_after: next_group.cwd,
+        });
+    }
+    events
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RowLocation {
+    group: GroupIdentity,
+    cwd: Option<String>,
+}
+
+fn rows_by_pane(snapshot: &SidebarSnapshot) -> HashMap<PaneId, RowLocation> {
+    let mut rows = HashMap::new();
+    for group in &snapshot.worktree_groups {
+        let identity = GroupIdentity {
+            kind: worktree_kind_name(group.kind).to_owned(),
+            key: group.key.clone(),
+        };
+        for row in &group.rows {
+            let Some(pane) = row.pane.as_ref() else {
+                continue;
+            };
+            rows.insert(
+                pane.pane_id.clone(),
+                RowLocation {
+                    group: identity.clone(),
+                    cwd: pane.cwd.clone(),
+                },
+            );
+        }
+    }
+    rows
+}
+
+fn worktree_kind_name(kind: crate::SidebarWorktreeKind) -> &'static str {
+    match kind {
+        crate::SidebarWorktreeKind::Channel => "channel",
+        crate::SidebarWorktreeKind::Worktree => "worktree",
+        crate::SidebarWorktreeKind::Root => "root",
+        crate::SidebarWorktreeKind::External => "external",
     }
 }
 

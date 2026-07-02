@@ -5,9 +5,11 @@
 //! Zellij-native RSS growth. The log is diagnostic state: append-only within a
 //! size cap, never read by correctness code.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
+
+use super::JsonlLog;
 
 const PLUGIN_PRESENCE_LOG_NAME: &str = "plugin-presence.log.jsonl";
 const PLUGIN_PRESENCE_LOG_MAX_BYTES: u64 = 1_048_576;
@@ -45,17 +47,11 @@ impl PluginPresenceSample {
     }
 }
 
-pub fn path(state_root: &Path) -> PathBuf {
-    state_root.join(PLUGIN_PRESENCE_LOG_NAME)
-}
-
-pub fn append<T: Serialize>(state_root: &Path, record: &T) {
-    let path = path(state_root);
-    if let Err(err) =
-        super::rotating::append_rotating_jsonl(&path, PLUGIN_PRESENCE_LOG_MAX_BYTES, record)
-    {
-        tracing::debug!(path = %path.display(), error = %err, "presence plugin telemetry append failed");
-    }
+pub fn log(state_root: &Path) -> JsonlLog {
+    JsonlLog::new(
+        state_root.join(PLUGIN_PRESENCE_LOG_NAME),
+        PLUGIN_PRESENCE_LOG_MAX_BYTES,
+    )
 }
 
 #[cfg(test)]
@@ -65,9 +61,10 @@ mod tests {
     #[test]
     fn append_writes_jsonl_record() {
         let dir = tempfile::tempdir().unwrap();
-        append(dir.path(), &serde_json::json!({ "pages": 42 }));
+        let log = log(dir.path());
+        log.append(&serde_json::json!({ "pages": 42 }));
 
-        let bytes = std::fs::read_to_string(path(dir.path())).unwrap();
+        let bytes = std::fs::read_to_string(log.path()).unwrap();
         assert_eq!(bytes, "{\"pages\":42}\n");
     }
 
