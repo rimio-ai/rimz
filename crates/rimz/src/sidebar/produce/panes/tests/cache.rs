@@ -8,8 +8,6 @@ fn snapshot_cache_freshness_matrix() {
     // production clock-skew contract.
     let fresh = unix_now_ms().saturating_add(60_000);
     let stale = unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
-    let carried_stale_for_snapshot =
-        unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
 
     enum CacheEntry {
         Valid {
@@ -105,7 +103,7 @@ fn snapshot_cache_freshness_matrix() {
             "carried panes clamp event ttl",
             CacheEntry::Valid {
                 session: "rimz-query-engine",
-                produced_at_ms: carried_stale_for_snapshot,
+                produced_at_ms: stale,
                 carried: true,
             },
             "rimz-query-engine",
