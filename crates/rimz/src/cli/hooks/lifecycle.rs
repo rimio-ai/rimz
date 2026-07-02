@@ -697,8 +697,9 @@ pub(super) fn fill_root_launch_identity(
         observation.launch_group = identity_env(observation, rimz::harness::run::ENV_LAUNCH_GROUP);
     }
     if observation.launch_ordinal.is_none() {
-        observation.launch_ordinal = identity_env(observation, rimz::harness::run::ENV_LAUNCH_ORDINAL)
-            .and_then(|raw| raw.parse::<u32>().ok());
+        observation.launch_ordinal =
+            identity_env(observation, rimz::harness::run::ENV_LAUNCH_ORDINAL)
+                .and_then(|raw| raw.parse::<u32>().ok());
     }
     if observation.channel.is_none() {
         observation.channel = identity_env(observation, rimz::harness::run::ENV_CHANNEL);

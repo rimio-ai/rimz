@@ -5,6 +5,7 @@ use clap::Parser;
 use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::config::LaunchPlacement;
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
+use rimz::harness::spec::Column;
 use rimz::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use std::collections::BTreeMap;
 
@@ -1234,8 +1235,8 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
         role_binding("coder"),
         role_binding("reviewer"),
     ];
-    let team_layout = rimz::agents_spec::LayoutSpec {
-        columns: vec![rimz::agents_spec::Column {
+    let team_layout = LayoutSpec {
+        columns: vec![Column {
             rows: vec![
                 agent_cell_with_role(Some("coder")),
                 agent_cell_with_role(Some("planner")),
@@ -1267,7 +1268,7 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
             .all(|request| request.launch_group.is_none())
     );
 
-    let single_role = rimz::agents_spec::LayoutSpec::single(agent_cell_with_role(Some("coder")));
+    let single_role = LayoutSpec::single(agent_cell_with_role(Some("coder")));
     let requests = launch_identity_requests(
         &single_role,
         None,
@@ -1279,8 +1280,8 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
     .unwrap();
     assert_eq!(requests[0].launch_ordinal, Some(1));
 
-    let inline = rimz::agents_spec::LayoutSpec {
-        columns: vec![rimz::agents_spec::Column {
+    let inline = LayoutSpec {
+        columns: vec![Column {
             rows: vec![agent_cell_with_role(None), agent_cell_with_role(None)],
             stacked: false,
         }],
@@ -1295,7 +1296,7 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
     assert_eq!(requests[0].launch_ordinal, Some(0));
     assert_eq!(requests[1].launch_ordinal, Some(1));
 
-    let single = rimz::agents_spec::LayoutSpec::single(agent_cell_with_role(None));
+    let single = LayoutSpec::single(agent_cell_with_role(None));
     let requests = launch_identity_requests(&single, None, None, None, None, None).unwrap();
     assert_eq!(requests[0].launch_group, None);
     assert_eq!(requests[0].launch_ordinal, None);
