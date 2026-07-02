@@ -2,9 +2,11 @@
 //! after a rate-limit window resets or a retry backoff elapses.
 //!
 //! Opt-in ([`ResumeConfig::auto_continue`]). The producer arms the resume while
-//! the park is fresh and fires it once the class-specific clock is due. The
-//! durable record carries everything needed between arm and fire so the decision
-//! never depends on the ephemeral per-session context surviving the wait:
+//! the park is fresh, re-arms a lost limit record after budget recovery when
+//! the agent still carries a limit marker, and fires it once the class-specific
+//! clock is due. The durable record carries everything needed between arm and
+//! fire so the decision never depends on the ephemeral per-session context
+//! surviving the wait:
 //!
 //! - **Arm.** Each frame an agent is parked on a resumable certificate
 //!   ([`crate::agents::resume_park`]), the producer writes a durable [`ParkRecord`]
@@ -12,13 +14,13 @@
 //!   rate-limit record captures the latest spent-window reset deadline; a
 //!   backoff record carries the turn-error marker time and retry state.
 //! - **Fire.** Once the window reset deadline or retry backoff is due and the
-//!   agent is still idle (`last_activity` unchanged), the producer spawns the
-//!   detached `rimz agents auto-continue` helper that queues and delivers a
-//!   resume-gated message record.
+//!   agent is still idle (`last_activity` has not advanced), the producer
+//!   spawns the detached `rimz agents auto-continue` helper that queues and
+//!   delivers a resume-gated message record.
 //! - **Clear.** Any activity since the park (the nudge took, or the agent woke on
 //!   its own) advances `last_activity`, and the stale record is removed. A
-//!   delivered resume message also clears the record; unconfirmed or failed
-//!   resume messages control bounded retries.
+//!   delivered resume message also clears the record; evidenced resume messages
+//!   control exhaustion, while helper spawns only pace retries.
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
 //! arm decision is the pure, unit-tested [`crate::agents::resume_park`].
@@ -54,17 +56,19 @@ use super::SidebarSnapshot;
 struct ParkRecord {
     /// The park class and its durable resume facts.
     kind: ParkKind,
-    /// The agent's rollup `last_activity` at arm time. Unchanged means the agent
-    /// has done nothing since: still parked, safe to nudge. Advanced means it woke
-    /// (our nudge took, or it resumed on its own), so the record is stale.
+    /// The agent's rollup `last_activity` at arm time. Equal or regressed means
+    /// the agent has done nothing since: still parked, safe to nudge. Advanced
+    /// means it woke (our nudge took, or it resumed on its own), so the record
+    /// is stale.
     parked_at_activity: Timestamp,
     /// When the last auto-continue attempt fired, throttling re-nudges so a nudge
     /// that fails to wake a still-parked agent is retried without spamming a
     /// working one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_nudge_at: Option<Timestamp>,
-    /// Auto-continue attempts for this park. Rate-limit and backoff records both
-    /// use it for the retry cap.
+    /// Auto-continue helper spawns for this park. Rate-limit and backoff records
+    /// both use it for pacing and overload backoff steps; evidenced resume
+    /// messages own the retry cap.
     #[serde(default)]
     retries: u32,
 }
@@ -85,7 +89,8 @@ enum ParkKind {
 
 /// Arm or fire each park when live auto-continue is enabled. Best-effort: an
 /// empty nudge text or an agent with no live pane waits without consuming a
-/// retry; a spawn failure consumes one attempt and backs off. Producer-only —
+/// retry; a spawned helper paces the next attempt even if it dies before
+/// queueing. Producer-only —
 /// one elected producer drives one room, and the records live in that room's
 /// runtime dir, so one due condition nudges its agent once per retry.
 pub(super) fn resume_parked(
@@ -147,6 +152,13 @@ pub(super) fn resume_parked(
                 // chance to fire the persisted due record on the recovery
                 // frame; clear only stale records whose marker already moved on.
                 if limit_marker_active(agent) {
+                    if read_park(&path).is_none() && budget_recovered(budget, now) {
+                        arm_park(
+                            &path,
+                            ParkKind::RateLimit { deadline: now },
+                            agent.last_activity,
+                        );
+                    }
                     fire_if_due(
                         agent,
                         &path,
@@ -206,7 +218,7 @@ pub(super) fn exhausted_parks(
         {
             continue;
         }
-        if record.retries >= config.auto_continue_max_retries {
+        if evidenced_attempts(resume_messages, agent, &record) >= config.auto_continue_max_retries {
             exhausted.insert((agent.kind.clone(), agent.agent_id.clone()));
         }
     }
@@ -235,20 +247,27 @@ fn limit_marker_active(agent: &AgentState) -> bool {
 
 /// Capture (or refresh) the park while the reading is still active. A new park
 /// baseline — the first arm, the agent acted and re-parked, or the park class
-/// changed — starts a fresh nudge throttle and retry count; a steady park keeps
-/// both. Write-if-changed, so a frozen park costs one write, not one per frame.
+/// changed — starts a fresh nudge throttle and retry count; a steady or
+/// regressed park keeps both and preserves the prior activity baseline.
+/// Write-if-changed, so a frozen park costs one write, not one per frame.
 fn arm_park(path: &Path, kind: ParkKind, last_activity: Timestamp) {
     let prior = read_park(path);
     let carry = prior
         .as_ref()
         .filter(|record| {
-            record.parked_at_activity == last_activity && same_park_class(&record.kind, &kind)
+            record.parked_at_activity >= last_activity && same_park_class(&record.kind, &kind)
         })
-        .map(|record| (record.last_nudge_at, record.retries));
-    let (last_nudge_at, retries) = carry.unwrap_or((None, 0));
+        .map(|record| {
+            (
+                record.parked_at_activity,
+                record.last_nudge_at,
+                record.retries,
+            )
+        });
+    let (parked_at_activity, last_nudge_at, retries) = carry.unwrap_or((last_activity, None, 0));
     let next = ParkRecord {
         kind,
-        parked_at_activity: last_activity,
+        parked_at_activity,
         last_nudge_at,
         retries,
     };
@@ -311,8 +330,10 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
     if ctx.text.is_empty() {
         return;
     }
+    let attempts = evidenced_attempts(ctx.resume_messages, agent, &record);
     if !nudge_due(
         &record,
+        attempts,
         ctx.now,
         &ctx.config.auto_continue_backoff_secs,
         ctx.config.auto_continue_max_retries,
@@ -336,11 +357,12 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
     write_park(path, &nudged_record(record, ctx.now));
 }
 
-/// Whether the agent has done nothing since the park was armed — its rollup
-/// `last_activity` still matches. A changed activity means it woke (our nudge
-/// took, or it resumed on its own), so the record is stale.
+/// Whether the agent has done nothing since the park was armed. Equal or
+/// regressed rollup activity is the same park; only activity past the captured
+/// baseline means it woke (our nudge took, or it resumed on its own), so the
+/// record is stale.
 fn still_parked(record: &ParkRecord, last_activity: Timestamp) -> bool {
-    record.parked_at_activity == last_activity
+    last_activity <= record.parked_at_activity
 }
 
 fn nudged_record(mut record: ParkRecord, now: Timestamp) -> ParkRecord {
@@ -360,11 +382,18 @@ fn overload_backoff(retries: u32, backoff_secs: &[u64]) -> Duration {
 
 /// Whether a nudge is due for this park class. Rate limits wait for the captured
 /// deadline and then throttle repeats; backoff records wait from park time for
-/// the first try, then from the prior nudge for each retry step until the cap.
-fn nudge_due(record: &ParkRecord, now: Timestamp, backoff_secs: &[u64], max_retries: u32) -> bool {
+/// the first try, then from the prior nudge for each retry step until the
+/// evidenced-attempt cap.
+fn nudge_due(
+    record: &ParkRecord,
+    attempts: u32,
+    now: Timestamp,
+    backoff_secs: &[u64],
+    max_retries: u32,
+) -> bool {
     match &record.kind {
         ParkKind::RateLimit { deadline } => {
-            if record.retries >= max_retries {
+            if attempts >= max_retries {
                 return false;
             }
             now >= *deadline
@@ -374,7 +403,7 @@ fn nudge_due(record: &ParkRecord, now: Timestamp, backoff_secs: &[u64], max_retr
                 })
         }
         ParkKind::Overloaded { overloaded_at } => {
-            if record.retries >= max_retries {
+            if attempts >= max_retries {
                 return false;
             }
             let anchor = record.last_nudge_at.unwrap_or(*overloaded_at);
@@ -382,6 +411,18 @@ fn nudge_due(record: &ParkRecord, now: Timestamp, backoff_secs: &[u64], max_retr
                 >= overload_backoff(record.retries, backoff_secs).as_secs() as i64
         }
     }
+}
+
+fn evidenced_attempts(messages: &[ResumeMessage], agent: &AgentState, record: &ParkRecord) -> u32 {
+    let count = messages
+        .iter()
+        .filter(|message| {
+            message.same_agent_card(agent) && message.enqueued_at >= record.parked_at_activity
+        })
+        .map(|message| message.message_id.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
+    count.min(u32::MAX as usize) as u32
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -517,9 +558,9 @@ fn park_record_path(
 }
 
 /// Spawn the detached, fresh-stdio helper that queues or redelivers the
-/// resume-gated message. Best-effort: a spawn failure is logged and counted as a
-/// fired attempt so a broken helper path backs off instead of retrying every
-/// frame.
+/// resume-gated message. Best-effort: a spawn failure is logged without
+/// consuming an attempt; a spawned helper that dies before queueing is still
+/// paced by the durable nudge stamp.
 #[cfg(not(test))]
 fn spawn_auto_continue(
     runtime: &RuntimePaths,
@@ -600,493 +641,4 @@ fn spawn_auto_continue(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::agents::lifecycle::TurnPhase;
-    use crate::agents::{
-        AgentContext, AgentRateLimits, AgentStatus, AgentTurnError, RateLimitWindow, TurnErrorClass,
-    };
-    use crate::ids::{AgentSessionId, MuxName, WorkspaceId};
-
-    fn ts(secs: i64) -> Timestamp {
-        Timestamp::from_second(secs).expect("valid test timestamp")
-    }
-
-    fn rate_record(
-        deadline: i64,
-        activity: i64,
-        last_nudge: Option<i64>,
-        retries: u32,
-    ) -> ParkRecord {
-        ParkRecord {
-            kind: ParkKind::RateLimit {
-                deadline: ts(deadline),
-            },
-            parked_at_activity: ts(activity),
-            last_nudge_at: last_nudge.map(ts),
-            retries,
-        }
-    }
-
-    fn overloaded_record(
-        overloaded_at: i64,
-        activity: i64,
-        last_nudge: Option<i64>,
-        retries: u32,
-    ) -> ParkRecord {
-        ParkRecord {
-            kind: ParkKind::Overloaded {
-                overloaded_at: ts(overloaded_at),
-            },
-            parked_at_activity: ts(activity),
-            last_nudge_at: last_nudge.map(ts),
-            retries,
-        }
-    }
-
-    fn due(record: &ParkRecord, now: i64, backoff_secs: &[u64], max_retries: u32) -> bool {
-        nudge_due(record, ts(now), backoff_secs, max_retries)
-    }
-
-    fn resume_message(id: u64, status: MessageStatus, enqueued_at: i64) -> ResumeMessage {
-        ResumeMessage {
-            message_id: MessageId::parse(&format!("msg_{id:016x}")).expect("message id"),
-            kind: AgentKind::new_unchecked("claude"),
-            agent_id: "sess".into(),
-            agent_name: None,
-            status,
-            enqueued_at: ts(enqueued_at),
-            updated_at: ts(enqueued_at),
-        }
-    }
-
-    fn window(used: u8, reset: i64) -> RateLimitWindow {
-        RateLimitWindow {
-            used_percentage: Some(used),
-            resets_at: Some(ts(reset)),
-            duration_mins: Some(300),
-            ..Default::default()
-        }
-    }
-
-    fn temp_runtime() -> (tempfile::TempDir, RuntimePaths) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
-            .expect("runtime paths");
-        runtime.ensure_dirs().expect("runtime dirs");
-        (dir, runtime)
-    }
-
-    fn park_path(runtime: &RuntimePaths) -> PathBuf {
-        park_record_path(runtime, &AgentKind::new_unchecked("claude"), &"sess".into())
-    }
-
-    fn agent(activity: i64) -> AgentState {
-        AgentState {
-            agent_id: "sess".into(),
-            kind: AgentKind::new_unchecked("claude"),
-            name: None,
-            kind_ordinal: None,
-            profile: None,
-            role: None,
-            team: None,
-            channel: None,
-            status: AgentStatus::Running,
-            phase: TurnPhase::Idle,
-            pane: None,
-            agent_pid: None,
-            agent_process_start: None,
-            runtime_owner: None,
-            parent_agent_id: None,
-            worktree_path: None,
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_seen: ts(activity),
-            last_activity: ts(activity),
-            registered_at: Some(ts(activity)),
-        }
-    }
-
-    fn limit_agent(activity: i64, error_at: i64) -> AgentState {
-        let mut agent = agent(activity);
-        agent.context = Some(AgentContext {
-            source: "claude".to_owned(),
-            session_name: None,
-            session_preview: None,
-            model_id: None,
-            model_display_name: None,
-            effort: None,
-            thinking_enabled: None,
-            output_style: None,
-            vim_mode: None,
-            agent_version: None,
-            exceeds_200k_tokens: None,
-            cost: None,
-            tokens: None,
-            rate_limits: None,
-            pr: None,
-            account: None,
-            turn_error: Some(AgentTurnError {
-                class: TurnErrorClass::PausedRateLimit,
-                at: ts(error_at),
-                label: Some("You've hit your usage limit".to_owned()),
-            }),
-            turn_complete: None,
-            observed_at: ts(error_at),
-        });
-        agent
-    }
-
-    fn live_pane() -> PaneAgent {
-        PaneAgent {
-            kind: AgentKind::new_unchecked("claude"),
-            kind_ordinal: None,
-            name: None,
-            profile: None,
-            role: None,
-            team: None,
-            channel: None,
-            agent_id: Some("sess".into()),
-            pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
-            worktree_path: None,
-            worktree_branch: None,
-        }
-    }
-
-    #[test]
-    fn arms_a_rate_limit_park_with_its_deadline_and_activity() {
-        let (_dir, runtime) = temp_runtime();
-        let path = park_path(&runtime);
-        arm_park(
-            &path,
-            ParkKind::RateLimit {
-                deadline: ts(5_000),
-            },
-            ts(1_000),
-        );
-        assert_eq!(read_park(&path), Some(rate_record(5_000, 1_000, None, 0)));
-    }
-
-    #[test]
-    fn arms_an_overloaded_park_with_its_activity() {
-        let (_dir, runtime) = temp_runtime();
-        let path = park_path(&runtime);
-        arm_park(
-            &path,
-            ParkKind::Overloaded {
-                overloaded_at: ts(1_500),
-            },
-            ts(1_000),
-        );
-        assert_eq!(
-            read_park(&path),
-            Some(overloaded_record(1_500, 1_000, None, 0))
-        );
-    }
-
-    #[test]
-    fn a_steady_park_keeps_its_nudge_stamp_and_retry_count() {
-        let (_dir, runtime) = temp_runtime();
-        let path = park_path(&runtime);
-        write_park(&path, &overloaded_record(1_500, 1_000, Some(4_000), 3));
-        // Re-arm at the same activity (the agent is still idle): retry state survives.
-        arm_park(
-            &path,
-            ParkKind::Overloaded {
-                overloaded_at: ts(1_500),
-            },
-            ts(1_000),
-        );
-        assert_eq!(
-            read_park(&path),
-            Some(overloaded_record(1_500, 1_000, Some(4_000), 3))
-        );
-    }
-
-    #[test]
-    fn a_new_park_baseline_resets_the_throttle_and_retry_count() {
-        let (_dir, runtime) = temp_runtime();
-        let path = park_path(&runtime);
-        write_park(&path, &overloaded_record(1_500, 1_000, Some(4_000), 3));
-        // The agent acted (activity advanced) and re-parked: a fresh nudge may fire.
-        arm_park(
-            &path,
-            ParkKind::RateLimit {
-                deadline: ts(9_000),
-            },
-            ts(8_000),
-        );
-        assert_eq!(read_park(&path), Some(rate_record(9_000, 8_000, None, 0)));
-    }
-
-    #[test]
-    fn a_new_park_class_resets_the_throttle_and_retry_count() {
-        let (_dir, runtime) = temp_runtime();
-        let path = park_path(&runtime);
-        write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 4));
-        arm_park(
-            &path,
-            ParkKind::Overloaded {
-                overloaded_at: ts(1_500),
-            },
-            ts(1_000),
-        );
-        assert_eq!(
-            read_park(&path),
-            Some(overloaded_record(1_500, 1_000, None, 0))
-        );
-    }
-
-    #[test]
-    fn still_parked_tracks_frozen_activity() {
-        let record = rate_record(5_000, 1_000, None, 0);
-        assert!(still_parked(&record, ts(1_000)));
-        assert!(!still_parked(&record, ts(1_200)));
-    }
-
-    #[test]
-    fn rate_limit_nudge_waits_for_the_deadline_then_fires() {
-        let record = rate_record(5_000, 1_000, None, 0);
-        assert!(!due(&record, 4_999, &[], 10));
-        assert!(due(&record, 5_000, &[], 10));
-    }
-
-    #[test]
-    fn rate_limit_recent_nudge_throttles_the_next() {
-        // Last nudge at 5_000; the retry interval is 120s.
-        let record = rate_record(5_000, 1_000, Some(5_000), 1);
-        assert!(!due(&record, 5_060, &[], 10));
-        assert!(due(&record, 5_200, &[], 10));
-    }
-
-    #[test]
-    fn rate_limit_retry_cap_stops_further_nudges() {
-        let at_cap = rate_record(5_000, 1_000, Some(5_000), 3);
-        assert!(!due(&at_cap, 9_000, &[], 3));
-
-        let before_cap = rate_record(5_000, 1_000, Some(5_000), 2);
-        assert!(due(&before_cap, 5_200, &[], 3));
-    }
-
-    #[test]
-    fn overload_backoff_expands_then_repeats_the_last_step() {
-        assert_eq!(overload_backoff(0, &[60, 120, 180]).as_secs(), 60);
-        assert_eq!(overload_backoff(1, &[60, 120, 180]).as_secs(), 120);
-        assert_eq!(overload_backoff(2, &[60, 120, 180]).as_secs(), 180);
-        assert_eq!(overload_backoff(9, &[60, 120, 180]).as_secs(), 180);
-        assert_eq!(overload_backoff(0, &[]).as_secs(), 300);
-    }
-
-    #[test]
-    fn first_overloaded_nudge_waits_from_the_park_time() {
-        let record = overloaded_record(1_000, 100, None, 0);
-        assert!(!due(&record, 1_059, &[60, 120, 180], 10));
-        assert!(due(&record, 1_060, &[60, 120, 180], 10));
-    }
-
-    #[test]
-    fn overloaded_retries_wait_on_their_backoff_step() {
-        let second = overloaded_record(1_000, 100, Some(1_060), 1);
-        assert!(!due(&second, 1_179, &[60, 120, 180], 10));
-        assert!(due(&second, 1_180, &[60, 120, 180], 10));
-
-        let later = overloaded_record(1_000, 100, Some(1_180), 2);
-        assert!(!due(&later, 1_359, &[60, 120, 180], 10));
-        assert!(due(&later, 1_360, &[60, 120, 180], 10));
-    }
-
-    #[test]
-    fn overloaded_retry_cap_stops_further_nudges() {
-        let at_cap = overloaded_record(1_000, 100, Some(1_000), 10);
-        assert!(!due(&at_cap, 9_000, &[60, 120, 180], 10));
-
-        let before_cap = overloaded_record(1_000, 100, Some(1_000), 9);
-        assert!(due(&before_cap, 1_180, &[60, 120, 180], 10));
-    }
-
-    #[test]
-    fn recovered_budget_fires_due_rate_limit_record_before_clearing() {
-        let (_dir, runtime) = temp_runtime();
-        let path = park_path(&runtime);
-        write_park(&path, &rate_record(5_000, 1_000, None, 0));
-        super::super::rate_limits::write_rate_limits_cache(
-            &runtime.shared_rate_limits_path(),
-            &super::super::rate_limits::RateLimitsCache {
-                refreshed_at_ms: 0,
-                windows: [(
-                    "claude".to_owned(),
-                    AgentRateLimits {
-                        windows: vec![window(20, 9_000)],
-                    },
-                )]
-                .into_iter()
-                .collect(),
-                pending: Default::default(),
-            },
-        );
-        let mut snapshot = SidebarSnapshot::build_with_agents(
-            runtime.workspace_id.clone(),
-            Vec::new(),
-            vec![limit_agent(1_000, 5_990)],
-            ts(6_000),
-        );
-        snapshot.now = ts(6_000);
-        snapshot.agent_panes = vec![live_pane()];
-        resume_parked(
-            &snapshot,
-            &runtime,
-            &ResumeConfig {
-                auto_continue: true,
-                auto_continue_max_retries: 3,
-                ..ResumeConfig::default()
-            },
-            &[],
-        );
-        assert_eq!(
-            read_park(&path),
-            Some(rate_record(5_000, 1_000, Some(6_000), 1))
-        );
-    }
-
-    #[test]
-    fn recovered_budget_clears_a_stale_rate_limit_record() {
-        let (_dir, runtime) = temp_runtime();
-        let path = park_path(&runtime);
-        write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 1));
-        super::super::rate_limits::write_rate_limits_cache(
-            &runtime.shared_rate_limits_path(),
-            &super::super::rate_limits::RateLimitsCache {
-                refreshed_at_ms: 0,
-                windows: [(
-                    "claude".to_owned(),
-                    AgentRateLimits {
-                        windows: vec![window(20, 9_000)],
-                    },
-                )]
-                .into_iter()
-                .collect(),
-                pending: Default::default(),
-            },
-        );
-        let mut snapshot = SidebarSnapshot::build_with_agents(
-            runtime.workspace_id.clone(),
-            Vec::new(),
-            vec![agent(1_000)],
-            ts(6_000),
-        );
-        snapshot.now = ts(6_000);
-        resume_parked(
-            &snapshot,
-            &runtime,
-            &ResumeConfig {
-                auto_continue: true,
-                ..ResumeConfig::default()
-            },
-            &[],
-        );
-        assert_eq!(read_park(&path), None);
-    }
-
-    #[test]
-    fn nudging_records_the_time_and_increments_retries() {
-        let nudged = nudged_record(overloaded_record(1_000, 100, None, 2), ts(1_060));
-        assert_eq!(nudged.last_nudge_at, Some(ts(1_060)));
-        assert_eq!(nudged.retries, 3);
-    }
-
-    fn fire_with_resume_message(status: MessageStatus) -> Option<ParkRecord> {
-        let (_dir, runtime) = temp_runtime();
-        let path = park_path(&runtime);
-        write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 1));
-        let mut snapshot = SidebarSnapshot::build_with_agents(
-            runtime.workspace_id.clone(),
-            Vec::new(),
-            vec![limit_agent(1_000, 5_990)],
-            ts(6_000),
-        );
-        snapshot.now = ts(6_000);
-        snapshot.agent_panes = vec![live_pane()];
-        let config = ResumeConfig {
-            auto_continue_max_retries: 3,
-            ..ResumeConfig::default()
-        };
-        let messages = [resume_message(1, status, 5_900)];
-        fire_if_due(
-            &snapshot.agents[0],
-            &path,
-            FireContext {
-                snapshot: &snapshot,
-                runtime: &runtime,
-                now: ts(6_000),
-                text: "continue",
-                config: &config,
-                resume_messages: &messages,
-            },
-        );
-        read_park(&path)
-    }
-
-    #[test]
-    fn undelivered_resume_messages_allow_retry_under_cap() {
-        for status in [
-            MessageStatus::Sent,
-            MessageStatus::Queued,
-            MessageStatus::Abandoned,
-        ] {
-            assert_eq!(
-                fire_with_resume_message(status),
-                Some(rate_record(5_000, 1_000, Some(6_000), 2)),
-                "{status:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn delivered_resume_message_clears_the_park() {
-        assert_eq!(fire_with_resume_message(MessageStatus::Delivered), None);
-    }
-
-    #[test]
-    fn exhausted_resume_attempts_report_actionable_key() {
-        let (_dir, runtime) = temp_runtime();
-        let path = park_path(&runtime);
-        write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 3));
-        let snapshot = SidebarSnapshot::build_with_agents(
-            runtime.workspace_id.clone(),
-            Vec::new(),
-            vec![limit_agent(1_000, 5_990)],
-            ts(6_000),
-        );
-        let config = ResumeConfig {
-            auto_continue: true,
-            auto_continue_max_retries: 3,
-            ..ResumeConfig::default()
-        };
-        assert!(
-            exhausted_parks(&snapshot, &runtime, &config, &[]).contains(&(
-                AgentKind::new_unchecked("claude"),
-                AgentSessionId::from("sess")
-            ))
-        );
-    }
-}
+mod tests;
