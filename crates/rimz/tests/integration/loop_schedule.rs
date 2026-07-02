@@ -1414,7 +1414,7 @@ fn loop_run_lock_path(env: &Env, name: &str) -> std::path::PathBuf {
 }
 
 fn append_legacy_loop_record(env: &Env, task: &str, result: LoopRunResult) {
-    let path = loop_run_log::log_path(&env.state_root());
+    let path = run_log::log_path(&env.state_root());
     std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
     let result = serde_json::to_string(&result).expect("result json");
     let line =

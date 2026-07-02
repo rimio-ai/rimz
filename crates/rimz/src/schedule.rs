@@ -19,6 +19,8 @@ pub(crate) mod fire;
 pub mod instances;
 pub mod run_log;
 
+pub use fire::last_stamps;
+
 /// Errors from parsing or validating a schedule entry.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ScheduleErr {

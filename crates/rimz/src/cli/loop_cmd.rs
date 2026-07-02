@@ -380,7 +380,7 @@ fn list() -> Result<()> {
         };
         let stamps = runtime
             .as_ref()
-            .map(rimz::schedule::fire::last_stamps)
+            .map(rimz::schedule::last_stamps)
             .unwrap_or_default();
         let next = parsed
             .ok()
@@ -442,7 +442,7 @@ fn show(args: ShowArgs) -> Result<()> {
     let runtime = runtime_for_root(&root);
     let stamps = runtime
         .as_ref()
-        .map(rimz::schedule::fire::last_stamps)
+        .map(rimz::schedule::last_stamps)
         .unwrap_or_default();
     let room = if runtime.as_ref().is_some_and(fresh_sidebar_present) {
         "open"
