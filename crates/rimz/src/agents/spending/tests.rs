@@ -98,6 +98,15 @@ fn append_line(path: &Path, line: &str) {
     writeln!(f, "{line}").unwrap();
 }
 
+fn set_file_mtime(path: &Path, secs: u64) {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+        .unwrap();
+}
+
 fn codex_total_line(date: &str, input: u64, output: u64) -> String {
     format!(
         r#"{{"type":"event_msg","timestamp":"{date}T15:00:00.000Z","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"output_tokens":{output}}}}}}}}}"#
@@ -1363,6 +1372,112 @@ fn spending_walk_persists_cursor_before_aggregate() {
     assert_eq!(entries.len(), 1);
     assert!(entries[0].rolled);
     assert_eq!(entries[0].cost_usd, 3.0);
+}
+
+#[test]
+fn spending_walk_gates_warm_cursor_persists() {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let cache_path = dir.path().join("spending.json");
+    let transcript = write_jsonl(
+        dir.path(),
+        "claude.jsonl",
+        &[&claude_line(&today, 1.0, "msg-1", "req-1")],
+    );
+    set_file_mtime(&transcript, NOW_SECS);
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> =
+        vec![(claude_adapter(), transcript.clone())];
+    let mut walker = SpendingWalker::new();
+
+    let first = walker.walk(
+        &cache_path,
+        &files,
+        &PriceBook::default(),
+        NOW_SECS,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+        &mut SilentWalk,
+    );
+    assert!(first.stats.cache_written);
+    assert_eq!(
+        read_spending_cache(&cache_path).files[&transcript.to_string_lossy().into_owned()]
+            .entries
+            .len(),
+        1
+    );
+    let first_stamp = cache_stamp(&cache_path);
+
+    append_line(&transcript, &claude_line(&today, 2.0, "msg-2", "req-2"));
+    set_file_mtime(&transcript, NOW_SECS + 60);
+    let second = walker.walk(
+        &cache_path,
+        &files,
+        &PriceBook::default(),
+        NOW_SECS + 60,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+        &mut SilentWalk,
+    );
+    assert!(!second.stats.cache_written);
+    assert!((second.spending.total.year.usd - 3.0).abs() < 1e-9);
+    assert_eq!(cache_stamp(&cache_path), first_stamp);
+    assert_eq!(
+        read_spending_cache(&cache_path).files[&transcript.to_string_lossy().into_owned()]
+            .entries
+            .len(),
+        1,
+        "warm suffix stays in memory until the persist interval expires"
+    );
+
+    let third = walker.walk(
+        &cache_path,
+        &files,
+        &PriceBook::default(),
+        NOW_SECS + SPENDING_PERSIST_MIN_INTERVAL + 61,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+        &mut SilentWalk,
+    );
+    assert!(third.stats.cache_written);
+    assert_eq!(
+        read_spending_cache(&cache_path).files[&transcript.to_string_lossy().into_owned()]
+            .entries
+            .len(),
+        2,
+        "post-interval walk lands previously dirty in-memory state"
+    );
+
+    let padding = "x".repeat(SPENDING_PERSIST_PARSE_BYTES as usize);
+    append_line(
+        &transcript,
+        &format!(
+            r#"{{"timestamp":"{today}T15:02:00.000Z","costUSD":3.0,"requestId":"req-big","padding":"{padding}","message":{{"id":"msg-big","usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
+        ),
+    );
+    set_file_mtime(&transcript, NOW_SECS + SPENDING_PERSIST_MIN_INTERVAL + 62);
+    let fourth = walker.walk(
+        &cache_path,
+        &files,
+        &PriceBook::default(),
+        NOW_SECS + SPENDING_PERSIST_MIN_INTERVAL + 62,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+        &mut SilentWalk,
+    );
+    assert!(fourth.stats.parse_bytes >= SPENDING_PERSIST_PARSE_BYTES);
+    assert!(fourth.stats.cache_written);
+    assert!((fourth.spending.total.year.usd - 6.0).abs() < 1e-9);
+    assert_eq!(
+        read_spending_cache(&cache_path).files[&transcript.to_string_lossy().into_owned()]
+            .entries
+            .len(),
+        3,
+        "large parse work persists regardless of the interval"
+    );
 }
 
 #[test]

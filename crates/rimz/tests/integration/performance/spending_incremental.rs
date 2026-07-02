@@ -196,14 +196,9 @@ fn spending_walk_io_is_history_independent() {
         "warm walk parses only the appended turn"
     );
 
-    // Work proxy: the cache grew by exactly the appended entry — the history
-    // was never re-read, so nothing duplicated.
-    let cache = read_spending_cache(&cache_path);
-    let refreshed = cache.files.values().next().expect("cached file");
-    assert_eq!(
-        refreshed.entries.len(),
-        HISTORY_LINES + 1,
-        "suffix parse appends exactly the new entry"
+    assert!(
+        !warm.stats.cache_written,
+        "small warm suffixes stay in the in-memory walker until the persist gate"
     );
     assert!(
         warm.spending.total.year.usd > cold.spending.total.year.usd,
@@ -229,6 +224,30 @@ fn spending_walk_io_is_history_independent() {
         modified(&cache_path),
         cache_mtime,
         "unchanged walk leaves the spending cache mtime untouched"
+    );
+    let due = walker.walk(
+        &cache_path,
+        &files,
+        &prices,
+        NOW_SECS + 301,
+        &Default::default(),
+        None,
+        &HeadlineSpec::default(),
+        &mut SilentWalk,
+    );
+    assert!(
+        due.stats.cache_written,
+        "post-interval walk persists the held suffix cursor"
+    );
+
+    // Work proxy: once the persist gate opens, the cache contains exactly the
+    // appended entry — the history was never re-read, so nothing duplicated.
+    let cache = read_spending_cache(&cache_path);
+    let refreshed = cache.files.values().next().expect("cached file");
+    assert_eq!(
+        refreshed.entries.len(),
+        HISTORY_LINES + 1,
+        "suffix parse appends exactly the new entry"
     );
 
     // Resource shape: the warm pass keeps transcript IO to the appended turn.

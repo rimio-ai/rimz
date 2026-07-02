@@ -18,8 +18,9 @@
 //! and each dashboard panel read account-global piles. The cockpit reads a
 //! workspace-scoped [`SpendTally`] derived from the same cached entries.
 
+use std::cell::Cell;
 #[cfg(test)]
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -97,6 +98,9 @@ const SKIP_PARSE_MARGIN_SECS: u64 = 2 * 86_400;
 /// Cadence for cursor-cache checkpoints and partial aggregate publishes during
 /// a cold spending-history walk.
 pub(crate) const WALK_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
+
+const SPENDING_PERSIST_MIN_INTERVAL: u64 = 5 * 60;
+const SPENDING_PERSIST_PARSE_BYTES: u64 = 1 << 20;
 
 const MAX_SPENDING_PARSE_WORKERS: usize = 8;
 
@@ -556,6 +560,7 @@ struct CacheStamp {
 pub struct SpendingWalker {
     cache: SpendingDiskCache,
     cache_stamp: Option<CacheStamp>,
+    last_persisted_now_secs: Option<u64>,
     memo: Option<SpendingMemo>,
 }
 
@@ -579,6 +584,7 @@ impl SpendingWalker {
                 ..Default::default()
             },
             cache_stamp: None,
+            last_persisted_now_secs: None,
             memo: None,
         }
     }
@@ -660,16 +666,33 @@ impl SpendingWalker {
         let mut stats = WalkStats::default();
         self.sync_from_disk(cache_path, &mut stats);
         let prior_generation = self.cache.generation;
+        let persist_worthy = Cell::new(
+            persist
+                && self.last_persisted_now_secs.is_none_or(|last| {
+                    now_secs.saturating_sub(last) >= SPENDING_PERSIST_MIN_INTERVAL
+                }),
+        );
         let mut checkpoint_written = false;
+        let mut checkpoint_generation = None;
         {
             let mut last_checkpoint = Instant::now()
                 .checked_sub(WALK_CHECKPOINT_INTERVAL)
                 .unwrap_or_else(Instant::now);
+            let mut on_jobs_scheduled = |stats: &WalkStats| {
+                if stats.parse_bytes >= SPENDING_PERSIST_PARSE_BYTES {
+                    persist_worthy.set(true);
+                }
+            };
             let mut tick = |cache: &SpendingDiskCache, progress: SpendProgress| {
                 observer.on_file(progress);
                 if last_checkpoint.elapsed() >= WALK_CHECKPOINT_INTERVAL {
-                    if persist && cache.dirty && write_spending_cache(cache_path, cache) {
+                    if persist
+                        && persist_worthy.get()
+                        && cache.dirty
+                        && write_spending_cache(cache_path, cache)
+                    {
                         checkpoint_written = true;
+                        checkpoint_generation = Some(cache.generation);
                     }
                     observer.on_interval(cache);
                     last_checkpoint = Instant::now();
@@ -682,15 +705,28 @@ impl SpendingWalker {
                 now_secs,
                 origin_overrides,
                 &mut stats,
-                &mut tick,
+                &mut RefreshCallbacks {
+                    on_jobs_scheduled: &mut on_jobs_scheduled,
+                    tick: &mut tick,
+                },
             );
         }
         if checkpoint_written {
             stats.cache_written = true;
+            self.last_persisted_now_secs = Some(now_secs);
+            if checkpoint_generation == Some(self.cache.generation) {
+                self.cache.dirty = false;
+                self.cache_stamp = cache_stamp(cache_path);
+            }
         }
-        if persist && self.cache.dirty && write_spending_cache(cache_path, &self.cache) {
+        if persist
+            && persist_worthy.get()
+            && self.cache.dirty
+            && write_spending_cache(cache_path, &self.cache)
+        {
             self.cache.dirty = false;
             self.cache_stamp = cache_stamp(cache_path);
+            self.last_persisted_now_secs = Some(now_secs);
             stats.cache_written = true;
         }
         #[cfg(test)]
@@ -871,6 +907,7 @@ pub fn compute_spending_with_origins_and_scope(
     spec: &HeadlineSpec,
 ) -> (Spending, SpendTally) {
     let mut tick = |_: &SpendingDiskCache, _: SpendProgress| {};
+    let mut on_jobs_scheduled = |_: &WalkStats| {};
     let mut stats = WalkStats::default();
     refresh_spending_cache(
         files,
@@ -879,7 +916,10 @@ pub fn compute_spending_with_origins_and_scope(
         now_secs,
         origin_overrides,
         &mut stats,
-        &mut tick,
+        &mut RefreshCallbacks {
+            on_jobs_scheduled: &mut on_jobs_scheduled,
+            tick: &mut tick,
+        },
     );
 
     // Second pass: aggregate with cross-file Claude deduplication.
@@ -941,7 +981,7 @@ fn refresh_spending_cache(
     now_secs: u64,
     origin_overrides: &HashMap<PathBuf, PathBuf>,
     stats: &mut WalkStats,
-    tick: &mut dyn FnMut(&SpendingDiskCache, SpendProgress),
+    callbacks: &mut RefreshCallbacks<'_>,
 ) {
     // First pass: refresh stale cache entries — pure hit, suffix parse, or
     // cold parse, decided from one stat per file.
@@ -979,7 +1019,7 @@ fn refresh_spending_cache(
                 cache.mark_changed();
             }
             finished_files += 1;
-            tick(
+            (callbacks.tick)(
                 cache,
                 SpendProgress {
                     finished_files,
@@ -991,7 +1031,7 @@ fn refresh_spending_cache(
 
         if !cache.files.contains_key(&key) && !heals && cold_parse_out_of_window(mtime, now_secs) {
             finished_files += 1;
-            tick(
+            (callbacks.tick)(
                 cache,
                 SpendProgress {
                     finished_files,
@@ -1023,11 +1063,24 @@ fn refresh_spending_cache(
         });
     }
 
-    refresh_spending_cache_jobs(&jobs, cache, prices, &mut finished_files, total_files, tick);
+    (callbacks.on_jobs_scheduled)(stats);
+    refresh_spending_cache_jobs(
+        &jobs,
+        cache,
+        prices,
+        &mut finished_files,
+        total_files,
+        callbacks.tick,
+    );
 
     if compact_spending_cache(cache, files, now_secs) {
         cache.mark_changed();
     }
+}
+
+struct RefreshCallbacks<'a> {
+    on_jobs_scheduled: &'a mut dyn FnMut(&WalkStats),
+    tick: &'a mut dyn FnMut(&SpendingDiskCache, SpendProgress),
 }
 
 struct SpendingParseJob<'a> {
