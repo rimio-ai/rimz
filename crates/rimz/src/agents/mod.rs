@@ -85,7 +85,9 @@ pub(crate) use state::{
     AccountBudget, ResumeArm, display_turn_error, effective_turn_error_class,
     rate_limit_window_kinds, resume_park,
 };
-pub use transcript::{ChatEntry, TranscriptMessage, TranscriptRole};
+pub use transcript::{
+    AskAnswer, AskQuestion, ChatEntry, TranscriptMessage, TranscriptRole, answers_text,
+};
 pub use transcript_fs::read_transcript_lines;
 pub(crate) use transcript_fs::read_transcript_tail;
 
@@ -528,17 +530,18 @@ pub trait AgentAdapter: Send + Sync {
         false
     }
 
-    /// Human-readable question/options text for a blocking ask hook, parsed from
-    /// the agent-native payload. `None` means the hook carries no native question
+    /// Structured question/options for a blocking ask hook, parsed from the
+    /// agent-native payload. `None` means the hook carries no native question
     /// text.
-    fn ask_question_summary(&self, _event_name: &str, _payload: &Value) -> Option<String> {
+    fn ask_question_detail(&self, _event_name: &str, _payload: &Value) -> Option<Vec<AskQuestion>> {
         None
     }
 
-    /// Answer text reported when a native ask completes in the agent's own UI.
-    /// `Some` drives both the transcript answer entry and pending native ask
-    /// expiry; `None` means this event carries no native ask answer.
-    fn native_ask_answer(&self, _event_name: &str, _payload: &Value) -> Option<String> {
+    /// Structured answer choices reported when a native ask completes in the
+    /// agent's own UI. `Some` drives both the transcript answer entry and
+    /// pending native ask expiry; `None` means this event carries no native ask
+    /// answer.
+    fn native_ask_answer(&self, _event_name: &str, _payload: &Value) -> Option<Vec<AskAnswer>> {
         None
     }
 

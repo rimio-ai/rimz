@@ -136,6 +136,7 @@ impl Ledger {
         let Some(agent_id) = item.agent_session_id().map(AgentSessionId::from) else {
             return;
         };
+        let text = crate::ledger::transcript_log::answer_text(&resolution.decision);
         let entry = crate::ledger::transcript_log::TranscriptEntry {
             at: resolution.resolved_at,
             kind: AgentKind::new_unchecked(item.source.clone()),
@@ -152,7 +153,13 @@ impl Ledger {
             entry: crate::ledger::transcript_log::TranscriptKind::Answer,
             request_id: Some(item.request_id.clone()),
             from: Some(resolution_from(resolution)),
-            text: crate::ledger::transcript_log::answer_text(&resolution.decision),
+            text: text.clone(),
+            questions: Vec::new(),
+            answers: vec![crate::agents::AskAnswer {
+                question: None,
+                chosen: vec![text],
+                note: None,
+            }],
         };
         if let Err(err) = crate::ledger::transcript_log::append(self.paths(), &entry) {
             warn!(

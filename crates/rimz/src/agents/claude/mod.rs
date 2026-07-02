@@ -61,11 +61,12 @@ use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation, AgentTurnError,
-    ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
-    RootIdentity, SubagentIdentity, SubagentObservation, TranscriptMessage, choice_is_allow,
-    classify_agent_hook, non_empty_trimmed, optional_payload_string, read_transcript_tail,
-    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation, AgentTurnError, AskAnswer,
+    AskQuestion, ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport,
+    Result, RootIdentity, SubagentIdentity, SubagentObservation, TranscriptMessage,
+    choice_is_allow, classify_agent_hook, non_empty_trimmed, optional_payload_string,
+    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
+    stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
 use crate::feed::{FeedItem, FeedKind, Resolution};
@@ -696,20 +697,20 @@ impl AgentAdapter for ClaudeAdapter {
         matches!(event_name, "Stop" | "UserPromptSubmit")
     }
 
-    fn ask_question_summary(&self, event_name: &str, payload: &Value) -> Option<String> {
+    fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
         if event_name != "PreToolUse" {
             return None;
         }
         let parsed = parse_pre_tool_use(payload);
-        ask::question_summary(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
+        ask::question_detail(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
     }
 
-    fn native_ask_answer(&self, event_name: &str, payload: &Value) -> Option<String> {
+    fn native_ask_answer(&self, event_name: &str, payload: &Value) -> Option<Vec<AskAnswer>> {
         if event_name != "PostToolUse" {
             return None;
         }
         let parsed = parse_post_tool_use(payload);
-        ask::answer_summary(parsed.tool_name.as_deref()?, parsed.tool_response.as_ref()?)
+        ask::answer_detail(parsed.tool_name.as_deref()?, parsed.tool_response.as_ref()?)
     }
 
     fn observe_lifecycle(

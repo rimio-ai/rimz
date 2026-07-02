@@ -53,6 +53,14 @@ struct ChatView {
 type AgentKey = (AgentKind, AgentSessionId);
 
 #[derive(Clone, Debug)]
+struct RenderEntry {
+    kind: TranscriptKind,
+    request_id: Option<RequestId>,
+    agent: AgentKey,
+    chat: rimz::agents::ChatEntry,
+}
+
+#[derive(Clone, Debug)]
 struct Identity {
     base_handle: String,
     channel: Option<String>,
@@ -98,11 +106,11 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     let mut entries: Vec<_> = filtered
         .into_iter()
         .filter_map(|entry| {
-            let chat = chat_entry_for_log_entry(entry, &identities, scope.include_channel);
-            entry_matches_focus(entry, &chat, &scope, &identities).then_some(chat)
+            let render = render_entry_for_log_entry(entry, &identities, scope.include_channel);
+            entry_matches_focus(entry, &render.chat, &scope, &identities).then_some(render)
         })
         .collect();
-    entries.sort_by(|left, right| compare_optional_timestamps(left.at, right.at));
+    entries.sort_by(|left, right| compare_optional_timestamps(left.chat.at, right.chat.at));
 
     if entries.is_empty() {
         bail!("no transcripts on disk for this scope yet");
@@ -113,7 +121,7 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         print_json(&ChatView {
             channel: scope.channel,
             focus: scope.focus,
-            entries,
+            entries: entries.iter().map(|entry| entry.chat.clone()).collect(),
         })?;
     } else {
         let tz = super::machine_config().time_zone();
@@ -134,6 +142,19 @@ fn compare_optional_timestamps(
     }
 }
 
+fn render_entry_for_log_entry(
+    entry: &TranscriptEntry,
+    identities: &HashMap<AgentKey, Identity>,
+    include_channel: bool,
+) -> RenderEntry {
+    RenderEntry {
+        kind: entry.entry,
+        request_id: entry.request_id.clone(),
+        agent: entry_key(entry),
+        chat: chat_entry_for_log_entry(entry, identities, include_channel),
+    }
+}
+
 fn chat_entry_for_log_entry(
     entry: &TranscriptEntry,
     identities: &HashMap<AgentKey, Identity>,
@@ -146,24 +167,32 @@ fn chat_entry_for_log_entry(
             to: Some(receiver),
             at: Some(entry.at),
             text: entry.text.clone(),
+            questions: entry.questions.clone(),
+            answers: entry.answers.clone(),
         },
         TranscriptKind::Message => rimz::agents::ChatEntry {
             from: entry.from.clone().unwrap_or_else(|| "user".to_owned()),
             to: Some(receiver),
             at: Some(entry.at),
             text: entry.text.clone(),
+            questions: entry.questions.clone(),
+            answers: entry.answers.clone(),
         },
         TranscriptKind::Assistant | TranscriptKind::Ask => rimz::agents::ChatEntry {
             from: receiver,
             to: None,
             at: Some(entry.at),
             text: entry.text.clone(),
+            questions: entry.questions.clone(),
+            answers: entry.answers.clone(),
         },
         TranscriptKind::Answer => rimz::agents::ChatEntry {
             from: entry.from.clone().unwrap_or_else(|| "resolver".to_owned()),
             to: Some(receiver),
             at: Some(entry.at),
             text: entry.text.clone(),
+            questions: entry.questions.clone(),
+            answers: entry.answers.clone(),
         },
     }
 }
@@ -494,7 +523,8 @@ const AGENT_TONES: [anstyle::Style; 3] = [
     render::palette::ACCENT,
     render::palette::GOOD,
 ];
-const BODY_INDENT: &str = "    ";
+const BODY_INDENT: &str = "  ";
+const GROUP_WINDOW_SECS: i64 = 5 * 60;
 
 #[derive(Default)]
 struct AgentTones {
@@ -536,11 +566,7 @@ fn display_handle(handle: &str, grouped: bool) -> &str {
     if grouped { base_handle(handle) } else { handle }
 }
 
-fn render_chat(
-    channel: Option<&str>,
-    entries: &[rimz::agents::ChatEntry],
-    tz: &TimeZone,
-) -> Result<()> {
+fn render_chat(channel: Option<&str>, entries: &[RenderEntry], tz: &TimeZone) -> Result<()> {
     let mut out = render::out();
     let today = jiff::Timestamp::now().to_zoned(tz.clone()).date();
     render_chat_to(&mut out, channel, entries, tz, today)
@@ -549,45 +575,514 @@ fn render_chat(
 fn render_chat_to(
     out: &mut impl Write,
     channel: Option<&str>,
-    entries: &[rimz::agents::ChatEntry],
+    entries: &[RenderEntry],
     tz: &TimeZone,
     today: Date,
 ) -> Result<()> {
     write_header(out, channel)?;
     let grouped = channel.is_some();
+    let folded = pair_answers(entries);
     let mut tones = AgentTones::default();
     let mut last_date = Some(today);
     let mut first_entry = true;
     let mut follows_day_delimiter = false;
-    for entry in entries {
-        if let Some(at) = entry.at {
-            let date = at.to_zoned(tz.clone()).date();
-            if Some(date) != last_date {
-                write_day_delimiter(out, date, today)?;
-                last_date = Some(date);
-                follows_day_delimiter = true;
-            }
+    let mut last_group: Option<GroupState> = None;
+    for (index, entry) in entries.iter().enumerate() {
+        if folded.suppressed_answers.contains(&index) {
+            continue;
         }
-        if !first_entry && !follows_day_delimiter {
+        let entry_date = entry.chat.at.map(|at| at.to_zoned(tz.clone()).date());
+        if let Some(date) = entry_date
+            && Some(date) != last_date
+        {
+            write_day_delimiter(out, date, today)?;
+            last_date = Some(date);
+            follows_day_delimiter = true;
+            last_group = None;
+        }
+        let is_ask = entry.kind == TranscriptKind::Ask;
+        let continuation = !is_ask
+            && last_group
+                .as_ref()
+                .is_some_and(|group| group.matches(entry, grouped, entry_date));
+        if !continuation && !first_entry && !follows_day_delimiter {
             writeln!(out)?;
         }
-        let from = if entry.from == "user" {
-            render::paint(render::palette::COOL, "user")
-        } else if entry.from == "you" {
-            render::paint(render::palette::COOL.bold(), "you")
+        if !continuation {
+            write_entry_header(out, entry, grouped, &mut tones, tz)?;
+        }
+        if is_ask {
+            let answer = folded
+                .answer_by_ask
+                .get(&index)
+                .map(|answer| &entries[*answer]);
+            write_ask_card(out, entry, answer)?;
+            last_group = None;
         } else {
-            let display = display_handle(&entry.from, grouped);
-            render::paint(tones.tone(base_handle(&entry.from)).bold(), display)
-        };
-        let to = entry
-            .to
-            .as_deref()
-            .map(|to| format!("{}, ", display_handle(to, grouped)))
-            .unwrap_or_default();
-        write_chat_line(out, entry.at, &from, &format!("{to}{}", entry.text), tz)?;
+            write_body_lines(out, &entry.chat.text)?;
+            last_group = Some(GroupState::new(entry, grouped, entry_date));
+        }
         first_entry = false;
         follows_day_delimiter = false;
     }
+    Ok(())
+}
+
+#[derive(Default)]
+struct AnswerPairs {
+    answer_by_ask: HashMap<usize, usize>,
+    suppressed_answers: BTreeSet<usize>,
+}
+
+fn pair_answers(entries: &[RenderEntry]) -> AnswerPairs {
+    let mut folded = AnswerPairs::default();
+    let mut open_by_request: HashMap<RequestId, usize> = HashMap::new();
+    let mut open_by_agent: HashMap<AgentKey, Vec<usize>> = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        match entry.kind {
+            TranscriptKind::Ask => {
+                if let Some(request_id) = entry.request_id.as_ref() {
+                    open_by_request.insert(request_id.clone(), index);
+                }
+                open_by_agent
+                    .entry(entry.agent.clone())
+                    .or_default()
+                    .push(index);
+            }
+            TranscriptKind::Answer => {
+                let mut by_agent = || {
+                    let stack = open_by_agent.get_mut(&entry.agent)?;
+                    while let Some(ask) = stack.pop() {
+                        if !folded.answer_by_ask.contains_key(&ask) {
+                            return Some(ask);
+                        }
+                    }
+                    None
+                };
+                let ask = if let Some(request_id) = entry.request_id.as_ref() {
+                    open_by_request
+                        .remove(request_id)
+                        .filter(|ask| !folded.answer_by_ask.contains_key(ask))
+                } else {
+                    by_agent()
+                };
+                if let Some(ask) = ask {
+                    folded.answer_by_ask.insert(ask, index);
+                    folded.suppressed_answers.insert(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    folded
+}
+
+#[derive(Clone, Debug)]
+struct GroupState {
+    from: String,
+    to: Option<String>,
+    at: Option<jiff::Timestamp>,
+    date: Option<Date>,
+}
+
+impl GroupState {
+    fn new(entry: &RenderEntry, grouped: bool, date: Option<Date>) -> Self {
+        let (from, to) = group_key(entry, grouped);
+        Self {
+            from,
+            to,
+            at: entry.chat.at,
+            date,
+        }
+    }
+
+    fn matches(&self, entry: &RenderEntry, grouped: bool, date: Option<Date>) -> bool {
+        let (from, to) = group_key(entry, grouped);
+        if self.from != from || self.to != to || self.date != date {
+            return false;
+        }
+        let (Some(previous), Some(current)) = (self.at, entry.chat.at) else {
+            return false;
+        };
+        let gap = current.duration_since(previous);
+        !gap.is_negative() && gap.as_secs() <= GROUP_WINDOW_SECS
+    }
+}
+
+fn group_key(entry: &RenderEntry, grouped: bool) -> (String, Option<String>) {
+    (
+        display_handle(&entry.chat.from, grouped).to_owned(),
+        entry
+            .chat
+            .to
+            .as_deref()
+            .map(|to| display_handle(to, grouped).to_owned()),
+    )
+}
+
+fn write_entry_header(
+    out: &mut impl Write,
+    entry: &RenderEntry,
+    grouped: bool,
+    tones: &mut AgentTones,
+    tz: &TimeZone,
+) -> Result<()> {
+    let mut header = paint_handle(&entry.chat.from, grouped, tones);
+    if let Some(to) = entry.chat.to.as_deref() {
+        header.push_str(&render::paint(render::palette::FAINT, " → "));
+        header.push_str(&paint_handle(to, grouped, tones));
+    }
+    if let Some(at) = entry.chat.at {
+        header.push_str("  ");
+        header.push_str(&render::paint(
+            render::palette::FAINT,
+            &at.to_zoned(tz.clone()).strftime("%H:%M").to_string(),
+        ));
+    }
+    writeln!(out, "{header}")?;
+    Ok(())
+}
+
+fn paint_handle(handle: &str, grouped: bool, tones: &mut AgentTones) -> String {
+    if handle == "user" {
+        render::paint(render::palette::COOL, "user")
+    } else if handle == "you" {
+        render::paint(render::palette::COOL.bold(), "you")
+    } else {
+        let display = display_handle(handle, grouped);
+        render::paint(tones.tone(base_handle(handle)).bold(), display)
+    }
+}
+
+fn write_body_lines(out: &mut impl Write, text: &str) -> Result<()> {
+    for line in text.lines() {
+        if line.is_empty() {
+            writeln!(out)?;
+        } else {
+            writeln!(out, "{BODY_INDENT}{}", paint_mentions(line))?;
+        }
+    }
+    Ok(())
+}
+
+fn paint_mentions(line: &str) -> String {
+    let mut rendered = String::new();
+    let mut index = 0;
+    while index < line.len() {
+        let ch = line[index..]
+            .chars()
+            .next()
+            .expect("index stays on char boundary");
+        if matches!(ch, '@' | '#') && mention_boundary(line, index) {
+            let token_start = index + ch.len_utf8();
+            let mut token_end = token_start;
+            for (offset, token_ch) in line[token_start..].char_indices() {
+                if is_mention_char(token_ch) {
+                    token_end = token_start + offset + token_ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let mut paint_end = token_end;
+            while paint_end > token_start {
+                let tail = line[..paint_end]
+                    .chars()
+                    .next_back()
+                    .expect("paint_end stays on char boundary");
+                if matches!(tail, '.' | ',' | ';' | ':' | '!' | '?' | ')') {
+                    paint_end -= tail.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if paint_end > token_start {
+                let style = if ch == '@' {
+                    render::palette::COOL.bold()
+                } else {
+                    render::palette::ACCENT
+                };
+                rendered.push_str(&render::paint(style, &line[index..paint_end]));
+                rendered.push_str(&line[paint_end..token_end]);
+                index = token_end;
+                continue;
+            }
+        }
+        rendered.push(ch);
+        index += ch.len_utf8();
+    }
+    rendered
+}
+
+fn mention_boundary(line: &str, index: usize) -> bool {
+    if index == 0 {
+        return true;
+    }
+    line[..index]
+        .chars()
+        .next_back()
+        .is_some_and(|ch| ch.is_whitespace() || ch == '(')
+}
+
+fn is_mention_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/' | '-')
+}
+
+fn write_ask_card(
+    out: &mut impl Write,
+    ask: &RenderEntry,
+    answer: Option<&RenderEntry>,
+) -> Result<()> {
+    if ask.chat.questions.is_empty() {
+        write_legacy_ask_card(out, ask, answer)
+    } else {
+        if !ask.chat.text.is_empty() {
+            write_body_lines(out, &ask.chat.text)?;
+        }
+        write_structured_ask_card(out, &ask.chat.questions, answer)
+    }
+}
+
+fn write_structured_ask_card(
+    out: &mut impl Write,
+    questions: &[rimz::agents::AskQuestion],
+    answer: Option<&RenderEntry>,
+) -> Result<()> {
+    let (answers, source) = folded_answers(answer);
+    let matched = match_question_answers(questions, &answers);
+    for (index, question) in questions.iter().enumerate() {
+        if index > 0 {
+            write_spine_blank(out, matched[index - 1].is_some())?;
+        }
+        write_question_block(out, question, matched[index].as_ref(), source)?;
+    }
+    Ok(())
+}
+
+fn folded_answers(answer: Option<&RenderEntry>) -> (Vec<rimz::agents::AskAnswer>, Option<&str>) {
+    let Some(answer) = answer else {
+        return (Vec::new(), None);
+    };
+    let answers = if !answer.chat.answers.is_empty() {
+        answer.chat.answers.clone()
+    } else {
+        let text = answer.chat.text.trim();
+        if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![rimz::agents::AskAnswer {
+                question: None,
+                chosen: vec![text.to_owned()],
+                note: None,
+            }]
+        }
+    };
+    (answers, Some(answer.chat.from.as_str()))
+}
+
+fn match_question_answers(
+    questions: &[rimz::agents::AskQuestion],
+    answers: &[rimz::agents::AskAnswer],
+) -> Vec<Option<rimz::agents::AskAnswer>> {
+    let mut matched = vec![None; questions.len()];
+    let mut used = vec![false; answers.len()];
+    for (answer_index, answer) in answers.iter().enumerate() {
+        let Some(question) = answer.question.as_deref() else {
+            continue;
+        };
+        if let Some(question_index) = questions.iter().enumerate().position(|(index, candidate)| {
+            candidate.question == question && matched[index].is_none()
+        }) {
+            matched[question_index] = Some(answer.clone());
+            used[answer_index] = true;
+        }
+    }
+    for (answer_index, answer) in answers.iter().enumerate() {
+        if used[answer_index] {
+            continue;
+        }
+        if let Some(slot) = matched.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(answer.clone());
+        }
+    }
+    matched
+}
+
+fn write_question_block(
+    out: &mut impl Write,
+    question: &rimz::agents::AskQuestion,
+    answer: Option<&rimz::agents::AskAnswer>,
+    source: Option<&str>,
+) -> Result<()> {
+    let answered = answer.is_some();
+    write_question_text(out, answered, &question.question)?;
+    match answer {
+        Some(answer) if question.options.is_empty() => write_free_answer(out, answer, source),
+        Some(answer) => write_option_answers(out, &question.options, answer, source),
+        None => {
+            for option in &question.options {
+                write_spine_line(out, false, &format!("○ {option}"))?;
+            }
+            write_unanswered(out)
+        }
+    }
+}
+
+fn write_question_text(out: &mut impl Write, answered: bool, question: &str) -> Result<()> {
+    for (index, line) in question.lines().enumerate() {
+        let line = if index == 0 {
+            render::paint(anstyle::Style::new().bold(), line)
+        } else {
+            line.to_owned()
+        };
+        write_spine_line(out, answered, &line)?;
+    }
+    Ok(())
+}
+
+fn write_free_answer(
+    out: &mut impl Write,
+    answer: &rimz::agents::AskAnswer,
+    source: Option<&str>,
+) -> Result<()> {
+    let mut suffix_written = false;
+    for choice in answer.chosen.iter().filter_map(|choice| non_empty(choice)) {
+        let suffix = answer_suffix(source, answer.note.as_deref(), &mut suffix_written);
+        let content = format!(
+            "{} {}{}",
+            render::paint(render::palette::GOOD, "●"),
+            paint_mentions(choice),
+            suffix
+        );
+        write_spine_line(out, true, &content)?;
+    }
+    Ok(())
+}
+
+fn write_option_answers(
+    out: &mut impl Write,
+    options: &[String],
+    answer: &rimz::agents::AskAnswer,
+    source: Option<&str>,
+) -> Result<()> {
+    let chosen = answer
+        .chosen
+        .iter()
+        .filter_map(|choice| non_empty(choice))
+        .collect::<Vec<_>>();
+    let mut suffix_written = false;
+    for option in options {
+        if chosen.iter().any(|choice| *choice == option) {
+            let suffix = answer_suffix(source, answer.note.as_deref(), &mut suffix_written);
+            let content = format!(
+                "{} {}{}",
+                render::paint(render::palette::GOOD, "●"),
+                option,
+                suffix
+            );
+            write_spine_line(out, true, &content)?;
+        } else {
+            let content = render::paint(render::palette::FAINT, &format!("○ {option}"));
+            write_spine_line(out, true, &content)?;
+        }
+    }
+    let other = chosen
+        .into_iter()
+        .filter(|choice| !options.iter().any(|option| option == choice))
+        .collect::<Vec<_>>();
+    if !other.is_empty() {
+        let suffix = answer_suffix(source, answer.note.as_deref(), &mut suffix_written);
+        let content = format!(
+            "{} {} {}{}",
+            render::paint(render::palette::GOOD, "●"),
+            render::paint(render::palette::MUTED, "other:"),
+            paint_mentions(&other.join(", ")),
+            suffix
+        );
+        write_spine_line(out, true, &content)?;
+    }
+    Ok(())
+}
+
+fn write_legacy_ask_card(
+    out: &mut impl Write,
+    ask: &RenderEntry,
+    answer: Option<&RenderEntry>,
+) -> Result<()> {
+    let answered = answer.is_some();
+    for line in ask.chat.text.lines() {
+        write_spine_line(out, answered, &paint_mentions(line))?;
+    }
+    let Some(answer) = answer else {
+        return write_unanswered(out);
+    };
+    let text = if answer.chat.answers.is_empty() {
+        answer.chat.text.trim().to_owned()
+    } else {
+        rimz::agents::answers_text(&answer.chat.answers)
+    };
+    if text.is_empty() {
+        return Ok(());
+    }
+    let mut suffix_written = false;
+    for line in text.lines() {
+        let content = format!(
+            "{} {}{}",
+            render::paint(render::palette::GOOD, "●"),
+            paint_mentions(line),
+            answer_suffix(Some(&answer.chat.from), None, &mut suffix_written)
+        );
+        write_spine_line(out, true, &content)?;
+    }
+    Ok(())
+}
+
+fn write_unanswered(out: &mut impl Write) -> Result<()> {
+    write_spine_line(
+        out,
+        false,
+        &render::paint(render::palette::WARN, "◌ unanswered"),
+    )
+}
+
+fn answer_suffix(source: Option<&str>, note: Option<&str>, written: &mut bool) -> String {
+    if *written {
+        return String::new();
+    }
+    *written = true;
+    let Some(source) = source.and_then(non_empty) else {
+        return String::new();
+    };
+    let mut suffix = format!(" — {source}");
+    if let Some(note) = note.and_then(non_empty) {
+        suffix.push_str(" · “");
+        suffix.push_str(note);
+        suffix.push('”');
+    }
+    render::paint(render::palette::MUTED, &suffix)
+}
+
+fn non_empty(text: &str) -> Option<&str> {
+    let text = text.trim();
+    (!text.is_empty()).then_some(text)
+}
+
+fn write_spine_line(out: &mut impl Write, answered: bool, content: &str) -> Result<()> {
+    let style = if answered {
+        render::palette::FAINT
+    } else {
+        render::palette::WARN
+    };
+    writeln!(out, "{}{}", render::paint(style, "▌ "), content)?;
+    Ok(())
+}
+
+fn write_spine_blank(out: &mut impl Write, answered: bool) -> Result<()> {
+    let style = if answered {
+        render::palette::FAINT
+    } else {
+        render::palette::WARN
+    };
+    writeln!(out, "{}", render::paint(style, "▌"))?;
     Ok(())
 }
 
@@ -606,29 +1101,6 @@ fn write_day_delimiter(out: &mut impl Write, date: Date, today: Date) -> Result<
     Ok(())
 }
 
-fn write_chat_line(
-    out: &mut impl Write,
-    at: Option<jiff::Timestamp>,
-    from: &str,
-    text: &str,
-    tz: &TimeZone,
-) -> Result<()> {
-    let time = at.map_or_else(
-        || "        ".to_owned(),
-        |at| at.to_zoned(tz.clone()).strftime("%H:%M:%S").to_string(),
-    );
-    let time = render::paint(render::palette::FAINT, &time);
-    writeln!(out, "{time}  {from}")?;
-    for line in text.lines() {
-        if line.is_empty() {
-            writeln!(out)?;
-        } else {
-            writeln!(out, "{BODY_INDENT}{line}")?;
-        }
-    }
-    Ok(())
-}
-
 fn print_json(value: &impl Serialize) -> Result<()> {
     let mut stdout = std::io::stdout().lock();
     serde_json::to_writer_pretty(&mut stdout, value)?;
@@ -644,25 +1116,52 @@ mod tests {
         raw.parse().expect("timestamp")
     }
 
-    fn entry(at: &str, text: &str) -> rimz::agents::ChatEntry {
-        rimz::agents::ChatEntry {
-            from: "user".to_owned(),
-            to: None,
-            at: Some(ts(at)),
-            text: text.to_owned(),
+    fn agent_key() -> AgentKey {
+        (
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("sess-1"),
+        )
+    }
+
+    fn render_entry(
+        kind: TranscriptKind,
+        from: &str,
+        to: Option<&str>,
+        at: &str,
+        text: &str,
+    ) -> RenderEntry {
+        RenderEntry {
+            kind,
+            request_id: None,
+            agent: agent_key(),
+            chat: rimz::agents::ChatEntry {
+                from: from.to_owned(),
+                to: to.map(ToOwned::to_owned),
+                at: Some(ts(at)),
+                text: text.to_owned(),
+                questions: Vec::new(),
+                answers: Vec::new(),
+            },
         }
     }
 
-    fn ask_entry(at: &str, text: &str) -> rimz::agents::ChatEntry {
-        rimz::agents::ChatEntry {
-            from: "claude".to_owned(),
-            to: None,
-            at: Some(ts(at)),
-            text: text.to_owned(),
-        }
+    fn entry(at: &str, text: &str) -> RenderEntry {
+        render_entry(TranscriptKind::Prompt, "user", Some("@claude"), at, text)
     }
 
-    fn render(entries: &[rimz::agents::ChatEntry], today: Date) -> String {
+    fn assistant_entry(at: &str, text: &str) -> RenderEntry {
+        render_entry(TranscriptKind::Assistant, "@claude", None, at, text)
+    }
+
+    fn ask_entry(at: &str, text: &str) -> RenderEntry {
+        render_entry(TranscriptKind::Ask, "@claude", None, at, text)
+    }
+
+    fn answer_entry(at: &str, text: &str) -> RenderEntry {
+        render_entry(TranscriptKind::Answer, "you", Some("@claude"), at, text)
+    }
+
+    fn render(entries: &[RenderEntry], today: Date) -> String {
         let tz = TimeZone::get("America/New_York").expect("timezone");
         let mut out = anstream::StripStream::new(Vec::new());
         render_chat_to(&mut out, None, entries, &tz, today).expect("render");
@@ -688,6 +1187,8 @@ mod tests {
             request_id: None,
             from: from.map(ToOwned::to_owned),
             text: text.to_owned(),
+            questions: Vec::new(),
+            answers: Vec::new(),
         }
     }
 
@@ -758,9 +1259,9 @@ mod tests {
         let today = out.find("──── Today ").expect("today");
         assert!(friday < saturday);
         assert!(saturday < today);
-        assert!(out.contains("23:30:00"));
-        assert!(out.contains("10:00:00"));
-        assert!(out.contains("12:00:00"));
+        assert!(out.contains("23:30"));
+        assert!(out.contains("10:00"));
+        assert!(out.contains("12:00"));
         assert!(!out.contains("03:30:00"));
     }
 
@@ -772,7 +1273,7 @@ mod tests {
         );
 
         assert!(!out.contains("────"));
-        assert!(out.contains("00:30:00"));
+        assert!(out.contains("00:30"));
     }
 
     #[test]
@@ -780,16 +1281,156 @@ mod tests {
         let out = render(
             &[
                 entry("2026-06-28T04:00:00Z", "hello\n\nagain"),
-                ask_entry("2026-06-28T04:00:01Z", "answer"),
+                assistant_entry("2026-06-28T04:00:01Z", "answer"),
             ],
             jiff::civil::date(2026, 6, 28),
         );
 
         assert!(
-            out.contains("00:00:00  user\n    hello\n\n    again\n\n00:00:01  claude\n    answer"),
+            out.contains("user → @claude  00:00\n  hello\n\n  again\n\n@claude  00:00\n  answer"),
             "{out}"
         );
         assert!(!out.contains("user:"), "{out}");
+    }
+
+    #[test]
+    fn chat_groups_same_sender_receiver_inside_window() {
+        let out = render(
+            &[
+                entry("2026-06-28T04:00:00Z", "first"),
+                entry("2026-06-28T04:04:59Z", "second"),
+                entry("2026-06-28T04:10:01Z", "third"),
+            ],
+            jiff::civil::date(2026, 6, 28),
+        );
+
+        assert_eq!(out.matches("user → @claude").count(), 2, "{out}");
+        assert!(out.contains("first\n  second"), "{out}");
+    }
+
+    #[test]
+    fn chat_breaks_group_on_receiver_change_and_ask_cards() {
+        let mut routed = entry("2026-06-28T04:02:00Z", "to codex");
+        routed.chat.to = Some("@codex".to_owned());
+        let out = render(
+            &[
+                entry("2026-06-28T04:00:00Z", "first"),
+                routed,
+                ask_entry("2026-06-28T04:03:00Z", "Approve tool?"),
+                entry("2026-06-28T04:04:00Z", "after ask"),
+            ],
+            jiff::civil::date(2026, 6, 28),
+        );
+
+        assert_eq!(out.matches("user →").count(), 3, "{out}");
+        assert!(out.contains("▌ Approve tool?\n▌ ◌ unanswered"), "{out}");
+    }
+
+    #[test]
+    fn mention_painting_highlights_agents_and_channels() {
+        let raw = paint_mentions("ping @codex in (#feat-auth). keep email@host plain");
+
+        assert!(raw.contains("\u{1b}["), "{raw:?}");
+        assert!(raw.contains("@codex"), "{raw}");
+        assert!(raw.contains("#feat-auth"), "{raw}");
+        assert!(raw.contains("email@host"), "{raw}");
+    }
+
+    #[test]
+    fn structured_ask_card_folds_selected_answer_with_note() {
+        let request_id = RequestId::new();
+        let mut ask = ask_entry("2026-06-28T18:00:00Z", "I checked both paths.");
+        ask.request_id = Some(request_id.clone());
+        ask.chat.questions = vec![rimz::agents::AskQuestion {
+            question: "Choose deployment path?".to_owned(),
+            options: vec!["safe".to_owned(), "fast".to_owned()],
+        }];
+        let mut answer = answer_entry("2026-06-28T18:01:00Z", "safe");
+        answer.request_id = Some(request_id);
+        answer.chat.answers = vec![rimz::agents::AskAnswer {
+            question: Some("Choose deployment path?".to_owned()),
+            chosen: vec!["safe".to_owned()],
+            note: Some("use prod window".to_owned()),
+        }];
+
+        let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
+
+        assert!(
+            out.contains("@claude  14:00\n  I checked both paths."),
+            "{out}"
+        );
+        assert!(out.contains("▌ Choose deployment path?"), "{out}");
+        assert!(out.contains("▌ ● safe — you · “use prod window”"), "{out}");
+        assert!(out.contains("▌ ○ fast"), "{out}");
+        assert!(!out.contains("you → @claude"), "{out}");
+    }
+
+    #[test]
+    fn structured_ask_card_renders_other_and_multi_question_answers() {
+        let mut ask = ask_entry("2026-06-28T18:00:00Z", "");
+        ask.chat.questions = vec![
+            rimz::agents::AskQuestion {
+                question: "Merge strategy?".to_owned(),
+                options: vec!["squash".to_owned(), "rebase".to_owned()],
+            },
+            rimz::agents::AskQuestion {
+                question: "Notify team?".to_owned(),
+                options: vec!["yes".to_owned(), "no".to_owned()],
+            },
+        ];
+        let mut answer = answer_entry("2026-06-28T18:01:00Z", "live repro first\nyes");
+        answer.chat.answers = vec![
+            rimz::agents::AskAnswer {
+                question: Some("Notify team?".to_owned()),
+                chosen: vec!["yes".to_owned()],
+                note: None,
+            },
+            rimz::agents::AskAnswer {
+                question: Some("Merge strategy?".to_owned()),
+                chosen: vec!["live repro first".to_owned()],
+                note: None,
+            },
+        ];
+
+        let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
+
+        assert!(out.contains("▌ ● other: live repro first — you"), "{out}");
+        assert!(out.contains("▌\n▌ Notify team?"), "{out}");
+        assert!(out.contains("▌ ● yes — you"), "{out}");
+    }
+
+    #[test]
+    fn legacy_ask_card_folds_text_answer_or_stays_unanswered() {
+        let mut ask = ask_entry("2026-06-28T18:00:00Z", "Choose path? [safe, fast]");
+        ask.request_id = Some(RequestId::new());
+        let mut answer = answer_entry("2026-06-28T18:01:00Z", "safe");
+        answer.request_id = ask.request_id.clone();
+
+        let answered = render(&[ask.clone(), answer], jiff::civil::date(2026, 6, 28));
+        let unanswered = render(&[ask], jiff::civil::date(2026, 6, 28));
+
+        assert!(
+            answered.contains("▌ Choose path? [safe, fast]\n▌ ● safe — you"),
+            "{answered}"
+        );
+        assert!(
+            unanswered.contains("▌ Choose path? [safe, fast]\n▌ ◌ unanswered"),
+            "{unanswered}"
+        );
+    }
+
+    #[test]
+    fn request_id_answer_without_matching_ask_stays_plain() {
+        let mut ask = ask_entry("2026-06-28T18:00:00Z", "Native question?");
+        ask.request_id = Some(RequestId::new());
+        let mut answer = answer_entry("2026-06-28T18:01:00Z", "allow");
+        answer.request_id = Some(RequestId::new());
+
+        let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
+
+        assert!(out.contains("▌ Native question?\n▌ ◌ unanswered"), "{out}");
+        assert!(out.contains("you → @claude"), "{out}");
+        assert!(out.contains("  allow"), "{out}");
     }
 
     #[test]

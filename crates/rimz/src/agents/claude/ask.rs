@@ -1,15 +1,17 @@
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
+use crate::agents::{AskAnswer, AskQuestion};
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct AskUserQuestionInput {
-    questions: Vec<AskQuestion>,
+    questions: Vec<ClaudeAskQuestion>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
-struct AskQuestion {
+struct ClaudeAskQuestion {
     question: Option<String>,
     options: Vec<AskOption>,
 }
@@ -28,7 +30,7 @@ struct AskUserQuestionResponse {
     #[serde(deserialize_with = "null_to_default")]
     answers: Map<String, Value>,
     #[serde(deserialize_with = "null_to_default")]
-    questions: Vec<AskQuestion>,
+    questions: Vec<ClaudeAskQuestion>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -37,100 +39,122 @@ struct ExitPlanModeInput {
     plan: Option<String>,
 }
 
-pub(super) fn question_summary(tool_name: &str, tool_input: &Value) -> Option<String> {
+pub(super) fn question_detail(tool_name: &str, tool_input: &Value) -> Option<Vec<AskQuestion>> {
     match tool_name {
-        "AskUserQuestion" => ask_user_question_summary(tool_input),
-        "ExitPlanMode" => exit_plan_mode_summary(tool_input),
+        "AskUserQuestion" => ask_user_question_detail(tool_input),
+        "ExitPlanMode" => exit_plan_mode_detail(tool_input),
         _ => None,
     }
 }
 
-pub(super) fn answer_summary(tool_name: &str, tool_response: &Value) -> Option<String> {
+pub(super) fn answer_detail(tool_name: &str, tool_response: &Value) -> Option<Vec<AskAnswer>> {
     match tool_name {
         "AskUserQuestion" => ask_user_question_answer(tool_response),
-        "ExitPlanMode" => Some("approved plan".to_owned()),
+        "ExitPlanMode" => Some(vec![AskAnswer {
+            question: None,
+            chosen: vec!["approved plan".to_owned()],
+            note: None,
+        }]),
         _ => None,
     }
 }
 
-fn ask_user_question_summary(tool_input: &Value) -> Option<String> {
+fn ask_user_question_detail(tool_input: &Value) -> Option<Vec<AskQuestion>> {
     let parsed: AskUserQuestionInput = serde_json::from_value(tool_input.clone()).ok()?;
-    let text = parsed
+    let questions = parsed
         .questions
         .into_iter()
-        .filter_map(render_question)
-        .collect::<Vec<_>>()
-        .join("\n");
-    non_empty(Some(&text))
+        .filter_map(structured_question)
+        .collect::<Vec<_>>();
+    (!questions.is_empty()).then_some(questions)
 }
 
-fn render_question(question: AskQuestion) -> Option<String> {
-    let mut text = non_empty(question.question.as_deref())?;
+fn structured_question(question: ClaudeAskQuestion) -> Option<AskQuestion> {
+    let question_text = non_empty(question.question.as_deref())?;
     let labels = question
         .options
         .into_iter()
         .filter_map(|option| non_empty(option.label.as_deref()))
         .collect::<Vec<_>>();
-    if !labels.is_empty() {
-        text.push_str(" [");
-        text.push_str(&labels.join(", "));
-        text.push(']');
-    }
-    Some(text)
+    Some(AskQuestion {
+        question: question_text,
+        options: labels,
+    })
 }
 
-fn exit_plan_mode_summary(tool_input: &Value) -> Option<String> {
+fn exit_plan_mode_detail(tool_input: &Value) -> Option<Vec<AskQuestion>> {
     let parsed: ExitPlanModeInput = serde_json::from_value(tool_input.clone()).ok()?;
     let plan = non_empty(parsed.plan.as_deref())?;
-    Some(format!("Requesting plan approval:\n\n{plan}"))
+    Some(vec![AskQuestion {
+        question: format!("Requesting plan approval:\n\n{plan}"),
+        options: Vec::new(),
+    }])
 }
 
-fn ask_user_question_answer(tool_response: &Value) -> Option<String> {
+fn ask_user_question_answer(tool_response: &Value) -> Option<Vec<AskAnswer>> {
     // Claude Code has not documented this PostToolUse shape yet
     // (anthropics/claude-code#12605); refine these fields as the wire settles.
     value_text(tool_response)
-        .or_else(|| answers_map_summary(tool_response))
-        .or_else(|| object_answer_field(tool_response, "answers"))
-        .or_else(|| object_answer_field(tool_response, "choices"))
-        .or_else(|| object_answer_field(tool_response, "selectedOptions"))
-        .or_else(|| serde_json::to_string(tool_response).ok())
+        .map(single_answer)
+        .or_else(|| answers_map_detail(tool_response))
+        .or_else(|| object_answer_field(tool_response, "answers").map(single_answer))
+        .or_else(|| object_answer_field(tool_response, "choices").map(single_answer))
+        .or_else(|| object_answer_field(tool_response, "selectedOptions").map(single_answer))
+        .or_else(|| serde_json::to_string(tool_response).ok().map(single_answer))
 }
 
-fn answers_map_summary(tool_response: &Value) -> Option<String> {
+fn single_answer(text: String) -> Vec<AskAnswer> {
+    vec![AskAnswer {
+        question: None,
+        chosen: vec![text],
+        note: None,
+    }]
+}
+
+fn answers_map_detail(tool_response: &Value) -> Option<Vec<AskAnswer>> {
     let parsed: AskUserQuestionResponse = serde_json::from_value(tool_response.clone()).ok()?;
     if parsed.answers.is_empty() {
         return None;
     }
 
     let mut answers = parsed.answers;
-    let mut lines = Vec::new();
+    let mut entries = Vec::new();
     for question in parsed.questions {
         let Some(question_text) = non_empty(question.question.as_deref()) else {
             continue;
         };
         if let Some(value) = answers.remove(&question_text)
-            && let Some(line) = answer_line(&question_text, &value, &parsed.annotations)
+            && let Some(answer) = answer_entry(Some(question_text), &value, &parsed.annotations)
         {
-            lines.push(line);
+            entries.push(answer);
         }
     }
     for (question, value) in answers {
-        if let Some(line) = answer_line(&question, &value, &parsed.annotations) {
-            lines.push(line);
+        if let Some(answer) = answer_entry(Some(question), &value, &parsed.annotations) {
+            entries.push(answer);
         }
     }
 
-    (!lines.is_empty()).then(|| lines.join("\n"))
+    (!entries.is_empty()).then_some(entries)
 }
 
-fn answer_line(question: &str, value: &Value, annotations: &Map<String, Value>) -> Option<String> {
-    let mut line = answer_value_text(value)?;
-    if let Some(note) = answer_note(question, annotations) {
-        line.push_str(" (note: ");
-        line.push_str(&note);
-        line.push(')');
+fn answer_entry(
+    question: Option<String>,
+    value: &Value,
+    annotations: &Map<String, Value>,
+) -> Option<AskAnswer> {
+    let chosen = answer_value_choices(value);
+    if chosen.is_empty() {
+        return None;
     }
-    Some(line)
+    let note = question
+        .as_deref()
+        .and_then(|question| answer_note(question, annotations));
+    Some(AskAnswer {
+        question,
+        chosen,
+        note,
+    })
 }
 
 fn answer_note(question: &str, annotations: &Map<String, Value>) -> Option<String> {
@@ -144,6 +168,13 @@ fn answer_note(question: &str, annotations: &Map<String, Value>) -> Option<Strin
 fn object_answer_field(value: &Value, key: &str) -> Option<String> {
     let field = value.get(key)?;
     answer_value_text(field)
+}
+
+fn answer_value_choices(value: &Value) -> Vec<String> {
+    if let Some(values) = value.as_array() {
+        return values.iter().filter_map(answer_value_text).collect();
+    }
+    answer_value_text(value).into_iter().collect()
 }
 
 fn answer_value_text(value: &Value) -> Option<String> {
@@ -196,8 +227,8 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn ask_user_question_summary_renders_questions_and_options() {
-        let summary = question_summary(
+    fn ask_user_question_detail_renders_questions_and_options() {
+        let questions = question_detail(
             "AskUserQuestion",
             &json!({
                 "questions": [
@@ -217,47 +248,70 @@ mod tests {
         );
 
         assert_eq!(
-            summary.as_deref(),
-            Some("Choose deployment path? [safe, fast]\nNotify team?")
+            questions,
+            Some(vec![
+                AskQuestion {
+                    question: "Choose deployment path?".to_owned(),
+                    options: vec!["safe".to_owned(), "fast".to_owned()],
+                },
+                AskQuestion {
+                    question: "Notify team?".to_owned(),
+                    options: Vec::new(),
+                },
+            ])
         );
     }
 
     #[test]
-    fn exit_plan_mode_summary_renders_plan_approval_request() {
-        let summary = question_summary(
+    fn exit_plan_mode_detail_renders_plan_approval_request() {
+        let questions = question_detail(
             "ExitPlanMode",
             &json!({ "plan": "1. Edit parser\n2. Run tests" }),
         );
 
         assert_eq!(
-            summary.as_deref(),
-            Some("Requesting plan approval:\n\n1. Edit parser\n2. Run tests")
+            questions,
+            Some(vec![AskQuestion {
+                question: "Requesting plan approval:\n\n1. Edit parser\n2. Run tests".to_owned(),
+                options: Vec::new(),
+            }])
         );
     }
 
     #[test]
     fn ask_user_question_answer_prefers_readable_fields() {
         assert_eq!(
-            answer_summary("AskUserQuestion", &json!("safe")).as_deref(),
-            Some("safe")
+            answer_detail("AskUserQuestion", &json!("safe")),
+            Some(vec![AskAnswer {
+                question: None,
+                chosen: vec!["safe".to_owned()],
+                note: None,
+            }])
         );
         assert_eq!(
-            answer_summary(
+            answer_detail(
                 "AskUserQuestion",
                 &json!({ "selectedOptions": [{ "label": "fast" }, { "label": "notify" }] })
-            )
-            .as_deref(),
-            Some("fast, notify")
+            ),
+            Some(vec![AskAnswer {
+                question: None,
+                chosen: vec!["fast, notify".to_owned()],
+                note: None,
+            }])
         );
         assert_eq!(
-            answer_summary("AskUserQuestion", &json!({ "unexpected": ["shape"] })).as_deref(),
-            Some(r#"{"unexpected":["shape"]}"#)
+            answer_detail("AskUserQuestion", &json!({ "unexpected": ["shape"] })),
+            Some(vec![AskAnswer {
+                question: None,
+                chosen: vec![r#"{"unexpected":["shape"]}"#.to_owned()],
+                note: None,
+            }])
         );
     }
 
     #[test]
     fn ask_user_question_answer_renders_live_answer_map() {
-        let answer = answer_summary(
+        let answer = answer_detail(
             "AskUserQuestion",
             &json!({
                 "annotations": {},
@@ -270,12 +324,19 @@ mod tests {
             }),
         );
 
-        assert_eq!(answer.as_deref(), Some("Live repro first"));
+        assert_eq!(
+            answer,
+            Some(vec![AskAnswer {
+                question: Some("Choose deployment path?".to_owned()),
+                chosen: vec!["Live repro first".to_owned()],
+                note: None,
+            }])
+        );
     }
 
     #[test]
     fn ask_user_question_answer_orders_live_answer_map_by_questions() {
-        let answer = answer_summary(
+        let answer = answer_detail(
             "AskUserQuestion",
             &json!({
                 "annotations": {},
@@ -290,12 +351,15 @@ mod tests {
             }),
         );
 
-        assert_eq!(answer.as_deref(), Some("safe\nyes"));
+        assert_eq!(
+            crate::agents::answers_text(&answer.expect("answer")),
+            "safe\nyes"
+        );
     }
 
     #[test]
     fn ask_user_question_answer_renders_multiselect_arrays() {
-        let answer = answer_summary(
+        let answer = answer_detail(
             "AskUserQuestion",
             &json!({
                 "annotations": {},
@@ -306,12 +370,19 @@ mod tests {
             }),
         );
 
-        assert_eq!(answer.as_deref(), Some("a, b"));
+        assert_eq!(
+            answer,
+            Some(vec![AskAnswer {
+                question: Some("Choose scopes?".to_owned()),
+                chosen: vec!["a".to_owned(), "b".to_owned()],
+                note: None,
+            }])
+        );
     }
 
     #[test]
     fn ask_user_question_answer_appends_annotation_notes() {
-        let answer = answer_summary(
+        let answer = answer_detail(
             "AskUserQuestion",
             &json!({
                 "annotations": {
@@ -324,12 +395,19 @@ mod tests {
             }),
         );
 
-        assert_eq!(answer.as_deref(), Some("safe (note: use prod window)"));
+        assert_eq!(
+            answer,
+            Some(vec![AskAnswer {
+                question: Some("Choose deployment path?".to_owned()),
+                chosen: vec!["safe".to_owned()],
+                note: Some("use prod window".to_owned()),
+            }])
+        );
     }
 
     #[test]
     fn ask_user_question_answer_tolerates_null_live_fields() {
-        let answer = answer_summary(
+        let answer = answer_detail(
             "AskUserQuestion",
             &json!({
                 "annotations": null,
@@ -338,15 +416,26 @@ mod tests {
             }),
         );
 
-        assert_eq!(answer.as_deref(), Some("safe"));
+        assert_eq!(
+            answer,
+            Some(vec![AskAnswer {
+                question: Some("Choose deployment path?".to_owned()),
+                chosen: vec!["safe".to_owned()],
+                note: None,
+            }])
+        );
     }
 
     #[test]
     fn answer_summary_handles_plan_approval() {
         assert_eq!(
-            answer_summary("ExitPlanMode", &json!({})).as_deref(),
-            Some("approved plan")
+            answer_detail("ExitPlanMode", &json!({})),
+            Some(vec![AskAnswer {
+                question: None,
+                chosen: vec!["approved plan".to_owned()],
+                note: None,
+            }])
         );
-        assert!(answer_summary("Bash", &json!("ok")).is_none());
+        assert!(answer_detail("Bash", &json!("ok")).is_none());
     }
 }

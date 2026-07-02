@@ -100,13 +100,13 @@ fn record_native_answer(
     event_name: &str,
     payload: &Value,
 ) {
-    let Some(answer) = agent
-        .native_ask_answer(event_name, payload)
-        .map(|answer| answer.trim().to_owned())
-        .filter(|answer| !answer.is_empty())
-    else {
+    let Some(answers) = agent.native_ask_answer(event_name, payload) else {
         return;
     };
+    let answer = rimz::agents::answers_text(&answers);
+    if answers.is_empty() || answer.is_empty() {
+        return;
+    }
     let Some(agent_id) = payload_agent_id(payload) else {
         return;
     };
@@ -161,6 +161,8 @@ fn record_native_answer(
         request_id: None,
         from: Some("you".to_owned()),
         text: answer,
+        questions: Vec::new(),
+        answers,
     };
     if let Err(err) = rimz::ledger::transcript_log::append(ledger.paths(), &entry) {
         warn!(
@@ -505,6 +507,8 @@ fn record_transcript_conversation(
         request_id: None,
         from: None,
         text,
+        questions: Vec::new(),
+        answers: Vec::new(),
     };
 
     match observation.signal {

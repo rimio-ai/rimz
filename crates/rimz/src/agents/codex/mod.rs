@@ -76,7 +76,7 @@ use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentErr, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
+    AgentAdapter, AgentErr, AgentLifecycleObservation, AgentTurnError, AskQuestion, ClassifiedHook,
     ExtraCredits, HookInstallPreview, HookInstallReport, HookUninstallReport, LifecycleRefreshCtx,
     LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, Result, RootIdentity,
     SubagentIdentity, TranscriptMessage, TranscriptRole, choice_is_allow, classify_agent_hook,
@@ -133,18 +133,26 @@ struct CodexQuestion {
     question: Option<String>,
 }
 
-fn codex_question_summary(tool_name: &str, tool_input: &Value) -> Option<String> {
+fn codex_question_detail(tool_name: &str, tool_input: &Value) -> Option<Vec<AskQuestion>> {
     if tool_name != "request_user_input" {
         return None;
     }
     let parsed: CodexQuestionInput = serde_json::from_value(tool_input.clone()).ok()?;
-    let text = parsed
+    let questions = parsed
         .questions
         .into_iter()
-        .filter_map(|question| question.question.as_deref().and_then(non_empty_trimmed))
-        .collect::<Vec<_>>()
-        .join("\n");
-    (!text.is_empty()).then_some(text)
+        .filter_map(|question| {
+            question
+                .question
+                .as_deref()
+                .and_then(non_empty_trimmed)
+                .map(|question| AskQuestion {
+                    question,
+                    options: Vec::new(),
+                })
+        })
+        .collect::<Vec<_>>();
+    (!questions.is_empty()).then_some(questions)
 }
 
 /// Everything `const` about Codex, in one place. See [`AgentDescriptor`] for
@@ -681,12 +689,12 @@ impl AgentAdapter for CodexAdapter {
         Ok(None)
     }
 
-    fn ask_question_summary(&self, event_name: &str, payload: &Value) -> Option<String> {
+    fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
         if event_name != "PreToolUse" {
             return None;
         }
         let parsed = parse_pre_tool_use(payload);
-        codex_question_summary(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
+        codex_question_detail(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
     }
 
     fn moves_on(&self, event_name: &str) -> bool {

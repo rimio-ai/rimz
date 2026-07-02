@@ -12,6 +12,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::agents::{AskAnswer, AskQuestion};
 use crate::ids::{AgentKind, AgentSessionId, RequestId};
 use crate::ledger::{StatePaths, atomic, lock};
 
@@ -65,6 +66,10 @@ pub struct TranscriptEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<AskQuestion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub answers: Vec<AskAnswer>,
 }
 
 /// Append one transcript entry. Callers must not already hold the workspace
@@ -214,6 +219,8 @@ mod tests {
             request_id: None,
             from: None,
             text: text.to_owned(),
+            questions: Vec::new(),
+            answers: Vec::new(),
         }
     }
 
@@ -254,9 +261,32 @@ mod tests {
             let json = serde_json::to_string(&entry).expect("serialize");
             assert!(!json.contains("request_id"));
             assert!(!json.contains("channel"));
+            assert!(!json.contains("questions"));
+            assert!(!json.contains("answers"));
             let decoded: TranscriptEntry = serde_json::from_str(&json).expect("decode");
             assert_eq!(decoded, entry);
         }
+    }
+
+    #[test]
+    fn transcript_entry_round_trips_structured_asks_and_answers() {
+        let mut entry = entry(TranscriptKind::Ask, "lead-in", "2026-06-01T00:00:00Z");
+        entry.questions = vec![AskQuestion {
+            question: "Choose deployment path?".to_owned(),
+            options: vec!["safe".to_owned(), "fast".to_owned()],
+        }];
+        entry.answers = vec![AskAnswer {
+            question: Some("Choose deployment path?".to_owned()),
+            chosen: vec!["safe".to_owned()],
+            note: Some("use prod window".to_owned()),
+        }];
+
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(json.contains("questions"));
+        assert!(json.contains("answers"));
+        let decoded: TranscriptEntry = serde_json::from_str(&json).expect("decode");
+
+        assert_eq!(decoded, entry);
     }
 
     #[test]

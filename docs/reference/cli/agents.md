@@ -172,7 +172,7 @@ rimz transcript @all#cli-docs --last 12
 rimz transcript --json
 ```
 
-A channel target (`#worktree`, `@all`, or no target for the current channel) projects every root agent's transcript-log entry into one timestamp-ordered chat log. Human prompts render as `user: @handle, text`; assistant messages render as `@handle: text`; delivered agent messages render as `@sender: @receiver, text` from structured message attribution; blocking asks render from the agent; and effective answers render from `you` or the resolver to the agent. Peer-opened turns include the receiver's assistant reply, and `--last <N>` keeps the last N chat lines.
+A channel target (`#worktree`, `@all`, or no target for the current channel) projects every root agent's transcript-log entry into one timestamp-ordered chat log. Headers put the sender first, add the receiver with `→` when one exists, and show `HH:MM`; consecutive messages from the same sender-to-receiver pair group under one header. Message bodies highlight `@agent` and `#channel` mentions. Blocking asks render as cards with a left spine, option lists, folded answers, and `◌ unanswered` when no answer exists in the log. Peer-opened turns include the receiver's assistant reply, and `--last <N>` keeps the last N chat lines.
 
 A single-agent target builds that same channel log and filters it to messages the focal agent sent or received, so sent messages appear from peers' logs as well as received messages from the focal log. Sends made with `--no-from` look like human prompts, and cross-channel sends involving agents outside the focal channel are outside this view. `--json` emits `{channel, focus, entries}` for both channel and agent targets.
 

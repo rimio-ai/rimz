@@ -134,7 +134,7 @@ fn codex_descriptor_declares_lazy_registration_and_idle_card_fallbacks() {
 
 #[test]
 fn codex_question_summary_reads_request_user_input_questions() {
-    let summary = CodexAdapter.ask_question_summary(
+    let questions = CodexAdapter.ask_question_detail(
         "PreToolUse",
         &json!({
             "tool_name": "request_user_input",
@@ -148,12 +148,21 @@ fn codex_question_summary_reads_request_user_input_questions() {
     );
 
     assert_eq!(
-        summary.as_deref(),
-        Some("Pick a migration path?\nNotify users?")
+        questions,
+        Some(vec![
+            crate::agents::AskQuestion {
+                question: "Pick a migration path?".to_owned(),
+                options: Vec::new(),
+            },
+            crate::agents::AskQuestion {
+                question: "Notify users?".to_owned(),
+                options: Vec::new(),
+            },
+        ])
     );
     assert!(
         CodexAdapter
-            .ask_question_summary(
+            .ask_question_detail(
                 "PreToolUse",
                 &json!({
                     "tool_name": "shell",

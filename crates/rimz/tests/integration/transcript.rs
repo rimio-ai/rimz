@@ -50,13 +50,13 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
             .args(["transcript", "sess-transcript-a", "--worktree", branch]),
     );
     assert!(single.contains("#feature-transcript"), "{single}");
-    assert!(
-        single.contains("user\n    @claude, first prompt"),
-        "{single}"
-    );
-    assert!(single.contains("@claude\n    final answer"), "{single}");
+    assert!(single.contains("user → @claude"), "{single}");
+    assert!(single.contains("  first prompt"), "{single}");
+    assert!(single.contains("@claude"), "{single}");
+    assert!(single.contains("  final answer"), "{single}");
     assert!(!single.contains("needs attention"), "{single}");
-    assert!(single.contains("you\n    @claude, allow"), "{single}");
+    assert!(single.contains("you → @claude"), "{single}");
+    assert!(single.contains("  allow"), "{single}");
     assert!(
         !single.contains("draft answer"),
         "durable log stores the turn-final assistant message only:\n{single}"
@@ -64,17 +64,16 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
 
     let channel = run_ok(env.rimz().args(["transcript", "#feature-transcript"]));
     assert!(channel.contains("#feature-transcript"), "{channel}");
-    assert!(
-        channel.contains("user\n    @claude, first prompt"),
-        "{channel}"
-    );
-    assert!(channel.contains("@claude\n    final answer"), "{channel}");
-    assert!(
-        channel.contains("user\n    @codex, second prompt"),
-        "{channel}"
-    );
-    assert!(channel.contains("@codex\n    second answer"), "{channel}");
-    assert!(channel.contains("you\n    @claude, allow"), "{channel}");
+    assert!(channel.contains("user → @claude"), "{channel}");
+    assert!(channel.contains("  first prompt"), "{channel}");
+    assert!(channel.contains("@claude"), "{channel}");
+    assert!(channel.contains("  final answer"), "{channel}");
+    assert!(channel.contains("user → @codex"), "{channel}");
+    assert!(channel.contains("  second prompt"), "{channel}");
+    assert!(channel.contains("@codex"), "{channel}");
+    assert!(channel.contains("  second answer"), "{channel}");
+    assert!(channel.contains("you → @claude"), "{channel}");
+    assert!(channel.contains("  allow"), "{channel}");
     assert!(!channel.contains("other prompt"), "{channel}");
 
     let all = run_ok(env.rimz().args(["transcript", "@all"]));
@@ -197,13 +196,39 @@ fn transcript_records_native_ask_question_context_and_answer() {
 
     let output = run_ok(env.rimz().args(["transcript", &format!("#{branch}")]));
     assert!(output.contains("here is my read"), "{output}");
-    assert!(
-        output.contains("Choose deployment path? [safe, fast]"),
-        "{output}"
-    );
-    assert!(output.contains("you\n    @claude, safe"), "{output}");
+    assert!(output.contains("▌ Choose deployment path?"), "{output}");
+    assert!(output.contains("▌ ● safe — you"), "{output}");
+    assert!(output.contains("▌ ○ fast"), "{output}");
+    assert!(!output.contains("you → @claude"), "{output}");
     assert!(!output.contains("\"answers\""), "{output}");
     assert!(!output.contains("claude needs attention"), "{output}");
+
+    let json = run_ok(
+        env.rimz()
+            .args(["transcript", &format!("#{branch}"), "--json"]),
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("transcript json");
+    let entries = parsed["entries"].as_array().expect("entries");
+    assert!(entries.iter().any(|entry| {
+        entry["questions"].as_array().is_some_and(|questions| {
+            questions.first().is_some_and(|question| {
+                question["question"] == "Choose deployment path?"
+                    && question["options"]
+                        .as_array()
+                        .is_some_and(|options| options.len() == 2)
+            })
+        })
+    }));
+    assert!(entries.iter().any(|entry| {
+        entry["answers"].as_array().is_some_and(|answers| {
+            answers.first().is_some_and(|answer| {
+                answer["question"] == "Choose deployment path?"
+                    && answer["chosen"]
+                        .as_array()
+                        .is_some_and(|chosen| chosen.first() == Some(&json!("safe")))
+            })
+        })
+    }));
 
     let feed = env.feed_list_json();
     let items = feed.as_array().expect("feed items");
@@ -263,16 +288,12 @@ fn transcript_groups_chronological_entries_across_append_order() {
             .args(["transcript", "sess-order", "--worktree", branch]),
     );
 
-    assert!(
-        output.contains("user\n    @claude, first prompt"),
-        "{output}"
-    );
-    assert!(output.contains("@claude\n    first answer"), "{output}");
-    assert!(
-        output.contains("user\n    @claude, second prompt"),
-        "{output}"
-    );
-    assert!(output.contains("@claude\n    second answer"), "{output}");
+    assert!(output.contains("user → @claude"), "{output}");
+    assert!(output.contains("  first prompt"), "{output}");
+    assert!(output.contains("@claude"), "{output}");
+    assert!(output.contains("  first answer"), "{output}");
+    assert!(output.contains("  second prompt"), "{output}");
+    assert!(output.contains("  second answer"), "{output}");
     assert!(
         output.find("first answer").unwrap() < output.find("second prompt").unwrap(),
         "{output}"
@@ -393,30 +414,24 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
     );
 
     let channel = run_ok(env.rimz().args(["transcript", "#attribution-transcript"]));
-    assert!(
-        channel.contains("@claude\n    @codex, do the thing"),
-        "{channel}"
-    );
-    assert!(channel.contains("@codex\n    @claude, ack"), "{channel}");
-    assert!(
-        channel.contains("@claude\n    visible claude reply"),
-        "{channel}"
-    );
-    assert!(
-        channel.contains("@codex\n    visible codex reply"),
-        "{channel}"
-    );
+    assert!(channel.contains("@claude → @codex"), "{channel}");
+    assert!(channel.contains("  do the thing"), "{channel}");
+    assert!(channel.contains("@codex → @claude"), "{channel}");
+    assert!(channel.contains("  ack"), "{channel}");
+    assert!(channel.contains("@claude"), "{channel}");
+    assert!(channel.contains("  visible claude reply"), "{channel}");
+    assert!(channel.contains("@codex"), "{channel}");
+    assert!(channel.contains("  visible codex reply"), "{channel}");
 
     let codex = run_ok(
         env.rimz()
             .args(["transcript", "@codex#attribution-transcript"]),
     );
-    assert!(
-        codex.contains("@claude\n    @codex, do the thing"),
-        "{codex}"
-    );
-    assert!(codex.contains("@codex\n    @claude, ack"), "{codex}");
-    assert!(codex.contains("@codex\n    visible codex reply"), "{codex}");
+    assert!(codex.contains("@claude → @codex"), "{codex}");
+    assert!(codex.contains("  do the thing"), "{codex}");
+    assert!(codex.contains("@codex → @claude"), "{codex}");
+    assert!(codex.contains("  ack"), "{codex}");
+    assert!(codex.contains("  visible codex reply"), "{codex}");
     assert!(!codex.contains("visible claude reply"), "{codex}");
 }
 
@@ -446,8 +461,10 @@ fn transcript_hook_records_routed_prompt_as_message_entry() {
     }));
 
     let output = run_ok(env.rimz().args(["transcript", "#hook-routed-transcript"]));
-    assert!(output.contains("@claude\n    @codex, ship it"), "{output}");
-    assert!(output.contains("@codex\n    codex reply"), "{output}");
+    assert!(output.contains("@claude → @codex"), "{output}");
+    assert!(output.contains("  ship it"), "{output}");
+    assert!(output.contains("@codex"), "{output}");
+    assert!(output.contains("  codex reply"), "{output}");
 }
 
 #[test]
@@ -494,6 +511,8 @@ fn agent_entry(
         request_id: None,
         from: None,
         text: text.to_owned(),
+        questions: Vec::new(),
+        answers: Vec::new(),
     }
 }
 
