@@ -116,7 +116,7 @@ pub(super) fn recover_focused_pane_binding(
 }
 
 fn log_binding_recovery(ledger: &Ledger, record: BindingRecoveryLog) {
-    rimz::binding_log::append(ledger.runtime_paths(), &record);
+    rimz::diag::binding::append(ledger.runtime_paths(), &record);
 }
 
 #[derive(Debug, Serialize)]

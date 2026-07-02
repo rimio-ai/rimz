@@ -404,7 +404,7 @@ fn codex_daemon_routed_lifecycle_hooks_recover_distinct_pane_stamps() {
     assert_agent_pane(&second_snapshot, "sess-codex-left", "tmux:%10");
     assert_agent_pane(&second_snapshot, "sess-codex-right", "tmux:%11");
 
-    let log_path = rimz::binding_log::path(&env.runtime_paths());
+    let log_path = rimz::diag::binding::path(&env.runtime_paths());
     let log = std::fs::read_to_string(&log_path).expect("binding log");
     let records = log
         .lines()

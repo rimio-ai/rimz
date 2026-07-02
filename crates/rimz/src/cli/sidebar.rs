@@ -779,9 +779,9 @@ fn write_plugin_presence_sample(workspace_id: &WorkspaceId, command: &WakeComman
     };
     let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
     let _ = state.ensure_dirs();
-    rimz::plugin_presence_log::append(
+    rimz::diag::plugin_presence::append(
         &state.root,
-        &rimz::plugin_presence_log::PluginPresenceSample::new(
+        &rimz::diag::plugin_presence::PluginPresenceSample::new(
             rimz::sidebar::cache::unix_now_ms(),
             command.session_name.clone(),
             pages,

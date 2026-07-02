@@ -5,7 +5,7 @@
 //! and the unread mark/clear transitions append compact JSONL records under the
 //! workspace state directory. The log is diagnostic state: append-only within a
 //! size cap, never read by correctness code. Records are written through
-//! [`crate::diag::DiagSink`], which already carries the workspace identity to
+//! [`super::DiagSink`], which already carries the workspace identity to
 //! every emission site.
 
 use std::path::{Path, PathBuf};
@@ -21,9 +21,7 @@ pub fn path(state_root: &Path) -> PathBuf {
 
 pub fn append<T: Serialize>(state_root: &Path, record: &T) {
     let path = path(state_root);
-    if let Err(err) =
-        crate::rotating_log::append_rotating_jsonl(&path, NOTIFY_LOG_MAX_BYTES, record)
-    {
+    if let Err(err) = super::rotating::append_rotating_jsonl(&path, NOTIFY_LOG_MAX_BYTES, record) {
         tracing::debug!(path = %path.display(), error = %err, "notify trace append failed");
     }
 }

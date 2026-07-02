@@ -52,7 +52,7 @@ pub fn path(state_root: &Path) -> PathBuf {
 pub fn append<T: Serialize>(state_root: &Path, record: &T) {
     let path = path(state_root);
     if let Err(err) =
-        crate::rotating_log::append_rotating_jsonl(&path, PLUGIN_PRESENCE_LOG_MAX_BYTES, record)
+        super::rotating::append_rotating_jsonl(&path, PLUGIN_PRESENCE_LOG_MAX_BYTES, record)
     {
         tracing::debug!(path = %path.display(), error = %err, "presence plugin telemetry append failed");
     }

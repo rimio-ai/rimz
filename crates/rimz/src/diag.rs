@@ -15,6 +15,11 @@ use crate::ids::{PaneId, SidebarInstanceId, WorkspaceId};
 use crate::schema::diag::{DiagEnvelope, DiagEvent, GroupIdentity};
 use crate::schema::notify_trace::{NotifyTraceEnvelope, NotifyTraceEvent};
 
+pub mod binding;
+mod notify;
+pub mod plugin_presence;
+pub(crate) mod rotating;
+
 const DIAG_LOG_NAME: &str = "diag.log.jsonl";
 const DIAG_LOG_MAX_BYTES: u64 = 1_048_576;
 const DIAG_FRAMES_DIR: &str = "diag-frames";
@@ -123,7 +128,7 @@ impl DiagSink {
             at_ms,
             event,
         );
-        crate::notify_log::append(&self.state_root, &envelope);
+        notify::append(&self.state_root, &envelope);
     }
 
     pub fn capture_frame_pair<T: Serialize>(
@@ -163,9 +168,7 @@ impl DiagSink {
             event,
         )
         .with_suppressed(suppressed_since_last);
-        if let Err(err) =
-            crate::rotating_log::append_rotating_jsonl(&path, DIAG_LOG_MAX_BYTES, &envelope)
-        {
+        if let Err(err) = rotating::append_rotating_jsonl(&path, DIAG_LOG_MAX_BYTES, &envelope) {
             tracing::debug!(path = %path.display(), error = %err, "diagnostic append failed");
         }
     }

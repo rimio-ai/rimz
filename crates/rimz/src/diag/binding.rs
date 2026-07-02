@@ -20,9 +20,7 @@ pub fn path(runtime: &RuntimePaths) -> PathBuf {
 
 pub fn append<T: Serialize>(runtime: &RuntimePaths, record: &T) {
     let path = path(runtime);
-    if let Err(err) =
-        crate::rotating_log::append_rotating_jsonl(&path, BINDING_LOG_MAX_BYTES, record)
-    {
+    if let Err(err) = super::rotating::append_rotating_jsonl(&path, BINDING_LOG_MAX_BYTES, record) {
         tracing::debug!(path = %path.display(), error = %err, "binding log append failed");
     }
 }

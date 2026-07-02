@@ -121,7 +121,7 @@ The crate splits into subtree modules (each with a local contract or detail doc)
 | `schema/` | the durable event envelope, typed sidebar-event and diagnostic envelopes, heartbeat shape, and protocol-version constants | [ledger.md](./docs/internals/sidebar/ledger.md) · [state.md](./docs/internals/sidebar/state.md) |
 | `resolver/` | the per-machine allowlist, heartbeat freshness, and TOCTOU restat | [resolvers.md](./docs/internals/agents/resolvers.md) |
 | `remote/` | pure SSH target grammar, the guarded ssh command builder, reconnect policy, the link-health protocol, and the `remote.toml` alias store | [remote.md](./docs/internals/reach/remote.md) |
-| `diag.rs`, `rotating_log.rs`, `binding_log.rs`, `notify_log.rs` | diagnostic-only JSONL append surfaces (sidebar anomalies, the shared rotating helper, pane-binding recovery, the notification trace) | [diagnostics.md](./docs/internals/health/diagnostics.md) · [notifications.md](./docs/internals/sidebar/notifications.md) |
+| `diag/` | diagnostic-only JSONL append surfaces (sidebar anomalies, the shared rotating helper, pane-binding recovery, the notification trace, and Zellij presence-plugin telemetry) | [diagnostics.md](./docs/internals/health/diagnostics.md) · [notifications.md](./docs/internals/sidebar/notifications.md) |
 
 ### Top-level domain modules
 

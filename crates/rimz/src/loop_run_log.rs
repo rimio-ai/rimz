@@ -132,7 +132,7 @@ pub fn append(record: &LoopRunRecord) {
 
 fn append_to(state_root: &Path, record: &LoopRunRecord) -> std::io::Result<()> {
     let capped = capped_record(record);
-    crate::rotating_log::append_rotating_jsonl(&log_path(state_root), MAX_BYTES, &capped)
+    crate::diag::rotating::append_rotating_jsonl(&log_path(state_root), MAX_BYTES, &capped)
 }
 
 pub fn stats(state_root: &Path) -> BTreeMap<String, LoopRunStats> {

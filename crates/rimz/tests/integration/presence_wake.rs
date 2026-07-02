@@ -151,7 +151,7 @@ impl WakeEnv {
     fn plugin_presence_log(&self) -> PathBuf {
         let state = rimz::StatePaths::under(self.workspace_id.clone(), &self.state_root)
             .expect("state paths");
-        rimz::plugin_presence_log::path(&state.root)
+        rimz::diag::plugin_presence::path(&state.root)
     }
 
     /// Seed the shared pane cache with a publishable shell frame produced
