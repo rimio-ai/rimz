@@ -465,8 +465,8 @@ impl AgentAdapter for OpencodeAdapter {
         observation.parent_agent_id = parent_agent_id;
         observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
-        observation.model = parsed.model.clone();
-        observation.effort = parsed.effort;
+        observation.launch.model = parsed.model.clone();
+        observation.launch.effort = parsed.effort;
         observation.context_window = parsed
             .context_window
             .or_else(|| context_window_for(parsed.model.as_deref()));

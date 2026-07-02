@@ -69,7 +69,7 @@ pub use lifecycle::{
 };
 pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
-pub use observation::{AgentLifecycleObservation, SessionOrigin};
+pub use observation::{AgentLifecycleObservation, LaunchParams, SessionOrigin};
 pub(crate) use payload::{
     CONTROL_TAG_PREFIXES, choice_is_allow, classify_agent_hook, non_empty_trimmed,
     optional_payload_string, sanitize_user_prompt, stop_payload_errored,

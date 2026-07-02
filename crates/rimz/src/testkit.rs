@@ -9,8 +9,8 @@ pub use crate::ledger::event_log::testkit::{bytes_read, bytes_written};
 pub use crate::proc::testkit::spawn_count;
 
 pub mod fleet {
-    use crate::agents::AgentLifecycleObservation;
     use crate::agents::lifecycle::LifecycleSignal;
+    use crate::agents::{AgentLifecycleObservation, LaunchParams};
     use crate::ids::{AgentSessionId, MuxName, PaneId, ViewKind, WorkspaceId};
     use crate::ledger::event::EventEnvelope;
     use crate::ledger::{StatePaths, event_log};
@@ -141,13 +141,7 @@ pub mod fleet {
         AgentLifecycleObservation {
             agent_id: Some(AgentSessionId::from(format!("agent-{slot}"))),
             agent_name: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            profile: None,
-            kind_ordinal: None,
+            launch: LaunchParams::default(),
             signal: LifecycleSignal::Registered,
             agent_pid: None,
             agent_process_start: None,
@@ -158,8 +152,6 @@ pub mod fleet {
             prompt: None,
             transcript_path: None,
             origin: None,
-            model: None,
-            effort: None,
             context_pct: None,
             context_window: None,
             total_tokens: None,

@@ -264,34 +264,40 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
         (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
         launch_identity_env,
     );
-    assert_eq!(observed.role.as_deref(), Some("coder"));
-    assert_eq!(observed.team.as_deref(), Some("pcr"));
-    assert_eq!(observed.launch_group.as_deref(), Some("launch_group_1"));
-    assert_eq!(observed.launch_ordinal, Some(2));
-    assert_eq!(observed.profile.as_deref(), Some("codex-coder"));
-    assert_eq!(observed.model.as_deref(), Some("env-model"));
-    assert_eq!(observed.effort.as_deref(), Some("env-effort"));
+    assert_eq!(observed.launch.role.as_deref(), Some("coder"));
+    assert_eq!(observed.launch.team.as_deref(), Some("pcr"));
+    assert_eq!(
+        observed.launch.launch_group.as_deref(),
+        Some("launch_group_1")
+    );
+    assert_eq!(observed.launch.launch_ordinal, Some(2));
+    assert_eq!(observed.launch.profile.as_deref(), Some("codex-coder"));
+    assert_eq!(observed.launch.model.as_deref(), Some("env-model"));
+    assert_eq!(observed.launch.effort.as_deref(), Some("env-effort"));
 
     let mut payload = root_observation();
-    payload.role = Some("payload-role".to_owned());
-    payload.team = Some("payload-team".to_owned());
-    payload.launch_group = Some("payload-group".to_owned());
-    payload.launch_ordinal = Some(7);
-    payload.profile = Some("payload-profile".to_owned());
-    payload.model = Some("payload-model".to_owned());
-    payload.effort = Some("payload-effort".to_owned());
+    payload.launch.role = Some("payload-role".to_owned());
+    payload.launch.team = Some("payload-team".to_owned());
+    payload.launch.launch_group = Some("payload-group".to_owned());
+    payload.launch.launch_ordinal = Some(7);
+    payload.launch.profile = Some("payload-profile".to_owned());
+    payload.launch.model = Some("payload-model".to_owned());
+    payload.launch.effort = Some("payload-effort".to_owned());
     fill_root_launch_identity(
         &mut payload,
         (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
         launch_identity_env,
     );
-    assert_eq!(payload.role.as_deref(), Some("payload-role"));
-    assert_eq!(payload.team.as_deref(), Some("payload-team"));
-    assert_eq!(payload.launch_group.as_deref(), Some("payload-group"));
-    assert_eq!(payload.launch_ordinal, Some(7));
-    assert_eq!(payload.profile.as_deref(), Some("payload-profile"));
-    assert_eq!(payload.model.as_deref(), Some("payload-model"));
-    assert_eq!(payload.effort.as_deref(), Some("payload-effort"));
+    assert_eq!(payload.launch.role.as_deref(), Some("payload-role"));
+    assert_eq!(payload.launch.team.as_deref(), Some("payload-team"));
+    assert_eq!(
+        payload.launch.launch_group.as_deref(),
+        Some("payload-group")
+    );
+    assert_eq!(payload.launch.launch_ordinal, Some(7));
+    assert_eq!(payload.launch.profile.as_deref(), Some("payload-profile"));
+    assert_eq!(payload.launch.model.as_deref(), Some("payload-model"));
+    assert_eq!(payload.launch.effort.as_deref(), Some("payload-effort"));
 
     let mut configured = root_observation();
     fill_root_launch_identity(
@@ -305,9 +311,9 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
             _ => None,
         },
     );
-    assert_eq!(configured.model.as_deref(), Some("cfg-model"));
-    assert_eq!(configured.effort.as_deref(), Some("cfg-effort"));
-    assert_eq!(configured.launch_ordinal, None);
+    assert_eq!(configured.launch.model.as_deref(), Some("cfg-model"));
+    assert_eq!(configured.launch.effort.as_deref(), Some("cfg-effort"));
+    assert_eq!(configured.launch.launch_ordinal, None);
 }
 
 #[test]
@@ -321,13 +327,13 @@ fn subagent_launch_identity_is_not_inherited_from_parent_env() {
         launch_identity_env,
     );
 
-    assert_eq!(observed.role, None);
-    assert_eq!(observed.team, None);
-    assert_eq!(observed.launch_group, None);
-    assert_eq!(observed.launch_ordinal, None);
-    assert_eq!(observed.profile, None);
-    assert_eq!(observed.model, None);
-    assert_eq!(observed.effort, None);
+    assert_eq!(observed.launch.role, None);
+    assert_eq!(observed.launch.team, None);
+    assert_eq!(observed.launch.launch_group, None);
+    assert_eq!(observed.launch.launch_ordinal, None);
+    assert_eq!(observed.launch.profile, None);
+    assert_eq!(observed.launch.model, None);
+    assert_eq!(observed.launch.effort, None);
 }
 
 #[test]

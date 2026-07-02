@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use rimz::EventEnvelope;
-use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
 #[cfg(unix)]
 use rimz::ids::AgentKind;
 use rimz::ids::AgentSessionId;
@@ -1091,15 +1091,25 @@ fn seed_agent_launch(
         AgentLaunchPayload {
             agent_id: AgentSessionId::from(launch_id),
             agent_name: agent_name.to_owned(),
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            kind_ordinal: None,
+            launch: LaunchParams {
+                profile: None,
+
+                role: None,
+
+                model: None,
+
+                effort: None,
+
+                team: None,
+
+                launch_group: None,
+
+                launch_ordinal: None,
+
+                channel: None,
+
+                kind_ordinal: None,
+            },
             state,
             run_id: None,
             pane_id: None,

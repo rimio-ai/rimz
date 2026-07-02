@@ -101,10 +101,10 @@ pub(super) fn record_transcript_conversation(
     };
     let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
     let channel = rimz::harness::target::compose_channel(
-        observation.channel.as_deref(),
+        observation.launch.channel.as_deref(),
         observation.worktree_branch.as_deref(),
         observation.worktree_path.as_deref().and_then(path_basename),
-        observation.team.as_deref(),
+        observation.launch.team.as_deref(),
     )
     .or_else(|| workspace.worktree_branch.clone());
     let entry_base = |entry, text: String| rimz::ledger::transcript_log::TranscriptEntry {
@@ -113,8 +113,8 @@ pub(super) fn record_transcript_conversation(
         agent_id: agent_id.clone(),
         channel: channel.clone(),
         name: observation.agent_name.clone(),
-        profile: observation.profile.clone(),
-        role: observation.role.clone(),
+        profile: observation.launch.profile.clone(),
+        role: observation.launch.role.clone(),
         entry,
         request_id: None,
         from: None,

@@ -1,5 +1,6 @@
 use crate::common::Env;
 use jiff::Timestamp;
+use rimz::agents::LaunchParams;
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::ids::AgentKind;
 use serde_json::json;
@@ -332,13 +333,7 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
     let observation = rimz::agents::AgentLifecycleObservation {
         agent_id: Some("sess-stale".into()),
         agent_name: Some("lucid-atlas".to_owned()),
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        profile: None,
-        kind_ordinal: None,
+        launch: LaunchParams::default(),
         signal: rimz::agents::LifecycleSignal::Registered,
         agent_pid: Some(u32::MAX),
         agent_process_start: None,
@@ -354,8 +349,6 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         prompt: None,
         transcript_path: None,
         origin: None,
-        model: None,
-        effort: None,
         context_pct: None,
         context_window: None,
         total_tokens: None,

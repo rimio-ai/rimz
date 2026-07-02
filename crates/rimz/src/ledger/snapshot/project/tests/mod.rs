@@ -3,9 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 
 use super::super::view::{attach_sub_agents, row_from_agent, sub_agent_from_state};
-use crate::agents::AgentStatus;
-use crate::agents::SessionOrigin;
 use crate::agents::lifecycle::TurnPhase;
+use crate::agents::{AgentStatus, LaunchParams, SessionOrigin};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use crate::ledger::snapshot::SidebarSnapshot;
@@ -46,15 +45,7 @@ fn launch_payload(agent_id: &str, agent_name: &str) -> AgentLaunchPayload {
     AgentLaunchPayload {
         agent_id: agent_id.into(),
         agent_name: agent_name.to_owned(),
-        profile: None,
-        role: None,
-        model: None,
-        effort: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        kind_ordinal: None,
+        launch: LaunchParams::default(),
         state: AgentLaunchState::Bound,
         run_id: None,
         pane_id: None,
@@ -343,8 +334,11 @@ fn launch_cohort_identity_reduces_and_survives_bound_event_without_fields() {
     let launch = launch_event(
         "claude",
         AgentLaunchPayload {
-            launch_group: Some("launch_group_1".to_owned()),
-            launch_ordinal: Some(1),
+            launch: LaunchParams {
+                launch_group: Some("launch_group_1".to_owned()),
+                launch_ordinal: Some(1),
+                ..LaunchParams::default()
+            },
             state: AgentLaunchState::Starting,
             prompt: None,
             ..launch_payload("launch_a", "lucid-atlas")
@@ -369,8 +363,11 @@ fn launch_seeds_model_and_effort_until_lifecycle_observes_them() {
     let launch = launch_event(
         "codex",
         AgentLaunchPayload {
-            model: Some("gpt-5.5-codex".to_owned()),
-            effort: Some("xhigh".to_owned()),
+            launch: LaunchParams {
+                model: Some("gpt-5.5-codex".to_owned()),
+                effort: Some("xhigh".to_owned()),
+                ..LaunchParams::default()
+            },
             prompt: None,
             ..launch_payload("launch_a", "lucid-atlas")
         },
@@ -404,11 +401,14 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
     let launch = launch_event(
         "codex",
         AgentLaunchPayload {
-            profile: Some("codex-coder".to_owned()),
-            role: Some("coder".to_owned()),
-            team: Some("pcr".to_owned()),
-            launch_group: Some("launch_group_1".to_owned()),
-            launch_ordinal: Some(2),
+            launch: LaunchParams {
+                profile: Some("codex-coder".to_owned()),
+                role: Some("coder".to_owned()),
+                team: Some("pcr".to_owned()),
+                launch_group: Some("launch_group_1".to_owned()),
+                launch_ordinal: Some(2),
+                ..LaunchParams::default()
+            },
             state: AgentLaunchState::Starting,
             prompt: None,
             ..launch_payload("launch_a", "lucid-atlas")
@@ -439,9 +439,12 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
     let launch = launch_event(
         "codex",
         AgentLaunchPayload {
-            profile: Some("codex-coder".to_owned()),
-            role: Some("coder".to_owned()),
-            team: Some("pcr".to_owned()),
+            launch: LaunchParams {
+                profile: Some("codex-coder".to_owned()),
+                role: Some("coder".to_owned()),
+                team: Some("pcr".to_owned()),
+                ..LaunchParams::default()
+            },
             pane_id: Some(PaneId::parse("zellij:terminal_1").expect("pane id")),
             prompt: None,
             ..launch_payload("launch_a", "lucid-atlas")

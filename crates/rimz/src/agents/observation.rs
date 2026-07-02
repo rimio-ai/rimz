@@ -26,6 +26,44 @@ pub enum SessionOrigin {
     Forked,
 }
 
+/// Launcher-selected parameters shared by launch and lifecycle event payloads.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LaunchParams {
+    /// The `[agents.profiles]` profile the launcher selected, passed through
+    /// `RIMZ_AGENT_PROFILE`. Used as the card handle when no role is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The `[agents.teams]` role the launcher selected, passed through
+    /// `RIMZ_AGENT_ROLE`. The reducer projects it to the card handle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// The `[agents.teams]` team name the launcher selected, passed through
+    /// `RIMZ_TEAM`. The reducer projects it to the routing channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
+    /// The inline multi-agent launch cohort the launcher minted, passed through
+    /// `RIMZ_LAUNCH_GROUP`. Team launches use `RIMZ_TEAM` as the cohort key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_group: Option<String>,
+    /// The agent's order inside its launch cohort, passed through
+    /// `RIMZ_LAUNCH_ORDINAL`. Team launches use role-list order; inline
+    /// layouts use agent-cell order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_ordinal: Option<u32>,
+    /// The named channel the launcher selected, passed through `RIMZ_CHANNEL`.
+    /// The reducer projects it to the routing channel ahead of worktree/team.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    /// Display ordinal within this kind for the current room incarnation.
+    /// The reducer derives it when the event omits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind_ordinal: Option<u32>,
+}
+
 /// One lifecycle observation: the agent-agnostic [`LifecycleSignal`] a native
 /// event carries plus the enrichment it reports. Returned by
 /// [`AgentAdapter::observe_lifecycle`](super::AgentAdapter::observe_lifecycle)
@@ -44,35 +82,8 @@ pub struct AgentLifecycleObservation {
     /// during reduction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
-    /// The `[agents.teams]` role the launcher selected, passed through
-    /// `RIMZ_AGENT_ROLE`. The reducer projects it to the card handle.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
-    /// The `[agents.teams]` team name the launcher selected, passed through
-    /// `RIMZ_TEAM`. The reducer projects it to the routing channel.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub team: Option<String>,
-    /// The inline multi-agent launch cohort the launcher minted, passed through
-    /// `RIMZ_LAUNCH_GROUP`. Team launches use `RIMZ_TEAM` as the cohort key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub launch_group: Option<String>,
-    /// The agent's order inside its launch cohort, passed through
-    /// `RIMZ_LAUNCH_ORDINAL`. Team launches use role-list order; inline
-    /// layouts use agent-cell order.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub launch_ordinal: Option<u32>,
-    /// The named channel the launcher selected, passed through `RIMZ_CHANNEL`.
-    /// The reducer projects it to the routing channel ahead of worktree/team.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel: Option<String>,
-    /// The `[agents.profiles]` profile the launcher selected, passed through
-    /// `RIMZ_AGENT_PROFILE`. Used as the card handle when no role is present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile: Option<String>,
-    /// Display ordinal within this kind for the current room incarnation.
-    /// The reducer derives it when the event omits it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind_ordinal: Option<u32>,
+    #[serde(flatten)]
+    pub launch: LaunchParams,
     /// The agent-agnostic lifecycle intent this event carries. The reducer and
     /// the ingestion path fold it onto the rollup through the one
     /// [`step`](super::lifecycle::step) table; the adapter no longer decides a
@@ -114,10 +125,6 @@ pub struct AgentLifecycleObservation {
     /// render lane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SessionOrigin>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
     /// Context-window utilization in percent reported by the agent (0..=100).
     /// Enrich-only / privacy-gated — the no-transcript-correctness rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -169,13 +176,7 @@ impl AgentLifecycleObservation {
         Self {
             agent_id,
             agent_name: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            profile: None,
-            kind_ordinal: None,
+            launch: LaunchParams::default(),
             signal,
             agent_pid: None,
             agent_process_start: None,
@@ -186,8 +187,6 @@ impl AgentLifecycleObservation {
             prompt: None,
             transcript_path: None,
             origin: None,
-            model: None,
-            effort: None,
             context_pct: None,
             context_window: None,
             total_tokens: None,

@@ -222,10 +222,10 @@ mod tests {
         observation.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
         observation.worktree_path = Some("/tmp/project".to_owned());
         observation.worktree_branch = Some("feature".to_owned());
-        observation.role = Some("coder".to_owned());
-        observation.team = Some("pcr".to_owned());
-        observation.channel = Some("event-log".to_owned());
-        observation.profile = Some("claude-coder".to_owned());
+        observation.launch.role = Some("coder".to_owned());
+        observation.launch.team = Some("pcr".to_owned());
+        observation.launch.channel = Some("event-log".to_owned());
+        observation.launch.profile = Some("claude-coder".to_owned());
         observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
 
         let identity = event_lifecycle_observation(&observation);
@@ -242,10 +242,10 @@ mod tests {
         assert!(trimmed.transcript_path.is_none());
         assert!(trimmed.worktree_path.is_none());
         assert!(trimmed.worktree_branch.is_none());
-        assert!(trimmed.role.is_none());
-        assert!(trimmed.team.is_none());
-        assert!(trimmed.channel.is_none());
-        assert!(trimmed.profile.is_none());
+        assert!(trimmed.launch.role.is_none());
+        assert!(trimmed.launch.team.is_none());
+        assert!(trimmed.launch.channel.is_none());
+        assert!(trimmed.launch.profile.is_none());
         assert_eq!(trimmed.pane_id.as_ref().map(PaneId::raw), Some("%1"));
         assert_eq!(
             observation.transcript_path.as_deref(),

@@ -520,8 +520,8 @@ impl AgentAdapter for PiAdapter {
         // control text never reaches the row; absent fields are carry-forward.
         observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
-        observation.model = parsed.model;
-        observation.effort = parsed.effort;
+        observation.launch.model = parsed.model;
+        observation.launch.effort = parsed.effort;
         // The gauge is payload-first and payload-only: the extension stamps
         // it on every envelope from the in-process `ctx.getContextUsage()`,
         // so no transcript tail is ever read (the `None` fallback).

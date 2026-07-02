@@ -106,8 +106,11 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     assert_eq!(registered.agent_id.as_deref(), Some("ses_1"));
     assert_eq!(registered.signal, LifecycleSignal::Registered);
     assert_eq!(registered.worktree_path.as_deref(), Some("/home/u/repo"));
-    assert_eq!(registered.model.as_deref(), Some("claude-sonnet-4.5"));
-    assert_eq!(registered.effort.as_deref(), Some("xhigh"));
+    assert_eq!(
+        registered.launch.model.as_deref(),
+        Some("claude-sonnet-4.5")
+    );
+    assert_eq!(registered.launch.effort.as_deref(), Some("xhigh"));
     assert_eq!(registered.context_window, Some(200_000));
     assert_eq!(registered.fresh_input_tokens, Some(100));
     assert_eq!(registered.cache_write_input_tokens, Some(40));

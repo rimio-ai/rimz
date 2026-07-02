@@ -10,15 +10,25 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
         AgentLaunchPayload {
             agent_id: "sess-1".into(),
             agent_name: "lucid-atlas".to_owned(),
-            profile: Some("codex-coder".to_owned()),
-            role: Some("coder".to_owned()),
-            model: None,
-            effort: None,
-            team: Some("pcr".to_owned()),
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            kind_ordinal: None,
+            launch: LaunchParams {
+                profile: Some("codex-coder".to_owned()),
+
+                role: Some("coder".to_owned()),
+
+                model: None,
+
+                effort: None,
+
+                team: Some("pcr".to_owned()),
+
+                launch_group: None,
+
+                launch_ordinal: None,
+
+                channel: None,
+
+                kind_ordinal: None,
+            },
             state: AgentLaunchState::Starting,
             run_id: None,
             pane_id: None,

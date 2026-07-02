@@ -37,12 +37,12 @@ fn append_registered_agent(env: &Env, session: &str, role: &str, pane: &str, bra
         Some(AgentSessionId::from(session)),
         LifecycleSignal::Registered,
     );
-    obs.role = Some(role.to_owned());
-    obs.profile = Some(format!("codex-{role}"));
+    obs.launch.role = Some(role.to_owned());
+    obs.launch.profile = Some(format!("codex-{role}"));
     obs.worktree_path = Some(env.project_root.display().to_string());
     obs.worktree_branch = Some(branch.to_owned());
-    obs.model = Some("GPT-5.5".to_owned());
-    obs.effort = Some("high".to_owned());
+    obs.launch.model = Some("GPT-5.5".to_owned());
+    obs.launch.effort = Some("high".to_owned());
     obs.pane_id = Some(PaneId::from_parts(MuxName::Tmux, pane));
     let event = EventEnvelope::agent_lifecycle(
         env.workspace_id.clone(),

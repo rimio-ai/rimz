@@ -5,8 +5,8 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use rimz::agents::{
-    AgentLifecycleObservation, AgentRateLimits, AgentTurnError, LifecycleSignal, RateLimitWindow,
-    TurnErrorClass,
+    AgentLifecycleObservation, AgentRateLimits, AgentTurnError, LaunchParams, LifecycleSignal,
+    RateLimitWindow, TurnErrorClass,
 };
 use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
@@ -1193,8 +1193,8 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
         LifecycleSignal::Registered,
         |observation| {
             observation.agent_name = Some("swift-otter".to_owned());
-            observation.role = Some("coder".to_owned());
-            observation.kind_ordinal = Some(1);
+            observation.launch.role = Some("coder".to_owned());
+            observation.launch.kind_ordinal = Some(1);
             observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
         },
     );
@@ -1999,7 +1999,7 @@ fn message_miss_lists_available_agents() {
         LifecycleSignal::Registered,
         |observation| {
             observation.agent_name = Some("swift-otter".to_owned());
-            observation.role = Some("helper".to_owned());
+            observation.launch.role = Some("helper".to_owned());
             observation.worktree_branch = Some("feature-miss-list".to_owned());
         },
     );
@@ -2534,15 +2534,25 @@ fn seed_provisional_codex_launch(
         AgentLaunchPayload {
             agent_id: AgentSessionId::from(launch_id),
             agent_name: agent_name.to_owned(),
-            profile: None,
-            role: role.map(ToOwned::to_owned),
-            model: None,
-            effort: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            kind_ordinal: Some(1),
+            launch: LaunchParams {
+                profile: None,
+
+                role: role.map(ToOwned::to_owned),
+
+                model: None,
+
+                effort: None,
+
+                team: None,
+
+                launch_group: None,
+
+                launch_ordinal: None,
+
+                channel: None,
+
+                kind_ordinal: Some(1),
+            },
             state: AgentLaunchState::Starting,
             run_id: None,
             pane_id: Some(PaneId::from_parts(MuxName::Zellij, stale_pane)),

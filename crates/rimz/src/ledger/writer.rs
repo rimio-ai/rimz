@@ -8,6 +8,7 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::agents::LaunchParams;
 use crate::feed::FeedItem;
 use crate::ledger::event::{AgentLaunchPayload, EventEnvelope};
 use crate::pane::RuntimeOwnerKind;
@@ -565,15 +566,17 @@ fn agent_launch_event(append: &AgentLaunchAppend, identity: &AgentLaunchIdentity
         AgentLaunchPayload {
             agent_id: identity.agent_id.clone(),
             agent_name: identity.name.clone(),
-            profile: identity.profile.clone(),
-            role: identity.role.clone(),
-            model: identity.model.clone(),
-            effort: identity.effort.clone(),
-            team: identity.team.clone(),
-            launch_group: identity.launch_group.clone(),
-            launch_ordinal: identity.launch_ordinal,
-            channel: identity.channel.clone().or_else(|| append.channel.clone()),
-            kind_ordinal: None,
+            launch: LaunchParams {
+                profile: identity.profile.clone(),
+                role: identity.role.clone(),
+                model: identity.model.clone(),
+                effort: identity.effort.clone(),
+                team: identity.team.clone(),
+                launch_group: identity.launch_group.clone(),
+                launch_ordinal: identity.launch_ordinal,
+                channel: identity.channel.clone().or_else(|| append.channel.clone()),
+                kind_ordinal: None,
+            },
             state: append.state,
             run_id: identity.run_id.clone(),
             pane_id: append.pane_id.clone(),
@@ -675,15 +678,7 @@ mod tests {
                 AgentLaunchPayload {
                     agent_id: AgentSessionId::from(agent_id),
                     agent_name: name.to_owned(),
-                    profile: None,
-                    role: None,
-                    model: None,
-                    effort: None,
-                    team: None,
-                    launch_group: None,
-                    launch_ordinal: None,
-                    channel: None,
-                    kind_ordinal: None,
+                    launch: LaunchParams::default(),
                     state: crate::ledger::event::AgentLaunchState::Bound,
                     run_id: None,
                     pane_id: None,
@@ -780,15 +775,7 @@ mod tests {
                 AgentLaunchPayload {
                     agent_id: AgentSessionId::from("launch_a"),
                     agent_name: "lucid-atlas".to_owned(),
-                    profile: None,
-                    role: None,
-                    model: None,
-                    effort: None,
-                    team: None,
-                    launch_group: None,
-                    launch_ordinal: None,
-                    channel: None,
-                    kind_ordinal: None,
+                    launch: LaunchParams::default(),
                     state: crate::ledger::event::AgentLaunchState::Bound,
                     run_id: None,
                     pane_id: None,

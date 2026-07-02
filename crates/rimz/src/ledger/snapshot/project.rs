@@ -546,6 +546,7 @@ impl CardIdentityAllocator {
         let name =
             self.assign_name_candidate(&key, Some(payload.agent_name.as_str()), prior, agent_id);
         let candidate = payload
+            .launch
             .kind_ordinal
             .or_else(|| prior.and_then(|state| state.kind_ordinal));
         let kind_ordinal = self.assign_ordinal_candidate(kind, agent_id, candidate, prior);
@@ -626,6 +627,7 @@ impl CardIdentityAllocator {
         prior: Option<&AgentState>,
     ) -> u32 {
         let candidate = observation
+            .launch
             .kind_ordinal
             .or_else(|| prior.and_then(|state| state.kind_ordinal));
         self.assign_ordinal_candidate(kind, agent_id, candidate, prior)
@@ -739,30 +741,36 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         kind_ordinal: Some(input.card_identity.kind_ordinal),
         profile: input
             .observation
+            .launch
             .profile
             .clone()
             .or_else(|| input.prior.and_then(|state| state.profile.clone())),
         role: input
             .observation
+            .launch
             .role
             .clone()
             .or_else(|| input.prior.and_then(|state| state.role.clone())),
         team: input
             .observation
+            .launch
             .team
             .clone()
             .or_else(|| input.prior.and_then(|state| state.team.clone())),
         launch_group: input
             .observation
+            .launch
             .launch_group
             .clone()
             .or_else(|| input.prior.and_then(|state| state.launch_group.clone())),
         launch_ordinal: input
             .observation
+            .launch
             .launch_ordinal
             .or_else(|| input.prior.and_then(|state| state.launch_ordinal)),
         channel: input
             .observation
+            .launch
             .channel
             .clone()
             .or_else(|| input.prior.and_then(|state| state.channel.clone())),
@@ -855,25 +863,31 @@ fn assemble_launch_state(
         name: Some(card_identity.name),
         kind_ordinal: Some(card_identity.kind_ordinal),
         profile: payload
+            .launch
             .profile
             .clone()
             .or_else(|| prior.and_then(|state| state.profile.clone())),
         role: payload
+            .launch
             .role
             .clone()
             .or_else(|| prior.and_then(|state| state.role.clone())),
         team: payload
+            .launch
             .team
             .clone()
             .or_else(|| prior.and_then(|state| state.team.clone())),
         launch_group: payload
+            .launch
             .launch_group
             .clone()
             .or_else(|| prior.and_then(|state| state.launch_group.clone())),
         launch_ordinal: payload
+            .launch
             .launch_ordinal
             .or_else(|| prior.and_then(|state| state.launch_ordinal)),
         channel: payload
+            .launch
             .channel
             .clone()
             .or_else(|| prior.and_then(|state| state.channel.clone())),
@@ -899,11 +913,13 @@ fn assemble_launch_state(
         origin: prior.and_then(|state| state.origin),
         recent_prompts,
         model: payload
+            .launch
             .model
             .as_deref()
             .map(canonical_model)
             .or_else(|| prior.and_then(|state| state.model.clone())),
         effort: payload
+            .launch
             .effort
             .clone()
             .or_else(|| prior.and_then(|state| state.effort.clone())),
@@ -1199,6 +1215,7 @@ fn model_projection(
     prior: Option<&AgentState>,
 ) -> Option<String> {
     observation
+        .launch
         .model
         .clone()
         .map(|raw| canonical_model(&raw))
@@ -1210,6 +1227,7 @@ fn effort_projection(
     prior: Option<&AgentState>,
 ) -> Option<String> {
     observation
+        .launch
         .effort
         .clone()
         .or_else(|| prior.and_then(|p| p.effort.clone()))

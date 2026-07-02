@@ -21,7 +21,7 @@ fn transcript_tail_drives_context_window_and_tokens() {
         .unwrap();
     assert_eq!(obs.total_tokens, Some(100_500));
     assert_eq!(obs.context_window, None);
-    assert_eq!(obs.model.as_deref(), Some("claude-opus-4-7"));
+    assert_eq!(obs.launch.model.as_deref(), Some("claude-opus-4-7"));
 
     // The 1M beta is signalled by a `[1m]` marker that rides only the hook
     // payload's model field — the transcript writes the bare id. The adapter
@@ -45,7 +45,7 @@ fn transcript_tail_drives_context_window_and_tokens() {
         .unwrap();
     assert_eq!(obs.context_window, Some(1_000_000));
     assert_eq!(obs.total_tokens, Some(100_500));
-    assert_eq!(obs.model.as_deref(), Some("claude-opus-4-8[1m]"));
+    assert_eq!(obs.launch.model.as_deref(), Some("claude-opus-4-8[1m]"));
 }
 
 #[test]

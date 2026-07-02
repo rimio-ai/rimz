@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::{RawValue, to_raw_value};
 use serde_json::{Value, json};
 
-use crate::agents::AgentLifecycleObservation;
+use crate::agents::{AgentLifecycleObservation, LaunchParams};
 use crate::feed::FeedItem;
 use crate::ids::{
     AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, RunId, WorkspaceId,
@@ -40,24 +40,8 @@ pub enum AgentLaunchState {
 pub struct AgentLaunchPayload {
     pub agent_id: AgentSessionId,
     pub agent_name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub team: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub launch_group: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub launch_ordinal: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind_ordinal: Option<u32>,
+    #[serde(flatten)]
+    pub launch: LaunchParams,
     #[serde(default)]
     pub state: AgentLaunchState,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -13,8 +13,8 @@
 //! do, because the fold produces it.
 
 use rimz::EventEnvelope;
-use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
+use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::ids::MuxName;
 use rimz::ids::PaneId;
 use std::path::Path;
@@ -34,13 +34,7 @@ fn registered(
     AgentLifecycleObservation {
         agent_id: Some(agent_id.into()),
         agent_name: Some(name.to_owned()),
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        profile: None,
-        kind_ordinal: None,
+        launch: LaunchParams::default(),
         signal: LifecycleSignal::Registered,
         agent_pid: None,
         agent_process_start: None,
@@ -51,8 +45,6 @@ fn registered(
         prompt: None,
         transcript_path: None,
         origin: None,
-        model: None,
-        effort: None,
         context_pct: None,
         context_window: None,
         total_tokens: None,
@@ -144,9 +136,9 @@ fn resume_replays_role_and_team() {
         "/repo/feature",
         "feature",
     );
-    obs.role = Some("planner".to_owned());
-    obs.team = Some("pcr".to_owned());
-    obs.profile = Some("claude-planner".to_owned());
+    obs.launch.role = Some("planner".to_owned());
+    obs.launch.team = Some("pcr".to_owned());
+    obs.launch.profile = Some("claude-planner".to_owned());
     h.ledger
         .append_event(&lifecycle(&h, "claude", "SessionStart", &obs))
         .expect("append");

@@ -22,18 +22,18 @@ pub(super) fn record_lifecycle_observation(
             );
         }
         if observation.parent_agent_id.is_none()
-            && (observation.role.is_none()
-                || observation.channel.is_none()
-                || observation.profile.is_none()
-                || observation.model.is_none()
-                || observation.effort.is_none())
+            && (observation.launch.role.is_none()
+                || observation.launch.channel.is_none()
+                || observation.launch.profile.is_none()
+                || observation.launch.model.is_none()
+                || observation.launch.effort.is_none())
         {
-            let configured_identity = if observation.model.is_none() || observation.effort.is_none()
-            {
-                agent.configured_identity()
-            } else {
-                (None, None)
-            };
+            let configured_identity =
+                if observation.launch.model.is_none() || observation.launch.effort.is_none() {
+                    agent.configured_identity()
+                } else {
+                    (None, None)
+                };
             fill_root_launch_identity(&mut observation, configured_identity, |observation, var| {
                 agent_identity_env(observation, var, validate_non_empty_identity_env)
             });
@@ -52,7 +52,7 @@ pub(super) fn record_lifecycle_observation(
             ledger,
             &mut observation,
         );
-        let model_hint = observation.model.clone();
+        let model_hint = observation.launch.model.clone();
         // Validate the transition this event drives against the prior rollup
         // and log any anomaly once, here at ingestion. Replay re-derives the
         // same state silently.
@@ -154,10 +154,10 @@ pub(super) fn event_lifecycle_observation(
     trimmed.transcript_path = None;
     trimmed.worktree_path = None;
     trimmed.worktree_branch = None;
-    trimmed.role = None;
-    trimmed.team = None;
-    trimmed.channel = None;
-    trimmed.profile = None;
+    trimmed.launch.role = None;
+    trimmed.launch.team = None;
+    trimmed.launch.channel = None;
+    trimmed.launch.profile = None;
     // Lazy adapters can first recover their pane binding on TurnStarted, so the
     // reducer needs every event pane stamp that focus recovery supplies.
     Cow::Owned(trimmed)

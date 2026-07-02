@@ -41,32 +41,34 @@ pub(in crate::cli::hooks) fn fill_root_launch_identity(
     if observation.parent_agent_id.is_some() {
         return;
     }
-    if observation.role.is_none() {
-        observation.role = identity_env(observation, rimz::harness::run::ENV_AGENT_ROLE);
+    if observation.launch.role.is_none() {
+        observation.launch.role = identity_env(observation, rimz::harness::run::ENV_AGENT_ROLE);
     }
-    if observation.team.is_none() {
-        observation.team = identity_env(observation, rimz::harness::run::ENV_TEAM);
+    if observation.launch.team.is_none() {
+        observation.launch.team = identity_env(observation, rimz::harness::run::ENV_TEAM);
     }
-    if observation.launch_group.is_none() {
-        observation.launch_group = identity_env(observation, rimz::harness::run::ENV_LAUNCH_GROUP);
+    if observation.launch.launch_group.is_none() {
+        observation.launch.launch_group =
+            identity_env(observation, rimz::harness::run::ENV_LAUNCH_GROUP);
     }
-    if observation.launch_ordinal.is_none() {
-        observation.launch_ordinal =
+    if observation.launch.launch_ordinal.is_none() {
+        observation.launch.launch_ordinal =
             identity_env(observation, rimz::harness::run::ENV_LAUNCH_ORDINAL)
                 .and_then(|raw| raw.parse::<u32>().ok());
     }
-    if observation.channel.is_none() {
-        observation.channel = identity_env(observation, rimz::harness::run::ENV_CHANNEL);
+    if observation.launch.channel.is_none() {
+        observation.launch.channel = identity_env(observation, rimz::harness::run::ENV_CHANNEL);
     }
-    if observation.profile.is_none() {
-        observation.profile = identity_env(observation, rimz::harness::run::ENV_AGENT_PROFILE);
+    if observation.launch.profile.is_none() {
+        observation.launch.profile =
+            identity_env(observation, rimz::harness::run::ENV_AGENT_PROFILE);
     }
-    if observation.model.is_none() {
-        observation.model = identity_env(observation, rimz::harness::run::ENV_AGENT_MODEL)
+    if observation.launch.model.is_none() {
+        observation.launch.model = identity_env(observation, rimz::harness::run::ENV_AGENT_MODEL)
             .or(configured_identity.0);
     }
-    if observation.effort.is_none() {
-        observation.effort = identity_env(observation, rimz::harness::run::ENV_AGENT_EFFORT)
+    if observation.launch.effort.is_none() {
+        observation.launch.effort = identity_env(observation, rimz::harness::run::ENV_AGENT_EFFORT)
             .or(configured_identity.1);
     }
 }

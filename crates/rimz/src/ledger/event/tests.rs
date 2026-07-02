@@ -1,7 +1,7 @@
 use super::*;
 
-use crate::agents::SessionOrigin;
 use crate::agents::lifecycle::LifecycleSignal;
+use crate::agents::{LaunchParams, SessionOrigin};
 use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 
@@ -13,13 +13,17 @@ fn lifecycle_observation() -> AgentLifecycleObservation {
     AgentLifecycleObservation {
         agent_id: Some(AgentSessionId::from("sess-1")),
         agent_name: Some("amber-atlas".to_owned()),
-        role: Some("reviewer".to_owned()),
-        team: Some("pcr".to_owned()),
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        profile: Some("claude-reviewer".to_owned()),
-        kind_ordinal: Some(2),
+        launch: LaunchParams {
+            profile: Some("claude-reviewer".to_owned()),
+            role: Some("reviewer".to_owned()),
+            model: Some("claude-opus".to_owned()),
+            effort: Some("high".to_owned()),
+            team: Some("pcr".to_owned()),
+            launch_group: None,
+            launch_ordinal: None,
+            channel: None,
+            kind_ordinal: Some(2),
+        },
         signal: LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
@@ -38,8 +42,6 @@ fn lifecycle_observation() -> AgentLifecycleObservation {
         prompt: Some("ship it".to_owned()),
         transcript_path: Some("/tmp/transcript.jsonl".to_owned()),
         origin: None,
-        model: Some("claude-opus".to_owned()),
-        effort: Some("high".to_owned()),
         context_pct: Some(80),
         context_window: Some(200_000),
         total_tokens: Some(10_000),
@@ -232,7 +234,7 @@ fn old_shape_agent_lifecycle_params_still_decode() {
             Some("12345".to_owned()),
         ))
     );
-    assert_eq!(payload.observation.role, None);
+    assert_eq!(payload.observation.launch.role, None);
     assert_eq!(payload.observation.pane_id, None);
 }
 
@@ -263,23 +265,104 @@ fn agent_launch_payload_round_trips_channel_identity() {
     let payload: AgentLaunchPayload = serde_json::from_value(json!({
         "agent_id": "launch-1",
         "agent_name": "swift-otter",
+        "profile": "codex-coder",
         "role": "coder",
+        "model": "gpt-5.5-codex",
+        "effort": "xhigh",
         "team": "pcr",
         "launch_group": "launch_group_1",
         "launch_ordinal": 2,
         "channel": "design",
+        "kind_ordinal": 1,
     }))
     .unwrap();
 
-    assert_eq!(payload.team.as_deref(), Some("pcr"));
-    assert_eq!(payload.launch_group.as_deref(), Some("launch_group_1"));
-    assert_eq!(payload.launch_ordinal, Some(2));
-    assert_eq!(payload.channel.as_deref(), Some("design"));
+    assert_eq!(payload.launch.profile.as_deref(), Some("codex-coder"));
+    assert_eq!(payload.launch.team.as_deref(), Some("pcr"));
+    assert_eq!(
+        payload.launch.launch_group.as_deref(),
+        Some("launch_group_1")
+    );
+    assert_eq!(payload.launch.launch_ordinal, Some(2));
+    assert_eq!(payload.launch.channel.as_deref(), Some("design"));
+    assert_eq!(payload.launch.kind_ordinal, Some(1));
     let encoded = serde_json::to_value(&payload).unwrap();
+    assert_eq!(encoded["profile"], "codex-coder");
+    assert_eq!(encoded["role"], "coder");
+    assert_eq!(encoded["model"], "gpt-5.5-codex");
+    assert_eq!(encoded["effort"], "xhigh");
     assert_eq!(encoded["team"], "pcr");
     assert_eq!(encoded["launch_group"], "launch_group_1");
     assert_eq!(encoded["launch_ordinal"], 2);
     assert_eq!(encoded["channel"], "design");
+    assert_eq!(encoded["kind_ordinal"], 1);
+    assert!(encoded.get("launch").is_none());
+}
+
+#[test]
+fn shared_launch_params_stay_top_level_in_launch_and_lifecycle_events() {
+    const KEYS: [&str; 9] = [
+        "profile",
+        "role",
+        "model",
+        "effort",
+        "team",
+        "launch_group",
+        "launch_ordinal",
+        "channel",
+        "kind_ordinal",
+    ];
+
+    let launch = EventEnvelope::agent_launched(
+        workspace(),
+        "session",
+        &AgentKind::new_unchecked("codex"),
+        AgentLaunchPayload {
+            agent_id: AgentSessionId::from("launch-1"),
+            agent_name: "swift-otter".to_owned(),
+            launch: LaunchParams {
+                profile: Some("codex-coder".to_owned()),
+                role: Some("coder".to_owned()),
+                model: Some("gpt-5.5-codex".to_owned()),
+                effort: Some("xhigh".to_owned()),
+                team: Some("pcr".to_owned()),
+                launch_group: Some("launch_group_1".to_owned()),
+                launch_ordinal: Some(2),
+                channel: Some("design".to_owned()),
+                kind_ordinal: Some(1),
+            },
+            state: AgentLaunchState::Starting,
+            run_id: None,
+            pane_id: None,
+            runtime_owner: None,
+            worktree_path: None,
+            worktree_branch: None,
+            prompt: None,
+            description: None,
+        },
+    );
+    let launch_params = params_value(&launch);
+    for key in KEYS {
+        assert!(launch_params.get(key).is_some(), "{key} stays top-level");
+    }
+    assert!(launch_params.get("launch").is_none());
+
+    let mut observation = lifecycle_observation();
+    observation.launch.launch_group = Some("launch_group_1".to_owned());
+    observation.launch.launch_ordinal = Some(2);
+    observation.launch.channel = Some("design".to_owned());
+    let lifecycle = EventEnvelope::agent_lifecycle(
+        workspace(),
+        "session",
+        "codex",
+        "SessionStart",
+        &observation,
+    );
+    let lifecycle_params = params_value(&lifecycle);
+    for key in KEYS {
+        assert!(lifecycle_params.get(key).is_some(), "{key} stays top-level");
+    }
+    assert!(lifecycle_params.get("launch").is_none());
 }
 
 #[test]

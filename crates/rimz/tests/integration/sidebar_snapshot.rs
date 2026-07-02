@@ -3,8 +3,8 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
+use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::ledger::event::EventEnvelope;
 
 use crate::common::Env;
@@ -13,13 +13,7 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
     let obs = AgentLifecycleObservation {
         agent_id: Some(agent_id.into()),
         agent_name: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        profile: None,
-        kind_ordinal: None,
+        launch: LaunchParams::default(),
         signal: LifecycleSignal::Registered,
         agent_pid: None,
         agent_process_start: None,
@@ -30,8 +24,6 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
         prompt: None,
         transcript_path: None,
         origin: None,
-        model: None,
-        effort: None,
         context_pct: None,
         context_window: None,
         total_tokens: None,

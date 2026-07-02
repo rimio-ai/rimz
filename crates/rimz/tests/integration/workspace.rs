@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime};
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use rimz::WorkspaceId;
-use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
+use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::agents::{AgentState, AgentStatus};
 use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId};
@@ -146,9 +146,9 @@ fn message_agent() -> AgentState {
         description: None,
         transcript_path: None,
         origin: None,
-        recent_prompts: Vec::new(),
         model: None,
         effort: None,
+        recent_prompts: Vec::new(),
         context_pct: None,
         context_window: None,
         total_tokens: None,
@@ -253,13 +253,7 @@ fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycl
     AgentLifecycleObservation {
         agent_id: Some(AgentSessionId::from("claude-1")),
         agent_name: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        profile: None,
-        kind_ordinal: None,
+        launch: LaunchParams::default(),
         signal,
         agent_pid: None,
         agent_process_start: None,
@@ -270,8 +264,6 @@ fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycl
         prompt: None,
         transcript_path: None,
         origin: None,
-        model: None,
-        effort: None,
         context_pct: None,
         context_window: None,
         total_tokens: None,

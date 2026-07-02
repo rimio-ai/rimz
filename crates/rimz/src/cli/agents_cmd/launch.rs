@@ -875,18 +875,20 @@ pub(super) fn append_launch_event(
         rimz::ledger::event::AgentLaunchPayload {
             agent_id: identity.agent_id.clone(),
             agent_name: identity.name.clone(),
-            profile: identity.profile.clone(),
-            role: identity.role.clone(),
-            model: identity.model.clone(),
-            effort: identity.effort.clone(),
-            team: identity.team.clone(),
-            launch_group: identity.launch_group.clone(),
-            launch_ordinal: identity.launch_ordinal,
-            channel: identity
-                .channel
-                .clone()
-                .or_else(|| params.channel.map(ToOwned::to_owned)),
-            kind_ordinal: None,
+            launch: rimz::agents::LaunchParams {
+                profile: identity.profile.clone(),
+                role: identity.role.clone(),
+                model: identity.model.clone(),
+                effort: identity.effort.clone(),
+                team: identity.team.clone(),
+                launch_group: identity.launch_group.clone(),
+                launch_ordinal: identity.launch_ordinal,
+                channel: identity
+                    .channel
+                    .clone()
+                    .or_else(|| params.channel.map(ToOwned::to_owned)),
+                kind_ordinal: None,
+            },
             state: params.state,
             run_id: identity.run_id.clone(),
             pane_id: params.pane_id,

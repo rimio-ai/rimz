@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
-use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
+use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
@@ -321,13 +321,7 @@ fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
     AgentLifecycleObservation {
         agent_id: Some(AgentSessionId::from("claude-1")),
         agent_name: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        profile: None,
-        kind_ordinal: None,
+        launch: LaunchParams::default(),
         signal: LifecycleSignal::Registered,
         agent_pid: None,
         agent_process_start: None,
@@ -338,8 +332,6 @@ fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
         prompt: None,
         transcript_path: None,
         origin: None,
-        model: None,
-        effort: None,
         context_pct: None,
         context_window: None,
         total_tokens: None,

@@ -1073,8 +1073,8 @@ fn build_claude_observation(
     observation.prompt =
         sanitize_user_prompt(parts.user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
     observation.transcript_path = transcript_path;
-    observation.model = model;
-    observation.effort = claude_effort(payload, parts);
+    observation.launch.model = model;
+    observation.launch.effort = claude_effort(payload, parts);
     observation.context_window = context_window;
     observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
     observation

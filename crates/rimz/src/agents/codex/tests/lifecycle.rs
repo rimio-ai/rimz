@@ -272,7 +272,7 @@ model_reasoning_effort = "xhigh"
     });
 
     assert_eq!(start.parent_agent_id.as_deref(), Some("sess-parent"));
-    assert_eq!(start.effort.as_deref(), Some("xhigh"));
+    assert_eq!(start.launch.effort.as_deref(), Some("xhigh"));
 }
 
 #[test]

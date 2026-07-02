@@ -1052,8 +1052,8 @@ fn build_codex_observation(
         .map(|path| path.to_string_lossy().into_owned());
     observation.turn_error = transcript.turn_error;
     let reported_context_window = usage.reported_context_window();
-    observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
-    observation.effort = payload_reasoning_effort(payload).or_else(|| {
+    observation.launch.model = optional_payload_string(payload, &["model"]).or(usage.model);
+    observation.launch.effort = payload_reasoning_effort(payload).or_else(|| {
         if is_subagent {
             configured_reasoning_effort()
         } else {

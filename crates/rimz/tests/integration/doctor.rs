@@ -2,8 +2,8 @@
 //! then run the binary and assert the report. The JSON report is the stable
 //! contract checked here; a smoke test pins the human report's shape.
 
-use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
+use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::ids::{MuxName, ResolverId, SidebarInstanceId};
 use rimz::ledger::event::{EventEnvelope, MessageEventMethod};
 use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
@@ -26,13 +26,7 @@ fn inject_lifecycle(
     let obs = AgentLifecycleObservation {
         agent_id: Some(agent_id.into()),
         agent_name: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        profile: None,
-        kind_ordinal: None,
+        launch: LaunchParams::default(),
         signal,
         agent_pid: None,
         agent_process_start: None,
@@ -43,8 +37,6 @@ fn inject_lifecycle(
         prompt: None,
         transcript_path: None,
         origin: None,
-        model: None,
-        effort: None,
         context_pct: None,
         context_window: None,
         total_tokens: None,

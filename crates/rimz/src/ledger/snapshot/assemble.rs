@@ -192,8 +192,8 @@ mod tests {
 
     use super::*;
 
-    use crate::agents::AgentLifecycleObservation;
     use crate::agents::lifecycle::LifecycleSignal;
+    use crate::agents::{AgentLifecycleObservation, LaunchParams};
     use crate::ids::{AgentSessionId, WorkspaceId};
     use crate::ledger::event::EventEnvelope;
 
@@ -308,13 +308,7 @@ mod tests {
         let observation = AgentLifecycleObservation {
             agent_id: Some(AgentSessionId::from(agent_id)),
             agent_name: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            profile: None,
-            kind_ordinal: None,
+            launch: LaunchParams::default(),
             signal: LifecycleSignal::Registered,
             agent_pid,
             agent_process_start: None,
@@ -325,8 +319,6 @@ mod tests {
             prompt: None,
             transcript_path: None,
             origin: None,
-            model: None,
-            effort: None,
             context_pct: None,
             context_window: None,
             total_tokens: None,

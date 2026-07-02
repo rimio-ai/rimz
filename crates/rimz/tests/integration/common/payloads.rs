@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use rimz::EventEnvelope;
-use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
+use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::ids::AgentSessionId;
 use rimz::resolver::heartbeat::ResolverHeartbeat;
 use serde_json::json;
@@ -39,13 +39,7 @@ fn registered_observation(agent_id: &str) -> AgentLifecycleObservation {
     AgentLifecycleObservation {
         agent_id: Some(AgentSessionId::from(agent_id)),
         agent_name: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        profile: None,
-        kind_ordinal: None,
+        launch: LaunchParams::default(),
         signal: LifecycleSignal::Registered,
         agent_pid: None,
         agent_process_start: None,
@@ -56,8 +50,6 @@ fn registered_observation(agent_id: &str) -> AgentLifecycleObservation {
         prompt: None,
         transcript_path: None,
         origin: None,
-        model: None,
-        effort: None,
         context_pct: None,
         context_window: None,
         total_tokens: None,
