@@ -14,6 +14,9 @@ use uuid::Uuid;
 use crate::config::{WorktreeBase, WorktreeConfig};
 use crate::forge;
 
+mod include;
+mod link;
+
 const MARKER_FILE: &str = "rimz-worktree.json";
 const MARKER_VERSION: u32 = 3;
 const LANDED_BASE_SCAN_CAP: u32 = 500;
@@ -533,8 +536,8 @@ fn add_and_seed(
         created_at: jiff::Timestamp::now(),
     };
     write_marker(&path, &marker)?;
-    let included = crate::worktree_include::copy_includes(repo_root, &path);
-    let linked = crate::worktree_link::link_dirs(repo_root, &path);
+    let included = include::copy_includes(repo_root, &path);
+    let linked = link::link_dirs(repo_root, &path);
     Ok(CreatedWorktree {
         name,
         path,
