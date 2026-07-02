@@ -5,6 +5,29 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 pub(crate) fn tracked_text_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let files: Vec<_> = git_tracked_files(root)?
+        .into_iter()
+        .filter(|path| {
+            matches!(
+                path.extension().and_then(OsStr::to_str),
+                Some("rs" | "toml" | "md" | "json")
+            )
+        })
+        .collect();
+    if files.is_empty() {
+        return walk_text_files(root);
+    }
+    Ok(files)
+}
+
+pub(crate) fn tracked_rust_files(root: &Path) -> Result<Vec<PathBuf>> {
+    Ok(git_tracked_files(root)?
+        .into_iter()
+        .filter(|path| path.extension().and_then(OsStr::to_str) == Some("rs"))
+        .collect())
+}
+
+fn git_tracked_files(root: &Path) -> Result<Vec<PathBuf>> {
     let output = Command::new("git")
         .args(["ls-files"])
         .current_dir(root)
@@ -13,20 +36,10 @@ pub(crate) fn tracked_text_files(root: &Path) -> Result<Vec<PathBuf>> {
     if !output.status.success() {
         bail!("git ls-files failed");
     }
-    let files: Vec<_> = String::from_utf8_lossy(&output.stdout)
+    Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
-        .filter(|path| {
-            path.ends_with(".rs")
-                || path.ends_with(".toml")
-                || path.ends_with(".md")
-                || path.ends_with(".json")
-        })
         .map(|path| root.join(path))
-        .collect();
-    if files.is_empty() {
-        return walk_text_files(root);
-    }
-    Ok(files)
+        .collect())
 }
 
 fn walk_text_files(root: &Path) -> Result<Vec<PathBuf>> {

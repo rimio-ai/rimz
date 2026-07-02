@@ -278,7 +278,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 ### Contributor command surface
 
-`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `profile-build`, `hooks`, `fmt`, `lint`, `test`, `test-archive`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `invariants`, `docs-links`, `gate`, `checks`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. `install-dev` is the contributor opt-in to [off-box reporting](../internals/health/observability.md): a debug host `rimz` built `--features sentry`, so its reporting defaults to the `development` environment. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
+`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `profile-build`, `hooks`, `fmt`, `lint`, `test`, `test-archive`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `complexity`, `invariants`, `docs-links`, `gate`, `checks`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. `cargo xtask complexity [N]` ranks tracked `.rs` files by cyclomatic/cognitive complexity via `rust-code-analysis-cli` (`cargo install rust-code-analysis-cli --locked`); it is a local report, not part of `gate`/`checks`/`ci`. `install-dev` is the contributor opt-in to [off-box reporting](../internals/health/observability.md): a debug host `rimz` built `--features sentry`, so its reporting defaults to the `development` environment. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
 
 ## Reading order for new contributors
 

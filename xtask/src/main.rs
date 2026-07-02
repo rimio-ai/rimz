@@ -5,6 +5,7 @@
 
 mod brew;
 mod build;
+mod complexity;
 mod docs_links;
 mod files;
 mod gates;
@@ -139,6 +140,11 @@ const TASKS: &[TaskInfo] = &[
         runs: "cargo bench -p rimz --features testkit --locked",
     },
     TaskInfo {
+        name: "complexity",
+        summary: "Rank Rust source and test files by cyclomatic/cognitive complexity.",
+        runs: "rust-code-analysis-cli metrics over every tracked .rs file; prints top-N source and test files by complexity",
+    },
+    TaskInfo {
         name: "invariants",
         summary: "Run repository architecture invariants.",
         runs: "grep-style invariants implemented in xtask",
@@ -252,7 +258,10 @@ pub(crate) fn is_help_flag(arg: &str) -> bool {
 }
 
 fn task_accepts_args(task: &str) -> bool {
-    matches!(task, "test" | "test-archive" | "perf" | "screenshot")
+    matches!(
+        task,
+        "test" | "test-archive" | "perf" | "complexity" | "screenshot"
+    )
 }
 
 fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
@@ -278,6 +287,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "semver" => gates::semver(root),
         "externals" => gates::externals(root),
         "perf" => gates::perf(root, args),
+        "complexity" => complexity::complexity(root, args),
         "invariants" => invariants::invariants(root),
         "docs-links" => docs_links::docs_links(root),
         "gate" => gates::gate(root),
