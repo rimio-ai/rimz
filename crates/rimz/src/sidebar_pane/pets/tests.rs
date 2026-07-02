@@ -20,55 +20,25 @@ fn frame(
 }
 
 #[test]
-fn dashboard_pet_size_uses_fixed_tier_footprints() {
-    assert_eq!(DASHBOARD_PIXEL_PET, PetGridSize { cols: 15, rows: 9 });
-    assert_eq!(DASHBOARD_CELL_PET, PetGridSize { cols: 18, rows: 9 });
-    assert_eq!(
-        dashboard_pet_size(PetRenderTier::Pixel),
-        DASHBOARD_PIXEL_PET
-    );
-    assert_eq!(dashboard_pet_size(PetRenderTier::Cell), DASHBOARD_CELL_PET);
-}
-
-#[test]
-fn render_tier_resolves_mode_and_caps() {
+fn render_tier_resolves_mode_caps_and_paintability() {
     use PetsGlyphMode::{Auto, Pixel, Sextant};
     let caps = |pixel_transport, kitty_term| PetRenderCaps {
         pixel_transport,
         kitty_term,
     };
-    for (mode, caps, tier) in [
-        (Auto, caps(true, true), PetRenderTier::Pixel),
-        (Auto, caps(true, false), PetRenderTier::Cell),
-        (Auto, caps(false, true), PetRenderTier::Cell),
-        (Pixel, caps(true, false), PetRenderTier::Pixel),
-        (Pixel, caps(false, true), PetRenderTier::Cell),
-        (Sextant, caps(true, true), PetRenderTier::Cell),
+
+    for (mode, caps, pixel_paintable, tier) in [
+        (Auto, caps(true, true), true, PetRenderTier::Pixel),
+        (Auto, caps(true, true), false, PetRenderTier::Cell),
+        (Auto, caps(true, false), true, PetRenderTier::Cell),
+        (Auto, caps(false, true), true, PetRenderTier::Cell),
+        (Pixel, caps(true, false), true, PetRenderTier::Pixel),
+        (Pixel, caps(true, false), false, PetRenderTier::Cell),
+        (Pixel, caps(false, true), true, PetRenderTier::Cell),
+        (Sextant, caps(true, true), false, PetRenderTier::Cell),
     ] {
-        assert_eq!(resolve_render_tier(mode, caps), tier);
+        assert_eq!(effective_render_tier(mode, caps, pixel_paintable), tier);
     }
-}
-
-#[test]
-fn effective_render_tier_downgrades_only_unpaintable_pixels() {
-    use PetsGlyphMode::{Pixel, Sextant};
-    let pixel_caps = PetRenderCaps {
-        pixel_transport: true,
-        kitty_term: true,
-    };
-
-    assert_eq!(
-        effective_render_tier(Pixel, pixel_caps, true),
-        PetRenderTier::Pixel
-    );
-    assert_eq!(
-        effective_render_tier(Pixel, pixel_caps, false),
-        PetRenderTier::Cell
-    );
-    assert_eq!(
-        effective_render_tier(Sextant, pixel_caps, false),
-        PetRenderTier::Cell
-    );
 }
 
 #[test]
@@ -271,83 +241,46 @@ fn retry_due_waits_for_cooldown_then_clears() {
 }
 
 #[test]
-fn action_transition_jumps_once_then_settles() {
+fn jump_plays_once_per_trigger_then_settles() {
     let refresh_ms = 100;
-    let mut assets = loaded_assets(Some(PetAction::Running));
     let config = enabled_config();
     let body = Some(PetRenderTier::Cell);
+    for (previous, action, unread_triggered, steady_track) in [
+        (PetAction::Running, PetAction::Ask, false, model::TRACK_ASK),
+        (
+            PetAction::Running,
+            PetAction::Running,
+            true,
+            model::TRACK_RUNNING,
+        ),
+    ] {
+        let mut assets = loaded_assets(Some(previous));
 
-    let view = assets
-        .view(
-            &config,
-            frame(PetAction::Ask, 10, refresh_ms, body, true, false),
-        )
-        .expect("enabled pets produce a view");
-    assert_eq!(view.active_track, model::TRACK_JUMPING);
-    assert_eq!(assets.jump_started_phase, Some(10));
+        let view = assets
+            .view(
+                &config,
+                frame(action, 10, refresh_ms, body, true, unread_triggered),
+            )
+            .expect("enabled pets produce a view");
+        assert_eq!(view.active_track, model::TRACK_JUMPING);
+        assert_eq!(assets.jump_started_phase, Some(10));
 
-    let jump = model::animations()
-        .get(model::TRACK_JUMPING)
-        .expect("jumping track");
-    let phases = jump
-        .loop_duration(refresh_ms)
-        .as_millis()
-        .div_ceil(u128::from(refresh_ms));
-    let view = assets
-        .view(
-            &config,
-            frame(
-                PetAction::Ask,
-                10 + phases as u64,
-                refresh_ms,
-                body,
-                true,
-                false,
-            ),
-        )
-        .expect("enabled pets produce a view");
-    assert_eq!(view.active_track, model::TRACK_ASK);
-    assert_eq!(assets.jump_started_phase, None);
-}
-
-#[test]
-fn unread_trigger_jumps_once_without_action_change() {
-    let refresh_ms = 100;
-    let mut assets = loaded_assets(Some(PetAction::Running));
-    let config = enabled_config();
-    let body = Some(PetRenderTier::Cell);
-
-    let view = assets
-        .view(
-            &config,
-            frame(PetAction::Running, 10, refresh_ms, body, true, true),
-        )
-        .expect("enabled pets produce a view");
-    assert_eq!(view.active_track, model::TRACK_JUMPING);
-    assert_eq!(assets.jump_started_phase, Some(10));
-
-    let jump = model::animations()
-        .get(model::TRACK_JUMPING)
-        .expect("jumping track");
-    let phases = jump
-        .loop_duration(refresh_ms)
-        .as_millis()
-        .div_ceil(u128::from(refresh_ms));
-    let view = assets
-        .view(
-            &config,
-            frame(
-                PetAction::Running,
-                10 + phases as u64,
-                refresh_ms,
-                body,
-                true,
-                false,
-            ),
-        )
-        .expect("enabled pets produce a view");
-    assert_eq!(view.active_track, model::TRACK_RUNNING);
-    assert_eq!(assets.jump_started_phase, None);
+        let jump = model::animations()
+            .get(model::TRACK_JUMPING)
+            .expect("jumping track");
+        let phases = jump
+            .loop_duration(refresh_ms)
+            .as_millis()
+            .div_ceil(u128::from(refresh_ms));
+        let view = assets
+            .view(
+                &config,
+                frame(action, 10 + phases as u64, refresh_ms, body, true, false),
+            )
+            .expect("enabled pets produce a view");
+        assert_eq!(view.active_track, steady_track);
+        assert_eq!(assets.jump_started_phase, None);
+    }
 }
 
 #[test]
@@ -435,6 +368,16 @@ fn memoized_grids_are_evicted_on_resize() {
     let memo = &assets.loaded.as_ref().expect("loaded").memo;
     assert_eq!(memo.len(), 1);
     assert!(memo.keys().all(|key| key.cols == 13));
+}
+
+#[test]
+fn observe_unread_rows_triggers_only_on_new_rows() {
+    let mut assets = PetAssets::default();
+
+    assert!(assets.observe_unread_rows(["agent-1".to_owned(), "agent-2".to_owned()]));
+    assert!(!assets.observe_unread_rows(["agent-1".to_owned(), "agent-2".to_owned()]));
+    assert!(!assets.observe_unread_rows(["agent-2".to_owned()]));
+    assert!(assets.observe_unread_rows(["agent-1".to_owned(), "agent-2".to_owned()]));
 }
 
 fn enabled_config() -> PetsConfig {

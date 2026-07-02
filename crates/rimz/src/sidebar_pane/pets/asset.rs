@@ -402,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_home_prefers_xdg_cache_home() {
+    fn cache_and_petdex_roots_resolve_from_env() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(
             cache_home_from(
@@ -410,6 +410,20 @@ mod tests {
                 Some(PathBuf::from("/home/a"))
             ),
             dir.path()
+        );
+        assert_eq!(
+            cache_home_from(None, Some(PathBuf::from("/home/a"))),
+            PathBuf::from("/home/a/.cache")
+        );
+        assert_eq!(
+            petdex_root_from(Some(PathBuf::from("/home/a"))),
+            Some(PathBuf::from("/home/a/.codex/pets"))
+        );
+        assert_eq!(petdex_root_from(None), None);
+        assert_eq!(
+            petdex_root_from(Some(PathBuf::new())),
+            None,
+            "empty HOME is no root"
         );
     }
 
@@ -453,34 +467,17 @@ mod tests {
             "a path-like selector is a local source, trimmed"
         );
         assert_eq!(
+            resolve_pet_source("my-pet.webp"),
+            Some(PetSource::Local(PathBuf::from("my-pet.webp"))),
+            "a dotted selector is a local source"
+        );
+        assert_eq!(
             resolve_pet_source(" wall-e "),
             Some(PetSource::Petdex("wall-e".to_owned())),
             "a bare slug is a petdex pet, trimmed"
         );
         assert_eq!(resolve_pet_source("   "), None, "empty selects nothing");
-    }
-
-    #[test]
-    fn is_path_like_separates_paths_from_petdex_slugs() {
-        assert!(is_path_like("~/.codex/pets/wall-e"));
-        assert!(is_path_like("/abs/wall-e"));
-        assert!(is_path_like("my-pet.webp"));
-        assert!(!is_path_like("wall-e"));
-        assert!(!is_path_like("kaka-2"));
-    }
-
-    #[test]
-    fn petdex_root_from_joins_home() {
-        assert_eq!(
-            petdex_root_from(Some(PathBuf::from("/home/a"))),
-            Some(PathBuf::from("/home/a/.codex/pets"))
-        );
-        assert_eq!(petdex_root_from(None), None);
-        assert_eq!(
-            petdex_root_from(Some(PathBuf::new())),
-            None,
-            "empty HOME is no root"
-        );
+        assert!(is_path_like("~/x"), "a home prefix is path-like");
     }
 
     #[test]
@@ -494,18 +491,17 @@ mod tests {
         std::fs::write(dir.path().join("stray"), "not a pet").expect("write stray file");
 
         assert_eq!(installed_petdex_pets_in(dir.path()), ["a", "b"]);
-    }
-
-    #[test]
-    fn installed_petdex_pets_missing_root_is_empty() {
-        let dir = tempfile::tempdir().expect("tempdir");
-
         assert!(installed_petdex_pets_in(&dir.path().join("missing")).is_empty());
     }
 
     #[test]
     fn petdex_dir_reads_manifest_and_resolves_sheet_without_eviction() {
         let dir = tempfile::tempdir().expect("tempdir");
+        assert!(matches!(
+            resolve_petdex_dir(dir.path()),
+            Err(AssetErr::Io { .. })
+        ));
+
         std::fs::write(
             dir.path().join("pet.json"),
             br#"{"id":"wall-e","spritesheetPath":"spritesheet.webp"}"#,
@@ -520,15 +516,6 @@ mod tests {
             Err(AssetErr::Decode(_))
         ));
         assert!(sheet.exists(), "a petdex sheet is never evicted");
-    }
-
-    #[test]
-    fn petdex_dir_reports_a_missing_manifest() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        assert!(matches!(
-            resolve_petdex_dir(dir.path()),
-            Err(AssetErr::Io { .. })
-        ));
     }
 
     #[test]

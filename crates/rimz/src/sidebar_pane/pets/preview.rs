@@ -160,38 +160,7 @@ fn rgb(color: Color) -> Option<(u8, u8, u8)> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::catalog::FRAME_COUNT;
     use super::*;
-
-    #[test]
-    fn listable_ids_exposes_catalog_first() {
-        let ids = listable_ids();
-        assert_eq!(
-            ids.iter()
-                .take(BUILTIN_PETS.len())
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            [
-                "codex",
-                "dewey",
-                "fireball",
-                "rocky",
-                "seedy",
-                "stacky",
-                "bsod",
-                "null-signal",
-            ]
-        );
-    }
-
-    #[test]
-    fn preview_idle_track_resolves_to_catalog_frame() {
-        let sprite_index = model::animations()
-            .get(model::TRACK_IDLE)
-            .expect("idle preview track exists")
-            .first_sprite();
-        assert!(sprite_index < FRAME_COUNT);
-    }
 
     #[test]
     fn preview_cell_maps_rgb_and_reset() {

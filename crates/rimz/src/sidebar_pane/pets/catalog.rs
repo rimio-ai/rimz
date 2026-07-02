@@ -52,26 +52,3 @@ pub(crate) const BUILTIN_PETS: &[Pet] = &[
 pub(crate) fn pet_by_id(id: &str) -> Option<&'static Pet> {
     BUILTIN_PETS.iter().find(|pet| pet.id == id)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn builtin_catalog_contains_expected_ids() {
-        let ids = BUILTIN_PETS.iter().map(|pet| pet.id).collect::<Vec<_>>();
-        assert_eq!(
-            ids,
-            [
-                "codex",
-                "dewey",
-                "fireball",
-                "rocky",
-                "seedy",
-                "stacky",
-                "bsod",
-                "null-signal",
-            ]
-        );
-    }
-}

@@ -293,23 +293,81 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sextant_special_cases_reuse_legacy_blocks() {
-        assert_eq!(sextant_char(0), ' ');
-        assert_eq!(sextant_char(0b111111), '█');
-        assert_eq!(sextant_char(0b010101), '▌');
-        assert_eq!(sextant_char(0b101010), '▐');
+    fn sextant_chars_map_patterns_with_legacy_block_skips() {
+        for (pattern, ch) in [
+            (0, ' '),
+            (1, '\u{1FB00}'),
+            (20, '\u{1FB13}'),
+            (0b010101, '▌'),
+            (22, '\u{1FB14}'),
+            (41, '\u{1FB27}'),
+            (0b101010, '▐'),
+            (43, '\u{1FB28}'),
+            (62, '\u{1FB3B}'),
+            (0b111111, '█'),
+        ] {
+            assert_eq!(sextant_char(pattern), ch);
+        }
     }
 
     #[test]
-    fn transparent_pixels_drop_to_terminal_background() {
-        let image = RgbaImage {
+    fn render_frame_maps_coverage_to_ink_and_transparency() {
+        let transparent = RgbaImage {
             width: 1,
             height: 1,
             data: vec![255, 0, 0, 0],
         };
-        let grid = render_frame(&image, 1, 1);
-        assert_eq!(grid[0][0].ch, ' ');
-        assert_eq!(grid[0][0].fg, Color::Reset);
-        assert_eq!(grid[0][0].bg, Color::Reset);
+        assert_eq!(
+            render_frame(&transparent, 1, 1)[0][0],
+            PetCell {
+                ch: ' ',
+                fg: Color::Reset,
+                bg: Color::Reset,
+            }
+        );
+
+        let opaque_two_color = RgbaImage {
+            width: 2,
+            height: 3,
+            data: [
+                [255, 0, 0, 255],
+                [0, 0, 255, 255],
+                [255, 0, 0, 255],
+                [0, 0, 255, 255],
+                [255, 0, 0, 255],
+                [0, 0, 255, 255],
+            ]
+            .concat(),
+        };
+        assert_eq!(
+            render_frame(&opaque_two_color, 1, 1)[0][0],
+            PetCell {
+                ch: '▌',
+                fg: Color::Rgb(255, 0, 0),
+                bg: Color::Rgb(0, 0, 255),
+            }
+        );
+
+        let half_covered = RgbaImage {
+            width: 2,
+            height: 3,
+            data: [
+                [255, 0, 0, 255],
+                [0, 0, 0, 0],
+                [255, 0, 0, 255],
+                [0, 0, 0, 0],
+                [255, 0, 0, 255],
+                [0, 0, 0, 0],
+            ]
+            .concat(),
+        };
+        assert_eq!(
+            render_frame(&half_covered, 1, 1)[0][0],
+            PetCell {
+                ch: '▌',
+                fg: Color::Rgb(255, 0, 0),
+                bg: Color::Reset,
+            }
+        );
     }
 }

@@ -114,6 +114,7 @@ mod tests {
             caption(Some(PetAction::Ask), PetAction::Idle, 0),
             Some("all caught up")
         );
+        assert_eq!(caption(None, PetAction::Idle, 0), Some("resting"));
         assert_eq!(caption(Some(PetAction::Idle), PetAction::Idle, 7), None);
     }
 
@@ -123,10 +124,5 @@ mod tests {
         let second = caption(None, PetAction::Running, 1);
         assert!(first.is_some() && second.is_some());
         assert_ne!(first, second, "different seeds pick different lines");
-    }
-
-    #[test]
-    fn resting_is_the_cold_idle_line() {
-        assert_eq!(caption(None, PetAction::Idle, 0), Some("resting"));
     }
 }

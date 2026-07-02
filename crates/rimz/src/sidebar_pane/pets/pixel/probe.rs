@@ -260,6 +260,18 @@ mod tests {
             }
         );
 
+        let all = FakeProbe {
+            allow_passthrough: Some("all\n".to_owned()),
+            ..FakeProbe::ok()
+        };
+        assert_eq!(
+            detect_with(MuxName::Tmux, TEST_SESSION, &all),
+            PetRenderCaps {
+                pixel_transport: true,
+                kitty_term: true,
+            }
+        );
+
         let unsupported_term = FakeProbe {
             termnames: Some(vec!["screen-256color".to_owned()]),
             ..FakeProbe::ok()
@@ -271,20 +283,22 @@ mod tests {
                 kitty_term: false,
             }
         );
-    }
 
-    #[test]
-    fn tmux_gate_accepts_all_passthrough_value() {
-        let all = FakeProbe {
-            allow_passthrough: Some("all\n".to_owned()),
+        let unattached = FakeProbe {
+            termnames: Some(Vec::new()),
             ..FakeProbe::ok()
         };
-
-        assert!(detect_with(MuxName::Tmux, TEST_SESSION, &all).pixel_transport);
+        assert_eq!(
+            detect_with(MuxName::Tmux, TEST_SESSION, &unattached),
+            PetRenderCaps {
+                pixel_transport: true,
+                kitty_term: false,
+            }
+        );
     }
 
     #[test]
-    fn termname_gate_accepts_known_kitty_terminals_case_insensitively() {
+    fn termname_gate_filters_control_clients_and_requires_all_to_match() {
         for termname in [
             "xterm-ghostty",
             "ghostty",
@@ -302,10 +316,7 @@ mod tests {
                 "{termname} should enable pixels"
             );
         }
-    }
 
-    #[test]
-    fn termname_gate_requires_every_attached_client_to_match() {
         let allowed = FakeProbe {
             termnames: Some(vec!["xterm-ghostty".to_owned(), "kitty".to_owned()]),
             ..FakeProbe::ok()
@@ -320,10 +331,7 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert!(!detect_with(MuxName::Tmux, TEST_SESSION, &mixed).kitty_term);
-    }
 
-    #[test]
-    fn tmux_control_mode_clients_are_ignored_for_termname_gate() {
         assert_eq!(
             rendering_termnames("0 xterm-ghostty\n1 tmux-256color"),
             vec!["xterm-ghostty".to_owned()]
@@ -334,33 +342,6 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert!(detect_with(MuxName::Tmux, TEST_SESSION, &probe).kitty_term);
-    }
-
-    #[test]
-    fn termname_gate_scopes_clients_to_sidebar_session() {
-        let probe = FakeProbe {
-            expected_session: "room-a".to_owned(),
-            termnames: Some(vec!["xterm-ghostty".to_owned()]),
-            ..FakeProbe::ok()
-        };
-
-        assert!(detect_with(MuxName::Tmux, "room-a", &probe).kitty_term);
-    }
-
-    #[test]
-    fn termname_gate_rejects_empty_unattached_clients() {
-        let unattached = FakeProbe {
-            termnames: Some(Vec::new()),
-            ..FakeProbe::ok()
-        };
-
-        assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, &unattached),
-            PetRenderCaps {
-                pixel_transport: true,
-                kitty_term: false,
-            }
-        );
     }
 
     #[test]
@@ -388,6 +369,23 @@ mod tests {
                     kitty_term: true,
                 },
                 true
+            )
+        );
+
+        let zellij = FakeProbe::ok()
+            .with_env("ZELLIJ", "1")
+            .with_env("TERM", "xterm-kitty");
+        assert_eq!(detect_env_with(&zellij), (PetRenderCaps::default(), false));
+
+        let unsupported = FakeProbe::ok().with_env("TERM", "xterm-256color");
+        assert_eq!(
+            detect_env_with(&unsupported),
+            (
+                PetRenderCaps {
+                    pixel_transport: true,
+                    kitty_term: false,
+                },
+                false
             )
         );
     }

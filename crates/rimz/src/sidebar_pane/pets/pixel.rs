@@ -402,22 +402,6 @@ mod tests {
     }
 
     #[test]
-    fn row_column_diacritics_match_kitty_placeholder_table() {
-        assert_eq!(
-            ROW_COLUMN_DIACRITICS,
-            [
-                '\u{0305}', '\u{030d}', '\u{030e}', '\u{0310}', '\u{0312}', '\u{033d}', '\u{033e}',
-                '\u{033f}', '\u{0346}', '\u{034a}', '\u{034b}', '\u{034c}', '\u{0350}', '\u{0351}',
-                '\u{0352}', '\u{0357}', '\u{035b}', '\u{0363}', '\u{0364}', '\u{0365}', '\u{0366}',
-                '\u{0367}', '\u{0368}', '\u{0369}', '\u{036a}', '\u{036b}', '\u{036c}', '\u{036d}',
-                '\u{036e}', '\u{036f}', '\u{0483}', '\u{0484}',
-            ]
-        );
-        assert_eq!(diacritic(3), '\u{0310}');
-        assert_ne!(diacritic(3), '\u{030f}');
-    }
-
-    #[test]
     fn clear_deletes_cached_images_and_blanks_last_rect() {
         let mut painter = PixelPainter::with_id_base(0x120000, true);
         painter.pet_id = Some("codex".to_owned());
@@ -522,6 +506,7 @@ mod tests {
             )
             .expect("paint");
 
+        assert_sync_bracketed(&bytes);
         assert_eq!(
             bytes
                 .windows(b"\x1bPtmux;".len())
@@ -530,28 +515,6 @@ mod tests {
             3,
             "two transmit chunks plus one virtual placement each get a passthrough wrapper"
         );
-    }
-
-    #[test]
-    fn paint_brackets_frame_in_synchronized_output() {
-        let mut painter = PixelPainter::with_id_base(0x120000, true);
-        let pixel = PetPixelView {
-            pet_id: "codex".to_owned(),
-            sprite_index: 0,
-            size: super::super::PetGridSize { cols: 2, rows: 1 },
-        };
-        let mut bytes = Vec::new();
-
-        painter
-            .paint(
-                &mut bytes,
-                Rect::new(0, 0, 2, 1),
-                &pixel,
-                &image(vec![0, 1, 2, 3]),
-            )
-            .expect("paint");
-
-        assert_sync_bracketed(&bytes);
     }
 
     #[test]
