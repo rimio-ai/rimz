@@ -200,9 +200,10 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
     let candidates: Vec<_> = entries
         .into_iter()
         .filter(|entry| {
+            let path = rimz::worktree::normalize_path_lexical(&entry.path);
             !protected_paths
                 .iter()
-                .any(|cwd| rimz::worktree::path_inside(cwd, &entry.path))
+                .any(|cwd| rimz::worktree::path_inside(cwd, &path))
                 && !entry.dirty
                 && entry.landed == Some(true)
         })
