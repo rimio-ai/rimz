@@ -29,16 +29,18 @@ mod sections;
 mod theme;
 mod ui_state;
 
+pub use self::animation::{AnimationCadence, animation_cadence, has_live_animation};
 use self::ansi::{infallible, write_buffer_line_ansi};
 use self::chrome::{hairline_rule, help_lines};
 pub(crate) use self::compose::compose_lines;
+#[cfg(test)]
 use self::compose::lead_unread;
 #[cfg(test)]
 use self::compose::{
     auto_scroll_reveal_group, auto_scroll_to_selection, build_bottom_chrome, pad_chrome,
     scroll_thumb,
 };
-pub use self::ui_state::{Alert, AnimationCadence, UiState};
+pub use self::ui_state::{Alert, UiState};
 pub(crate) use self::ui_state::{
     BodyFilter, Browse, DashboardTab, FrozenOrder, GateNotice, ManualScroll, OrderHold,
 };
@@ -49,7 +51,6 @@ use std::io::{self, Write};
 
 use crate::agents::AgentStatus;
 use crate::agents::TurnPhase;
-use crate::config::AnimationSpec;
 use crate::config::GlyphRole;
 use crate::sidebar_pane::pets::PetAction;
 use crate::{ProcessState, SidebarRow, SidebarSnapshot};
@@ -76,107 +77,11 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
     draw_with_ui(frame, snapshot, alert, &mut UiState::default());
 }
 
-/// Whether any visible row is in an animated state — a running agent (working
-/// or pre-edit thinking), a resolver mid-flight, an active process spinning on
-/// real work (a build, a test, a `sudo` install), or the single lead unread
-/// `?`/`!` row whose configured effect flows. The serve loop uses this as the
-/// broad "does anything move?" gate; [`animation_cadence`] decides whether the
-/// movement needs the fast frame grid or the breath grid. A fully settled
-/// sidebar — quiet read idle/done rows, and every unread row past the lead
-/// resting at its static crest — keeps idling on the slow data tick. A stalled
-/// agent is projected to `failed` upstream, so it reads as a pulsing `!` here.
-/// The cockpit's headline-spend count-up rides a separate gate (`UiState::tally`),
-/// so a finished-turn climb keeps the tick alive even when every row is
-/// otherwise static.
-pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
-    animation_cadence(snapshot) != AnimationCadence::None
-}
-
-// Deliberately unfiltered by the make-up filter: the cockpit's attention
-// buckets still animate (and the counts still tick) for rows a filter hides,
-// so the gate must track the whole room, not the narrowed body.
-pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
-    let mut breath = false;
-    for row in snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| &group.rows)
-    {
-        if row.is_agent() {
-            if row.resolver().is_some() || row.status() == Some(AgentStatus::Running) {
-                return AnimationCadence::Fast;
-            }
-            // A read `?`/`!` row honours its configured effect. Unread motion is
-            // reserved to the single lead row (checked once below); every other
-            // unread row settles to the static `bright` crest and asks nothing
-            // of the grid.
-            if !row.unread
-                && let Some(status) = row.status()
-                && status.is_actionable()
-            {
-                breath |= status_needs_motion(&snapshot.theme.animations, status);
-            }
-        } else if row.process_is_busy() {
-            return AnimationCadence::Fast;
-        }
-    }
-    // The lead unread row wears the continuous unread effect, so it keeps the
-    // breath grid warm — but only when that effect actually moves frame to
-    // frame, not when it rests at the static `bright` crest or its role is
-    // quieted to `static`. The cockpit lead bucket pulses with it, so this one
-    // condition covers both the row and its bucket.
-    breath |= lead_unread_needs_motion(snapshot);
-    if breath || snapshot.theme.animations.has_resting_motion() {
-        AnimationCadence::Breath
-    } else {
-        AnimationCadence::None
-    }
-}
-
 /// Resolve the glyph for `role` under `theme`'s glyph set, so non-sidebar
 /// surfaces honor the same `[theme] style` / `[theme.glyphs]` config the sidebar
 /// reads.
 pub fn theme_glyph(theme: &crate::config::ThemeConfig, role: crate::config::GlyphRole) -> String {
     theme::GlyphSet::from_theme(theme).glyph(role).to_owned()
-}
-
-/// Whether the single lead unread row carries per-frame motion the breath grid
-/// must serve. The lead is the oldest actionable unread ask ([`lead_unread`]);
-/// it animates when the configured unread effect flows (shimmer or blink, not
-/// the held `bright` crest) and the lead's role has not been quieted to
-/// `static`.
-fn lead_unread_needs_motion(snapshot: &SidebarSnapshot) -> bool {
-    let Some((_, status)) = lead_unread(&snapshot.worktree_groups) else {
-        return false;
-    };
-    unread_effect_animates(snapshot.theme.animations.unread)
-        && status_needs_motion(&snapshot.theme.animations, status)
-}
-
-/// Whether the configured unread effect flows on the phase grid. `shimmer` and
-/// `blink` move; the held `bright` crest is static, so a lead row wearing it
-/// asks nothing of the breath grid.
-fn unread_effect_animates(effect: Option<crate::config::UnreadEffect>) -> bool {
-    !matches!(effect, Some(crate::config::UnreadEffect::Bright))
-}
-
-fn status_needs_motion(
-    animations: &crate::config::ThemeAnimationsConfig,
-    status: AgentStatus,
-) -> bool {
-    let spec = match status {
-        AgentStatus::Waiting => animations.waiting.as_ref(),
-        AgentStatus::Failed => animations.failed.as_ref(),
-        _ => None,
-    };
-    spec_needs_motion(spec)
-}
-
-fn spec_needs_motion(spec: Option<&AnimationSpec>) -> bool {
-    match spec {
-        Some(spec) if spec.disables_effect_motion() => spec.has_frame_motion(),
-        _ => true,
-    }
 }
 
 pub fn draw_with_ui(
@@ -495,7 +400,7 @@ pub(crate) fn pet_motion_enabled(snapshot: &SidebarSnapshot, action: PetAction) 
         PetAction::Ask => animations.waiting.as_ref(),
         PetAction::Failed => animations.failed.as_ref(),
     };
-    spec_needs_motion(spec)
+    animation::spec_needs_motion(spec)
 }
 
 pub fn draw_to_terminal<B: Backend>(
