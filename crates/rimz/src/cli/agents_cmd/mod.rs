@@ -191,6 +191,12 @@ enum AgentsSubcmd {
         reference: String,
         #[arg(long)]
         json: bool,
+        /// Also capture the agent pane's visible area.
+        #[arg(long)]
+        capture: bool,
+        /// Keep ANSI colors/attributes in the capture.
+        #[arg(long, requires = "capture")]
+        ansi: bool,
     },
     /// Focus an agent pane.
     Focus { reference: String },
@@ -285,8 +291,13 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             all,
             worktree,
         }) => return list_agents(json, all, worktree, globals),
-        Some(AgentsSubcmd::Show { reference, json }) => {
-            return show_agent(reference, json, globals);
+        Some(AgentsSubcmd::Show {
+            reference,
+            json,
+            capture,
+            ansi,
+        }) => {
+            return show_agent(reference, json, capture, ansi, globals);
         }
         Some(AgentsSubcmd::Focus { reference }) => return focus_agent(reference, globals),
         Some(AgentsSubcmd::Wait {

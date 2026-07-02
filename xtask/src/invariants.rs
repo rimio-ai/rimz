@@ -752,21 +752,44 @@ fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
         root.join("docs"),
         root.join("xtask"),
     ];
+    let agents_show_command = "crates/rimz/src/cli/agents_cmd/commands.rs";
     for needle in [
         concat!("capture", "_pane("),
         concat!("send", "_keys("),
         concat!("send", "_key("),
     ] {
-        ensure_no_match(
-            files,
-            needle,
-            |path| {
-                allowed_prefixes
-                    .iter()
-                    .any(|prefix| path.starts_with(prefix))
-            },
-            "core paths must not auto-use pane capture/send primitives",
-        )?;
+        let mut violations = Vec::new();
+        for path in files {
+            if allowed_prefixes
+                .iter()
+                .any(|prefix| path.starts_with(prefix))
+            {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            for (idx, line) in text.lines().enumerate() {
+                if !line.contains(needle) {
+                    continue;
+                }
+                // `rimz agents show --capture` is an explicit user-facing pane
+                // read, wired to the same primitive as `rimz pane capture`.
+                if needle == concat!("capture", "_pane(")
+                    && path.to_string_lossy().ends_with(agents_show_command)
+                    && line.trim() == ".capture_pane(&pane.pane_id, None, ansi)"
+                {
+                    continue;
+                }
+                violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+            }
+        }
+        if !violations.is_empty() {
+            bail!(
+                "core paths must not auto-use pane capture/send primitives\n{}",
+                violations.join("\n")
+            );
+        }
     }
     Ok(())
 }

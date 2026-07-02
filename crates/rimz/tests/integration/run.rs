@@ -445,6 +445,45 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
 }
 
 #[test]
+fn agents_show_capture_errors_when_agent_has_no_bound_pane() {
+    let env = Env::new();
+    let ledger = env.ledger();
+    let mut observation = rimz::agents::AgentLifecycleObservation::new(
+        Some("sess-captureless".into()),
+        rimz::agents::LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some("lucid-atlas".to_owned());
+    observation.worktree_path = Some(env.project_root.display().to_string());
+    ledger
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "session",
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .expect("append lifecycle");
+
+    let out = env
+        .rimz()
+        .args(["agents", "show", "lucid-atlas", "--capture"])
+        .output()
+        .expect("spawn agents show --capture");
+
+    assert!(
+        !out.status.success(),
+        "agents show --capture should fail without a bound pane\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("agent lucid-atlas has no bound pane"),
+        "missing no-pane error: {stderr}"
+    );
+}
+
+#[test]
 fn agents_list_prints_channel_column_without_audit_lifecycle() {
     let env = Env::new();
 

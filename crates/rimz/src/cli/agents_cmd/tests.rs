@@ -139,6 +139,28 @@ fn agents_list_all_conflicts_with_worktree_filter() {
 }
 
 #[test]
+fn agents_show_capture_ansi_parses() {
+    let parsed =
+        AgentsHarness::try_parse_from(["rimz", "show", "swift-otter", "--capture", "--ansi"])
+            .expect("parse agents show capture ansi");
+    assert!(matches!(
+        parsed.args.command,
+        Some(AgentsSubcmd::Show {
+            capture: true,
+            ansi: true,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn agents_show_ansi_requires_capture() {
+    let err = AgentsHarness::try_parse_from(["rimz", "show", "swift-otter", "--ansi"])
+        .expect_err("ansi requires capture");
+    assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+}
+
+#[test]
 fn agents_bare_json_parses_as_list_flag() {
     let parsed = AgentsHarness::try_parse_from(["rimz", "--json"]).expect("parse agents json");
     assert!(parsed.args.command.is_none());

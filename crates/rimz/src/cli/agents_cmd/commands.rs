@@ -90,7 +90,13 @@ fn list_channel_filter_for_current(
     }
 }
 
-pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn show_agent(
+    reference: String,
+    json: bool,
+    capture: bool,
+    ansi: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = crate::cli::open_ledger(&workspace)?;
     let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
@@ -127,6 +133,23 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
         .as_ref()
         .and_then(|agent| pending_ask_for(agent, feed_items.iter()));
     let ask = ask_item.map(crate::cli::transcript::ask_view);
+    let pane_capture = if capture {
+        let agent = agent.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("no live agent matches `{reference}`; nothing to capture")
+        })?;
+        let pane = agent
+            .pane
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent_name(agent)))?;
+        let backend = rimz::mux::backend_for(pane.pane_id.mux());
+        Some(
+            backend
+                .capture_pane(&pane.pane_id, None, ansi)
+                .context("capturing agent pane")?,
+        )
+    } else {
+        None
+    };
     if json {
         #[derive(serde::Serialize)]
         struct Show<'a> {
@@ -138,12 +161,15 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
             run: Option<RunRecord>,
             #[serde(skip_serializing_if = "Option::is_none")]
             ask: Option<crate::cli::transcript::AskView>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            capture: Option<rimz::mux::PaneCapture>,
         }
         supervised::output::print_json(&Show {
             agent: agent.as_ref(),
             stale,
             run,
             ask,
+            capture: pane_capture,
         })?;
         return Ok(());
     }
@@ -211,6 +237,18 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
     kv.render(&mut render::out())?;
     if let Some(run) = run.or_else(|| newest_run_for_agent(&ledger, agent).ok().flatten()) {
         print_run_line(&run)?;
+    }
+    if let Some(capture) = pane_capture {
+        use std::io::Write;
+
+        let mut out = render::out();
+        writeln!(
+            out,
+            "{} {}",
+            render::paint(render::palette::MUTED, "capture:"),
+            capture.pane_id,
+        )?;
+        write!(out, "{}", capture.raw_text)?;
     }
     Ok(())
 }
