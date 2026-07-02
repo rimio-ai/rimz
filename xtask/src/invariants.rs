@@ -769,7 +769,8 @@ fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
             let Ok(text) = std::fs::read_to_string(path) else {
                 continue;
             };
-            for (idx, line) in text.lines().enumerate() {
+            let lines: Vec<&str> = text.lines().collect();
+            for (idx, line) in lines.iter().enumerate() {
                 if !line.contains(needle) {
                     continue;
                 }
@@ -777,7 +778,8 @@ fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
                 // read, wired to the same primitive as `rimz pane capture`.
                 if needle == concat!("capture", "_pane(")
                     && path.to_string_lossy().ends_with(agents_show_command)
-                    && line.trim() == ".capture_pane(&pane.pane_id, None, ansi)"
+                    && idx > 0
+                    && lines[idx - 1].trim() == "// rimz-invariant: explicit-agent-show-capture"
                 {
                     continue;
                 }

@@ -144,6 +144,7 @@ pub(super) fn show_agent(
         let backend = rimz::mux::backend_for(pane.pane_id.mux());
         Some(
             backend
+                // rimz-invariant: explicit-agent-show-capture
                 .capture_pane(&pane.pane_id, None, ansi)
                 .context("capturing agent pane")?,
         )
