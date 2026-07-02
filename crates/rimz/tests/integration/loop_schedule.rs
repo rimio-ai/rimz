@@ -917,6 +917,49 @@ fn loop_rename_rejects_collision_and_missing() {
         String::from_utf8_lossy(&collision.stderr)
     );
 
+    let add_instance = env
+        .rimz()
+        .args([
+            "loop", "add", "state", "--check", "true", "--at", "07:00", "--once",
+        ])
+        .output()
+        .expect("loop add instance");
+    assert!(
+        add_instance.status.success(),
+        "loop add failed: {}",
+        String::from_utf8_lossy(&add_instance.stderr)
+    );
+
+    let config_to_instance = env
+        .rimz()
+        .args(["loop", "rename", "old", "state"])
+        .output()
+        .expect("loop rename config to instance");
+    assert!(
+        !config_to_instance.status.success(),
+        "config-to-instance collision should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&config_to_instance.stderr).contains("already exists"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&config_to_instance.stderr)
+    );
+
+    let instance_to_config = env
+        .rimz()
+        .args(["loop", "rename", "state", "existing"])
+        .output()
+        .expect("loop rename instance to config");
+    assert!(
+        !instance_to_config.status.success(),
+        "instance-to-config collision should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&instance_to_config.stderr).contains("already exists"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&instance_to_config.stderr)
+    );
+
     let same = env
         .rimz()
         .args(["loop", "rename", "old", "old"])
