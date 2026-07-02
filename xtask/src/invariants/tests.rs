@@ -89,6 +89,55 @@ fn spend_parser_path_predicate_covers_nested_modules() {
 }
 
 #[test]
+fn sidebar_event_log_reads_must_route_through_rollup() {
+    let root = temp_repo_root("sidebar-event-log-boundary");
+    let bad = root.join("crates/rimz/src/sidebar/enrich/bad.rs");
+    let renderer_bad = root.join("crates/rimz/src/sidebar_pane/app/bad.rs");
+    let test_file = root.join("crates/rimz/src/sidebar/enrich/tests.rs");
+    for path in [&bad, &renderer_bad, &test_file] {
+        std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
+    }
+    let direct_read = concat!(
+        "fn f() { crate::ledger::event_log",
+        "::",
+        "read_all(path); }\n"
+    );
+    let offset_read = concat!("fn f() { event_log", "::", "read_from_offset(path, 0); }\n");
+    std::fs::write(&bad, direct_read).expect("write bad source");
+    std::fs::write(&renderer_bad, offset_read).expect("write bad renderer source");
+    std::fs::write(&test_file, direct_read).expect("write test source");
+
+    let err = ensure_sidebar_event_log_reads_through_rollup(
+        &root,
+        &[bad.clone(), renderer_bad.clone(), test_file.clone()],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("fold through RollupCursor"));
+    assert!(err.to_string().contains(&bad.display().to_string()));
+    assert!(!err.to_string().contains(&test_file.display().to_string()));
+
+    let err =
+        ensure_sidebar_event_log_reads_through_rollup(&root, std::slice::from_ref(&renderer_bad))
+            .unwrap_err();
+    assert!(err.to_string().contains("fold through RollupCursor"));
+    assert!(
+        err.to_string()
+            .contains(&renderer_bad.display().to_string())
+    );
+
+    ensure_sidebar_event_log_reads_through_rollup(&root, &[test_file]).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn temp_repo_root(label: &str) -> PathBuf {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!("{label}-{}-{unique}", std::process::id()))
+}
+
+#[test]
 fn tests_path_component_matches_nested_test_trees() {
     assert!(path_has_tests_component(Path::new("tests/mod.rs")));
     assert!(path_has_tests_component(Path::new(

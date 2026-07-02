@@ -127,3 +127,76 @@ fn warm_produce_folds_o_new_bytes() {
         "the produce lands the merged view"
     );
 }
+
+#[test]
+fn warm_auto_continue_tick_reads_no_event_log_history() {
+    let h = Harness::new();
+    let paths = h.ledger.paths();
+    seed_fleet_ledger(paths, FLEET, HISTORY_EVENTS).expect("seed event");
+    let log_len = std::fs::metadata(&paths.events_log)
+        .expect("log meta")
+        .len();
+    let mut cursor = RollupCursor::new();
+
+    let cold_before = bytes_read();
+    let cold = auto_continue_tick(&mut cursor, paths, &h.runtime_paths);
+    let cold_bytes = bytes_read() - cold_before;
+    assert_eq!(
+        cold_bytes, log_len,
+        "a cold auto-continue tick folds the log once through the rollup"
+    );
+    assert_eq!(cold.agents.len(), FLEET);
+
+    for tick in 0..3 {
+        let warm_before = bytes_read();
+        let warm = auto_continue_tick(&mut cursor, paths, &h.runtime_paths);
+        let warm_bytes = bytes_read() - warm_before;
+        assert_eq!(
+            warm_bytes, 0,
+            "unchanged-log auto-continue tick {tick} must not read event-log history"
+        );
+        assert_eq!(warm.agents.len(), FLEET);
+    }
+
+    event_log::append(
+        &paths.events_log,
+        &registered_lifecycle(&paths.workspace_id, HISTORY_EVENTS % FLEET),
+    )
+    .expect("append one");
+    let appended = std::fs::metadata(&paths.events_log)
+        .expect("log meta")
+        .len()
+        - log_len;
+
+    let append_before = bytes_read();
+    let warm = auto_continue_tick(&mut cursor, paths, &h.runtime_paths);
+    let append_bytes = bytes_read() - append_before;
+    assert_eq!(
+        append_bytes, appended,
+        "after one append, auto-continue tick reads only the appended frame"
+    );
+    assert_eq!(warm.agents.len(), FLEET);
+}
+
+fn auto_continue_tick(
+    cursor: &mut RollupCursor,
+    state: &rimz::StatePaths,
+    runtime: &rimz::RuntimePaths,
+) -> rimz::SidebarSnapshot {
+    let base = rimz::ledger::snapshot::build_with_cursor(state, cursor).expect("rollup");
+    let mut config = rimz::config::MachineConfig::default();
+    config.resume.auto_continue = true;
+    rimz::sidebar::enrich::enrich(
+        base,
+        None,
+        runtime,
+        Some(&state.messages_dir),
+        None,
+        rimz::sidebar::enrich::EnrichMode::Producing {
+            roots: None,
+            heavy: rimz::sidebar::enrich::HeavyLanes::Project,
+            config: Box::new(config),
+        },
+        None,
+    )
+}

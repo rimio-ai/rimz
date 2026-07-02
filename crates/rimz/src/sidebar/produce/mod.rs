@@ -25,7 +25,10 @@ mod metrics;
 mod panes;
 mod spending;
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use crate::ids::{MuxName, PaneId};
 use crate::sidebar::cache::unix_now_ms;
@@ -77,6 +80,15 @@ pub enum HeavyLaneMode {
     Project,
 }
 
+struct ProducerEnrich<'a> {
+    runtime: &'a RuntimePaths,
+    messages_dir: &'a Path,
+    exclude: Option<&'a PaneId>,
+    min_pane_cache_ms: Option<u64>,
+    diag: Option<&'a crate::diag::DiagSink>,
+    heavy: HeavyLaneMode,
+}
+
 #[cfg(feature = "testkit")]
 pub(crate) fn publish_test_pane_frame(
     runtime: &RuntimePaths,
@@ -102,11 +114,14 @@ pub fn produce_snapshot(
     Ok(enrich_producing(
         snapshot,
         Some(frame),
-        runtime,
-        opts.exclude.as_ref(),
-        opts.min_pane_cache_ms,
-        opts.diag.as_ref(),
-        opts.heavy_lanes,
+        ProducerEnrich {
+            runtime,
+            messages_dir: &state.messages_dir,
+            exclude: opts.exclude.as_ref(),
+            min_pane_cache_ms: opts.min_pane_cache_ms,
+            diag: opts.diag.as_ref(),
+            heavy: opts.heavy_lanes,
+        },
     ))
 }
 
@@ -146,11 +161,14 @@ pub fn produce_rollup_snapshot(
     Ok(enrich_producing(
         snapshot,
         None,
-        runtime,
-        exclude,
-        min_pane_cache_ms,
-        None,
-        HeavyLaneMode::Refresh,
+        ProducerEnrich {
+            runtime,
+            messages_dir: &state.messages_dir,
+            exclude,
+            min_pane_cache_ms,
+            diag: None,
+            heavy: HeavyLaneMode::Refresh,
+        },
     ))
 }
 
@@ -170,7 +188,7 @@ pub fn refresh_producer_caches(
     let trunk = config.sidebar.trunk.clone();
     let headline_spec = config.headline_spec();
     let resume_messages = crate::sidebar::enrich::read_auto_continue_resume_messages(
-        runtime,
+        Some(&state.messages_dir),
         &config.resume,
         base.resume_outcomes.as_deref().unwrap_or_default(),
     );
@@ -283,17 +301,14 @@ fn pane_list_fixture() -> Result<Option<Vec<crate::pane::PaneRef>>> {
 fn enrich_producing(
     snapshot: SidebarSnapshot,
     frame: Option<PaneFrame>,
-    runtime: &RuntimePaths,
-    exclude: Option<&PaneId>,
-    min_pane_cache_ms: Option<u64>,
-    diag: Option<&crate::diag::DiagSink>,
-    heavy: HeavyLaneMode,
+    opts: ProducerEnrich<'_>,
 ) -> SidebarSnapshot {
+    let runtime = opts.runtime;
     let roots = snapshot.project_root.clone().map(|root| {
-        git::project_group_roots(&root, snapshot.root_class, runtime, min_pane_cache_ms)
+        git::project_group_roots(&root, snapshot.root_class, runtime, opts.min_pane_cache_ms)
     });
     let config = crate::config::MachineConfig::load().unwrap_or_default();
-    match heavy {
+    match opts.heavy {
         HeavyLaneMode::Refresh => {
             let trunk = config.sidebar.trunk.clone();
             let headline_spec = config.headline_spec();
@@ -307,7 +322,8 @@ fn enrich_producing(
                 snapshot,
                 frame,
                 runtime,
-                exclude,
+                Some(opts.messages_dir),
+                opts.exclude,
                 EnrichMode::Producing {
                     roots,
                     heavy: HeavyLanes::Refresh {
@@ -316,20 +332,21 @@ fn enrich_producing(
                     },
                     config: Box::new(config),
                 },
-                diag,
+                opts.diag,
             )
         }
         HeavyLaneMode::Project => enrich(
             snapshot,
             frame,
             runtime,
-            exclude,
+            Some(opts.messages_dir),
+            opts.exclude,
             EnrichMode::Producing {
                 roots,
                 heavy: HeavyLanes::Project,
                 config: Box::new(config),
             },
-            diag,
+            opts.diag,
         ),
     }
 }

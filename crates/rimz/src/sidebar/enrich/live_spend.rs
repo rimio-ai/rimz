@@ -199,6 +199,7 @@ mod tests {
             None,
             &runtime,
             None,
+            None,
             EnrichMode::Cached,
             None,
         );
@@ -216,6 +217,7 @@ mod tests {
             build_snapshot(),
             None,
             &runtime,
+            None,
             None,
             EnrichMode::Cached,
             None,
@@ -238,6 +240,7 @@ mod tests {
             build_snapshot(),
             None,
             &runtime,
+            None,
             None,
             EnrichMode::Producing {
                 roots: None,

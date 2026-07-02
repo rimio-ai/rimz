@@ -38,6 +38,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_sidebar_renderer_boundaries(root, &files)?;
     ensure_spend_parser_boundaries(root, &files)?;
     ensure_sidebar_library_boundaries(root, &files)?;
+    ensure_sidebar_event_log_reads_through_rollup(root, &files)?;
     ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
     ensure_diag_writes_stay_in_diag(root, &files)?;
     ensure_sidebar_enrich_folds_before_live_panes(root)?;
@@ -150,6 +151,39 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         )?;
     }
     Ok(())
+}
+
+fn ensure_sidebar_event_log_reads_through_rollup(root: &Path, files: &[PathBuf]) -> Result<()> {
+    for needle in [
+        concat!("event_log", "::", "read_all"),
+        concat!("event_log", "::", "read_from_offset"),
+    ] {
+        ensure_no_match(
+            files,
+            needle,
+            |path| !is_sidebar_runtime_source(root, path) || is_test_source_path(root, path),
+            "sidebar event-log reads must fold through RollupCursor, not read events.log directly",
+        )?;
+    }
+    Ok(())
+}
+
+fn is_sidebar_runtime_source(root: &Path, path: &Path) -> bool {
+    path.starts_with(root.join("crates/rimz/src/sidebar"))
+        || path.starts_with(root.join("crates/rimz/src/sidebar_pane"))
+}
+
+fn is_test_source_path(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    relative
+        .components()
+        .any(|component| component.as_os_str() == OsStr::new("tests"))
+        || relative
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
 }
 
 fn ensure_ledger_durability(root: &Path, files: &[PathBuf]) -> Result<()> {

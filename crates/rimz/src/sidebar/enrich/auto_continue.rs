@@ -470,18 +470,18 @@ impl ResumeMessage {
 }
 
 pub(crate) fn read_resume_messages(
-    runtime: &RuntimePaths,
+    messages_dir: Option<&Path>,
     outcomes: &[ResumeOutcome],
 ) -> Vec<ResumeMessage> {
     let mut messages = outcomes
         .iter()
         .map(ResumeMessage::from_outcome)
         .collect::<Vec<_>>();
-    let Ok(state) = crate::StatePaths::for_workspace(runtime.workspace_id.clone()) else {
+    let Some(messages_dir) = messages_dir else {
         return messages;
     };
     messages.extend(
-        crate::ledger::message_store::list(&state.messages_dir)
+        crate::ledger::message_store::list(messages_dir)
             .map(|messages| {
                 messages
                     .iter()

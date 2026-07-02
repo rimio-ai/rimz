@@ -150,12 +150,12 @@ pub fn cached_worktree_roots(runtime: &RuntimePaths) -> Vec<PathBuf> {
 }
 
 pub(crate) fn read_auto_continue_resume_messages(
-    runtime: &RuntimePaths,
+    messages_dir: Option<&Path>,
     config: &crate::config::ResumeConfig,
     outcomes: &[ResumeOutcome],
 ) -> Vec<ResumeMessage> {
     if config.auto_continue {
-        auto_continue::read_resume_messages(runtime, outcomes)
+        auto_continue::read_resume_messages(messages_dir, outcomes)
     } else {
         Vec::new()
     }
@@ -505,6 +505,7 @@ pub fn enrich(
     mut snapshot: SidebarSnapshot,
     frame: Option<PaneFrame>,
     runtime: &RuntimePaths,
+    messages_dir: Option<&Path>,
     exclude: Option<&PaneId>,
     mut mode: EnrichMode<'_>,
     diag: Option<&crate::diag::DiagSink>,
@@ -628,7 +629,7 @@ pub fn enrich(
 
     let account_budgets = account_budgets_from_caches(runtime, snapshot.now);
     let resume_messages = read_auto_continue_resume_messages(
-        runtime,
+        messages_dir,
         &machine_config.resume,
         snapshot.resume_outcomes.as_deref().unwrap_or_default(),
     );

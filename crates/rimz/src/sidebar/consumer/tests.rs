@@ -320,6 +320,7 @@ fn no_frame_enrich_preserves_rollup_metadata_but_emits_no_groups() {
         None,
         &runtime,
         None,
+        None,
         EnrichMode::Cached,
         None,
     );
@@ -353,6 +354,7 @@ fn enrich_maps_carried_frame_to_truth_notice() {
         SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now()),
         Some(frame),
         &runtime,
+        None,
         None,
         EnrichMode::Cached,
         None,

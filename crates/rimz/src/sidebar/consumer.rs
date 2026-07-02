@@ -75,6 +75,7 @@ pub fn read_published_snapshot(
         base,
         cache,
         runtime,
+        Some(&state.messages_dir),
         exclude,
         EnrichMode::Cached,
         None,

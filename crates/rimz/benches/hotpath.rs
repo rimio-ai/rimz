@@ -313,6 +313,7 @@ fn enrich_cached(bencher: Bencher) {
                 Some(fixture.frame),
                 &fixture.runtime,
                 None,
+                None,
                 rimz::sidebar::enrich::EnrichMode::Cached,
                 None,
             ));
