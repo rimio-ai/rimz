@@ -157,7 +157,7 @@ Durable definitions live in `~/.config/rimz/loop.toml` under `[tasks.*]`. Machin
 
 - [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs) — pure parsing, descriptions, due evaluation, and next-occurrence calculation.
 - [`schedule/runner.rs`](../../../crates/rimz/src/harness/schedule/runner.rs) — check execution, prompt augmentation, per-task run locks, and the window-priming ping gate.
-- [`cli/loop_cmd.rs`](../../../crates/rimz/src/cli/loop_cmd.rs) — config and state editing, the `list`/`show` surfaces, and hidden `run` orchestration.
+- [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd/) — config and state editing, the `list`/`show` surfaces, and hidden `run` orchestration.
 - [`schedule/instances.rs`](../../../crates/rimz/src/harness/schedule/instances.rs) — the ephemeral state store and merged config/state read path; `load_all`/`load_entry` give config definitions precedence.
 - [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) — elder firing and the `loop-fire.json` state.
 - [`schedule/run_log.rs`](../../../crates/rimz/src/harness/schedule/run_log.rs) — result history, including mode, duration, check forensics, errors, run links, `check_skipped`, and `expired`.

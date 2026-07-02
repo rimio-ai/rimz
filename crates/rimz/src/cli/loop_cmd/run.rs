@@ -1,0 +1,409 @@
+//! Execute loop tasks and record foreground or scheduled run outcomes.
+
+use super::*;
+
+const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
+
+// ---- run --------------------------------------------------------------------
+
+struct RunOutcome {
+    result: LoopRunResult,
+    check: Option<CheckRecord>,
+    run_id: Option<String>,
+    last_message: Option<String>,
+    target: Option<String>,
+    exit_code: Option<i32>,
+}
+
+#[derive(Clone, Copy)]
+struct RunDisposition {
+    source: TaskSource,
+    mode: LoopRunMode,
+}
+
+impl RunOutcome {
+    fn new(result: LoopRunResult) -> Self {
+        Self {
+            result,
+            check: None,
+            run_id: None,
+            last_message: None,
+            target: None,
+            exit_code: None,
+        }
+    }
+}
+
+pub(super) fn run_one(name: &str, mode: LoopRunMode, globals: &GlobalFlags) -> Result<()> {
+    let (entry, source) = instances::load_entry(name)
+        .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
+    let started = Instant::now();
+    let _run_lock = match acquire_run_lock(name, &entry) {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            let duration_ms = elapsed_ms(started);
+            run_log::append(&LoopRunRecord {
+                task: name.to_owned(),
+                at: Timestamp::now(),
+                result: LoopRunResult::Overlapped,
+                mode: Some(mode),
+                duration_ms: Some(duration_ms),
+                error: None,
+                check: None,
+                run_id: None,
+                last_message: None,
+                target: None,
+            });
+            writeln!(
+                ui::out(),
+                "loop `{name}`: previous run still active; skipping"
+            )?;
+            return Ok(());
+        }
+        Err(err) => {
+            append_error_record(name, mode, started, &err);
+            return Err(err);
+        }
+    };
+    match execute_task(name, &entry, source, mode, globals) {
+        Ok(outcome) => {
+            let duration_ms = elapsed_ms(started);
+            let record = loop_record(name, mode, duration_ms, &outcome);
+            run_log::append(&record);
+            print_run_summary(name, duration_ms, &outcome)?;
+            if let Some(code) = outcome.exit_code {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Err(err) => {
+            append_error_record(name, mode, started, &err);
+            Err(err)
+        }
+    }
+}
+
+fn append_error_record(name: &str, mode: LoopRunMode, started: Instant, err: &anyhow::Error) {
+    let duration_ms = elapsed_ms(started);
+    let error = format!("{err:#}");
+    run_log::append(&LoopRunRecord {
+        task: name.to_owned(),
+        at: Timestamp::now(),
+        result: LoopRunResult::Errored,
+        mode: Some(mode),
+        duration_ms: Some(duration_ms),
+        error: Some(error.clone()),
+        check: None,
+        run_id: None,
+        last_message: None,
+        target: None,
+    });
+    tracing::warn!(task = name, error = %error, "loop task run failed");
+}
+
+fn execute_task(
+    name: &str,
+    entry: &TaskEntry,
+    source: TaskSource,
+    mode: LoopRunMode,
+    globals: &GlobalFlags,
+) -> Result<RunOutcome> {
+    let action = task_action(name, entry)?;
+    if deadline_expired(entry) {
+        if mode == LoopRunMode::Scheduled {
+            let _ = remove_task(name, source)?;
+        } else {
+            writeln!(
+                ui::out(),
+                "loop `{name}`: deadline expired; leaving task in place"
+            )?;
+        }
+        return Ok(RunOutcome::new(LoopRunResult::Expired));
+    }
+    let mut check_detail = None;
+    let prompt_override = match entry.check.as_deref() {
+        Some(cmd) => {
+            let outcome = run_check(
+                &entry.resolved_root(),
+                cmd,
+                check_timeout(entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
+            )?;
+            let record = check_record(&outcome);
+            match action {
+                TaskAction::CheckOnly => {
+                    if mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
+                        let _ = remove_task(name, source)?;
+                    }
+                    let mut run = RunOutcome::new(check_only_result(&outcome));
+                    run.check = Some(record);
+                    return Ok(run);
+                }
+                TaskAction::Spawn(_) | TaskAction::Deliver(_) => {
+                    if !polarity_fires(entry.on, &outcome) {
+                        let mut run = RunOutcome::new(LoopRunResult::CheckSkipped);
+                        run.check = Some(record);
+                        return Ok(run);
+                    }
+                    check_detail = Some(record);
+                    Some(augment_prompt(resolve_task_prompt(entry)?, cmd, &outcome))
+                }
+            }
+        }
+        None => None,
+    };
+    let TaskAction::Spawn(spec) = action else {
+        if let TaskAction::Deliver(target) = action {
+            return execute_delivery_task(
+                name,
+                entry,
+                RunDisposition { source, mode },
+                target,
+                prompt_override,
+                check_detail,
+                globals,
+            );
+        }
+        unreachable!("check-only task without check is rejected by task_action");
+    };
+    let resolved = preflight_task(entry)?;
+    let is_ping = agents_spec::virtual_ping_shape(spec);
+    // The ping exists only to *start* a sliding budget window, so a token spent on
+    // one already counting down buys nothing — skip it. Best-effort: an unknown or
+    // cold reading falls through to the ping.
+    if is_ping && window_already_running(entry, &resolved.kind)? {
+        writeln!(
+            ui::out(),
+            "loop `{name}`: {} budget window already active; skipping ping",
+            resolved.kind
+        )?;
+        let mut run = RunOutcome::new(LoopRunResult::SkippedWindow);
+        run.check = check_detail;
+        return Ok(run);
+    }
+    let prompt = match prompt_override {
+        Some(prompt) => prompt,
+        None => resolve_task_prompt(entry)?,
+    };
+    let system_prompt_file = entry
+        .system_prompt_file
+        .as_deref()
+        .map(resolve_config_path)
+        .transpose()?;
+    let task_mode = entry
+        .mode
+        .as_deref()
+        .filter(|mode| !mode.trim().is_empty())
+        .map(parse_mode_value)
+        .transpose()?;
+    let timeout = entry
+        .timeout
+        .as_deref()
+        .map(parse_task_timeout)
+        .transpose()
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let mut run_globals = globals.clone();
+    run_globals.root = Some(entry.resolved_root());
+    if mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
+        // One-shot cleanup happens before the terminal run. A one-shot removed
+        // pre-fire that then fails to launch is not retried.
+        let _ = remove_task(name, source)?;
+    }
+    let effort = entry
+        .effort
+        .clone()
+        .or_else(|| is_ping.then(|| "low".to_owned()));
+    let args = crate::cli::agents_cmd::AgentsArgs::for_task(crate::cli::agents_cmd::TaskRunArgs {
+        spec: spec.to_owned(),
+        prompt: Some(prompt),
+        worktree: entry.worktree.clone(),
+        mode: task_mode,
+        effort,
+        system_prompt_file,
+        timeout,
+    });
+    match crate::cli::agents_cmd::run_blocking_task(args, &run_globals) {
+        Ok(Some(record)) => {
+            let status = record.status;
+            let mut run = RunOutcome::new(status.into());
+            run.check = check_detail;
+            run.run_id = Some(record.run_id.to_string());
+            run.last_message = record.last_message;
+            run.exit_code = Some(status.exit_code());
+            Ok(run)
+        }
+        Ok(None) => {
+            let mut run = RunOutcome::new(LoopRunResult::Completed);
+            run.check = check_detail;
+            Ok(run)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn execute_delivery_task(
+    name: &str,
+    entry: &TaskEntry,
+    disposition: RunDisposition,
+    target: &TaskTarget,
+    prompt_override: Option<String>,
+    check_record: Option<CheckRecord>,
+    globals: &GlobalFlags,
+) -> Result<RunOutcome> {
+    if !delivery_target_alive(entry, target)? {
+        if disposition.mode == LoopRunMode::Scheduled {
+            writeln!(
+                ui::out(),
+                "loop `{name}`: target {} not alive; removing schedule",
+                target.handle
+            )?;
+            let _ = remove_task(name, disposition.source)?;
+        } else {
+            writeln!(
+                ui::out(),
+                "loop `{name}`: target {} not alive; leaving schedule in place",
+                target.handle
+            )?;
+        }
+        let mut run = RunOutcome::new(LoopRunResult::TargetGone);
+        run.check = check_record;
+        run.target = Some(target.handle.clone());
+        return Ok(run);
+    }
+    let prompt = match prompt_override {
+        Some(prompt) => prompt,
+        None => resolve_task_prompt(entry)?,
+    };
+    if disposition.mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
+        let _ = remove_task(name, disposition.source)?;
+    }
+    let root = entry.resolved_root();
+    match crate::cli::message::to_session(
+        &root,
+        &target.kind,
+        &target.session,
+        prompt,
+        DeliveryGate::Done,
+        globals,
+    ) {
+        Ok(()) => {
+            let mut run = RunOutcome::new(LoopRunResult::Delivered);
+            run.check = check_record;
+            run.target = Some(target.handle.clone());
+            Ok(run)
+        }
+        Err(err) if queue_resolution_miss(&err) => {
+            if disposition.mode == LoopRunMode::Scheduled {
+                writeln!(
+                    ui::out(),
+                    "loop `{name}`: target {} not alive; removing schedule",
+                    target.handle
+                )?;
+                let _ = remove_task(name, disposition.source)?;
+            } else {
+                writeln!(
+                    ui::out(),
+                    "loop `{name}`: target {} not alive; leaving schedule in place",
+                    target.handle
+                )?;
+            }
+            let mut run = RunOutcome::new(LoopRunResult::TargetGone);
+            run.check = check_record;
+            run.target = Some(target.handle.clone());
+            Ok(run)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn loop_record(
+    task: &str,
+    mode: LoopRunMode,
+    duration_ms: u64,
+    outcome: &RunOutcome,
+) -> LoopRunRecord {
+    LoopRunRecord {
+        task: task.to_owned(),
+        at: Timestamp::now(),
+        result: outcome.result,
+        mode: Some(mode),
+        duration_ms: Some(duration_ms),
+        error: None,
+        check: outcome.check.clone(),
+        run_id: outcome.run_id.clone(),
+        last_message: outcome.last_message.clone(),
+        target: outcome.target.clone(),
+    }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn print_run_summary(name: &str, duration_ms: u64, outcome: &RunOutcome) -> Result<()> {
+    let mut out = ui::out();
+    write!(out, "loop `{name}`: {}", outcome.result.label())?;
+    if let Some(exit) = outcome
+        .exit_code
+        .or_else(|| outcome.check.as_ref().and_then(|check| check.code))
+    {
+        write!(out, " (exit {exit})")?;
+    } else if outcome.check.as_ref().is_some_and(|check| check.timed_out) {
+        write!(out, " (timeout)")?;
+    }
+    writeln!(out, " in {}", render::format_duration_ms(duration_ms))?;
+    if let Some(check) = &outcome.check
+        && !check.output.trim().is_empty()
+    {
+        writeln!(
+            out,
+            "{}",
+            tail_output(check.output.as_bytes(), CHECK_SUMMARY_OUTPUT_CAP).trim_end()
+        )?;
+    }
+    Ok(())
+}
+
+fn delivery_target_alive(entry: &TaskEntry, target: &TaskTarget) -> Result<bool> {
+    let root = entry.resolved_root();
+    let workspace = WorkspaceResolver::resolve(&root, None)
+        .with_context(|| format!("resolving project root at {}", root.display()))?;
+    let ledger = crate::cli::open_ledger(&workspace)?;
+    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    Ok(snapshot.agents.iter().any(|agent| {
+        agent.parent_agent_id.is_none()
+            && agent.kind.as_str() == target.kind.as_str()
+            && agent.agent_id.as_str() == target.session
+    }))
+}
+
+fn queue_resolution_miss(err: &anyhow::Error) -> bool {
+    matches!(
+        err.downcast_ref::<rimz::TargetErr>(),
+        Some(rimz::TargetErr::NoMatch { .. } | rimz::TargetErr::NoMatchInChannel { .. })
+    )
+}
+
+pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
+    let mut reaped = 0;
+    for (name, (entry, source)) in instances::load_all() {
+        let target = match task_action(&name, &entry) {
+            Ok(TaskAction::Deliver(target)) => target,
+            Ok(TaskAction::Spawn(_) | TaskAction::CheckOnly) => continue,
+            Err(err) => {
+                tracing::debug!(task = %name, error = %err, "invalid loop task skipped by schedule gc");
+                continue;
+            }
+        };
+        match delivery_target_alive(&entry, target) {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = remove_task(&name, source)?;
+                reaped += 1;
+            }
+            Err(err) => {
+                tracing::debug!(task = %name, error = %err, "loop schedule gc skipped task");
+            }
+        }
+    }
+    Ok(reaped)
+}

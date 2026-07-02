@@ -115,7 +115,7 @@ The major subsystems live in subtree modules, indexed in the table with their co
 
 | Subtree | Owns | Detail |
 | --- | --- | --- |
-| `cli/` | command parsing and one `run(...)` per subcommand; oversized commands split under matching leaves (`cli/agents_cmd/`, `cli/doctor/`, `cli/stats/`, …); human-facing output flows through the shared `cli/render/` presentation layer | [cli.md](./docs/reference/cli.md) |
+| `cli/` | command parsing and one `run(...)` per subcommand; oversized commands split under matching leaves (`cli/agents_cmd/`, `cli/loop_cmd/`, `cli/doctor/`, `cli/stats/`, …); human-facing output flows through the shared `cli/render/` presentation layer | [cli.md](./docs/reference/cli.md) |
 | `agents/` | the agent integration layer: the `AgentAdapter` trait, the `state.rs` agent rollup model, registry, the per-kind adapters (Claude, Codex, Pi, OpenCode), provider-agnostic transcript fusion, and spend/pricing/account | [contract](./crates/rimz/src/agents/AGENTS.md) · [agent.md](./docs/internals/agents/agent.md) · [provider.md](./docs/internals/agents/provider.md) |
 | `harness/` | the agent harness: layout IR and teams, the address grammar, launch argv, petnames, supervised runs, loop scheduling and runner domain, auto-continue policy, and resume-on-rebirth planning | [contract](./crates/rimz/src/harness/AGENTS.md) · [harness.md](./docs/internals/agents/harness.md) |
 | `message/` | the durable per-agent message queue: the record and lifecycle domain model, park-vs-live dispatch, the live-pane send engine, queued-delivery sweeps, and elder-fired scheduled wakeups | [message.md](./docs/internals/agents/message.md) |
