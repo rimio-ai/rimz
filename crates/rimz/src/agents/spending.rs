@@ -3,8 +3,8 @@
 //! Per-provider typed parsers live in each adapter's `spend.rs`; this module
 //! owns the on-disk cache types and the [`compute_spending`] aggregation loop
 //! with a parallel streaming cold parse, store-time chunk dedup, periodic
-//! checkpoint/partial-publish observers, old-file skips, and cross-file Claude
-//! dedup. Discovery and parsing dispatch through the
+//! checkpoint/partial-publish observers, mtime-based old-file skips, and
+//! cross-file Claude dedup. Discovery and parsing dispatch through the
 //! adapter ([`AgentAdapter::transcript_files`] /
 //! [`AgentAdapter::parse_spend`]): a dollar-logging provider (Claude's legacy
 //! `costUSD`, Pi) reads its figures verbatim, a token-only provider (Codex,
@@ -102,8 +102,9 @@ const MAX_SPENDING_PARSE_WORKERS: usize = 8;
 
 /// Raw rows newer than this stay verbatim; older rows fold into
 /// day/model/thread rollups so the shared cache stays bounded by recent
-/// activity instead of lifetime history.
-const RAW_RETAIN_SECS: u64 = 14 * 86_400;
+/// activity instead of lifetime history. Eight days keeps the 7d window
+/// second-exact with a day of margin.
+const RAW_RETAIN_SECS: u64 = 8 * 86_400;
 
 /// The headline spend window shown in the cockpit and provider dashboard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -314,8 +315,10 @@ fn compute_model_breakdown_from_counted(
 /// under the current shape. `0` is the implicit pre-versioning shape (no
 /// `version` field). v11 drops per-entry origin in favour of per-file origin,
 /// dedups retry writes within each parsed chunk before storing, and reshapes
-/// compaction rollup keys around that per-file origin.
-const SPENDING_CACHE_VERSION: u32 = 11;
+/// compaction rollup keys around that per-file origin. v12 shortens on-disk
+/// field keys and skips default values; a v11 cache would otherwise read under
+/// the new keys as zeroed entries, so it cold-rebuilds.
+const SPENDING_CACHE_VERSION: u32 = 12;
 
 /// Gates the aggregate meaning in provider-spending.json, independent of the
 /// raw per-file [`SPENDING_CACHE_VERSION`]. An older stamp reads as stale, so
@@ -369,34 +372,36 @@ impl SpendingDiskCache {
 }
 
 /// Cached parse of one JSONL file.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileCacheEntry {
+    #[serde(default, rename = "m", skip_serializing_if = "is_zero")]
     pub mtime_secs: u64,
     /// File length at the last parse — the growth/truncation detector: a
     /// longer file parses only its suffix, a shorter (rotated/truncated) one
     /// re-parses cold, an equal length with a new mtime re-parses cold (an
     /// in-place rewrite).
-    #[serde(default)]
+    #[serde(default, rename = "n", skip_serializing_if = "is_zero")]
     pub len: u64,
     /// Where the last parse left off — the next incremental parse resumes here.
-    #[serde(default)]
+    #[serde(default, rename = "c", skip_serializing_if = "is_default_cursor")]
     pub cursor: SpendCursor,
     /// Durable per-file origin learned from the parser or a trusted override.
     /// Codex rollout paths do not encode a workspace, so Rimz can stamp the
     /// file once from live snapshot metadata and reuse that origin across cold
     /// re-parses.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "p", skip_serializing_if = "Option::is_none")]
     pub origin_path: Option<PathBuf>,
     /// One nonzero token-usage entry per parsed transcript record. Retry-write
     /// duplicates within each parsed chunk collapse before storage; aggregation
     /// still owns cross-file dedup.
+    #[serde(default, rename = "e", skip_serializing_if = "Vec::is_empty")]
     pub entries: Vec<CachedEntry>,
     /// Price lookup misses observed while parsing this file, keyed by model and
     /// carrying the youngest timestamp seen for that model. The pricing refresh
     /// chase unions active unknowns across currently discovered files. When one
     /// later resolves while still inside the widest spend window, this file cold
     /// re-parses so zero-dollar token entries recover their spend.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default, rename = "u", skip_serializing_if = "BTreeMap::is_empty")]
     pub unknown_models: BTreeMap<String, u64>,
 }
 
@@ -405,10 +410,11 @@ pub struct FileCacheEntry {
 /// carries its cumulative token totals and tracked model so a resumed delta
 /// subtraction stays exact). Stored per file in the spending cache; a state
 /// shape change bumps [`SPENDING_CACHE_VERSION`].
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpendCursor {
+    #[serde(default, rename = "o", skip_serializing_if = "is_zero")]
     pub offset: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "s", skip_serializing_if = "Option::is_none")]
     pub state: Option<serde_json::Value>,
 }
 
@@ -429,12 +435,14 @@ pub struct SpendParse {
 /// Codex and Pi entries. `thread_id` is present when the provider's durable
 /// transcript store exposes a native session id. `is_sidechain` drives the
 /// sidechain-replay suppression logic in `compute_spending`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CachedEntry {
     /// Unix timestamp (seconds) the entry was recorded, parsed from the JSONL
     /// `timestamp` via [`iso_to_unix_secs`]. Drives the trailing-window bucketing
     /// in [`accum`].
+    #[serde(rename = "t")]
     pub ts_secs: u64,
+    #[serde(rename = "u")]
     pub cost_usd: f64,
     /// Fresh input tokens (Claude `input_tokens`; Codex uncached input).
     /// Per-entry components stay raw; [`SpendWindow::add`] folds `cache_write`
@@ -442,47 +450,55 @@ pub struct CachedEntry {
     /// parseable; `SPENDING_CACHE_VERSION` is what actually heals it — a
     /// pre-split cache is discarded on read so every file re-parses, since a
     /// finalized session's stable mtime would otherwise pin these at `0`.
-    #[serde(default)]
+    #[serde(default, rename = "i", skip_serializing_if = "is_zero")]
     pub input: u64,
     /// Output tokens (Codex `output_tokens` already includes reasoning).
-    #[serde(default)]
+    #[serde(default, rename = "o", skip_serializing_if = "is_zero")]
     pub output: u64,
     /// Cache-write tokens (Claude `cache_creation_input_tokens`, Pi
     /// `cacheWrite`); `0` for providers with no cache-creation concept (Codex).
-    #[serde(default)]
+    #[serde(default, rename = "w", skip_serializing_if = "is_zero")]
     pub cache_write: u64,
     /// Cache-read (Claude `cache_read_input_tokens`; Codex `cached_input_tokens`).
-    #[serde(default)]
+    #[serde(default, rename = "r", skip_serializing_if = "is_zero")]
     pub cache_read: u64,
     /// `message.id` from Claude entries; `None` for Codex and Pi entries.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "m", skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
     /// `requestId` from Claude entries; `None` for Codex and Pi entries.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "q", skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     /// Provider-native billing thread/session id, used for stores where many
     /// sessions live in one transcript file or database.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "h", skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
     /// `isSidechain` flag from Claude entries.
-    #[serde(default)]
+    #[serde(default, rename = "s", skip_serializing_if = "is_false")]
     pub is_sidechain: bool,
     /// Model id as the transcript named it (`claude-opus-4-8`, `gpt-5-codex`, …),
     /// kept for the per-model token breakdown. `None` for an entry whose
     /// transcript named no model. Carried through dedup so a kept turn keeps its
     /// model.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "l", skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Synthetic per-day rollup produced by recency compaction. Rolled rows
     /// carry no dedup IDs because compaction runs after cross-file dedup.
     /// Native thread ids are retained so old multi-session stores keep session
     /// counts exact.
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, rename = "d", skip_serializing_if = "is_false")]
     pub rolled: bool,
 }
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+fn is_default_cursor(cursor: &SpendCursor) -> bool {
+    cursor == &SpendCursor::default()
 }
 
 #[cfg(test)]
@@ -974,21 +990,6 @@ fn refresh_spending_cache(
         }
 
         if !cache.files.contains_key(&key) && !heals && cold_parse_out_of_window(mtime, now_secs) {
-            cache.files.insert(
-                key,
-                FileCacheEntry {
-                    mtime_secs: mtime,
-                    len,
-                    cursor: SpendCursor {
-                        offset: len,
-                        state: None,
-                    },
-                    origin_path: None,
-                    entries: Vec::new(),
-                    unknown_models: BTreeMap::new(),
-                },
-            );
-            cache.mark_changed();
             finished_files += 1;
             tick(
                 cache,
@@ -1587,6 +1588,14 @@ pub(crate) fn compact_spending_cache(
         changed |= retained.len() != before_len;
         cached_file.entries = retained;
     }
+    let before = cache.files.len();
+    // Parsed entry and unknown-model timestamps are not newer than the file mtime
+    // in real transcript stores; once mtime is past the widest window plus skew
+    // margin, the record can no longer affect totals, sessions, or price chases.
+    cache
+        .files
+        .retain(|_, file| !cold_parse_out_of_window(file.mtime_secs, now_secs));
+    changed |= cache.files.len() != before;
     changed
 }
 
@@ -1989,8 +1998,9 @@ fn within_widest_window(ts_secs: u64, now_secs: u64) -> bool {
     now_secs.saturating_sub(ts_secs) < WIDEST_SPEND_WINDOW_SECS
 }
 
-/// A new file last modified before the widest spend window (plus a clock-skew
-/// margin) holds no in-window entries, so cold-parsing it is pure waste.
+/// A file last modified before the widest spend window (plus a clock-skew
+/// margin) holds no in-window entries, so cold-parsing or retaining it is pure
+/// waste.
 fn cold_parse_out_of_window(mtime_secs: u64, now_secs: u64) -> bool {
     mtime_secs.saturating_add(WIDEST_SPEND_WINDOW_SECS + SKIP_PARSE_MARGIN_SECS) < now_secs
 }

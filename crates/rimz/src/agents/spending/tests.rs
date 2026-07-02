@@ -142,6 +142,11 @@ fn cached_entry(ts_secs: u64, cost_usd: f64, thread_id: &str) -> CachedEntry {
 
 fn cached_file(path: &Path, entries: Vec<CachedEntry>) -> (String, FileCacheEntry) {
     let (mtime_secs, len) = file_stat(path);
+    let mtime_secs = entries
+        .iter()
+        .map(|entry| entry.ts_secs)
+        .max()
+        .map_or(mtime_secs, |entry_mtime| mtime_secs.max(entry_mtime));
     (
         path.to_string_lossy().into_owned(),
         FileCacheEntry {
@@ -859,7 +864,7 @@ fn cold_parse_skip_ignores_new_files_outside_widest_window() {
         format!("{}\n", claude_line_ts(&iso_at(mtime), 1.0, "old", "old")),
     )
     .unwrap();
-    let (mtime, len) = file_stat(&file);
+    let (mtime, _) = file_stat(&file);
     let files = vec![(claude_adapter(), file.clone())];
     let mut cache = SpendingDiskCache::default();
 
@@ -871,10 +876,12 @@ fn cold_parse_skip_ignores_new_files_outside_widest_window() {
     );
 
     assert_eq!(skipped.total.year.usd, 0.0);
-    let entry = &cache.files[&file.to_string_lossy().into_owned()];
-    assert!(entry.entries.is_empty());
-    assert_eq!(entry.cursor.offset, len);
-    assert_eq!(entry.len, len);
+    assert!(
+        !cache
+            .files
+            .contains_key(&file.to_string_lossy().into_owned())
+    );
+    assert!(!cache.dirty);
 
     let fresh_file = write_jsonl(
         dir.path(),
@@ -1242,7 +1249,7 @@ fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
     old_project_same_bucket.model = Some("claude-opus-4-8".to_owned());
     let mut old_other = cached_entry(NOW_SECS - 60 * 86_400, 3.0, "old-other");
     old_other.model = Some("claude-sonnet-4-6".to_owned());
-    let mut recent = cached_entry(NOW_SECS - 10 * 86_400, 4.0, "recent");
+    let mut recent = cached_entry(NOW_SECS - RAW_RETAIN_SECS + 86_400, 4.0, "recent");
     recent.model = Some("claude-opus-4-8".to_owned());
     let mut cache = SpendingDiskCache {
         files: HashMap::from([
@@ -1431,7 +1438,7 @@ fn cache_compaction_defers_message_ids_with_recent_replays() {
         rolled: false,
     };
     let recent_replay = CachedEntry {
-        ts_secs: NOW_SECS - 10 * 86_400,
+        ts_secs: NOW_SECS - RAW_RETAIN_SECS + 86_400,
         cost_usd: 9.0,
         input: 9_000,
         is_sidechain: true,
@@ -1465,6 +1472,11 @@ fn cache_compaction_drops_expired_rollups() {
         files: HashMap::from([cached_file(&file, vec![expired])]),
         ..Default::default()
     };
+    cache
+        .files
+        .get_mut(&file.to_string_lossy().into_owned())
+        .unwrap()
+        .mtime_secs = NOW_SECS;
     let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
 
     assert!(compact_spending_cache(&mut cache, &files, NOW_SECS));
@@ -1474,6 +1486,79 @@ fn cache_compaction_drops_expired_rollups() {
             .entries
             .is_empty()
     );
+}
+
+#[test]
+fn cache_compaction_evicts_dead_file_records() {
+    let dir = TempDir::new().unwrap();
+    let old_mtime = NOW_SECS - WIDEST_SPEND_WINDOW_SECS - SKIP_PARSE_MARGIN_SECS - 10;
+    let recent_mtime = NOW_SECS - 60;
+    let discovered_old = write_jsonl(dir.path(), "old.jsonl", &[]);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&discovered_old)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(old_mtime))
+        .unwrap();
+    let (discovered_mtime, discovered_len) = file_stat(&discovered_old);
+    let deleted_old = dir.path().join("deleted.jsonl");
+    let recent_absent = dir.path().join("recent.jsonl");
+    let discovered_key = discovered_old.to_string_lossy().into_owned();
+    let deleted_key = deleted_old.to_string_lossy().into_owned();
+    let recent_key = recent_absent.to_string_lossy().into_owned();
+    let mut cache = SpendingDiskCache {
+        files: HashMap::from([
+            (
+                discovered_key.clone(),
+                FileCacheEntry {
+                    mtime_secs: discovered_mtime,
+                    len: discovered_len,
+                    cursor: SpendCursor {
+                        offset: discovered_len,
+                        state: None,
+                    },
+                    origin_path: None,
+                    entries: Vec::new(),
+                    unknown_models: BTreeMap::new(),
+                },
+            ),
+            (
+                deleted_key.clone(),
+                FileCacheEntry {
+                    mtime_secs: old_mtime,
+                    len: 0,
+                    cursor: SpendCursor::default(),
+                    origin_path: None,
+                    entries: vec![cached_entry(old_mtime, 1.0, "deleted-old")],
+                    unknown_models: BTreeMap::new(),
+                },
+            ),
+            (
+                recent_key.clone(),
+                FileCacheEntry {
+                    mtime_secs: recent_mtime,
+                    len: 0,
+                    cursor: SpendCursor::default(),
+                    origin_path: None,
+                    entries: vec![cached_entry(recent_mtime, 2.0, "recent-absent")],
+                    unknown_models: BTreeMap::new(),
+                },
+            ),
+        ]),
+        ..Default::default()
+    };
+
+    compute_spending(
+        &[(claude_adapter(), discovered_old)],
+        &mut cache,
+        &PriceBook::default(),
+        NOW_SECS,
+    );
+
+    assert!(cache.dirty);
+    assert!(!cache.files.contains_key(&discovered_key));
+    assert!(!cache.files.contains_key(&deleted_key));
+    assert!(cache.files.contains_key(&recent_key));
 }
 
 #[test]
@@ -1773,6 +1858,93 @@ fn write_skips_version_downgrade() {
         Some(WORKSPACE_SPENDING_VERSION)
     );
     assert_ne!(std::fs::read(&workspace_path).unwrap(), current_workspace);
+}
+
+#[test]
+fn spending_cursor_cache_wire_shape_uses_short_keys() {
+    let full = CachedEntry {
+        ts_secs: 12_345,
+        cost_usd: 0.125,
+        input: 10,
+        output: 20,
+        cache_write: 3,
+        cache_read: 4,
+        message_id: Some("msg-1".to_owned()),
+        request_id: Some("req-1".to_owned()),
+        thread_id: Some("thread-1".to_owned()),
+        is_sidechain: true,
+        model: Some("claude-opus-4-8".to_owned()),
+        rolled: true,
+    };
+    let codex = CachedEntry {
+        ts_secs: 67_890,
+        cost_usd: 0.001,
+        input: 100,
+        output: 50,
+        cache_write: 0,
+        cache_read: 25,
+        message_id: None,
+        request_id: None,
+        thread_id: None,
+        is_sidechain: false,
+        model: Some("gpt-5-codex".to_owned()),
+        rolled: false,
+    };
+    let entries = vec![full.clone(), codex.clone()];
+    let value = serde_json::to_value(&entries).unwrap();
+
+    insta::assert_json_snapshot!(value, @r###"
+        [
+          {
+            "d": true,
+            "h": "thread-1",
+            "i": 10,
+            "l": "claude-opus-4-8",
+            "m": "msg-1",
+            "o": 20,
+            "q": "req-1",
+            "r": 4,
+            "s": true,
+            "t": 12345,
+            "u": 0.125,
+            "w": 3
+          },
+          {
+            "i": 100,
+            "l": "gpt-5-codex",
+            "o": 50,
+            "r": 25,
+            "t": 67890,
+            "u": 0.001
+          }
+        ]
+        "###);
+    assert_eq!(
+        serde_json::from_value::<Vec<CachedEntry>>(value).unwrap(),
+        entries
+    );
+
+    let file = FileCacheEntry {
+        mtime_secs: 88_888,
+        len: 123,
+        cursor: SpendCursor {
+            offset: 77,
+            state: Some(serde_json::json!({"acc": 3})),
+        },
+        origin_path: Some(PathBuf::from("/tmp/repo")),
+        entries: vec![codex],
+        unknown_models: BTreeMap::from([("new-model".to_owned(), 66_666)]),
+    };
+    let file_value = serde_json::to_value(&file).unwrap();
+    assert!(file_value.get("mtime_secs").is_none());
+    assert_eq!(file_value["m"], 88_888);
+    assert_eq!(file_value["n"], 123);
+    assert_eq!(file_value["c"]["o"], 77);
+    assert_eq!(file_value["c"]["s"], serde_json::json!({"acc": 3}));
+    assert_eq!(
+        serde_json::from_value::<FileCacheEntry>(file_value).unwrap(),
+        file
+    );
 }
 
 #[test]
