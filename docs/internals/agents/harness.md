@@ -125,6 +125,8 @@ Each room fires only tasks whose normalized `root` maps to its `WorkspaceId`. `r
 
 The elder spawns `rimz loop run <name>` with fresh null stdio. That hidden runner resolves the recorded root, runs any `check` first, applies agent hook preflight only when the guard fires, and then launches the supervised pane or messages the pinned session.
 
+`rimz loop fire <name>` drives the same runner path in the foreground for testing and leaves one-shot entries and bind schedules in place.
+
 Self-paced loops are ordinary one-shots. An agent schedules its next wake with `--in <delay>` at the end of the current wake; the instance row is removed before delivery, so the agent creates the next one only while it still has work. The pending wake stays visible in `rimz loop list` without editing `loop.toml`.
 
 ### Script checks

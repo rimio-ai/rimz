@@ -177,6 +177,60 @@ fn loop_add_ephemeral_tasks_use_instance_state() {
 }
 
 #[test]
+fn loop_fire_keeps_ephemeral_task() {
+    let env = Env::new();
+
+    let add = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "probe",
+            "--check",
+            "printf ok",
+            "--at",
+            "07:00",
+            "--once",
+        ])
+        .output()
+        .expect("loop add check-only one-shot");
+    assert!(
+        add.status.success(),
+        "loop add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    assert!(
+        read_loop_instances(&env).0.contains_key("probe"),
+        "one-shot should persist as state"
+    );
+
+    for _ in 0..2 {
+        let fire = env
+            .rimz()
+            .args(["loop", "fire", "probe"])
+            .output()
+            .expect("loop fire");
+        assert!(
+            fire.status.success(),
+            "loop fire failed: {}",
+            String::from_utf8_lossy(&fire.stderr)
+        );
+        assert!(
+            read_loop_instances(&env).0.contains_key("probe"),
+            "manual fire should keep the one-shot instance"
+        );
+    }
+
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 2);
+    assert!(
+        records
+            .iter()
+            .all(|record| record.task == "probe" && record.result == LoopRunResult::Completed)
+    );
+}
+
+#[test]
 fn loop_add_replaces_same_name_across_config_and_state() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -593,6 +647,91 @@ fn loop_run_bind_dead_session_reaps_schedule() {
 }
 
 #[test]
+fn loop_fire_bind_dead_session_keeps_schedule() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.dead]\n\
+             bind = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
+             prompt = \"wake up\"\n\
+             root = \"{}\"\n\
+             at = \"07:00\"\n",
+            env.project_root.display()
+        ),
+    );
+
+    let fire = env
+        .rimz()
+        .args(["loop", "fire", "dead"])
+        .output()
+        .expect("loop fire");
+    assert!(
+        fire.status.success(),
+        "loop fire failed: {}",
+        String::from_utf8_lossy(&fire.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&fire.stdout).contains("not alive; leaving schedule in place"),
+        "dead target should be reported: {}",
+        String::from_utf8_lossy(&fire.stdout)
+    );
+    let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
+    assert!(
+        config.contains("[tasks.dead]"),
+        "manual fire should keep dead schedule: {config}"
+    );
+    assert_eq!(
+        read_loop_run_records(&env)
+            .last()
+            .map(|record| record.result),
+        Some(LoopRunResult::TargetGone)
+    );
+}
+
+#[test]
+fn loop_fire_bind_delivers_prompt() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-fire", "feature-loop");
+
+    let add = env
+        .rimz()
+        .args([
+            "loop", "add", "manual", "--bind", "@claude", "--every", "15m", "--prompt", "fire now",
+        ])
+        .output()
+        .expect("loop add");
+    assert!(
+        add.status.success(),
+        "loop add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let fire = env
+        .rimz()
+        .args(["loop", "fire", "manual"])
+        .output()
+        .expect("loop fire");
+    assert!(
+        fire.status.success(),
+        "loop fire failed: {}",
+        String::from_utf8_lossy(&fire.stderr)
+    );
+
+    let messages = env.ledger().list_pending_messages().expect("messages");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].text, "fire now");
+    assert_eq!(messages[0].agent_id.as_str(), "sess-loop-fire");
+    assert_eq!(
+        read_loop_run_records(&env)
+            .last()
+            .map(|record| record.result),
+        Some(LoopRunResult::Delivered)
+    );
+}
+
+#[test]
 fn loop_run_bind_tilde_root_queues_prompt() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -664,6 +803,146 @@ fn loop_add_bind_validates_mode_selection() {
         String::from_utf8_lossy(&spawn_only.stderr).contains("only apply to --spec tasks"),
         "unexpected stderr: {}",
         String::from_utf8_lossy(&spawn_only.stderr)
+    );
+}
+
+#[test]
+fn loop_rename_moves_config_entry() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "# keep this task comment\n\
+             [tasks.old]\n\
+             check = \"true\"\n\
+             root = \"{}\"\n\
+             every = \"15m\"\n",
+            env.project_root.display()
+        ),
+    );
+
+    let rename = env
+        .rimz()
+        .args(["loop", "rename", "old", "new"])
+        .output()
+        .expect("loop rename");
+    assert!(
+        rename.status.success(),
+        "loop rename failed: {}",
+        String::from_utf8_lossy(&rename.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&rename.stdout).contains("renamed loop task `old` to `new`"),
+        "unexpected stdout: {}",
+        String::from_utf8_lossy(&rename.stdout)
+    );
+
+    let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
+    assert!(config.contains("# keep this task comment"));
+    assert!(config.contains("[tasks.new]"), "new task missing: {config}");
+    assert!(
+        !config.contains("[tasks.old]"),
+        "old task should be gone: {config}"
+    );
+}
+
+#[test]
+fn loop_rename_moves_instance_entry() {
+    let env = Env::new();
+
+    let add = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "old-state",
+            "--check",
+            "true",
+            "--at",
+            "07:00",
+            "--once",
+        ])
+        .output()
+        .expect("loop add instance");
+    assert!(
+        add.status.success(),
+        "loop add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let rename = env
+        .rimz()
+        .args(["loop", "rename", "old-state", "new-state"])
+        .output()
+        .expect("loop rename");
+    assert!(
+        rename.status.success(),
+        "loop rename failed: {}",
+        String::from_utf8_lossy(&rename.stderr)
+    );
+
+    let instances = read_loop_instances(&env);
+    assert!(!instances.0.contains_key("old-state"));
+    assert!(instances.0.contains_key("new-state"));
+}
+
+#[test]
+fn loop_rename_rejects_collision_and_missing() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.old]\n\
+             check = \"true\"\n\
+             root = \"{}\"\n\
+             every = \"15m\"\n\
+             [tasks.existing]\n\
+             check = \"true\"\n\
+             root = \"{}\"\n\
+             every = \"15m\"\n",
+            env.project_root.display(),
+            env.project_root.display()
+        ),
+    );
+
+    let collision = env
+        .rimz()
+        .args(["loop", "rename", "old", "existing"])
+        .output()
+        .expect("loop rename collision");
+    assert!(!collision.status.success(), "collision should fail");
+    assert!(
+        String::from_utf8_lossy(&collision.stderr).contains("already exists"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&collision.stderr)
+    );
+
+    let same = env
+        .rimz()
+        .args(["loop", "rename", "old", "old"])
+        .output()
+        .expect("loop rename same name");
+    assert!(!same.status.success(), "same-name rename should fail");
+    assert!(
+        String::from_utf8_lossy(&same.stderr).contains("must differ"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&same.stderr)
+    );
+
+    let missing = env
+        .rimz()
+        .args(["loop", "rename", "missing", "free"])
+        .output()
+        .expect("loop rename missing");
+    assert!(
+        missing.status.success(),
+        "missing rename failed: {}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&missing.stdout).contains("no loop task named `missing`"),
+        "unexpected stdout: {}",
+        String::from_utf8_lossy(&missing.stdout)
     );
 }
 

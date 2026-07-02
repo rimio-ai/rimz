@@ -53,10 +53,14 @@ pub struct LoopArgs {
 enum LoopSubcmd {
     /// Add or replace a task in the per-machine config.
     Add(Box<AddArgs>),
-    /// Remove a task from the config.
+    /// Remove a task from its store.
     Remove(NameArgs),
+    /// Rename a task in the store that owns it.
+    Rename(RenameArgs),
     /// List configured tasks and whether their room is open.
     List,
+    /// Fire one task now in the foreground for testing; one-shots and schedules stay put.
+    Fire(NameArgs),
     /// Run one task now. The sidebar elder calls this; humans rarely do.
     #[command(hide = true)]
     Run(NameArgs),
@@ -130,6 +134,12 @@ struct NameArgs {
     name: String,
 }
 
+#[derive(Debug, Args)]
+struct RenameArgs {
+    name: String,
+    new_name: String,
+}
+
 struct AddTiming {
     at: Option<String>,
     days: Option<String>,
@@ -137,12 +147,20 @@ struct AddTiming {
     deadline: Option<Timestamp>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunMode {
+    Scheduled,
+    Manual,
+}
+
 pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         LoopSubcmd::Add(args) => add(*args),
         LoopSubcmd::Remove(args) => remove(&args.name),
+        LoopSubcmd::Rename(args) => rename(&args.name, &args.new_name),
         LoopSubcmd::List => list(),
-        LoopSubcmd::Run(args) => run_one(&args.name, globals),
+        LoopSubcmd::Fire(args) => run_one(&args.name, RunMode::Manual, globals),
+        LoopSubcmd::Run(args) => run_one(&args.name, RunMode::Scheduled, globals),
     }
 }
 
@@ -298,6 +316,25 @@ fn remove(name: &str) -> Result<()> {
     Ok(())
 }
 
+fn rename(name: &str, new_name: &str) -> Result<()> {
+    schedule::validate_name(new_name)?;
+    if name == new_name {
+        bail!("new loop task name must differ from `{name}`");
+    }
+    if load_all().contains_key(new_name) {
+        bail!("loop task `{new_name}` already exists");
+    }
+
+    let renamed = loop_instances::rename(name, new_name)? | config_rename(name, new_name)?;
+    let mut out = ui::out();
+    if renamed {
+        writeln!(out, "renamed loop task `{name}` to `{new_name}`")?;
+    } else {
+        writeln!(out, "no loop task named `{name}`")?;
+    }
+    Ok(())
+}
+
 // ---- list -------------------------------------------------------------------
 
 fn list() -> Result<()> {
@@ -377,11 +414,18 @@ fn loop_record(task: &str, result: LoopRunResult) -> LoopRunRecord {
 
 // ---- run --------------------------------------------------------------------
 
-fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
+fn run_one(name: &str, mode: RunMode, globals: &GlobalFlags) -> Result<()> {
     let (entry, source) = load_entry(name)?;
     let action = task_action(name, &entry)?;
     if deadline_expired(&entry) {
-        let _ = remove_task(name, source)?;
+        if mode == RunMode::Scheduled {
+            let _ = remove_task(name, source)?;
+        } else {
+            writeln!(
+                ui::out(),
+                "loop `{name}`: deadline expired; leaving task in place"
+            )?;
+        }
         loop_run_log::append(&loop_record(name, LoopRunResult::Expired));
         return Ok(());
     }
@@ -394,7 +438,7 @@ fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
             )?;
             match action {
                 TaskAction::CheckOnly => {
-                    if is_ephemeral(&entry) {
+                    if mode == RunMode::Scheduled && is_ephemeral(&entry) {
                         let _ = remove_task(name, source)?;
                     }
                     loop_run_log::append(&loop_record(name, check_only_result(&outcome)));
@@ -413,7 +457,7 @@ fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
     };
     let TaskAction::Spawn(spec) = action else {
         if let TaskAction::Deliver(target) = action {
-            return run_delivery_task(name, &entry, source, target, prompt_override, globals);
+            return run_delivery_task(name, &entry, source, target, prompt_override, mode, globals);
         }
         unreachable!("check-only task without check is rejected by task_action");
     };
@@ -449,7 +493,7 @@ fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
         .map_err(|err| anyhow::anyhow!("{err}"))?;
     let mut run_globals = globals.clone();
     run_globals.root = Some(entry.resolved_root());
-    if is_ephemeral(&entry) {
+    if mode == RunMode::Scheduled && is_ephemeral(&entry) {
         // One-shot cleanup happens before the terminal run. A one-shot removed
         // pre-fire that then fails to launch is not retried.
         let _ = remove_task(name, source)?;
@@ -487,15 +531,24 @@ fn run_delivery_task(
     source: TaskSource,
     target: &TaskTarget,
     prompt_override: Option<String>,
+    mode: RunMode,
     globals: &GlobalFlags,
 ) -> Result<()> {
     if !delivery_target_alive(entry, target)? {
-        writeln!(
-            ui::out(),
-            "loop `{name}`: target {} not alive; removing schedule",
-            target.handle
-        )?;
-        let _ = remove_task(name, source)?;
+        if mode == RunMode::Scheduled {
+            writeln!(
+                ui::out(),
+                "loop `{name}`: target {} not alive; removing schedule",
+                target.handle
+            )?;
+            let _ = remove_task(name, source)?;
+        } else {
+            writeln!(
+                ui::out(),
+                "loop `{name}`: target {} not alive; leaving schedule in place",
+                target.handle
+            )?;
+        }
         loop_run_log::append(&loop_record(name, LoopRunResult::TargetGone));
         return Ok(());
     }
@@ -503,7 +556,7 @@ fn run_delivery_task(
         Some(prompt) => prompt,
         None => resolve_task_prompt(entry)?,
     };
-    if is_ephemeral(entry) {
+    if mode == RunMode::Scheduled && is_ephemeral(entry) {
         let _ = remove_task(name, source)?;
     }
     let root = entry.resolved_root();
@@ -520,12 +573,20 @@ fn run_delivery_task(
             Ok(())
         }
         Err(err) if queue_resolution_miss(&err) => {
-            writeln!(
-                ui::out(),
-                "loop `{name}`: target {} not alive; removing schedule",
-                target.handle
-            )?;
-            let _ = remove_task(name, source)?;
+            if mode == RunMode::Scheduled {
+                writeln!(
+                    ui::out(),
+                    "loop `{name}`: target {} not alive; removing schedule",
+                    target.handle
+                )?;
+                let _ = remove_task(name, source)?;
+            } else {
+                writeln!(
+                    ui::out(),
+                    "loop `{name}`: target {} not alive; leaving schedule in place",
+                    target.handle
+                )?;
+            }
             loop_run_log::append(&loop_record(name, LoopRunResult::TargetGone));
             Ok(())
         }
@@ -1240,6 +1301,33 @@ fn config_remove(name: &str) -> Result<bool> {
             .with_context(|| format!("writing {}", path.display()))?;
     }
     Ok(removed)
+}
+
+fn config_rename(name: &str, new_name: &str) -> Result<bool> {
+    let path = MachineConfig::loop_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    let mut doc = text
+        .parse::<DocumentMut>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    let Some(tasks) = doc.get_mut("tasks").and_then(Item::as_table_mut) else {
+        return Ok(false);
+    };
+    if tasks.contains_key(new_name) {
+        bail!("loop task `{new_name}` already exists");
+    }
+    let Some(entry) = tasks.remove(name) else {
+        return Ok(false);
+    };
+    tasks.insert(new_name, entry);
+
+    let rendered = doc.to_string();
+    MachineConfig::parse_text(&path, &rendered, &agents_home())
+        .with_context(|| format!("validating `loop.tasks.{new_name}`"))?;
+    write_bytes_atomically(&path, rendered.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
 }
 
 #[cfg(test)]

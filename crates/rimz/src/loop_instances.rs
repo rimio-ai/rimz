@@ -29,6 +29,10 @@ pub fn remove(name: &str) -> Result<bool> {
     remove_from(&state_home(), name)
 }
 
+pub fn rename(old: &str, new: &str) -> Result<bool> {
+    rename_from(&state_home(), old, new)
+}
+
 fn load_from(state_root: &Path) -> Tasks {
     let Ok(bytes) = std::fs::read(path(state_root)) else {
         return Tasks::default();
@@ -49,6 +53,16 @@ fn remove_from(state_root: &Path, name: &str) -> Result<bool> {
         write_temp_then_rename_cache(&path(state_root), &tasks)?;
     }
     Ok(removed)
+}
+
+fn rename_from(state_root: &Path, old: &str, new: &str) -> Result<bool> {
+    let mut tasks = load_from(state_root);
+    let Some(entry) = tasks.0.remove(old) else {
+        return Ok(false);
+    };
+    tasks.0.insert(new.to_owned(), entry);
+    write_temp_then_rename_cache(&path(state_root), &tasks)?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -87,5 +101,22 @@ mod tests {
         assert!(remove_from(dir.path(), "wake").expect("remove"));
         assert!(load_from(dir.path()).0.is_empty());
         assert!(!remove_from(dir.path(), "wake").expect("remove absent"));
+    }
+
+    #[test]
+    fn rename_moves_existing_entry() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let entry = task();
+
+        insert_into(dir.path(), "wake", &entry).expect("insert");
+
+        assert!(rename_from(dir.path(), "wake", "nudge").expect("rename"));
+        let tasks = load_from(dir.path());
+        assert!(!tasks.0.contains_key("wake"));
+        assert_eq!(
+            tasks.0.get("nudge").map(|entry| entry.prompt.as_deref()),
+            Some(Some("wake"))
+        );
+        assert!(!rename_from(dir.path(), "wake", "later").expect("rename absent"));
     }
 }
