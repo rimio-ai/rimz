@@ -5,7 +5,9 @@
 //! with the cost map in `docs/internals/health/performance.md`.
 //! Counter deltas are scoped by producer lane so concurrent fetch and cache
 //! refresh work attribute their forks and ledger reads to the loop that caused
-//! them.
+//! them. The same consecutive-tick window filters both breach start and
+//! recovery, so one cheap tick inside a saturated episode does not flap the
+//! diagnostic identity.
 
 use std::time::{Duration, Instant};
 
@@ -46,19 +48,20 @@ impl TickSample {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct TickStart {
     started_at: Instant,
     bytes_read: u64,
     spawns: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct TickMeter {
     tick_loop: TickLoop,
     work_lane: WorkLane,
     budget_wall_ms: u64,
     streak: u32,
+    under_streak: u32,
     since_ms: u64,
     last: TickSample,
     worst: TickSample,
@@ -75,6 +78,7 @@ impl TickMeter {
             work_lane: work_lane(tick_loop),
             budget_wall_ms: duration_ms(tick),
             streak: 0,
+            under_streak: 0,
             since_ms: 0,
             last: TickSample::default(),
             worst: TickSample::default(),
@@ -105,6 +109,7 @@ impl TickMeter {
             return self.finish_under_budget(at_ms);
         }
 
+        self.under_streak = 0;
         if self.streak == 0 {
             self.since_ms = at_ms;
             self.worst = sample;
@@ -117,10 +122,17 @@ impl TickMeter {
     }
 
     fn finish_under_budget(&mut self, at_ms: u64) -> Option<DiagEvent> {
-        let event = (self.streak >= TICK_BUDGET_BREACH_TICKS)
-            .then(|| self.event(Some(at_ms.saturating_sub(self.since_ms))));
+        if self.streak < TICK_BUDGET_BREACH_TICKS {
+            self.reset();
+            return None;
+        }
+        self.under_streak = self.under_streak.saturating_add(1);
+        if self.under_streak < TICK_BUDGET_BREACH_TICKS {
+            return None;
+        }
+        let event = self.event(Some(at_ms.saturating_sub(self.since_ms)));
         self.reset();
-        event
+        Some(event)
     }
 
     fn event(&self, recovered_after_ms: Option<u64>) -> DiagEvent {
@@ -143,6 +155,7 @@ impl TickMeter {
 
     fn reset(&mut self) {
         self.streak = 0;
+        self.under_streak = 0;
         self.since_ms = 0;
         self.last = TickSample::default();
         self.worst = TickSample::default();
@@ -360,8 +373,11 @@ mod tests {
             let _ = meter.finish_sample(over_wall(), u64::from(at_ms));
         }
 
+        for at_ms in 30..30 + TICK_BUDGET_BREACH_TICKS - 1 {
+            assert_eq!(meter.finish_sample(under(), u64::from(at_ms)), None);
+        }
         let event = meter
-            .finish_sample(under(), 30)
+            .finish_sample(under(), 30 + u64::from(TICK_BUDGET_BREACH_TICKS - 1))
             .expect("recovery after active breach");
 
         assert_eq!(
@@ -376,11 +392,46 @@ mod tests {
                 0,
                 0,
                 10,
-                Some(20)
+                Some(24)
             )
         );
-        assert_eq!(meter.finish_sample(under(), 31), None);
+        assert_eq!(meter.finish_sample(under(), 35), None);
         assert_eq!(meter.streak, 0);
+    }
+
+    #[test]
+    fn active_breach_requires_symmetric_under_budget_recovery_streak() {
+        let mut meter = meter(TickLoop::Fetch);
+        for at_ms in 10..10 + TICK_BUDGET_BREACH_TICKS {
+            let _ = meter.finish_sample(
+                sample(DEFAULT_WALL_MS + 1, TICK_FOLD_BYTES_BUDGET + 9, 0),
+                u64::from(at_ms),
+            );
+        }
+
+        assert_eq!(meter.finish_sample(under(), 20), None);
+
+        let mut event = None;
+        for at_ms in 21..21 + TICK_BUDGET_BREACH_TICKS {
+            event = meter.finish_sample(sample(DEFAULT_WALL_MS + 50, 0, 0), u64::from(at_ms));
+        }
+        let event = event.expect("active breach continues after one under-budget tick");
+
+        assert_eq!(
+            event_fields(event),
+            (
+                TickLoop::Fetch,
+                TICK_BUDGET_BREACH_TICKS * 2,
+                DEFAULT_WALL_MS + 50,
+                0,
+                0,
+                DEFAULT_WALL_MS + 50,
+                TICK_FOLD_BYTES_BUDGET + 9,
+                0,
+                10,
+                None
+            )
+        );
     }
 
     #[test]

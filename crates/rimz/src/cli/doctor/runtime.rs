@@ -497,24 +497,55 @@ pub(super) fn collect_rooms(
 }
 
 pub(super) fn collect_diagnostics(ws: &rimz::ResolvedWorkspace) -> model::Diagnostics {
-    let Some((path, records)) = rimz::diag::recent_records(ws.workspace_id.clone(), 12) else {
+    const RECENT_DIAG_ROWS: usize = 12;
+    let Some((path, records)) = rimz::diag::recent_records(ws.workspace_id.clone(), usize::MAX)
+    else {
         return model::Diagnostics::Unavailable;
     };
-    let records = records
-        .into_iter()
-        .map(|record| model::DiagRow {
-            severity: record.severity,
-            kind: record.event.kind_name().to_owned(),
-            at_ms: record.at_ms,
-            summary: summary_with_suppressed(
-                diagnostic_summary(&record.event),
-                record.suppressed_since_last,
-            ),
-        })
-        .collect();
+    let records = diagnostic_rows(records, RECENT_DIAG_ROWS);
     model::Diagnostics::Ready {
         path: path.display().to_string(),
         records,
+    }
+}
+
+fn diagnostic_rows(
+    records: Vec<rimz::schema::diag::DiagEnvelope>,
+    limit: usize,
+) -> Vec<model::DiagRow> {
+    let mut groups: Vec<(String, rimz::schema::diag::DiagEnvelope, usize)> = Vec::new();
+    for record in records {
+        let key = record.event.identity_key();
+        match groups.last_mut() {
+            Some((last_key, latest, count)) if last_key == &key => {
+                *latest = record;
+                *count = count.saturating_add(1);
+            }
+            _ => groups.push((key, record, 1)),
+        }
+    }
+    if groups.len() > limit {
+        groups.drain(..groups.len() - limit);
+    }
+    groups
+        .into_iter()
+        .map(|(_, record, count)| diagnostic_row(record, count))
+        .collect()
+}
+
+fn diagnostic_row(record: rimz::schema::diag::DiagEnvelope, count: usize) -> model::DiagRow {
+    let summary = summary_with_record_count(
+        summary_with_suppressed(
+            diagnostic_summary(&record.event),
+            record.suppressed_since_last,
+        ),
+        count,
+    );
+    model::DiagRow {
+        severity: record.severity,
+        kind: record.event.kind_name().to_owned(),
+        at_ms: record.at_ms,
+        summary,
     }
 }
 
@@ -732,10 +763,18 @@ fn summary_with_suppressed(summary: String, suppressed_since_last: u32) -> Strin
     }
 }
 
+fn summary_with_record_count(summary: String, count: usize) -> String {
+    if count <= 1 {
+        summary
+    } else {
+        format!("{summary}; {count} records")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rimz::schema::diag::{DiagEvent, FrameRejectReason, TickLoop};
+    use rimz::schema::diag::{DiagEnvelope, DiagEvent, FrameRejectReason, TickLoop};
 
     fn sidebar(raw: &str) -> rimz::SidebarInstanceId {
         rimz::SidebarInstanceId::parse(raw).expect("valid sidebar id")
@@ -754,6 +793,34 @@ mod tests {
             "/tmp/sidebar.sock".into(),
             pane.map(|pane| rimz::PaneId::parse(pane).unwrap()),
         )
+    }
+
+    fn diag_record(at_ms: u64, event: DiagEvent) -> DiagEnvelope {
+        DiagEnvelope::new(
+            rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+            "rimz-test".to_owned(),
+            None,
+            at_ms,
+            event,
+        )
+    }
+
+    fn tick_breach(since_ms: u64, recovered_after_ms: Option<u64>, over_ticks: u32) -> DiagEvent {
+        DiagEvent::TickBudgetBreach {
+            tick_loop: TickLoop::Fetch,
+            over_ticks,
+            last_wall_ms: 1_100,
+            last_fold_bytes: 0,
+            last_spawns: 0,
+            wall_ms: 1_500,
+            fold_bytes: 0,
+            spawns: 0,
+            budget_wall_ms: 1_000,
+            budget_fold_bytes: 262_144,
+            budget_spawns: 32,
+            since_ms,
+            recovered_after_ms,
+        }
     }
 
     #[test]
@@ -797,6 +864,42 @@ mod tests {
         });
         assert!(tick.contains("last 900ms/1024B/1 spawns"));
         assert!(tick.contains("worst 1500ms/300000B/40 spawns"));
+    }
+
+    #[test]
+    fn diagnostic_rows_collapse_consecutive_same_identity_records() {
+        let rows = diagnostic_rows(
+            vec![
+                diag_record(1, tick_breach(10, None, 5)),
+                diag_record(2, tick_breach(10, None, 6)),
+            ],
+            12,
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].at_ms, 2);
+        assert!(rows[0].summary.contains("over budget for 6 ticks"));
+        assert!(rows[0].summary.ends_with("; 2 records"));
+    }
+
+    #[test]
+    fn diagnostic_rows_group_before_recent_cap_and_keep_distinct_identities() {
+        let mut records = Vec::new();
+        for at_ms in 1..=13 {
+            records.push(diag_record(at_ms, tick_breach(10, None, at_ms as u32)));
+        }
+        records.push(diag_record(20, tick_breach(10, Some(10), 13)));
+        records.push(diag_record(21, tick_breach(30, None, 5)));
+
+        let rows = diagnostic_rows(records, 12);
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].at_ms, 13);
+        assert!(rows[0].summary.ends_with("; 13 records"));
+        assert!(rows[1].summary.contains("recovered after 10ms"));
+        assert!(!rows[1].summary.contains("records"));
+        assert!(rows[2].summary.contains("over budget for 5 ticks"));
+        assert!(!rows[2].summary.contains("records"));
     }
 
     #[test]
