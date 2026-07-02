@@ -7,15 +7,16 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 
 use crate::MuxName;
 use crate::SidebarSnapshot;
-use crate::sidebar_pane::pets::{PetAssets, PixelPainter, detect_pet_render_caps};
+use crate::sidebar_pane::pets::{PixelPainter, detect_pet_render_caps};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::tui::{MouseCapture, TerminalModeGuard};
+
+use super::paint::FramePainter;
 
 struct GalleryState {
     snapshot: SidebarSnapshot,
     ui: UiState,
-    pets: PetAssets,
-    pixel_painter: PixelPainter,
+    paint: FramePainter,
 }
 
 pub fn serve_fixture(
@@ -31,21 +32,15 @@ pub fn serve_fixture(
     terminal.clear()?;
 
     let mut ui = UiState::default();
-    let mut pets = PetAssets::default();
     let caps = detect_pet_render_caps(mux, session_name);
-    let mut pixel_painter = PixelPainter::new(mux == MuxName::Tmux);
+    let mut paint = FramePainter::new(caps, mux == MuxName::Tmux);
     let anim_start = Instant::now();
     let cadence = Duration::from_millis(u64::from(refresh_ms));
 
     loop {
         ui.animation_phase = super::timing::wall_clock_phase(anim_start, refresh_ms);
-        super::refresh_pet_view(&mut ui, &mut pets, &snapshot, caps, false);
-        render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui)?;
-        if pixel_painter.needs_full_redraw(super::paintable_pet_pixel(&ui, &pets)) {
-            terminal.clear()?;
-            render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui)?;
-        }
-        super::paint_pet_pixel(&ui, &pets, &mut pixel_painter, &mut terminal)?;
+        paint.refresh_view(&mut ui, &snapshot, false);
+        paint.draw_and_paint(&mut terminal, &snapshot, None, &mut ui)?;
 
         if !event::poll(cadence)? {
             continue;
@@ -82,10 +77,10 @@ pub fn serve_gallery(
                 ..UiState::default()
             },
             snapshot,
-            pets: PetAssets::default(),
-            pixel_painter: PixelPainter::with_id_base(
+            paint: FramePainter::with_id_base(
                 id_base.wrapping_add((index as u32) << 12),
                 mux == MuxName::Tmux,
+                caps,
             ),
         })
         .collect::<Vec<_>>();
@@ -96,24 +91,20 @@ pub fn serve_gallery(
         let phase = super::timing::wall_clock_phase(anim_start, refresh_ms);
         for state in &mut states {
             state.ui.animation_phase = phase;
-            super::refresh_pet_view(&mut state.ui, &mut state.pets, &state.snapshot, caps, false);
+            state
+                .paint
+                .refresh_view(&mut state.ui, &state.snapshot, false);
         }
         draw_gallery_to_terminal(&mut terminal, &mut states)?;
-        if states.iter().any(|state| {
-            state
-                .pixel_painter
-                .needs_full_redraw(super::paintable_pet_pixel(&state.ui, &state.pets))
-        }) {
+        if states
+            .iter()
+            .any(|state| state.paint.needs_full_redraw(&state.ui))
+        {
             terminal.clear()?;
             draw_gallery_to_terminal(&mut terminal, &mut states)?;
         }
         for state in &mut states {
-            super::paint_pet_pixel(
-                &state.ui,
-                &state.pets,
-                &mut state.pixel_painter,
-                &mut terminal,
-            )?;
+            state.paint.paint_after_draw(&state.ui, &mut terminal)?;
         }
 
         if !event::poll(cadence)? {

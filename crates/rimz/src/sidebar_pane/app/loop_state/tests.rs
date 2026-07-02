@@ -907,7 +907,7 @@ fn resize_reprobe_refreshes_pet_render_caps_for_session() {
         Some((crate::MuxName::Tmux, "rimz-test".to_owned()))
     );
     assert_eq!(
-        state.pet_render_caps,
+        state.paint.caps(),
         PetRenderCaps {
             pixel_transport: true,
             kitty_term: true,
@@ -919,17 +919,17 @@ fn resize_reprobe_refreshes_pet_render_caps_for_session() {
 fn resize_reprobe_can_downgrade_enabled_pet_render_caps() {
     let ws = workspace();
     let (_dir, mut state) = loop_state(&ws);
-    state.pet_render_caps = PetRenderCaps {
+    state.paint.set_caps(PetRenderCaps {
         pixel_transport: true,
         kitty_term: true,
-    };
+    });
 
     state.refresh_pet_render_caps_with(crate::MuxName::Tmux, "rimz-test", |_, _| PetRenderCaps {
         pixel_transport: false,
         kitty_term: false,
     });
 
-    assert_eq!(state.pet_render_caps, PetRenderCaps::default());
+    assert_eq!(state.paint.caps(), PetRenderCaps::default());
 }
 
 #[test]

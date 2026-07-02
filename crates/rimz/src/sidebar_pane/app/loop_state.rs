@@ -5,6 +5,7 @@ use jiff::Timestamp;
 use super::gate::apply_gate;
 use super::health::degraded_too_long;
 use super::lifecycle::self_close_decision;
+use super::paint::FramePainter;
 use super::remind::RemindState;
 use super::selection::{reconcile_selection, row_index_of_pane};
 use super::state::{
@@ -15,7 +16,7 @@ use super::state::{
 use super::*;
 use crate::sidebar::read_marks::{ReadMarkStore, write_manual_read_marks};
 use crate::sidebar::unread::{self, UnreadClearCause};
-use crate::sidebar_pane::pets::{PetAssets, PetRenderCaps, PixelPainter, detect_pet_render_caps};
+use crate::sidebar_pane::pets::PetRenderCaps;
 
 pub(super) struct MaintenanceContext<'a> {
     pub(super) config: &'a ServeConfig,
@@ -99,9 +100,7 @@ pub(super) struct LoopState {
     gate: GateState,
     self_close: SelfCloseState,
     pub(super) ui: UiState,
-    pet_assets: PetAssets,
-    pixel_painter: PixelPainter,
-    pet_render_caps: PetRenderCaps,
+    paint: FramePainter,
     pub(super) read_marks: ReadMarkStore,
     remind: RemindState,
     dirty: bool,
@@ -116,6 +115,44 @@ pub(super) struct LoopState {
     pub(super) should_exit: bool,
     pub(super) tab_emptied: bool,
     pub(super) reexec_to: Option<PathBuf>,
+}
+
+struct InputApply {
+    painted: bool,
+    focused: Option<PaneId>,
+    mark_read: Option<String>,
+    mark_unread: Option<String>,
+}
+
+pub(super) fn handle_wakeup(
+    wakeup: Wakeup,
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+) -> InputOutcome {
+    // The help popup is a transient modal: while it is up, the next
+    // interaction dismisses it and is consumed, never also acting on the
+    // sidebar beneath.
+    if ui.help_visible
+        && matches!(
+            wakeup,
+            Wakeup::Key(_) | Wakeup::MouseClick { .. } | Wakeup::Scroll { .. }
+        )
+    {
+        ui.help_visible = false;
+        return InputOutcome::redraw();
+    }
+    match wakeup {
+        Wakeup::Key(action) => handle_key(action, ui, snapshot),
+        Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),
+        Wakeup::Scroll { down } => handle_scroll(down, ui),
+        Wakeup::Resize => InputOutcome::redraw(),
+        // The serve loop intercepts these before dispatching here: a tick, a
+        // typed sidebar event is a re-fetch trigger, worker completions are
+        // folded, and a reload re-execs.
+        Wakeup::Tick | Wakeup::Event(_) | Wakeup::Reload | Wakeup::Snapshot => {
+            InputOutcome::default()
+        }
+    }
 }
 
 impl LoopState {
@@ -143,9 +180,7 @@ impl LoopState {
             gate: GateState::default(),
             self_close: SelfCloseState::default(),
             ui: UiState::default(),
-            pet_assets: PetAssets::default(),
-            pixel_painter: PixelPainter::new(pixel_wrap),
-            pet_render_caps,
+            paint: FramePainter::new(pet_render_caps, pixel_wrap),
             read_marks,
             remind: RemindState::default(),
             dirty: true,
@@ -424,7 +459,7 @@ impl LoopState {
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         anim_start: Instant,
     ) -> Result<()> {
-        self.refresh_pet_render_caps(config.mux, &config.session_name);
+        self.paint.refresh_caps(config.mux, &config.session_name);
         // Once a sibling has been seen, a grow is the mux handing the sidebar
         // freed sibling space — the precondition for the self-close full-width
         // flash. Hold the paint until the next fresh pane-frame fold carries
@@ -447,20 +482,9 @@ impl LoopState {
             if grew {
                 self.clear_pixel(terminal);
             }
-            if apply_input(
-                Wakeup::Resize,
-                &mut self.ui,
-                &mut PetRender {
-                    assets: &mut self.pet_assets,
-                    pixel_painter: &mut self.pixel_painter,
-                    caps: self.pet_render_caps,
-                },
-                &mut self.health,
-                terminal,
-                &self.current,
-                anim_start,
-            )?
-            .painted
+            if self
+                .apply_input(Wakeup::Resize, terminal, anim_start)?
+                .painted
             {
                 self.dirty = false;
             }
@@ -476,17 +500,14 @@ impl LoopState {
         Ok(())
     }
 
-    fn refresh_pet_render_caps(&mut self, mux: MuxName, session_name: &str) {
-        self.refresh_pet_render_caps_with(mux, session_name, detect_pet_render_caps);
-    }
-
+    #[cfg(test)]
     fn refresh_pet_render_caps_with(
         &mut self,
         mux: MuxName,
         session_name: &str,
         detect: impl FnOnce(MuxName, &str) -> PetRenderCaps,
     ) {
-        self.pet_render_caps = detect(mux, session_name);
+        self.paint.refresh_caps_with(mux, session_name, detect);
     }
 
     pub(super) fn on_input(
@@ -498,19 +519,7 @@ impl LoopState {
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
     ) -> Result<()> {
-        let applied = apply_input(
-            wakeup,
-            &mut self.ui,
-            &mut PetRender {
-                assets: &mut self.pet_assets,
-                pixel_painter: &mut self.pixel_painter,
-                caps: self.pet_render_caps,
-            },
-            &mut self.health,
-            terminal,
-            &self.current,
-            anim_start,
-        )?;
+        let applied = self.apply_input(wakeup, terminal, anim_start)?;
         if applied.painted {
             // Key/mouse input paints synchronously for instant feedback; a
             // paint settles any frame the loop owed.
@@ -539,6 +548,54 @@ impl LoopState {
             self.mark_row_unread(config, fetch, &row_id, diag);
         }
         Ok(())
+    }
+
+    /// Apply an input wakeup (key/mouse/resize) to the local UI in place. Input
+    /// never changes ledger data, so it redraws the *current* snapshot and may
+    /// jump focus, but it never re-runs the snapshot burst — that per-keystroke
+    /// refetch was the input lag. Input paints synchronously so a keypress or
+    /// click feels instant rather than waiting for the next frame; the returned
+    /// `bool` reports whether it painted, so the serve loop can clear its
+    /// frame-pending flag.
+    fn apply_input(
+        &mut self,
+        wakeup: Wakeup,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        anim_start: Instant,
+    ) -> Result<InputApply> {
+        let outcome = handle_wakeup(wakeup, &mut self.ui, &self.current);
+        if outcome.dismiss {
+            self.health.alert = None;
+        }
+        if outcome.redraw {
+            // Carry the live spin phase into the instant paint so a keypress
+            // mid-spin never rewinds the animation to a stale frame.
+            self.ui.animation_phase =
+                wall_clock_phase(anim_start, self.current.theme.display.resolved_refresh_ms());
+            self.paint.refresh_view(
+                &mut self.ui,
+                &self.current,
+                self.health
+                    .alert
+                    .as_ref()
+                    .is_some_and(render::Alert::is_active),
+            );
+            self.paint.draw_and_paint(
+                terminal,
+                &self.current,
+                self.health.alert.as_ref(),
+                &mut self.ui,
+            )?;
+        }
+        Ok(InputApply {
+            painted: outcome.redraw,
+            focused: outcome.focus,
+            // The `m`/`M` keys name a row to mark read/unread; the loop does
+            // the durable write and repaint (`on_input`), which owns the
+            // runtime paths.
+            mark_read: outcome.mark_read,
+            mark_unread: outcome.mark_unread,
+        })
     }
 
     /// Mark a row read without jumping (`m`): write the durable manual receipt,
@@ -687,7 +744,7 @@ impl LoopState {
     }
 
     pub(super) fn clear_pixel(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) {
-        if let Err(err) = self.pixel_painter.clear(terminal.backend_mut()) {
+        if let Err(err) = self.paint.clear(terminal.backend_mut()) {
             debug!(error = %err, "pet pixel clear failed");
         }
     }
@@ -750,20 +807,13 @@ impl LoopState {
             );
             if self.dirty || animating {
                 let was_dirty = self.dirty;
-                refresh_pet_view(
-                    &mut self.ui,
-                    &mut self.pet_assets,
-                    &self.current,
-                    self.pet_render_caps,
-                    alert_active,
-                );
-                super::draw_frame_and_paint_pet_pixel(
+                self.paint
+                    .refresh_view(&mut self.ui, &self.current, alert_active);
+                self.paint.draw_and_paint(
                     terminal,
                     &self.current,
                     self.health.alert.as_ref(),
                     &mut self.ui,
-                    &self.pet_assets,
-                    &mut self.pixel_painter,
                 )?;
                 self.dirty = false;
                 if was_dirty {

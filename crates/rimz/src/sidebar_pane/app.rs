@@ -25,10 +25,7 @@ use crate::sidebar::fuse::fuse;
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL};
-use crate::sidebar_pane::pets::{
-    PetAssets, PetBody, PetPixelView, PetRenderCaps, PetViewFrame, PixelPainter,
-    detect_pet_render_caps, effective_render_tier,
-};
+use crate::sidebar_pane::pets::detect_pet_render_caps;
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::{ClearType, CrosstermBackend};
@@ -50,6 +47,7 @@ mod lifecycle;
 mod loop_state;
 mod notify;
 mod order_hold;
+mod paint;
 mod reload;
 mod remind;
 mod selection;
@@ -59,6 +57,8 @@ mod timing;
 mod tmux_watch;
 mod transcript_watch;
 
+#[cfg(test)]
+use self::loop_state::handle_wakeup;
 use self::loop_state::{LoopFlow, LoopState, MaintenanceContext};
 use self::{notify::*, socket::*, timing::*};
 use fetch::{FetchDispatcher, FetchOutcome, FetchRequest, spawn_fetch_worker};
@@ -453,181 +453,6 @@ fn set_terminal_title() -> io::Result<()> {
     let mut stdout = io::stdout();
     write!(stdout, "\x1b]2;{}\x07", crate::pane::SIDEBAR_CHROME_TITLE)?;
     stdout.flush()
-}
-
-/// Apply an input wakeup (key/mouse/resize) to the local UI in place. Input
-/// never changes ledger data, so it redraws the *current* snapshot and may jump
-/// focus, but it never re-runs the snapshot burst — that per-keystroke refetch
-/// was the input lag. Input paints synchronously so a keypress or click feels
-/// instant rather than waiting for the next frame; the returned `bool` reports
-/// whether it painted, so the serve loop can clear its frame-pending flag.
-fn apply_input(
-    wakeup: Wakeup,
-    ui: &mut UiState,
-    pets: &mut PetRender<'_>,
-    health: &mut Health,
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    snapshot: &SidebarSnapshot,
-    anim_start: Instant,
-) -> Result<InputApply> {
-    let outcome = handle_wakeup(wakeup, ui, snapshot);
-    if outcome.dismiss {
-        health.alert = None;
-    }
-    if outcome.redraw {
-        // Carry the live spin phase into the instant paint so a keypress mid-spin
-        // never rewinds the animation to a stale frame.
-        ui.animation_phase =
-            wall_clock_phase(anim_start, snapshot.theme.display.resolved_refresh_ms());
-        refresh_pet_view(
-            ui,
-            pets.assets,
-            snapshot,
-            pets.caps,
-            health.alert.as_ref().is_some_and(render::Alert::is_active),
-        );
-        draw_frame_and_paint_pet_pixel(
-            terminal,
-            snapshot,
-            health.alert.as_ref(),
-            ui,
-            pets.assets,
-            pets.pixel_painter,
-        )?;
-    }
-    Ok(InputApply {
-        painted: outcome.redraw,
-        focused: outcome.focus,
-        // The `m`/`M` keys name a row to mark read/unread; the loop does the
-        // durable write and repaint (`on_input`), which owns the runtime paths.
-        mark_read: outcome.mark_read,
-        mark_unread: outcome.mark_unread,
-    })
-}
-
-struct PetRender<'a> {
-    assets: &'a mut PetAssets,
-    pixel_painter: &'a mut PixelPainter,
-    caps: PetRenderCaps,
-}
-
-fn refresh_pet_view(
-    ui: &mut UiState,
-    pet_assets: &mut PetAssets,
-    snapshot: &SidebarSnapshot,
-    caps: PetRenderCaps,
-    alert_active: bool,
-) {
-    let action = render::selected_pet_action(snapshot, ui);
-    let tier = effective_render_tier(
-        snapshot.theme.pets.glyphs,
-        caps,
-        !snapshot.providers.is_empty() && render::pet_body_enabled(snapshot),
-    );
-    let body = (snapshot.theme.pets.enabled
-        && render::dashboard_present(snapshot, alert_active)
-        && render::pet_body_enabled(snapshot))
-    .then_some(tier);
-    let unread_triggered = if snapshot.theme.pets.enabled {
-        pet_assets.observe_unread_rows(render::unread_pet_row_ids(snapshot))
-    } else {
-        false
-    };
-    ui.pet = pet_assets.view(
-        &snapshot.theme.pets,
-        PetViewFrame {
-            action,
-            phase: ui.animation_phase,
-            refresh_ms: snapshot.theme.display.resolved_refresh_ms(),
-            body,
-            motion_enabled: render::pet_motion_enabled(snapshot, action),
-            unread_triggered,
-        },
-    );
-}
-
-fn draw_frame_and_paint_pet_pixel<W: Write>(
-    terminal: &mut Terminal<CrosstermBackend<W>>,
-    snapshot: &SidebarSnapshot,
-    alert: Option<&render::Alert>,
-    ui: &mut UiState,
-    pet_assets: &PetAssets,
-    pixel_painter: &mut PixelPainter,
-) -> io::Result<()> {
-    render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
-    // `draw_into` writes the fresh pixel rect into `ui`, so placement-shift
-    // recovery must run after one draw. A pre-draw check only sees the previous
-    // frame's rect and misses the steady same-pet layout shift.
-    if pixel_painter.needs_full_redraw(paintable_pet_pixel(ui, pet_assets)) {
-        ratatui::backend::Backend::clear_region(terminal.backend_mut(), ClearType::All)?;
-        // The terminal contents are gone, so make ratatui diff against an empty
-        // previous buffer on the redraw without querying the real cursor.
-        terminal.swap_buffers();
-        render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
-    }
-    paint_pet_pixel(ui, pet_assets, pixel_painter, terminal)
-}
-
-fn paint_pet_pixel<W: Write>(
-    ui: &UiState,
-    pet_assets: &PetAssets,
-    pixel_painter: &mut PixelPainter,
-    terminal: &mut Terminal<CrosstermBackend<W>>,
-) -> io::Result<()> {
-    if let Some((rect, pixel)) = paintable_pet_pixel(ui, pet_assets) {
-        let frame = pet_assets
-            .pixel_frame(&pixel.pet_id, pixel.sprite_index)
-            .expect("paintable pixel pet has a loaded frame");
-        return pixel_painter.paint(terminal.backend_mut(), rect, pixel, frame);
-    }
-    pixel_painter.hide_after_draw(terminal.backend_mut())
-}
-
-fn paintable_pet_pixel<'a>(
-    ui: &'a UiState,
-    pet_assets: &PetAssets,
-) -> Option<(ratatui::layout::Rect, &'a PetPixelView)> {
-    let rect = ui.pet_pixel_rect?;
-    let PetBody::Pixel(pixel) = ui.pet.as_ref()?.body.as_ref()? else {
-        return None;
-    };
-    pet_assets
-        .pixel_frame(&pixel.pet_id, pixel.sprite_index)
-        .map(|_| (rect, pixel))
-}
-
-struct InputApply {
-    painted: bool,
-    focused: Option<PaneId>,
-    mark_read: Option<String>,
-    mark_unread: Option<String>,
-}
-
-fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -> InputOutcome {
-    // The help popup is a transient modal: while it is up, the next
-    // interaction dismisses it and is consumed, never also acting on the
-    // sidebar beneath.
-    if ui.help_visible
-        && matches!(
-            wakeup,
-            Wakeup::Key(_) | Wakeup::MouseClick { .. } | Wakeup::Scroll { .. }
-        )
-    {
-        ui.help_visible = false;
-        return InputOutcome::redraw();
-    }
-    match wakeup {
-        Wakeup::Key(action) => handle_key(action, ui, snapshot),
-        Wakeup::MouseClick { column, row } => handle_mouse_click(column, row, ui, snapshot),
-        Wakeup::Scroll { down } => handle_scroll(down, ui),
-        Wakeup::Resize => InputOutcome::redraw(),
-        // The serve loop intercepts these before dispatching here: a tick, a
-        // typed sidebar event is a re-fetch trigger, worker
-        // completions are folded, and a reload re-execs.
-        Wakeup::Tick | Wakeup::Event(_) | Wakeup::Reload | Wakeup::Snapshot => {
-            InputOutcome::default()
-        }
-    }
 }
 
 /// A workspace-scoped envelope (`session_name: None`) targets every renderer

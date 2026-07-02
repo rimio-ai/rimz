@@ -1,6 +1,7 @@
 use super::input::{KeyAction, Wakeup};
 use super::*;
 use crate::sidebar_pane::app::fixtures::{pane, snapshot, snapshot_with_panes, workspace};
+use crate::sidebar_pane::pets::{PetAssets, PetPixelView, PetRenderCaps};
 use jiff::Timestamp;
 
 fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
@@ -232,15 +233,9 @@ fn refresh_pet_view_uses_fixed_pet_size_when_dashboard_present() {
     let mut snapshot = snapshot(&ws);
     snapshot.theme.pets.enabled = true;
     let mut ui = UiState::default();
-    let mut assets = PetAssets::default();
+    let mut painter = paint::FramePainter::new(PetRenderCaps::default(), true);
 
-    refresh_pet_view(
-        &mut ui,
-        &mut assets,
-        &snapshot,
-        PetRenderCaps::default(),
-        false,
-    );
+    painter.refresh_view(&mut ui, &snapshot, false);
 
     let pet = ui.pet.expect("pet view");
     assert_eq!(pet.body, None);
@@ -280,15 +275,13 @@ fn pixel_shift_clear_uses_fresh_rect_from_draw() {
         pet_pixel_rect: Some(stale_rect),
         ..Default::default()
     };
-    let assets = PetAssets::test_loaded_pixel_frame("codex");
-    let mut painter = PixelPainter::default();
+    let mut painter = paint::FramePainter::with_assets(
+        PetAssets::test_loaded_pixel_frame("codex"),
+        PetRenderCaps::default(),
+        true,
+    );
     painter
-        .paint(
-            &mut Vec::new(),
-            stale_rect,
-            &pixel,
-            assets.pixel_frame("codex", 0).expect("pixel frame"),
-        )
+        .seed_pixel_for_test(&mut Vec::new(), stale_rect, &pixel)
         .expect("seed old pixel placement");
     #[derive(Clone)]
     struct SharedBuffer(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
@@ -308,15 +301,9 @@ fn pixel_shift_clear_uses_fresh_rect_from_draw() {
     let mut terminal =
         Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).expect("terminal");
 
-    draw_frame_and_paint_pet_pixel(
-        &mut terminal,
-        &snapshot,
-        None,
-        &mut ui,
-        &assets,
-        &mut painter,
-    )
-    .expect("draw");
+    painter
+        .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
+        .expect("draw");
     let output = output.borrow();
     let output = String::from_utf8_lossy(&output);
 
