@@ -1,0 +1,321 @@
+//! Agent context sidecar merge and realtime-cost enrichment.
+
+use super::*;
+
+pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
+    let AgentContextHook {
+        workspace,
+        ledger,
+        agent,
+        context,
+    } = ctx;
+    let LifecycleEventContext {
+        event_name,
+        payload,
+        agent_id,
+        model_hint,
+        turn_ended,
+        observed_turn_error,
+    } = context;
+    // Tombstone the session's statusline context sidecar so it cannot pin stale
+    // enrichment to a session the rollup has dropped.
+    if agent.ends_session(event_name)
+        && let Err(err) = rimz::ledger::agent_context::remove(
+            ledger.runtime_paths(),
+            agent.descriptor().kind,
+            agent_id,
+        )
+    {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = %event_name,
+            error = %err,
+            "lifecycle: failed to remove the session's context sidecar",
+        );
+    }
+    // Refresh the activity heartbeat on progress-proving events so the
+    // sidebar's `last_activity` advances per tool call, not just per turn.
+    if agent.descriptor().records_activity(event_name)
+        && let Err(err) =
+            rimz::agent_activity::touch(ledger.runtime_paths(), agent.descriptor().kind, agent_id)
+    {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = %event_name,
+            error = %err,
+            "lifecycle: failed to touch the agent activity heartbeat",
+        );
+    }
+    if let Some(context_agent_id) = payload_context_agent_id(payload) {
+        merge_agent_context_sidecars(ContextSidecarInput {
+            workspace,
+            ledger,
+            agent,
+            event_name,
+            payload,
+            context_agent_id,
+            model_hint,
+            turn_ended,
+            observed_turn_error,
+        });
+    }
+    // An adapter can request a detached `rimz` helper after a lifecycle event.
+    // Spawned with fresh stdio and never awaited, so it adds no latency to the
+    // agent's turn.
+    let refresh_ctx = rimz::agents::LifecycleRefreshCtx {
+        agent_id,
+        workspace_id: workspace.workspace_id.as_str(),
+        model_hint,
+        server_url: payload.get("server_url").and_then(Value::as_str),
+    };
+    if let Some(spawn) = agent.post_lifecycle_refresh(event_name, &refresh_ctx) {
+        spawn_refresh_detached(&spawn);
+    }
+}
+
+pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
+    let ContextSidecarInput {
+        workspace,
+        ledger,
+        agent,
+        event_name,
+        payload,
+        context_agent_id,
+        model_hint,
+        turn_ended,
+        observed_turn_error,
+    } = input;
+    let mut turn_error_updated = false;
+    if let Some(marker) = observed_turn_error {
+        turn_error_updated |= merge_turn_error_marker_and_transcript(
+            workspace,
+            ledger,
+            agent,
+            event_name,
+            context_agent_id,
+            marker,
+        );
+    } else if let Some(marker) = agent.observe_turn_error_from_hook(event_name, payload) {
+        turn_error_updated |= merge_turn_error_marker_and_transcript(
+            workspace,
+            ledger,
+            agent,
+            event_name,
+            context_agent_id,
+            marker,
+        );
+    } else if turn_error_refresh_event(event_name)
+        && let Some(marker) = agent.observe_turn_error(payload)
+    {
+        turn_error_updated |= merge_turn_error_marker_and_transcript(
+            workspace,
+            ledger,
+            agent,
+            event_name,
+            context_agent_id,
+            marker,
+        );
+    }
+    if turn_error_updated {
+        let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+    }
+
+    if payload_carries_observed_context(payload)
+        && let Some(context) = agent.observe_context(agent.descriptor().kind, payload)
+    {
+        let kind = agent.descriptor().kind;
+        match rimz::ledger::agent_context::merge_observed(
+            ledger.runtime_paths(),
+            kind,
+            context_agent_id,
+            context,
+        ) {
+            Ok(true) => {
+                let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+            }
+            Ok(false) => {}
+            Err(err) => {
+                warn!(
+                    agent = kind,
+                    session = %context_agent_id,
+                    tags.operation = "agent.context_observed_merge",
+                    error = &err as &dyn std::error::Error,
+                    "lifecycle: failed to merge observed context",
+                );
+            }
+        }
+    }
+
+    let prior = rimz::ledger::agent_context::read_one(
+        ledger.runtime_paths(),
+        agent.descriptor().kind,
+        context_agent_id,
+    );
+    let local_model_hint = model_hint.or_else(|| {
+        prior
+            .as_ref()
+            .and_then(|record| record.context.model_id.as_deref())
+    });
+    let refresh_ctx = rimz::agents::LocalContextRefreshCtx {
+        agent_id: context_agent_id,
+        model_hint: local_model_hint,
+        prior_effort: prior
+            .as_ref()
+            .and_then(|record| record.context.effort.as_deref()),
+        prior_transcript_path: prior
+            .as_ref()
+            .and_then(|record| record.transcript_path.as_deref()),
+        prior_transcript_stat: prior
+            .as_ref()
+            .and_then(|record| record.transcript_stat.as_ref()),
+    };
+    let mut refresh = agent.local_context_refresh(event_name, &refresh_ctx);
+    supplement_realtime_cost(
+        agent,
+        context_agent_id,
+        turn_ended,
+        prior.as_ref(),
+        &mut refresh,
+    );
+    let Some(refresh) = refresh else {
+        return;
+    };
+    if let Err(err) = rimz::ledger::agent_context::merge_local_context(
+        ledger.runtime_paths(),
+        agent.descriptor().kind,
+        context_agent_id,
+        prior,
+        refresh,
+        jiff::Timestamp::now(),
+    ) {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = %event_name,
+            error = %err,
+            "lifecycle: failed to merge local context sidecar",
+        );
+    } else {
+        let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+    }
+}
+
+pub(super) fn supplement_realtime_cost(
+    agent: &dyn AgentAdapter,
+    context_agent_id: &str,
+    turn_ended: bool,
+    prior: Option<&rimz::ledger::agent_context::AgentContextRecord>,
+    refresh: &mut Option<rimz::agents::LocalContextRefresh>,
+) {
+    if !turn_ended || refresh_total_cost(refresh.as_ref()).is_some() {
+        return;
+    }
+    let Some(coverage) = realtime_cost_coverage(agent) else {
+        return;
+    };
+    let partial = matches!(coverage, rimz::agents::ConcernCoverage::Partial { .. });
+    if matches!(coverage, rimz::agents::ConcernCoverage::Unsupported { .. }) {
+        return;
+    }
+    if !partial && prior_total_cost(prior).is_some() {
+        return;
+    }
+
+    let prior_path = refresh
+        .as_ref()
+        .and_then(|refresh| refresh.transcript_path.as_deref())
+        .or_else(|| prior.and_then(|record| record.transcript_path.as_deref()))
+        .map(Path::new);
+    let Some(path) = agent.session_transcript(context_agent_id, prior_path) else {
+        return;
+    };
+    let Some(stat) = local_transcript_stat(&path) else {
+        return;
+    };
+    if prior_total_cost(prior).is_some()
+        && prior
+            .and_then(|record| record.transcript_stat.as_ref())
+            .is_some_and(|prior_stat| *prior_stat == stat)
+        && refresh
+            .as_ref()
+            .and_then(|refresh| refresh.transcript_stat.as_ref())
+            .is_none_or(|refresh_stat| *refresh_stat == stat)
+    {
+        return;
+    }
+
+    let Some(cost) = rimz::agents::spending::session_cost_usd(
+        agent,
+        context_agent_id,
+        &path,
+        &rimz::agents::PriceBook::embedded(),
+    ) else {
+        return;
+    };
+
+    let refresh = refresh.get_or_insert_with(|| rimz::agents::LocalContextRefresh {
+        model_id: None,
+        effort: prior.and_then(|record| record.context.effort.clone()),
+        tokens: prior.and_then(|record| record.context.tokens.clone()),
+        cost: None,
+        turn_complete: prior.and_then(|record| record.context.turn_complete),
+        transcript_path: None,
+        transcript_stat: None,
+    });
+    refresh.cost = Some(cost);
+    refresh.transcript_path = Some(path.to_string_lossy().into_owned());
+    refresh.transcript_stat = Some(stat);
+}
+
+pub(super) fn realtime_cost_coverage(
+    agent: &dyn AgentAdapter,
+) -> Option<rimz::agents::ConcernCoverage> {
+    agent
+        .descriptor()
+        .coverage
+        .iter()
+        .find(|(concern, _)| *concern == rimz::agents::IntegrationConcern::RealtimeCost)
+        .map(|(_, coverage)| *coverage)
+}
+
+pub(super) fn refresh_total_cost(
+    refresh: Option<&rimz::agents::LocalContextRefresh>,
+) -> Option<f64> {
+    refresh
+        .and_then(|refresh| refresh.cost.as_ref())
+        .and_then(|cost| cost.total_cost_usd)
+}
+
+pub(super) fn prior_total_cost(
+    prior: Option<&rimz::ledger::agent_context::AgentContextRecord>,
+) -> Option<f64> {
+    prior
+        .and_then(|record| record.context.cost.as_ref())
+        .and_then(|cost| cost.total_cost_usd)
+}
+
+pub(super) fn local_transcript_stat(path: &Path) -> Option<rimz::agents::TranscriptStat> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?;
+    let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(rimz::agents::TranscriptStat {
+        mtime_secs: since_epoch.as_secs().try_into().unwrap_or(i64::MAX),
+        mtime_nanos: since_epoch.subsec_nanos(),
+        len: meta.len(),
+    })
+}
+
+pub(super) const OBSERVED_CONTEXT_KEYS: &[&str] = &[
+    "model",
+    "effort",
+    "rate_limits",
+    "total_cost_usd",
+    "context_window",
+    "total_tokens",
+    "context_pct",
+];
+
+pub(super) fn payload_carries_observed_context(payload: &Value) -> bool {
+    OBSERVED_CONTEXT_KEYS
+        .iter()
+        .any(|key| payload.get(*key).is_some())
+}

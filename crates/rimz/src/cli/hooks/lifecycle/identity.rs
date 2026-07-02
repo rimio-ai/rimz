@@ -1,0 +1,104 @@
+//! Launch identity enrichment from environment and process state.
+
+use super::*;
+
+pub(super) fn env_run_id() -> Option<rimz::RunId> {
+    let raw = std::env::var(rimz::harness::run::ENV_RUN_ID).ok()?;
+    match raw.parse() {
+        Ok(run_id) => Some(run_id),
+        Err(err) => {
+            warn!(
+                run_id = %raw,
+                error = %err,
+                "lifecycle: ignoring invalid supervised run id",
+            );
+            None
+        }
+    }
+}
+
+type IdentityValidator = fn(String, &str, &str) -> Option<String>;
+
+pub(super) fn agent_identity_env(
+    observation: &AgentLifecycleObservation,
+    var: &str,
+    validate: IdentityValidator,
+) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .and_then(|raw| validate(raw, "env", var))
+        .or_else(|| {
+            let raw = rimz::proc::env_var(observation.agent_pid?, var)?;
+            validate(raw, "process", var)
+        })
+}
+
+pub(in crate::cli::hooks) fn fill_root_launch_identity(
+    observation: &mut AgentLifecycleObservation,
+    configured_identity: (Option<String>, Option<String>),
+    mut identity_env: impl FnMut(&AgentLifecycleObservation, &'static str) -> Option<String>,
+) {
+    if observation.parent_agent_id.is_some() {
+        return;
+    }
+    if observation.role.is_none() {
+        observation.role = identity_env(observation, rimz::harness::run::ENV_AGENT_ROLE);
+    }
+    if observation.team.is_none() {
+        observation.team = identity_env(observation, rimz::harness::run::ENV_TEAM);
+    }
+    if observation.launch_group.is_none() {
+        observation.launch_group = identity_env(observation, rimz::harness::run::ENV_LAUNCH_GROUP);
+    }
+    if observation.launch_ordinal.is_none() {
+        observation.launch_ordinal =
+            identity_env(observation, rimz::harness::run::ENV_LAUNCH_ORDINAL)
+                .and_then(|raw| raw.parse::<u32>().ok());
+    }
+    if observation.channel.is_none() {
+        observation.channel = identity_env(observation, rimz::harness::run::ENV_CHANNEL);
+    }
+    if observation.profile.is_none() {
+        observation.profile = identity_env(observation, rimz::harness::run::ENV_AGENT_PROFILE);
+    }
+    if observation.model.is_none() {
+        observation.model = identity_env(observation, rimz::harness::run::ENV_AGENT_MODEL)
+            .or(configured_identity.0);
+    }
+    if observation.effort.is_none() {
+        observation.effort = identity_env(observation, rimz::harness::run::ENV_AGENT_EFFORT)
+            .or(configured_identity.1);
+    }
+}
+
+pub(super) fn validate_agent_name_env(raw: String, source: &str, _var: &str) -> Option<String> {
+    if rimz::harness::petname::valid_name(&raw)
+        && !rimz::harness::petname::collides_with_reserved_prefix(&raw, rimz::agents::known_kinds())
+    {
+        Some(raw)
+    } else {
+        warn!(
+            agent_name = %raw,
+            source,
+            "lifecycle: ignoring invalid Rimz agent name",
+        );
+        None
+    }
+}
+
+pub(super) fn validate_non_empty_identity_env(
+    raw: String,
+    source: &str,
+    var: &str,
+) -> Option<String> {
+    let value = raw.trim();
+    if !value.is_empty() {
+        Some(value.to_owned())
+    } else {
+        warn!(
+            env_var = var,
+            source, "lifecycle: ignoring empty Rimz agent identity",
+        );
+        None
+    }
+}
