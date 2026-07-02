@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -138,55 +138,13 @@ pub(crate) fn remove_terminal_copy(dir: &Path, stem: &str) -> Result<(), StoreEr
 pub(crate) fn prune_terminal(
     dir: &Path,
     older_than: Duration,
-) -> Result<crate::ledger::event_log::PruneOutcome, StoreErr> {
+) -> Result<atomic::PruneOutcome, StoreErr> {
     let terminal_dir = dir.join(TERMINAL_SUBDIR);
-    let entries = match fs::read_dir(&terminal_dir) {
-        Ok(entries) => entries,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => {
-            return Ok(crate::ledger::event_log::PruneOutcome::default());
-        }
-        Err(source) => {
-            return Err(StoreErr::Io {
-                path: terminal_dir,
-                source,
-            });
-        }
-    };
-
-    let now = SystemTime::now();
-    let mut report = crate::ledger::event_log::PruneOutcome::default();
-    for entry in entries {
-        let entry = entry.map_err(|source| StoreErr::Io {
-            path: terminal_dir.clone(),
-            source,
-        })?;
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
-        }
-        let meta = fs::symlink_metadata(&path).map_err(|source| StoreErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let modified = meta.modified().map_err(|source| StoreErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let Ok(age) = now.duration_since(modified) else {
-            continue;
-        };
-        if age < older_than {
-            continue;
-        }
-        let bytes = meta.len();
-        fs::remove_file(&path).map_err(|source| StoreErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        report.files_removed += 1;
-        report.bytes_removed = report.bytes_removed.saturating_add(bytes);
-    }
-    Ok(report)
+    Ok(atomic::prune_old_files(
+        &terminal_dir,
+        older_than,
+        |path| path.extension().and_then(|s| s.to_str()) == Some("json"),
+    )?)
 }
 
 fn read_item<R: DeserializeOwned>(path: &Path) -> Result<R, StoreErr> {
@@ -204,6 +162,7 @@ fn read_item<R: DeserializeOwned>(path: &Path) -> Result<R, StoreErr> {
 mod tests {
     use super::*;
     use serde::{Deserialize, Serialize};
+    use std::time::SystemTime;
     use tempfile::tempdir;
 
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

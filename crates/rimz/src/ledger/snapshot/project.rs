@@ -133,7 +133,7 @@ pub(super) fn stamp_compact_commands_in_agents(
         let EventKind::Message { payload, .. } = &event.kind else {
             continue;
         };
-        stamp_compact_command_in_agents(agents, payload);
+        stamp_compact_command(agents.iter_mut(), payload);
     }
 }
 
@@ -191,7 +191,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
             }
             EventKind::AgentLifecycle(payload) => payload,
             EventKind::Message { payload, .. } => {
-                stamp_compact_command(&mut map, payload);
+                stamp_compact_command(map.values_mut(), payload);
                 continue;
             }
             EventKind::Other {
@@ -367,33 +367,14 @@ fn reduce_agent_launch(
     map.insert(key, state);
 }
 
-fn stamp_compact_command(
-    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+fn stamp_compact_command<'a>(
+    agents: impl IntoIterator<Item = &'a mut AgentState>,
     payload: &MessageEventPayload,
 ) {
     let Some(tokens) = compact_command_tokens(payload) else {
         return;
     };
-    let key = (payload.kind.clone(), payload.agent_id.clone());
-    if let Some(agent) = map.get_mut(&key) {
-        agent.last_compact_command_tokens = Some(tokens);
-        return;
-    }
-    let Some(agent_name) = payload.agent_name.as_deref() else {
-        return;
-    };
-    if let Some(agent) = map
-        .values_mut()
-        .find(|agent| agent.kind == payload.kind && agent.name.as_deref() == Some(agent_name))
-    {
-        agent.last_compact_command_tokens = Some(tokens);
-    }
-}
-
-fn stamp_compact_command_in_agents(agents: &mut [AgentState], payload: &MessageEventPayload) {
-    let Some(tokens) = compact_command_tokens(payload) else {
-        return;
-    };
+    let mut agents = agents.into_iter().collect::<Vec<_>>();
     if let Some(agent) = agents
         .iter_mut()
         .find(|agent| agent.kind == payload.kind && agent.agent_id == payload.agent_id)

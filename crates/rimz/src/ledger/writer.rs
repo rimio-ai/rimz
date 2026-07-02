@@ -4,10 +4,12 @@
 //! here is imported outside the ledger module.
 
 use std::collections::BTreeSet;
+use std::io;
 use std::path::Path;
 use std::time::Duration;
 
 use crate::feed::FeedItem;
+use crate::harness::run::RunRecord;
 use crate::pane::RuntimeOwnerKind;
 use crate::schema::event::{AgentLaunchPayload, EventEnvelope};
 use crate::workspace::ResolvedWorkspace;
@@ -26,7 +28,72 @@ mod queue;
 mod reset;
 mod resolve;
 
-fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Result<(bool, usize)> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PublishPolicy {
+    Debounced,
+    Forced,
+    Skip,
+}
+
+pub(super) struct Txn<'a> {
+    pub(super) paths: &'a StatePaths,
+    events: Vec<EventEnvelope>,
+    wake_items: Vec<FeedItem>,
+    wake_runs: Vec<RunRecord>,
+    wake_sidebars: bool,
+    publish: PublishPolicy,
+}
+
+impl Txn<'_> {
+    pub(super) fn append(&mut self, event: &EventEnvelope) -> Result<()> {
+        event_log::append(&self.paths.events_log, event)?;
+        self.events.push(event.clone());
+        if self.publish == PublishPolicy::Skip {
+            self.publish = PublishPolicy::Debounced;
+        }
+        Ok(())
+    }
+
+    pub(super) fn wake_item(&mut self, item: &FeedItem) {
+        self.wake_items.push(item.clone());
+    }
+
+    pub(super) fn set_publish(&mut self, publish: PublishPolicy) {
+        self.publish = publish;
+    }
+}
+
+enum RollupInvalidation {
+    Reseed,
+    Drop,
+}
+
+fn remove_snapshot_file_if_exists(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(LedgerErr::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn invalidate_snapshot_caches(paths: &StatePaths, rollup: RollupInvalidation) -> Result<()> {
+    // A swapped or cut event log voids offset-stamped fold bases. Retract the
+    // published view before touching the rollup cache so a crash leaves readers
+    // folding for themselves, never trusting an extent that can alias into the
+    // fresh log after it regrows.
+    remove_snapshot_file_if_exists(&paths.latest_snapshot)?;
+    publish::retract_publish_stamp(paths);
+    match rollup {
+        RollupInvalidation::Reseed => snapshot::reseed_rollup_cache_for_rotation(paths)?,
+        RollupInvalidation::Drop => remove_snapshot_file_if_exists(&paths.rollup_cache)?,
+    }
+    Ok(())
+}
+
+fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Result<usize> {
     let current_bytes = match std::fs::metadata(&paths.events_log) {
         Ok(meta) => meta.len(),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => 0,
@@ -40,7 +107,7 @@ fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Res
     };
     if current_bytes == 0 || current_bytes < min_bytes {
         let existing = snapshot::read_carryover(&paths.agents_carryover)?;
-        return Ok((false, existing.agents.len()));
+        return Ok(existing.agents.len());
     }
 
     let (cache, merged_agents, resume_outcomes) = snapshot::catch_up_rollup(paths)?;
@@ -61,7 +128,7 @@ fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Res
             resume_outcomes,
         },
     )?;
-    Ok((true, carryover_agents))
+    Ok(carryover_agents)
 }
 
 fn prune_old_dead_agents(
@@ -82,14 +149,57 @@ fn prune_old_dead_agents(
 }
 
 impl Ledger {
+    fn commit<T>(
+        &self,
+        publish: PublishPolicy,
+        f: impl FnOnce(&mut Txn<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let (out, txn) = {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            let mut txn = Txn {
+                paths: &self.inner.paths,
+                events: Vec::new(),
+                wake_items: Vec::new(),
+                wake_runs: Vec::new(),
+                wake_sidebars: false,
+                publish,
+            };
+            let out = f(&mut txn)?;
+            (out, txn)
+        };
+
+        for event in &txn.events {
+            self.wake_sidebars_for_event_best_effort(event);
+        }
+        for item in &txn.wake_items {
+            self.wake_per_request_best_effort(item);
+        }
+        for record in &txn.wake_runs {
+            self.wake_run_best_effort(record);
+        }
+        if txn.wake_sidebars && txn.events.is_empty() {
+            self.wake_sidebars_hint_best_effort();
+        }
+        match txn.publish {
+            PublishPolicy::Debounced => self.publish_snapshot_best_effort(),
+            PublishPolicy::Forced => self.publish_snapshot_forced(),
+            PublishPolicy::Skip if !txn.events.is_empty() => {
+                debounce::sync_log_debounced(&self.inner.paths);
+            }
+            PublishPolicy::Skip => {}
+        }
+        Ok(out)
+    }
+
     /// Persist the project-root index used by maintenance commands. This does
     /// not change feed state and does not wake sidebars.
     #[must_use = "durability barrier; check the result"]
     pub fn record_workspace(&self, workspace: &ResolvedWorkspace) -> Result<()> {
-        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-        let record = workspace_record::WorkspaceRecord::from_resolved(workspace);
-        workspace_record::write(&self.inner.paths, &record)?;
-        Ok(())
+        self.commit(PublishPolicy::Skip, |txn| {
+            let record = workspace_record::WorkspaceRecord::from_resolved(workspace);
+            workspace_record::write(txn.paths, &record)?;
+            Ok(())
+        })
     }
 
     /// Rewrite durable workspace identity after a project root move.
@@ -134,10 +244,8 @@ impl Ledger {
 
             let record = workspace_record::WorkspaceRecord::from_resolved(workspace);
             workspace_record::write(&self.inner.paths, &record)?;
-            // The log was wholesale-replaced: every byte offset in the fold
-            // base is void. Reseed it as a new generation before rebuilding.
-            publish::retract_publish_stamp(&self.inner.paths);
-            snapshot::reseed_rollup_cache_for_rotation(&self.inner.paths)?;
+            // The log was wholesale-replaced; reseed fold caches before rebuilding.
+            invalidate_snapshot_caches(&self.inner.paths, RollupInvalidation::Reseed)?;
             snapshot::rebuild(&self.inner.paths)?;
 
             (feed_items_rewritten, messages_rewritten, events_rewritten)
@@ -165,30 +273,19 @@ impl Ledger {
         requests: &[AgentLaunchRequest],
         append: &AgentLaunchAppend,
     ) -> Result<Vec<AgentLaunchIdentity>> {
-        let (abandoned, events, identities) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let abandoned =
-                expiry::sweep_dead_owned_items_debounced(&self.inner.paths, &append.session_name)?;
-            let (_cache, base_agents, _resume_outcomes) =
-                snapshot::catch_up_rollup(&self.inner.paths)?;
+        self.commit(PublishPolicy::Skip, |txn| {
+            expiry::sweep_dead_owned_items_debounced(txn, &append.session_name)?;
+            let (_cache, base_agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
             let identities = allocate_agent_launch_identities(requests, &base_agents)?;
             let events = identities
                 .iter()
                 .map(|identity| agent_launch_event(append, identity))
                 .collect::<Vec<_>>();
             for event in &events {
-                event_log::append(&self.inner.paths.events_log, event)?;
+                txn.append(event)?;
             }
-            (abandoned, events, identities)
-        };
-        for request_id in &abandoned {
-            self.wake_sidebars_best_effort(request_id);
-        }
-        for event in &events {
-            self.wake_sidebars_for_event_best_effort(event);
-        }
-        self.publish_snapshot_best_effort();
-        Ok(identities)
+            Ok(identities)
+        })
     }
 
     /// Append a lifecycle event and expire the session's superseded pending
@@ -203,14 +300,12 @@ impl Ledger {
         event: &EventEnvelope,
         expiry: Option<(&str, &str, AskExpiry)>,
     ) -> Result<usize> {
-        let (abandoned, expired) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let abandoned =
-                expiry::sweep_dead_owned_items_debounced(&self.inner.paths, &event.session_name)?;
-            event_log::append(&self.inner.paths.events_log, event)?;
+        self.commit(PublishPolicy::Skip, |txn| {
+            expiry::sweep_dead_owned_items_debounced(txn, &event.session_name)?;
+            txn.append(event)?;
             let expired = match expiry {
                 Some((source, agent_id, scope)) => expiry::expire_agent_asks_locked(
-                    &self.inner.paths,
+                    txn,
                     source,
                     agent_id,
                     &event.session_name,
@@ -218,14 +313,8 @@ impl Ledger {
                 )?,
                 None => Vec::new(),
             };
-            (abandoned, expired)
-        };
-        for request_id in abandoned.iter().chain(expired.iter()) {
-            self.wake_sidebars_best_effort(request_id);
-        }
-        self.wake_sidebars_for_event_best_effort(event);
-        self.publish_snapshot_best_effort();
-        Ok(expired.len())
+            Ok(expired.len())
+        })
     }
 
     /// Write a new feed item to disk, append a `feed.push` event, and rebuild
@@ -233,66 +322,39 @@ impl Ledger {
     /// lock so partial writes can't surface to the sidebar.
     #[must_use = "durability barrier; check the result"]
     pub fn push_feed_item(&self, item: &FeedItem, session_name: &str) -> Result<()> {
-        self.push_feed_item_superseding(item, None, session_name)
+        self.push_feed_item_superseding(item, None, session_name, None)
+            .map(|_| ())
     }
 
-    /// [`Self::push_feed_item`] that also expires the session's prior
-    /// native_ui asks in the same critical section — a fresh ask supersedes
-    /// them before being pushed, under one lock cycle with one snapshot
-    /// rebuild. `supersede` carries `(source, agent_id)`; `None` is a plain
-    /// push.
+    /// [`Self::push_feed_item`] plus same-cycle superseding and an optional
+    /// transcript append. The feed push remains authoritative: transcript
+    /// append errors are returned for warning logs after wakeups, not promoted
+    /// into a failed ask.
     #[must_use = "durability barrier; check the result"]
     pub fn push_feed_item_superseding(
         &self,
         item: &FeedItem,
         supersede: Option<(&str, &str)>,
         session_name: &str,
-    ) -> Result<()> {
-        self.push_feed_item_superseding_with_transcript(item, supersede, session_name, None)
-            .map(|_| ())
-    }
-
-    /// [`Self::push_feed_item_superseding`] plus an optional transcript append
-    /// inside the same critical section. The feed push remains authoritative:
-    /// transcript append errors are returned for warning logs after wakeups, not
-    /// promoted into a failed ask.
-    #[must_use = "durability barrier; check the result"]
-    pub fn push_feed_item_superseding_with_transcript(
-        &self,
-        item: &FeedItem,
-        supersede: Option<(&str, &str)>,
-        session_name: &str,
         transcript: Option<&transcript_log::TranscriptEntry>,
     ) -> Result<Option<transcript_log::TranscriptLogErr>> {
-        let (abandoned, expired, transcript_err) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let abandoned =
-                expiry::sweep_dead_owned_items_debounced(&self.inner.paths, session_name)?;
-            let expired = match supersede {
-                Some((source, agent_id)) => expiry::expire_agent_asks_locked(
-                    &self.inner.paths,
+        self.commit(PublishPolicy::Skip, |txn| {
+            expiry::sweep_dead_owned_items_debounced(txn, session_name)?;
+            if let Some((source, agent_id)) = supersede {
+                expiry::expire_agent_asks_locked(
+                    txn,
                     source,
                     agent_id,
                     session_name,
                     AskExpiry::MovedOn,
-                )?,
-                None => Vec::new(),
-            };
-            feed_store::write(&self.inner.paths.feed_dir, item)?;
-            event_log::append(
-                &self.inner.paths.events_log,
-                &EventEnvelope::feed_pushed(item, session_name),
-            )?;
-            let transcript_err = transcript
-                .and_then(|entry| transcript_log::append_locked(&self.inner.paths, entry).err());
-            (abandoned, expired, transcript_err)
-        };
-        for request_id in abandoned.iter().chain(expired.iter()) {
-            self.wake_sidebars_best_effort(request_id);
-        }
-        self.wake_sidebars_best_effort(&item.request_id);
-        self.publish_snapshot_best_effort();
-        Ok(transcript_err)
+                )?;
+            }
+            feed_store::write(&txn.paths.feed_dir, item)?;
+            txn.append(&EventEnvelope::feed_pushed(item, session_name))?;
+            let transcript_err =
+                transcript.and_then(|entry| transcript_log::append_locked(txn.paths, entry).err());
+            Ok(transcript_err)
+        })
     }
 
     /// Rotate the active event log when it exceeds `min_bytes`, preserving
@@ -336,7 +398,7 @@ impl Ledger {
             // workspace → publish ordering as the identity rewrite.
             let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
 
-            let (_will_rotate, carryover_agents) =
+            let carryover_agents =
                 stage_agent_carryover_for_rotation(&self.inner.paths, min_bytes)?;
 
             let rotation = rotate(
@@ -346,35 +408,15 @@ impl Ledger {
             )?;
 
             if rotation.is_rotated() {
-                // Retract the published snapshot before anything else: its
-                // extent stamp describes the renamed-away log, and the
-                // freshness check compares offsets only. A crash anywhere
-                // between here and the rebuild below must leave readers on
-                // the fold-it-yourself path — never a stale stamp that could
-                // alias once the fresh log regrows to the stamped length.
-                match std::fs::remove_file(&self.inner.paths.latest_snapshot) {
-                    Ok(()) => {}
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(source) => {
-                        return Err(event_log::EventLogErr::Io {
-                            path: self.inner.paths.latest_snapshot.clone(),
-                            source,
-                        }
-                        .into());
-                    }
-                }
-                // The fresh log is a new generation: reseed the fold base at
-                // offset zero with the generation bumped, so a reader's
-                // pre-rotation extent can never alias into the new log.
-                publish::retract_publish_stamp(&self.inner.paths);
-                snapshot::reseed_rollup_cache_for_rotation(&self.inner.paths)?;
+                // The active log was swapped; reseed fold caches before rebuilding.
+                invalidate_snapshot_caches(&self.inner.paths, RollupInvalidation::Reseed)?;
                 snapshot::rebuild(&self.inner.paths)?;
             }
 
             let pruned = if let Some(older_than) = archive_older_than {
                 event_log::prune_archive(&self.inner.paths.events_archive_dir, older_than)?
             } else {
-                event_log::PruneOutcome::default()
+                super::atomic::PruneOutcome::default()
             };
             let terminal_pruned = feed_store::prune_terminal(
                 &self.inner.paths.feed_dir,
@@ -429,23 +471,8 @@ impl Ledger {
         let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
         let outcome = event_log::repair(&self.inner.paths.events_log)?;
         if outcome.truncated() {
-            for stale in [
-                &self.inner.paths.latest_snapshot,
-                &self.inner.paths.rollup_cache,
-            ] {
-                match std::fs::remove_file(stale) {
-                    Ok(()) => {}
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(source) => {
-                        return Err(event_log::EventLogErr::Io {
-                            path: (*stale).clone(),
-                            source,
-                        }
-                        .into());
-                    }
-                }
-            }
-            publish::retract_publish_stamp(&self.inner.paths);
+            // The active log was cut; drop fold caches before rebuilding.
+            invalidate_snapshot_caches(&self.inner.paths, RollupInvalidation::Drop)?;
             snapshot::rebuild(&self.inner.paths)?;
         }
         Ok(outcome)

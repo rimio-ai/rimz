@@ -20,7 +20,7 @@ mod recovery;
 mod rotation;
 
 pub use recovery::{RepairOutcome, repair};
-pub use rotation::{PruneOutcome, RotationOutcome, prune_archive, rotate};
+pub use rotation::{RotationOutcome, prune_archive, rotate};
 
 pub const DEFAULT_RETENTION_ARG: &str = "14d";
 pub const DEFAULT_RETENTION: Duration = Duration::from_secs(14 * 86_400);

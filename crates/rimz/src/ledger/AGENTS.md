@@ -4,11 +4,11 @@ Local contract for `crates/rimz/src/ledger/` — durable workspace state. Extend
 
 ## Write path
 
-- Every mutator lives under [`writer.rs`](./writer.rs): the façade keeps the lock → feed-write → event-append choreography, and `writer/` owns debounce, publish, expiry, and resolver-chain branches. The wakeup, group-fdatasync, and snapshot-publish tail runs off-lock. Reads on the `Ledger` handle are lock-free.
+- Every mutator lives under [`writer.rs`](./writer.rs): the façade owns the `commit` primitive for lock → store-write → event-append, and `writer/` owns debounce, publish, expiry, resolver-chain, and queue branches. The wakeup, group-fdatasync, and snapshot-publish tail runs once off-lock. Reads on the `Ledger` handle are lock-free.
 - Cross-process serialization is the workspace lock's job: every writer is a short-lived CLI process serialized through `workspace.lock`; there is no in-process actor.
 - The helpers in [`atomic.rs`](./atomic.rs) cover every durable write — `write_temp_then_rename` for whole files, `append_record_bytes` (one `write()`, no fsync) for the event log; appended frames become durable through the write tail's debounced group fdatasync and rotation's pre-rename sync. Every fsync syscall lives in `atomic.rs` (CI grep). No module hand-rolls its own atomic dance; the event-log frame encoding lives beside its decoder in [`event_log/frame.rs`](./event_log/frame.rs).
 - The pending/terminal feed split is load-bearing: a terminal write lands beside the pending file, then an atomic rename moves it into `terminal/` — no crash window resurrects a decided ask, and decision-path scans stay O(pending).
-- The feed store owns [`pending_terminal.rs`](./pending_terminal.rs). The message queue owns one live `messages.jsonl` file and records terminal outcomes in the event log.
+- The feed store owns [`pending_terminal.rs`](./pending_terminal.rs); shared age pruning lives in [`atomic.rs`](./atomic.rs). The message queue owns one live `messages.jsonl` file and records terminal outcomes in the event log.
 - The dead-owner abandon sweep, the event-log group sync, and the checkpoint publish are debounced through stamps beside the workspace lock, keeping the write path O(1) over feed history; the stamps live outside the feed dir so item scans never see them. Wakeups fire before the publish — consumers fold the log tail themselves, so checkpoint cadence is latency tuning, never truth.
 
 ## Read path

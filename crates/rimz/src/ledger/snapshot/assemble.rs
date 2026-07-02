@@ -8,7 +8,7 @@ use jiff::Timestamp;
 
 use super::Result;
 use super::fold::{ResumeOutcome, RollupCursor, catch_up_rollup, write_rollup_cache};
-use super::view::SidebarSnapshot;
+use super::view::{SNAPSHOT_VERSION, SidebarSnapshot};
 use crate::agents::AgentState;
 use crate::ledger::atomic::{self};
 use crate::ledger::event_log::{self};
@@ -128,9 +128,7 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
             .is_some_and(|extent| extent.offset == log_len)
     };
     let snapshot_is_current = |snapshot: &SidebarSnapshot| {
-        stamp_is_current(snapshot)
-            && agent_identities_are_current(snapshot)
-            && snapshot.resume_outcomes.is_some()
+        stamp_is_current(snapshot) && snapshot.snapshot_version == SNAPSHOT_VERSION
     };
     let len = meta.len();
     let path = paths.latest_snapshot.as_path();
@@ -157,18 +155,6 @@ thread_local! {
     /// This thread's last `latest.json` parse — the rollup a long-lived
     /// consumer thread re-reads on every ledger delta.
     static LATEST_PARSE_CACHE: ParseCache<SidebarSnapshot> = const { ParseCache::new() };
-}
-
-fn agent_identities_are_current(snapshot: &SidebarSnapshot) -> bool {
-    snapshot.agents.iter().all(|agent| {
-        agent.name.as_deref().is_some_and(|name| {
-            crate::harness::petname::valid_name(name)
-                && !crate::harness::petname::collides_with_reserved_prefix(
-                    name,
-                    crate::agents::known_kinds(),
-                )
-        }) && agent.kind_ordinal.is_some()
-    })
 }
 
 pub(crate) fn display_name_for(paths: &StatePaths) -> String {
@@ -290,36 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn read_fresh_latest_rejects_snapshots_without_card_identity() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
-        paths.ensure_dirs().unwrap();
-        event_log::append(&paths.events_log, &lifecycle(&workspace, "a", None)).unwrap();
-        rebuild(&paths).unwrap();
-
-        let mut legacy = read_fresh_latest(&paths).expect("fresh snapshot");
-        assert!(
-            agent_identities_are_current(&legacy),
-            "rebuilt snapshots carry card identity"
-        );
-        legacy.agents[0].name = None;
-        legacy.agents[0].kind_ordinal = None;
-        atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
-
-        assert!(
-            read_fresh_latest(&paths).is_none(),
-            "old latest.json without name/ordinal is not fresh for the new CLI"
-        );
-        let rebuilt = build_from(&paths).unwrap();
-        assert!(
-            agent_identities_are_current(&rebuilt),
-            "fallback rebuild backfills deterministic card identity"
-        );
-    }
-
-    #[test]
-    fn read_fresh_latest_rejects_snapshots_without_resume_outcomes() {
+    fn read_fresh_latest_rejects_version_mismatch() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
         let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -327,28 +284,23 @@ mod tests {
         event_log::append(&paths.events_log, &lifecycle(&workspace, "a", None)).unwrap();
         rebuild(&paths).unwrap();
         assert!(
-            read_fresh_latest(&paths)
-                .and_then(|snapshot| snapshot.resume_outcomes)
-                .is_some(),
-            "rebuilt snapshots carry the resume outcome migration marker"
+            read_fresh_latest(&paths).is_some(),
+            "rebuilt snapshots carry the current version"
         );
 
         let bytes = std::fs::read(&paths.latest_snapshot).unwrap();
         let mut legacy: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        legacy
-            .as_object_mut()
-            .expect("snapshot is an object")
-            .remove("resume_outcomes");
+        legacy["snapshot_version"] = serde_json::json!(0);
         atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
 
         assert!(
             read_fresh_latest(&paths).is_none(),
-            "old latest.json without resume outcomes is not fresh for the new CLI"
+            "old latest.json with a mismatched version is not fresh"
         );
         let rebuilt = build_from(&paths).unwrap();
         assert!(
-            rebuilt.resume_outcomes.is_some(),
-            "fallback rebuild stamps the resume outcome field"
+            rebuilt.snapshot_version == SNAPSHOT_VERSION,
+            "fallback rebuild stamps the current snapshot version"
         );
     }
 

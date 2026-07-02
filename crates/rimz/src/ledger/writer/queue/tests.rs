@@ -5,6 +5,7 @@ use crate::agents::AgentLifecycleObservation;
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::ledger::event_log;
 use crate::message::{DeliveryGate, MessageSender};
 use crate::{RuntimePaths, StatePaths};
 

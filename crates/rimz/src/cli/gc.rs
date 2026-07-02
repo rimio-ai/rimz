@@ -91,7 +91,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                     0,
                     None,
                     0,
-                    rimz::ledger::event_log::PruneOutcome::default(),
+                    rimz::ledger::atomic::PruneOutcome::default(),
                 )
             }
         },
@@ -101,7 +101,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
             0,
             None,
             0,
-            rimz::ledger::event_log::PruneOutcome::default(),
+            rimz::ledger::atomic::PruneOutcome::default(),
         ),
     };
     spinner.set("reaping dead schedules…");
@@ -142,7 +142,7 @@ struct GcOutcome {
     queue_archived: usize,
     queue_reconciled: usize,
     carryover_pruned: usize,
-    terminal_pruned: rimz::ledger::event_log::PruneOutcome,
+    terminal_pruned: rimz::ledger::atomic::PruneOutcome,
     schedules_reaped: usize,
     prune: gc::WorkspacePruneReport,
     worktrees: WorktreeSweep,
@@ -522,7 +522,7 @@ mod tests {
             queue_archived: 0,
             queue_reconciled: 0,
             carryover_pruned: 1,
-            terminal_pruned: rimz::ledger::event_log::PruneOutcome {
+            terminal_pruned: rimz::ledger::atomic::PruneOutcome {
                 files_removed: 1,
                 bytes_removed: 512,
             },

@@ -190,8 +190,8 @@ pub struct WorkspaceRewriteOutcome {
 #[derive(Clone, Debug)]
 pub struct EventLogRotationOutcome {
     pub rotation: event_log::RotationOutcome,
-    pub pruned: event_log::PruneOutcome,
-    pub terminal_pruned: event_log::PruneOutcome,
+    pub pruned: atomic::PruneOutcome,
+    pub terminal_pruned: atomic::PruneOutcome,
     pub carryover_agents: usize,
 }
 

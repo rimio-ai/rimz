@@ -1,4 +1,4 @@
-//! Disk-write primitives.
+//! Disk-write primitives and disk hygiene sweeps.
 //!
 //! Two write shapes cover every disk write in the project:
 //!
@@ -34,6 +34,12 @@ pub enum AtomicErr {
 }
 
 pub type Result<T> = std::result::Result<T, AtomicErr>;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PruneOutcome {
+    pub files_removed: usize,
+    pub bytes_removed: u64,
+}
 
 /// Write raw bytes to `path` via a same-directory temp file followed by an
 /// atomic rename. fsync is applied to the temp file before the rename.
@@ -389,6 +395,62 @@ pub fn sweep_orphan_temps_under(root: &Path, min_age: Duration) -> (usize, u64) 
     }
 
     (files_removed, bytes_removed)
+}
+
+/// Remove old files under `dir` when `keep` selects them for this sweep.
+#[must_use = "maintenance report; surface it to the caller"]
+pub fn prune_old_files(
+    dir: &Path,
+    older_than: Duration,
+    keep: impl Fn(&Path) -> bool,
+) -> Result<PruneOutcome> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Ok(PruneOutcome::default());
+        }
+        Err(source) => {
+            return Err(AtomicErr::Io {
+                path: dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+
+    let now = SystemTime::now();
+    let mut report = PruneOutcome::default();
+    for entry in entries {
+        let entry = entry.map_err(|source| AtomicErr::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        if !keep(&path) {
+            continue;
+        }
+        let metadata = std::fs::symlink_metadata(&path).map_err(|source| AtomicErr::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let modified = metadata.modified().map_err(|source| AtomicErr::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let Ok(age) = now.duration_since(modified) else {
+            continue;
+        };
+        if age < older_than {
+            continue;
+        }
+        let bytes = metadata.len();
+        std::fs::remove_file(&path).map_err(|source| AtomicErr::Io {
+            path: path.clone(),
+            source,
+        })?;
+        report.files_removed += 1;
+        report.bytes_removed = report.bytes_removed.saturating_add(bytes);
+    }
+    Ok(report)
 }
 
 /// fsync a directory so its rename/unlink operations are durable.

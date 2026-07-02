@@ -99,10 +99,7 @@ pub fn list_pending(feed_dir: &Path) -> Result<Vec<FeedItem>> {
     Ok(items)
 }
 
-pub fn prune_terminal(
-    feed_dir: &Path,
-    older_than: Duration,
-) -> Result<crate::ledger::event_log::PruneOutcome> {
+pub fn prune_terminal(feed_dir: &Path, older_than: Duration) -> Result<atomic::PruneOutcome> {
     Ok(pending_terminal::prune_terminal(feed_dir, older_than)?)
 }
 

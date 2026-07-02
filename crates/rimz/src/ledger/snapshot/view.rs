@@ -8,7 +8,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use super::fold::{ResumeOutcome, agent_rollup_with_carryover};
+use super::fold::ResumeOutcome;
+#[cfg(test)]
+use super::fold::agent_rollup_with_carryover;
 use super::panes::SidebarOwnView;
 use super::row::PaneAgent;
 use crate::agents::AgentState;
@@ -18,6 +20,7 @@ use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::agent_context::AgentContextRecord;
 use crate::ledger::event_log::{self};
 use crate::ledger::subagent_context::SubagentContextRecord;
+#[cfg(test)]
 use crate::schema::event::EventEnvelope;
 use crate::workspace::RootClass;
 
@@ -59,6 +62,10 @@ fn default_root_class() -> RootClass {
     RootClass::Repo
 }
 
+/// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
+/// `latest.json` files read as stale instead of accreting one-off guards.
+pub const SNAPSHOT_VERSION: u32 = 1;
+
 /// Sidebar view-model. The pane frame admits every rendered card; ledger,
 /// sidecars, and realtime events only enrich rows admitted from live panes.
 /// Worktree groups are the renderer contract: grouping, attention ranking,
@@ -70,6 +77,8 @@ fn default_root_class() -> RootClass {
 /// (`with_live_panes`). The sidebar renderer reads `worktree_groups`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SidebarSnapshot {
+    #[serde(default)]
+    pub snapshot_version: u32,
     pub workspace_id: WorkspaceId,
     pub display_name: String,
     pub generated_at: Timestamp,
@@ -272,6 +281,7 @@ pub struct SidebarSnapshot {
 }
 
 impl SidebarSnapshot {
+    #[cfg(test)]
     pub fn build(
         workspace_id: WorkspaceId,
         items: Vec<FeedItem>,
@@ -284,6 +294,7 @@ impl SidebarSnapshot {
     /// Build a snapshot, folding `carryover_agents` into the agent rollup so
     /// pre-rotation observations survive event-log archiving. Live events
     /// with a newer `last_seen` override the carryover.
+    #[cfg(test)]
     pub fn build_with_carryover(
         workspace_id: WorkspaceId,
         items: Vec<FeedItem>,
@@ -332,6 +343,7 @@ impl SidebarSnapshot {
 
         let display_name = workspace_id.as_str().to_owned();
         Self {
+            snapshot_version: SNAPSHOT_VERSION,
             workspace_id,
             display_name,
             generated_at: now,

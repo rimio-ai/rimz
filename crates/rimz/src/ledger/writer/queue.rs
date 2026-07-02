@@ -9,12 +9,25 @@ use crate::message::{
 };
 use crate::schema::event::{EventEnvelope, MessageEventMethod};
 
-use super::super::{Ledger, Result, event_log, lock, message_store};
+use super::super::{Ledger, Result, message_store};
+use super::{PublishPolicy, Txn};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReconcileReport {
     pub requeued: usize,
     pub timed_out: usize,
+}
+
+enum MessageUpdate {
+    Keep,
+    Rewrite {
+        method: MessageEventMethod,
+        reason: Option<String>,
+    },
+    Finalize {
+        status: MessageStatus,
+        reason: Option<String>,
+    },
 }
 
 impl Ledger {
@@ -28,6 +41,7 @@ impl Ledger {
 
     fn finalize_message_locked(
         &self,
+        txn: &mut Txn<'_>,
         mut message: MessageRecord,
         status: MessageStatus,
         session_name: &str,
@@ -43,69 +57,96 @@ impl Ledger {
         let method = MessageEventMethod::for_terminal_status(status)
             .expect("finalize_message_locked only accepts terminal message statuses");
         let event = EventEnvelope::message_event(&message, session_name, method, reason);
-        message_store::remove(&self.inner.paths.messages_dir, &message.message_id)?;
-        event_log::append(&self.inner.paths.events_log, &event)?;
+        message_store::remove(&txn.paths.messages_dir, &message.message_id)?;
+        txn.append(&event)?;
         Ok((message, event))
+    }
+
+    fn update_messages_locked(
+        &self,
+        txn: &mut Txn<'_>,
+        session_name: &str,
+        now: Timestamp,
+        mut update: impl FnMut(&mut MessageRecord) -> MessageUpdate,
+    ) -> Result<Vec<MessageRecord>> {
+        let mut messages = message_store::list(&txn.paths.messages_dir)?;
+        let mut removed_ids = std::collections::BTreeSet::new();
+        let mut updated = Vec::new();
+        let mut events = Vec::new();
+        for message in &mut messages {
+            match update(message) {
+                MessageUpdate::Keep => {}
+                MessageUpdate::Rewrite { method, reason } => {
+                    updated.push(message.clone());
+                    events.push(EventEnvelope::message_event(
+                        message,
+                        session_name,
+                        method,
+                        reason.as_deref(),
+                    ));
+                }
+                MessageUpdate::Finalize { status, reason } => {
+                    debug_assert!(status.is_terminal());
+                    message.status = status;
+                    message.updated_at = now;
+                    if status == MessageStatus::Delivered {
+                        message.delivered_at = Some(now);
+                    }
+                    let method = MessageEventMethod::for_terminal_status(status)
+                        .expect("MessageUpdate::Finalize only accepts terminal statuses");
+                    removed_ids.insert(message.message_id.to_string());
+                    updated.push(message.clone());
+                    events.push(EventEnvelope::message_event(
+                        message,
+                        session_name,
+                        method,
+                        reason.as_deref(),
+                    ));
+                }
+            }
+        }
+        if updated.is_empty() {
+            return Ok(updated);
+        }
+        messages.retain(|message| !removed_ids.contains(message.message_id.as_str()));
+        message_store::replace_all(&txn.paths.messages_dir, &messages)?;
+        for event in &events {
+            txn.append(event)?;
+        }
+        Ok(updated)
     }
 
     fn finalize_matching_messages_locked(
         &self,
+        txn: &mut Txn<'_>,
         status: MessageStatus,
         session_name: &str,
         reason: &str,
         mut select: impl FnMut(&MessageRecord) -> bool,
         mut update: impl FnMut(&mut MessageRecord),
-    ) -> Result<(Vec<MessageRecord>, Vec<EventEnvelope>)> {
+    ) -> Result<Vec<MessageRecord>> {
         debug_assert!(status.is_terminal());
         let now = Timestamp::now();
-        let method = MessageEventMethod::for_terminal_status(status)
-            .expect("finalize_matching_messages_locked only accepts terminal message statuses");
-        let mut messages = message_store::list(&self.inner.paths.messages_dir)?;
-        let mut removed_ids = std::collections::BTreeSet::new();
-        let mut finalized = Vec::new();
-        let mut events = Vec::new();
-        for message in &mut messages {
+        self.update_messages_locked(txn, session_name, now, |message| {
             if !select(message) {
-                continue;
+                return MessageUpdate::Keep;
             }
             update(message);
-            message.status = status;
-            message.updated_at = now;
-            if status == MessageStatus::Delivered {
-                message.delivered_at = Some(now);
+            MessageUpdate::Finalize {
+                status,
+                reason: Some(reason.to_owned()),
             }
-            removed_ids.insert(message.message_id.to_string());
-            finalized.push(message.clone());
-            events.push(EventEnvelope::message_event(
-                message,
-                session_name,
-                method,
-                Some(reason),
-            ));
-        }
-        if finalized.is_empty() {
-            return Ok((finalized, events));
-        }
-        messages.retain(|message| !removed_ids.contains(message.message_id.as_str()));
-        message_store::replace_all(&self.inner.paths.messages_dir, &messages)?;
-        for event in &events {
-            event_log::append(&self.inner.paths.events_log, event)?;
-        }
-        Ok((finalized, events))
+        })
     }
 
     #[must_use = "durability barrier; check the result"]
     pub fn queue_message(&self, message: &MessageRecord, session_name: &str) -> Result<()> {
         let event =
             EventEnvelope::message_event(message, session_name, MessageEventMethod::Queued, None);
-        {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            message_store::write(&self.inner.paths.messages_dir, message)?;
-            event_log::append(&self.inner.paths.events_log, &event)?;
-        }
-        self.wake_sidebars_for_event_best_effort(&event);
-        self.publish_snapshot_best_effort();
-        Ok(())
+        self.commit(PublishPolicy::Skip, |txn| {
+            message_store::write(&txn.paths.messages_dir, message)?;
+            txn.append(&event)
+        })
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -114,10 +155,9 @@ impl Ledger {
         message: &MessageRecord,
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
-        let (sent, event) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+        self.commit(PublishPolicy::Skip, |txn| {
             let mut message =
-                match message_store::load(&self.inner.paths.messages_dir, &message.message_id) {
+                match message_store::load(&txn.paths.messages_dir, &message.message_id) {
                     Ok(existing)
                         if matches!(
                             existing.status,
@@ -140,19 +180,16 @@ impl Ledger {
             message.status = MessageStatus::Sent;
             message.updated_at = now;
             message.last_error = None;
-            message_store::write(&self.inner.paths.messages_dir, &message)?;
+            message_store::write(&txn.paths.messages_dir, &message)?;
             let event = EventEnvelope::message_event(
                 &message,
                 session_name,
                 MessageEventMethod::Sent,
                 None,
             );
-            event_log::append(&self.inner.paths.events_log, &event)?;
-            (message, event)
-        };
-        self.wake_sidebars_for_event_best_effort(&event);
-        self.publish_snapshot_best_effort();
-        Ok(Some(sent))
+            txn.append(&event)?;
+            Ok(Some(message))
+        })
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -161,45 +198,47 @@ impl Ledger {
         message_id: &MessageId,
         now: Timestamp,
     ) -> Result<Option<MessageRecord>> {
-        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-        let queued = message_store::list_pending(&self.inner.paths.messages_dir)?;
-        let Some(message) = queued
-            .iter()
-            .find(|message| message.message_id == *message_id)
-        else {
-            return Ok(None);
-        };
-        if !claim_expired(message.last_attempt_at, now) {
-            return Ok(None);
-        }
-        let Some(head) = queue_head_for_message(queued.iter(), message, now) else {
-            return Ok(None);
-        };
-        if head.message_id != *message_id {
-            return Ok(None);
-        }
-        let mut claimed = message.clone();
-        claimed.status = MessageStatus::Claimed;
-        claimed.attempts = claimed.attempts.saturating_add(1);
-        claimed.last_attempt_at = Some(now);
-        claimed.last_error = None;
-        claimed.retry_after = None;
-        claimed.updated_at = now;
-        message_store::write(&self.inner.paths.messages_dir, &claimed)?;
-        Ok(Some(claimed))
+        self.commit(PublishPolicy::Skip, |txn| {
+            let queued = message_store::list_pending(&txn.paths.messages_dir)?;
+            let Some(message) = queued
+                .iter()
+                .find(|message| message.message_id == *message_id)
+            else {
+                return Ok(None);
+            };
+            if !claim_expired(message.last_attempt_at, now) {
+                return Ok(None);
+            }
+            let Some(head) = queue_head_for_message(queued.iter(), message, now) else {
+                return Ok(None);
+            };
+            if head.message_id != *message_id {
+                return Ok(None);
+            }
+            let mut claimed = message.clone();
+            claimed.status = MessageStatus::Claimed;
+            claimed.attempts = claimed.attempts.saturating_add(1);
+            claimed.last_attempt_at = Some(now);
+            claimed.last_error = None;
+            claimed.retry_after = None;
+            claimed.updated_at = now;
+            message_store::write(&txn.paths.messages_dir, &claimed)?;
+            Ok(Some(claimed))
+        })
     }
 
     #[must_use = "durability barrier; check the result"]
     pub fn defer_message_wake(&self, message_id: &MessageId, until: Timestamp) -> Result<()> {
-        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-        let mut message = match message_store::load(&self.inner.paths.messages_dir, message_id) {
-            Ok(message) if message.status == MessageStatus::Queued => message,
-            Ok(_) | Err(message_store::MessageStoreErr::NotFound(_)) => return Ok(()),
-            Err(err) => return Err(err.into()),
-        };
-        message.retry_after = Some(until);
-        message_store::write(&self.inner.paths.messages_dir, &message)?;
-        Ok(())
+        self.commit(PublishPolicy::Skip, |txn| {
+            let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
+                Ok(message) if message.status == MessageStatus::Queued => message,
+                Ok(_) | Err(message_store::MessageStoreErr::NotFound(_)) => return Ok(()),
+                Err(err) => return Err(err.into()),
+            };
+            message.retry_after = Some(until);
+            message_store::write(&txn.paths.messages_dir, &message)?;
+            Ok(())
+        })
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -211,9 +250,8 @@ impl Ledger {
         reason: Option<&str>,
     ) -> Result<Option<MessageRecord>> {
         debug_assert!(status.is_terminal());
-        let (settled, event) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let message = match message_store::load(&self.inner.paths.messages_dir, message_id) {
+        self.commit(PublishPolicy::Skip, |txn| {
+            let message = match message_store::load(&txn.paths.messages_dir, message_id) {
                 Ok(message)
                     if matches!(
                         message.status,
@@ -226,11 +264,10 @@ impl Ledger {
                 Err(err) => return Err(err.into()),
             };
             let now = Timestamp::now();
-            self.finalize_message_locked(message, status, session_name, reason, now)?
-        };
-        self.wake_sidebars_for_event_best_effort(&event);
-        self.publish_snapshot_best_effort();
-        Ok(Some(settled))
+            let (settled, _event) =
+                self.finalize_message_locked(txn, message, status, session_name, reason, now)?;
+            Ok(Some(settled))
+        })
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -242,9 +279,8 @@ impl Ledger {
         body: MessageBody,
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
-        let outcome = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let mut messages = message_store::list(&self.inner.paths.messages_dir)?;
+        self.commit(PublishPolicy::Skip, |txn| {
+            let messages = message_store::list(&txn.paths.messages_dir)?;
             let Some(oldest) = messages
                 .iter()
                 .filter(|message| {
@@ -258,10 +294,7 @@ impl Ledger {
                 return Ok(None);
             };
             let now = Timestamp::now();
-            let mut removed_ids = std::collections::BTreeSet::new();
-            let mut delivered = Vec::new();
-            let mut events = Vec::new();
-            for message in &mut messages {
+            let delivered = self.update_messages_locked(txn, session_name, now, |message| {
                 let selected = if message.message_id == oldest.message_id {
                     true
                 } else {
@@ -272,38 +305,17 @@ impl Ledger {
                         && message.batch_id == oldest.batch_id
                 };
                 if !selected {
-                    continue;
+                    return MessageUpdate::Keep;
                 }
-                message.status = MessageStatus::Delivered;
-                message.updated_at = now;
-                message.delivered_at = Some(now);
-                removed_ids.insert(message.message_id.to_string());
-                delivered.push(message.clone());
-                events.push(EventEnvelope::message_event(
-                    message,
-                    session_name,
-                    MessageEventMethod::Delivered,
-                    None,
-                ));
-            }
-            messages.retain(|message| !removed_ids.contains(message.message_id.as_str()));
-            message_store::replace_all(&self.inner.paths.messages_dir, &messages)?;
-            for event in &events {
-                event_log::append(&self.inner.paths.events_log, event)?;
-            }
-            delivered
+                MessageUpdate::Finalize {
+                    status: MessageStatus::Delivered,
+                    reason: None,
+                }
+            })?;
+            Ok(delivered
                 .into_iter()
-                .find(|message| message.message_id == oldest.message_id)
-                .map(|message| (message, events))
-        };
-        let Some((message, events)) = outcome else {
-            return Ok(None);
-        };
-        for event in &events {
-            self.wake_sidebars_for_event_best_effort(event);
-        }
-        self.publish_snapshot_best_effort();
-        Ok(Some(message))
+                .find(|message| message.message_id == oldest.message_id))
+        })
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -313,10 +325,8 @@ impl Ledger {
         session_name: &str,
         reason: Option<&str>,
     ) -> Result<Option<MessageRecord>> {
-        let outcome = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let mut message = match message_store::load(&self.inner.paths.messages_dir, message_id)
-            {
+        self.commit(PublishPolicy::Skip, |txn| {
+            let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
                 Ok(message) if message.status == MessageStatus::Sent => message,
                 Ok(_) | Err(message_store::MessageStoreErr::NotFound(_)) => return Ok(None),
                 Err(err) => return Err(err.into()),
@@ -324,20 +334,16 @@ impl Ledger {
             let now = Timestamp::now();
             let reason = reason.unwrap_or("delivery window elapsed");
             message.last_error = Some(reason.to_owned());
-            Some(self.finalize_message_locked(
+            let (message, _event) = self.finalize_message_locked(
+                txn,
                 message,
                 MessageStatus::TimedOut,
                 session_name,
                 Some(reason),
                 now,
-            )?)
-        };
-        let Some((message, event)) = outcome else {
-            return Ok(None);
-        };
-        self.wake_sidebars_for_event_best_effort(&event);
-        self.publish_snapshot_best_effort();
-        Ok(Some(message))
+            )?;
+            Ok(Some(message))
+        })
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -348,21 +354,17 @@ impl Ledger {
         window: Duration,
         max_attempts: u32,
     ) -> Result<ReconcileReport> {
-        let mut report = ReconcileReport::default();
-        let mut events = Vec::new();
-        {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let mut messages = message_store::list(&self.inner.paths.messages_dir)?;
-            let mut removed_ids = std::collections::BTreeSet::new();
-            for message in &mut messages {
+        self.commit(PublishPolicy::Skip, |txn| {
+            let mut report = ReconcileReport::default();
+            let updated = self.update_messages_locked(txn, session_name, now, |message| {
                 if message.status != MessageStatus::Sent {
-                    continue;
+                    return MessageUpdate::Keep;
                 }
                 let age = now.duration_since(message.updated_at);
                 if !age.is_negative() && age.as_millis() < window.as_millis() as i128 {
-                    continue;
+                    return MessageUpdate::Keep;
                 }
-                let (method, reason) = if message.unconfirmed_sends < max_attempts {
+                if message.unconfirmed_sends < max_attempts {
                     message.status = MessageStatus::Queued;
                     message.pane_id = None;
                     message.batch_id = None;
@@ -371,36 +373,27 @@ impl Ledger {
                     message.retry_after = None;
                     message.last_error = Some("delivery unconfirmed; re-queued".to_owned());
                     report.requeued += 1;
-                    (MessageEventMethod::Queued, "reconcile")
+                    message.updated_at = now;
+                    MessageUpdate::Rewrite {
+                        method: MessageEventMethod::Queued,
+                        reason: Some("reconcile".to_owned()),
+                    }
                 } else {
-                    message.status = MessageStatus::TimedOut;
                     message.last_error = Some(format!(
                         "delivery unconfirmed after {max_attempts} unconfirmed sends"
                     ));
-                    removed_ids.insert(message.message_id.to_string());
                     report.timed_out += 1;
-                    (MessageEventMethod::TimedOut, "reconcile")
-                };
-                message.updated_at = now;
-                let event =
-                    EventEnvelope::message_event(message, session_name, method, Some(reason));
-                events.push(event);
-            }
-            if !events.is_empty() {
-                messages.retain(|message| !removed_ids.contains(message.message_id.as_str()));
-                message_store::replace_all(&self.inner.paths.messages_dir, &messages)?;
-                for event in &events {
-                    event_log::append(&self.inner.paths.events_log, event)?;
+                    MessageUpdate::Finalize {
+                        status: MessageStatus::TimedOut,
+                        reason: Some("reconcile".to_owned()),
+                    }
                 }
+            })?;
+            if !updated.is_empty() {
+                txn.set_publish(PublishPolicy::Forced);
             }
-        }
-        for event in &events {
-            self.wake_sidebars_for_event_best_effort(event);
-        }
-        if !events.is_empty() {
-            self.publish_snapshot_forced();
-        }
-        Ok(report)
+            Ok(report)
+        })
     }
 
     pub fn earliest_message_wake(
@@ -422,10 +415,9 @@ impl Ledger {
         error: &str,
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
-        let (errored, event) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+        self.commit(PublishPolicy::Skip, |txn| {
             let mut message =
-                match message_store::load(&self.inner.paths.messages_dir, &message.message_id) {
+                match message_store::load(&txn.paths.messages_dir, &message.message_id) {
                     Ok(existing)
                         if matches!(
                             existing.status,
@@ -442,17 +434,16 @@ impl Ledger {
                     Err(err) => return Err(err.into()),
                 };
             message.last_error = Some(error.to_owned());
-            self.finalize_message_locked(
+            let (errored, _event) = self.finalize_message_locked(
+                txn,
                 message,
                 MessageStatus::Errored,
                 session_name,
                 Some(error),
                 Timestamp::now(),
-            )?
-        };
-        self.wake_sidebars_for_event_best_effort(&event);
-        self.publish_snapshot_best_effort();
-        Ok(Some(errored))
+            )?;
+            Ok(Some(errored))
+        })
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -462,10 +453,8 @@ impl Ledger {
         error: &str,
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
-        let outcome = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let mut message = match message_store::load(&self.inner.paths.messages_dir, message_id)
-            {
+        self.commit(PublishPolicy::Skip, |txn| {
+            let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
                 Ok(message)
                     if matches!(
                         message.status,
@@ -480,28 +469,21 @@ impl Ledger {
             message.last_error = Some(error.to_owned());
             message.updated_at = Timestamp::now();
             if message.attempts >= MAX_DELIVERY_ATTEMPTS {
-                let (message, event) = self.finalize_message_locked(
+                let (message, _event) = self.finalize_message_locked(
+                    txn,
                     message,
                     MessageStatus::Abandoned,
                     session_name,
                     Some(error),
                     Timestamp::now(),
                 )?;
-                Some((message, Some(event)))
+                Ok(Some(message))
             } else {
                 message.status = MessageStatus::Queued;
-                message_store::write(&self.inner.paths.messages_dir, &message)?;
-                Some((message, None))
+                message_store::write(&txn.paths.messages_dir, &message)?;
+                Ok(Some(message))
             }
-        };
-        let Some((message, terminal)) = outcome else {
-            return Ok(None);
-        };
-        if let Some(event) = terminal.as_ref() {
-            self.wake_sidebars_for_event_best_effort(event);
-            self.publish_snapshot_best_effort();
-        }
-        Ok(Some(message))
+        })
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -529,22 +511,16 @@ impl Ledger {
         agent_name: Option<&str>,
         session_name: &str,
     ) -> Result<usize> {
-        let (removed, events) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+        let removed = self.commit(PublishPolicy::Skip, |txn| {
             self.finalize_matching_messages_locked(
+                txn,
                 MessageStatus::Removed,
                 session_name,
                 "clear",
                 |message| message.status.is_open() && message.same_card(kind, agent_id, agent_name),
                 |_| {},
-            )?
-        };
-        for event in &events {
-            self.wake_sidebars_for_event_best_effort(event);
-        }
-        if !removed.is_empty() {
-            self.publish_snapshot_best_effort();
-        }
+            )
+        })?;
         Ok(removed.len())
     }
 
@@ -552,9 +528,9 @@ impl Ledger {
     pub fn archive_orphan_messages(&self, session_name: &str) -> Result<usize> {
         let snapshot = self.snapshot()?;
         let live_agents = snapshot.agents;
-        let (archived, events) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            self.finalize_matching_messages_locked(
+        let archived = self.commit(PublishPolicy::Skip, |txn| {
+            let archived = self.finalize_matching_messages_locked(
+                txn,
                 MessageStatus::Archived,
                 session_name,
                 "receiver ended",
@@ -565,14 +541,12 @@ impl Ledger {
                             .any(|agent| message.same_agent_card(agent))
                 },
                 |message| message.last_error = Some("receiver ended".to_owned()),
-            )?
-        };
-        for event in &events {
-            self.wake_sidebars_for_event_best_effort(event);
-        }
-        if !archived.is_empty() {
-            self.publish_snapshot_forced();
-        }
+            )?;
+            if !archived.is_empty() {
+                txn.set_publish(PublishPolicy::Forced);
+            }
+            Ok(archived)
+        })?;
         Ok(archived.len())
     }
 
@@ -585,22 +559,16 @@ impl Ledger {
         reason: &str,
         session_name: &str,
     ) -> Result<usize> {
-        let (archived, events) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+        let archived = self.commit(PublishPolicy::Skip, |txn| {
             self.finalize_matching_messages_locked(
+                txn,
                 MessageStatus::Archived,
                 session_name,
                 reason,
                 |message| message.status.is_open() && message.same_card(kind, agent_id, agent_name),
                 |message| message.last_error = Some(reason.to_owned()),
-            )?
-        };
-        for event in &events {
-            self.wake_sidebars_for_event_best_effort(event);
-        }
-        if !archived.is_empty() {
-            self.publish_snapshot_best_effort();
-        }
+            )
+        })?;
         Ok(archived.len())
     }
 
@@ -611,22 +579,16 @@ impl Ledger {
         reason: &str,
         session_name: &str,
     ) -> Result<usize> {
-        let (archived, events) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+        let archived = self.commit(PublishPolicy::Skip, |txn| {
             self.finalize_matching_messages_locked(
+                txn,
                 MessageStatus::Archived,
                 session_name,
                 reason,
                 |message| message.status.is_open() && message.channel.as_deref() == Some(channel),
                 |message| message.last_error = Some(reason.to_owned()),
-            )?
-        };
-        for event in &events {
-            self.wake_sidebars_for_event_best_effort(event);
-        }
-        if !archived.is_empty() {
-            self.publish_snapshot_best_effort();
-        }
+            )
+        })?;
         Ok(archived.len())
     }
 }

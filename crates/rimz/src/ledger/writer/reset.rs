@@ -13,7 +13,6 @@ use super::super::{
     Ledger, LedgerErr, ResetRecordsOutcome, Result, event_log, feed_store, lock, run_store,
     snapshot,
 };
-use super::publish;
 
 fn remove_file_if_exists(path: &Path) -> Result<bool> {
     match fs::remove_file(path) {
@@ -243,7 +242,7 @@ impl Ledger {
                 remove_file_if_exists(&self.inner.paths.agents_carryover)?;
                 0
             } else {
-                super::stage_agent_carryover_for_rotation(&self.inner.paths, 0)?.1
+                super::stage_agent_carryover_for_rotation(&self.inner.paths, 0)?
             };
 
             let rotation = rotate(
@@ -252,13 +251,19 @@ impl Ledger {
                 0,
             )?;
 
-            publish::retract_publish_stamp(&self.inner.paths);
-            remove_file_if_exists(&self.inner.paths.latest_snapshot)?;
             if hard {
+                super::publish::retract_publish_stamp(&self.inner.paths);
+                remove_file_if_exists(&self.inner.paths.latest_snapshot)?;
                 remove_file_if_exists(&self.inner.paths.events_log)?;
                 remove_file_if_exists(&self.inner.paths.rollup_cache)?;
             } else if rotation.is_rotated() {
-                snapshot::reseed_rollup_cache_for_rotation(&self.inner.paths)?;
+                super::invalidate_snapshot_caches(
+                    &self.inner.paths,
+                    super::RollupInvalidation::Reseed,
+                )?;
+            } else {
+                super::publish::retract_publish_stamp(&self.inner.paths);
+                remove_file_if_exists(&self.inner.paths.latest_snapshot)?;
             }
 
             remove_dir_contents(&self.inner.paths.feed_dir)?;

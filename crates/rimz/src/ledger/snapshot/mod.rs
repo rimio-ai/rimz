@@ -51,9 +51,9 @@ pub use row::{
 pub(crate) use view::fold_ask_onto_row;
 pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use view::{
-    PresenceSample, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarProviderPanel,
-    SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice,
-    WorktreePrState, WorktreeTrunkSync, lead_unread_row,
+    PresenceSample, SNAPSHOT_VERSION, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
+    SidebarProviderPanel, SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup,
+    SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
 };
 
 #[derive(Debug, thiserror::Error)]

@@ -4,22 +4,23 @@ use serde_json::json;
 use crate::feed::{AbandonReason, FeedStatus, Resolution, ResolutionMethod};
 use crate::ids::RequestId;
 
-use super::super::{AskExpiry, Ledger, Result, StatePaths, event_log, feed_store, lock, runtime};
+use super::super::{AskExpiry, Ledger, Result, feed_store, runtime};
 use super::debounce::{abandon_sweep_due, abandon_sweep_stamp, touch_stamp};
+use super::{PublishPolicy, Txn};
 use crate::schema::event::EventEnvelope;
 
 /// Run the dead-owner sweep at most once per the abandon sweep interval.
 /// Caller holds the workspace lock. The common case is one stamp stat — the
 /// write path itself stays O(1) regardless of feed history.
 pub(super) fn sweep_dead_owned_items_debounced(
-    paths: &StatePaths,
+    txn: &mut Txn<'_>,
     session_name: &str,
 ) -> Result<Vec<RequestId>> {
-    if !abandon_sweep_due(paths) {
+    if !abandon_sweep_due(txn.paths) {
         return Ok(Vec::new());
     }
-    let abandoned = abandon_dead_owned_items_locked(paths, session_name)?;
-    touch_stamp(&abandon_sweep_stamp(paths));
+    let abandoned = abandon_dead_owned_items_locked(txn, session_name)?;
+    touch_stamp(&abandon_sweep_stamp(txn.paths));
     Ok(abandoned)
 }
 
@@ -28,7 +29,7 @@ pub(super) fn sweep_dead_owned_items_debounced(
 /// event. Caller holds the workspace lock and owns the snapshot rebuild and
 /// the wakeups for the returned targets.
 pub(super) fn expire_agent_asks_locked(
-    paths: &StatePaths,
+    txn: &mut Txn<'_>,
     source: &str,
     agent_id: &str,
     session_name: &str,
@@ -36,7 +37,7 @@ pub(super) fn expire_agent_asks_locked(
 ) -> Result<Vec<RequestId>> {
     let reason = expiry.reason();
     let mut expired = Vec::new();
-    for mut item in feed_store::list_pending(&paths.feed_dir)? {
+    for mut item in feed_store::list_pending(&txn.paths.feed_dir)? {
         if item.source_kind != "agent-hook"
             || item.source != source
             || item.status != FeedStatus::Pending
@@ -52,34 +53,31 @@ pub(super) fn expire_agent_asks_locked(
         item.status = FeedStatus::Abandoned;
         item.resolution = Some(resolution);
         item.updated_at = Timestamp::now();
-        feed_store::write(&paths.feed_dir, &item)?;
-        event_log::append(
-            &paths.events_log,
-            &EventEnvelope::new(
-                item.workspace_id.clone(),
-                session_name,
-                "rimz",
-                "cli",
-                "feed.expire",
-                json!({
-                    "request_id": item.request_id,
-                    "source": source,
-                    "agent_id": agent_id,
-                    "reason": reason.as_str(),
-                }),
-            ),
-        )?;
+        feed_store::write(&txn.paths.feed_dir, &item)?;
+        txn.append(&EventEnvelope::new(
+            item.workspace_id.clone(),
+            session_name,
+            "rimz",
+            "cli",
+            "feed.expire",
+            json!({
+                "request_id": item.request_id,
+                "source": source,
+                "agent_id": agent_id,
+                "reason": reason.as_str(),
+            }),
+        ))?;
         expired.push(item.request_id.clone());
     }
     Ok(expired)
 }
 
 fn abandon_dead_owned_items_locked(
-    paths: &StatePaths,
+    txn: &mut Txn<'_>,
     session_name: &str,
 ) -> Result<Vec<RequestId>> {
     let mut abandoned = Vec::new();
-    for mut item in feed_store::list_pending(&paths.feed_dir)? {
+    for mut item in feed_store::list_pending(&txn.paths.feed_dir)? {
         if item.status != FeedStatus::Pending {
             continue;
         }
@@ -97,23 +95,20 @@ fn abandon_dead_owned_items_locked(
         item.status = FeedStatus::Abandoned;
         item.resolution = Some(resolution);
         item.updated_at = Timestamp::now();
-        feed_store::write(&paths.feed_dir, &item)?;
-        event_log::append(
-            &paths.events_log,
-            &EventEnvelope::new(
-                item.workspace_id.clone(),
-                session_name,
-                "rimz",
-                "cli",
-                "feed.abandon",
-                json!({
-                    "request_id": item.request_id,
-                    "surface": item.surface,
-                    "reason": AbandonReason::OwnerProcessExited.as_str(),
-                    "owner": owner,
-                }),
-            ),
-        )?;
+        feed_store::write(&txn.paths.feed_dir, &item)?;
+        txn.append(&EventEnvelope::new(
+            item.workspace_id.clone(),
+            session_name,
+            "rimz",
+            "cli",
+            "feed.abandon",
+            json!({
+                "request_id": item.request_id,
+                "surface": item.surface,
+                "reason": AbandonReason::OwnerProcessExited.as_str(),
+                "owner": owner,
+            }),
+        ))?;
         abandoned.push(item.request_id.clone());
     }
     Ok(abandoned)
@@ -122,19 +117,14 @@ fn abandon_dead_owned_items_locked(
 impl Ledger {
     #[must_use = "durability barrier; check the result"]
     pub fn abandon_dead_owned_items(&self, session_name: &str) -> Result<usize> {
-        let abandoned = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let abandoned = abandon_dead_owned_items_locked(&self.inner.paths, session_name)?;
-            touch_stamp(&abandon_sweep_stamp(&self.inner.paths));
-            abandoned
-        };
-        for request_id in &abandoned {
-            self.wake_sidebars_best_effort(request_id);
-        }
-        if !abandoned.is_empty() {
-            // Forced: gc reports from the checkpoint right after the sweep.
-            self.publish_snapshot_forced();
-        }
+        let abandoned = self.commit(PublishPolicy::Skip, |txn| {
+            let abandoned = abandon_dead_owned_items_locked(txn, session_name)?;
+            touch_stamp(&abandon_sweep_stamp(txn.paths));
+            if !abandoned.is_empty() {
+                txn.set_publish(PublishPolicy::Forced);
+            }
+            Ok(abandoned)
+        })?;
         Ok(abandoned.len())
     }
 
@@ -182,18 +172,13 @@ impl Ledger {
         session_name: &str,
         expiry: AskExpiry,
     ) -> Result<usize> {
-        let expired = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            expire_agent_asks_locked(&self.inner.paths, source, agent_id, session_name, expiry)?
-        };
-        for request_id in &expired {
-            self.wake_sidebars_best_effort(request_id);
-        }
-        if !expired.is_empty() {
-            // Forced: the standalone expiry's caller reads the checkpoint
-            // right after its verdict.
-            self.publish_snapshot_forced();
-        }
+        let expired = self.commit(PublishPolicy::Skip, |txn| {
+            let expired = expire_agent_asks_locked(txn, source, agent_id, session_name, expiry)?;
+            if !expired.is_empty() {
+                txn.set_publish(PublishPolicy::Forced);
+            }
+            Ok(expired)
+        })?;
         Ok(expired.len())
     }
 }

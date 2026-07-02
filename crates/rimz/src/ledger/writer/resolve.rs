@@ -9,9 +9,9 @@ use crate::ids::{AgentKind, AgentSessionId, RequestId, ResolverId};
 use crate::schema::event::EventEnvelope;
 
 use super::super::{
-    AbstainOutcome, ElapseOutcome, Ledger, ResolveOutcome, Result, TimeoutOutcome, event_log,
-    feed_store, lock,
+    AbstainOutcome, ElapseOutcome, Ledger, ResolveOutcome, Result, TimeoutOutcome, feed_store,
 };
+use super::PublishPolicy;
 
 impl Ledger {
     /// Apply a resolver decision. CAS on `status = Pending`. Late answers
@@ -25,9 +25,8 @@ impl Ledger {
         override_chain: bool,
         session_name: &str,
     ) -> Result<ResolveOutcome> {
-        let item_to_wake = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let mut item = feed_store::load(&self.inner.paths.feed_dir, request_id)?;
+        let item_to_wake = self.commit(PublishPolicy::Skip, |txn| {
+            let mut item = feed_store::load(&txn.paths.feed_dir, request_id)?;
 
             if !item.surface.supports_resolve() {
                 return Err(feed_store::FeedStoreErr::SurfaceMismatch {
@@ -80,7 +79,8 @@ impl Ledger {
                 item.mark_resolver_answered(responder.as_ref());
                 item.resolution = Some(resolution.clone());
                 item.updated_at = Timestamp::now();
-                feed_store::write(&self.inner.paths.feed_dir, &item)?;
+                feed_store::write(&txn.paths.feed_dir, &item)?;
+                txn.wake_item(&item);
                 Some(item.clone())
             } else {
                 warn!(
@@ -90,34 +90,28 @@ impl Ledger {
                 None
             };
 
-            event_log::append(
-                &self.inner.paths.events_log,
-                &EventEnvelope::new(
-                    item.workspace_id.clone(),
-                    session_name,
-                    "rimz",
-                    "cli",
-                    "feed.resolve",
-                    json!({
-                        "request_id": request_id,
-                        "effective": effective,
-                        "late": late,
-                        "method": resolution.method,
-                        "resolver_id": resolution.resolver_id.clone(),
-                        "reason": resolution.reason.clone(),
-                    }),
-                ),
-            )?;
+            txn.append(&EventEnvelope::new(
+                item.workspace_id.clone(),
+                session_name,
+                "rimz",
+                "cli",
+                "feed.resolve",
+                json!({
+                    "request_id": request_id,
+                    "effective": effective,
+                    "late": late,
+                    "method": resolution.method,
+                    "resolver_id": resolution.resolver_id.clone(),
+                    "reason": resolution.reason.clone(),
+                }),
+            ))?;
 
-            item_to_wake
-        };
+            Ok(item_to_wake)
+        })?;
 
         if let Some(item) = &item_to_wake {
             self.record_transcript_answer_best_effort(item);
-            self.wake_per_request_best_effort(item);
-            self.wake_sidebars_best_effort(&item.request_id);
         }
-        self.publish_snapshot_best_effort();
 
         Ok(ResolveOutcome {
             request_id: request_id.clone(),
@@ -177,9 +171,8 @@ impl Ledger {
         session_name: &str,
         reason: AbandonReason,
     ) -> Result<TimeoutOutcome> {
-        let wake_target = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let mut item = feed_store::load(&self.inner.paths.feed_dir, request_id)?;
+        let outcome = self.commit(PublishPolicy::Debounced, |txn| {
+            let mut item = feed_store::load(&txn.paths.feed_dir, request_id)?;
 
             if !item.surface.supports_resolve() {
                 return Err(feed_store::FeedStoreErr::SurfaceMismatch {
@@ -201,35 +194,27 @@ impl Ledger {
             item.status = FeedStatus::TimedOut;
             item.mark_active_resolver_budget_elapsed(reason);
             item.updated_at = Timestamp::now();
-            feed_store::write(&self.inner.paths.feed_dir, &item)?;
-            event_log::append(
-                &self.inner.paths.events_log,
-                &EventEnvelope::new(
-                    item.workspace_id.clone(),
-                    session_name,
-                    "rimz",
-                    "cli",
-                    "feed.timeout",
-                    json!({
-                        "request_id": request_id,
-                        "surface": item.surface,
-                        "reason": reason.as_str(),
-                    }),
-                ),
-            )?;
-            Some(item.request_id.clone())
-        };
+            feed_store::write(&txn.paths.feed_dir, &item)?;
+            txn.append(&EventEnvelope::new(
+                item.workspace_id.clone(),
+                session_name,
+                "rimz",
+                "cli",
+                "feed.timeout",
+                json!({
+                    "request_id": request_id,
+                    "surface": item.surface,
+                    "reason": reason.as_str(),
+                }),
+            ))?;
+            Ok(TimeoutOutcome {
+                request_id: request_id.clone(),
+                status: FeedStatus::TimedOut,
+                transitioned: true,
+            })
+        })?;
 
-        if let Some(request_id) = &wake_target {
-            self.wake_sidebars_best_effort(request_id);
-        }
-        self.publish_snapshot_best_effort();
-
-        Ok(TimeoutOutcome {
-            request_id: request_id.clone(),
-            status: FeedStatus::TimedOut,
-            transitioned: wake_target.is_some(),
-        })
+        Ok(outcome)
     }
 
     /// Explicit chain handoff. The active resolver calls this to pass on a
@@ -244,9 +229,8 @@ impl Ledger {
         reason: Option<String>,
         session_name: &str,
     ) -> Result<AbstainOutcome> {
-        let (outcome, wake_target) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let mut item = feed_store::load(&self.inner.paths.feed_dir, request_id)?;
+        self.commit(PublishPolicy::Skip, |txn| {
+            let mut item = feed_store::load(&txn.paths.feed_dir, request_id)?;
             if !item.surface.supports_resolve() {
                 return Err(feed_store::FeedStoreErr::SurfaceMismatch {
                     request_id: request_id.clone(),
@@ -282,33 +266,26 @@ impl Ledger {
 
             let next = item.advance_resolver_chain_after(resolver_id);
             item.updated_at = Timestamp::now();
-            feed_store::write(&self.inner.paths.feed_dir, &item)?;
-            event_log::append(
-                &self.inner.paths.events_log,
-                &EventEnvelope::new(
-                    item.workspace_id.clone(),
-                    session_name,
-                    "rimz",
-                    "cli",
-                    "feed.abstain",
-                    json!({
-                        "request_id": request_id,
-                        "resolver_id": resolver_id,
-                        "reason": reason,
-                        "next_resolver": next.clone(),
-                    }),
-                ),
-            )?;
+            feed_store::write(&txn.paths.feed_dir, &item)?;
+            txn.append(&EventEnvelope::new(
+                item.workspace_id.clone(),
+                session_name,
+                "rimz",
+                "cli",
+                "feed.abstain",
+                json!({
+                    "request_id": request_id,
+                    "resolver_id": resolver_id,
+                    "reason": reason,
+                    "next_resolver": next.clone(),
+                }),
+            ))?;
             let outcome = AbstainOutcome {
                 request_id: request_id.clone(),
                 next_resolver: next,
             };
-            (outcome, item.request_id.clone())
-        };
-
-        self.wake_sidebars_best_effort(&wake_target);
-        self.publish_snapshot_best_effort();
-        Ok(outcome)
+            Ok(outcome)
+        })
     }
 
     /// Involuntary chain handoff. Called by the hook bridge when the active
@@ -322,9 +299,8 @@ impl Ledger {
         reason: AbandonReason,
         session_name: &str,
     ) -> Result<ElapseOutcome> {
-        let (outcome, wake_target) = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let mut item = feed_store::load(&self.inner.paths.feed_dir, request_id)?;
+        self.commit(PublishPolicy::Skip, |txn| {
+            let mut item = feed_store::load(&txn.paths.feed_dir, request_id)?;
             if !item.surface.supports_resolve() {
                 return Err(feed_store::FeedStoreErr::SurfaceMismatch {
                     request_id: request_id.clone(),
@@ -351,33 +327,26 @@ impl Ledger {
             item.mark_active_resolver_budget_elapsed(reason);
             let next = item.advance_resolver_chain_after(current);
             item.updated_at = Timestamp::now();
-            feed_store::write(&self.inner.paths.feed_dir, &item)?;
-            event_log::append(
-                &self.inner.paths.events_log,
-                &EventEnvelope::new(
-                    item.workspace_id.clone(),
-                    session_name,
-                    "rimz",
-                    "cli",
-                    "feed.chain_elapse",
-                    json!({
-                        "request_id": request_id,
-                        "resolver_id": current,
-                        "reason": reason.as_str(),
-                        "next_resolver": next.clone(),
-                    }),
-                ),
-            )?;
+            feed_store::write(&txn.paths.feed_dir, &item)?;
+            txn.append(&EventEnvelope::new(
+                item.workspace_id.clone(),
+                session_name,
+                "rimz",
+                "cli",
+                "feed.chain_elapse",
+                json!({
+                    "request_id": request_id,
+                    "resolver_id": current,
+                    "reason": reason.as_str(),
+                    "next_resolver": next.clone(),
+                }),
+            ))?;
             let outcome = ElapseOutcome {
                 request_id: request_id.clone(),
                 next_resolver: next,
             };
-            (outcome, item.request_id.clone())
-        };
-
-        self.wake_sidebars_best_effort(&wake_target);
-        self.publish_snapshot_best_effort();
-        Ok(outcome)
+            Ok(outcome)
+        })
     }
 
     /// Mark a `native_ui` feed item as acknowledged locally. Never reaches the
@@ -389,9 +358,8 @@ impl Ledger {
         reason: Option<String>,
         session_name: &str,
     ) -> Result<()> {
-        let wake_target = {
-            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let mut item = feed_store::load(&self.inner.paths.feed_dir, request_id)?;
+        self.commit(PublishPolicy::Debounced, |txn| {
+            let mut item = feed_store::load(&txn.paths.feed_dir, request_id)?;
             if !item.surface.supports_dismiss() {
                 return Err(feed_store::FeedStoreErr::SurfaceMismatch {
                     request_id: request_id.clone(),
@@ -409,29 +377,20 @@ impl Ledger {
             item.status = FeedStatus::Resolved;
             item.resolution = Some(resolution);
             item.updated_at = Timestamp::now();
-            feed_store::write(&self.inner.paths.feed_dir, &item)?;
-            event_log::append(
-                &self.inner.paths.events_log,
-                &EventEnvelope::new(
-                    item.workspace_id.clone(),
-                    session_name,
-                    "rimz",
-                    "cli",
-                    "feed.dismiss",
-                    json!({
-                        "request_id": request_id,
-                        "reason": reason,
-                    }),
-                ),
-            )?;
-            Some(item.request_id.clone())
-        };
-
-        if let Some(request_id) = &wake_target {
-            self.wake_sidebars_best_effort(request_id);
-        }
-        self.publish_snapshot_best_effort();
-        Ok(())
+            feed_store::write(&txn.paths.feed_dir, &item)?;
+            txn.append(&EventEnvelope::new(
+                item.workspace_id.clone(),
+                session_name,
+                "rimz",
+                "cli",
+                "feed.dismiss",
+                json!({
+                    "request_id": request_id,
+                    "reason": reason,
+                }),
+            ))?;
+            Ok(())
+        })
     }
 }
 

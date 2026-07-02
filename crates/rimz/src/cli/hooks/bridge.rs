@@ -142,12 +142,9 @@ fn push_feed_item_recording_ask(
     session_name: &str,
 ) -> Result<()> {
     let transcript = transcript_ask_entry(agent, event_name, item);
-    if let Some(err) = ledger.push_feed_item_superseding_with_transcript(
-        item,
-        supersede,
-        session_name,
-        transcript.as_ref(),
-    )? {
+    if let Some(err) =
+        ledger.push_feed_item_superseding(item, supersede, session_name, transcript.as_ref())?
+    {
         warn!(
             agent = agent.descriptor().kind,
             request_id = %item.request_id,

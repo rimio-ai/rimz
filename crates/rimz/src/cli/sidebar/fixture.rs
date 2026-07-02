@@ -6,6 +6,7 @@ pub(super) fn sidebar_fixture_snapshot(
     let now = fixture_now()?;
     let workspace_id = "ws_0123456789abcdef01234567".parse::<WorkspaceId>()?;
     let mut snapshot = rimz::SidebarSnapshot {
+        snapshot_version: rimz::ledger::snapshot::SNAPSHOT_VERSION,
         workspace_id,
         display_name: "query-engine".to_owned(),
         generated_at: now,

@@ -144,6 +144,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
     let now = super::fixed_now();
     SidebarSnapshot {
+        snapshot_version: crate::ledger::snapshot::SNAPSHOT_VERSION,
         workspace_id,
         display_name: "query-engine".to_owned(),
         generated_at: now,

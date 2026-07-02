@@ -51,7 +51,8 @@ fn warm_append_push_and_resolve_perform_zero_fsyncs() {
         "agent-hook",
     );
     h.ledger
-        .push_feed_item_superseding(&item, Some(("claude", "live")), "rimz-perf")
+        .push_feed_item_superseding(&item, Some(("claude", "live")), "rimz-perf", None)
+        .map(|_| ())
         .expect("push");
     h.ledger
         .resolve_feed_item(

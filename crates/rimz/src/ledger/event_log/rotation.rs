@@ -1,7 +1,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use uuid::Uuid;
 
@@ -31,12 +31,6 @@ impl RotationOutcome {
     pub fn is_rotated(&self) -> bool {
         matches!(self, Self::Rotated { .. })
     }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct PruneOutcome {
-    pub files_removed: usize,
-    pub bytes_removed: u64,
 }
 
 /// Rotate `events_log` into `archive_dir` when it crosses `min_bytes`.
@@ -93,52 +87,12 @@ pub fn rotate(events_log: &Path, archive_dir: &Path, min_bytes: u64) -> Result<R
 /// considered; foreign files are ignored so a misconfigured operator can't
 /// lose data by dropping unrelated content into the archive directory.
 #[must_use = "maintenance report; surface it to the caller"]
-pub fn prune_archive(archive_dir: &Path, older_than: Duration) -> Result<PruneOutcome> {
-    let entries = match fs::read_dir(archive_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(PruneOutcome::default()),
-        Err(source) => {
-            return Err(EventLogErr::Io {
-                path: archive_dir.to_path_buf(),
-                source,
-            });
-        }
-    };
-
-    let now = SystemTime::now();
-    let mut report = PruneOutcome::default();
-    for entry in entries {
-        let entry = entry.map_err(|source| EventLogErr::Io {
-            path: archive_dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        if !is_archive_name(&path) {
-            continue;
-        }
-        let meta = fs::symlink_metadata(&path).map_err(|source| EventLogErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let modified = meta.modified().map_err(|source| EventLogErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let Ok(age) = now.duration_since(modified) else {
-            continue;
-        };
-        if age < older_than {
-            continue;
-        }
-        let bytes = meta.len();
-        fs::remove_file(&path).map_err(|source| EventLogErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        report.files_removed += 1;
-        report.bytes_removed = report.bytes_removed.saturating_add(bytes);
-    }
-    Ok(report)
+pub fn prune_archive(archive_dir: &Path, older_than: Duration) -> Result<atomic::PruneOutcome> {
+    Ok(atomic::prune_old_files(
+        archive_dir,
+        older_than,
+        is_archive_name,
+    )?)
 }
 
 fn is_archive_name(path: &Path) -> bool {
