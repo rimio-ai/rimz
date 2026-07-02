@@ -1,13 +1,15 @@
-//! Rimz-owned loop task instances.
+//! Rimz-owned loop task instances and merged loop task reads.
 //!
 //! Durable recurring definitions live in `loop.toml`. Machine-generated
 //! one-shots, self-wakes, and poll-until instances live here as state, using
 //! the same task entry shape without turning runtime churn into user config
-//! edits.
+//! edits. Readers merge both backings here; durable config wins when both
+//! stores contain a name.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::config::{TaskEntry, Tasks};
+use crate::config::{MachineConfig, TaskEntry, Tasks};
 use crate::ledger::atomic::{Result, write_temp_then_rename_cache};
 use crate::ledger::paths::state_home;
 
@@ -19,6 +21,18 @@ pub fn path(state_root: &Path) -> PathBuf {
 
 pub fn load() -> Tasks {
     load_from(&state_home())
+}
+
+pub fn load_all() -> BTreeMap<String, (TaskEntry, TaskSource)> {
+    load_all_from(load(), MachineConfig::load_lenient().r#loop.tasks)
+}
+
+pub fn load_entry(name: &str) -> Option<(TaskEntry, TaskSource)> {
+    load_all().remove(name)
+}
+
+pub fn is_ephemeral(entry: &TaskEntry) -> bool {
+    entry.once || entry.deadline.is_some()
 }
 
 pub fn insert(name: &str, entry: &TaskEntry) -> Result<()> {
@@ -33,11 +47,41 @@ pub fn rename(old: &str, new: &str) -> Result<bool> {
     rename_from(&state_home(), old, new)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskSource {
+    Config,
+    Instance,
+}
+
+impl TaskSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Instance => "state",
+        }
+    }
+}
+
 fn load_from(state_root: &Path) -> Tasks {
     let Ok(bytes) = std::fs::read(path(state_root)) else {
         return Tasks::default();
     };
     serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn load_all_from(instances: Tasks, config: Tasks) -> BTreeMap<String, (TaskEntry, TaskSource)> {
+    let mut tasks: BTreeMap<_, _> = instances
+        .0
+        .into_iter()
+        .map(|(name, entry)| (name, (entry, TaskSource::Instance)))
+        .collect();
+    tasks.extend(
+        config
+            .0
+            .into_iter()
+            .map(|(name, entry)| (name, (entry, TaskSource::Config))),
+    );
+    tasks
 }
 
 fn insert_into(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
@@ -118,5 +162,37 @@ mod tests {
             Some(Some("wake"))
         );
         assert!(!rename_from(dir.path(), "wake", "later").expect("rename absent"));
+    }
+
+    #[test]
+    fn merged_reads_prefer_config_over_instance() {
+        let mut instance = task();
+        instance.prompt = Some("state".to_owned());
+        let mut config = task();
+        config.prompt = Some("config".to_owned());
+
+        let tasks = load_all_from(
+            Tasks(BTreeMap::from([("wake".to_owned(), instance)])),
+            Tasks(BTreeMap::from([("wake".to_owned(), config)])),
+        );
+
+        let (entry, source) = tasks.get("wake").expect("wake task");
+        assert_eq!(source, &TaskSource::Config);
+        assert_eq!(entry.prompt.as_deref(), Some("config"));
+    }
+
+    #[test]
+    fn ephemeral_tasks_are_once_or_deadline_bound() {
+        let mut entry = task();
+        entry.once = false;
+        entry.deadline = None;
+        assert!(!is_ephemeral(&entry));
+
+        entry.once = true;
+        assert!(is_ephemeral(&entry));
+
+        entry.once = false;
+        entry.deadline = Some(jiff::Timestamp::UNIX_EPOCH);
+        assert!(is_ephemeral(&entry));
     }
 }

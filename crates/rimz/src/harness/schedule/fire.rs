@@ -13,7 +13,7 @@ use jiff::{Timestamp, Zoned};
 
 use super::instances;
 use crate::RuntimePaths;
-use crate::config::{MachineConfig, TaskEntry};
+use crate::config::TaskEntry;
 use crate::harness::schedule;
 use crate::ids::WorkspaceId;
 use crate::ledger::atomic::write_temp_then_rename_cache;
@@ -25,7 +25,13 @@ enum Action {
 }
 
 pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
-    let tasks = workspace_tasks(load_all_tasks(), &runtime.workspace_id);
+    let tasks = workspace_tasks(
+        instances::load_all()
+            .into_iter()
+            .map(|(name, (entry, _))| (name, entry))
+            .collect(),
+        &runtime.workspace_id,
+    );
     let path = state_path(runtime);
     let state = read_state(&path);
     let (actions, next_state) = plan(&tasks, &state, now);
@@ -93,22 +99,6 @@ fn workspace_tasks(
             WorkspaceId::from_project_root(&entry.resolved_root()) == *workspace_id
         })
         .collect()
-}
-
-fn load_all_tasks() -> BTreeMap<String, TaskEntry> {
-    merge_task_maps(
-        MachineConfig::load_lenient().r#loop.tasks.0,
-        instances::load().0,
-    )
-}
-
-fn merge_task_maps(
-    config: BTreeMap<String, TaskEntry>,
-    instances: BTreeMap<String, TaskEntry>,
-) -> BTreeMap<String, TaskEntry> {
-    let mut tasks = instances;
-    tasks.extend(config);
-    tasks
 }
 
 fn read_state(path: &Path) -> BTreeMap<String, Timestamp> {
@@ -252,18 +242,5 @@ mod tests {
         let filtered = workspace_tasks(tasks, &workspace_id);
 
         assert_eq!(filtered.keys().cloned().collect::<Vec<_>>(), vec!["home"]);
-    }
-
-    #[test]
-    fn instance_store_tasks_feed_workspace_filter() {
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/repo/owned"));
-        let tasks = merge_task_maps(
-            BTreeMap::new(),
-            BTreeMap::from([("wake".to_owned(), task("/repo/owned", "5m"))]),
-        );
-
-        let filtered = workspace_tasks(tasks, &workspace_id);
-
-        assert_eq!(filtered.keys().cloned().collect::<Vec<_>>(), vec!["wake"]);
     }
 }

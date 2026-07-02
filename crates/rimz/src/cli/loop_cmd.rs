@@ -38,7 +38,10 @@ use rimz::harness::schedule::runner::{
     check_timeout, deadline_expired, polarity_fires, run_check, tail_output,
     window_already_running,
 };
-use rimz::harness::schedule::{self, instances};
+use rimz::harness::schedule::{
+    self,
+    instances::{self, TaskSource},
+};
 use rimz::harness::spec::{self as agents_spec, Cell, LayoutSpec};
 use rimz::ids::WorkspaceId;
 use rimz::ledger::atomic::write_bytes_atomically;
@@ -291,7 +294,7 @@ fn add(args: AddArgs) -> Result<()> {
     if has_agent_action {
         preflight_entry(&args.name, &entry, resolved.as_ref())?;
     }
-    if is_ephemeral(&entry) {
+    if instances::is_ephemeral(&entry) {
         config_remove(&args.name)?;
         instances::insert(&args.name, &entry)?;
     } else {
@@ -335,7 +338,7 @@ fn rename(name: &str, new_name: &str) -> Result<()> {
     if name == new_name {
         bail!("new loop task name must differ from `{name}`");
     }
-    if load_all().contains_key(new_name) {
+    if instances::load_all().contains_key(new_name) {
         bail!("loop task `{new_name}` already exists");
     }
 
@@ -352,7 +355,7 @@ fn rename(name: &str, new_name: &str) -> Result<()> {
 // ---- list -------------------------------------------------------------------
 
 fn list() -> Result<()> {
-    let tasks = load_all();
+    let tasks = instances::load_all();
     let mut out = ui::out();
     if tasks.is_empty() {
         writeln!(out, "no loop tasks; add one with `rimz loop add`")?;
@@ -437,7 +440,9 @@ fn next_fire_text(
 }
 
 fn show(args: ShowArgs) -> Result<()> {
-    let (entry, source) = load_entry(&args.name)?;
+    let (entry, source) = instances::load_entry(&args.name).ok_or_else(|| {
+        anyhow::anyhow!("no loop task named `{}`; see `rimz loop list`", args.name)
+    })?;
     let root = entry.resolved_root();
     let runtime = runtime_for_root(&root);
     let stamps = runtime
@@ -678,7 +683,8 @@ impl RunOutcome {
 }
 
 fn run_one(name: &str, mode: LoopRunMode, globals: &GlobalFlags) -> Result<()> {
-    let (entry, source) = load_entry(name)?;
+    let (entry, source) = instances::load_entry(name)
+        .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     let started = Instant::now();
     let _run_lock = match acquire_run_lock(name, &entry) {
         Ok(Some(guard)) => guard,
@@ -773,7 +779,7 @@ fn execute_task(
             let record = check_record(&outcome);
             match action {
                 TaskAction::CheckOnly => {
-                    if mode == LoopRunMode::Scheduled && is_ephemeral(entry) {
+                    if mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
                         let _ = remove_task(name, source)?;
                     }
                     let mut run = RunOutcome::new(check_only_result(&outcome));
@@ -845,7 +851,7 @@ fn execute_task(
         .map_err(|err| anyhow::anyhow!("{err}"))?;
     let mut run_globals = globals.clone();
     run_globals.root = Some(entry.resolved_root());
-    if mode == LoopRunMode::Scheduled && is_ephemeral(entry) {
+    if mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
         // One-shot cleanup happens before the terminal run. A one-shot removed
         // pre-fire that then fails to launch is not retried.
         let _ = remove_task(name, source)?;
@@ -915,7 +921,7 @@ fn execute_delivery_task(
         Some(prompt) => prompt,
         None => resolve_task_prompt(entry)?,
     };
-    if disposition.mode == LoopRunMode::Scheduled && is_ephemeral(entry) {
+    if disposition.mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
         let _ = remove_task(name, disposition.source)?;
     }
     let root = entry.resolved_root();
@@ -1027,7 +1033,7 @@ fn queue_resolution_miss(err: &anyhow::Error) -> bool {
 
 pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
     let mut reaped = 0;
-    for (name, (entry, source)) in load_all() {
+    for (name, (entry, source)) in instances::load_all() {
         let target = match task_action(&name, &entry) {
             Ok(TaskAction::Deliver(target)) => target,
             Ok(TaskAction::Spawn(_) | TaskAction::CheckOnly) => continue,
@@ -1061,21 +1067,6 @@ enum TaskAction<'a> {
     Spawn(&'a str),
     Deliver(&'a TaskTarget),
     CheckOnly,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TaskSource {
-    Config,
-    Instance,
-}
-
-impl TaskSource {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Config => "config",
-            Self::Instance => "state",
-        }
-    }
 }
 
 fn task_action<'a>(name: &str, entry: &'a TaskEntry) -> Result<TaskAction<'a>> {
@@ -1303,43 +1294,11 @@ fn preflight_kind(kind: &str) -> Result<()> {
     Ok(())
 }
 
-fn load_tasks() -> std::collections::BTreeMap<String, TaskEntry> {
-    MachineConfig::load_lenient().r#loop.tasks.0
-}
-
-fn load_all() -> std::collections::BTreeMap<String, (TaskEntry, TaskSource)> {
-    let mut tasks: std::collections::BTreeMap<_, _> = instances::load()
-        .0
-        .into_iter()
-        .map(|(name, entry)| (name, (entry, TaskSource::Instance)))
-        .collect();
-    tasks.extend(
-        load_tasks()
-            .into_iter()
-            .map(|(name, entry)| (name, (entry, TaskSource::Config))),
-    );
-    tasks
-}
-
-fn load_entry(name: &str) -> Result<(TaskEntry, TaskSource)> {
-    if let Some(entry) = instances::load().0.remove(name) {
-        return Ok((entry, TaskSource::Instance));
-    }
-    load_tasks()
-        .remove(name)
-        .map(|entry| (entry, TaskSource::Config))
-        .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))
-}
-
 fn remove_task(name: &str, source: TaskSource) -> Result<bool> {
     match source {
         TaskSource::Config => config_remove(name),
         TaskSource::Instance => instances::remove(name).map_err(Into::into),
     }
-}
-
-fn is_ephemeral(entry: &TaskEntry) -> bool {
-    entry.once || entry.deadline.is_some()
 }
 
 fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
