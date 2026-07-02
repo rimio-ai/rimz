@@ -11,9 +11,6 @@ use std::time::{Duration, Instant};
 use crate::diag::DiagSink;
 use crate::schema::diag::{DiagEvent, TickLoop};
 
-/// Above the degraded Zellij `list-panes` ceiling plus fold/enrich work. A
-/// producer sustaining past one default data tick cannot hold cadence.
-pub(crate) const TICK_WALL_BUDGET: Duration = Duration::from_secs(1);
 /// Lifecycle frames are pinned under 1KiB; a 100-agent burst folds about 100KiB,
 /// and warm unchanged logs fold zero bytes. Cold catch-up trips one tick only.
 pub(crate) const TICK_FOLD_BYTES_BUDGET: u64 = 256 * 1024;
@@ -32,8 +29,8 @@ struct TickSample {
 }
 
 impl TickSample {
-    fn exceeds_budget(self) -> bool {
-        self.wall_ms > budget_wall_ms()
+    fn exceeds_budget(self, budget_wall_ms: u64) -> bool {
+        self.wall_ms > budget_wall_ms
             || self.fold_bytes > TICK_FOLD_BYTES_BUDGET
             || self.spawns > TICK_SPAWN_BUDGET
     }
@@ -57,15 +54,21 @@ pub(crate) struct TickStart {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TickMeter {
     tick_loop: TickLoop,
+    budget_wall_ms: u64,
     streak: u32,
     since_ms: u64,
     worst: TickSample,
 }
 
 impl TickMeter {
-    pub(crate) fn new(tick_loop: TickLoop) -> Self {
+    /// The wall budget is one configured data tick. At the default one-second
+    /// tick this stays above the degraded Zellij `list-panes` ceiling plus
+    /// fold/enrich work; longer cadences allow proportionally longer producer
+    /// work before a tick counts as saturated.
+    pub(crate) fn new(tick_loop: TickLoop, tick: Duration) -> Self {
         Self {
             tick_loop,
+            budget_wall_ms: duration_ms(tick),
             streak: 0,
             since_ms: 0,
             worst: TickSample::default(),
@@ -91,7 +94,7 @@ impl TickMeter {
     }
 
     fn finish_sample(&mut self, sample: TickSample, at_ms: u64) -> Option<DiagEvent> {
-        if !sample.exceeds_budget() {
+        if !sample.exceeds_budget(self.budget_wall_ms) {
             return self.finish_under_budget(at_ms);
         }
 
@@ -120,7 +123,7 @@ impl TickMeter {
             wall_ms: self.worst.wall_ms,
             fold_bytes: self.worst.fold_bytes,
             spawns: self.worst.spawns,
-            budget_wall_ms: budget_wall_ms(),
+            budget_wall_ms: self.budget_wall_ms,
             budget_fold_bytes: TICK_FOLD_BYTES_BUDGET,
             budget_spawns: TICK_SPAWN_BUDGET,
             since_ms: self.since_ms,
@@ -161,10 +164,6 @@ pub(crate) fn report(diag: Option<&DiagSink>, event: DiagEvent) {
     }
 }
 
-fn budget_wall_ms() -> u64 {
-    duration_ms(TICK_WALL_BUDGET)
-}
-
 fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
@@ -181,8 +180,14 @@ mod tests {
         }
     }
 
+    const DEFAULT_WALL_MS: u64 = 1_000;
+
+    fn meter(tick_loop: TickLoop) -> TickMeter {
+        TickMeter::new(tick_loop, Duration::from_secs(1))
+    }
+
     fn over_wall() -> TickSample {
-        sample(budget_wall_ms() + 1, 0, 0)
+        sample(DEFAULT_WALL_MS + 1, 0, 0)
     }
 
     fn under() -> TickSample {
@@ -215,7 +220,7 @@ mod tests {
 
     #[test]
     fn under_budget_stream_stays_silent() {
-        let mut meter = TickMeter::new(TickLoop::Fetch);
+        let mut meter = meter(TickLoop::Fetch);
 
         for at_ms in 0..10 {
             assert_eq!(meter.finish_sample(under(), at_ms), None);
@@ -226,7 +231,7 @@ mod tests {
 
     #[test]
     fn short_over_budget_streak_resets_without_record() {
-        let mut meter = TickMeter::new(TickLoop::Fetch);
+        let mut meter = meter(TickLoop::Fetch);
 
         for at_ms in 0..TICK_BUDGET_BREACH_TICKS - 1 {
             assert_eq!(meter.finish_sample(over_wall(), u64::from(at_ms)), None);
@@ -238,11 +243,11 @@ mod tests {
 
     #[test]
     fn threshold_consecutive_ticks_emit_active_breach_with_worst_values() {
-        let mut meter = TickMeter::new(TickLoop::Fetch);
+        let mut meter = meter(TickLoop::Fetch);
         for at_ms in 10..10 + TICK_BUDGET_BREACH_TICKS - 1 {
             assert_eq!(
                 meter.finish_sample(
-                    sample(budget_wall_ms() + u64::from(at_ms), 0, 1),
+                    sample(DEFAULT_WALL_MS + u64::from(at_ms), 0, 1),
                     u64::from(at_ms)
                 ),
                 None
@@ -252,7 +257,7 @@ mod tests {
         let event = meter
             .finish_sample(
                 sample(
-                    budget_wall_ms() + 1,
+                    DEFAULT_WALL_MS + 1,
                     TICK_FOLD_BYTES_BUDGET + 5,
                     TICK_SPAWN_BUDGET + 2,
                 ),
@@ -265,7 +270,7 @@ mod tests {
             (
                 TickLoop::Fetch,
                 TICK_BUDGET_BREACH_TICKS,
-                budget_wall_ms() + 13,
+                DEFAULT_WALL_MS + 13,
                 TICK_FOLD_BYTES_BUDGET + 5,
                 TICK_SPAWN_BUDGET + 2,
                 10,
@@ -276,13 +281,13 @@ mod tests {
 
     #[test]
     fn persistent_breach_keeps_emitting_active_records() {
-        let mut meter = TickMeter::new(TickLoop::Fetch);
+        let mut meter = meter(TickLoop::Fetch);
         for at_ms in 10..10 + TICK_BUDGET_BREACH_TICKS {
             let _ = meter.finish_sample(over_wall(), u64::from(at_ms));
         }
 
         let event = meter
-            .finish_sample(sample(budget_wall_ms() + 50, 0, 0), 20)
+            .finish_sample(sample(DEFAULT_WALL_MS + 50, 0, 0), 20)
             .expect("persistent breach");
 
         assert_eq!(
@@ -290,7 +295,7 @@ mod tests {
             (
                 TickLoop::Fetch,
                 TICK_BUDGET_BREACH_TICKS + 1,
-                budget_wall_ms() + 50,
+                DEFAULT_WALL_MS + 50,
                 0,
                 0,
                 10,
@@ -301,7 +306,7 @@ mod tests {
 
     #[test]
     fn recovery_emits_info_once_and_resets() {
-        let mut meter = TickMeter::new(TickLoop::CacheRefresh);
+        let mut meter = meter(TickLoop::CacheRefresh);
         for at_ms in 10..10 + TICK_BUDGET_BREACH_TICKS {
             let _ = meter.finish_sample(over_wall(), u64::from(at_ms));
         }
@@ -315,7 +320,7 @@ mod tests {
             (
                 TickLoop::CacheRefresh,
                 TICK_BUDGET_BREACH_TICKS,
-                budget_wall_ms() + 1,
+                DEFAULT_WALL_MS + 1,
                 0,
                 0,
                 10,
@@ -329,16 +334,40 @@ mod tests {
     #[test]
     fn each_metric_can_trip_the_budget() {
         for sample in [
-            sample(budget_wall_ms() + 1, 0, 0),
+            sample(DEFAULT_WALL_MS + 1, 0, 0),
             sample(0, TICK_FOLD_BYTES_BUDGET + 1, 0),
             sample(0, 0, TICK_SPAWN_BUDGET + 1),
         ] {
-            let mut meter = TickMeter::new(TickLoop::Fetch);
+            let mut meter = meter(TickLoop::Fetch);
             let mut event = None;
             for at_ms in 0..TICK_BUDGET_BREACH_TICKS {
                 event = meter.finish_sample(sample, u64::from(at_ms));
             }
             assert!(event.is_some());
         }
+    }
+
+    #[test]
+    fn wall_budget_tracks_configured_tick_duration() {
+        let mut default_tick = TickMeter::new(TickLoop::Fetch, Duration::from_secs(1));
+        let mut long_tick = TickMeter::new(TickLoop::Fetch, Duration::from_secs(10));
+        let sample = sample(1_500, 0, 0);
+
+        let mut default_event = None;
+        let mut long_event = None;
+        for at_ms in 0..TICK_BUDGET_BREACH_TICKS {
+            default_event = default_tick.finish_sample(sample, u64::from(at_ms));
+            long_event = long_tick.finish_sample(sample, u64::from(at_ms));
+        }
+
+        let default_event = default_event.expect("1.5s exceeds a 1s tick");
+        assert!(long_event.is_none());
+        match default_event {
+            DiagEvent::TickBudgetBreach { budget_wall_ms, .. } => {
+                assert_eq!(budget_wall_ms, DEFAULT_WALL_MS);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert_eq!(long_tick.streak, 0);
     }
 }

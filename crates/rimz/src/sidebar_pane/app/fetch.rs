@@ -575,7 +575,7 @@ pub(super) fn spawn_fetch_worker(
         let mut notifications = NotificationState::default();
         let mut link_notifications = LinkNotificationState::default();
         let mut last_election = None;
-        let mut meter = TickMeter::new(TickLoop::Fetch);
+        let mut meter = TickMeter::new(TickLoop::Fetch, tick_for(config.tick_seconds));
         while let Ok(first) = request_rx.recv() {
             // Coalesce any requests that piled up into one run, keeping the
             // strongest intent and the newest pane-freshness floor.

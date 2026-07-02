@@ -28,7 +28,7 @@ pub(super) fn spawn(
 fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: Option<crate::diag::DiagSink>) {
     let mut cursor = RollupCursor::new();
     let mut spending_walker = SpendingWalker::new();
-    let mut meter = TickMeter::new(TickLoop::CacheRefresh);
+    let mut meter = TickMeter::new(TickLoop::CacheRefresh, tick_for(config.tick_seconds));
     loop {
         std::thread::sleep(tick_for(config.tick_seconds));
         if crate::sidebar::elder_sidebar_instance(&runtime, &config.instance_id).is_some() {

@@ -70,7 +70,7 @@ Where the milliseconds are, and what bounds each. Reproducible figures come from
 
 ## The tick budget
 
-The sidebar meters producer ticks against the budgets declared in [`sidebar/meter.rs`](../../../crates/rimz/src/sidebar/meter.rs). The budgets mirror the cost map and move with it: a cost-map change revisits the tick budgets in the same PR. Sustained breaches write `tick_budget_breach` diagnostics ([diagnostics.md](./diagnostics.md)), and the first active record in an episode emits one `warn!` through the observability bridge. The meter observes only; producer work proceeds unchanged.
+The sidebar meters producer ticks against the budgets declared in [`sidebar/meter.rs`](../../../crates/rimz/src/sidebar/meter.rs). The wall bound is one configured data tick; byte and spawn bounds stay absolute because they track storm shape rather than cadence. The budgets mirror the cost map and move with it: a cost-map change revisits the tick budgets in the same PR. Sustained breaches write `tick_budget_breach` diagnostics ([diagnostics.md](./diagnostics.md)), and the first active record in an episode emits one `warn!` through the observability bridge. The meter observes only; producer work proceeds unchanged.
 
 ## Measuring
 
