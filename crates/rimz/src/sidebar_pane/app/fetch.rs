@@ -371,30 +371,11 @@ fn emit_unread_reconcile_trace(
     opened: &[OpenedUnread],
     cleared: &[ClearedUnread],
 ) {
-    use crate::schema::notify_trace::NotifyTraceEvent;
     for item in opened {
-        diag.trace_notify(NotifyTraceEvent::UnreadMarked {
-            row_id: item.row_id.clone(),
-            label: Some(item.label.clone()),
-            agent_kind: Some(item.agent_kind.clone()),
-            agent_id: Some(item.agent_id.clone()),
-            worktree: item.worktree.clone(),
-            pane_id: item.pane_id.clone(),
-            status: item.status.as_str().to_owned(),
-            episode_ms: item.episode_ms,
-        });
+        diag.trace_notify(item.trace_event());
     }
     for item in cleared {
-        diag.trace_notify(NotifyTraceEvent::UnreadCleared {
-            row_id: item.row_id.clone(),
-            label: item.label.clone(),
-            agent_kind: item.agent_kind.clone(),
-            agent_id: item.agent_id.clone(),
-            worktree: item.worktree.clone(),
-            pane_id: item.pane_id.clone(),
-            cause: item.cause.as_str().to_owned(),
-            cleared_at_ms: item.cleared_at_ms,
-        });
+        diag.trace_notify(item.trace_event());
     }
 }
 

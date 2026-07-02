@@ -259,6 +259,21 @@ pub struct OpenedUnread {
     pub silent: bool,
 }
 
+impl OpenedUnread {
+    pub(crate) fn trace_event(&self) -> crate::schema::notify_trace::NotifyTraceEvent {
+        crate::schema::notify_trace::NotifyTraceEvent::UnreadMarked {
+            row_id: self.row_id.clone(),
+            label: Some(self.label.clone()),
+            agent_kind: Some(self.agent_kind.clone()),
+            agent_id: Some(self.agent_id.clone()),
+            worktree: self.worktree.clone(),
+            pane_id: self.pane_id.clone(),
+            status: self.status.as_str().to_owned(),
+            episode_ms: self.episode_ms,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClearedUnread {
     pub(crate) row_id: String,
@@ -269,6 +284,21 @@ pub(crate) struct ClearedUnread {
     pub(crate) pane_id: Option<PaneId>,
     pub(crate) cause: UnreadClearCause,
     pub(crate) cleared_at_ms: Option<i64>,
+}
+
+impl ClearedUnread {
+    pub(crate) fn trace_event(&self) -> crate::schema::notify_trace::NotifyTraceEvent {
+        crate::schema::notify_trace::NotifyTraceEvent::UnreadCleared {
+            row_id: self.row_id.clone(),
+            label: self.label.clone(),
+            agent_kind: self.agent_kind.clone(),
+            agent_id: self.agent_id.clone(),
+            worktree: self.worktree.clone(),
+            pane_id: self.pane_id.clone(),
+            cause: self.cause.as_str().to_owned(),
+            cleared_at_ms: self.cleared_at_ms,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

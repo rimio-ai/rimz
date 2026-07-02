@@ -2,8 +2,12 @@ use super::*;
 use crate::agents::AgentStatus;
 use crate::schema::diag::{DiagEvent, GateRule};
 use crate::sidebar::read_marks::ReadMarkStore;
+use crate::sidebar_pane::app::ServeConfig;
+use crate::sidebar_pane::app::fetch::FetchOutcome;
 use crate::sidebar_pane::app::fixtures::{snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
+use crate::sidebar_pane::app::loop_state::LoopState;
+use crate::sidebar_pane::pets::PetRenderCaps;
 use crate::sidebar_pane::render::{Alert, GateNotice};
 use crate::{
     AgentCard, PaneId, RowCard, RuntimePaths, SidebarInstanceId, SidebarStatusCount,
@@ -199,13 +203,7 @@ fn set_viewed(snapshot: &mut SidebarSnapshot, active_pane_is_viewed: bool) {
 
 struct ApplyHarness {
     config: ServeConfig,
-    last_snapshot: Option<SidebarSnapshot>,
-    current: SidebarSnapshot,
-    health: Health,
-    gate: GateState,
-    self_close: SelfCloseState,
-    ui: UiState,
-    read_marks: ReadMarkStore,
+    state: LoopState,
 }
 
 impl ApplyHarness {
@@ -224,16 +222,18 @@ impl ApplyHarness {
     ) -> Self {
         let mut config = serve_config(ws);
         config.instance_id = instance_id.clone();
-        Self {
-            config,
-            last_snapshot: None,
-            current: snapshot(ws),
-            health: Health::default(),
-            gate: GateState::default(),
-            self_close: SelfCloseState::default(),
-            ui: UiState::default(),
-            read_marks: ReadMarkStore::new(runtime, instance_id),
-        }
+        let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
+        let mut state = LoopState::new(
+            ws.clone(),
+            None,
+            None,
+            observe_tx,
+            ReadMarkStore::new(runtime, instance_id),
+            PetRenderCaps::default(),
+            true,
+        );
+        state.current = snapshot(ws);
+        Self { config, state }
     }
 
     fn apply(&mut self, snapshot: SidebarSnapshot) -> ApplyOutcome {
@@ -245,20 +245,23 @@ impl ApplyHarness {
     }
 
     fn apply_outcome(&mut self, outcome: FetchOutcome) -> ApplyOutcome {
-        apply_fetch_outcome(
-            &self.config,
-            outcome,
-            &mut self.last_snapshot,
-            &mut self.current,
-            &mut self.health,
-            &mut self.gate,
-            &mut self.self_close,
-            &mut self.ui,
-            &mut self.read_marks,
-            std::time::Instant::now(),
-            None,
-        )
-        .expect("apply fetch outcome")
+        self.state
+            .apply_fetch_outcome(&self.config, outcome, std::time::Instant::now(), None)
+            .expect("apply fetch outcome")
+    }
+}
+
+impl std::ops::Deref for ApplyHarness {
+    type Target = LoopState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl std::ops::DerefMut for ApplyHarness {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
     }
 }
 
@@ -823,48 +826,54 @@ fn diagnostics_record_fetch_and_gate_transitions() {
 
     emit_diagnostics(
         Some(&sink),
-        &prev,
-        &prev,
-        &prev,
-        &Health::default(),
-        &Health {
-            failure_streak: 1,
-            alert: None,
+        FetchDiagnostics {
+            prev_snapshot: &prev,
+            incoming_snapshot: &prev,
+            next_snapshot: &prev,
+            prev_health: &Health::default(),
+            next_health: &Health {
+                failure_streak: 1,
+                alert: None,
+            },
+            prev_gate: &held_gate,
+            next_gate: &held_gate,
+            fetch_failure: Some("pane discovery failed".to_owned()),
+            rejected: false,
+            released_via_escape_hatch: false,
+            now: fixed_time(1_700_000_000),
         },
-        &held_gate,
-        &held_gate,
-        Some("pane discovery failed".to_owned()),
-        false,
-        false,
-        fixed_time(1_700_000_000),
     );
     emit_diagnostics(
         Some(&sink),
-        &prev,
-        &incoming,
-        &prev,
-        &Health::default(),
-        &Health::default(),
-        &GateState::default(),
-        &held_gate,
-        None,
-        true,
-        false,
-        fixed_time(1_700_000_001),
+        FetchDiagnostics {
+            prev_snapshot: &prev,
+            incoming_snapshot: &incoming,
+            next_snapshot: &prev,
+            prev_health: &Health::default(),
+            next_health: &Health::default(),
+            prev_gate: &GateState::default(),
+            next_gate: &held_gate,
+            fetch_failure: None,
+            rejected: true,
+            released_via_escape_hatch: false,
+            now: fixed_time(1_700_000_001),
+        },
     );
     emit_diagnostics(
         Some(&sink),
-        &prev,
-        &prev,
-        &prev,
-        &Health::default(),
-        &Health::default(),
-        &held_gate,
-        &GateState::default(),
-        None,
-        false,
-        true,
-        fixed_time(1_700_000_003),
+        FetchDiagnostics {
+            prev_snapshot: &prev,
+            incoming_snapshot: &prev,
+            next_snapshot: &prev,
+            prev_health: &Health::default(),
+            next_health: &Health::default(),
+            prev_gate: &held_gate,
+            next_gate: &GateState::default(),
+            fetch_failure: None,
+            rejected: false,
+            released_via_escape_hatch: true,
+            now: fixed_time(1_700_000_003),
+        },
     );
 
     let events = diagnostic_events(&sink);

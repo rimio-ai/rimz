@@ -68,7 +68,7 @@ use input::{Wakeup, encode_key, encode_mouse, wait_for_wakeup};
 use lifecycle::{PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, resize_grew};
 use reload::{ReloadAction, reexec_self, reload_action};
 use selection::{InputOutcome, handle_key, handle_mouse_click, handle_scroll, row_index_of_pane};
-use state::{apply_fetch_outcome, placeholder_snapshot};
+use state::placeholder_snapshot;
 
 pub use demo::{serve_fixture, serve_gallery};
 pub use health::Health;
