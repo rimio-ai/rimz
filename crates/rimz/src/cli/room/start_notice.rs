@@ -1,4 +1,9 @@
-use super::*;
+//! Start-time workspace notices for root class and overlapping live rooms.
+
+use std::io::Write;
+
+use anyhow::Result;
+use rimz::ids::MuxName;
 
 fn root_class_notice(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
     use rimz::workspace::RootClass;
@@ -85,6 +90,7 @@ pub(super) fn report_start_notices(workspace: &rimz::ResolvedWorkspace) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn resolved(root: &str, class: rimz::workspace::RootClass) -> rimz::ResolvedWorkspace {
         use rimz::ids::WorkspaceId;

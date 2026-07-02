@@ -1,7 +1,6 @@
 use super::*;
-use crate::cli::{
-    agents_launch, build_sidebar_opts, machine_config, open_ledger, record_workspace,
-};
+use crate::cli::room::build_sidebar_opts;
+use crate::cli::{agents_launch, machine_config, open_ledger, record_workspace};
 
 pub(super) fn launch_layout(
     args: AgentsArgs,

@@ -1,5 +1,7 @@
-use super::*;
 use std::io::Write as _;
+
+use super::*;
+use crate::cli::room::{detected_installable_adapters, render_dry_run};
 
 pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
     if dry_run {
@@ -19,7 +21,7 @@ pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
             }
         }
         None => {
-            let adapters = super::super::hook_install::detected_installable_adapters();
+            let adapters = detected_installable_adapters();
             if adapters.is_empty() {
                 anyhow::bail!(
                     "no supported coding agents detected on PATH ({}) - install an agent and rerun, or name one: rimz hooks install <agent>",
@@ -47,7 +49,7 @@ fn run_install_dry_run(agent: Option<String>) -> Result<()> {
             vec![integration.preview_hook_install()?]
         }
         None => {
-            let adapters = super::super::hook_install::detected_installable_adapters();
+            let adapters = detected_installable_adapters();
             if adapters.is_empty() {
                 anyhow::bail!(
                     "no supported coding agents detected on PATH ({}) - install an agent and rerun, or name one: rimz hooks install <agent>",
@@ -62,7 +64,7 @@ fn run_install_dry_run(agent: Option<String>) -> Result<()> {
         }
     };
     let mut out = crate::cli::render::err();
-    crate::cli::hook_install::render_dry_run(&mut out, &previews)
+    render_dry_run(&mut out, &previews)
 }
 
 pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {

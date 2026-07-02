@@ -640,7 +640,7 @@ fn gallery(globals: &GlobalFlags) -> Result<()> {
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
     let detected_size = rimz::mux::detect_terminal_size();
-    let room = super::RoomTarget {
+    let room = crate::cli::room::RoomTarget {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
         session_name: &workspace.session_name,
@@ -667,7 +667,7 @@ fn gallery(globals: &GlobalFlags) -> Result<()> {
             },
             focus: true,
             dock_sidebar: false,
-            sidebar: super::build_sidebar_opts(&room, Vec::new())?,
+            sidebar: crate::cli::room::build_sidebar_opts(&room, Vec::new())?,
         })
         .context("opening sidebar gallery")
 }

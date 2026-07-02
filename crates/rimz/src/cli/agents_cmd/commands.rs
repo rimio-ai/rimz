@@ -508,7 +508,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
     // too (tmux binds it; Zellij routes it through the presence plugin below) —
     // the key reaches the sidebar from any pane regardless of how the room came
     // to be.
-    crate::cli::register_focus_key(backend.as_ref(), &machine_config);
+    crate::cli::room::register_focus_key(backend.as_ref(), &machine_config);
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
@@ -519,9 +519,9 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
         detected_size,
         refresh_ms: None,
     };
-    crate::cli::launch_sidebar_for_workspace(backend.as_ref(), &room, None, &[]);
-    crate::cli::gate_room_before_attach(backend.as_ref(), &room, None, &[])?;
-    crate::cli::ensure_presence_plugin(
+    crate::cli::room::launch_sidebar_for_workspace(backend.as_ref(), &room, None, &[]);
+    crate::cli::room::gate_room_before_attach(backend.as_ref(), &room, None, &[])?;
+    crate::cli::room::ensure_presence_plugin(
         backend.as_ref(),
         &workspace.session_name,
         &workspace.workspace_id,
@@ -620,7 +620,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
             },
             focus: false,
             dock_sidebar: true,
-            sidebar: crate::cli::build_sidebar_opts(&room, Vec::new())?,
+            sidebar: crate::cli::room::build_sidebar_opts(&room, Vec::new())?,
         }),
     };
     if let Err(err) = open_result {

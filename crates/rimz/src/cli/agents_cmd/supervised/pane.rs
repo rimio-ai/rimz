@@ -6,7 +6,8 @@ use anyhow::bail;
 
 #[cfg(test)]
 use super::output;
-use crate::cli::{GlobalFlags, MissingSessionReport, pick_mux_for_session};
+use crate::cli::GlobalFlags;
+use crate::cli::room::{MissingSessionReport, pick_mux_for_session};
 use rimz::harness::run::RunRecord;
 use rimz::ids::PaneId;
 use rimz::mux::PaneListOptions;

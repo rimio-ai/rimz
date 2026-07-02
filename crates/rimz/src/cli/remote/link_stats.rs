@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use super::super::workspace_record_for_session;
+use crate::cli::room::workspace_record_for_session;
 use rimz::remote::link::{LinkAck, LinkProbe, LinkStatsFile};
 
 const LINK_SCHEMA_MISMATCH_EXIT: i32 = 2;

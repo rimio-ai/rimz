@@ -6,10 +6,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 
-use super::{
-    GlobalFlags, RoomTarget, build_sidebar_opts, machine_config, open_ledger, record_workspace,
-};
+use super::{GlobalFlags, machine_config, open_ledger, record_workspace};
 use crate::cli::render;
+use crate::cli::room::{RoomTarget, build_sidebar_opts};
 use rimz::agents::AgentState;
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, TabOptions};
 use rimz::workspace::{RootClass, WorkspaceResolver};

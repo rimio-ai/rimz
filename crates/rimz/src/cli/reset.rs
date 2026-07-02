@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 
 use super::GlobalFlags;
+use crate::cli::room::{print_reset_report, rebirth_room};
 use rimz::RuntimePaths;
 use rimz::workspace::WorkspaceResolver;
 
@@ -64,7 +65,7 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
     let records = ledger
         .reset_records(&workspace.session_name, args.hard)
         .context("resetting workspace records")?;
-    super::print_reset_report(&report, Some(&records))?;
+    print_reset_report(&report, Some(&records))?;
 
     if args.no_start {
         writeln!(
@@ -73,5 +74,5 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         )?;
         return Ok(());
     }
-    super::rebirth_room(args.path, globals)
+    rebirth_room(args.path, globals)
 }

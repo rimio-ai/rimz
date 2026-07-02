@@ -1,8 +1,17 @@
+//! Session-record lookup, mux choice, and renamed-session retirement.
+
+use std::path::Path;
 use std::time::SystemTime;
 
-use super::*;
+use anyhow::{Context, Result};
+use rimz::ids::MuxName;
+use rimz::ledger::workspace_record;
+use rimz::mux::MuxBackend;
+use rimz::{RuntimePaths, StatePaths, WorkspaceRecord};
 
-pub(super) fn pick_mux_for_session(
+use super::MissingSessionReport;
+
+pub(crate) fn pick_mux_for_session(
     session: &str,
     explicit: Option<MuxName>,
     missing_report: MissingSessionReport,
@@ -81,7 +90,7 @@ pub(super) fn retire_renamed_session(
     }
 }
 
-pub(super) fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>> {
+pub(crate) fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>> {
     workspace_record_for_session_under(
         session,
         &rimz::ledger::paths::state_home(),
@@ -197,6 +206,7 @@ fn matching_sidebar_heartbeat_mtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::ids::WorkspaceId;
 
     #[test]
     fn renamed_session_retires_only_a_live_diverged_name() {

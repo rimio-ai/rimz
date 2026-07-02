@@ -1,4 +1,15 @@
-use super::*;
+//! Stuck-room recovery gate and reset reporting.
+
+use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use rimz::mux::{DaemonView, MuxBackend, SessionHealth};
+use rimz::{Ledger, RuntimePaths, StatePaths};
+
+use crate::cli::{AttachFlags, GlobalFlags, StartArgs, confirm};
+
+use super::{RoomTarget, build_sidebar_opts, start};
 
 fn ensure_clean_room(
     backend: &dyn MuxBackend,
@@ -29,7 +40,7 @@ fn ensure_clean_room(
 /// Run the pre-attach health gate and, if the room cannot self-heal, handle the
 /// stuck case (offer a reset, or fail fast). The single entry the attach flows
 /// call before building the attach command.
-pub(super) fn gate_room_before_attach(
+pub(crate) fn gate_room_before_attach(
     backend: &dyn MuxBackend,
     target: &RoomTarget<'_>,
     daemon: Option<&DaemonView>,

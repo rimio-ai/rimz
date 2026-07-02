@@ -1,3 +1,5 @@
+//! Start-time agent hook auto-install prompt.
+
 use std::io::{BufRead, IsTerminal, Write};
 
 use anyhow::Result;
@@ -5,7 +7,7 @@ use rimz::agents::{HookInstallPreview, HookInstallReport, StatusLineChange};
 use similar::TextDiff;
 use unicode_width::UnicodeWidthStr;
 
-use super::render;
+use crate::cli::render;
 
 const DIFF_CONTEXT_LINES: usize = 3;
 const CARD_TEXT_WIDTH: usize = 44;

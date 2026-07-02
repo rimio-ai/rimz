@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 
-use super::{GlobalFlags, RoomTarget};
+use super::GlobalFlags;
+use crate::cli::room::RoomTarget;
 use rimz::agents::AgentAdapter;
 use rimz::agents::AgentState;
 use rimz::bridge::{self, ExpectedRunFrame, SocketGuard};

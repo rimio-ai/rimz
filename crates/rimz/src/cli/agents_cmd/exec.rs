@@ -728,7 +728,7 @@ fn session_live(globals: &GlobalFlags, session_name: &str) -> bool {
         return false;
     };
     let backend = rimz::mux::backend_for(mux);
-    crate::cli::resume::session_is_live(backend.as_ref(), session_name)
+    crate::cli::room::session_is_live(backend.as_ref(), session_name)
 }
 
 fn close_own_pane(globals: &GlobalFlags, session_name: &str) {

@@ -5,7 +5,8 @@ use std::io::IsTerminal;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
-use super::{AttachAction, AttachFlags, GlobalFlags, attach_action, exec_attach_command};
+use super::{AttachFlags, GlobalFlags};
+use crate::cli::room::{AttachAction, AttachMode, attach_action, exec_attach_command};
 use rimz::ids::MuxName;
 use rimz::remote::aliases::{RemoteAlias, RemoteAliases};
 use rimz::remote::{
@@ -302,7 +303,7 @@ fn resolve_connect(
 /// SSH remote attach: the local rimz is a launcher and link supervisor only.
 /// Workspace resolution, session birth, the sidebar, and the health gate all
 /// run on the remote host's own `rimz`; the room renders here over `ssh -t`.
-fn attach_remote(remote: RemoteConnect, mode: super::AttachMode) -> Result<()> {
+fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
     let term = remote_term_plan();
     let plain_spec = ssh_attach_spec(&remote.target, remote.no_resume, remote.mux, &term);
 

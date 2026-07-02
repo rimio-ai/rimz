@@ -1,5 +1,14 @@
-use super::*;
+//! Daemon view assembly and launch for room start.
+
+use std::path::{Path, PathBuf};
+
 use rimz::config::DaemonConfig;
+use rimz::mux::{
+    BackgroundViewLaunch, BackgroundViewOptions, DaemonView, HostPane, MuxBackend,
+    SidebarPaneOptions,
+};
+
+use super::RoomTarget;
 
 pub(super) fn build_daemon_view(
     remote_control: &rimz::config::RemoteControlConfig,

@@ -1,4 +1,11 @@
-use super::*;
+//! Attach action selection, attach-command printing, and exec.
+
+use std::io::{IsTerminal, Write};
+
+use anyhow::{Context, Result};
+use rimz::ids::MuxName;
+
+use super::{AttachAction, AttachMode};
 
 pub(super) fn run_attach_action(
     spec: &rimz::mux::CommandSpec,

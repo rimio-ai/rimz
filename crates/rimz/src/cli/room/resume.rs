@@ -1,4 +1,11 @@
-use super::*;
+//! Resume planning and reboot detection for room rebirth.
+
+use std::io::Write;
+use std::path::Path;
+
+use anyhow::{Context, Result};
+use rimz::mux::{MuxBackend, SessionHealth};
+use rimz::{Ledger, RuntimePaths, StatePaths};
 
 pub(super) fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
     let exists = backend
@@ -16,7 +23,7 @@ pub(super) fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &s
 /// Used by the agent wrapper on a close signal: a live session means the pane
 /// closed deliberately while the room stayed up, while a missing session means
 /// mux loss and the agent stays recoverable.
-pub(super) fn session_is_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
+pub(crate) fn session_is_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
     backend
         .list_sessions()
         .map(|sessions| sessions.iter().any(|name| name == session_name))
