@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
 use rimz::config::{CheckOn, TaskEntry, TaskTarget, Tasks};
@@ -350,7 +350,88 @@ fn loop_run_check_only_logs_command_result() {
             Some(expected),
             "{name} should log {expected:?}"
         );
+        let record = records.last().expect("last record");
+        assert_eq!(
+            record.check.as_ref().and_then(|check| check.code),
+            Some(if expected == LoopRunResult::Completed {
+                0
+            } else {
+                1
+            })
+        );
+        assert!(
+            record
+                .check
+                .as_ref()
+                .is_some_and(|check| check.output.contains(name.strip_prefix("check-").unwrap())),
+            "{name} should keep check output"
+        );
     }
+}
+
+#[test]
+fn loop_check_failure_show_prints_exit_and_output() {
+    let env = Env::new();
+    let command = "definitely-missing-rimz-loop-command";
+    let add = env
+        .rimz()
+        .args([
+            "loop", "add", "missing", "--check", command, "--every", "15m",
+        ])
+        .output()
+        .expect("loop add check-only");
+    assert!(
+        add.status.success(),
+        "loop add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let fire = env
+        .rimz()
+        .args(["loop", "fire", "missing"])
+        .output()
+        .expect("loop fire check-only");
+    assert!(
+        fire.status.success(),
+        "loop fire failed: {}",
+        String::from_utf8_lossy(&fire.stderr)
+    );
+    let fire_stdout = String::from_utf8_lossy(&fire.stdout);
+    assert!(
+        fire_stdout.contains("loop `missing`: failed (exit 127"),
+        "fire should print outcome summary: {fire_stdout}"
+    );
+    assert!(
+        fire_stdout.contains(command),
+        "fire should print check output tail: {fire_stdout}"
+    );
+
+    let records = read_loop_run_records(&env);
+    let record = records.last().expect("check record");
+    assert_eq!(record.result, LoopRunResult::Failed);
+    let check = record.check.as_ref().expect("check detail");
+    assert_eq!(check.code, Some(127));
+    assert!(check.output.contains(command));
+
+    let show = env
+        .rimz()
+        .args(["loop", "show", "missing"])
+        .output()
+        .expect("loop show");
+    assert!(
+        show.status.success(),
+        "loop show failed: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.contains("RESULT") && stdout.contains("failed"),
+        "show should print runs table: {stdout}"
+    );
+    assert!(
+        stdout.contains("last run output (exit 127)") && stdout.contains(command),
+        "show should print output detail: {stdout}"
+    );
 }
 
 #[test]
@@ -437,6 +518,73 @@ fn loop_run_check_guard_skips_or_delivers_with_output() {
             .contains("check `printf boom; exit 1` exited 1")
     );
     assert!(messages[0].text.contains("boom"));
+    let records = read_loop_run_records(&env);
+    let broken = records.last().expect("broken run record");
+    assert_eq!(broken.result, LoopRunResult::Delivered);
+    let check = broken.check.as_ref().expect("guard check detail");
+    assert_eq!(check.code, Some(1));
+    assert!(check.output.contains("boom"));
+    let skipped = records
+        .iter()
+        .find(|record| record.task == "healthy")
+        .expect("healthy run record");
+    assert_eq!(skipped.result, LoopRunResult::CheckSkipped);
+    assert_eq!(skipped.check.as_ref().and_then(|check| check.code), Some(0));
+}
+
+#[test]
+fn loop_run_error_records_and_show_displays_message() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-error", "feature-loop");
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.bad_prompt]\n\
+             bind = {{ kind = \"claude\", session = \"sess-loop-error\", handle = \"@claude\" }}\n\
+             prompt-file = \"missing-prompt.txt\"\n\
+             root = \"{}\"\n\
+             every = \"15m\"\n",
+            env.project_root.display()
+        ),
+    );
+
+    let run = env
+        .rimz()
+        .args(["loop", "run", "bad_prompt"])
+        .output()
+        .expect("loop run bad prompt");
+    assert!(
+        !run.status.success(),
+        "loop run should fail for missing prompt-file"
+    );
+    let records = read_loop_run_records(&env);
+    let record = records.last().expect("errored record");
+    assert_eq!(record.task, "bad_prompt");
+    assert_eq!(record.result, LoopRunResult::Errored);
+    assert!(
+        record
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("reading prompt-file")),
+        "record should store error chain: {record:?}"
+    );
+
+    let show = env
+        .rimz()
+        .args(["loop", "show", "bad_prompt"])
+        .output()
+        .expect("loop show bad prompt");
+    assert!(
+        show.status.success(),
+        "loop show failed: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.contains("error") && stdout.contains("reading prompt-file"),
+        "show should display stored error: {stdout}"
+    );
 }
 
 #[test]
@@ -728,6 +876,118 @@ fn loop_fire_bind_delivers_prompt() {
             .last()
             .map(|record| record.result),
         Some(LoopRunResult::Delivered)
+    );
+}
+
+#[test]
+fn loop_list_next_uses_room_arm_stamp() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.next]\n\
+             check = \"true\"\n\
+             root = \"{}\"\n\
+             every = \"15m\"\n",
+            env.project_root.display()
+        ),
+    );
+
+    let list = env
+        .rimz()
+        .args(["loop", "list"])
+        .output()
+        .expect("loop list no stamp");
+    assert!(
+        list.status.success(),
+        "loop list failed: {}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        stdout.contains("NEXT"),
+        "list should include NEXT: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("next") && line.contains("every 15m  -")),
+        "no arm stamp should render dash: {stdout}"
+    );
+
+    write_loop_fire_state(
+        &env,
+        BTreeMap::from([(
+            "next".to_owned(),
+            Timestamp::now() - SignedDuration::from_secs(16 * 60),
+        )]),
+    );
+    let list = env
+        .rimz()
+        .args(["loop", "list"])
+        .output()
+        .expect("loop list stamped");
+    assert!(
+        list.status.success(),
+        "loop list failed: {}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("next") && line.contains("due")),
+        "due arm stamp should render due: {stdout}"
+    );
+}
+
+#[test]
+fn loop_show_and_list_fold_legacy_records() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.legacy]\n\
+             check = \"true\"\n\
+             root = \"{}\"\n\
+             every = \"15m\"\n",
+            env.project_root.display()
+        ),
+    );
+    append_legacy_loop_record(&env, "legacy", LoopRunResult::Completed);
+
+    let list = env
+        .rimz()
+        .args(["loop", "list"])
+        .output()
+        .expect("loop list legacy");
+    assert!(
+        list.status.success(),
+        "loop list failed: {}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("legacy") && line.contains("completed")),
+        "list should fold legacy record: {stdout}"
+    );
+
+    let show = env
+        .rimz()
+        .args(["loop", "show", "legacy"])
+        .output()
+        .expect("loop show legacy");
+    assert!(
+        show.status.success(),
+        "loop show failed: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.contains("completed") && stdout.contains("MODE"),
+        "show should render legacy record with defaulted fields: {stdout}"
     );
 }
 
@@ -1064,6 +1324,22 @@ fn write_loop_instances(env: &Env, tasks: Tasks) {
     std::fs::create_dir_all(path.parent().expect("instances parent")).expect("mkdir state");
     std::fs::write(path, serde_json::to_vec_pretty(&tasks).expect("json"))
         .expect("write loop instances");
+}
+
+fn write_loop_fire_state(env: &Env, stamps: BTreeMap<String, Timestamp>) {
+    let path = env.runtime_paths().root.join("loop-fire.json");
+    std::fs::create_dir_all(path.parent().expect("loop fire parent")).expect("mkdir runtime");
+    std::fs::write(path, serde_json::to_vec_pretty(&stamps).expect("json"))
+        .expect("write loop fire state");
+}
+
+fn append_legacy_loop_record(env: &Env, task: &str, result: LoopRunResult) {
+    let path = loop_run_log::log_path(&env.state_root());
+    std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
+    let result = serde_json::to_string(&result).expect("result json");
+    let line =
+        format!("{{\"task\":\"{task}\",\"at\":\"1970-01-01T00:00:10Z\",\"result\":{result}}}\n");
+    std::fs::write(path, line).expect("write legacy loop run record");
 }
 
 fn loop_config_path(env: &Env) -> std::path::PathBuf {

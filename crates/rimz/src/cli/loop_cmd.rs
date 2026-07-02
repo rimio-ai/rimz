@@ -7,11 +7,13 @@
 //! cell is the window-priming special case and gets the budget-window skip
 //! optimization.
 //!
-//! This handler parses and edits the per-machine config, lists room-open state,
-//! and owns the hidden runner the elder spawns. The pure schedule parsing and
-//! due evaluation live in [`rimz::schedule`]; delivery mode reuses the shared
-//! message seam, and ephemeral self-wakes live in [`rimz::loop_instances`].
+//! This handler parses and edits the per-machine config, lists room-open and
+//! next-fire state, inspects run history, and owns the hidden runner the elder
+//! spawns. The runner appends exactly one history record after loading a task:
+//! the pure executor returns an outcome, and this wrapper records success,
+//! failure, or error with capped forensics.
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -27,9 +29,11 @@ use rimz::agents_spec::{self, Cell, LayoutSpec};
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use rimz::ids::WorkspaceId;
 use rimz::ledger::atomic::write_bytes_atomically;
-use rimz::ledger::paths::{RuntimePaths, agents_home, config_home, runtime_home, state_home};
+use rimz::ledger::paths::{
+    RuntimePaths, StatePaths, agents_home, config_home, runtime_home, state_home,
+};
 use rimz::loop_instances;
-use rimz::loop_run_log::{self, LoopRunRecord, LoopRunResult};
+use rimz::loop_run_log::{self, CheckRecord, LoopRunMode, LoopRunRecord, LoopRunResult};
 use rimz::message::DeliveryGate;
 use rimz::schedule;
 use rimz::sidebar::enrich::shortest_window_running;
@@ -42,6 +46,7 @@ use super::render as ui;
 const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CHECK_OUTPUT_CAP: usize = 16 * 1024;
+const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
 
 #[derive(Debug, Args)]
 pub struct LoopArgs {
@@ -59,6 +64,8 @@ enum LoopSubcmd {
     Rename(RenameArgs),
     /// List configured tasks and whether their room is open.
     List,
+    /// Show one task's schedule, next fire, and recent run forensics.
+    Show(ShowArgs),
     /// Fire one task now in the foreground for testing; one-shots and schedules stay put.
     Fire(NameArgs),
     /// Run one task now. The sidebar elder calls this; humans rarely do.
@@ -140,17 +147,19 @@ struct RenameArgs {
     new_name: String,
 }
 
+#[derive(Debug, Args)]
+struct ShowArgs {
+    name: String,
+    /// Number of recent runs to show.
+    #[arg(short = 'n', long = "runs", default_value_t = 10)]
+    runs: usize,
+}
+
 struct AddTiming {
     at: Option<String>,
     days: Option<String>,
     once: bool,
     deadline: Option<Timestamp>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RunMode {
-    Scheduled,
-    Manual,
 }
 
 pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
@@ -159,8 +168,9 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::Remove(args) => remove(&args.name),
         LoopSubcmd::Rename(args) => rename(&args.name, &args.new_name),
         LoopSubcmd::List => list(),
-        LoopSubcmd::Fire(args) => run_one(&args.name, RunMode::Manual, globals),
-        LoopSubcmd::Run(args) => run_one(&args.name, RunMode::Scheduled, globals),
+        LoopSubcmd::Show(args) => show(args),
+        LoopSubcmd::Fire(args) => run_one(&args.name, LoopRunMode::Manual, globals),
+        LoopSubcmd::Run(args) => run_one(&args.name, LoopRunMode::Scheduled, globals),
     }
 }
 
@@ -346,17 +356,33 @@ fn list() -> Result<()> {
     }
     let stats = loop_run_log::stats(&state_home());
     let now = Timestamp::now();
+    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let mut table = ui::Table::new([
-        "NAME", "SOURCE", "SPEC", "SCHEDULE", "ROOM", "RUNS", "LAST RUN", "RESULT", "ROOT",
+        "NAME", "SOURCE", "SPEC", "SCHEDULE", "NEXT", "ROOM", "RUNS", "LAST RUN", "RESULT", "ROOT",
     ])
-    .right(&[5]);
+    .right(&[6]);
     for (name, (entry, source)) in &tasks {
-        let when = match schedule::parse_schedule(name, entry) {
+        let parsed = schedule::parse_schedule(name, entry);
+        let when = match &parsed {
             Ok(schedule) => schedule.describe(),
             Err(err) => format!("invalid: {err}"),
         };
         let root = entry.resolved_root();
-        let state = if room_open(&root) { "open" } else { "no room" };
+        let runtime = runtime_for_root(&root);
+        let state = if runtime.as_ref().is_some_and(fresh_sidebar_present) {
+            "open"
+        } else {
+            "no room"
+        };
+        let stamps = runtime
+            .as_ref()
+            .map(rimz::loop_fire::last_stamps)
+            .unwrap_or_default();
+        let next = parsed
+            .ok()
+            .and_then(|parsed| next_fire_text(name, &parsed.schedule, &stamps, &now_zoned, now))
+            .map(ui::cell)
+            .unwrap_or_else(|| ui::cell("-").dash());
         let task_stats = stats.get(name);
         let runs = task_stats.map_or(0, |stats| stats.runs);
         let last_run = if let Some(stats) = task_stats {
@@ -373,6 +399,7 @@ fn list() -> Result<()> {
             ui::cell(source.label()),
             ui::cell(task_subject(entry)),
             ui::cell(when),
+            next,
             ui::cell(state),
             ui::cell(runs.to_string()),
             last_run,
@@ -385,8 +412,102 @@ fn list() -> Result<()> {
 }
 
 fn room_open(root: &Path) -> bool {
-    RuntimePaths::for_workspace(WorkspaceId::from_project_root(root))
-        .is_ok_and(|runtime| fresh_sidebar_present(&runtime))
+    runtime_for_root(root)
+        .as_ref()
+        .is_some_and(fresh_sidebar_present)
+}
+
+fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
+    RuntimePaths::for_workspace(WorkspaceId::from_project_root(root)).ok()
+}
+
+fn next_fire_text(
+    name: &str,
+    schedule: &schedule::Schedule,
+    stamps: &BTreeMap<String, Timestamp>,
+    now_zoned: &jiff::Zoned,
+    now: Timestamp,
+) -> Option<String> {
+    let next = schedule.next_after(*stamps.get(name)?, now_zoned)?;
+    Some(ui::rel_until(next, now))
+}
+
+fn show(args: ShowArgs) -> Result<()> {
+    let (entry, source) = load_entry(&args.name)?;
+    let root = entry.resolved_root();
+    let runtime = runtime_for_root(&root);
+    let stamps = runtime
+        .as_ref()
+        .map(rimz::loop_fire::last_stamps)
+        .unwrap_or_default();
+    let room = if runtime.as_ref().is_some_and(fresh_sidebar_present) {
+        "open"
+    } else {
+        "no room"
+    };
+    let parsed = schedule::parse_schedule(&args.name, &entry);
+    let schedule_text = match &parsed {
+        Ok(parsed) => parsed.describe(),
+        Err(err) => format!("invalid: {err}"),
+    };
+    let now = Timestamp::now();
+    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
+    let next = parsed
+        .as_ref()
+        .ok()
+        .and_then(|parsed| next_fire_text(&args.name, &parsed.schedule, &stamps, &now_zoned, now))
+        .unwrap_or_else(|| "-".to_owned());
+
+    let mut out = ui::out();
+    writeln!(out, "loop `{}`", args.name)?;
+    let mut kv = ui::KeyVals::new();
+    kv.push("source", ui::cell(source.label()));
+    kv.push("task", ui::cell(task_subject(&entry)));
+    kv.push("schedule", ui::cell(schedule_text));
+    kv.push(
+        "root",
+        ui::cell(ui::home_relative(root.to_string_lossy().as_ref())),
+    );
+    kv.push("room", ui::cell(room));
+    kv.push("next", ui::cell(next));
+    kv.render(&mut out)?;
+
+    let records = loop_run_log::task_records(&state_home(), &args.name);
+    if records.is_empty() {
+        writeln!(out, "no runs recorded; try `rimz loop fire {}`", args.name)?;
+        return Ok(());
+    }
+
+    writeln!(out)?;
+    let mut table = ui::Table::new(["WHEN", "MODE", "RESULT", "TIME", "EXIT", "NOTE"]);
+    let start = records.len().saturating_sub(args.runs);
+    for record in &records[start..] {
+        table.row([
+            ui::cell(ui::rel_age(record.at, now)),
+            ui::cell(record.mode.map_or("-", LoopRunMode::label)).dash(),
+            loop_result_cell(record.result),
+            ui::cell(
+                record
+                    .duration_ms
+                    .map(format_duration_ms)
+                    .unwrap_or_else(|| "-".to_owned()),
+            )
+            .dash(),
+            ui::cell(record_exit(record).unwrap_or_else(|| "-".to_owned())).dash(),
+            ui::cell(record_note(record).unwrap_or_else(|| "-".to_owned())).dash(),
+        ]);
+    }
+    table.render(&mut out)?;
+
+    if let Some(detail) = records
+        .iter()
+        .rev()
+        .find(|record| record_has_detail(record))
+    {
+        writeln!(out)?;
+        render_record_detail(&mut out, &entry, detail)?;
+    }
+    Ok(())
 }
 
 fn loop_result_cell(result: LoopRunResult) -> ui::Cell {
@@ -404,21 +525,198 @@ fn loop_result_cell(result: LoopRunResult) -> ui::Cell {
     ui::cell(result.label()).fg(style)
 }
 
-fn loop_record(task: &str, result: LoopRunResult) -> LoopRunRecord {
-    LoopRunRecord {
-        task: task.to_owned(),
-        at: Timestamp::now(),
-        result,
+fn format_duration_ms(ms: u64) -> String {
+    if ms < 1_000 {
+        format!("{ms}ms")
+    } else if ms < 10_000 {
+        format!("{:.1}s", ms as f64 / 1_000.0)
+    } else if ms < 60_000 {
+        format!("{}s", ms / 1_000)
+    } else {
+        format!("{}m", ms / 60_000)
     }
+}
+
+fn record_exit(record: &LoopRunRecord) -> Option<String> {
+    if let Some(check) = &record.check {
+        if check.timed_out {
+            return Some("timeout".to_owned());
+        }
+        return check.code.map(|code| code.to_string());
+    }
+    record
+        .run_id
+        .as_ref()
+        .and_then(|_| spawn_exit_code(record.result))
+        .map(|code| code.to_string())
+}
+
+fn spawn_exit_code(result: LoopRunResult) -> Option<i32> {
+    match result {
+        LoopRunResult::Completed => Some(0),
+        LoopRunResult::Failed => Some(1),
+        LoopRunResult::TimedOut => Some(124),
+        LoopRunResult::Canceled => Some(130),
+        _ => None,
+    }
+}
+
+fn record_note(record: &LoopRunRecord) -> Option<String> {
+    record
+        .error
+        .as_deref()
+        .or(record.last_message.as_deref())
+        .or(record.target.as_deref())
+        .map(|note| truncate_note(first_line(note), 60))
+}
+
+fn first_line(text: &str) -> &str {
+    text.lines().next().unwrap_or("")
+}
+
+fn truncate_note(text: &str, max: usize) -> String {
+    let mut chars = text.chars();
+    let clipped: String = chars.by_ref().take(max).collect();
+    if chars.next().is_some() && max >= 3 {
+        format!("{}...", clipped.chars().take(max - 3).collect::<String>())
+    } else {
+        clipped
+    }
+}
+
+fn record_has_detail(record: &LoopRunRecord) -> bool {
+    record.check.is_some()
+        || record.error.is_some()
+        || record.last_message.is_some()
+        || record.run_id.is_some()
+}
+
+fn render_record_detail(
+    out: &mut impl Write,
+    entry: &TaskEntry,
+    record: &LoopRunRecord,
+) -> std::io::Result<()> {
+    writeln!(out, "last run detail")?;
+    if let Some(check) = &record.check {
+        let status = if check.timed_out {
+            "timeout".to_owned()
+        } else {
+            check
+                .code
+                .map(|code| format!("exit {code}"))
+                .unwrap_or_else(|| "signal".to_owned())
+        };
+        writeln!(out, "last run output ({status}):")?;
+        if check.output.trim().is_empty() {
+            writeln!(out, "-")?;
+        } else {
+            writeln!(out, "{}", check.output.trim_end())?;
+        }
+    }
+    if let Some(error) = &record.error {
+        writeln!(out, "error:")?;
+        writeln!(out, "{error}")?;
+    }
+    if let Some(last_message) = &record.last_message {
+        writeln!(out, "last message:")?;
+        writeln!(out, "{last_message}")?;
+    }
+    if let Some(run_id) = &record.run_id {
+        writeln!(out, "run: {run_id}")?;
+        if let Some(transcript) = transcript_path_for_record(entry, run_id) {
+            writeln!(out, "transcript: {transcript}")?;
+        }
+    }
+    Ok(())
+}
+
+fn transcript_path_for_record(entry: &TaskEntry, run_id: &str) -> Option<String> {
+    let run_id = rimz::RunId::parse(run_id).ok()?;
+    let paths = StatePaths::under(
+        WorkspaceId::from_project_root(&entry.resolved_root()),
+        &state_home(),
+    )
+    .ok()?;
+    rimz::run::load(&paths, &run_id)
+        .ok()
+        .and_then(|record| record.transcript_path)
 }
 
 // ---- run --------------------------------------------------------------------
 
-fn run_one(name: &str, mode: RunMode, globals: &GlobalFlags) -> Result<()> {
+struct RunOutcome {
+    result: LoopRunResult,
+    check: Option<CheckRecord>,
+    run_id: Option<String>,
+    last_message: Option<String>,
+    target: Option<String>,
+    exit_code: Option<i32>,
+}
+
+#[derive(Clone, Copy)]
+struct RunDisposition {
+    source: TaskSource,
+    mode: LoopRunMode,
+}
+
+impl RunOutcome {
+    fn new(result: LoopRunResult) -> Self {
+        Self {
+            result,
+            check: None,
+            run_id: None,
+            last_message: None,
+            target: None,
+            exit_code: None,
+        }
+    }
+}
+
+fn run_one(name: &str, mode: LoopRunMode, globals: &GlobalFlags) -> Result<()> {
     let (entry, source) = load_entry(name)?;
-    let action = task_action(name, &entry)?;
-    if deadline_expired(&entry) {
-        if mode == RunMode::Scheduled {
+    let started = Instant::now();
+    match execute_task(name, &entry, source, mode, globals) {
+        Ok(outcome) => {
+            let duration_ms = elapsed_ms(started);
+            let record = loop_record(name, mode, duration_ms, &outcome);
+            loop_run_log::append(&record);
+            print_run_summary(name, duration_ms, &outcome)?;
+            if let Some(code) = outcome.exit_code {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Err(err) => {
+            let duration_ms = elapsed_ms(started);
+            let error = format!("{err:#}");
+            loop_run_log::append(&LoopRunRecord {
+                task: name.to_owned(),
+                at: Timestamp::now(),
+                result: LoopRunResult::Errored,
+                mode: Some(mode),
+                duration_ms: Some(duration_ms),
+                error: Some(error.clone()),
+                check: None,
+                run_id: None,
+                last_message: None,
+                target: None,
+            });
+            tracing::warn!(task = name, error = %error, "loop task run failed");
+            Err(err)
+        }
+    }
+}
+
+fn execute_task(
+    name: &str,
+    entry: &TaskEntry,
+    source: TaskSource,
+    mode: LoopRunMode,
+    globals: &GlobalFlags,
+) -> Result<RunOutcome> {
+    let action = task_action(name, entry)?;
+    if deadline_expired(entry) {
+        if mode == LoopRunMode::Scheduled {
             let _ = remove_task(name, source)?;
         } else {
             writeln!(
@@ -426,30 +724,34 @@ fn run_one(name: &str, mode: RunMode, globals: &GlobalFlags) -> Result<()> {
                 "loop `{name}`: deadline expired; leaving task in place"
             )?;
         }
-        loop_run_log::append(&loop_record(name, LoopRunResult::Expired));
-        return Ok(());
+        return Ok(RunOutcome::new(LoopRunResult::Expired));
     }
+    let mut check_detail = None;
     let prompt_override = match entry.check.as_deref() {
         Some(cmd) => {
             let outcome = run_check(
                 &entry.resolved_root(),
                 cmd,
-                check_timeout(&entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
+                check_timeout(entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
             )?;
+            let record = check_record(&outcome);
             match action {
                 TaskAction::CheckOnly => {
-                    if mode == RunMode::Scheduled && is_ephemeral(&entry) {
+                    if mode == LoopRunMode::Scheduled && is_ephemeral(entry) {
                         let _ = remove_task(name, source)?;
                     }
-                    loop_run_log::append(&loop_record(name, check_only_result(&outcome)));
-                    return Ok(());
+                    let mut run = RunOutcome::new(check_only_result(&outcome));
+                    run.check = Some(record);
+                    return Ok(run);
                 }
                 TaskAction::Spawn(_) | TaskAction::Deliver(_) => {
                     if !polarity_fires(entry.on, &outcome) {
-                        loop_run_log::append(&loop_record(name, LoopRunResult::CheckSkipped));
-                        return Ok(());
+                        let mut run = RunOutcome::new(LoopRunResult::CheckSkipped);
+                        run.check = Some(record);
+                        return Ok(run);
                     }
-                    Some(augment_prompt(resolve_task_prompt(&entry)?, cmd, &outcome))
+                    check_detail = Some(record);
+                    Some(augment_prompt(resolve_task_prompt(entry)?, cmd, &outcome))
                 }
             }
         }
@@ -457,27 +759,36 @@ fn run_one(name: &str, mode: RunMode, globals: &GlobalFlags) -> Result<()> {
     };
     let TaskAction::Spawn(spec) = action else {
         if let TaskAction::Deliver(target) = action {
-            return run_delivery_task(name, &entry, source, target, prompt_override, mode, globals);
+            return execute_delivery_task(
+                name,
+                entry,
+                RunDisposition { source, mode },
+                target,
+                prompt_override,
+                check_detail,
+                globals,
+            );
         }
         unreachable!("check-only task without check is rejected by task_action");
     };
-    let resolved = preflight_task(&entry)?;
+    let resolved = preflight_task(entry)?;
     let is_ping = agents_spec::virtual_ping_shape(spec);
     // The ping exists only to *start* a sliding budget window, so a token spent on
     // one already counting down buys nothing — skip it. Best-effort: an unknown or
     // cold reading falls through to the ping.
-    if is_ping && window_already_running(&entry, &resolved.kind)? {
+    if is_ping && window_already_running(entry, &resolved.kind)? {
         writeln!(
             ui::out(),
             "loop `{name}`: {} budget window already active; skipping ping",
             resolved.kind
         )?;
-        loop_run_log::append(&loop_record(name, LoopRunResult::SkippedWindow));
-        return Ok(());
+        let mut run = RunOutcome::new(LoopRunResult::SkippedWindow);
+        run.check = check_detail;
+        return Ok(run);
     }
     let prompt = match prompt_override {
         Some(prompt) => prompt,
-        None => resolve_task_prompt(&entry)?,
+        None => resolve_task_prompt(entry)?,
     };
     let system_prompt_file = entry
         .system_prompt_file
@@ -493,7 +804,7 @@ fn run_one(name: &str, mode: RunMode, globals: &GlobalFlags) -> Result<()> {
         .map_err(|err| anyhow::anyhow!("{err}"))?;
     let mut run_globals = globals.clone();
     run_globals.root = Some(entry.resolved_root());
-    if mode == RunMode::Scheduled && is_ephemeral(&entry) {
+    if mode == LoopRunMode::Scheduled && is_ephemeral(entry) {
         // One-shot cleanup happens before the terminal run. A one-shot removed
         // pre-fire that then fails to launch is not retried.
         let _ = remove_task(name, source)?;
@@ -505,7 +816,7 @@ fn run_one(name: &str, mode: RunMode, globals: &GlobalFlags) -> Result<()> {
     let args = super::agents_cmd::AgentsArgs::for_task(super::agents_cmd::TaskRunArgs {
         spec: spec.to_owned(),
         prompt: Some(prompt),
-        worktree: entry.worktree,
+        worktree: entry.worktree.clone(),
         ask,
         yolo,
         effort,
@@ -513,35 +824,41 @@ fn run_one(name: &str, mode: RunMode, globals: &GlobalFlags) -> Result<()> {
         timeout,
     });
     match super::agents_cmd::run_blocking_task(args, &run_globals) {
-        Ok(Some(status)) => {
-            loop_run_log::append(&loop_record(name, status.into()));
-            std::process::exit(status.exit_code());
+        Ok(Some(record)) => {
+            let status = record.status;
+            let mut run = RunOutcome::new(status.into());
+            run.check = check_detail;
+            run.run_id = Some(record.run_id.to_string());
+            run.last_message = record.last_message;
+            run.exit_code = Some(status.exit_code());
+            Ok(run)
         }
-        Ok(None) => Ok(()),
-        Err(err) => {
-            loop_run_log::append(&loop_record(name, LoopRunResult::Errored));
-            Err(err)
+        Ok(None) => {
+            let mut run = RunOutcome::new(LoopRunResult::Completed);
+            run.check = check_detail;
+            Ok(run)
         }
+        Err(err) => Err(err),
     }
 }
 
-fn run_delivery_task(
+fn execute_delivery_task(
     name: &str,
     entry: &TaskEntry,
-    source: TaskSource,
+    disposition: RunDisposition,
     target: &TaskTarget,
     prompt_override: Option<String>,
-    mode: RunMode,
+    check_record: Option<CheckRecord>,
     globals: &GlobalFlags,
-) -> Result<()> {
+) -> Result<RunOutcome> {
     if !delivery_target_alive(entry, target)? {
-        if mode == RunMode::Scheduled {
+        if disposition.mode == LoopRunMode::Scheduled {
             writeln!(
                 ui::out(),
                 "loop `{name}`: target {} not alive; removing schedule",
                 target.handle
             )?;
-            let _ = remove_task(name, source)?;
+            let _ = remove_task(name, disposition.source)?;
         } else {
             writeln!(
                 ui::out(),
@@ -549,15 +866,17 @@ fn run_delivery_task(
                 target.handle
             )?;
         }
-        loop_run_log::append(&loop_record(name, LoopRunResult::TargetGone));
-        return Ok(());
+        let mut run = RunOutcome::new(LoopRunResult::TargetGone);
+        run.check = check_record;
+        run.target = Some(target.handle.clone());
+        return Ok(run);
     }
     let prompt = match prompt_override {
         Some(prompt) => prompt,
         None => resolve_task_prompt(entry)?,
     };
-    if mode == RunMode::Scheduled && is_ephemeral(entry) {
-        let _ = remove_task(name, source)?;
+    if disposition.mode == LoopRunMode::Scheduled && is_ephemeral(entry) {
+        let _ = remove_task(name, disposition.source)?;
     }
     let root = entry.resolved_root();
     match super::message::to_session(
@@ -569,17 +888,19 @@ fn run_delivery_task(
         globals,
     ) {
         Ok(()) => {
-            loop_run_log::append(&loop_record(name, LoopRunResult::Delivered));
-            Ok(())
+            let mut run = RunOutcome::new(LoopRunResult::Delivered);
+            run.check = check_record;
+            run.target = Some(target.handle.clone());
+            Ok(run)
         }
         Err(err) if queue_resolution_miss(&err) => {
-            if mode == RunMode::Scheduled {
+            if disposition.mode == LoopRunMode::Scheduled {
                 writeln!(
                     ui::out(),
                     "loop `{name}`: target {} not alive; removing schedule",
                     target.handle
                 )?;
-                let _ = remove_task(name, source)?;
+                let _ = remove_task(name, disposition.source)?;
             } else {
                 writeln!(
                     ui::out(),
@@ -587,11 +908,61 @@ fn run_delivery_task(
                     target.handle
                 )?;
             }
-            loop_run_log::append(&loop_record(name, LoopRunResult::TargetGone));
-            Ok(())
+            let mut run = RunOutcome::new(LoopRunResult::TargetGone);
+            run.check = check_record;
+            run.target = Some(target.handle.clone());
+            Ok(run)
         }
         Err(err) => Err(err),
     }
+}
+
+fn loop_record(
+    task: &str,
+    mode: LoopRunMode,
+    duration_ms: u64,
+    outcome: &RunOutcome,
+) -> LoopRunRecord {
+    LoopRunRecord {
+        task: task.to_owned(),
+        at: Timestamp::now(),
+        result: outcome.result,
+        mode: Some(mode),
+        duration_ms: Some(duration_ms),
+        error: None,
+        check: outcome.check.clone(),
+        run_id: outcome.run_id.clone(),
+        last_message: outcome.last_message.clone(),
+        target: outcome.target.clone(),
+    }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn print_run_summary(name: &str, duration_ms: u64, outcome: &RunOutcome) -> Result<()> {
+    let mut out = ui::out();
+    write!(out, "loop `{name}`: {}", outcome.result.label())?;
+    if let Some(exit) = outcome
+        .exit_code
+        .or_else(|| outcome.check.as_ref().and_then(|check| check.code))
+    {
+        write!(out, " (exit {exit})")?;
+    } else if outcome.check.as_ref().is_some_and(|check| check.timed_out) {
+        write!(out, " (timeout)")?;
+    }
+    writeln!(out, " in {}", format_duration_ms(duration_ms))?;
+    if let Some(check) = &outcome.check
+        && !check.output.trim().is_empty()
+    {
+        writeln!(
+            out,
+            "{}",
+            tail_output(check.output.as_bytes(), CHECK_SUMMARY_OUTPUT_CAP).trim_end()
+        )?;
+    }
+    Ok(())
 }
 
 fn delivery_target_alive(entry: &TaskEntry, target: &TaskTarget) -> Result<bool> {
@@ -619,6 +990,14 @@ struct CheckOutcome {
     timed_out: bool,
     output: String,
     code: Option<i32>,
+}
+
+fn check_record(outcome: &CheckOutcome) -> CheckRecord {
+    CheckRecord {
+        code: outcome.code,
+        timed_out: outcome.timed_out,
+        output: outcome.output.clone(),
+    }
 }
 
 fn deadline_expired(entry: &TaskEntry) -> bool {

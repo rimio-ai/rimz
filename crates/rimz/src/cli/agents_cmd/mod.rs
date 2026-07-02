@@ -408,15 +408,16 @@ fn parse_pr(raw: &str) -> std::result::Result<rimz::forge::PrTarget, String> {
     rimz::forge::parse(raw)
 }
 
-/// Drive one blocking scheduled loop task for `rimz loop run`. Routes through
+/// Drive one blocking scheduled loop task for `rimz loop run`, returning the
+/// stored run record so loop history can link to its transcript. Routes through
 /// the same supervised `-p` path an interactive `rimz agents <spec> -p` uses.
 /// `globals` carries the task's `root`, so the workspace resolves with no mux
 /// pin.
 pub(crate) fn run_blocking_task(
     args: AgentsArgs,
     globals: &GlobalFlags,
-) -> Result<Option<RunStatus>> {
-    Ok(run_print(args, globals)?.map(|record| record.status))
+) -> Result<Option<RunRecord>> {
+    run_print(args, globals)
 }
 
 /// Launch a missing agent for `message --create`. A *type* handle — a kind

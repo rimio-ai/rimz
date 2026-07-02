@@ -116,6 +116,10 @@ fn read_state(path: &Path) -> BTreeMap<String, Timestamp> {
     serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
+pub fn last_stamps(runtime: &RuntimePaths) -> BTreeMap<String, Timestamp> {
+    read_state(&state_path(runtime))
+}
+
 fn state_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("loop-fire.json")
 }

@@ -13,7 +13,7 @@
 use std::time::Duration;
 
 use crate::config::TaskEntry;
-use jiff::{Timestamp, Zoned};
+use jiff::{SignedDuration, Timestamp, Zoned};
 
 /// Errors from parsing or validating a schedule entry.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -159,6 +159,19 @@ impl Schedule {
             Schedule::RawCron(expr) => {
                 cron_matches(expr, now) && minute_bucket(last_fire) < minute_bucket(now.timestamp())
             }
+        }
+    }
+
+    /// First occurrence after `last_fire`, evaluated from `now` in the
+    /// configured local zone. A returned timestamp may be at or before `now`,
+    /// which means the elder should fire on its next tick.
+    pub fn next_after(&self, last_fire: Timestamp, now: &Zoned) -> Option<Timestamp> {
+        match self {
+            Schedule::Interval(spec) => last_fire
+                .checked_add(SignedDuration::from_secs(i64::from(spec.minutes) * 60))
+                .ok(),
+            Schedule::Calendar(spec) => calendar_next_after(spec, last_fire, now),
+            Schedule::RawCron(expr) => cron_next_after(expr, last_fire, now),
         }
     }
 }
@@ -406,6 +419,34 @@ fn calendar_due(spec: &CalendarSpec, last_fire: Timestamp, now: &Zoned) -> bool 
     last_fire < occurrence.timestamp() && now.timestamp() >= occurrence.timestamp()
 }
 
+fn calendar_next_after(
+    spec: &CalendarSpec,
+    last_fire: Timestamp,
+    now: &Zoned,
+) -> Option<Timestamp> {
+    for days in 0..=8 {
+        let date = now
+            .date()
+            .checked_add(Duration::from_secs(days * 86_400))
+            .ok()?;
+        if !spec.weekdays.is_empty() && !spec.weekdays.contains(&weekday_from_jiff(date.weekday()))
+        {
+            continue;
+        }
+        let Ok(occurrence) = date
+            .at(spec.hour as i8, spec.minute as i8, 0, 0)
+            .to_zoned(now.time_zone().clone())
+        else {
+            continue;
+        };
+        let timestamp = occurrence.timestamp();
+        if timestamp > last_fire {
+            return Some(timestamp);
+        }
+    }
+    None
+}
+
 fn weekday_from_jiff(day: jiff::civil::Weekday) -> Weekday {
     match day {
         jiff::civil::Weekday::Monday => Weekday::Mon,
@@ -420,6 +461,23 @@ fn weekday_from_jiff(day: jiff::civil::Weekday) -> Weekday {
 
 fn minute_bucket(timestamp: Timestamp) -> i64 {
     timestamp.as_second().div_euclid(60)
+}
+
+fn cron_next_after(expr: &str, last_fire: Timestamp, now: &Zoned) -> Option<Timestamp> {
+    if cron_matches(expr, now) && minute_bucket(last_fire) < minute_bucket(now.timestamp()) {
+        return Some(now.timestamp());
+    }
+    let start_bucket = minute_bucket(now.timestamp()) + 1;
+    let max_minutes = 60 * 24 * 60;
+    for offset in 0..=max_minutes {
+        let second = start_bucket.checked_add(offset)?.checked_mul(60)?;
+        let timestamp = Timestamp::from_second(second).ok()?;
+        let candidate = timestamp.to_zoned(now.time_zone().clone());
+        if cron_matches(expr, &candidate) {
+            return Some(timestamp);
+        }
+    }
+    None
 }
 
 fn cron_matches(expr: &str, now: &Zoned) -> bool {
@@ -756,5 +814,72 @@ mod tests {
 
         let saturday = zdt(2026, 6, 27, 7, 0, 0);
         assert!(!schedule.due(seconds_before(saturday.timestamp(), 60), &saturday));
+    }
+
+    #[test]
+    fn interval_next_after_uses_last_fire_edge() {
+        let schedule = Schedule::Interval(IntervalSpec::new(15));
+        let now = zdt(2026, 6, 24, 8, 10, 0);
+        let last_fire = seconds_before(now.timestamp(), 60);
+        assert_eq!(
+            schedule.next_after(last_fire, &now),
+            Some(Timestamp::from_second(last_fire.as_second() + 900).expect("timestamp"))
+        );
+    }
+
+    #[test]
+    fn calendar_next_after_crosses_week_boundary() {
+        let schedule = parse_schedule("m", &entry(Some("07:30"), Some("mon"), None, None, false))
+            .expect("parse")
+            .schedule;
+        let now = zdt(2026, 6, 24, 8, 0, 0);
+        let last_fire = zdt(2026, 6, 22, 7, 30, 0).timestamp();
+        assert_eq!(
+            schedule.next_after(last_fire, &now),
+            Some(zdt(2026, 6, 29, 7, 30, 0).timestamp())
+        );
+    }
+
+    #[test]
+    fn calendar_next_after_reports_due_today() {
+        let schedule = parse_schedule("m", &entry(Some("07:30"), None, None, None, false))
+            .expect("parse")
+            .schedule;
+        let now = zdt(2026, 6, 24, 8, 0, 0);
+        let last_fire = zdt(2026, 6, 23, 7, 30, 0).timestamp();
+        assert_eq!(
+            schedule.next_after(last_fire, &now),
+            Some(zdt(2026, 6, 24, 7, 30, 0).timestamp())
+        );
+    }
+
+    #[test]
+    fn cron_next_after_walks_to_next_matching_minute() {
+        let schedule = Schedule::RawCron("*/15 * * * *".to_owned());
+        let now = zdt(2026, 6, 24, 8, 14, 12);
+        assert_eq!(
+            schedule.next_after(seconds_before(now.timestamp(), 60), &now),
+            Some(zdt(2026, 6, 24, 8, 15, 0).timestamp())
+        );
+    }
+
+    #[test]
+    fn cron_next_after_reports_current_matching_minute_due_once() {
+        let schedule = Schedule::RawCron("*/15 * * * *".to_owned());
+        let now = zdt(2026, 6, 24, 8, 30, 12);
+        assert_eq!(
+            schedule.next_after(seconds_before(now.timestamp(), 60), &now),
+            Some(now.timestamp())
+        );
+    }
+
+    #[test]
+    fn cron_next_after_returns_none_past_search_cap() {
+        let schedule = Schedule::RawCron("0 0 1 1 *".to_owned());
+        let now = zdt(2026, 1, 2, 0, 0, 0);
+        assert_eq!(
+            schedule.next_after(seconds_before(now.timestamp(), 60), &now),
+            None
+        );
     }
 }

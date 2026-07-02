@@ -123,9 +123,9 @@ Arming stamps the first-sight time, and that stamp sets the firing edge each sch
 
 Each room fires only tasks whose normalized `root` maps to its `WorkspaceId`. `rimz loop add` writes a canonical absolute root; a hand-edited `~` or relative root is expanded and canonicalized before the ownership check, display, and execution.
 
-The elder spawns `rimz loop run <name>` with fresh null stdio. That hidden runner resolves the recorded root, runs any `check` first, applies agent hook preflight only when the guard fires, and then launches the supervised pane or messages the pinned session.
+The elder spawns `rimz loop run <name>` with fresh null stdio. That hidden runner resolves the recorded root, runs any `check` first, applies agent hook preflight only when the guard fires, and then launches the supervised pane or messages the pinned session. Once a task is loaded, the runner appends exactly one history record: mode, duration, terminal result, check exit/timeout/output tail, error chain, delivery target, and supervised run id/last message when present.
 
-`rimz loop fire <name>` drives the same runner path in the foreground for testing and leaves one-shot entries and bind schedules in place.
+`rimz loop fire <name>` drives the same runner path in the foreground for testing, prints the outcome and check output tail, and leaves one-shot entries and bind schedules in place.
 
 Self-paced loops are ordinary one-shots. An agent schedules its next wake with `--in <delay>` at the end of the current wake; the instance row is removed before delivery, so the agent creates the next one only while it still has work. The pending wake stays visible in `rimz loop list` without editing `loop.toml`.
 
@@ -133,7 +133,7 @@ Self-paced loops are ordinary one-shots. An agent schedules its next wake with `
 
 `check = "<shell>"` runs through `sh -c` at the task's project root before any agent action. `on = "fail"` — the default — wakes on a non-zero exit or a timeout; `on = "success"` wakes on a zero exit. `timeout = "5m"` bounds the check, falling back to five minutes when unset.
 
-A check-only task is a scheduled command with no agent action: it logs `completed`, `failed`, or `timed out` and keeps recurring unless it is ephemeral. A guarded task logs `skipped` when the command exits with the non-firing polarity; when the guard fires, Rimz appends the command, its exit status, and the capped combined output to the base prompt before spawning or delivering.
+A check-only task is a scheduled command with no agent action: it logs `completed`, `failed`, or `timed out` with the exit code and capped combined output, and keeps recurring unless it is ephemeral. A guarded task logs the check evidence whether it skips or fires; when the guard fires, Rimz appends the command, its exit status, and the capped combined output to the base prompt before spawning or delivering.
 
 Two patterns fall out of the guard. The watchdog runs a command on a schedule and wakes an agent on failure (`every = "15m"`, `check = "cargo test"`, `on = "fail"`, `spec = "codex"`). The trigger-when-green polls until a command succeeds, then delivers (`every = "2m"`, `check = "gh run watch --exit-status"`, `on = "success"`, `bind = ...`, `deadline = ...`). A poll-until instance stops in one of two cases: the first matching check result fires the agent action, or the `deadline` passes and the run logs `expired`.
 
@@ -151,13 +151,13 @@ A task whose `spec` is a `<kind>-ping` virtual cell starts a provider's budget w
 
 ### State and code
 
-Durable definitions live in `~/.config/rimz/loop.toml` under `[tasks.*]`. Machine-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` with the same task shape; `is_ephemeral = once || deadline.is_some()` routes a task between the two on add and drives removal-on-fire. Per-room arm/fire stamps live in runtime `loop-fire.json`, and user-global run history lives in state `loop-runs.log.jsonl`.
+Durable definitions live in `~/.config/rimz/loop.toml` under `[tasks.*]`. Machine-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` with the same task shape; `is_ephemeral = once || deadline.is_some()` routes a task between the two on add and drives removal-on-fire. Per-room arm/fire stamps live in runtime `loop-fire.json`; `Schedule::next_after` combines those stamps with the configured timezone so `rimz loop list` and `rimz loop show` render the NEXT column as `due`, `in 12m`, or `-`. User-global run history lives in state `loop-runs.log.jsonl`, and `rimz loop show <name>` reads it for recent runs plus the newest stored check output, error chain, delivery target, run id, last message, and transcript path when the run store still has it.
 
-- [`schedule.rs`](../../../crates/rimz/src/schedule.rs) — pure parsing, descriptions, and due evaluation.
-- [`cli/loop_cmd.rs`](../../../crates/rimz/src/cli/loop_cmd.rs) — config and state editing, the `list` surface, and the hidden `run` runner, including check execution and prompt augmentation.
+- [`schedule.rs`](../../../crates/rimz/src/schedule.rs) — pure parsing, descriptions, due evaluation, and next-occurrence calculation.
+- [`cli/loop_cmd.rs`](../../../crates/rimz/src/cli/loop_cmd.rs) — config and state editing, the `list`/`show` surfaces, and the hidden `run` runner, including check execution, prompt augmentation, and one-record append discipline.
 - [`loop_instances.rs`](../../../crates/rimz/src/loop_instances.rs) — the ephemeral state store.
 - [`loop_fire.rs`](../../../crates/rimz/src/loop_fire.rs) — elder firing and the `loop-fire.json` state.
-- [`loop_run_log.rs`](../../../crates/rimz/src/loop_run_log.rs) — result history, including `check_skipped` and `expired`.
+- [`loop_run_log.rs`](../../../crates/rimz/src/loop_run_log.rs) — result history, including mode, duration, check forensics, errors, run links, `check_skipped`, and `expired`.
 
 ## Cleanup
 

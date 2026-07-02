@@ -93,6 +93,23 @@ pub(crate) fn rel_age(ts: Timestamp, now: Timestamp) -> String {
     }
 }
 
+pub(crate) fn rel_until(ts: Timestamp, now: Timestamp) -> String {
+    let until = ts.duration_since(now);
+    if until.is_negative() || until.is_zero() {
+        return "due".to_owned();
+    }
+    let secs = until.as_secs().max(0) as u64;
+    if secs < 60 {
+        format!("in {secs}s")
+    } else if secs < 3_600 {
+        format!("in {}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("in {}h", secs / 3_600)
+    } else {
+        format!("in {}d", secs / 86_400)
+    }
+}
+
 fn home_relative_to(home: Option<&str>, path: &str) -> String {
     let Some(home) = home.filter(|home| !home.is_empty()) else {
         return path.to_owned();
@@ -425,6 +442,31 @@ mod tests {
         assert_eq!(
             rel_age(Timestamp::from_second(200_001).expect("timestamp"), now),
             "now"
+        );
+    }
+
+    #[test]
+    fn rel_until_uses_seconds_minutes_hours_days_and_marks_past_due() {
+        let now = Timestamp::from_second(200_000).expect("timestamp");
+        assert_eq!(
+            rel_until(Timestamp::from_second(200_041).expect("timestamp"), now),
+            "in 41s"
+        );
+        assert_eq!(
+            rel_until(Timestamp::from_second(200_120).expect("timestamp"), now),
+            "in 2m"
+        );
+        assert_eq!(
+            rel_until(Timestamp::from_second(207_200).expect("timestamp"), now),
+            "in 2h"
+        );
+        assert_eq!(
+            rel_until(Timestamp::from_second(372_800).expect("timestamp"), now),
+            "in 2d"
+        );
+        assert_eq!(
+            rel_until(Timestamp::from_second(199_999).expect("timestamp"), now),
+            "due"
         );
     }
 
