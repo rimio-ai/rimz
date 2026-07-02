@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -10,8 +10,8 @@ use anyhow::{Context, Result, bail};
 
 use rimz::remote::RemoteTarget;
 use rimz::remote::link::{
-    LINK_BLACKOUT_AFTER, LinkAck, LinkProbe, ProbeWindow, control_check_spec,
-    probe_interval_from_env, probe_stream_spec, probe_timeout_from_env,
+    LinkAck, LinkEvent, LinkMonitor, LinkProbe, control_check_spec, probe_interval_from_env,
+    probe_stream_spec, probe_timeout_from_env,
 };
 
 const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(50);
@@ -71,7 +71,7 @@ pub(super) fn supervise_remote(
         if control_ready {
             remove_control_path(control_path);
         }
-        if outcome.duration >= policy.gatetime {
+        if outcome.established {
             established = true;
             consecutive_failures = 0;
         }
@@ -128,15 +128,12 @@ fn run_ssh_session(
         if let Some(status) = child.try_wait().context("polling ssh session")? {
             return Ok(SessionOutcome {
                 status,
-                duration: started.elapsed(),
+                established: started.elapsed() >= gatetime,
             });
         }
         if !reported_established && started.elapsed() >= gatetime {
             reported_established = true;
-            if should_report_gatetime_restored(
-                restore_existing_outage_after_gatetime,
-                *outage_active,
-            ) {
+            if restore_existing_outage_after_gatetime && *outage_active {
                 report_link_restored(host, outage_active);
             }
         }
@@ -150,13 +147,6 @@ fn run_ssh_session(
             }
         }
     }
-}
-
-fn should_report_gatetime_restored(
-    restore_existing_outage_after_gatetime: bool,
-    outage_active: bool,
-) -> bool {
-    restore_existing_outage_after_gatetime && outage_active
 }
 
 fn ssh_session_poll_interval(
@@ -179,7 +169,7 @@ fn ssh_session_poll_interval(
 #[derive(Debug)]
 struct SessionOutcome {
     status: std::process::ExitStatus,
-    duration: Duration,
+    established: bool,
 }
 
 fn recv_link_event(events: &mpsc::Receiver<LinkEvent>, poll: Duration) -> Option<LinkEvent> {
@@ -191,13 +181,6 @@ fn recv_link_event(events: &mpsc::Receiver<LinkEvent>, poll: Duration) -> Option
             None
         }
     }
-}
-
-#[derive(Debug)]
-enum LinkEvent {
-    FirstAck,
-    Blackout(Duration),
-    Recovered,
 }
 
 fn handle_link_event(host: &str, event: LinkEvent, outage_active: &mut bool) {
@@ -394,12 +377,8 @@ fn probe_loop(
     events: mpsc::Sender<LinkEvent>,
     stop: Arc<AtomicBool>,
 ) {
-    let mut window = ProbeWindow::with_timeout(probe_timeout_from_env());
-    let mut seq: u64 = 0;
-    let mut blackout_latched = false;
-    let mut seen_ack = false;
-    let mut consecutive_failures = 0u32;
-    let mut respawn_backoff = ProbeRespawnBackoff::default();
+    let mut monitor = LinkMonitor::with_timeout(probe_timeout_from_env());
+    let mut failures = 0u32;
     while !stop.load(Ordering::Relaxed) {
         if !wait_for_control_master(&target, &control_path, &stop) {
             return;
@@ -410,54 +389,31 @@ fn probe_loop(
             interval,
             &events,
             &stop,
-            &mut window,
-            &mut seq,
-            &mut blackout_latched,
-            &mut seen_ack,
+            &mut monitor,
         ) {
             ProbeStreamExit::Stopped | ProbeStreamExit::VersionSkew => return,
             ProbeStreamExit::Ended { acked } => {
                 let respawn_delay = if acked {
-                    respawn_backoff.reset();
+                    failures = 0;
                     PROBE_RESPAWN_BACKOFF_MIN
                 } else {
-                    respawn_backoff.next_delay()
-                };
-                if acked {
-                    consecutive_failures = 0;
-                } else {
-                    consecutive_failures = consecutive_failures.saturating_add(1);
-                }
-                if consecutive_failures >= PROBE_STREAM_BLACKOUT_FAILURES {
-                    maybe_send_probe_blackout(
-                        &events,
-                        &mut window,
-                        &mut blackout_latched,
-                        seen_ack,
+                    let delay = rimz::remote::backoff(
+                        failures,
+                        PROBE_RESPAWN_BACKOFF_MIN,
+                        PROBE_RESPAWN_BACKOFF_MAX,
                     );
+                    failures = failures.saturating_add(1);
+                    delay
+                };
+                if failures >= PROBE_STREAM_BLACKOUT_FAILURES
+                    && let Some(event) =
+                        monitor.check_blackout(rimz::sidebar::timing::unix_now_ms())
+                {
+                    let _ = events.send(event);
                 }
                 sleep_interruptibly(respawn_delay, &stop);
             }
         }
-    }
-}
-
-#[derive(Debug, Default)]
-struct ProbeRespawnBackoff {
-    failures: u32,
-}
-
-impl ProbeRespawnBackoff {
-    fn reset(&mut self) {
-        self.failures = 0;
-    }
-
-    fn next_delay(&mut self) -> Duration {
-        let shift = self.failures.min(5);
-        self.failures = self.failures.saturating_add(1);
-        PROBE_RESPAWN_BACKOFF_MIN
-            .saturating_mul(1u32 << shift)
-            .min(PROBE_RESPAWN_BACKOFF_MAX)
     }
 }
 
@@ -468,125 +424,153 @@ enum ProbeStreamExit {
     VersionSkew,
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "probe loop state is explicit and testable"
-)]
+struct ProbeChild {
+    child: Child,
+    stdin: ChildStdin,
+    reader: std::thread::JoinHandle<()>,
+}
+
+impl ProbeChild {
+    fn spawn(
+        target: &RemoteTarget,
+        control_path: &Path,
+    ) -> std::io::Result<(Self, mpsc::Receiver<u64>)> {
+        let mut child = probe_stream_spec(target, control_path)
+            .to_command()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::other("probe stream missing stdout"));
+        };
+        let Some(stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::other("probe stream missing stdin"));
+        };
+        let (ack_tx, ack_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout)
+                .lines()
+                .map_while(std::result::Result::ok)
+            {
+                let Ok(ack) = serde_json::from_str::<LinkAck>(&line) else {
+                    continue;
+                };
+                if ack.version_ok() {
+                    let _ = ack_tx.send(ack.seq);
+                }
+            }
+        });
+        Ok((
+            Self {
+                child,
+                stdin,
+                reader,
+            },
+            ack_rx,
+        ))
+    }
+
+    fn shutdown(mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = self.reader.join();
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProbeStreamStop {
+    Ended,
+    Stopped,
+    VersionSkew,
+}
+
 fn run_probe_stream(
     target: &RemoteTarget,
     control_path: &Path,
     interval: Duration,
     events: &mpsc::Sender<LinkEvent>,
     stop: &AtomicBool,
-    window: &mut ProbeWindow,
-    seq: &mut u64,
-    blackout_latched: &mut bool,
-    seen_ack: &mut bool,
+    monitor: &mut LinkMonitor,
 ) -> ProbeStreamExit {
-    let mut child = match probe_stream_spec(target, control_path)
-        .to_command()
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
+    let (mut child, ack_rx) = match ProbeChild::spawn(target, control_path) {
+        Ok(spawned) => spawned,
         Err(err) => {
             tracing::debug!(error = %err, "remote link probe stream spawn failed");
             return ProbeStreamExit::Ended { acked: false };
         }
     };
-    let Some(stdout) = child.stdout.take() else {
-        return ProbeStreamExit::Ended { acked: false };
-    };
-    let Some(mut stdin) = child.stdin.take() else {
-        return ProbeStreamExit::Ended { acked: false };
-    };
-    window.begin_stream();
-    let (ack_tx, ack_rx) = mpsc::channel();
-    let reader = std::thread::spawn(move || {
-        for line in BufReader::new(stdout)
-            .lines()
-            .map_while(std::result::Result::ok)
-        {
-            let Ok(ack) = serde_json::from_str::<LinkAck>(&line) else {
-                continue;
-            };
-            if ack.version_ok() {
-                let _ = ack_tx.send(ack.seq);
-            }
-        }
-    });
+    monitor.begin_stream();
     let mut next_tick = Instant::now();
     let mut acked = false;
-    loop {
+    let reason = loop {
         if stop.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = reader.join();
-            return ProbeStreamExit::Stopped;
+            break ProbeStreamStop::Stopped;
         }
-        match child.try_wait() {
+        match child.child.try_wait() {
             Ok(Some(status)) => {
-                let _ = reader.join();
                 if matches!(
                     status.code(),
                     Some(rimz::remote::REMOTE_RIMZ_MISSING_EXIT | 2)
                 ) {
-                    return ProbeStreamExit::VersionSkew;
+                    break ProbeStreamStop::VersionSkew;
                 }
-                acked =
-                    finish_probe_stream(&ack_rx, events, window, blackout_latched, seen_ack, acked);
-                return ProbeStreamExit::Ended { acked };
+                break ProbeStreamStop::Ended;
             }
             Ok(None) => {}
             Err(err) => {
                 tracing::debug!(error = %err, "remote link probe stream poll failed");
-                let _ = reader.join();
-                acked =
-                    finish_probe_stream(&ack_rx, events, window, blackout_latched, seen_ack, acked);
-                return ProbeStreamExit::Ended { acked };
+                break ProbeStreamStop::Ended;
             }
         }
 
-        let drained = drain_probe_acks(&ack_rx, events, window, blackout_latched, seen_ack);
-        if drained.acked {
-            acked = true;
-        }
-        if drained.reported_rtt_changed {
-            let sent_at_ms = rimz::sidebar::timing::unix_now_ms();
-            let probe = LinkProbe::new(*seq, sent_at_ms, window.stats());
-            // Stats refreshes update the remote cache immediately after a
-            // displayed RTT change. They are not measurement samples, so the
-            // ack is intentionally ignored by the window.
-            *seq = (*seq).saturating_add(1);
-            if write_link_probe(&mut stdin, &probe).is_err() {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
-                acked =
-                    finish_probe_stream(&ack_rx, events, window, blackout_latched, seen_ack, acked);
-                return ProbeStreamExit::Ended { acked };
+        let mut reported_rtt_changed = false;
+        while let Ok(seq) = ack_rx.try_recv() {
+            let outcome = monitor.record_ack(seq, rimz::sidebar::timing::unix_now_ms());
+            acked |= outcome.accepted;
+            reported_rtt_changed |= outcome.reported_rtt_changed;
+            for event in outcome.events {
+                let _ = events.send(event);
             }
         }
-        maybe_send_probe_blackout(events, window, blackout_latched, *seen_ack);
+        if reported_rtt_changed {
+            let probe = monitor.stats_refresh_probe(rimz::sidebar::timing::unix_now_ms());
+            if write_link_probe(&mut child.stdin, &probe).is_err() {
+                break ProbeStreamStop::Ended;
+            }
+        }
+        if let Some(event) = monitor.check_blackout(rimz::sidebar::timing::unix_now_ms()) {
+            let _ = events.send(event);
+        }
 
         if Instant::now() >= next_tick {
-            let sent_at_ms = rimz::sidebar::timing::unix_now_ms();
-            let probe = LinkProbe::new(*seq, sent_at_ms, window.stats());
-            window.record_sent(*seq, sent_at_ms);
-            *seq = (*seq).saturating_add(1);
-            if write_link_probe(&mut stdin, &probe).is_err() {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
-                acked =
-                    finish_probe_stream(&ack_rx, events, window, blackout_latched, seen_ack, acked);
-                return ProbeStreamExit::Ended { acked };
+            let probe = monitor.next_probe(rimz::sidebar::timing::unix_now_ms());
+            if write_link_probe(&mut child.stdin, &probe).is_err() {
+                break ProbeStreamStop::Ended;
             }
             next_tick = Instant::now() + interval;
         }
         sleep_until_next_tick(next_tick, stop);
+    };
+    child.shutdown();
+
+    match reason {
+        ProbeStreamStop::Stopped => ProbeStreamExit::Stopped,
+        ProbeStreamStop::VersionSkew => ProbeStreamExit::VersionSkew,
+        ProbeStreamStop::Ended => {
+            while let Ok(seq) = ack_rx.try_recv() {
+                let outcome = monitor.record_ack(seq, rimz::sidebar::timing::unix_now_ms());
+                acked |= outcome.accepted;
+                for event in outcome.events {
+                    let _ = events.send(event);
+                }
+            }
+            ProbeStreamExit::Ended { acked }
+        }
     }
 }
 
@@ -594,80 +578,6 @@ fn write_link_probe(stdin: &mut impl Write, probe: &LinkProbe) -> std::io::Resul
     serde_json::to_writer(&mut *stdin, probe).map_err(std::io::Error::other)?;
     writeln!(stdin)?;
     stdin.flush()
-}
-
-fn finish_probe_stream(
-    ack_rx: &mpsc::Receiver<u64>,
-    events: &mpsc::Sender<LinkEvent>,
-    window: &mut ProbeWindow,
-    blackout_latched: &mut bool,
-    seen_ack: &mut bool,
-    acked: bool,
-) -> bool {
-    drain_probe_acks(ack_rx, events, window, blackout_latched, seen_ack).acked || acked
-}
-
-fn maybe_send_probe_blackout(
-    events: &mpsc::Sender<LinkEvent>,
-    window: &mut ProbeWindow,
-    blackout_latched: &mut bool,
-    seen_ack: bool,
-) {
-    let now_ms = rimz::sidebar::timing::unix_now_ms();
-    maybe_send_probe_blackout_at(events, window, blackout_latched, seen_ack, now_ms);
-}
-
-fn maybe_send_probe_blackout_at(
-    events: &mpsc::Sender<LinkEvent>,
-    window: &mut ProbeWindow,
-    blackout_latched: &mut bool,
-    seen_ack: bool,
-    now_ms: u64,
-) {
-    if !seen_ack {
-        return;
-    }
-    window.expire(now_ms);
-    let blackout_ms = window.blackout_ms(now_ms);
-    if blackout_ms >= LINK_BLACKOUT_AFTER.as_millis() as u64 && !*blackout_latched {
-        *blackout_latched = true;
-        let _ = events.send(LinkEvent::Blackout(Duration::from_millis(blackout_ms)));
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct ProbeAckDrain {
-    acked: bool,
-    reported_rtt_changed: bool,
-}
-
-fn drain_probe_acks(
-    ack_rx: &mpsc::Receiver<u64>,
-    events: &mpsc::Sender<LinkEvent>,
-    window: &mut ProbeWindow,
-    blackout_latched: &mut bool,
-    seen_ack: &mut bool,
-) -> ProbeAckDrain {
-    let mut drained = ProbeAckDrain::default();
-    while let Ok(seq) = ack_rx.try_recv() {
-        let now_ms = rimz::sidebar::timing::unix_now_ms();
-        let before_rtt = window.reported_rtt_ms();
-        if !window.record_ack(seq, now_ms) {
-            continue;
-        }
-        let after_rtt = window.reported_rtt_ms();
-        drained.acked = true;
-        drained.reported_rtt_changed |= before_rtt != after_rtt;
-        if !*seen_ack {
-            *seen_ack = true;
-            let _ = events.send(LinkEvent::FirstAck);
-        }
-        if *blackout_latched {
-            *blackout_latched = false;
-            let _ = events.send(LinkEvent::Recovered);
-        }
-    }
-    drained
 }
 
 fn sleep_until_next_tick(next_tick: Instant, stop: &AtomicBool) {

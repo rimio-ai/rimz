@@ -191,17 +191,6 @@ pub fn ssh_attach_spec(
     no_resume: bool,
     mux: Option<MuxName>,
     term: &TermPlan,
-) -> CommandSpec {
-    ssh_attach_spec_with_control(target, no_resume, mux, term, None)
-}
-
-/// [`ssh_attach_spec`] plus optional ControlMaster setup for the supervised
-/// remote path. `None` keeps the plain ControlMaster shape.
-pub fn ssh_attach_spec_with_control(
-    target: &RemoteTarget,
-    no_resume: bool,
-    mux: Option<MuxName>,
-    term: &TermPlan,
     control: Option<&Path>,
 ) -> CommandSpec {
     CommandSpec::new(ssh_program())
@@ -439,7 +428,7 @@ impl ReconnectPolicy {
     }
 }
 
-fn env_ms(key: &str) -> Option<Duration> {
+pub(crate) fn env_ms(key: &str) -> Option<Duration> {
     std::env::var(key)
         .ok()?
         .parse::<u64>()
@@ -477,7 +466,11 @@ pub fn verdict(
     match exit_code {
         Some(0) => Verdict::CleanExit,
         Some(SSH_TRANSPORT_EXIT) if established => Verdict::Retry {
-            delay: backoff(consecutive_failures, policy),
+            delay: backoff(
+                consecutive_failures,
+                policy.backoff_base,
+                policy.backoff_cap,
+            ),
         },
         Some(code) => Verdict::Fatal { code },
         // Signal-death: something killed ssh deliberately; don't fight it.
@@ -485,12 +478,10 @@ pub fn verdict(
     }
 }
 
-fn backoff(consecutive_failures: u32, policy: &ReconnectPolicy) -> Duration {
-    let factor = 2u32.saturating_pow(consecutive_failures.min(16));
-    policy
-        .backoff_base
-        .saturating_mul(factor)
-        .min(policy.backoff_cap)
+/// Capped exponential backoff shared by ssh reconnects and probe respawns.
+pub fn backoff(failures: u32, base: Duration, cap: Duration) -> Duration {
+    let factor = 2u32.saturating_pow(failures.min(16));
+    base.saturating_mul(factor).min(cap)
 }
 
 #[cfg(test)]
@@ -677,7 +668,7 @@ mod tests {
     #[test]
     fn term_downgrade_sets_term_before_exec() {
         let target = parse("dev-box:query-engine");
-        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Downgrade);
+        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Downgrade, None);
         let snippet = spec.args.last().expect("snippet");
         assert!(
             snippet.contains("export TERM=xterm-256color; exec rimz"),
@@ -692,7 +683,7 @@ mod tests {
             name: "alacritty".to_owned(),
             source: "ALACRITTY|fake,".to_owned(),
         };
-        let spec = ssh_attach_spec(&target, false, None, &term);
+        let spec = ssh_attach_spec(&target, false, None, &term, None);
         let snippet = spec.args.last().expect("snippet");
         assert!(
             snippet.contains(
@@ -705,7 +696,7 @@ mod tests {
     #[test]
     fn session_spec_compiles_to_remote_attach() {
         let target = parse("dev-box:query-engine");
-        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep);
+        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep, None);
         assert_eq!(spec.program, "ssh");
         assert_eq!(
             spec.args[..10],
@@ -735,8 +726,8 @@ mod tests {
     #[test]
     fn supervised_spec_adds_controlmaster_without_changing_the_plain_spec() {
         let target = parse("dev-box:query-engine");
-        let plain = ssh_attach_spec(&target, false, None, &TermPlan::Keep);
-        let control = ssh_attach_spec_with_control(
+        let plain = ssh_attach_spec(&target, false, None, &TermPlan::Keep, None);
+        let control = ssh_attach_spec(
             &target,
             false,
             None,
@@ -762,7 +753,7 @@ mod tests {
     #[test]
     fn path_spec_compiles_to_remote_start() {
         let target = parse("dev-box:~/code/query-engine");
-        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep);
+        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep, None);
         let snippet = spec.args.last().expect("snippet");
         assert!(snippet.ends_with("exec rimz start --attach -- \"$HOME\"'/code/query-engine'"));
     }
@@ -770,7 +761,7 @@ mod tests {
     #[test]
     fn no_resume_and_mux_ride_the_remote_invocation() {
         let target = parse("dev-box:query-engine");
-        let spec = ssh_attach_spec(&target, true, Some(MuxName::Tmux), &TermPlan::Keep);
+        let spec = ssh_attach_spec(&target, true, Some(MuxName::Tmux), &TermPlan::Keep, None);
         let snippet = spec.args.last().expect("snippet");
         assert!(snippet.contains("exec rimz attach --attach --no-resume --mux tmux -- "));
     }
@@ -778,16 +769,44 @@ mod tests {
     #[test]
     fn display_ssh_command_is_pasteable() {
         let target = parse("dev-box:query-engine");
-        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep);
+        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep, None);
         let line = display_ssh_command(&spec);
         assert!(line.starts_with("ssh -o ServerAliveInterval=5"));
         assert!(line.contains(" -t -- dev-box '"));
         assert!(line.ends_with("'"));
 
-        let v6 = ssh_attach_spec(&parse("[::1]:query-engine"), false, None, &TermPlan::Keep);
+        let v6 = ssh_attach_spec(
+            &parse("[::1]:query-engine"),
+            false,
+            None,
+            &TermPlan::Keep,
+            None,
+        );
         assert!(
             display_ssh_command(&v6).contains(" -- '[::1]' "),
             "bracketed destinations quote against shell globbing"
+        );
+    }
+
+    #[test]
+    fn backoff_doubles_until_capped() {
+        let base = Duration::from_secs(1);
+        let cap = Duration::from_secs(30);
+        let delays: Vec<Duration> = (0..7)
+            .map(|failures| backoff(failures, base, cap))
+            .collect();
+
+        assert_eq!(
+            delays,
+            [
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+                Duration::from_secs(8),
+                Duration::from_secs(16),
+                Duration::from_secs(30),
+                Duration::from_secs(30),
+            ]
         );
     }
 

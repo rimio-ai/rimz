@@ -9,10 +9,7 @@ use super::{AttachFlags, GlobalFlags};
 use crate::cli::room::{AttachAction, AttachMode, attach_action, exec_attach_command};
 use rimz::ids::MuxName;
 use rimz::remote::aliases::{RemoteAlias, RemoteAliases};
-use rimz::remote::{
-    RemoteTarget, TermPlan, infocmp_program, ssh_attach_spec, ssh_attach_spec_with_control,
-    term_plan_from,
-};
+use rimz::remote::{RemoteTarget, TermPlan, infocmp_program, ssh_attach_spec, term_plan_from};
 
 mod bandwidth;
 mod link_stats;
@@ -28,9 +25,7 @@ pub struct RemoteArgs {
 #[derive(Debug, Subcommand)]
 enum RemoteSubcmd {
     /// Save a named remote target.
-    #[command(
-        after_help = "With `remote add`, --mux <name> pins the saved alias when written under `remote` or `add`. A top-level `rimz --mux <name> remote add ...` is not saved."
-    )]
+    #[command(after_help = "With `remote add`, --mux <name> pins the saved alias.")]
     Add {
         name: String,
         target: String,
@@ -43,7 +38,7 @@ enum RemoteSubcmd {
     },
     /// Replace a saved remote target.
     #[command(
-        after_help = "Like `remote add`, --mux <name> pins the saved alias when scoped to `remote` or `update`. Flags not passed reset to their defaults."
+        after_help = "Like `remote add`, --mux <name> pins the saved alias. Flags not passed reset to their defaults."
     )]
     Update {
         name: String,
@@ -120,7 +115,7 @@ fn build_alias(
         target,
         reconnect: !no_reconnect,
         no_resume,
-        mux: add_persistent_mux(globals),
+        mux: globals.mux,
     }
 }
 
@@ -181,22 +176,12 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             reset,
             no_reconnect,
             attach,
-        } => {
-            let aliases = RemoteAliases::load().context("loading remote aliases")?;
-            let remote =
-                resolve_connect(&alias_or_target, reset, no_reconnect, globals.mux, &aliases)?;
-            attach_remote(remote, attach.mode())
-        }
+        } => connect(alias_or_target, reset, no_reconnect, attach, globals),
         RemoteSubcmd::Reset {
             alias_or_target,
             no_reconnect,
             attach,
-        } => {
-            let aliases = RemoteAliases::load().context("loading remote aliases")?;
-            let remote =
-                resolve_connect(&alias_or_target, true, no_reconnect, globals.mux, &aliases)?;
-            attach_remote(remote, attach.mode())
-        }
+        } => connect(alias_or_target, true, no_reconnect, attach, globals),
         RemoteSubcmd::Rm { name } => {
             let mut aliases = RemoteAliases::load().context("loading remote aliases")?;
             aliases.remove(&name)?;
@@ -219,51 +204,6 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             LinkStatsSubcmd::Ingest(args) => link_stats::ingest(args),
         },
     }
-}
-
-fn add_persistent_mux(globals: &GlobalFlags) -> Option<MuxName> {
-    remote_writer_scopes_mux_flag(std::env::args_os())
-        .then_some(globals.mux)
-        .flatten()
-}
-
-fn remote_writer_scopes_mux_flag<I, S>(args: I) -> bool
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    let mut in_remote = false;
-    let mut in_writer = false;
-    let mut mux_scoped_to_remote = false;
-
-    for arg in args.into_iter().skip(1) {
-        let Some(arg) = arg.as_ref().to_str() else {
-            continue;
-        };
-        if !in_remote {
-            in_remote = arg == "remote";
-            continue;
-        }
-        if arg == "--" {
-            break;
-        }
-        if is_mux_flag(arg) {
-            if in_writer {
-                return true;
-            }
-            mux_scoped_to_remote = true;
-            continue;
-        }
-        if !in_writer && matches!(arg, "add" | "update") {
-            in_writer = true;
-        }
-    }
-
-    in_writer && mux_scoped_to_remote
-}
-
-fn is_mux_flag(arg: &str) -> bool {
-    arg == "--mux" || arg.starts_with("--mux=")
 }
 
 #[derive(Debug)]
@@ -300,12 +240,24 @@ fn resolve_connect(
     })
 }
 
+fn connect(
+    alias_or_target: String,
+    reset: bool,
+    no_reconnect: bool,
+    attach: AttachFlags,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let aliases = RemoteAliases::load().context("loading remote aliases")?;
+    let remote = resolve_connect(&alias_or_target, reset, no_reconnect, globals.mux, &aliases)?;
+    attach_remote(remote, attach.mode())
+}
+
 /// SSH remote attach: the local rimz is a launcher and link supervisor only.
 /// Workspace resolution, session birth, the sidebar, and the health gate all
 /// run on the remote host's own `rimz`; the room renders here over `ssh -t`.
 fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
     let term = remote_term_plan();
-    let plain_spec = ssh_attach_spec(&remote.target, remote.no_resume, remote.mux, &term);
+    let plain_spec = ssh_attach_spec(&remote.target, remote.no_resume, remote.mux, &term, None);
 
     // The local nesting block does not apply: a remote room inside a local
     // pane is a legitimate shape (the remote rimz checks its own env).
@@ -330,7 +282,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             if remote.reconnect {
                 let control = rimz::remote::link::validated_control_path()
                     .context("checking SSH ControlMaster socket path")?;
-                let control_spec = ssh_attach_spec_with_control(
+                let control_spec = ssh_attach_spec(
                     &remote.target,
                     remote.no_resume,
                     remote.mux,
@@ -363,13 +315,7 @@ fn run_infocmp(term: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
-
     use super::*;
-
-    fn args(values: &[&str]) -> Vec<OsString> {
-        values.iter().map(OsString::from).collect()
-    }
 
     fn alias(name: &str, target: &str, reconnect: bool, no_resume: bool) -> RemoteAlias {
         RemoteAlias {
@@ -382,30 +328,22 @@ mod tests {
     }
 
     #[test]
-    fn remote_writer_scopes_mux_from_remote_or_writer_position() {
-        assert!(!remote_writer_scopes_mux_flag(args(&[
-            "rimz", "--mux", "tmux", "remote", "add", "name", "target",
-        ])));
-        assert!(remote_writer_scopes_mux_flag(args(&[
-            "rimz", "remote", "--mux", "tmux", "add", "name", "target",
-        ])));
-        assert!(remote_writer_scopes_mux_flag(args(&[
-            "rimz", "remote", "add", "--mux", "tmux", "name", "target",
-        ])));
-        assert!(remote_writer_scopes_mux_flag(args(&[
-            "rimz",
-            "remote",
-            "add",
-            "name",
-            "target",
-            "--mux=tmux",
-        ])));
-        assert!(remote_writer_scopes_mux_flag(args(&[
-            "rimz", "remote", "update", "--mux", "tmux", "name", "target",
-        ])));
-        assert!(!remote_writer_scopes_mux_flag(args(&[
-            "rimz", "remote", "add", "name", "target", "--", "--mux", "tmux",
-        ])));
+    fn build_alias_persists_mux_from_globals() {
+        let globals = GlobalFlags {
+            mux: Some(MuxName::Tmux),
+            root: None,
+            color: super::super::ColorWhen::Auto,
+        };
+
+        let alias = build_alias(
+            "prod".to_owned(),
+            "prod-box:query-engine".to_owned(),
+            false,
+            false,
+            &globals,
+        );
+
+        assert_eq!(alias.mux, Some(MuxName::Tmux));
     }
 
     #[test]
@@ -422,12 +360,17 @@ mod tests {
             .unwrap();
 
         let raw = resolve_connect("raw-box:session", false, false, None, &aliases).unwrap();
-        let raw_spec = ssh_attach_spec(&raw.target, raw.no_resume, raw.mux, &TermPlan::Keep);
+        let raw_spec = ssh_attach_spec(&raw.target, raw.no_resume, raw.mux, &TermPlan::Keep, None);
         assert_eq!(raw_spec.args[10], "raw-box");
 
         let named = resolve_connect("prod", false, false, None, &aliases).unwrap();
-        let named_spec =
-            ssh_attach_spec(&named.target, named.no_resume, named.mux, &TermPlan::Keep);
+        let named_spec = ssh_attach_spec(
+            &named.target,
+            named.no_resume,
+            named.mux,
+            &TermPlan::Keep,
+            None,
+        );
         assert_eq!(named_spec.args[10], "prod-box");
 
         let fresh = resolve_connect("fresh", false, false, None, &aliases).unwrap();

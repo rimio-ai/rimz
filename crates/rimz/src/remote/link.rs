@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::mux::CommandSpec;
 use crate::sock;
 
-use super::{RemoteSpec, RemoteTarget, quote_remote_path, remote_path_prefix, sh_quote};
+use super::{RemoteSpec, RemoteTarget, env_ms, quote_remote_path, remote_path_prefix, sh_quote};
 
 pub const LINK_SCHEMA_VERSION: &str = "rimz.link.v1";
 pub const LINK_STATS_FILE: &str = "link-stats.json";
@@ -114,6 +114,15 @@ impl LinkStatsFile {
     pub fn version_ok(&self) -> bool {
         self.v == LINK_SCHEMA_VERSION
     }
+}
+
+/// Link-health events emitted by local probe accounting and rendered by the
+/// remote supervisor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkEvent {
+    FirstAck,
+    Blackout(Duration),
+    Recovered,
 }
 
 /// Overall tier is the worst of RTT and probe-miss rate.
@@ -274,14 +283,6 @@ pub fn probe_interval_from_env() -> Option<Duration> {
 
 pub fn probe_timeout_from_env() -> Duration {
     env_ms(PROBE_TIMEOUT_ENV).unwrap_or(LINK_PROBE_TIMEOUT)
-}
-
-fn env_ms(key: &str) -> Option<Duration> {
-    std::env::var(key)
-        .ok()?
-        .parse::<u64>()
-        .ok()
-        .map(Duration::from_millis)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -448,6 +449,99 @@ impl ProbeWindow {
         while self.outcomes.len() > LINK_WINDOW {
             self.outcomes.pop_front();
         }
+    }
+}
+
+/// Outcome of recording one probe ack.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AckOutcome {
+    pub accepted: bool,
+    pub reported_rtt_changed: bool,
+    pub events: Vec<LinkEvent>,
+}
+
+/// Pure local link-health accounting for the probe stream.
+#[derive(Clone, Debug)]
+pub struct LinkMonitor {
+    window: ProbeWindow,
+    seen_ack: bool,
+    blackout_latched: bool,
+    seq: u64,
+}
+
+impl LinkMonitor {
+    pub fn with_timeout(timeout: Duration) -> Self {
+        Self {
+            window: ProbeWindow::with_timeout(timeout),
+            seen_ack: false,
+            blackout_latched: false,
+            seq: 0,
+        }
+    }
+
+    pub fn begin_stream(&mut self) {
+        self.window.begin_stream();
+    }
+
+    pub fn next_probe(&mut self, now_ms: u64) -> LinkProbe {
+        let seq = self.next_seq();
+        let probe = LinkProbe::new(seq, now_ms, self.window.stats());
+        self.window.record_sent(seq, now_ms);
+        probe
+    }
+
+    pub fn stats_refresh_probe(&mut self, now_ms: u64) -> LinkProbe {
+        let seq = self.next_seq();
+        // Stats refreshes update the remote cache immediately after a displayed
+        // RTT change. They are not measurement samples, so the ack is
+        // intentionally ignored by the window.
+        LinkProbe::new(seq, now_ms, self.window.stats())
+    }
+
+    pub fn record_ack(&mut self, seq: u64, now_ms: u64) -> AckOutcome {
+        let before_rtt = self.window.reported_rtt_ms();
+        if !self.window.record_ack(seq, now_ms) {
+            return AckOutcome::default();
+        }
+
+        let mut events = Vec::new();
+        if !self.seen_ack {
+            self.seen_ack = true;
+            events.push(LinkEvent::FirstAck);
+        }
+        if self.blackout_latched {
+            self.blackout_latched = false;
+            events.push(LinkEvent::Recovered);
+        }
+
+        AckOutcome {
+            accepted: true,
+            reported_rtt_changed: before_rtt != self.window.reported_rtt_ms(),
+            events,
+        }
+    }
+
+    pub fn check_blackout(&mut self, now_ms: u64) -> Option<LinkEvent> {
+        if !self.seen_ack {
+            return None;
+        }
+        self.window.expire(now_ms);
+        let blackout_ms = self.window.blackout_ms(now_ms);
+        if blackout_ms >= LINK_BLACKOUT_AFTER.as_millis() as u64 && !self.blackout_latched {
+            self.blackout_latched = true;
+            return Some(LinkEvent::Blackout(Duration::from_millis(blackout_ms)));
+        }
+        None
+    }
+
+    pub fn stats(&self) -> LinkStats {
+        self.window.stats()
+    }
+
+    fn next_seq(&mut self) -> u64 {
+        let seq = self.seq;
+        self.seq = self.seq.saturating_add(1);
+        seq
     }
 }
 
@@ -623,6 +717,83 @@ mod tests {
             assert!(window.record_ack(seq, seq * 10 + 1));
         }
         assert_eq!(usize::from(window.stats().window), LINK_WINDOW);
+    }
+
+    #[test]
+    fn link_monitor_reports_when_rtt_becomes_publishable() {
+        let mut monitor = LinkMonitor::with_timeout(Duration::from_millis(100));
+
+        let first_probe = monitor.next_probe(1_000);
+        let first = monitor.record_ack(first_probe.seq, 1_050);
+        assert!(first.accepted);
+        assert!(
+            !first.reported_rtt_changed,
+            "the first ack is accounted but keeps the badge warming"
+        );
+        assert_eq!(first.events, vec![LinkEvent::FirstAck]);
+        assert_eq!(monitor.stats().rtt_ms, None);
+
+        let second_probe = monitor.next_probe(1_060);
+        let second = monitor.record_ack(second_probe.seq, 1_115);
+        assert!(second.accepted);
+        assert!(
+            second.reported_rtt_changed,
+            "the second ack seeds the displayed RTT and should publish immediately"
+        );
+        assert!(second.events.is_empty());
+        assert!(monitor.stats().rtt_ms.is_some());
+    }
+
+    #[test]
+    fn link_monitor_drains_multiple_tail_acks() {
+        let mut monitor = LinkMonitor::with_timeout(Duration::from_millis(100));
+        let first_probe = monitor.next_probe(1_000);
+        let second_probe = monitor.next_probe(1_010);
+
+        let first = monitor.record_ack(first_probe.seq, 1_020);
+        let second = monitor.record_ack(second_probe.seq, 1_040);
+
+        assert!(first.accepted);
+        assert_eq!(first.events, vec![LinkEvent::FirstAck]);
+        assert!(second.accepted);
+        assert!(second.events.is_empty());
+        let stats = monitor.stats();
+        assert_eq!(stats.window, 2);
+        assert_eq!(stats.miss_pct, 0);
+        assert!(stats.rtt_ms.is_some());
+    }
+
+    #[test]
+    fn link_monitor_blackout_requires_prior_ack_threshold_and_latches() {
+        let mut monitor = LinkMonitor::with_timeout(Duration::from_millis(100));
+        let blackout_after_ms = LINK_BLACKOUT_AFTER.as_millis() as u64;
+        let first_probe = monitor.next_probe(1_000);
+
+        assert_eq!(
+            monitor.check_blackout(1_000 + blackout_after_ms),
+            None,
+            "blackout requires at least one accepted ack"
+        );
+
+        let first = monitor.record_ack(first_probe.seq, 1_020);
+        assert!(first.accepted);
+        assert_eq!(first.events, vec![LinkEvent::FirstAck]);
+
+        assert_eq!(monitor.check_blackout(1_020 + blackout_after_ms - 1), None);
+        assert_eq!(
+            monitor.check_blackout(1_020 + blackout_after_ms),
+            Some(LinkEvent::Blackout(LINK_BLACKOUT_AFTER))
+        );
+        assert_eq!(
+            monitor.check_blackout(1_020 + blackout_after_ms + 1_000),
+            None,
+            "latched blackout events are not repeated"
+        );
+
+        let recovered_probe = monitor.next_probe(1_020 + blackout_after_ms + 1_100);
+        let recovered = monitor.record_ack(recovered_probe.seq, 1_020 + blackout_after_ms + 1_120);
+        assert!(recovered.accepted);
+        assert_eq!(recovered.events, vec![LinkEvent::Recovered]);
     }
 
     #[test]
