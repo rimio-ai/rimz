@@ -155,7 +155,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     spawn_event_waker(socket_path.clone());
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
-    terminal.clear()?;
+    ratatui::backend::Backend::clear_region(terminal.backend_mut(), ClearType::All)?;
+    terminal.swap_buffers();
 
     let initial_width = terminal.size().map(|s| s.width).ok();
     // Without a diagnostics sink there is nowhere to record anomalies, so the
