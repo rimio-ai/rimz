@@ -461,18 +461,37 @@ impl MuxBackend for TmuxBackend {
         let mut first_daemon_pane = None;
         if let Some((first, rest)) = opts.view.hosts.split_first() {
             let size = opts.sidebar.birth_size.cols.to_string();
-            let first_daemon =
-                self.split_printed("-h", &first_content, Some(&size), &first.cwd, &first.argv)?;
+            let first_daemon = self.split_printed_with_reason(
+                "-h",
+                &first_content,
+                Some(&size),
+                &first.cwd,
+                &first.argv,
+                "split-window did not print a daemon pane id",
+            )?;
             let mut previous = first_daemon.clone();
             for host in rest {
-                previous = self.split_printed("-v", &previous, None, &host.cwd, &host.argv)?;
+                previous = self.split_printed_with_reason(
+                    "-v",
+                    &previous,
+                    None,
+                    &host.cwd,
+                    &host.argv,
+                    "split-window did not print a daemon pane id",
+                )?;
             }
             first_daemon_pane = Some(first_daemon);
         }
         let mut previous_content = first_content.clone();
         for content in rest_content {
-            previous_content =
-                self.split_printed("-v", &previous_content, None, &content.cwd, &content.argv)?;
+            previous_content = self.split_printed_with_reason(
+                "-v",
+                &previous_content,
+                None,
+                &content.cwd,
+                &content.argv,
+                "split-window did not print a content pane id",
+            )?;
         }
         if let Some(first_daemon) = first_daemon_pane {
             if let Err(err) = self

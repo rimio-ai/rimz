@@ -498,6 +498,25 @@ impl TmuxBackend {
         cwd: &Path,
         argv: &[String],
     ) -> Result<String> {
+        self.split_printed_with_reason(
+            direction,
+            target,
+            size,
+            cwd,
+            argv,
+            "split-window did not print a pane id",
+        )
+    }
+
+    pub(super) fn split_printed_with_reason(
+        &self,
+        direction: &str,
+        target: &str,
+        size: Option<&str>,
+        cwd: &Path,
+        argv: &[String],
+        empty_reason: &str,
+    ) -> Result<String> {
         let mut args = vec![
             "split-window".to_owned(),
             "-d".to_owned(),
@@ -517,7 +536,7 @@ impl TmuxBackend {
         if pane_id.is_empty() {
             return Err(MuxErr::Output {
                 program: "tmux".to_owned(),
-                reason: "split-window did not print a pane id".to_owned(),
+                reason: empty_reason.to_owned(),
             });
         }
         Ok(pane_id)
