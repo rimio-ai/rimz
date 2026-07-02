@@ -236,10 +236,10 @@ pub fn cwd(_pid: u32) -> Option<std::path::PathBuf> {
     None
 }
 
-/// Test-only observability seam for subprocesses on hot paths. The counter is
-/// per-process and relaxed, matching the ledger counters: benchmarks and
-/// integration gates care about exact call counts at the fork funnels, not
-/// cross-process aggregation.
+/// Always-on observability seam for subprocesses on hot paths. The counter is
+/// per-process and relaxed, matching the ledger counters: benchmarks,
+/// integration gates, and the sidebar tick meter care about exact call counts at
+/// the fork funnels, not cross-process aggregation.
 #[doc(hidden)]
 pub mod testkit {
     use std::sync::atomic::{AtomicU64, Ordering};

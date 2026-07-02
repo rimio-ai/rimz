@@ -10,18 +10,25 @@ use std::thread::JoinHandle;
 use tracing::{debug, error};
 
 use crate::agents::spending::SpendingWalker;
+use crate::schema::diag::TickLoop;
 use crate::sidebar::consumer::RollupCursor;
+use crate::sidebar::meter::TickMeter;
 use crate::{RuntimePaths, StatePaths};
 
 use super::{ServeConfig, tick_for};
 
-pub(super) fn spawn(config: ServeConfig, runtime: RuntimePaths) -> JoinHandle<()> {
-    std::thread::spawn(move || refresh_loop(config, runtime))
+pub(super) fn spawn(
+    config: ServeConfig,
+    runtime: RuntimePaths,
+    diag: Option<crate::diag::DiagSink>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || refresh_loop(config, runtime, diag))
 }
 
-fn refresh_loop(config: ServeConfig, runtime: RuntimePaths) {
+fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: Option<crate::diag::DiagSink>) {
     let mut cursor = RollupCursor::new();
     let mut spending_walker = SpendingWalker::new();
+    let mut meter = TickMeter::new(TickLoop::CacheRefresh);
     loop {
         std::thread::sleep(tick_for(config.tick_seconds));
         if crate::sidebar::elder_sidebar_instance(&runtime, &config.instance_id).is_some() {
@@ -37,7 +44,8 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths) {
                 continue;
             }
         };
-        if let Err(err) = refresh_guarded(&mut cursor, &mut spending_walker, |cursor, walker| {
+        let tick = meter.begin();
+        let result = refresh_guarded(&mut cursor, &mut spending_walker, |cursor, walker| {
             crate::sidebar::produce::refresh_producer_caches(
                 cursor,
                 walker,
@@ -46,7 +54,11 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths) {
                 &config.session_name,
                 config.own_pane.as_ref(),
             )
-        }) {
+        });
+        if let Some(event) = meter.finish(tick, crate::sidebar::cache::unix_now_ms()) {
+            crate::sidebar::meter::report(diag.as_ref(), event);
+        }
+        if let Err(err) = result {
             debug!(error = %err, "sidebar cache refresh failed");
         }
         let now = jiff::Timestamp::now().to_zoned(config.timezone.clone());

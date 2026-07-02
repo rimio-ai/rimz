@@ -10,8 +10,10 @@ use std::sync::mpsc::Sender;
 
 use crate::config::NotificationsPrefs;
 use crate::ids::{PaneId, SidebarInstanceId};
+use crate::schema::diag::TickLoop;
 use crate::schema::sidebar_event::SidebarEvent;
 use crate::sidebar::consumer::RollupCursor;
+use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
 use crate::sidebar::read_marks::ReadMarks;
 use crate::sidebar::unread::{ClearedUnread, OpenedUnread, UnreadEpisodes};
@@ -573,6 +575,7 @@ pub(super) fn spawn_fetch_worker(
         let mut notifications = NotificationState::default();
         let mut link_notifications = LinkNotificationState::default();
         let mut last_election = None;
+        let mut meter = TickMeter::new(TickLoop::Fetch);
         while let Ok(first) = request_rx.recv() {
             // Coalesce any requests that piled up into one run, keeping the
             // strongest intent and the newest pane-freshness floor.
@@ -600,6 +603,7 @@ pub(super) fn spawn_fetch_worker(
             // `workspace migrate` repoints the ledger without a restart.
             match StatePaths::for_workspace(config.workspace_id.clone()) {
                 Ok(state) => {
+                    let tick = meter.begin();
                     run_fetch_cycle(
                         FetchCycle {
                             config: &config,
@@ -615,6 +619,9 @@ pub(super) fn spawn_fetch_worker(
                         &mut cursor,
                         &mut post,
                     );
+                    if let Some(event) = meter.finish(tick, crate::sidebar::cache::unix_now_ms()) {
+                        crate::sidebar::meter::report(diag.as_ref(), event);
+                    }
                 }
                 Err(err) => post(FetchOutcome {
                     snapshot: Err(format!("resolving workspace state paths: {err}")),

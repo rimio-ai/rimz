@@ -139,10 +139,11 @@ pub fn read_from_offset(path: &Path, start: u64) -> Result<(Vec<EventEnvelope>, 
     Ok((events, end))
 }
 
-/// Test-only observability seam: bytes the row scan actually read, so the
-/// performance tier can prove a warm fold is O(new bytes) rather than O(log)
-/// from the integration binary. Per-process and relaxed, like
-/// [`crate::ledger::atomic::testkit`].
+/// Always-on observability seam: bytes the row scan actually read, so the
+/// performance tier and sidebar tick meter can prove a warm fold is O(new
+/// bytes) rather than O(log) from the integration binary. Per-process and
+/// relaxed, like [`crate::ledger::atomic::testkit`] and
+/// [`crate::sidebar::meter`].
 #[doc(hidden)]
 pub mod testkit {
     use std::sync::atomic::{AtomicU64, Ordering};

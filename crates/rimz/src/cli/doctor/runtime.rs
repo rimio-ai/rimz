@@ -623,6 +623,34 @@ fn diagnostic_summary(event: &rimz::schema::diag::DiagEvent) -> String {
                 None => format!("link {tier:?}; rtt {rtt}; loss {miss_pct}%"),
             }
         }
+        DiagEvent::TickBudgetBreach {
+            tick_loop,
+            over_ticks,
+            wall_ms,
+            fold_bytes,
+            spawns,
+            budget_wall_ms,
+            budget_fold_bytes,
+            budget_spawns,
+            recovered_after_ms,
+            ..
+        } => {
+            let sample = format!("worst {wall_ms}ms/{fold_bytes}B/{spawns} spawns");
+            let budget =
+                format!("budget {budget_wall_ms}ms/{budget_fold_bytes}B/{budget_spawns} spawns");
+            match recovered_after_ms {
+                Some(ms) => {
+                    format!(
+                        "{tick_loop:?} tick recovered after {ms}ms; {over_ticks} over ticks; {sample}; {budget}"
+                    )
+                }
+                None => {
+                    format!(
+                        "{tick_loop:?} tick over budget for {over_ticks} ticks; {sample}; {budget}"
+                    )
+                }
+            }
+        }
         DiagEvent::ProducerElected { prior_elder } => {
             format!("this renderer became producer after {prior_elder} aged out")
         }

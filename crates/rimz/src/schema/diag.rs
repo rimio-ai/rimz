@@ -73,6 +73,13 @@ pub enum DiagSeverity {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TickLoop {
+    Fetch,
+    CacheRefresh,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DiagEvent {
@@ -145,6 +152,23 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rtt_ms: Option<u32>,
         miss_pct: u16,
+        since_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recovered_after_ms: Option<u64>,
+    },
+    TickBudgetBreach {
+        tick_loop: TickLoop,
+        /// Consecutive over-budget ticks at emit time.
+        over_ticks: u32,
+        /// Worst values observed in the streak.
+        wall_ms: u64,
+        fold_bytes: u64,
+        spawns: u64,
+        /// The declared bounds the sample was judged against.
+        budget_wall_ms: u64,
+        budget_fold_bytes: u64,
+        budget_spawns: u64,
+        /// Unix ms of the streak's first over-budget tick.
         since_ms: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recovered_after_ms: Option<u64>,
@@ -232,6 +256,10 @@ impl DiagEvent {
                 recovered_after_ms: None,
                 ..
             }
+            | Self::TickBudgetBreach {
+                recovered_after_ms: None,
+                ..
+            }
             | Self::RowConflict { .. }
             | Self::DuplicatePaneId { .. }
             | Self::FocusContested { .. }
@@ -255,6 +283,10 @@ impl DiagEvent {
                 recovered_after_ms: Some(_),
                 ..
             } => DiagSeverity::Info,
+            Self::TickBudgetBreach {
+                recovered_after_ms: Some(_),
+                ..
+            } => DiagSeverity::Info,
         }
     }
 
@@ -271,6 +303,7 @@ impl DiagEvent {
             Self::FetchFailure { .. } => "fetch_failure",
             Self::HealthAlert { .. } => "health_alert",
             Self::LinkAlert { .. } => "link_alert",
+            Self::TickBudgetBreach { .. } => "tick_budget_breach",
             Self::ProducerElected { .. } => "producer_elected",
             Self::ProducerDemoted { .. } => "producer_demoted",
             Self::RowConflict { .. } => "row_conflict",
@@ -329,6 +362,19 @@ impl DiagEvent {
                     "active"
                 };
                 format!("{}:{tier:?}:{phase}:{since_ms}", self.kind_name())
+            }
+            Self::TickBudgetBreach {
+                tick_loop,
+                since_ms,
+                recovered_after_ms,
+                ..
+            } => {
+                let phase = if recovered_after_ms.is_some() {
+                    "recovered"
+                } else {
+                    "active"
+                };
+                format!("{}:{tick_loop:?}:{phase}:{since_ms}", self.kind_name())
             }
             Self::RowConflict {
                 agent_kind,
@@ -729,6 +775,30 @@ mod tests {
                 since_ms: 10,
                 recovered_after_ms: None,
             },
+            DiagEvent::TickBudgetBreach {
+                tick_loop: TickLoop::Fetch,
+                over_ticks: 5,
+                wall_ms: 1_200,
+                fold_bytes: 300_000,
+                spawns: 0,
+                budget_wall_ms: 1_000,
+                budget_fold_bytes: 262_144,
+                budget_spawns: 32,
+                since_ms: 10,
+                recovered_after_ms: None,
+            },
+            DiagEvent::TickBudgetBreach {
+                tick_loop: TickLoop::CacheRefresh,
+                over_ticks: 7,
+                wall_ms: 1_500,
+                fold_bytes: 512_000,
+                spawns: 40,
+                budget_wall_ms: 1_000,
+                budget_fold_bytes: 262_144,
+                budget_spawns: 32,
+                since_ms: 20,
+                recovered_after_ms: Some(8_000),
+            },
             DiagEvent::ProducerElected {
                 prior_elder: sidebar("sb_019e8c565bbd708097fce9514f79da04"),
             },
@@ -933,6 +1003,39 @@ mod tests {
         assert_eq!(recovered.severity(), DiagSeverity::Info);
         assert_ne!(active.identity_key(), recovered.identity_key());
         assert_ne!(active.identity_key(), next_episode.identity_key());
+    }
+
+    #[test]
+    fn tick_budget_breach_identity_distinguishes_phase_loop_and_episode() {
+        let active = tick_budget_breach(TickLoop::Fetch, 10, None);
+        let recovered = tick_budget_breach(TickLoop::Fetch, 10, Some(500));
+        let next_episode = tick_budget_breach(TickLoop::Fetch, 20, None);
+        let other_loop = tick_budget_breach(TickLoop::CacheRefresh, 10, None);
+
+        assert_eq!(active.severity(), DiagSeverity::Warn);
+        assert_eq!(recovered.severity(), DiagSeverity::Info);
+        assert_ne!(active.identity_key(), recovered.identity_key());
+        assert_ne!(active.identity_key(), next_episode.identity_key());
+        assert_ne!(active.identity_key(), other_loop.identity_key());
+    }
+
+    fn tick_budget_breach(
+        tick_loop: TickLoop,
+        since_ms: u64,
+        recovered_after_ms: Option<u64>,
+    ) -> DiagEvent {
+        DiagEvent::TickBudgetBreach {
+            tick_loop,
+            over_ticks: 5,
+            wall_ms: 1_200,
+            fold_bytes: 300_000,
+            spawns: 2,
+            budget_wall_ms: 1_000,
+            budget_fold_bytes: 262_144,
+            budget_spawns: 32,
+            since_ms,
+            recovered_after_ms,
+        }
     }
 
     #[test]
