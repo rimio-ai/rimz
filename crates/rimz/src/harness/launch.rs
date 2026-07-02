@@ -650,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn exec_argv_renders_interactive_launch_identity() {
+    fn exec_argv_renders_maximal_launch_identity() {
         let extra_args = argv(&["--dangerously-skip-permissions"]);
         let invocation = ExecInvocation {
             kind: "claude",
@@ -658,10 +658,10 @@ mod tests {
                 prompt: Some("fix it"),
                 extra_args: &extra_args,
             },
-            run_id: None,
+            run_id: Some("run_123"),
             worktree_path: Some(Path::new("/repo/worktree")),
             close_pane_on_exit: true,
-            exit_on_run_completion: false,
+            exit_on_run_completion: true,
             identity: ExecIdentity {
                 name: Some("swift-otter"),
                 launch_id: Some("launch_123"),
@@ -683,6 +683,8 @@ mod tests {
                 "agents",
                 "exec",
                 "claude",
+                "--run-id",
+                "run_123",
                 "--agent-name",
                 "swift-otter",
                 "--launch-id",
@@ -703,6 +705,7 @@ mod tests {
                 "opus",
                 "--agent-effort",
                 "high",
+                "--exit-on-run-completion",
                 "--close-pane-on-exit",
                 "--worktree-path",
                 "/repo/worktree",
@@ -710,63 +713,6 @@ mod tests {
                 "fix it",
                 "--",
                 "--dangerously-skip-permissions",
-            ])
-        );
-    }
-
-    #[test]
-    fn exec_argv_renders_supervised_run_cleanup() {
-        let permission_args = argv(&["--ask"]);
-        let invocation = ExecInvocation {
-            kind: "codex",
-            action: ExecAction::Launch {
-                prompt: Some("ship"),
-                extra_args: &permission_args,
-            },
-            run_id: Some("run_123"),
-            worktree_path: Some(Path::new("/repo")),
-            close_pane_on_exit: true,
-            exit_on_run_completion: true,
-            identity: ExecIdentity {
-                name: Some("direct-codex"),
-                launch_id: Some("launch_abc"),
-                profile: Some("reviewer"),
-                role: Some("qa"),
-                model: Some("gpt-5.5"),
-                effort: Some("xhigh"),
-                ..ExecIdentity::default()
-            },
-        };
-
-        assert_eq!(
-            exec_argv(Path::new("/bin/rimz"), &invocation),
-            argv(&[
-                "/bin/rimz",
-                "agents",
-                "exec",
-                "codex",
-                "--run-id",
-                "run_123",
-                "--agent-name",
-                "direct-codex",
-                "--launch-id",
-                "launch_abc",
-                "--agent-profile",
-                "reviewer",
-                "--agent-role",
-                "qa",
-                "--agent-model",
-                "gpt-5.5",
-                "--agent-effort",
-                "xhigh",
-                "--exit-on-run-completion",
-                "--close-pane-on-exit",
-                "--worktree-path",
-                "/repo",
-                "--prompt",
-                "ship",
-                "--",
-                "--ask",
             ])
         );
     }
@@ -848,60 +794,51 @@ mod tests {
             },
         };
 
-        let env = exec_identity_env(&invocation);
-
         assert_eq!(
-            env.get(crate::harness::run::ENV_AGENT_KIND)
-                .map(String::as_str),
-            Some("claude")
-        );
-        assert_eq!(
-            env.get(crate::harness::run::ENV_RUN_ID).map(String::as_str),
-            Some("run_123")
-        );
-        assert_eq!(
-            env.get(crate::harness::run::ENV_AGENT_NAME)
-                .map(String::as_str),
-            Some("swift-otter")
-        );
-        assert_eq!(
-            env.get(crate::harness::run::ENV_AGENT_PROFILE)
-                .map(String::as_str),
-            Some("planner")
-        );
-        assert_eq!(
-            env.get(crate::harness::run::ENV_AGENT_ROLE)
-                .map(String::as_str),
-            Some("coder")
-        );
-        assert_eq!(
-            env.get(crate::harness::run::ENV_TEAM).map(String::as_str),
-            Some("pcr")
-        );
-        assert_eq!(
-            env.get(crate::harness::run::ENV_LAUNCH_GROUP)
-                .map(String::as_str),
-            Some("launch_group_1")
-        );
-        assert_eq!(
-            env.get(crate::harness::run::ENV_LAUNCH_ORDINAL)
-                .map(String::as_str),
-            Some("2")
-        );
-        assert_eq!(
-            env.get(crate::harness::run::ENV_CHANNEL)
-                .map(String::as_str),
-            Some("design")
-        );
-        assert_eq!(
-            env.get(crate::harness::run::ENV_AGENT_MODEL)
-                .map(String::as_str),
-            Some("opus")
-        );
-        assert_eq!(
-            env.get(crate::harness::run::ENV_AGENT_EFFORT)
-                .map(String::as_str),
-            Some("high")
+            exec_identity_env(&invocation),
+            BTreeMap::from([
+                (
+                    crate::harness::run::ENV_AGENT_KIND.to_owned(),
+                    "claude".to_owned()
+                ),
+                (
+                    crate::harness::run::ENV_RUN_ID.to_owned(),
+                    "run_123".to_owned()
+                ),
+                (
+                    crate::harness::run::ENV_AGENT_NAME.to_owned(),
+                    "swift-otter".to_owned(),
+                ),
+                (
+                    crate::harness::run::ENV_AGENT_PROFILE.to_owned(),
+                    "planner".to_owned(),
+                ),
+                (
+                    crate::harness::run::ENV_AGENT_ROLE.to_owned(),
+                    "coder".to_owned()
+                ),
+                (crate::harness::run::ENV_TEAM.to_owned(), "pcr".to_owned()),
+                (
+                    crate::harness::run::ENV_LAUNCH_GROUP.to_owned(),
+                    "launch_group_1".to_owned(),
+                ),
+                (
+                    crate::harness::run::ENV_LAUNCH_ORDINAL.to_owned(),
+                    "2".to_owned()
+                ),
+                (
+                    crate::harness::run::ENV_CHANNEL.to_owned(),
+                    "design".to_owned()
+                ),
+                (
+                    crate::harness::run::ENV_AGENT_MODEL.to_owned(),
+                    "opus".to_owned()
+                ),
+                (
+                    crate::harness::run::ENV_AGENT_EFFORT.to_owned(),
+                    "high".to_owned()
+                ),
+            ])
         );
     }
 

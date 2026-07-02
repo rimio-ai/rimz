@@ -20,9 +20,9 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-live", "feature-loop");
 
-    let add = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop",
             "add",
             "wake",
@@ -32,13 +32,7 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
             "15m",
             "--prompt",
             "next step",
-        ])
-        .output()
-        .expect("loop add");
-    assert!(
-        add.status.success(),
-        "loop add failed: {}",
-        String::from_utf8_lossy(&add.stderr)
+        ],
     );
     let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
@@ -46,16 +40,7 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
         "task should pin the live session id: {config}"
     );
 
-    let run = env
-        .rimz()
-        .args(["loop", "run", "wake"])
-        .output()
-        .expect("loop run");
-    assert!(
-        run.status.success(),
-        "loop run failed: {}",
-        String::from_utf8_lossy(&run.stderr)
-    );
+    loop_ok(&env, &["loop", "run", "wake"]);
 
     let messages = env.ledger().list_pending_messages().expect("messages");
     assert_eq!(messages.len(), 1);
@@ -69,17 +54,7 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
     assert_eq!(records[0].task, "wake");
     assert_eq!(records[0].result, LoopRunResult::Delivered);
 
-    let list = env
-        .rimz()
-        .args(["loop", "list"])
-        .output()
-        .expect("loop list");
-    assert!(
-        list.status.success(),
-        "loop list failed: {}",
-        String::from_utf8_lossy(&list.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&list.stdout);
+    let stdout = loop_ok(&env, &["loop", "list"]);
     assert!(
         stdout.contains("SOURCE")
             && stdout.contains("RUNS")
@@ -101,9 +76,9 @@ fn loop_add_ephemeral_tasks_use_instance_state() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-state", "feature-loop");
 
-    let add_later = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop",
             "add",
             "later",
@@ -113,13 +88,7 @@ fn loop_add_ephemeral_tasks_use_instance_state() {
             "5m",
             "--prompt",
             "later wake",
-        ])
-        .output()
-        .expect("loop add --in");
-    assert!(
-        add_later.status.success(),
-        "loop add --in failed: {}",
-        String::from_utf8_lossy(&add_later.stderr)
+        ],
     );
     assert!(
         read_loop_instances(&env).0.contains_key("later"),
@@ -130,24 +99,15 @@ fn loop_add_ephemeral_tasks_use_instance_state() {
         "--in should not create loop.toml"
     );
 
-    let run_later = env
-        .rimz()
-        .args(["loop", "run", "later"])
-        .output()
-        .expect("loop run later");
-    assert!(
-        run_later.status.success(),
-        "loop run failed: {}",
-        String::from_utf8_lossy(&run_later.stderr)
-    );
+    loop_ok(&env, &["loop", "run", "later"]);
     assert!(
         !read_loop_instances(&env).0.contains_key("later"),
         "fired one-shot should be removed from state"
     );
 
-    let add_daily = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop",
             "add",
             "daily",
@@ -157,13 +117,7 @@ fn loop_add_ephemeral_tasks_use_instance_state() {
             "07:00",
             "--prompt",
             "daily wake",
-        ])
-        .output()
-        .expect("loop add daily");
-    assert!(
-        add_daily.status.success(),
-        "loop add daily failed: {}",
-        String::from_utf8_lossy(&add_daily.stderr)
+        ],
     );
     let loop_text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
@@ -180,9 +134,9 @@ fn loop_add_ephemeral_tasks_use_instance_state() {
 fn loop_fire_keeps_ephemeral_task() {
     let env = Env::new();
 
-    let add = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop",
             "add",
             "probe",
@@ -191,13 +145,7 @@ fn loop_fire_keeps_ephemeral_task() {
             "--at",
             "07:00",
             "--once",
-        ])
-        .output()
-        .expect("loop add check-only one-shot");
-    assert!(
-        add.status.success(),
-        "loop add failed: {}",
-        String::from_utf8_lossy(&add.stderr)
+        ],
     );
     assert!(
         read_loop_instances(&env).0.contains_key("probe"),
@@ -205,16 +153,7 @@ fn loop_fire_keeps_ephemeral_task() {
     );
 
     for _ in 0..2 {
-        let fire = env
-            .rimz()
-            .args(["loop", "fire", "probe"])
-            .output()
-            .expect("loop fire");
-        assert!(
-            fire.status.success(),
-            "loop fire failed: {}",
-            String::from_utf8_lossy(&fire.stderr)
-        );
+        loop_ok(&env, &["loop", "fire", "probe"]);
         assert!(
             read_loop_instances(&env).0.contains_key("probe"),
             "manual fire should keep the one-shot instance"
@@ -236,9 +175,9 @@ fn loop_add_replaces_same_name_across_config_and_state() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-replace", "feature-loop");
 
-    let add_durable = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop",
             "add",
             "swap",
@@ -248,13 +187,7 @@ fn loop_add_replaces_same_name_across_config_and_state() {
             "15m",
             "--prompt",
             "durable wake",
-        ])
-        .output()
-        .expect("loop add durable");
-    assert!(
-        add_durable.status.success(),
-        "loop add durable failed: {}",
-        String::from_utf8_lossy(&add_durable.stderr)
+        ],
     );
     assert!(
         std::fs::read_to_string(loop_config_path(&env))
@@ -263,17 +196,11 @@ fn loop_add_replaces_same_name_across_config_and_state() {
         "durable task should persist in loop.toml"
     );
 
-    let add_ephemeral = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop", "add", "swap", "--bind", "@claude", "--in", "5m", "--prompt", "one shot",
-        ])
-        .output()
-        .expect("loop add ephemeral");
-    assert!(
-        add_ephemeral.status.success(),
-        "loop add ephemeral failed: {}",
-        String::from_utf8_lossy(&add_ephemeral.stderr)
+        ],
     );
     assert!(
         read_loop_instances(&env).0.contains_key("swap"),
@@ -285,9 +212,9 @@ fn loop_add_replaces_same_name_across_config_and_state() {
         "ephemeral replacement should remove config task: {loop_text}"
     );
 
-    let add_durable_again = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop",
             "add",
             "swap",
@@ -297,13 +224,7 @@ fn loop_add_replaces_same_name_across_config_and_state() {
             "30m",
             "--prompt",
             "durable again",
-        ])
-        .output()
-        .expect("loop add durable again");
-    assert!(
-        add_durable_again.status.success(),
-        "loop add durable again failed: {}",
-        String::from_utf8_lossy(&add_durable_again.stderr)
+        ],
     );
     assert!(
         !read_loop_instances(&env).0.contains_key("swap"),
@@ -324,26 +245,11 @@ fn loop_run_check_only_logs_command_result() {
         ("check-ok", "printf ok", LoopRunResult::Completed),
         ("check-fail", "printf fail; exit 1", LoopRunResult::Failed),
     ] {
-        let add = env
-            .rimz()
-            .args(["loop", "add", name, "--check", command, "--every", "15m"])
-            .output()
-            .expect("loop add check-only");
-        assert!(
-            add.status.success(),
-            "loop add failed: {}",
-            String::from_utf8_lossy(&add.stderr)
+        loop_ok(
+            &env,
+            &["loop", "add", name, "--check", command, "--every", "15m"],
         );
-        let run = env
-            .rimz()
-            .args(["loop", "run", name])
-            .output()
-            .expect("loop run check-only");
-        assert!(
-            run.status.success(),
-            "loop run failed: {}",
-            String::from_utf8_lossy(&run.stderr)
-        );
+        loop_ok(&env, &["loop", "run", name]);
         let records = read_loop_run_records(&env);
         assert_eq!(
             records.last().map(|record| record.result),
@@ -373,30 +279,14 @@ fn loop_run_check_only_logs_command_result() {
 fn loop_check_failure_show_prints_exit_and_output() {
     let env = Env::new();
     let command = "definitely-missing-rimz-loop-command";
-    let add = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop", "add", "missing", "--check", command, "--every", "15m",
-        ])
-        .output()
-        .expect("loop add check-only");
-    assert!(
-        add.status.success(),
-        "loop add failed: {}",
-        String::from_utf8_lossy(&add.stderr)
+        ],
     );
 
-    let fire = env
-        .rimz()
-        .args(["loop", "fire", "missing"])
-        .output()
-        .expect("loop fire check-only");
-    assert!(
-        fire.status.success(),
-        "loop fire failed: {}",
-        String::from_utf8_lossy(&fire.stderr)
-    );
-    let fire_stdout = String::from_utf8_lossy(&fire.stdout);
+    let fire_stdout = loop_ok(&env, &["loop", "fire", "missing"]);
     assert!(
         fire_stdout.contains("loop `missing`: failed (exit 127"),
         "fire should print outcome summary: {fire_stdout}"
@@ -413,17 +303,7 @@ fn loop_check_failure_show_prints_exit_and_output() {
     assert_eq!(check.code, Some(127));
     assert!(check.output.contains(command));
 
-    let show = env
-        .rimz()
-        .args(["loop", "show", "missing"])
-        .output()
-        .expect("loop show");
-    assert!(
-        show.status.success(),
-        "loop show failed: {}",
-        String::from_utf8_lossy(&show.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&show.stdout);
+    let stdout = loop_ok(&env, &["loop", "show", "missing"]);
     assert!(
         stdout.contains("RESULT") && stdout.contains("failed"),
         "show should print runs table: {stdout}"
@@ -440,29 +320,14 @@ fn loop_run_check_guard_skips_or_delivers_with_output() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-check", "feature-loop");
 
-    let add_healthy = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop", "add", "healthy", "--bind", "@claude", "--every", "15m", "--check", "true",
             "--on", "fail", "--prompt", "fix it",
-        ])
-        .output()
-        .expect("loop add healthy");
-    assert!(
-        add_healthy.status.success(),
-        "loop add healthy failed: {}",
-        String::from_utf8_lossy(&add_healthy.stderr)
+        ],
     );
-    let run_healthy = env
-        .rimz()
-        .args(["loop", "run", "healthy"])
-        .output()
-        .expect("loop run healthy");
-    assert!(
-        run_healthy.status.success(),
-        "loop run healthy failed: {}",
-        String::from_utf8_lossy(&run_healthy.stderr)
-    );
+    loop_ok(&env, &["loop", "run", "healthy"]);
     assert!(
         env.ledger()
             .list_pending_messages()
@@ -477,9 +342,9 @@ fn loop_run_check_guard_skips_or_delivers_with_output() {
         Some(LoopRunResult::CheckSkipped)
     );
 
-    let add_broken = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop",
             "add",
             "broken",
@@ -491,24 +356,9 @@ fn loop_run_check_guard_skips_or_delivers_with_output() {
             "printf boom; exit 1",
             "--prompt",
             "fix it",
-        ])
-        .output()
-        .expect("loop add broken");
-    assert!(
-        add_broken.status.success(),
-        "loop add broken failed: {}",
-        String::from_utf8_lossy(&add_broken.stderr)
+        ],
     );
-    let run_broken = env
-        .rimz()
-        .args(["loop", "run", "broken"])
-        .output()
-        .expect("loop run broken");
-    assert!(
-        run_broken.status.success(),
-        "loop run broken failed: {}",
-        String::from_utf8_lossy(&run_broken.stderr)
-    );
+    loop_ok(&env, &["loop", "run", "broken"]);
     let messages = env.ledger().list_pending_messages().expect("messages");
     assert_eq!(messages.len(), 1);
     assert!(messages[0].text.contains("fix it"));
@@ -549,15 +399,7 @@ fn loop_run_error_records_and_show_displays_message() {
         ),
     );
 
-    let run = env
-        .rimz()
-        .args(["loop", "run", "bad_prompt"])
-        .output()
-        .expect("loop run bad prompt");
-    assert!(
-        !run.status.success(),
-        "loop run should fail for missing prompt-file"
-    );
+    loop_fail(&env, &["loop", "run", "bad_prompt"]);
     let records = read_loop_run_records(&env);
     let record = records.last().expect("errored record");
     assert_eq!(record.task, "bad_prompt");
@@ -570,17 +412,7 @@ fn loop_run_error_records_and_show_displays_message() {
         "record should store error chain: {record:?}"
     );
 
-    let show = env
-        .rimz()
-        .args(["loop", "show", "bad_prompt"])
-        .output()
-        .expect("loop show bad prompt");
-    assert!(
-        show.status.success(),
-        "loop show failed: {}",
-        String::from_utf8_lossy(&show.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&show.stdout);
+    let stdout = loop_ok(&env, &["loop", "show", "bad_prompt"]);
     assert!(
         stdout.contains("error") && stdout.contains("reading prompt-file"),
         "show should display stored error: {stdout}"
@@ -593,9 +425,9 @@ fn loop_run_poll_until_fires_once_and_expires() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-until", "feature-loop");
 
-    let add = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop",
             "add",
             "green",
@@ -611,28 +443,13 @@ fn loop_run_poll_until_fires_once_and_expires() {
             "30m",
             "--prompt",
             "merge now",
-        ])
-        .output()
-        .expect("loop add poll-until");
-    assert!(
-        add.status.success(),
-        "loop add poll-until failed: {}",
-        String::from_utf8_lossy(&add.stderr)
+        ],
     );
     assert!(
         read_loop_instances(&env).0.contains_key("green"),
         "poll-until should persist as state"
     );
-    let run = env
-        .rimz()
-        .args(["loop", "run", "green"])
-        .output()
-        .expect("loop run green");
-    assert!(
-        run.status.success(),
-        "loop run green failed: {}",
-        String::from_utf8_lossy(&run.stderr)
-    );
+    loop_ok(&env, &["loop", "run", "green"]);
     assert_eq!(
         env.ledger()
             .list_pending_messages()
@@ -666,16 +483,7 @@ fn loop_run_poll_until_fires_once_and_expires() {
             },
         )])),
     );
-    let run = expired
-        .rimz()
-        .args(["loop", "run", "expired"])
-        .output()
-        .expect("loop run expired");
-    assert!(
-        run.status.success(),
-        "loop run expired failed: {}",
-        String::from_utf8_lossy(&run.stderr)
-    );
+    loop_ok(&expired, &["loop", "run", "expired"]);
     assert!(read_loop_instances(&expired).0.is_empty());
     assert_eq!(
         read_loop_run_records(&expired)
@@ -740,16 +548,7 @@ fn loop_run_bind_git_worktree_session_queues_prompt() {
         String::from_utf8_lossy(&add.stderr)
     );
 
-    let run = env
-        .rimz()
-        .args(["loop", "run", "wake-worktree"])
-        .output()
-        .expect("loop run");
-    assert!(
-        run.status.success(),
-        "loop run failed: {}",
-        String::from_utf8_lossy(&run.stderr)
-    );
+    loop_ok(&env, &["loop", "run", "wake-worktree"]);
 
     let messages = env.ledger().list_pending_messages().expect("messages");
     assert_eq!(messages.len(), 1);
@@ -772,20 +571,10 @@ fn loop_run_bind_dead_session_reaps_schedule() {
         ),
     );
 
-    let run = env
-        .rimz()
-        .args(["loop", "run", "dead"])
-        .output()
-        .expect("loop run");
+    let stdout = loop_ok(&env, &["loop", "run", "dead"]);
     assert!(
-        run.status.success(),
-        "loop run failed: {}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&run.stdout).contains("not alive; removing schedule"),
-        "dead target should be reported: {}",
-        String::from_utf8_lossy(&run.stdout)
+        stdout.contains("not alive; removing schedule"),
+        "dead target should be reported: {stdout}"
     );
     let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
@@ -809,20 +598,10 @@ fn loop_fire_bind_dead_session_keeps_schedule() {
         ),
     );
 
-    let fire = env
-        .rimz()
-        .args(["loop", "fire", "dead"])
-        .output()
-        .expect("loop fire");
+    let stdout = loop_ok(&env, &["loop", "fire", "dead"]);
     assert!(
-        fire.status.success(),
-        "loop fire failed: {}",
-        String::from_utf8_lossy(&fire.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&fire.stdout).contains("not alive; leaving schedule in place"),
-        "dead target should be reported: {}",
-        String::from_utf8_lossy(&fire.stdout)
+        stdout.contains("not alive; leaving schedule in place"),
+        "dead target should be reported: {stdout}"
     );
     let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
@@ -843,29 +622,14 @@ fn loop_fire_bind_delivers_prompt() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-fire", "feature-loop");
 
-    let add = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop", "add", "manual", "--bind", "@claude", "--every", "15m", "--prompt", "fire now",
-        ])
-        .output()
-        .expect("loop add");
-    assert!(
-        add.status.success(),
-        "loop add failed: {}",
-        String::from_utf8_lossy(&add.stderr)
+        ],
     );
 
-    let fire = env
-        .rimz()
-        .args(["loop", "fire", "manual"])
-        .output()
-        .expect("loop fire");
-    assert!(
-        fire.status.success(),
-        "loop fire failed: {}",
-        String::from_utf8_lossy(&fire.stderr)
-    );
+    loop_ok(&env, &["loop", "fire", "manual"]);
 
     let messages = env.ledger().list_pending_messages().expect("messages");
     assert_eq!(messages.len(), 1);
@@ -893,17 +657,7 @@ fn loop_list_next_uses_room_arm_stamp() {
         ),
     );
 
-    let list = env
-        .rimz()
-        .args(["loop", "list"])
-        .output()
-        .expect("loop list no stamp");
-    assert!(
-        list.status.success(),
-        "loop list failed: {}",
-        String::from_utf8_lossy(&list.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&list.stdout);
+    let stdout = loop_ok(&env, &["loop", "list"]);
     assert!(
         stdout.contains("NEXT"),
         "list should include NEXT: {stdout}"
@@ -922,17 +676,7 @@ fn loop_list_next_uses_room_arm_stamp() {
             Timestamp::now() - SignedDuration::from_secs(16 * 60),
         )]),
     );
-    let list = env
-        .rimz()
-        .args(["loop", "list"])
-        .output()
-        .expect("loop list stamped");
-    assert!(
-        list.status.success(),
-        "loop list failed: {}",
-        String::from_utf8_lossy(&list.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&list.stdout);
+    let stdout = loop_ok(&env, &["loop", "list"]);
     assert!(
         stdout
             .lines()
@@ -956,17 +700,7 @@ fn loop_show_and_list_fold_legacy_records() {
     );
     append_legacy_loop_record(&env, "legacy", LoopRunResult::Completed);
 
-    let list = env
-        .rimz()
-        .args(["loop", "list"])
-        .output()
-        .expect("loop list legacy");
-    assert!(
-        list.status.success(),
-        "loop list failed: {}",
-        String::from_utf8_lossy(&list.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&list.stdout);
+    let stdout = loop_ok(&env, &["loop", "list"]);
     assert!(
         stdout
             .lines()
@@ -974,17 +708,7 @@ fn loop_show_and_list_fold_legacy_records() {
         "list should fold legacy record: {stdout}"
     );
 
-    let show = env
-        .rimz()
-        .args(["loop", "show", "legacy"])
-        .output()
-        .expect("loop show legacy");
-    assert!(
-        show.status.success(),
-        "loop show failed: {}",
-        String::from_utf8_lossy(&show.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&show.stdout);
+    let stdout = loop_ok(&env, &["loop", "show", "legacy"]);
     assert!(
         stdout.contains("completed") && stdout.contains("MODE"),
         "show should render legacy record with defaulted fields: {stdout}"
@@ -994,17 +718,11 @@ fn loop_show_and_list_fold_legacy_records() {
 #[test]
 fn loop_run_overlapped_records_skip_and_keeps_task_state() {
     let env = Env::new();
-    let add = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop", "add", "busy", "--check", "true", "--at", "07:00", "--once",
-        ])
-        .output()
-        .expect("loop add busy");
-    assert!(
-        add.status.success(),
-        "loop add failed: {}",
-        String::from_utf8_lossy(&add.stderr)
+        ],
     );
     assert!(
         read_loop_instances(&env).0.contains_key("busy"),
@@ -1021,17 +739,7 @@ fn loop_run_overlapped_records_skip_and_keeps_task_state() {
         .expect("open lock");
     lock_file.try_lock().expect("hold loop run lock");
 
-    let run = env
-        .rimz()
-        .args(["loop", "run", "busy"])
-        .output()
-        .expect("loop run busy");
-    assert!(
-        run.status.success(),
-        "loop run failed: {}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stdout = loop_ok(&env, &["loop", "run", "busy"]);
     assert!(
         stdout.contains("previous run still active; skipping"),
         "overlap should print skip message: {stdout}"
@@ -1046,17 +754,7 @@ fn loop_run_overlapped_records_skip_and_keeps_task_state() {
         Some(LoopRunResult::Overlapped)
     );
 
-    let show = env
-        .rimz()
-        .args(["loop", "show", "busy"])
-        .output()
-        .expect("loop show busy");
-    assert!(
-        show.status.success(),
-        "loop show failed: {}",
-        String::from_utf8_lossy(&show.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&show.stdout);
+    let stdout = loop_ok(&env, &["loop", "show", "busy"]);
     assert!(
         stdout.contains("overlapped"),
         "show should display overlapped record: {stdout}"
@@ -1078,16 +776,7 @@ fn loop_run_bind_tilde_root_queues_prompt() {
          every = \"15m\"\n",
     );
 
-    let run = env
-        .rimz()
-        .args(["loop", "run", "tilde"])
-        .output()
-        .expect("loop run");
-    assert!(
-        run.status.success(),
-        "loop run failed: {}",
-        String::from_utf8_lossy(&run.stderr)
-    );
+    loop_ok(&env, &["loop", "run", "tilde"]);
 
     let messages = env.ledger().list_pending_messages().expect("messages");
     assert_eq!(messages.len(), 1);
@@ -1101,46 +790,38 @@ fn loop_add_bind_validates_mode_selection() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-validate", "feature-loop");
 
-    let missing = env
-        .rimz()
-        .args(["loop", "add", "bad", "--every", "15m", "--prompt", "x"])
-        .output()
-        .expect("loop add missing mode");
-    assert!(!missing.status.success(), "missing mode should fail");
+    let (_stdout, stderr) = loop_fail(
+        &env,
+        &["loop", "add", "bad", "--every", "15m", "--prompt", "x"],
+    );
     assert!(
-        String::from_utf8_lossy(&missing.stderr).contains("needs --spec, --bind, or --check"),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&missing.stderr)
+        stderr.contains("needs --spec, --bind, or --check"),
+        "unexpected stderr: {stderr}"
     );
 
-    let both = env
-        .rimz()
-        .args([
+    loop_fail(
+        &env,
+        &[
             "loop", "add", "bad", "--spec", "claude", "--bind", "@claude", "--every", "15m",
             "--prompt", "x",
-        ])
-        .output()
-        .expect("loop add both modes");
-    assert!(!both.status.success(), "clap should reject both modes");
+        ],
+    );
 
-    let spawn_only = env
-        .rimz()
-        .args([
+    let (_stdout, stderr) = loop_fail(
+        &env,
+        &[
             "loop", "add", "bad", "--bind", "@claude", "--mode", "auto", "--every", "15m",
             "--prompt", "x",
-        ])
-        .output()
-        .expect("loop add spawn-only flag");
-    assert!(!spawn_only.status.success(), "spawn-only flag should fail");
+        ],
+    );
     assert!(
-        String::from_utf8_lossy(&spawn_only.stderr).contains("only apply to --spec tasks"),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&spawn_only.stderr)
+        stderr.contains("only apply to --spec tasks"),
+        "unexpected stderr: {stderr}"
     );
 }
 
 #[test]
-fn loop_rename_moves_config_entry() {
+fn loop_rename_moves_config_and_instance_entries() {
     let env = Env::new();
     write_loop_config(
         &env,
@@ -1154,20 +835,10 @@ fn loop_rename_moves_config_entry() {
         ),
     );
 
-    let rename = env
-        .rimz()
-        .args(["loop", "rename", "old", "new"])
-        .output()
-        .expect("loop rename");
+    let stdout = loop_ok(&env, &["loop", "rename", "old", "new"]);
     assert!(
-        rename.status.success(),
-        "loop rename failed: {}",
-        String::from_utf8_lossy(&rename.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&rename.stdout).contains("renamed loop task `old` to `new`"),
-        "unexpected stdout: {}",
-        String::from_utf8_lossy(&rename.stdout)
+        stdout.contains("renamed loop task `old` to `new`"),
+        "unexpected stdout: {stdout}"
     );
 
     let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
@@ -1177,15 +848,9 @@ fn loop_rename_moves_config_entry() {
         !config.contains("[tasks.old]"),
         "old task should be gone: {config}"
     );
-}
-
-#[test]
-fn loop_rename_moves_instance_entry() {
-    let env = Env::new();
-
-    let add = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop",
             "add",
             "old-state",
@@ -1194,25 +859,10 @@ fn loop_rename_moves_instance_entry() {
             "--at",
             "07:00",
             "--once",
-        ])
-        .output()
-        .expect("loop add instance");
-    assert!(
-        add.status.success(),
-        "loop add failed: {}",
-        String::from_utf8_lossy(&add.stderr)
+        ],
     );
 
-    let rename = env
-        .rimz()
-        .args(["loop", "rename", "old-state", "new-state"])
-        .output()
-        .expect("loop rename");
-    assert!(
-        rename.status.success(),
-        "loop rename failed: {}",
-        String::from_utf8_lossy(&rename.stderr)
-    );
+    loop_ok(&env, &["loop", "rename", "old-state", "new-state"]);
 
     let instances = read_loop_instances(&env);
     assert!(!instances.0.contains_key("old-state"));
@@ -1238,88 +888,65 @@ fn loop_rename_rejects_collision_and_missing() {
         ),
     );
 
-    let collision = env
-        .rimz()
-        .args(["loop", "rename", "old", "existing"])
-        .output()
-        .expect("loop rename collision");
-    assert!(!collision.status.success(), "collision should fail");
+    let (_stdout, stderr) = loop_fail(&env, &["loop", "rename", "old", "existing"]);
     assert!(
-        String::from_utf8_lossy(&collision.stderr).contains("already exists"),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&collision.stderr)
+        stderr.contains("already exists"),
+        "unexpected stderr: {stderr}"
     );
 
-    let add_instance = env
-        .rimz()
-        .args([
+    loop_ok(
+        &env,
+        &[
             "loop", "add", "state", "--check", "true", "--at", "07:00", "--once",
-        ])
-        .output()
-        .expect("loop add instance");
-    assert!(
-        add_instance.status.success(),
-        "loop add failed: {}",
-        String::from_utf8_lossy(&add_instance.stderr)
+        ],
     );
 
-    let config_to_instance = env
-        .rimz()
-        .args(["loop", "rename", "old", "state"])
-        .output()
-        .expect("loop rename config to instance");
+    let (_stdout, stderr) = loop_fail(&env, &["loop", "rename", "old", "state"]);
     assert!(
-        !config_to_instance.status.success(),
-        "config-to-instance collision should fail"
-    );
-    assert!(
-        String::from_utf8_lossy(&config_to_instance.stderr).contains("already exists"),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&config_to_instance.stderr)
+        stderr.contains("already exists"),
+        "unexpected stderr: {stderr}"
     );
 
-    let instance_to_config = env
-        .rimz()
-        .args(["loop", "rename", "state", "existing"])
-        .output()
-        .expect("loop rename instance to config");
+    let (_stdout, stderr) = loop_fail(&env, &["loop", "rename", "state", "existing"]);
     assert!(
-        !instance_to_config.status.success(),
-        "instance-to-config collision should fail"
-    );
-    assert!(
-        String::from_utf8_lossy(&instance_to_config.stderr).contains("already exists"),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&instance_to_config.stderr)
+        stderr.contains("already exists"),
+        "unexpected stderr: {stderr}"
     );
 
-    let same = env
-        .rimz()
-        .args(["loop", "rename", "old", "old"])
-        .output()
-        .expect("loop rename same name");
-    assert!(!same.status.success(), "same-name rename should fail");
+    let (_stdout, stderr) = loop_fail(&env, &["loop", "rename", "old", "old"]);
     assert!(
-        String::from_utf8_lossy(&same.stderr).contains("must differ"),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&same.stderr)
+        stderr.contains("must differ"),
+        "unexpected stderr: {stderr}"
     );
 
-    let missing = env
-        .rimz()
-        .args(["loop", "rename", "missing", "free"])
-        .output()
-        .expect("loop rename missing");
+    let stdout = loop_ok(&env, &["loop", "rename", "missing", "free"]);
     assert!(
-        missing.status.success(),
-        "missing rename failed: {}",
-        String::from_utf8_lossy(&missing.stderr)
+        stdout.contains("no loop task named `missing`"),
+        "unexpected stdout: {stdout}"
     );
+}
+
+fn loop_ok(env: &Env, args: &[&str]) -> String {
+    let output = env.rimz().args(args).output().expect("rimz loop");
     assert!(
-        String::from_utf8_lossy(&missing.stdout).contains("no loop task named `missing`"),
-        "unexpected stdout: {}",
-        String::from_utf8_lossy(&missing.stdout)
+        output.status.success(),
+        "rimz {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    String::from_utf8(output.stdout).expect("stdout")
+}
+
+fn loop_fail(env: &Env, args: &[&str]) -> (String, String) {
+    let output = env.rimz().args(args).output().expect("rimz loop");
+    assert!(
+        !output.status.success(),
+        "rimz {args:?} should fail: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    (
+        String::from_utf8(output.stdout).expect("stdout"),
+        String::from_utf8(output.stderr).expect("stderr"),
+    )
 }
 
 fn register_running_agent(env: &Env, session_id: &str, branch: &str) {

@@ -393,29 +393,29 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    #[test]
-    fn terminal_status_maps_to_exit_code() {
-        assert_eq!(RunStatus::Completed.exit_code(), 0);
-        assert_eq!(RunStatus::Failed.exit_code(), 1);
-        assert_eq!(RunStatus::TimedOut.exit_code(), 124);
-        assert_eq!(RunStatus::Canceled.exit_code(), 130);
-        assert!(RunStatus::Canceled.is_terminal());
+    fn setup() -> (tempfile::TempDir, StatePaths, RunRecord) {
+        setup_for("claude")
     }
 
-    #[test]
-    fn lifecycle_completion_writes_terminal_record_once() {
+    fn setup_for(kind: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
         let dir = tempdir().unwrap();
         let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
         let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
         paths.ensure_dirs().unwrap();
         let record = RunRecord::new(
             workspace_id,
-            AgentKind::new_unchecked("claude"),
+            AgentKind::new_unchecked(kind),
             PermissionMode::Auto,
             "go".to_owned(),
             Path::new("/tmp/rimz-run").to_path_buf(),
         );
         create(&paths, &record).unwrap();
+        (dir, paths, record)
+    }
+
+    #[test]
+    fn lifecycle_completion_writes_terminal_record_once() {
+        let (_dir, paths, record) = setup();
         let observation = AgentLifecycleObservation::new(
             Some(AgentSessionId::from("sess-1")),
             LifecycleSignal::TurnEnded {
@@ -449,18 +449,7 @@ mod tests {
 
     #[test]
     fn subagent_observation_does_not_complete_parent_run() {
-        let dir = tempdir().unwrap();
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        paths.ensure_dirs().unwrap();
-        let record = RunRecord::new(
-            workspace_id,
-            AgentKind::new_unchecked("claude"),
-            PermissionMode::Auto,
-            "go".to_owned(),
-            Path::new("/tmp/rimz-run").to_path_buf(),
-        );
-        create(&paths, &record).unwrap();
+        let (_dir, paths, record) = setup();
         let mut observation = AgentLifecycleObservation::new(
             Some(AgentSessionId::from("child-1")),
             LifecycleSignal::TurnEnded {
@@ -486,18 +475,7 @@ mod tests {
 
     #[test]
     fn same_kind_child_process_does_not_complete_bound_parent_run() {
-        let dir = tempdir().unwrap();
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        paths.ensure_dirs().unwrap();
-        let record = RunRecord::new(
-            workspace_id,
-            AgentKind::new_unchecked("claude"),
-            PermissionMode::Auto,
-            "go".to_owned(),
-            Path::new("/tmp/rimz-run").to_path_buf(),
-        );
-        create(&paths, &record).unwrap();
+        let (_dir, paths, record) = setup();
         let parent = AgentLifecycleObservation::new(
             Some(AgentSessionId::from("sess-parent")),
             LifecycleSignal::TurnStarted,
@@ -528,67 +506,35 @@ mod tests {
     }
 
     #[test]
-    fn timeout_marks_nonterminal_run_and_preserves_terminal_run() {
-        let dir = tempdir().unwrap();
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        paths.ensure_dirs().unwrap();
-        let record = RunRecord::new(
-            workspace_id,
-            AgentKind::new_unchecked("claude"),
-            PermissionMode::Auto,
-            "go".to_owned(),
-            Path::new("/tmp/rimz-run").to_path_buf(),
-        );
-        create(&paths, &record).unwrap();
-
+    fn terminal_transitions_are_once_only_and_map_exit_codes() {
+        let (_dir, paths, record) = setup();
         let timed_out = timeout(&paths, &record.run_id).unwrap();
         assert_eq!(timed_out.status, RunStatus::TimedOut);
         assert!(timed_out.completed_at.is_some());
+        assert_eq!(timed_out.status.exit_code(), 124);
 
         let still_timed_out = fail(&paths, &record.run_id).unwrap();
         assert_eq!(still_timed_out.status, RunStatus::TimedOut);
-    }
 
-    #[test]
-    fn cancel_marks_nonterminal_run_and_preserves_terminal_run() {
-        let dir = tempdir().unwrap();
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        paths.ensure_dirs().unwrap();
-        let record = RunRecord::new(
-            workspace_id,
-            AgentKind::new_unchecked("claude"),
-            PermissionMode::Auto,
-            "go".to_owned(),
-            Path::new("/tmp/rimz-run").to_path_buf(),
-        );
-        create(&paths, &record).unwrap();
-
+        let (_dir, paths, record) = setup();
         let (canceled, wrote) = cancel(&paths, &record.run_id).unwrap();
         assert!(wrote);
         assert_eq!(canceled.status, RunStatus::Canceled);
         assert!(canceled.completed_at.is_some());
+        assert_eq!(canceled.status.exit_code(), 130);
 
         let (still_canceled, wrote) = cancel(&paths, &record.run_id).unwrap();
         assert!(!wrote);
         assert_eq!(still_canceled.status, RunStatus::Canceled);
+
+        assert_eq!(RunStatus::Completed.exit_code(), 0);
+        assert_eq!(RunStatus::Failed.exit_code(), 1);
+        assert!(RunStatus::Canceled.is_terminal());
     }
 
     #[test]
     fn record_lifecycle_folds_transcript_path_on_run_writes() {
-        let dir = tempdir().unwrap();
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        paths.ensure_dirs().unwrap();
-        let record = RunRecord::new(
-            workspace_id,
-            AgentKind::new_unchecked("claude"),
-            PermissionMode::Auto,
-            "go".to_owned(),
-            Path::new("/tmp/rimz-run").to_path_buf(),
-        );
-        create(&paths, &record).unwrap();
+        let (_dir, paths, record) = setup();
 
         let mut started = AgentLifecycleObservation::new(
             Some(AgentSessionId::from("sess-1")),
@@ -649,18 +595,7 @@ mod tests {
 
     #[test]
     fn record_lifecycle_folds_first_late_transcript_path() {
-        let dir = tempdir().unwrap();
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        paths.ensure_dirs().unwrap();
-        let record = RunRecord::new(
-            workspace_id,
-            AgentKind::new_unchecked("codex"),
-            PermissionMode::Auto,
-            "go".to_owned(),
-            Path::new("/tmp/rimz-run").to_path_buf(),
-        );
-        create(&paths, &record).unwrap();
+        let (_dir, paths, record) = setup_for("codex");
 
         let started = AgentLifecycleObservation::new(
             Some(AgentSessionId::from("sess-1")),
@@ -759,18 +694,7 @@ mod tests {
 
     #[test]
     fn record_pane_persists_launch_pane_id() {
-        let dir = tempdir().unwrap();
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        paths.ensure_dirs().unwrap();
-        let record = RunRecord::new(
-            workspace_id,
-            AgentKind::new_unchecked("claude"),
-            PermissionMode::Auto,
-            "go".to_owned(),
-            Path::new("/tmp/rimz-run").to_path_buf(),
-        );
-        create(&paths, &record).unwrap();
+        let (_dir, paths, record) = setup();
         let pane_id = PaneId::from_parts(MuxName::Tmux, "%7");
 
         let updated = record_pane(&paths, &record.run_id, pane_id.clone()).unwrap();
@@ -782,51 +706,13 @@ mod tests {
     }
 
     fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {
-        AgentState {
-            agent_id: AgentSessionId::from(id),
-            kind: AgentKind::new_unchecked(kind),
-            name: None,
-            kind_ordinal: None,
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            status,
-            phase: TurnPhase::Idle,
-            pane: None,
-            agent_pid: None,
-            agent_process_start: None,
-            runtime_owner: None,
-            parent_agent_id: None,
-            worktree_path: None,
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen: Timestamp::UNIX_EPOCH,
-            last_activity: Timestamp::UNIX_EPOCH,
-            registered_at: Some(Timestamp::UNIX_EPOCH),
-        }
+        let mut agent = crate::sidebar::test_support::root_agent(kind, id, None);
+        agent.name = None;
+        agent.kind_ordinal = None;
+        agent.status = status;
+        agent.last_seen = Timestamp::UNIX_EPOCH;
+        agent.last_activity = Timestamp::UNIX_EPOCH;
+        agent.registered_at = Some(Timestamp::UNIX_EPOCH);
+        agent
     }
 }

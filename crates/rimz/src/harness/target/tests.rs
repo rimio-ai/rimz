@@ -46,12 +46,31 @@ fn resolve_prefers_name_ordinal_kind_then_session_prefix() {
         "session-beta"
     );
     assert_eq!(
+        resolve_one(&snapshot, "@lucid-atlas#main", None, None)
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "session-alpha"
+    );
+    assert_eq!(
+        resolve_one(&snapshot, "@bright-beacon#feature/x.y", None, None)
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "session-beta"
+    );
+    assert_eq!(
         resolve_one(&snapshot, "@session-a", None, None)
             .unwrap()
             .agent_id
             .as_str(),
         "session-alpha"
     );
+    // `claude@main` is just an unknown name now, not "claude in main".
+    assert!(matches!(
+        resolve_one(&snapshot, "@claude@main", None, None),
+        Err(TargetErr::NoMatch { .. })
+    ));
 }
 
 #[test]
@@ -87,23 +106,18 @@ fn require_mention_demands_the_sigil() {
 }
 
 #[test]
-fn group_prefixed_uses_the_addressed_selector() {
+fn broadcast_and_group_prefix_selectors() {
+    assert!(is_broadcast("@all"));
+    assert!(is_broadcast("@all#main"));
+    assert!(is_broadcast("all"));
+    assert!(!is_broadcast("@claude"));
+    assert!(!is_broadcast("@planner"));
+    assert!(!is_broadcast("tmux:%1"));
+
     assert_eq!(group_prefixed("@all", "hi"), "@all, hi");
     assert_eq!(group_prefixed("@all#main", "hi"), "@all, hi");
     assert_eq!(group_prefixed("@claude", "go"), "@claude, go");
     assert_eq!(group_prefixed("@claude#design", "go"), "@claude, go");
-}
-
-#[test]
-fn old_infix_no_longer_scopes_by_worktree() {
-    let mut snapshot = empty_snapshot();
-    let agent = agent("claude", "session-alpha", Some("main"), "terminal_1");
-    snapshot.agents = vec![agent];
-    // `claude@main` is just an unknown name now, not "claude in main".
-    assert!(matches!(
-        resolve_one(&snapshot, "@claude@main", None, None),
-        Err(TargetErr::NoMatch { .. })
-    ));
 }
 
 #[test]
@@ -176,7 +190,7 @@ fn at_all_fans_to_the_channel_only() {
 }
 
 #[test]
-fn current_channel_default_applies() {
+fn current_channel_scoping_rules() {
     let mut snapshot = empty_snapshot();
     let feat = agent("claude", "session-feat", Some("feat"), "terminal_1");
     let main = agent("claude", "session-main", Some("main"), "terminal_2");
@@ -189,15 +203,6 @@ fn current_channel_default_applies() {
             .as_str(),
         "session-feat"
     );
-}
-
-#[test]
-fn exact_session_id_bypasses_current_channel() {
-    let mut snapshot = empty_snapshot();
-    let feat = agent("claude", "session-feat", Some("feat"), "terminal_1");
-    let main = agent("claude", "session-main", Some("main"), "terminal_2");
-    snapshot.agents = vec![feat, main];
-
     assert_eq!(
         resolve_one(&snapshot, "@session-feat", None, Some("main"))
             .unwrap()
@@ -205,15 +210,6 @@ fn exact_session_id_bypasses_current_channel() {
             .as_str(),
         "session-feat"
     );
-}
-
-#[test]
-fn none_current_channel_means_all_channels() {
-    let mut snapshot = empty_snapshot();
-    let feat = agent("claude", "session-feat", Some("feat"), "terminal_1");
-    let main = agent("claude", "session-main", Some("main"), "terminal_2");
-    snapshot.agents = vec![feat, main];
-
     // No current channel must not silently narrow — both are visible.
     assert!(matches!(
         resolve_one(&snapshot, "@claude", None, None),
@@ -300,22 +296,6 @@ fn rejects_conflicting_channels() {
         resolve_one(&snapshot, "@claude#main", Some("docs"), None),
         Err(TargetErr::ChannelMismatch { .. })
     ));
-}
-
-#[test]
-fn splits_channel_at_first_hash() {
-    let mut snapshot = empty_snapshot();
-    let mut agent = agent("claude", "session-alpha", Some("feature/x.y"), "terminal_1");
-    agent.name = Some("lucid-atlas".to_owned());
-    snapshot.agents = vec![agent];
-
-    assert_eq!(
-        resolve_one(&snapshot, "@lucid-atlas#feature/x.y", None, None)
-            .unwrap()
-            .agent_id
-            .as_str(),
-        "session-alpha"
-    );
 }
 
 #[test]
@@ -444,6 +424,7 @@ fn sender_prefix_parser_round_trips_same_and_cross_channel_senders() {
         Some(("@codex#design".to_owned(), body.to_owned()))
     );
 
+    assert_eq!(sender_prefix(&MessageSender::Human, &[], None), None);
     assert_eq!(parse_sender_prefix("@codex, ship it"), None);
     assert_eq!(parse_sender_prefix("ordinary text: with colon"), None);
 }
@@ -671,15 +652,6 @@ fn shared_role_requires_fanout_and_degrades_to_profile_or_ordinal() {
 }
 
 #[test]
-fn sender_prefix_skips_human_messages() {
-    let peers: Vec<&AgentState> = Vec::new();
-    assert_eq!(
-        sender_prefix(&crate::message::MessageSender::Human, &peers, None),
-        None
-    );
-}
-
-#[test]
 fn sender_prefix_uses_live_handle_and_channel_only_when_crossing_channels() {
     let mut snapshot = empty_snapshot();
     let mut sender = agent("claude", "session-sender", Some("docs"), "terminal_1");
@@ -706,28 +678,20 @@ fn sender_prefix_uses_live_handle_and_channel_only_when_crossing_channels() {
 }
 
 #[test]
-fn recipient_channel_falls_back_to_addressed_scope_for_fresh_pane() {
-    let target = fresh_pane("codex", "terminal_9");
-
+fn recipient_channel_prefers_bound_then_pane_then_scope() {
+    let fresh = fresh_pane("codex", "terminal_9");
     assert_eq!(
-        recipient_channel(&target, None, Some("bandwidth-profiling")).as_deref(),
+        recipient_channel(&fresh, None, Some("bandwidth-profiling")).as_deref(),
         Some("bandwidth-profiling")
     );
-}
 
-#[test]
-fn recipient_channel_prefers_live_pane_channel_over_scope() {
-    let target = lazy_pane("codex", "/repo/main", "terminal_9");
-
+    let lazy = lazy_pane("codex", "/repo/main", "terminal_9");
     assert_eq!(
-        recipient_channel(&target, None, Some("other")).as_deref(),
+        recipient_channel(&lazy, None, Some("other")).as_deref(),
         Some("main")
     );
-}
 
-#[test]
-fn recipient_channel_prefers_bound_agent_channel() {
-    let target = bound_pane(
+    let bound_target = bound_pane(
         "codex",
         1,
         "swift-otter",
@@ -738,7 +702,7 @@ fn recipient_channel_prefers_bound_agent_channel() {
     let bound = agent("codex", "session-x", Some("auth"), "terminal_9");
 
     assert_eq!(
-        recipient_channel(&target, Some(&bound), Some("other")).as_deref(),
+        recipient_channel(&bound_target, Some(&bound), Some("other")).as_deref(),
         Some("auth")
     );
 }
@@ -836,16 +800,6 @@ fn sender_prefix_fallback_keeps_petname_when_alias_matches_another_peer() {
 }
 
 #[test]
-fn is_broadcast_only_for_at_all() {
-    assert!(is_broadcast("@all"));
-    assert!(is_broadcast("@all#main"));
-    assert!(is_broadcast("all"));
-    assert!(!is_broadcast("@claude"));
-    assert!(!is_broadcast("@planner"));
-    assert!(!is_broadcast("tmux:%1"));
-}
-
-#[test]
 fn create_mention_extracts_type_handles_but_not_panes_or_broadcast() {
     // A kind/profile mention yields its selector and resolved channel.
     let create = create_mention("@planner#auth", None, None)
@@ -884,56 +838,17 @@ fn empty_snapshot() -> SidebarSnapshot {
 }
 
 fn agent(kind: &str, id: &str, branch: Option<&str>, raw_pane: &str) -> AgentState {
-    let now = Timestamp::now();
-    AgentState {
-        agent_id: AgentSessionId::from(id),
-        kind: AgentKind::new_unchecked(kind),
-        name: None,
-        kind_ordinal: None,
-        profile: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        status: AgentStatus::Idle,
-        phase: crate::agents::TurnPhase::Idle,
-        pane: Some(PaneRef::from_id(PaneId::from_parts(
-            MuxName::Zellij,
-            raw_pane,
-        ))),
-        agent_pid: None,
-        agent_process_start: None,
-        runtime_owner: None,
-        parent_agent_id: None,
-        worktree_path: branch.map(|branch| format!("/repo/{branch}")),
-        worktree_branch: branch.map(ToOwned::to_owned),
-        task: None,
-        prompt: None,
-        description: None,
-        transcript_path: None,
-        origin: None,
-        recent_prompts: Vec::new(),
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        context: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
-        compacting_since: None,
-        compaction_count: 0,
-        last_compact_command_tokens: None,
-        last_seen: now,
-        last_activity: now,
-        registered_at: Some(now),
-    }
+    let mut agent = crate::sidebar::test_support::root_agent(kind, id, None);
+    agent.name = None;
+    agent.kind_ordinal = None;
+    agent.status = AgentStatus::Idle;
+    agent.pane = Some(PaneRef::from_id(PaneId::from_parts(
+        MuxName::Zellij,
+        raw_pane,
+    )));
+    agent.worktree_path = branch.map(|branch| format!("/repo/{branch}"));
+    agent.worktree_branch = branch.map(ToOwned::to_owned);
+    agent
 }
 
 /// A lazy (sessionless) agent pane as the producer would emit it into

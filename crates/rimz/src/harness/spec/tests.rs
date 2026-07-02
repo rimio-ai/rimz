@@ -68,6 +68,18 @@ fn no_commands() -> CommandsConfig {
     CommandsConfig::default()
 }
 
+fn agent_cell(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> Cell {
+    let cell = parse_layout_spec(raw, profiles, commands)
+        .expect("parse agent")
+        .columns[0]
+        .rows[0]
+        .clone();
+    match cell {
+        Cell::Agent { .. } => cell,
+        _ => panic!("agent cell"),
+    }
+}
+
 #[test]
 fn parses_columns_and_tiled_rows() {
     let spec =
@@ -262,24 +274,44 @@ fn profile_mode_preset_and_extra_args_render_in_order_and_stamp_profile() {
 }
 
 #[test]
-fn profile_system_prompt_file_renders() {
-    let profiles = profiles([(
-        "planner",
-        Profile {
-            agent: "claude".to_owned(),
-            system_prompt_file: Some("/prompts/planner.md".into()),
-            ..profile("claude")
-        },
-    )]);
-    let Cell::Agent { args, profile, .. } = parse_layout_spec("planner", &profiles, &no_commands())
-        .expect("parse planner")
-        .columns[0]
-        .rows[0]
-        .clone()
-    else {
-        panic!("agent cell");
-    };
+fn profile_prompt_files_render_and_inherit() {
+    let profiles = profiles([
+        (
+            "planner",
+            Profile {
+                agent: "claude".to_owned(),
+                system_prompt_file: Some("/prompts/planner.md".into()),
+                ..profile("claude")
+            },
+        ),
+        (
+            "append",
+            Profile {
+                agent: "claude".to_owned(),
+                append_system_prompt_file: Some("/prompts/planner-extra.md".into()),
+                ..profile("claude")
+            },
+        ),
+        (
+            "base",
+            Profile {
+                agent: "claude".to_owned(),
+                append_system_prompt_file: Some("/prompts/base-extra.md".into()),
+                ..profile("claude")
+            },
+        ),
+        (
+            "child",
+            Profile {
+                agent: "base".to_owned(),
+                ..profile("base")
+            },
+        ),
+    ]);
 
+    let Cell::Agent { args, profile, .. } = agent_cell("planner", &profiles, &no_commands()) else {
+        unreachable!();
+    };
     assert_eq!(profile.as_deref(), Some("planner"));
     assert_eq!(
         args,
@@ -288,33 +320,17 @@ fn profile_system_prompt_file_renders() {
             "/prompts/planner.md".to_owned(),
         ]
     );
-}
 
-#[test]
-fn profile_append_system_prompt_file_renders() {
-    let profiles = profiles([(
-        "planner",
-        Profile {
-            agent: "claude".to_owned(),
-            append_system_prompt_file: Some("/prompts/planner-extra.md".into()),
-            ..profile("claude")
-        },
-    )]);
     let Cell::Agent {
         args,
         append_system_prompt_file,
         profile,
         ..
-    } = parse_layout_spec("planner", &profiles, &no_commands())
-        .expect("parse planner")
-        .columns[0]
-        .rows[0]
-        .clone()
+    } = agent_cell("append", &profiles, &no_commands())
     else {
-        panic!("agent cell");
+        unreachable!();
     };
-
-    assert_eq!(profile.as_deref(), Some("planner"));
+    assert_eq!(profile.as_deref(), Some("append"));
     assert_eq!(
         append_system_prompt_file.as_deref(),
         Some(Path::new("/prompts/planner-extra.md"))
@@ -324,6 +340,26 @@ fn profile_append_system_prompt_file_renders() {
         vec![
             "--append-system-prompt-file".to_owned(),
             "/prompts/planner-extra.md".to_owned(),
+        ]
+    );
+
+    let Cell::Agent {
+        args,
+        append_system_prompt_file,
+        ..
+    } = agent_cell("child", &profiles, &no_commands())
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        append_system_prompt_file.as_deref(),
+        Some(Path::new("/prompts/base-extra.md"))
+    );
+    assert_eq!(
+        args,
+        vec![
+            "--append-system-prompt-file".to_owned(),
+            "/prompts/base-extra.md".to_owned(),
         ]
     );
 }
@@ -370,57 +406,6 @@ fn profile_inheritance_folds_child_wins_and_args_replace() {
     assert_eq!(inherits_args.model.as_deref(), Some("child-model"));
     assert_eq!(inherits_args.effort.as_deref(), Some("medium"));
     assert_eq!(inherits_args.args.as_deref(), Some("--base"));
-}
-
-#[test]
-fn profile_append_system_prompt_file_inherits_from_base() {
-    let profiles = profiles([
-        (
-            "base",
-            Profile {
-                agent: "claude".to_owned(),
-                append_system_prompt_file: Some("/prompts/base-extra.md".into()),
-                ..profile("claude")
-            },
-        ),
-        (
-            "child",
-            Profile {
-                agent: "base".to_owned(),
-                ..profile("base")
-            },
-        ),
-    ]);
-
-    let child = resolve_profile("child", &profiles).expect("child resolves");
-    assert_eq!(
-        child.append_system_prompt_file.as_deref(),
-        Some(Path::new("/prompts/base-extra.md"))
-    );
-
-    let Cell::Agent {
-        args,
-        append_system_prompt_file,
-        ..
-    } = parse_layout_spec("child", &profiles, &no_commands())
-        .expect("parse child")
-        .columns[0]
-        .rows[0]
-        .clone()
-    else {
-        panic!("agent cell");
-    };
-    assert_eq!(
-        append_system_prompt_file.as_deref(),
-        Some(Path::new("/prompts/base-extra.md"))
-    );
-    assert_eq!(
-        args,
-        vec![
-            "--append-system-prompt-file".to_owned(),
-            "/prompts/base-extra.md".to_owned(),
-        ]
-    );
 }
 
 #[test]
@@ -486,12 +471,13 @@ fn profile_resolution_reports_unknown_base_cycles_depth_and_unsupported_fields()
 }
 
 #[test]
-fn kind_override_flows_into_bare_children_and_virtual_cells() {
+fn kind_override_flows_into_children_and_virtual_cells_override_mode() {
     let profiles = profiles([
         (
             "claude",
             Profile {
                 agent: "claude".to_owned(),
+                mode: Some(PermissionMode::Plan),
                 args: Some("--append".to_owned()),
                 ..profile("claude")
             },
@@ -499,125 +485,54 @@ fn kind_override_flows_into_bare_children_and_virtual_cells() {
         ("planner", profile("claude")),
     ]);
 
-    let Cell::Agent {
-        args,
-        profile: stamped,
-        ..
-    } = parse_layout_spec("claude", &profiles, &no_commands())
-        .expect("kind override")
-        .columns[0]
-        .rows[0]
-        .clone()
-    else {
-        panic!("agent cell");
-    };
-    assert_eq!(stamped.as_deref(), Some("claude"));
-    assert_eq!(args, vec!["--append".to_owned()]);
-
-    let Cell::Agent { args, profile, .. } = parse_layout_spec("planner", &profiles, &no_commands())
-        .expect("child")
-        .columns[0]
-        .rows[0]
-        .clone()
-    else {
-        panic!("agent cell");
-    };
-    assert_eq!(profile.as_deref(), Some("planner"));
-    assert_eq!(args, vec!["--append".to_owned()]);
-
-    let Cell::Agent { args, profile, .. } =
-        parse_layout_spec("claude-auto", &profiles, &no_commands())
-            .expect("virtual auto")
-            .columns[0]
-            .rows[0]
-            .clone()
-    else {
-        panic!("agent cell");
-    };
-    let mut expected = vec!["--append".to_owned()];
-    expected.extend(
-        crate::agents::find_adapter("claude")
-            .expect("claude")
-            .permission_args(PermissionMode::Auto),
-    );
-    assert_eq!(profile.as_deref(), Some("claude"));
-    assert_eq!(args, expected);
-
-    let Cell::Agent { args, profile, .. } =
-        parse_layout_spec("claude-ping", &profiles, &no_commands())
-            .expect("virtual ping")
-            .columns[0]
-            .rows[0]
-            .clone()
-    else {
-        panic!("agent cell");
-    };
-    assert_eq!(profile.as_deref(), Some("claude"));
-    assert_eq!(
-        args,
-        vec![
-            "--append".to_owned(),
-            "--effort".to_owned(),
-            "low".to_owned(),
-            "ping".to_owned(),
-        ]
-    );
-}
-
-#[test]
-fn virtual_cells_override_kind_profile_mode_but_keep_other_defaults() {
-    let profiles = profiles([(
-        "claude",
-        Profile {
-            agent: "claude".to_owned(),
-            mode: Some(PermissionMode::Plan),
-            args: Some("--append".to_owned()),
-            ..profile("claude")
-        },
-    )]);
-
-    let Cell::Agent { args, mode, .. } = parse_layout_spec("claude", &profiles, &no_commands())
-        .expect("bare override")
-        .columns[0]
-        .rows[0]
-        .clone()
-    else {
-        panic!("agent cell");
-    };
-    let mut expected_bare = crate::agents::find_adapter("claude")
+    let mut expected_plan = crate::agents::find_adapter("claude")
         .expect("claude")
         .permission_args(PermissionMode::Plan);
-    expected_bare.push("--append".to_owned());
-    assert_eq!(mode, Some(PermissionMode::Plan));
-    assert_eq!(args, expected_bare);
+    expected_plan.push("--append".to_owned());
+    for (raw, expected_profile) in [("claude", "claude"), ("planner", "planner")] {
+        let Cell::Agent {
+            args,
+            mode,
+            profile,
+            ..
+        } = agent_cell(raw, &profiles, &no_commands())
+        else {
+            unreachable!();
+        };
+        assert_eq!(profile.as_deref(), Some(expected_profile), "{raw}");
+        assert_eq!(mode, Some(PermissionMode::Plan), "{raw}");
+        assert_eq!(args, expected_plan.clone(), "{raw}");
+    }
 
-    let Cell::Agent { args, mode, .. } =
-        parse_layout_spec("claude-auto", &profiles, &no_commands())
-            .expect("virtual override")
-            .columns[0]
-            .rows[0]
-            .clone()
+    let Cell::Agent {
+        args,
+        mode,
+        profile,
+        ..
+    } = agent_cell("claude-auto", &profiles, &no_commands())
     else {
-        panic!("agent cell");
+        unreachable!();
     };
-    let mut expected_virtual = vec!["--append".to_owned()];
-    expected_virtual.extend(
+    let mut expected_auto = vec!["--append".to_owned()];
+    expected_auto.extend(
         crate::agents::find_adapter("claude")
             .expect("claude")
             .permission_args(PermissionMode::Auto),
     );
+    assert_eq!(profile.as_deref(), Some("claude"));
     assert_eq!(mode, Some(PermissionMode::Auto));
-    assert_eq!(args, expected_virtual);
+    assert_eq!(args, expected_auto);
 
-    let Cell::Agent { args, mode, .. } =
-        parse_layout_spec("claude-ping", &profiles, &no_commands())
-            .expect("ping override")
-            .columns[0]
-            .rows[0]
-            .clone()
+    let Cell::Agent {
+        args,
+        mode,
+        profile,
+        ..
+    } = agent_cell("claude-ping", &profiles, &no_commands())
     else {
-        panic!("agent cell");
+        unreachable!();
     };
+    assert_eq!(profile.as_deref(), Some("claude"));
     assert_eq!(mode, None);
     assert_eq!(
         args,
@@ -874,36 +789,58 @@ fn named_teams_resolve_roles_to_one_column_each() {
             effort: None,
         }
     );
-    assert!(commands.0.contains_key("vim"));
 }
 
 #[test]
 fn team_role_overrides_profile_fields_and_args_replace() {
-    let profiles = profiles([(
-        "coder-base",
-        Profile {
-            agent: "codex".to_owned(),
-            mode: Some(PermissionMode::Auto),
-            model: Some("base-model".to_owned()),
-            effort: Some("medium".to_owned()),
-            args: Some("--base".to_owned()),
-            ..profile("codex")
-        },
-    )]);
+    let profiles = profiles([
+        (
+            "coder-base",
+            Profile {
+                agent: "codex".to_owned(),
+                mode: Some(PermissionMode::Auto),
+                model: Some("base-model".to_owned()),
+                effort: Some("medium".to_owned()),
+                args: Some("--base".to_owned()),
+                ..profile("codex")
+            },
+        ),
+        (
+            "planner-base",
+            Profile {
+                agent: "claude".to_owned(),
+                append_system_prompt_file: Some("/prompts/base-extra.md".into()),
+                ..profile("claude")
+            },
+        ),
+    ]);
     let teams = TeamsConfig(BTreeMap::from([(
         "review".to_owned(),
-        team(vec![RoleBinding {
-            role: "coder".to_owned(),
-            profile: "coder-base".to_owned(),
-            mode: Some(PermissionMode::Ask),
-            model: Some("role-model".to_owned()),
-            effort: Some("high".to_owned()),
-            system_prompt_file: Some("/prompts/coder.md".into()),
-            append_system_prompt_file: None,
-            args: Some("--role".to_owned()),
-        }]),
+        team(vec![
+            RoleBinding {
+                role: "coder".to_owned(),
+                profile: "coder-base".to_owned(),
+                mode: Some(PermissionMode::Ask),
+                model: Some("role-model".to_owned()),
+                effort: Some("high".to_owned()),
+                system_prompt_file: Some("/prompts/coder.md".into()),
+                append_system_prompt_file: None,
+                args: Some("--role".to_owned()),
+            },
+            RoleBinding {
+                role: "planner".to_owned(),
+                profile: "planner-base".to_owned(),
+                mode: None,
+                model: None,
+                effort: None,
+                system_prompt_file: None,
+                append_system_prompt_file: Some("/prompts/role-extra.md".into()),
+                args: None,
+            },
+        ]),
     )]));
 
+    let spec = resolve_spec(Some("review"), &profiles, &no_commands(), &teams).expect("team");
     let Cell::Agent {
         args,
         mode,
@@ -913,11 +850,7 @@ fn team_role_overrides_profile_fields_and_args_replace() {
         model,
         effort,
         ..
-    } = resolve_spec(Some("review"), &profiles, &no_commands(), &teams)
-        .expect("team")
-        .columns[0]
-        .rows[0]
-        .clone()
+    } = spec.columns[0].rows[0].clone()
     else {
         panic!("agent cell");
     };
@@ -938,41 +871,12 @@ fn team_role_overrides_profile_fields_and_args_replace() {
     );
     assert!(args.contains(&"--role".to_owned()), "{args:?}");
     assert!(!args.contains(&"--base".to_owned()), "{args:?}");
-}
-
-#[test]
-fn team_role_overrides_append_system_prompt_file() {
-    let profiles = profiles([(
-        "planner-base",
-        Profile {
-            agent: "claude".to_owned(),
-            append_system_prompt_file: Some("/prompts/base-extra.md".into()),
-            ..profile("claude")
-        },
-    )]);
-    let teams = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team(vec![RoleBinding {
-            role: "planner".to_owned(),
-            profile: "planner-base".to_owned(),
-            mode: None,
-            model: None,
-            effort: None,
-            system_prompt_file: None,
-            append_system_prompt_file: Some("/prompts/role-extra.md".into()),
-            args: None,
-        }]),
-    )]));
 
     let Cell::Agent {
         args,
         append_system_prompt_file,
         ..
-    } = resolve_spec(Some("review"), &profiles, &no_commands(), &teams)
-        .expect("team")
-        .columns[0]
-        .rows[0]
-        .clone()
+    } = spec.columns[1].rows[0].clone()
     else {
         panic!("agent cell");
     };

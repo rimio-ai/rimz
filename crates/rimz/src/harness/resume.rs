@@ -333,7 +333,6 @@ pub fn channel_label(channel: Option<&str>, worktree: &Path) -> String {
 mod tests {
     use super::*;
     use crate::agents::AgentStatus;
-    use crate::agents::TurnPhase;
     use crate::ids::{MuxName, PaneId};
     use crate::pane::PaneRef;
     use jiff::Timestamp;
@@ -369,52 +368,17 @@ mod tests {
         secs_ago: i64,
     ) -> AgentState {
         let when = Timestamp::now() - std::time::Duration::from_secs(secs_ago.max(0) as u64);
-        AgentState {
-            agent_id: id.into(),
-            kind: AgentKind::new_unchecked(kind),
-            name: None,
-            kind_ordinal: None,
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            status: AgentStatus::Idle,
-            phase: TurnPhase::Idle,
-            pane: Some(pane(&format!("terminal_{id}"))),
-            agent_pid: None,
-            agent_process_start: None,
-            runtime_owner: None,
-            parent_agent_id: None,
-            worktree_path: Some(worktree.to_owned()),
-            worktree_branch: branch.map(ToOwned::to_owned),
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen: when,
-            last_activity: when,
-            registered_at: Some(when),
-        }
+        let mut agent = crate::sidebar::test_support::root_agent(kind, id, None);
+        agent.name = None;
+        agent.kind_ordinal = None;
+        agent.status = AgentStatus::Idle;
+        agent.pane = Some(pane(&format!("terminal_{id}")));
+        agent.worktree_path = Some(worktree.to_owned());
+        agent.worktree_branch = branch.map(ToOwned::to_owned);
+        agent.last_seen = when;
+        agent.last_activity = when;
+        agent.registered_at = Some(when);
+        agent
     }
 
     /// As [`agent`], but stamped on an explicit pane id so a test can model two
@@ -541,52 +505,31 @@ mod tests {
     }
 
     #[test]
-    fn skips_subagents() {
+    fn filters_subagents_paneless_and_ended_candidates() {
         let mut child = agent("claude", "kid", "/code/query-engine", Some("main"), 1);
         child.parent_agent_id = Some("parent".into());
-        let plan = plan_resume(
-            &[child],
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-        assert!(plan.is_empty());
-        assert!(plan.skipped.is_empty());
-    }
-
-    #[test]
-    fn skips_paneless_agents() {
         // A `None` pane is both a subagent/ghost with no presence and the shape
         // a rebirth boundary leaves behind for an agent that was not live in the
         // dying incarnation — neither is resumed.
-        let mut paneless = agent("claude", "a1", "/code/query-engine", Some("main"), 1);
+        let mut paneless = agent("claude", "paneless", "/code/query-engine", Some("main"), 1);
         paneless.pane = None;
-        let plan = plan_resume(
-            &[paneless],
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-        assert!(plan.is_empty());
-    }
-
-    #[test]
-    fn skips_cleanly_ended_sessions() {
-        let agents = vec![agent("claude", "a1", "/code/query-engine", Some("main"), 1)];
         let ended: BTreeSet<(AgentKind, AgentSessionId)> =
-            [(AgentKind::new_unchecked("claude"), "a1".into())]
+            [(AgentKind::new_unchecked("claude"), "ended".into())]
                 .into_iter()
                 .collect();
         let plan = plan_resume(
-            &agents,
+            &[
+                child,
+                paneless,
+                agent("claude", "ended", "/code/query-engine", Some("main"), 1),
+            ],
             &ended,
             DEFAULT_RESUME_MAX,
             |_| true,
             Path::new("/bin/rimz"),
         );
         assert!(plan.is_empty());
+        assert!(plan.skipped.is_empty());
     }
 
     #[test]
@@ -677,24 +620,6 @@ mod tests {
     }
 
     #[test]
-    fn keeps_two_kinds_in_one_worktree() {
-        let agents = vec![
-            agent("claude", "a1", "/code/query-engine", Some("main"), 5),
-            agent("codex", "c1", "/code/query-engine", Some("main"), 5),
-        ];
-        let plan = plan_resume(
-            &agents,
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-        assert_eq!(plan.tabs.len(), 1);
-        assert_eq!(plan.tabs[0].label, "#query-engine");
-        assert_eq!(plan.tabs[0].panes.len(), 2);
-    }
-
-    #[test]
     fn keeps_two_same_kind_agents_in_one_worktree() {
         // Two Claude sessions running side by side in one worktree — distinct
         // panes, so each is its own live agent. The `(kind, worktree, branch)`
@@ -716,6 +641,7 @@ mod tests {
                 9,
                 "terminal_5",
             ),
+            agent("codex", "c1", "/code/query-engine", Some("main"), 12),
         ];
         let plan = plan_resume(
             &agents,
@@ -725,10 +651,15 @@ mod tests {
             Path::new("/bin/rimz"),
         );
         assert_eq!(plan.tabs.len(), 1);
-        // Freshest leads within the tab; both sessions are resumed.
+        assert_eq!(plan.tabs[0].label, "#query-engine");
+        // Freshest leads within the tab; all same-worktree sessions are resumed.
         assert_eq!(
             plan.tabs[0].panes,
-            vec![exec_resume("claude", "a1"), exec_resume("claude", "a2")]
+            vec![
+                exec_resume("claude", "a1"),
+                exec_resume("claude", "a2"),
+                exec_resume("codex", "c1")
+            ]
         );
     }
 
@@ -744,19 +675,6 @@ mod tests {
         assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "a1")]);
         assert_eq!(plan.skipped.len(), 1);
         assert_eq!(plan.skipped[0].reason, ResumeSkipReason::OverCap);
-    }
-
-    #[test]
-    fn empty_when_no_agents() {
-        let plan = plan_resume(
-            &[],
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-        assert!(plan.is_empty());
-        assert!(plan.skipped.is_empty());
     }
 
     #[test]

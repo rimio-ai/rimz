@@ -1,8 +1,7 @@
 use super::*;
 use crate::agents::RateLimitsCache;
-use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{
-    AgentContext, AgentRateLimits, AgentStatus, AgentTurnError, RateLimitWindow, TurnErrorClass,
+    AgentContext, AgentRateLimits, AgentTurnError, RateLimitWindow, TurnErrorClass,
 };
 use crate::ids::{AgentSessionId, MuxName, WorkspaceId};
 
@@ -81,90 +80,39 @@ fn write_rate_limits_cache(runtime: &RuntimePaths, cache: &RateLimitsCache) {
         .expect("write rate-limits cache");
 }
 
+fn write_recovered_window(runtime: &RuntimePaths) {
+    write_rate_limits_cache(
+        runtime,
+        &RateLimitsCache {
+            refreshed_at_ms: 0,
+            windows: [(
+                "claude".to_owned(),
+                AgentRateLimits {
+                    windows: vec![window(20, 9_000)],
+                },
+            )]
+            .into_iter()
+            .collect(),
+            pending: Default::default(),
+        },
+    );
+}
+
 fn park_path(runtime: &RuntimePaths) -> PathBuf {
     park_record_path(runtime, &AgentKind::new_unchecked("claude"), &"sess".into())
 }
 
 fn agent(activity: i64) -> AgentState {
-    AgentState {
-        agent_id: "sess".into(),
-        kind: AgentKind::new_unchecked("claude"),
-        name: None,
-        kind_ordinal: None,
-        profile: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        status: AgentStatus::Running,
-        phase: TurnPhase::Idle,
-        pane: None,
-        agent_pid: None,
-        agent_process_start: None,
-        runtime_owner: None,
-        parent_agent_id: None,
-        worktree_path: None,
-        worktree_branch: None,
-        task: None,
-        prompt: None,
-        description: None,
-        transcript_path: None,
-        origin: None,
-        recent_prompts: Vec::new(),
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        context: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
-        compacting_since: None,
-        compaction_count: 0,
-        last_compact_command_tokens: None,
-        last_seen: ts(activity),
-        last_activity: ts(activity),
-        registered_at: Some(ts(activity)),
-    }
-}
-
-fn limit_agent(activity: i64, error_at: i64) -> AgentState {
-    let mut agent = agent(activity);
-    agent.context = Some(AgentContext {
-        source: "claude".to_owned(),
-        session_name: None,
-        session_preview: None,
-        model_id: None,
-        model_display_name: None,
-        effort: None,
-        thinking_enabled: None,
-        output_style: None,
-        vim_mode: None,
-        agent_version: None,
-        exceeds_200k_tokens: None,
-        cost: None,
-        tokens: None,
-        rate_limits: None,
-        pr: None,
-        account: None,
-        turn_error: Some(AgentTurnError {
-            class: TurnErrorClass::PausedRateLimit,
-            at: ts(error_at),
-            label: Some("You've hit your usage limit".to_owned()),
-        }),
-        turn_complete: None,
-        observed_at: ts(error_at),
-    });
+    let mut agent = crate::sidebar::test_support::root_agent("claude", "sess", None);
+    agent.name = None;
+    agent.kind_ordinal = None;
+    agent.last_seen = ts(activity);
+    agent.last_activity = ts(activity);
+    agent.registered_at = Some(ts(activity));
     agent
 }
 
-fn overloaded_agent(activity: i64, error_at: i64, label: &str) -> AgentState {
+fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str) -> AgentState {
     let mut agent = agent(activity);
     agent.context = Some(AgentContext {
         source: "claude".to_owned(),
@@ -184,7 +132,7 @@ fn overloaded_agent(activity: i64, error_at: i64, label: &str) -> AgentState {
         pr: None,
         account: None,
         turn_error: Some(AgentTurnError {
-            class: TurnErrorClass::PausedOverloaded,
+            class,
             at: ts(error_at),
             label: Some(label.to_owned()),
         }),
@@ -211,105 +159,71 @@ fn live_pane() -> PaneAgent {
 }
 
 #[test]
-fn arms_a_rate_limit_park_with_its_deadline_and_activity() {
-    let (_dir, runtime) = temp_runtime();
-    let path = park_path(&runtime);
-    arm_park(
-        &path,
-        ParkKind::RateLimit {
-            deadline: ts(5_000),
-        },
-        ts(1_000),
-    );
-    assert_eq!(read_park(&path), Some(rate_record(5_000, 1_000, None, 0)));
-}
-
-#[test]
-fn arms_an_overloaded_park_with_its_activity() {
-    let (_dir, runtime) = temp_runtime();
-    let path = park_path(&runtime);
-    arm_park(
-        &path,
-        ParkKind::Overloaded {
-            overloaded_at: ts(1_500),
-        },
-        ts(1_000),
-    );
-    assert_eq!(
-        read_park(&path),
-        Some(overloaded_record(1_500, 1_000, None, 0))
-    );
-}
-
-#[test]
-fn a_steady_park_keeps_its_nudge_stamp_and_retry_count() {
-    let (_dir, runtime) = temp_runtime();
-    let path = park_path(&runtime);
-    write_park(&path, &overloaded_record(1_500, 1_000, Some(4_000), 3));
-    // Re-arm at the same activity (the agent is still idle): retry state survives.
-    arm_park(
-        &path,
-        ParkKind::Overloaded {
-            overloaded_at: ts(1_500),
-        },
-        ts(1_000),
-    );
-    assert_eq!(
-        read_park(&path),
-        Some(overloaded_record(1_500, 1_000, Some(4_000), 3))
-    );
-}
-
-#[test]
-fn a_regressed_park_keeps_its_baseline_and_retry_state() {
-    let (_dir, runtime) = temp_runtime();
-    let path = park_path(&runtime);
-    write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 3));
-    arm_park(
-        &path,
-        ParkKind::RateLimit {
-            deadline: ts(6_000),
-        },
-        ts(900),
-    );
-    assert_eq!(
-        read_park(&path),
-        Some(rate_record(6_000, 1_000, Some(5_000), 3))
-    );
-}
-
-#[test]
-fn a_new_park_baseline_resets_the_throttle_and_retry_count() {
-    let (_dir, runtime) = temp_runtime();
-    let path = park_path(&runtime);
-    write_park(&path, &overloaded_record(1_500, 1_000, Some(4_000), 3));
-    // The agent acted (activity advanced) and re-parked: a fresh nudge may fire.
-    arm_park(
-        &path,
-        ParkKind::RateLimit {
-            deadline: ts(9_000),
-        },
-        ts(8_000),
-    );
-    assert_eq!(read_park(&path), Some(rate_record(9_000, 8_000, None, 0)));
-}
-
-#[test]
-fn a_new_park_class_resets_the_throttle_and_retry_count() {
-    let (_dir, runtime) = temp_runtime();
-    let path = park_path(&runtime);
-    write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 4));
-    arm_park(
-        &path,
-        ParkKind::Overloaded {
-            overloaded_at: ts(1_500),
-        },
-        ts(1_000),
-    );
-    assert_eq!(
-        read_park(&path),
-        Some(overloaded_record(1_500, 1_000, None, 0))
-    );
+fn arm_park_carries_or_resets_retry_state() {
+    for (name, prior, kind, activity, expected) in [
+        (
+            "rate limit arms with deadline",
+            None,
+            ParkKind::RateLimit {
+                deadline: ts(5_000),
+            },
+            1_000,
+            rate_record(5_000, 1_000, None, 0),
+        ),
+        (
+            "overloaded arms with activity",
+            None,
+            ParkKind::Overloaded {
+                overloaded_at: ts(1_500),
+            },
+            1_000,
+            overloaded_record(1_500, 1_000, None, 0),
+        ),
+        (
+            "steady park keeps retry state",
+            Some(overloaded_record(1_500, 1_000, Some(4_000), 3)),
+            ParkKind::Overloaded {
+                overloaded_at: ts(1_500),
+            },
+            1_000,
+            overloaded_record(1_500, 1_000, Some(4_000), 3),
+        ),
+        (
+            "regressed activity keeps baseline",
+            Some(rate_record(5_000, 1_000, Some(5_000), 3)),
+            ParkKind::RateLimit {
+                deadline: ts(6_000),
+            },
+            900,
+            rate_record(6_000, 1_000, Some(5_000), 3),
+        ),
+        (
+            "new activity resets retry state",
+            Some(overloaded_record(1_500, 1_000, Some(4_000), 3)),
+            ParkKind::RateLimit {
+                deadline: ts(9_000),
+            },
+            8_000,
+            rate_record(9_000, 8_000, None, 0),
+        ),
+        (
+            "new class resets retry state",
+            Some(rate_record(5_000, 1_000, Some(5_000), 4)),
+            ParkKind::Overloaded {
+                overloaded_at: ts(1_500),
+            },
+            1_000,
+            overloaded_record(1_500, 1_000, None, 0),
+        ),
+    ] {
+        let (_dir, runtime) = temp_runtime();
+        let path = park_path(&runtime);
+        if let Some(prior) = prior {
+            write_park(&path, &prior);
+        }
+        arm_park(&path, kind, ts(activity));
+        assert_eq!(read_park(&path), Some(expected), "{name}");
+    }
 }
 
 #[test]
@@ -349,27 +263,150 @@ fn fire_if_due_keeps_records_when_activity_regresses() {
 }
 
 #[test]
-fn rate_limit_nudge_waits_for_the_deadline_then_fires() {
-    let record = rate_record(5_000, 1_000, None, 0);
-    assert!(!due(&record, 0, 4_999, &[], 10));
-    assert!(due(&record, 0, 5_000, &[], 10));
-}
-
-#[test]
-fn rate_limit_recent_nudge_throttles_the_next() {
-    // Last nudge at 5_000; the retry interval is 120s.
-    let record = rate_record(5_000, 1_000, Some(5_000), 1);
-    assert!(!due(&record, 1, 5_060, &[], 10));
-    assert!(due(&record, 1, 5_200, &[], 10));
-}
-
-#[test]
-fn rate_limit_retry_cap_stops_further_nudges() {
-    let at_cap = rate_record(5_000, 1_000, Some(5_000), 0);
-    assert!(!due(&at_cap, 3, 9_000, &[], 3));
-
-    let before_cap = rate_record(5_000, 1_000, Some(5_000), 99);
-    assert!(due(&before_cap, 2, 5_200, &[], 3));
+fn nudge_due_truth_table() {
+    for (name, record, attempts, now, backoff, max_retries, expected) in [
+        (
+            "rate limit waits before deadline",
+            rate_record(5_000, 1_000, None, 0),
+            0,
+            4_999,
+            &[][..],
+            10,
+            false,
+        ),
+        (
+            "rate limit fires at deadline",
+            rate_record(5_000, 1_000, None, 0),
+            0,
+            5_000,
+            &[][..],
+            10,
+            true,
+        ),
+        (
+            "rate limit recent nudge throttles",
+            rate_record(5_000, 1_000, Some(5_000), 1),
+            1,
+            5_060,
+            &[][..],
+            10,
+            false,
+        ),
+        (
+            "rate limit retry interval elapses",
+            rate_record(5_000, 1_000, Some(5_000), 1),
+            1,
+            5_200,
+            &[][..],
+            10,
+            true,
+        ),
+        (
+            "rate limit cap stops nudges",
+            rate_record(5_000, 1_000, Some(5_000), 0),
+            3,
+            9_000,
+            &[][..],
+            3,
+            false,
+        ),
+        (
+            "rate limit under cap can retry",
+            rate_record(5_000, 1_000, Some(5_000), 99),
+            2,
+            5_200,
+            &[][..],
+            3,
+            true,
+        ),
+        (
+            "first overload waits from park time",
+            overloaded_record(1_000, 100, None, 0),
+            0,
+            1_059,
+            &[60, 120, 180],
+            10,
+            false,
+        ),
+        (
+            "first overload fires after backoff",
+            overloaded_record(1_000, 100, None, 0),
+            0,
+            1_060,
+            &[60, 120, 180],
+            10,
+            true,
+        ),
+        (
+            "second overload waits on backoff",
+            overloaded_record(1_000, 100, Some(1_060), 1),
+            1,
+            1_179,
+            &[60, 120, 180],
+            10,
+            false,
+        ),
+        (
+            "second overload fires after backoff",
+            overloaded_record(1_000, 100, Some(1_060), 1),
+            1,
+            1_180,
+            &[60, 120, 180],
+            10,
+            true,
+        ),
+        (
+            "later overload waits on last backoff",
+            overloaded_record(1_000, 100, Some(1_180), 2),
+            2,
+            1_359,
+            &[60, 120, 180],
+            10,
+            false,
+        ),
+        (
+            "later overload fires after last backoff",
+            overloaded_record(1_000, 100, Some(1_180), 2),
+            2,
+            1_360,
+            &[60, 120, 180],
+            10,
+            true,
+        ),
+        (
+            "overload cap stops nudges",
+            overloaded_record(1_000, 100, Some(1_000), 0),
+            10,
+            9_000,
+            &[60, 120, 180],
+            10,
+            false,
+        ),
+        (
+            "overload under cap can retry",
+            overloaded_record(1_000, 100, Some(1_000), 9),
+            9,
+            1_180,
+            &[60, 120, 180],
+            10,
+            true,
+        ),
+        (
+            "evidenced attempt cap stops nudges",
+            rate_record(5_000, 1_000, Some(5_000), 0),
+            3,
+            6_000,
+            &[][..],
+            3,
+            false,
+        ),
+    ] {
+        assert_eq!(
+            due(&record, attempts, now, backoff, max_retries),
+            expected,
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -379,13 +416,6 @@ fn overload_backoff_expands_then_repeats_the_last_step() {
     assert_eq!(overload_backoff(2, &[60, 120, 180]).as_secs(), 180);
     assert_eq!(overload_backoff(9, &[60, 120, 180]).as_secs(), 180);
     assert_eq!(overload_backoff(0, &[]).as_secs(), 300);
-}
-
-#[test]
-fn first_overloaded_nudge_waits_from_the_park_time() {
-    let record = overloaded_record(1_000, 100, None, 0);
-    assert!(!due(&record, 0, 1_059, &[60, 120, 180], 10));
-    assert!(due(&record, 0, 1_060, &[60, 120, 180], 10));
 }
 
 #[test]
@@ -402,7 +432,12 @@ fn stalled_stream_park_uses_default_three_minute_retry() {
         let mut snapshot = SidebarSnapshot::build_with_agents(
             runtime.workspace_id.clone(),
             Vec::new(),
-            vec![overloaded_agent(100, 1_000, label)],
+            vec![parked_agent(
+                100,
+                1_000,
+                TurnErrorClass::PausedOverloaded,
+                label,
+            )],
             ts(now),
         );
         snapshot.now = ts(now);
@@ -424,49 +459,20 @@ fn stalled_stream_park_uses_default_three_minute_retry() {
 }
 
 #[test]
-fn overloaded_retries_wait_on_their_backoff_step() {
-    let second = overloaded_record(1_000, 100, Some(1_060), 1);
-    assert!(!due(&second, 1, 1_179, &[60, 120, 180], 10));
-    assert!(due(&second, 1, 1_180, &[60, 120, 180], 10));
-
-    let later = overloaded_record(1_000, 100, Some(1_180), 2);
-    assert!(!due(&later, 2, 1_359, &[60, 120, 180], 10));
-    assert!(due(&later, 2, 1_360, &[60, 120, 180], 10));
-}
-
-#[test]
-fn overloaded_retry_cap_stops_further_nudges() {
-    let at_cap = overloaded_record(1_000, 100, Some(1_000), 0);
-    assert!(!due(&at_cap, 10, 9_000, &[60, 120, 180], 10));
-
-    let before_cap = overloaded_record(1_000, 100, Some(1_000), 9);
-    assert!(due(&before_cap, 9, 1_180, &[60, 120, 180], 10));
-}
-
-#[test]
 fn recovered_budget_fires_due_rate_limit_record_before_clearing() {
     let (_dir, runtime) = temp_runtime();
     let path = park_path(&runtime);
     write_park(&path, &rate_record(5_000, 1_000, None, 0));
-    write_rate_limits_cache(
-        &runtime,
-        &RateLimitsCache {
-            refreshed_at_ms: 0,
-            windows: [(
-                "claude".to_owned(),
-                AgentRateLimits {
-                    windows: vec![window(20, 9_000)],
-                },
-            )]
-            .into_iter()
-            .collect(),
-            pending: Default::default(),
-        },
-    );
+    write_recovered_window(&runtime);
     let mut snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
         Vec::new(),
-        vec![limit_agent(1_000, 5_990)],
+        vec![parked_agent(
+            1_000,
+            5_990,
+            TurnErrorClass::PausedRateLimit,
+            "You've hit your usage limit",
+        )],
         ts(6_000),
     );
     snapshot.now = ts(6_000);
@@ -491,25 +497,16 @@ fn recovered_budget_fires_due_rate_limit_record_before_clearing() {
 fn recovered_budget_rearms_a_lost_limit_park() {
     let (_dir, runtime) = temp_runtime();
     let path = park_path(&runtime);
-    write_rate_limits_cache(
-        &runtime,
-        &RateLimitsCache {
-            refreshed_at_ms: 0,
-            windows: [(
-                "claude".to_owned(),
-                AgentRateLimits {
-                    windows: vec![window(20, 9_000)],
-                },
-            )]
-            .into_iter()
-            .collect(),
-            pending: Default::default(),
-        },
-    );
+    write_recovered_window(&runtime);
     let mut snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
         Vec::new(),
-        vec![limit_agent(1_000, 5_990)],
+        vec![parked_agent(
+            1_000,
+            5_990,
+            TurnErrorClass::PausedRateLimit,
+            "You've hit your usage limit",
+        )],
         ts(6_000),
     );
     snapshot.now = ts(6_000);
@@ -535,21 +532,7 @@ fn recovered_budget_clears_a_stale_rate_limit_record() {
     let (_dir, runtime) = temp_runtime();
     let path = park_path(&runtime);
     write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 1));
-    write_rate_limits_cache(
-        &runtime,
-        &RateLimitsCache {
-            refreshed_at_ms: 0,
-            windows: [(
-                "claude".to_owned(),
-                AgentRateLimits {
-                    windows: vec![window(20, 9_000)],
-                },
-            )]
-            .into_iter()
-            .collect(),
-            pending: Default::default(),
-        },
-    );
+    write_recovered_window(&runtime);
     let mut snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
         Vec::new(),
@@ -583,7 +566,12 @@ fn fire_with_resume_message(status: MessageStatus) -> Option<ParkRecord> {
     let mut snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
         Vec::new(),
-        vec![limit_agent(1_000, 5_990)],
+        vec![parked_agent(
+            1_000,
+            5_990,
+            TurnErrorClass::PausedRateLimit,
+            "You've hit your usage limit",
+        )],
         ts(6_000),
     );
     snapshot.now = ts(6_000);
@@ -625,7 +613,12 @@ fn undelivered_resume_messages_allow_retry_under_cap() {
 
 #[test]
 fn duplicate_resume_messages_count_as_one_attempt() {
-    let agent = limit_agent(1_000, 5_990);
+    let agent = parked_agent(
+        1_000,
+        5_990,
+        TurnErrorClass::PausedRateLimit,
+        "You've hit your usage limit",
+    );
     let record = rate_record(5_000, 1_000, Some(5_000), 0);
     let duplicate = ResumeMessage {
         status: MessageStatus::TimedOut,
@@ -655,7 +648,12 @@ fn phantom_spawns_never_exhaust_a_park() {
     let snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
         Vec::new(),
-        vec![limit_agent(1_000, 5_990)],
+        vec![parked_agent(
+            1_000,
+            5_990,
+            TurnErrorClass::PausedRateLimit,
+            "You've hit your usage limit",
+        )],
         ts(6_000),
     );
     let config = ResumeConfig {
@@ -669,13 +667,6 @@ fn phantom_spawns_never_exhaust_a_park() {
 }
 
 #[test]
-fn evidenced_attempt_cap_stops_further_nudges() {
-    let record = rate_record(5_000, 1_000, Some(5_000), 0);
-
-    assert!(!nudge_due(&record, 3, ts(6_000), &[], 3));
-}
-
-#[test]
 fn exhausted_resume_attempts_report_actionable_key() {
     let (_dir, runtime) = temp_runtime();
     let path = park_path(&runtime);
@@ -683,7 +674,12 @@ fn exhausted_resume_attempts_report_actionable_key() {
     let snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
         Vec::new(),
-        vec![limit_agent(1_000, 5_990)],
+        vec![parked_agent(
+            1_000,
+            5_990,
+            TurnErrorClass::PausedRateLimit,
+            "You've hit your usage limit",
+        )],
         ts(6_000),
     );
     let config = ResumeConfig {
