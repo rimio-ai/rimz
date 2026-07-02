@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use crate::diag::notify::{NotifyTraceEnvelope, NotifyTraceEvent};
 use crate::diag::record::{DiagEnvelope, DiagEvent};
-use crate::ids::{PaneId, SidebarInstanceId, WorkspaceId};
+use crate::ids::{SidebarInstanceId, WorkspaceId};
 
 pub mod binding;
 pub mod notify;
