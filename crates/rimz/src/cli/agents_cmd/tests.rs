@@ -5,7 +5,7 @@ use clap::Parser;
 use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::config::LaunchPlacement;
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
-use rimz::ids::{AgentKind, WorkspaceId};
+use rimz::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Parser)]
@@ -40,6 +40,33 @@ fn only_agent_args_and_model(layout: &LayoutSpec) -> (&[String], Option<&str>) {
         panic!("single agent cell");
     };
     (args, model.as_deref())
+}
+
+fn role_binding(role: &str) -> rimz::config::RoleBinding {
+    rimz::config::RoleBinding {
+        role: role.to_owned(),
+        profile: format!("{role}-profile"),
+        mode: None,
+        model: None,
+        effort: None,
+        system_prompt_file: None,
+        append_system_prompt_file: None,
+        args: None,
+    }
+}
+
+fn agent_cell_with_role(role: Option<&str>) -> Cell {
+    Cell::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        args: Vec::new(),
+        mode: None,
+        system_prompt_file: None,
+        append_system_prompt_file: None,
+        profile: role.map(|role| format!("{role}-profile")),
+        role: role.map(ToOwned::to_owned),
+        model: None,
+        effort: None,
+    }
 }
 
 #[test]
@@ -132,6 +159,8 @@ fn full_launch_env_marks_agent_kind() {
             agent_profile: Some("planner"),
             agent_role: Some("coder"),
             agent_team: Some("pcr"),
+            launch_group: Some("launch_group_1"),
+            launch_ordinal: Some(2),
             agent_model: Some("gpt-5.5"),
             agent_effort: Some("xhigh"),
             ..AgentLaunchEnvIdentity::default()
@@ -162,6 +191,16 @@ fn full_launch_env_marks_agent_kind() {
     assert_eq!(
         env.get(rimz::harness::run::ENV_TEAM).map(String::as_str),
         Some("pcr")
+    );
+    assert_eq!(
+        env.get(rimz::harness::run::ENV_LAUNCH_GROUP)
+            .map(String::as_str),
+        Some("launch_group_1")
+    );
+    assert_eq!(
+        env.get(rimz::harness::run::ENV_LAUNCH_ORDINAL)
+            .map(String::as_str),
+        Some("2")
     );
     assert_eq!(
         env.get(rimz::harness::run::ENV_AGENT_MODEL)
@@ -236,6 +275,51 @@ fn pane_command_stamps_agent_role_and_team() {
 }
 
 #[test]
+fn pane_command_stamps_launch_cohort_identity() {
+    let cell = Cell::agent(AgentKind::new_unchecked("claude"));
+    let launch = LaunchIdentity {
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: AgentSessionId::from("launch_0123456789abcdef0123456789abcdef"),
+        name: "swift-otter".to_owned(),
+        profile: None,
+        role: None,
+        model: None,
+        effort: None,
+        team: None,
+        launch_group: Some("launch_group_1".to_owned()),
+        launch_ordinal: Some(2),
+        channel: None,
+        run_id: None,
+    };
+
+    let pane = pane_cmd_with_name(
+        &cell,
+        PaneCmdOptions {
+            rimz_bin: Path::new("/usr/bin/rimz"),
+            cwd: Path::new("/tmp/project"),
+            prompt: None,
+            cleanup_worktree: false,
+            in_place: false,
+            team: None,
+            channel: None,
+            launch: Some(&launch),
+        },
+    )
+    .expect("pane command");
+
+    assert!(
+        pane.argv
+            .windows(2)
+            .any(|args| args[0] == "--launch-group" && args[1] == "launch_group_1")
+    );
+    assert!(
+        pane.argv
+            .windows(2)
+            .any(|args| args[0] == "--launch-ordinal" && args[1] == "2")
+    );
+}
+
+#[test]
 fn team_role_spec_stamps_launch_identity_and_pane_command() {
     let profiles = rimz::config::ProfilesConfig(BTreeMap::from([(
         "planner-profile".to_owned(),
@@ -274,13 +358,22 @@ fn team_role_spec_stamps_launch_identity_and_pane_command() {
     .expect("team role spec");
     let team_name = rimz::harness::spec::spec_team("pcr.planner", &teams);
 
-    let requests = launch_identity_requests(&layout, None, None, team_name, None).unwrap();
+    let requests = launch_identity_requests(
+        &layout,
+        None,
+        None,
+        team_name,
+        teams.0.get("pcr").map(|team| team.roles.as_slice()),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].kind.as_str(), "codex");
     assert_eq!(requests[0].profile.as_deref(), Some("planner-profile"));
     assert_eq!(requests[0].role.as_deref(), Some("planner"));
     assert_eq!(requests[0].team.as_deref(), Some("pcr"));
+    assert_eq!(requests[0].launch_ordinal, Some(0));
 
     let pane = pane_cmd_with_name(
         &layout.columns[0].rows[0],
@@ -1093,14 +1186,15 @@ fn generated_worktree_name_is_soft_agent_name_candidate() {
     let layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
 
     let requests =
-        launch_identity_requests(&layout, None, Some("docs"), Some("pcr"), None).unwrap();
+        launch_identity_requests(&layout, None, Some("docs"), Some("pcr"), None, None).unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].name, AgentLaunchName::Soft("docs".to_owned()));
     assert_eq!(requests[0].profile, None);
     assert_eq!(requests[0].role, None);
     assert_eq!(requests[0].team.as_deref(), Some("pcr"));
 
-    let requests = launch_identity_requests(&layout, None, Some("my_feature"), None, None).unwrap();
+    let requests =
+        launch_identity_requests(&layout, None, Some("my_feature"), None, None, None).unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].name,
@@ -1122,7 +1216,7 @@ fn launch_identity_requests_carry_cell_identity() {
         effort: Some("high".to_owned()),
     });
 
-    let requests = launch_identity_requests(&layout, None, None, Some("pcr"), None).unwrap();
+    let requests = launch_identity_requests(&layout, None, None, Some("pcr"), None, None).unwrap();
 
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].kind.as_str(), "codex");
@@ -1134,11 +1228,85 @@ fn launch_identity_requests_carry_cell_identity() {
 }
 
 #[test]
+fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
+    let team_roles = vec![
+        role_binding("planner"),
+        role_binding("coder"),
+        role_binding("reviewer"),
+    ];
+    let team_layout = rimz::agents_spec::LayoutSpec {
+        columns: vec![rimz::agents_spec::Column {
+            rows: vec![
+                agent_cell_with_role(Some("coder")),
+                agent_cell_with_role(Some("planner")),
+                agent_cell_with_role(None),
+            ],
+            stacked: false,
+        }],
+    };
+
+    let requests = launch_identity_requests(
+        &team_layout,
+        None,
+        None,
+        Some("pcr"),
+        Some(&team_roles),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(requests[0].role.as_deref(), Some("coder"));
+    assert_eq!(requests[0].launch_ordinal, Some(1));
+    assert_eq!(requests[1].role.as_deref(), Some("planner"));
+    assert_eq!(requests[1].launch_ordinal, Some(0));
+    assert_eq!(requests[2].role, None);
+    assert_eq!(requests[2].launch_ordinal, None);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.launch_group.is_none())
+    );
+
+    let single_role = rimz::agents_spec::LayoutSpec::single(agent_cell_with_role(Some("coder")));
+    let requests = launch_identity_requests(
+        &single_role,
+        None,
+        None,
+        Some("pcr"),
+        Some(&team_roles),
+        None,
+    )
+    .unwrap();
+    assert_eq!(requests[0].launch_ordinal, Some(1));
+
+    let inline = rimz::agents_spec::LayoutSpec {
+        columns: vec![rimz::agents_spec::Column {
+            rows: vec![agent_cell_with_role(None), agent_cell_with_role(None)],
+            stacked: false,
+        }],
+    };
+    let requests = launch_identity_requests(&inline, None, None, None, None, None).unwrap();
+    let group = requests[0]
+        .launch_group
+        .as_deref()
+        .expect("inline launch group");
+    assert!(group.starts_with("launch_"));
+    assert_eq!(requests[1].launch_group.as_deref(), Some(group));
+    assert_eq!(requests[0].launch_ordinal, Some(0));
+    assert_eq!(requests[1].launch_ordinal, Some(1));
+
+    let single = rimz::agents_spec::LayoutSpec::single(agent_cell_with_role(None));
+    let requests = launch_identity_requests(&single, None, None, None, None, None).unwrap();
+    assert_eq!(requests[0].launch_group, None);
+    assert_eq!(requests[0].launch_ordinal, None);
+}
+
+#[test]
 fn explicit_agent_name_still_hard_fails_on_invalid() {
     let layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
 
     assert!(
-        launch_identity_requests(&layout, Some("my_feature"), None, None, None)
+        launch_identity_requests(&layout, Some("my_feature"), None, None, None, None)
             .unwrap_err()
             .to_string()
             .contains("invalid agent name")
@@ -1159,6 +1327,10 @@ fn exec_subcommand_captures_agent_args_after_separator() {
         "coder",
         "--agent-team",
         "pcr",
+        "--launch-group",
+        "launch_group_1",
+        "--launch-ordinal",
+        "2",
         "--agent-model",
         "gpt-5.5",
         "--agent-effort",
@@ -1188,6 +1360,8 @@ fn exec_subcommand_captures_agent_args_after_separator() {
     assert_eq!(args.agent_name.as_deref(), Some("lucid-atlas"));
     assert_eq!(args.agent_role.as_deref(), Some("coder"));
     assert_eq!(args.agent_team.as_deref(), Some("pcr"));
+    assert_eq!(args.launch_group.as_deref(), Some("launch_group_1"));
+    assert_eq!(args.launch_ordinal, Some(2));
     assert_eq!(args.agent_model.as_deref(), Some("gpt-5.5"));
     assert_eq!(args.agent_effort.as_deref(), Some("xhigh"));
     assert_eq!(
@@ -1274,6 +1448,8 @@ fn bare_exec_args() -> ExecArgs {
         agent_profile: None,
         agent_role: None,
         agent_team: None,
+        launch_group: None,
+        launch_ordinal: None,
         agent_channel: None,
         agent_model: None,
         agent_effort: None,
@@ -1409,6 +1585,8 @@ fn agent_with_status(
         profile: None,
         role: None,
         team: None,
+        launch_group: None,
+        launch_ordinal: None,
         channel: None,
         status,
         phase,

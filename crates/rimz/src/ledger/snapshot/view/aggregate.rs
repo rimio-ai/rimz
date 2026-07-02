@@ -9,8 +9,8 @@ use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
 use super::layout::{
-    capped_rows, compare_groups, compare_rows, effective_worktree_roots, group_branch_label,
-    multi_branch_paths, status_counts, worktree_group_key,
+    capped_rows, compare_groups, effective_worktree_roots, group_branch_label, multi_branch_paths,
+    sort_rows, status_counts, worktree_group_key,
 };
 use super::{SidebarWorktreeGroup, SidebarWorktreeKind};
 
@@ -102,7 +102,7 @@ pub(super) fn build_worktree_groups_from_rows(
     let mut groups = by_group
         .into_iter()
         .map(|(key, (label, kind, mut rows))| {
-            rows.sort_by(compare_rows);
+            sort_rows(&mut rows);
             // Prefer a branch label over the path-basename seed for worktree
             // pods. Root pods keep the room name; external keeps its catch-all
             // label even if a stray branch rode the row.

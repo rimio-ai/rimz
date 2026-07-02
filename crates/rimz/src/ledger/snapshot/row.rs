@@ -75,6 +75,15 @@ impl SidebarRow {
         }
     }
 
+    pub fn launch_cohort(&self) -> Option<&str> {
+        let agent = self.as_agent()?;
+        agent.team.as_deref().or(agent.launch_group.as_deref())
+    }
+
+    pub fn launch_ordinal(&self) -> Option<u32> {
+        self.as_agent().and_then(|agent| agent.launch_ordinal)
+    }
+
     /// The name to display on the card and in notifications: the agent's handle
     /// (role/profile) when set, else `name` — the kind for an agent row, the
     /// command for a process row.
@@ -290,6 +299,16 @@ pub struct AgentCard {
     /// subagent nesting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<String>,
+    /// The launch team copied from the rollup. Rendering does not use it yet;
+    /// row sorting treats it as the cohort key ahead of `launch_group`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
+    /// Inline multi-agent launch cohort copied from the rollup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_group: Option<String>,
+    /// Stable order inside the launch cohort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_ordinal: Option<u32>,
     /// Context-window % gauge value (0..=100).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_pct: Option<u8>,

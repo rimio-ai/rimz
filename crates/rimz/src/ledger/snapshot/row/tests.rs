@@ -100,6 +100,10 @@ fn display_name_prefers_agent_handle_and_falls_back_to_row_name() {
         last_activity: row_time(),
         card: RowCard::Agent(Box::new(AgentCard {
             handle: Some("planner".to_owned()),
+            team: None,
+            launch_group: None,
+            launch_ordinal: None,
+
             ..AgentCard::default()
         })),
     };

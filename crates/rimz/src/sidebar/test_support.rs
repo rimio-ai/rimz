@@ -95,6 +95,8 @@ pub(crate) fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> Age
         profile: None,
         role: None,
         team: None,
+        launch_group: None,
+        launch_ordinal: None,
         channel: None,
         status: AgentStatus::Running,
         phase: TurnPhase::Idle,

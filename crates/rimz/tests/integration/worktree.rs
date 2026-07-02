@@ -1096,6 +1096,8 @@ fn seed_agent_launch(
             model: None,
             effort: None,
             team: None,
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             kind_ordinal: None,
             state,

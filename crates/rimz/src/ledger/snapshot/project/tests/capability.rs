@@ -15,6 +15,8 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
             model: None,
             effort: None,
             team: Some("pcr".to_owned()),
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             kind_ordinal: None,
             state: AgentLaunchState::Starting,

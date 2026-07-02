@@ -851,6 +851,8 @@ fn agent(id: &str, name: Option<&str>) -> AgentState {
         profile: None,
         role: None,
         team: None,
+        launch_group: None,
+        launch_ordinal: None,
         channel: None,
         status: AgentStatus::Idle,
         phase: crate::agents::TurnPhase::Idle,

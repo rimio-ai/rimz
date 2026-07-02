@@ -347,6 +347,157 @@ fn cap_keeps_inactive_success_above_hidden_idle_tail() {
     assert!(snapshot.worktree_groups[0].hidden_count > 0);
 }
 
+#[test]
+fn cohort_rows_hold_launch_order_across_status_and_unread_churn() {
+    let mut snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            cohort_agent(
+                "cohort-second",
+                AgentStatus::Success,
+                1_000,
+                "launch_group_1",
+                Some(1),
+                "%1",
+            ),
+            cohort_agent(
+                "cohort-tail",
+                AgentStatus::Running,
+                2_000,
+                "launch_group_1",
+                None,
+                "%2",
+            ),
+            cohort_agent(
+                "cohort-first",
+                AgentStatus::Waiting,
+                3_000,
+                "launch_group_1",
+                Some(0),
+                "%3",
+            ),
+            agent_in("loose-unread", "/repo/main", AgentStatus::Success, 4_000).in_pane("%0"),
+        ],
+    );
+    row_mut(&mut snapshot, "loose-unread").unread = true;
+    snapshot.sort_groups_for_presentation();
+
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec![
+            "loose-unread",
+            "cohort-first",
+            "cohort-second",
+            "cohort-tail",
+        ],
+        "loose unread rows stay above the block; cohort rows keep launch order and ordinal-less members tail"
+    );
+}
+
+#[test]
+fn inline_cohorts_stay_contiguous_without_interleaving() {
+    let snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            cohort_agent(
+                "g1-a",
+                AgentStatus::Success,
+                1_000,
+                "launch_g1",
+                Some(0),
+                "%1",
+            ),
+            cohort_agent(
+                "g2-a",
+                AgentStatus::Success,
+                2_000,
+                "launch_g2",
+                Some(0),
+                "%2",
+            ),
+            cohort_agent(
+                "g2-b",
+                AgentStatus::Success,
+                3_000,
+                "launch_g2",
+                Some(1),
+                "%3",
+            ),
+            cohort_agent(
+                "g1-b",
+                AgentStatus::Success,
+                4_000,
+                "launch_g1",
+                Some(1),
+                "%4",
+            ),
+        ],
+    );
+
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["g1-a", "g1-b", "g2-a", "g2-b"],
+        "block min pane ordinal orders cohorts; internal launch ordinal keeps each cohort contiguous"
+    );
+}
+
+#[test]
+fn inactive_cohort_sinks_until_unread_member_clamps_it_live() {
+    let mut snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("fresh-idle", "/repo/main", AgentStatus::Idle, 1_000),
+            cohort_agent(
+                "old-a",
+                AgentStatus::Success,
+                2_000,
+                "launch_group_1",
+                Some(0),
+                "%1",
+            )
+            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+            cohort_agent(
+                "old-b",
+                AgentStatus::Idle,
+                3_000,
+                "launch_group_1",
+                Some(1),
+                "%2",
+            )
+            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        ],
+    );
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(order, vec!["fresh-idle", "old-a", "old-b"]);
+
+    row_mut(&mut snapshot, "old-b").unread = true;
+    snapshot.sort_groups_for_presentation();
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["old-a", "old-b", "fresh-idle"],
+        "one unread member keeps the block in the live band without changing its internal order"
+    );
+}
+
 fn row_mut<'a>(snapshot: &'a mut SidebarSnapshot, id: &str) -> &'a mut SidebarRow {
     snapshot
         .worktree_groups
@@ -354,6 +505,20 @@ fn row_mut<'a>(snapshot: &'a mut SidebarSnapshot, id: &str) -> &'a mut SidebarRo
         .flat_map(|group| group.rows.iter_mut())
         .find(|row| row.id == id)
         .unwrap_or_else(|| panic!("row {id} present"))
+}
+
+fn cohort_agent(
+    id: &str,
+    status: AgentStatus,
+    rank: i64,
+    launch_group: &str,
+    launch_ordinal: Option<u32>,
+    pane_raw: &str,
+) -> AgentState {
+    let mut agent = agent_in(id, "/repo/main", status, rank).in_pane(pane_raw);
+    agent.launch_group = Some(launch_group.to_owned());
+    agent.launch_ordinal = launch_ordinal;
+    agent
 }
 
 fn process_row(id: &str, worktree: &str) -> SidebarRow {

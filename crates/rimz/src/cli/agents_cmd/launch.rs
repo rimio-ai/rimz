@@ -89,6 +89,9 @@ pub(super) fn launch_layout(
         args.name.as_deref(),
         generated_worktree_name(&launch),
         team_name,
+        team_name
+            .and_then(|name| teams.0.get(name))
+            .map(|team| team.roles.as_slice()),
         args.channel.as_deref(),
     )?;
     let launch_identities = ledger.append_agent_launches_allocating(
@@ -355,6 +358,8 @@ pub(super) struct AgentLaunchEnvIdentity<'a> {
     pub(super) agent_profile: Option<&'a str>,
     pub(super) agent_role: Option<&'a str>,
     pub(super) agent_team: Option<&'a str>,
+    pub(super) launch_group: Option<&'a str>,
+    pub(super) launch_ordinal: Option<u32>,
     pub(super) agent_channel: Option<&'a str>,
     pub(super) agent_model: Option<&'a str>,
     pub(super) agent_effort: Option<&'a str>,
@@ -404,6 +409,18 @@ pub(super) fn full_agent_launch_env(
         env.insert(
             rimz::harness::run::ENV_TEAM.to_owned(),
             agent_team.to_owned(),
+        );
+    }
+    if let Some(launch_group) = identity.launch_group {
+        env.insert(
+            rimz::harness::run::ENV_LAUNCH_GROUP.to_owned(),
+            launch_group.to_owned(),
+        );
+    }
+    if let Some(launch_ordinal) = identity.launch_ordinal {
+        env.insert(
+            rimz::harness::run::ENV_LAUNCH_ORDINAL.to_owned(),
+            launch_ordinal.to_string(),
         );
     }
     if let Some(agent_channel) = identity.agent_channel {
@@ -811,10 +828,12 @@ pub(super) fn launch_identity_requests(
     explicit_name: Option<&str>,
     generated_worktree_name: Option<&str>,
     team: Option<&str>,
+    team_roles: Option<&[rimz::config::RoleBinding]>,
     channel: Option<&str>,
 ) -> Result<Vec<AgentLaunchRequest>> {
     let agent_cells: Vec<&Cell> = layout.agent_cells().collect();
     let agent_count = agent_cells.len();
+    let inline_launch_group = (team.is_none() && agent_count >= 2).then(mint_launch_group);
     let mut requests = Vec::with_capacity(agent_cells.len());
     for (index, cell) in agent_cells.into_iter().enumerate() {
         let Cell::Agent {
@@ -827,6 +846,13 @@ pub(super) fn launch_identity_requests(
         } = cell
         else {
             continue;
+        };
+        let launch_ordinal = match team {
+            Some(_) => role
+                .as_deref()
+                .and_then(|role| team_role_ordinal(team_roles, role)),
+            None if inline_launch_group.is_some() => Some(index_to_launch_ordinal(index)),
+            None => None,
         };
         let name = if agent_count == 1 && index == 0 {
             match explicit_name {
@@ -850,6 +876,8 @@ pub(super) fn launch_identity_requests(
             model: model.clone(),
             effort: effort.clone(),
             team: team.map(ToOwned::to_owned),
+            launch_group: inline_launch_group.clone(),
+            launch_ordinal,
             channel: channel.map(ToOwned::to_owned),
             run_id: None,
         });
@@ -861,6 +889,21 @@ pub(super) fn mint_launch_id() -> AgentSessionId {
     let raw = EventId::new();
     let suffix = raw.as_str().strip_prefix("evt_").unwrap_or(raw.as_str());
     AgentSessionId::from(format!("launch_{suffix}"))
+}
+
+fn mint_launch_group() -> String {
+    mint_launch_id().to_string()
+}
+
+fn team_role_ordinal(team_roles: Option<&[rimz::config::RoleBinding]>, role: &str) -> Option<u32> {
+    let index = team_roles?
+        .iter()
+        .position(|binding| binding.role == role)?;
+    Some(index_to_launch_ordinal(index))
+}
+
+fn index_to_launch_ordinal(index: usize) -> u32 {
+    u32::try_from(index).unwrap_or(u32::MAX)
 }
 
 pub(super) fn append_launch_events(
@@ -899,6 +942,8 @@ pub(super) fn append_launch_event(
             model: identity.model.clone(),
             effort: identity.effort.clone(),
             team: identity.team.clone(),
+            launch_group: identity.launch_group.clone(),
+            launch_ordinal: identity.launch_ordinal,
             channel: identity
                 .channel
                 .clone()
@@ -1037,6 +1082,12 @@ pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Re
                     "--launch-id".to_owned(),
                     launch.agent_id.as_str().to_owned(),
                 ]);
+                if let Some(launch_group) = launch.launch_group.as_deref() {
+                    argv.extend(["--launch-group".to_owned(), launch_group.to_owned()]);
+                }
+                if let Some(launch_ordinal) = launch.launch_ordinal {
+                    argv.extend(["--launch-ordinal".to_owned(), launch_ordinal.to_string()]);
+                }
             }
             if options.cleanup_worktree {
                 argv.extend([

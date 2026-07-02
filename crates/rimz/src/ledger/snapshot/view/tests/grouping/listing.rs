@@ -183,3 +183,31 @@ fn named_channel_groups_a_live_agent_ahead_of_worktree_identity() {
     assert_eq!(groups[0].kind, SidebarWorktreeKind::Channel);
     assert_eq!(groups[0].label, "design");
 }
+
+#[test]
+fn listing_roster_mirrors_cohort_block_order_and_group_attention_rank() {
+    let mut first = agent("claude", "cohort-first", AgentStatus::Success, 30).worktree("/repo/a");
+    first.launch_group = Some("launch_group_1".to_owned());
+    first.launch_ordinal = Some(0);
+    first.pane = Some(pane("%3", "claude", "/repo/a"));
+    let mut second = agent("claude", "cohort-second", AgentStatus::Waiting, 10).worktree("/repo/a");
+    second.launch_group = Some("launch_group_1".to_owned());
+    second.launch_ordinal = Some(1);
+    second.pane = Some(pane("%1", "claude", "/repo/a"));
+    let other = agent("claude", "other-running", AgentStatus::Running, 40).worktree("/repo/b");
+    let snapshot = room(Vec::new(), vec![second, other, first]);
+    let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
+
+    let groups = group_live_agents_by_worktree(&refs, &snapshot);
+
+    assert_eq!(
+        groups[0].label, "a",
+        "the waiting cohort member still lifts its group even when block order keeps it below a calm teammate"
+    );
+    let order = groups[0]
+        .agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(order, vec!["cohort-first", "cohort-second"]);
+}

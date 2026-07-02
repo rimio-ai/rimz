@@ -127,6 +127,8 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
         profile: None,
         role: None,
         team: None,
+        launch_group: None,
+        launch_ordinal: None,
         channel: None,
         status,
         phase: TurnPhase::Idle,

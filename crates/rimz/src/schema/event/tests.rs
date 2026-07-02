@@ -15,6 +15,8 @@ fn lifecycle_observation() -> AgentLifecycleObservation {
         agent_name: Some("amber-atlas".to_owned()),
         role: Some("reviewer".to_owned()),
         team: Some("pcr".to_owned()),
+        launch_group: None,
+        launch_ordinal: None,
         channel: None,
         profile: Some("claude-reviewer".to_owned()),
         kind_ordinal: Some(2),
@@ -146,6 +148,8 @@ fn agent_lifecycle_constructor_omits_absent_fields() {
         "agent_name",
         "role",
         "team",
+        "launch_group",
+        "launch_ordinal",
         "profile",
         "kind_ordinal",
         "agent_process_start",
@@ -261,14 +265,20 @@ fn agent_launch_payload_round_trips_channel_identity() {
         "agent_name": "swift-otter",
         "role": "coder",
         "team": "pcr",
+        "launch_group": "launch_group_1",
+        "launch_ordinal": 2,
         "channel": "design",
     }))
     .unwrap();
 
     assert_eq!(payload.team.as_deref(), Some("pcr"));
+    assert_eq!(payload.launch_group.as_deref(), Some("launch_group_1"));
+    assert_eq!(payload.launch_ordinal, Some(2));
     assert_eq!(payload.channel.as_deref(), Some("design"));
     let encoded = serde_json::to_value(&payload).unwrap();
     assert_eq!(encoded["team"], "pcr");
+    assert_eq!(encoded["launch_group"], "launch_group_1");
+    assert_eq!(encoded["launch_ordinal"], 2);
     assert_eq!(encoded["channel"], "design");
 }
 

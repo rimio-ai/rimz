@@ -46,6 +46,10 @@ pub struct AgentLaunchPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_ordinal: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_ordinal: Option<u32>,

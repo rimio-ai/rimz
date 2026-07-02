@@ -502,6 +502,8 @@ fn codex_origin_overrides_read_transcript_and_worktree_from_snapshot() {
         profile: None,
         role: None,
         team: None,
+        launch_group: None,
+        launch_ordinal: None,
         channel: None,
         status: AgentStatus::Running,
         phase: TurnPhase::Idle,

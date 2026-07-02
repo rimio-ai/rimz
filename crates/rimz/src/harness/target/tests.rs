@@ -893,6 +893,8 @@ fn agent(kind: &str, id: &str, branch: Option<&str>, raw_pane: &str) -> AgentSta
         profile: None,
         role: None,
         team: None,
+        launch_group: None,
+        launch_ordinal: None,
         channel: None,
         status: AgentStatus::Idle,
         phase: crate::agents::TurnPhase::Idle,

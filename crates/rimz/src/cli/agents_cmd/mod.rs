@@ -209,7 +209,7 @@ enum AgentsSubcmd {
     Stop { reference: String },
     /// Hidden wrapper used inside launched agent panes.
     #[command(hide = true)]
-    Exec(ExecArgs),
+    Exec(Box<ExecArgs>),
     /// Hidden helper the producer spawns to nudge a parked agent when its resume
     /// condition is due (`sidebar::enrich` auto-continue).
     #[command(hide = true)]
@@ -245,6 +245,12 @@ struct ExecArgs {
     /// makes in-place members resolve inside `<dir>/<team>`.
     #[arg(long)]
     agent_team: Option<String>,
+    /// The inline multi-agent launch cohort this agent belongs to.
+    #[arg(long)]
+    launch_group: Option<String>,
+    /// The agent's order inside its launch cohort.
+    #[arg(long)]
+    launch_ordinal: Option<u32>,
     /// The named channel this agent launched under.
     #[arg(long)]
     agent_channel: Option<String>,
@@ -270,7 +276,7 @@ struct ExecArgs {
 
 pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        Some(AgentsSubcmd::Exec(exec)) => return run_exec(exec, globals),
+        Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args),
         Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args, globals),
         Some(AgentsSubcmd::List {

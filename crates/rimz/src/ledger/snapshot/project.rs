@@ -771,6 +771,15 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
             .team
             .clone()
             .or_else(|| input.prior.and_then(|state| state.team.clone())),
+        launch_group: input
+            .observation
+            .launch_group
+            .clone()
+            .or_else(|| input.prior.and_then(|state| state.launch_group.clone())),
+        launch_ordinal: input
+            .observation
+            .launch_ordinal
+            .or_else(|| input.prior.and_then(|state| state.launch_ordinal)),
         channel: input
             .observation
             .channel
@@ -876,6 +885,13 @@ fn assemble_launch_state(
             .team
             .clone()
             .or_else(|| prior.and_then(|state| state.team.clone())),
+        launch_group: payload
+            .launch_group
+            .clone()
+            .or_else(|| prior.and_then(|state| state.launch_group.clone())),
+        launch_ordinal: payload
+            .launch_ordinal
+            .or_else(|| prior.and_then(|state| state.launch_ordinal)),
         channel: payload
             .channel
             .clone()

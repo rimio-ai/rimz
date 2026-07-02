@@ -531,6 +531,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
         args.name.as_deref(),
         generated_worktree_name(&launch),
         None,
+        None,
         args.channel.as_deref(),
     )?;
     let launch_requests = launch_requests

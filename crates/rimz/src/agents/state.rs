@@ -490,6 +490,15 @@ pub struct AgentState {
     /// it as the channel suffix when no worktree branch exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    /// Inline multi-agent launch cohort, stamped by `RIMZ_LAUNCH_GROUP` and
+    /// carried forward like `team`. Team launches use `team` as their cohort
+    /// key; inline layouts use this generated id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_group: Option<String>,
+    /// Stable order inside the launch cohort: team role-list index or inline
+    /// agent-cell index. Roleless team cells leave it unset and tail the block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_ordinal: Option<u32>,
     /// A named cooperation lane, stamped by `RIMZ_CHANNEL` and carried forward
     /// like `team`. When present it is the routing channel ahead of worktree
     /// branch, team, and directory fallback.
@@ -857,6 +866,8 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             status,
             phase: TurnPhase::Idle,

@@ -15,6 +15,8 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
         agent_name: None,
         role: None,
         team: None,
+        launch_group: None,
+        launch_ordinal: None,
         channel: None,
         profile: None,
         kind_ordinal: None,

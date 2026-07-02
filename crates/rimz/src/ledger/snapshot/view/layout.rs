@@ -237,7 +237,7 @@ pub(super) fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
 }
 
 pub(super) fn refresh_overlay_group(group: &mut SidebarWorktreeGroup) {
-    group.rows.sort_by(compare_rows);
+    sort_rows(&mut group.rows);
     group.status_counts = status_counts(&group.rows);
     let total = group.rows.len().saturating_add(group.hidden_count);
     let rows = std::mem::take(&mut group.rows);
@@ -247,9 +247,14 @@ pub(super) fn refresh_overlay_group(group: &mut SidebarWorktreeGroup) {
 
 pub(super) fn sort_groups_for_presentation(groups: &mut [SidebarWorktreeGroup]) {
     for group in groups.iter_mut() {
-        group.rows.sort_by(compare_rows);
+        sort_rows(&mut group.rows);
     }
     groups.sort_by(compare_groups);
+}
+
+pub(super) fn sort_rows(rows: &mut [SidebarRow]) {
+    let cohorts = cohort_aggregates(rows);
+    rows.sort_by(|left, right| compare_rows_with_cohorts(left, right, &cohorts));
 }
 
 /// Trim a group's idle/process tail to `WORKTREE_ROW_CAP`, always keeping unread
@@ -302,6 +307,129 @@ pub(super) fn compare_rows(left: &SidebarRow, right: &SidebarRow) -> Ordering {
         .then_with(|| row_rank(left).cmp(&row_rank(right)))
         .then_with(|| within_bucket(left, right))
         .then_with(|| left.id.cmp(&right.id))
+}
+
+#[derive(Clone, Debug)]
+struct CohortAggregate {
+    block_band: u8,
+    min_ordinal: Option<u64>,
+}
+
+fn cohort_aggregates(rows: &[SidebarRow]) -> BTreeMap<String, CohortAggregate> {
+    let mut aggregates: BTreeMap<String, (u8, Option<u64>)> = BTreeMap::new();
+    for row in rows {
+        let Some(cohort) = row.launch_cohort() else {
+            continue;
+        };
+        let entry = aggregates
+            .entry(cohort.to_owned())
+            .or_insert((u8::MAX, None));
+        entry.0 = entry.0.min(row_band(row));
+        entry.1 = min_optional_ordinal(entry.1, row_ordinal(row));
+    }
+    aggregates
+        .into_iter()
+        .map(|(cohort, (band, ordinal))| {
+            (
+                cohort,
+                CohortAggregate {
+                    block_band: band.max(1),
+                    min_ordinal: ordinal,
+                },
+            )
+        })
+        .collect()
+}
+
+fn min_optional_ordinal(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+fn compare_rows_with_cohorts(
+    left: &SidebarRow,
+    right: &SidebarRow,
+    cohorts: &BTreeMap<String, CohortAggregate>,
+) -> Ordering {
+    let left_cohort = left.launch_cohort();
+    let right_cohort = right.launch_cohort();
+    match (left_cohort, right_cohort) {
+        (Some(left_key), Some(right_key)) if left_key == right_key => {
+            compare_same_cohort_rows(left, right)
+        }
+        (None, None) => compare_rows(left, right),
+        _ => compare_effective_rows(left, right, left_cohort, right_cohort, cohorts),
+    }
+}
+
+fn compare_same_cohort_rows(left: &SidebarRow, right: &SidebarRow) -> Ordering {
+    cmp_start_asc(left.launch_ordinal(), right.launch_ordinal())
+        .then_with(|| cmp_start_asc(row_ordinal(left), row_ordinal(right)))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn compare_effective_rows(
+    left: &SidebarRow,
+    right: &SidebarRow,
+    left_cohort: Option<&str>,
+    right_cohort: Option<&str>,
+    cohorts: &BTreeMap<String, CohortAggregate>,
+) -> Ordering {
+    left.is_process()
+        .cmp(&right.is_process())
+        .then_with(|| {
+            effective_row_band(left, left_cohort, cohorts).cmp(&effective_row_band(
+                right,
+                right_cohort,
+                cohorts,
+            ))
+        })
+        .then_with(|| {
+            effective_row_rank(left, left_cohort).cmp(&effective_row_rank(right, right_cohort))
+        })
+        .then_with(|| {
+            cmp_start_asc(
+                effective_row_ordinal(left, left_cohort, cohorts),
+                effective_row_ordinal(right, right_cohort, cohorts),
+            )
+        })
+        .then_with(|| {
+            effective_row_key(left, left_cohort).cmp(effective_row_key(right, right_cohort))
+        })
+        .then_with(|| left_cohort.is_none().cmp(&right_cohort.is_none()))
+}
+
+fn effective_row_band(
+    row: &SidebarRow,
+    cohort: Option<&str>,
+    cohorts: &BTreeMap<String, CohortAggregate>,
+) -> u8 {
+    cohort
+        .and_then(|key| cohorts.get(key))
+        .map_or_else(|| row_band(row), |aggregate| aggregate.block_band)
+}
+
+fn effective_row_rank(row: &SidebarRow, cohort: Option<&str>) -> u8 {
+    if cohort.is_some() { 3 } else { row_rank(row) }
+}
+
+fn effective_row_ordinal(
+    row: &SidebarRow,
+    cohort: Option<&str>,
+    cohorts: &BTreeMap<String, CohortAggregate>,
+) -> Option<u64> {
+    cohort
+        .and_then(|key| cohorts.get(key))
+        .and_then(|aggregate| aggregate.min_ordinal)
+        .or_else(|| row_ordinal(row))
+}
+
+fn effective_row_key<'a>(row: &'a SidebarRow, cohort: Option<&'a str>) -> &'a str {
+    cohort.unwrap_or(row.id.as_str())
 }
 
 /// Tiebreak two rows that share a band and rank (their attention rank already
@@ -524,7 +652,7 @@ pub fn group_live_agents_by_worktree<'a>(
     }
     let mut groups: Vec<AgentWorktreeGroup<'a>> = by_key.into_values().collect();
     for group in &mut groups {
-        group.agents.sort_by(|a, b| compare_listing_agents(a, b));
+        sort_listing_agents(&mut group.agents);
     }
     groups.sort_by(compare_listing_groups);
     groups
@@ -534,6 +662,27 @@ pub fn group_live_agents_by_worktree<'a>(
 /// roster shares with the sidebar ([`pane_creation_ordinal`]).
 fn agent_ordinal(agent: &AgentState) -> Option<u64> {
     pane_creation_ordinal(agent.pane.as_ref())
+}
+
+fn sort_listing_agents(agents: &mut [&AgentState]) {
+    let cohorts = listing_cohort_aggregates(agents);
+    agents.sort_by(|a, b| compare_listing_agents_with_cohorts(a, b, &cohorts));
+}
+
+fn listing_cohort_aggregates(agents: &[&AgentState]) -> BTreeMap<String, Option<u64>> {
+    let mut aggregates: BTreeMap<String, Option<u64>> = BTreeMap::new();
+    for agent in agents {
+        let Some(cohort) = agent_launch_cohort(agent) else {
+            continue;
+        };
+        let entry = aggregates.entry(cohort.to_owned()).or_insert(None);
+        *entry = min_optional_ordinal(*entry, agent_ordinal(agent));
+    }
+    aggregates
+}
+
+fn agent_launch_cohort(agent: &AgentState) -> Option<&str> {
+    agent.team.as_deref().or(agent.launch_group.as_deref())
 }
 
 /// [`compare_rows`] for a bare roster with no unread/inactive state: the status
@@ -552,21 +701,92 @@ fn compare_listing_agents(a: &AgentState, b: &AgentState) -> Ordering {
         .then_with(|| a.agent_id.as_str().cmp(b.agent_id.as_str()))
 }
 
+fn compare_listing_agents_with_cohorts(
+    a: &AgentState,
+    b: &AgentState,
+    cohorts: &BTreeMap<String, Option<u64>>,
+) -> Ordering {
+    let a_cohort = agent_launch_cohort(a);
+    let b_cohort = agent_launch_cohort(b);
+    match (a_cohort, b_cohort) {
+        (Some(a_key), Some(b_key)) if a_key == b_key => compare_same_listing_cohort_agents(a, b),
+        (None, None) => compare_listing_agents(a, b),
+        _ => compare_effective_listing_agents(a, b, a_cohort, b_cohort, cohorts),
+    }
+}
+
+fn compare_same_listing_cohort_agents(a: &AgentState, b: &AgentState) -> Ordering {
+    cmp_start_asc(a.launch_ordinal, b.launch_ordinal)
+        .then_with(|| cmp_start_asc(agent_ordinal(a), agent_ordinal(b)))
+        .then_with(|| a.agent_id.as_str().cmp(b.agent_id.as_str()))
+}
+
+fn compare_effective_listing_agents(
+    a: &AgentState,
+    b: &AgentState,
+    a_cohort: Option<&str>,
+    b_cohort: Option<&str>,
+    cohorts: &BTreeMap<String, Option<u64>>,
+) -> Ordering {
+    effective_listing_rank(a, a_cohort)
+        .cmp(&effective_listing_rank(b, b_cohort))
+        .then_with(|| {
+            cmp_start_asc(
+                effective_listing_ordinal(a, a_cohort, cohorts),
+                effective_listing_ordinal(b, b_cohort, cohorts),
+            )
+        })
+        .then_with(|| effective_agent_key(a, a_cohort).cmp(effective_agent_key(b, b_cohort)))
+        .then_with(|| a_cohort.is_none().cmp(&b_cohort.is_none()))
+}
+
+fn effective_listing_rank(agent: &AgentState, cohort: Option<&str>) -> u8 {
+    if cohort.is_some() {
+        3
+    } else {
+        status_rank(agent.status)
+    }
+}
+
+fn effective_listing_ordinal(
+    agent: &AgentState,
+    cohort: Option<&str>,
+    cohorts: &BTreeMap<String, Option<u64>>,
+) -> Option<u64> {
+    cohort
+        .and_then(|key| cohorts.get(key).copied().flatten())
+        .or_else(|| agent_ordinal(agent))
+}
+
+fn effective_agent_key<'a>(agent: &'a AgentState, cohort: Option<&'a str>) -> &'a str {
+    cohort.unwrap_or_else(|| agent.agent_id.as_str())
+}
+
 /// [`compare_groups`] for the roster: the `external` catch-all last, then the
 /// most-urgent member, then the earliest member's pane creation order, then the
 /// label.
 fn compare_listing_groups(a: &AgentWorktreeGroup, b: &AgentWorktreeGroup) -> Ordering {
-    let tier = |group: &AgentWorktreeGroup| match group.agents.first() {
-        Some(top) if top.status.is_attention() => (1_u8, status_rank(top.status)),
-        Some(_) => (2, 0),
-        None => (u8::MAX, u8::MAX),
-    };
     let earliest =
         |group: &AgentWorktreeGroup| group.agents.iter().filter_map(|a| agent_ordinal(a)).min();
 
     (a.kind == SidebarWorktreeKind::External)
         .cmp(&(b.kind == SidebarWorktreeKind::External))
-        .then_with(|| tier(a).cmp(&tier(b)))
+        .then_with(|| listing_group_rank(a).cmp(&listing_group_rank(b)))
         .then_with(|| cmp_start_asc(earliest(a), earliest(b)))
         .then_with(|| a.label.cmp(&b.label))
+}
+
+fn listing_group_rank(group: &AgentWorktreeGroup) -> u8 {
+    group
+        .agents
+        .iter()
+        .map(|agent| {
+            if agent.status.is_attention() {
+                status_rank(agent.status)
+            } else {
+                3
+            }
+        })
+        .min()
+        .unwrap_or(u8::MAX)
 }

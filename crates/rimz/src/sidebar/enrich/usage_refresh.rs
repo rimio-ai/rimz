@@ -338,6 +338,8 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             status: AgentStatus::Running,
             phase: TurnPhase::Reasoning,

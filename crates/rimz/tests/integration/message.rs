@@ -2870,6 +2870,8 @@ fn seed_provisional_codex_launch_with_prompt(
             model: None,
             effort: None,
             team: None,
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             kind_ordinal: Some(1),
             state: AgentLaunchState::Starting,

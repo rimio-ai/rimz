@@ -148,6 +148,8 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         profile: None,
         role: None,
         team: None,
+        launch_group: None,
+        launch_ordinal: None,
         channel: None,
         status,
         phase: TurnPhase::Idle,

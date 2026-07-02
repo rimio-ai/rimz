@@ -1834,6 +1834,10 @@ fn agent_row_with(
         task: Some(task.to_owned()),
         model: Some(model.to_owned()),
         handle: options.handle,
+        team: None,
+        launch_group: None,
+        launch_ordinal: None,
+
         context_pct,
         context_window,
         total_tokens,

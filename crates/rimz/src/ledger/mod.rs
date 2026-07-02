@@ -212,6 +212,8 @@ pub struct AgentLaunchRequest {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub team: Option<String>,
+    pub launch_group: Option<String>,
+    pub launch_ordinal: Option<u32>,
     pub channel: Option<String>,
     pub run_id: Option<RunId>,
 }
@@ -226,6 +228,8 @@ pub struct AgentLaunchIdentity {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub team: Option<String>,
+    pub launch_group: Option<String>,
+    pub launch_ordinal: Option<u32>,
     pub channel: Option<String>,
     pub run_id: Option<RunId>,
 }

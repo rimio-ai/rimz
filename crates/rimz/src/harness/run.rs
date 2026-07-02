@@ -28,6 +28,12 @@ pub const ENV_AGENT_ROLE: &str = "RIMZ_AGENT_ROLE";
 /// The `[agents.teams]` team name an agent launched under. Set by the launch
 /// wrapper; read by member CLI calls so in-place teams scope to their channel.
 pub const ENV_TEAM: &str = "RIMZ_TEAM";
+/// The inline multi-agent launch cohort this agent belongs to. Team launches
+/// use [`ENV_TEAM`] as their cohort key; inline layouts use this generated id.
+pub const ENV_LAUNCH_GROUP: &str = "RIMZ_LAUNCH_GROUP";
+/// The agent's order inside its launch cohort: team role-list index or inline
+/// agent-cell index. Set by the wrapper; read into lifecycle observations.
+pub const ENV_LAUNCH_ORDINAL: &str = "RIMZ_LAUNCH_ORDINAL";
 /// Named cooperation lane an agent launched under. Set by the launch wrapper;
 /// read by lifecycle hooks and peer-message commands as the routing channel.
 pub const ENV_CHANNEL: &str = "RIMZ_CHANNEL";
@@ -784,6 +790,8 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             status,
             phase: TurnPhase::Idle,

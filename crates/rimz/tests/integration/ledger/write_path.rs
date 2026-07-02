@@ -99,6 +99,8 @@ fn launch_allocation_reserves_names_owned_by_reaped_rollup_agents() {
         model: None,
         effort: None,
         team: Some("pcr".to_owned()),
+        launch_group: None,
+        launch_ordinal: None,
         channel: None,
         run_id: None,
     };

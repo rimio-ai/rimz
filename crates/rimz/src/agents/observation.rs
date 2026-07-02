@@ -42,6 +42,15 @@ pub struct AgentLifecycleObservation {
     /// `RIMZ_TEAM`. The reducer projects it to the routing channel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    /// The inline multi-agent launch cohort the launcher minted, passed through
+    /// `RIMZ_LAUNCH_GROUP`. Team launches use `RIMZ_TEAM` as the cohort key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_group: Option<String>,
+    /// The agent's order inside its launch cohort, passed through
+    /// `RIMZ_LAUNCH_ORDINAL`. Team launches use role-list order; inline
+    /// layouts use agent-cell order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_ordinal: Option<u32>,
     /// The named channel the launcher selected, passed through `RIMZ_CHANNEL`.
     /// The reducer projects it to the routing channel ahead of worktree/team.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -151,6 +160,8 @@ impl AgentLifecycleObservation {
             agent_name: None,
             role: None,
             team: None,
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             profile: None,
             kind_ordinal: None,

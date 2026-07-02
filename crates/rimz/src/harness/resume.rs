@@ -282,6 +282,12 @@ fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
     if let Some(team) = agent.team.as_deref() {
         command.extend(["--agent-team".to_owned(), team.to_owned()]);
     }
+    if let Some(launch_group) = agent.launch_group.as_deref() {
+        command.extend(["--launch-group".to_owned(), launch_group.to_owned()]);
+    }
+    if let Some(launch_ordinal) = agent.launch_ordinal {
+        command.extend(["--launch-ordinal".to_owned(), launch_ordinal.to_string()]);
+    }
     if let Some(channel) = agent.channel.as_deref() {
         command.extend(["--agent-channel".to_owned(), channel.to_owned()]);
     }
@@ -375,6 +381,8 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
@@ -508,6 +516,8 @@ mod tests {
         agent.profile = Some("claude-planner".to_owned());
         agent.role = Some("planner".to_owned());
         agent.team = Some("pcr".to_owned());
+        agent.launch_group = Some("launch_group_1".to_owned());
+        agent.launch_ordinal = Some(2);
         assert_eq!(
             resume_command(Path::new("/bin/rimz"), &agent),
             vec![
@@ -526,6 +536,10 @@ mod tests {
                 "planner",
                 "--agent-team",
                 "pcr",
+                "--launch-group",
+                "launch_group_1",
+                "--launch-ordinal",
+                "2",
             ]
         );
     }

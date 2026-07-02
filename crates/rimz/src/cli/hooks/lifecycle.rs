@@ -693,6 +693,13 @@ pub(super) fn fill_root_launch_identity(
     if observation.team.is_none() {
         observation.team = identity_env(observation, rimz::harness::run::ENV_TEAM);
     }
+    if observation.launch_group.is_none() {
+        observation.launch_group = identity_env(observation, rimz::harness::run::ENV_LAUNCH_GROUP);
+    }
+    if observation.launch_ordinal.is_none() {
+        observation.launch_ordinal = identity_env(observation, rimz::harness::run::ENV_LAUNCH_ORDINAL)
+            .and_then(|raw| raw.parse::<u32>().ok());
+    }
     if observation.channel.is_none() {
         observation.channel = identity_env(observation, rimz::harness::run::ENV_CHANNEL);
     }
@@ -1839,6 +1846,8 @@ mod tests {
             profile: None,
             role: None,
             team: None,
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             status: rimz::agents::AgentStatus::Idle,
             phase: rimz::agents::TurnPhase::Idle,

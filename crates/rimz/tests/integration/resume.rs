@@ -36,6 +36,8 @@ fn registered(
         agent_name: Some(name.to_owned()),
         role: None,
         team: None,
+        launch_group: None,
+        launch_ordinal: None,
         channel: None,
         profile: None,
         kind_ordinal: None,

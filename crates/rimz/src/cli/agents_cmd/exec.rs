@@ -54,6 +54,8 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             agent_profile: args.agent_profile.as_deref(),
             agent_role: args.agent_role.as_deref(),
             agent_team: args.agent_team.as_deref(),
+            launch_group: args.launch_group.as_deref(),
+            launch_ordinal: args.launch_ordinal,
             agent_channel: args.agent_channel.as_deref(),
             agent_model: args.agent_model.as_deref(),
             agent_effort: args.agent_effort.as_deref(),
@@ -362,6 +364,8 @@ fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
                 model: args.agent_model.clone(),
                 effort: args.agent_effort.clone(),
                 team: args.agent_team.clone(),
+                launch_group: args.launch_group.clone(),
+                launch_ordinal: args.launch_ordinal,
                 channel: args.agent_channel.clone(),
                 run_id: args.run_id.clone(),
             }))

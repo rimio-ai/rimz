@@ -70,6 +70,8 @@ fn raw_launch_with_description(
             model: None,
             effort: None,
             team: None,
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             kind_ordinal: None,
             state,
@@ -317,6 +319,8 @@ fn launch_description_without_prompt_creates_idle_card() {
             model: None,
             effort: None,
             team: None,
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             kind_ordinal: None,
             state: AgentLaunchState::Bound,
@@ -337,6 +341,48 @@ fn launch_description_without_prompt_creates_idle_card() {
 }
 
 #[test]
+fn launch_cohort_identity_reduces_and_survives_bound_event_without_fields() {
+    let launch = EventEnvelope::agent_launched(
+        workspace(),
+        "session",
+        &AgentKind::new_unchecked("claude"),
+        AgentLaunchPayload {
+            agent_id: "launch_a".into(),
+            agent_name: "lucid-atlas".to_owned(),
+            profile: None,
+            role: None,
+            model: None,
+            effort: None,
+            team: None,
+            launch_group: Some("launch_group_1".to_owned()),
+            launch_ordinal: Some(1),
+            channel: None,
+            kind_ordinal: None,
+            state: AgentLaunchState::Starting,
+            run_id: None,
+            pane_id: None,
+            runtime_owner: None,
+            worktree_path: Some("/tmp/x".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            prompt: None,
+            description: None,
+        },
+    );
+    let bound = raw_launch(
+        AgentLaunchState::Bound,
+        "launch_a",
+        "lucid-atlas",
+        Some("tmux:%1"),
+    );
+
+    let agents = reduce_agent_states(&[launch, bound]);
+
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].launch_group.as_deref(), Some("launch_group_1"));
+    assert_eq!(agents[0].launch_ordinal, Some(1));
+}
+
+#[test]
 fn launch_seeds_model_and_effort_until_lifecycle_observes_them() {
     let launch = EventEnvelope::agent_launched(
         workspace(),
@@ -350,6 +396,8 @@ fn launch_seeds_model_and_effort_until_lifecycle_observes_them() {
             model: Some("gpt-5.5-codex".to_owned()),
             effort: Some("xhigh".to_owned()),
             team: None,
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             kind_ordinal: None,
             state: AgentLaunchState::Bound,
@@ -400,6 +448,8 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
             model: None,
             effort: None,
             team: Some("pcr".to_owned()),
+            launch_group: Some("launch_group_1".to_owned()),
+            launch_ordinal: Some(2),
             channel: None,
             kind_ordinal: None,
             state: AgentLaunchState::Starting,
@@ -428,6 +478,8 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
     assert_eq!(agents[0].profile.as_deref(), Some("codex-coder"));
     assert_eq!(agents[0].role.as_deref(), Some("coder"));
     assert_eq!(agents[0].team.as_deref(), Some("pcr"));
+    assert_eq!(agents[0].launch_group.as_deref(), Some("launch_group_1"));
+    assert_eq!(agents[0].launch_ordinal, Some(2));
 }
 
 #[test]
@@ -444,6 +496,8 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
             model: None,
             effort: None,
             team: Some("pcr".to_owned()),
+            launch_group: None,
+            launch_ordinal: None,
             channel: None,
             kind_ordinal: None,
             state: AgentLaunchState::Bound,
