@@ -524,7 +524,7 @@ struct AgentsFragmentFile {
     agents: AgentsFragment,
 }
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(default)]
 struct AgentsFragment {
     profiles: ProfilesConfig,
