@@ -37,7 +37,7 @@ fn producing_opts() -> FoldOpts<'static> {
     FoldOpts {
         producing: true,
         fresh_roots: None,
-        config: Some(Box::new(crate::config::MachineConfig::default())),
+        config: Some(std::sync::Arc::new(crate::config::MachineConfig::default())),
         lanes: None,
     }
 }
@@ -62,6 +62,7 @@ fn diff_entry(
         landed: Some(landed),
         did_work,
         merge_in_progress: Some(false),
+        ..DiffStatsCacheEntry::default()
     }
 }
 

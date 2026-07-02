@@ -194,6 +194,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         published_frame_hint: false,
     };
     let mut cursor = RollupCursor::new();
+    let mut consumer_memo = ConsumerFoldMemo::default();
     let mut notifications = NotificationState::default();
     let mut link_notifications = LinkNotificationState::default();
     let mut outcomes = Vec::new();
@@ -211,6 +212,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         },
         request,
         &mut cursor,
+        &mut consumer_memo,
         &mut |o| outcomes.push(o),
     );
 
@@ -399,8 +401,18 @@ impl ConsumerFixture {
     }
 
     fn run(&self, request: FetchRequest) -> Vec<FetchOutcome> {
-        let config = test_config(self.workspace_id.clone(), self.younger.clone());
         let mut cursor = RollupCursor::new();
+        let mut consumer_memo = ConsumerFoldMemo::default();
+        self.run_with(request, &mut cursor, &mut consumer_memo)
+    }
+
+    fn run_with(
+        &self,
+        request: FetchRequest,
+        cursor: &mut RollupCursor,
+        consumer_memo: &mut ConsumerFoldMemo,
+    ) -> Vec<FetchOutcome> {
+        let config = test_config(self.workspace_id.clone(), self.younger.clone());
         let mut notifications = NotificationState::default();
         let mut link_notifications = LinkNotificationState::default();
         let mut outcomes = Vec::new();
@@ -417,7 +429,8 @@ impl ConsumerFixture {
                 last_election: &mut last_election,
             },
             request,
-            &mut cursor,
+            cursor,
+            consumer_memo,
             &mut |outcome| outcomes.push(outcome),
         );
         outcomes
@@ -435,6 +448,39 @@ impl ConsumerFixture {
         )
         .unwrap();
     }
+}
+
+#[test]
+fn unchanged_consumer_inputs_skip_the_second_fold() {
+    let fixture = ConsumerFixture::new();
+    fixture.write_pane_frame();
+    let mut rollup = SidebarSnapshot::build(
+        fixture.workspace_id.clone(),
+        Vec::new(),
+        Vec::new(),
+        jiff::Timestamp::now(),
+    );
+    rollup.reflects_log = Some(crate::ledger::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    std::fs::write(
+        &fixture.state.latest_snapshot,
+        serde_json::to_vec(&rollup).unwrap(),
+    )
+    .unwrap();
+
+    let mut cursor = RollupCursor::new();
+    let mut consumer_memo = ConsumerFoldMemo::default();
+    let first = fixture.run_with(FetchRequest::default(), &mut cursor, &mut consumer_memo);
+    assert_eq!(first.len(), 1);
+    assert!(!first[0].unchanged);
+    assert!(first[0].snapshot.is_ok());
+
+    let second = fixture.run_with(FetchRequest::default(), &mut cursor, &mut consumer_memo);
+    assert_eq!(second.len(), 1);
+    assert!(second[0].unchanged);
+    assert!(second[0].final_for_request);
 }
 
 #[test]

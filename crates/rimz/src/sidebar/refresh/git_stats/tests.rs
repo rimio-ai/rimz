@@ -306,6 +306,7 @@ fn focused_diff_stats_refreshes_local_facts_before_commit_facts() {
             landed: Some(false),
             did_work: Some(false),
             merge_in_progress: Some(false),
+            ..DiffStatsCacheEntry::default()
         },
     );
     atomic::write_temp_then_rename_cache(&cache_path, &cache).unwrap();
@@ -370,6 +371,7 @@ fn non_focused_diff_stats_refreshes_local_and_commit_facts_together() {
             landed: Some(false),
             did_work: Some(false),
             merge_in_progress: Some(false),
+            ..DiffStatsCacheEntry::default()
         },
     );
     atomic::write_temp_then_rename_cache(&cache_path, &cache).unwrap();
@@ -421,6 +423,40 @@ fn diff_stats_refresh_stamps_fact_groups_at_completion() {
 
     assert!(entry.refreshed_at_ms > 0);
     assert!(entry.commit_refreshed_at_ms.is_some_and(|stamp| stamp > 0));
+}
+
+#[test]
+fn warm_unchanged_refs_skip_trunk_base_and_head_forks() {
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    if !repo.initialized {
+        return;
+    }
+    repo.write("base.txt", "base\n");
+    let _ = repo.git(&["add", "base.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "base"]);
+    let cold = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    assert!(cold.head_sha.is_some());
+    assert!(cold.trunk_sha.is_some());
+    assert!(cold.merge_base.is_some());
+
+    let before = crate::proc::testkit::spawn_count();
+    let warm = refresh_entry(
+        repo.path_str(),
+        Some(&cold),
+        DueFacts {
+            local: true,
+            commit: false,
+        },
+        None,
+    );
+
+    assert_eq!(
+        crate::proc::testkit::spawn_count() - before,
+        2,
+        "warm unchanged refs pay only diff and status"
+    );
+    assert_eq!(warm.branch.as_deref(), Some("main"));
+    assert_eq!(warm.merge_base, cold.merge_base);
 }
 
 #[test]

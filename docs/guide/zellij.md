@@ -39,10 +39,13 @@ default_shell "zsh"                    // or your shell of choice
 theme "dracula"                        // any bundled or custom theme
 show_startup_tips false                // skip the startup tip banner
 show_release_notes false               // skip the release-notes pane on upgrade
+session_serialization false            // prefer clean session births over held resurrection panes
 ```
 
 `pane_frames true` draws a titled border around each pane so you can always see which one holds focus — the single most useful upgrade for a multi-agent layout. Rimz enforces its room's mouse pair through the presence plugin, so your personal `focus_follows_mouse` and `mouse_click_through` settings no longer break single-click sidebar jumps.
 
 ## A note on resurrection
 
-Rimz disables Zellij session serialization inside its room, because it owns rebirth: when a room must come back after a reboot or crash, Rimz re-seeds the prior agents itself ([resume on rebirth](../internals/sidebar/sidebar.md#resume-on-rebirth)) rather than resurrecting a wall of suspended command panes. This is scoped to the Rimz session — your own Zellij sessions can keep `session_serialization true` if you rely on resurrection outside Rimz, and the two settings never collide.
+Rimz disables Zellij session serialization inside its room, because it owns rebirth: when a room must come back after a reboot or crash, Rimz re-seeds the prior agents itself ([resume on rebirth](../internals/sidebar/sidebar.md#resume-on-rebirth)) rather than resurrecting a wall of suspended command panes. Setting `session_serialization false` in your own `config.kdl` gives non-Rimz sessions the same clean-birth posture when you prefer running panes over resurrection.
+
+Rimz also disables Zellij's session metadata loop inside its room. At roughly 100 panes on Zellij 0.44.3 that loop rewrites `session-metadata.kdl` every few seconds and runs process discovery through `ps`, a visible share of the Zellij server CPU; Rimz starts and attaches rooms with `disable_session_metadata true` so that work stays out of the room.

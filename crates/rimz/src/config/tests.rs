@@ -723,6 +723,12 @@ fn load_memo_reuses_unchanged_inputs_and_busts_on_file_change() {
     assert_eq!(second, first);
 
     std::fs::write(&config_path, "[sidebar]\nfocus_key = \"Alt+yy\"\n").expect("rewrite config");
+    if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
+        && let Some(memo) = memo.as_mut()
+    {
+        memo.last_verified =
+            Instant::now() - CONFIG_STAMP_TTL - std::time::Duration::from_millis(1);
+    }
     let changed = MachineConfig::load_with_memo(&config_path, agents_home.path()).expect("reload");
     assert_eq!(changed.sidebar.focus_key, "Alt+yy");
     assert_ne!(changed, first);

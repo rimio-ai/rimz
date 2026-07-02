@@ -22,6 +22,7 @@ thread_local! {
 struct Counters {
     spawns: AtomicU64,
     event_log_bytes_read: AtomicU64,
+    mux_wait_ms: AtomicU64,
 }
 
 impl Counters {
@@ -29,6 +30,7 @@ impl Counters {
         Self {
             spawns: AtomicU64::new(0),
             event_log_bytes_read: AtomicU64::new(0),
+            mux_wait_ms: AtomicU64::new(0),
         }
     }
 }
@@ -72,6 +74,17 @@ pub(crate) fn count_event_log_bytes_read(n: u64) {
 
 pub(crate) fn event_log_bytes_read(lane: WorkLane) -> u64 {
     lane.counters().event_log_bytes_read.load(Ordering::Relaxed)
+}
+
+pub(crate) fn add_mux_wait_ms(ms: u64) {
+    current()
+        .counters()
+        .mux_wait_ms
+        .fetch_add(ms, Ordering::Relaxed);
+}
+
+pub(crate) fn mux_wait_ms(lane: WorkLane) -> u64 {
+    lane.counters().mux_wait_ms.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]

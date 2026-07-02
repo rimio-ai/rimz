@@ -219,6 +219,7 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
     assert!(has("--focus-follows-mouse", "false"));
     assert!(has("--auto-layout", "true"));
     assert!(has("--session-serialization", "false"));
+    assert!(has("--disable-session-metadata", "true"));
     for flag in [
         "--advanced-mouse-actions",
         "--mouse-hover-effects",
@@ -241,6 +242,7 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
     };
     assert!(has_unknown("--auto-layout", "true"));
     assert!(has_unknown("--session-serialization", "false"));
+    assert!(has_unknown("--disable-session-metadata", "true"));
     assert!(!unknown.iter().any(|arg| arg == "--mouse-click-through"));
     assert!(!unknown.iter().any(|arg| arg == "--advanced-mouse-actions"));
     assert!(!unknown.iter().any(|arg| arg == "--mouse-hover-effects"));

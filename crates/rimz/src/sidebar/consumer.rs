@@ -3,6 +3,9 @@
 //! Renderers that are not the elected producer stay in this lane: no mux call,
 //! no git call, no provider probe, and no durable ledger writes.
 
+use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
+
 use crate::ids::PaneId;
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
@@ -15,6 +18,27 @@ mod tests;
 /// Re-exported for long-lived consumers (the sidebar fetch worker), which sit
 /// behind this module's read-only boundary and never import `crate::ledger`.
 pub use crate::ledger::snapshot::RollupCursor;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsumerFoldInputsStamp {
+    state: Vec<StampedPath>,
+    runtime: Vec<StampedPath>,
+    dirs: Vec<StampedPath>,
+    config_generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StampedPath {
+    path: PathBuf,
+    stamp: FileStamp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    modified_secs: u64,
+    modified_nanos: u32,
+}
 
 /// The event-fresh ledger rollup, read in process: `latest.json` when it
 /// reflects the log (lock-free, O(snapshot)), else a re-projection folded
@@ -85,4 +109,81 @@ pub fn read_published_snapshot(
         },
         &crate::diag::DiagSink::disabled(),
     ))
+}
+
+/// Cheap identity of the files a consumer fold reads. A matching stamp lets a
+/// long-lived renderer skip the fold and keep its last committed frame; the
+/// poll backstop still forces a real fold periodically.
+pub fn consumer_fold_inputs_stamp(
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+) -> ConsumerFoldInputsStamp {
+    let state_files = [
+        state.events_log.clone(),
+        state.latest_snapshot.clone(),
+        state.rollup_cache.clone(),
+        state.agents_carryover.clone(),
+        state.workspace_record.clone(),
+        state.messages_dir.join("queue.json"),
+    ];
+    let runtime_files = [
+        runtime.pane_frame_path(),
+        runtime.diff_stats_path(),
+        runtime.pr_state_path(),
+        runtime.unread_path(),
+        crate::remote::link::stats_path(runtime),
+        runtime.shared_accounts_path(),
+        runtime.shared_rate_limits_path(),
+        runtime.shared_credits_path(),
+        runtime.shared_provider_spending_path(),
+        runtime.shared_spending_cursor_path(),
+        runtime.root.join("metrics-sample.json"),
+    ];
+    let dirs = [
+        state.messages_dir.as_path(),
+        runtime.agent_context_dir.as_path(),
+        runtime.subagent_context_dir.as_path(),
+        runtime.agent_activity_dir.as_path(),
+        runtime.read_marks_dir.as_path(),
+        runtime.root.as_path(),
+    ];
+
+    ConsumerFoldInputsStamp {
+        state: state_files
+            .into_iter()
+            .map(|path| stamped_path(&path))
+            .collect::<Vec<_>>(),
+        runtime: runtime_files
+            .iter()
+            .map(|path| stamped_path(path.as_path()))
+            .collect::<Vec<_>>(),
+        dirs: dirs.into_iter().map(stamped_path).collect::<Vec<_>>(),
+        config_generation: crate::config::MachineConfig::load_stamp_generation(),
+    }
+}
+
+fn stamped_path(path: &Path) -> StampedPath {
+    StampedPath {
+        path: path.to_path_buf(),
+        stamp: file_stamp(path),
+    }
+}
+
+fn file_stamp(path: &Path) -> FileStamp {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return FileStamp {
+            len: 0,
+            modified_secs: 0,
+            modified_nanos: 0,
+        };
+    };
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
+    FileStamp {
+        len: meta.len(),
+        modified_secs: modified.as_ref().map_or(0, |duration| duration.as_secs()),
+        modified_nanos: modified.map_or(0, |duration| duration.subsec_nanos()),
+    }
 }

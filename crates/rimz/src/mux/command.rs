@@ -10,7 +10,7 @@ use std::io;
 use std::io::Read as _;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::{MuxErr, Result};
 
@@ -126,6 +126,13 @@ impl CommandSpec {
     /// child is SIGKILLed by pid, the waiter's `wait()` reaps it, and a
     /// [`MuxErr::Timeout`] is returned.
     fn run_bounded(&self, timeout: Duration) -> Result<Output> {
+        let started = Instant::now();
+        let result = self.run_bounded_inner(timeout);
+        crate::lane::add_mux_wait_ms(duration_ms(started.elapsed()));
+        result
+    }
+
+    fn run_bounded_inner(&self, timeout: Duration) -> Result<Output> {
         crate::proc::testkit::count_spawn();
         let mut child = self
             .to_command()
@@ -206,6 +213,10 @@ impl CommandSpec {
             _ => MuxErr::Io(err),
         }
     }
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// SIGKILL a timed-out child by pid. Safe against pid reuse: the waiter thread

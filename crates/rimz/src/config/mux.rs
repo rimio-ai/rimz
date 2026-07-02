@@ -63,6 +63,11 @@ pub struct ZellijConfig {
     /// clean and running. Passed as `--session-serialization false` on birth and
     /// attach.
     pub session_serialization: bool,
+    /// Whether Zellij skips the per-second session metadata writer and command
+    /// discovery loop. Rimz keeps it on because the loop rewrites
+    /// `session-metadata.kdl` and forks `ps` even when session serialization is
+    /// disabled.
+    pub disable_session_metadata: bool,
 }
 
 impl Default for ZellijConfig {
@@ -84,6 +89,7 @@ impl Default for ZellijConfig {
             osc8_hyperlinks: None,
             auto_layout: true,
             session_serialization: false,
+            disable_session_metadata: true,
         }
     }
 }

@@ -11,7 +11,7 @@ use std::sync::mpsc::Sender;
 use crate::config::NotificationsPrefs;
 use crate::diag::record::TickLoop;
 use crate::ids::{PaneId, SidebarInstanceId};
-use crate::sidebar::consumer::RollupCursor;
+use crate::sidebar::consumer::{ConsumerFoldInputsStamp, RollupCursor};
 use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
@@ -64,6 +64,7 @@ pub(super) struct FetchOutcome {
     pub(super) snapshot: std::result::Result<SidebarSnapshot, String>,
     pub(super) final_for_request: bool,
     pub(super) fresh_pane_frame: bool,
+    pub(super) unchanged: bool,
 }
 
 pub(super) fn apply_refresh_override(config: &ServeConfig, snapshot: &mut SidebarSnapshot) {
@@ -119,6 +120,39 @@ struct FetchCycle<'a> {
     last_election: &'a mut Option<ProducerElection>,
 }
 
+const CONSUMER_UNCHANGED_BACKSTOP_MS: u64 = 30_000;
+
+#[derive(Default)]
+struct ConsumerFoldMemo {
+    last_ok: Option<(ConsumerFoldInputsStamp, u64)>,
+}
+
+impl ConsumerFoldMemo {
+    fn should_skip(
+        &self,
+        stamp: &ConsumerFoldInputsStamp,
+        now_ms: u64,
+        request: FetchRequest,
+        is_producer: bool,
+        produce: bool,
+    ) -> bool {
+        if is_producer || produce || !request.allows_unchanged_skip() {
+            return false;
+        }
+        self.last_ok.as_ref().is_some_and(|(last, folded_at_ms)| {
+            last == stamp && now_ms.saturating_sub(*folded_at_ms) < CONSUMER_UNCHANGED_BACKSTOP_MS
+        })
+    }
+
+    fn record(&mut self, stamp: ConsumerFoldInputsStamp, at_ms: u64) {
+        self.last_ok = Some((stamp, at_ms));
+    }
+
+    fn clear(&mut self) {
+        self.last_ok = None;
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProducerElection {
     elder: Option<SidebarInstanceId>,
@@ -134,6 +168,7 @@ fn run_fetch_cycle(
     ctx: FetchCycle<'_>,
     request: FetchRequest,
     cursor: &mut RollupCursor,
+    consumer_memo: &mut ConsumerFoldMemo,
     post: &mut dyn FnMut(FetchOutcome),
 ) {
     let FetchCycle {
@@ -157,6 +192,16 @@ fn run_fetch_cycle(
         crate::sidebar::cache::published_frame_produced_at_ms(runtime, &config.session_name);
     let published_frame_observed_at_ms =
         crate::sidebar::cache::published_frame_observed_at_ms(runtime, &config.session_name);
+    let fold_stamp = crate::sidebar::consumer::consumer_fold_inputs_stamp(state, runtime);
+    if consumer_memo.should_skip(&fold_stamp, now_ms, request, is_producer, false) {
+        post(FetchOutcome {
+            snapshot: Err("unchanged".to_owned()),
+            final_for_request: true,
+            fresh_pane_frame: false,
+            unchanged: true,
+        });
+        return;
+    }
     let fast = crate::sidebar::consumer::read_published_snapshot(
         cursor,
         state,
@@ -189,6 +234,7 @@ fn run_fetch_cycle(
                         .is_some_and(|observed_at_ms| observed_at_ms >= min)
                 }))
     });
+    let mut folded_consumer_ok = false;
     match fast {
         Ok(mut snapshot) => {
             let deliveries = if is_producer && !produce {
@@ -207,8 +253,13 @@ fn run_fetch_cycle(
                 snapshot: Ok(snapshot),
                 final_for_request: !produce,
                 fresh_pane_frame: fast_has_request_fresh_frame,
+                unchanged: false,
             });
             deliver_notifications(config, runtime, notification_prefs, diag, deliveries);
+            if !produce {
+                consumer_memo.record(fold_stamp.clone(), now_ms);
+                folded_consumer_ok = true;
+            }
         }
         // The consumer lane only misses when the ledger rollup itself could
         // not be read — a missing pane frame is a successful frameless fold.
@@ -218,6 +269,7 @@ fn run_fetch_cycle(
             snapshot: Err(err.to_string()),
             final_for_request: true,
             fresh_pane_frame: false,
+            unchanged: false,
         }),
         // An unreadable rollup on a producing cycle defers to the produce
         // below, which folds the same ledger and reports its own error.
@@ -252,6 +304,7 @@ fn run_fetch_cycle(
                     snapshot: Ok(snapshot),
                     final_for_request: true,
                     fresh_pane_frame: request.mode.produces_fresh_panes(),
+                    unchanged: false,
                 });
                 deliver_notifications(config, runtime, notification_prefs, diag, deliveries);
             }
@@ -260,9 +313,13 @@ fn run_fetch_cycle(
                     snapshot: Err(err),
                     final_for_request: true,
                     fresh_pane_frame: request.mode.produces_fresh_panes(),
+                    unchanged: false,
                 });
             }
         }
+    }
+    if !folded_consumer_ok {
+        consumer_memo.clear();
     }
 }
 
@@ -519,6 +576,12 @@ impl FetchRequest {
             (None, None) => None,
         };
     }
+
+    fn allows_unchanged_skip(self) -> bool {
+        self.mode == FetchMode::Normal
+            && self.min_pane_cache_ms.is_none()
+            && !self.published_frame_hint
+    }
 }
 
 /// Spawn the background fetch worker. It blocks for a request, coalesces any
@@ -543,6 +606,7 @@ pub(super) fn spawn_fetch_worker(
         // since the last one, instead of re-parsing the persisted base per
         // delta — and promotion to producer inherits the warm base.
         let mut cursor = RollupCursor::new();
+        let mut consumer_memo = ConsumerFoldMemo::default();
         let mut notifications = NotificationState::default();
         let mut link_notifications = LinkNotificationState::default();
         let mut last_election = None;
@@ -588,6 +652,7 @@ pub(super) fn spawn_fetch_worker(
                         },
                         request,
                         &mut cursor,
+                        &mut consumer_memo,
                         &mut post,
                     );
                     if let Some(event) = meter.finish(tick, crate::sidebar::timing::unix_now_ms()) {
@@ -598,6 +663,7 @@ pub(super) fn spawn_fetch_worker(
                     snapshot: Err(format!("resolving workspace state paths: {err}")),
                     final_for_request: true,
                     fresh_pane_frame: false,
+                    unchanged: false,
                 }),
             }
             if disconnected {

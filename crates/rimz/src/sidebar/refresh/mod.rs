@@ -18,6 +18,7 @@ pub mod accounts;
 pub mod codex;
 pub mod credits;
 pub mod daemon_reap;
+mod git_refs;
 pub mod git_stats;
 pub mod live_spend;
 pub mod pr;
@@ -83,7 +84,7 @@ pub fn refresh_heavy_lanes(
     // it; final folds merge the just-written cache read-only.
     let mut panels = fold_machine_config_with(
         base.clone(),
-        config.clone(),
+        config,
         lanes.accounts.clone(),
         &lanes.spending.provider.spending.by_provider,
     );

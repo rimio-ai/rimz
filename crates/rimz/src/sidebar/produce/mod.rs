@@ -25,6 +25,7 @@ mod panes;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use crate::ids::{MuxName, PaneId};
@@ -260,7 +261,8 @@ pub fn refresh_producer_caches(
     exclude: Option<&PaneId>,
 ) -> Result<()> {
     let base = read_published_snapshot(cursor, state, runtime, session, exclude)?;
-    let config = crate::config::MachineConfig::load().unwrap_or_default();
+    let config = crate::config::MachineConfig::load_shared()
+        .unwrap_or_else(|_| Arc::new(crate::config::MachineConfig::default()));
     let _ = refresh_heavy_lanes(
         &base,
         &base.agents,
@@ -358,7 +360,8 @@ fn enrich_producing_projecting(
     frame: Option<PaneFrame>,
     opts: ProducerEnrich<'_>,
 ) -> SidebarSnapshot {
-    let config = crate::config::MachineConfig::load().unwrap_or_default();
+    let config = crate::config::MachineConfig::load_shared()
+        .unwrap_or_else(|_| Arc::new(crate::config::MachineConfig::default()));
     let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
     enrich_producing_with(snapshot, frame, opts, config, roots, None, true)
 }
@@ -368,7 +371,8 @@ fn enrich_with_refresh(
     frame: Option<PaneFrame>,
     opts: ProducerEnrich<'_>,
 ) -> SidebarSnapshot {
-    let config = crate::config::MachineConfig::load().unwrap_or_default();
+    let config = crate::config::MachineConfig::load_shared()
+        .unwrap_or_else(|_| Arc::new(crate::config::MachineConfig::default()));
     let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
     let folded = enrich_producing_with(
         snapshot.clone(),
@@ -409,7 +413,7 @@ fn enrich_producing_with(
     snapshot: SidebarSnapshot,
     frame: Option<PaneFrame>,
     opts: ProducerEnrich<'_>,
-    config: crate::config::MachineConfig,
+    config: Arc<crate::config::MachineConfig>,
     roots: Option<Vec<PathBuf>>,
     lanes: Option<&RefreshedLanes>,
     producing: bool,
@@ -423,7 +427,7 @@ fn enrich_producing_with(
         FoldOpts {
             producing,
             fresh_roots: roots,
-            config: Some(Box::new(config)),
+            config: Some(config),
             lanes,
         },
         opts.diag,

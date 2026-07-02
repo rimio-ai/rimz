@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 use crate::agents::spending::{
@@ -245,7 +245,7 @@ pub fn wired_lazy_default_models() -> BTreeMap<String, String> {
 pub struct FoldOpts<'a> {
     pub producing: bool,
     pub fresh_roots: Option<Vec<PathBuf>>,
-    pub config: Option<Box<crate::config::MachineConfig>>,
+    pub config: Option<Arc<crate::config::MachineConfig>>,
     pub lanes: Option<&'a crate::sidebar::refresh::RefreshedLanes>,
 }
 
@@ -278,11 +278,10 @@ pub fn enrich(
     diag: &crate::diag::DiagSink,
 ) -> SidebarSnapshot {
     let producing = opts.producing;
-    let machine_config = opts
-        .config
-        .as_deref()
-        .cloned()
-        .unwrap_or_else(|| crate::config::MachineConfig::load().unwrap_or_default());
+    let machine_config = opts.config.take().unwrap_or_else(|| {
+        crate::config::MachineConfig::load_shared()
+            .unwrap_or_else(|_| Arc::new(crate::config::MachineConfig::default()))
+    });
     // Attention timing is needed during pane projection, before the full config
     // fold builds provider panels and stamps context severity.
     snapshot.sidebar = machine_config.sidebar.clone();
@@ -446,7 +445,7 @@ pub fn enrich(
     // consumers and the live fetch worker project the cached ones.
     let lanes = opts.lanes;
     let (mut folded, spending_caches) =
-        fold_machine_config(snapshot, runtime, machine_config, lanes);
+        fold_machine_config(snapshot, runtime, &machine_config, lanes);
     project_diff_stats(&mut folded, &diff_cache);
     if let Some(lanes) = lanes {
         project_pr_state_map(&mut folded, &lanes.pr_states);
@@ -534,7 +533,7 @@ fn apply_pane_metrics(snapshot: &mut SidebarSnapshot, metrics: Vec<(PaneId, Pane
 fn fold_machine_config(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
-    config: crate::config::MachineConfig,
+    config: &crate::config::MachineConfig,
     lanes: Option<&crate::sidebar::refresh::RefreshedLanes>,
 ) -> (SidebarSnapshot, SpendingCaches) {
     let accounts_config = config.accounts.clone();
@@ -718,18 +717,12 @@ fn discovered_files_signature(
 /// row's context-severity verdict.
 pub(crate) fn fold_machine_config_with(
     mut snapshot: SidebarSnapshot,
-    config: crate::config::MachineConfig,
+    config: &crate::config::MachineConfig,
     accounts: BTreeMap<String, crate::agents::AgentAccount>,
     provider_spending: &BTreeMap<String, crate::agents::SpendTally>,
 ) -> SidebarSnapshot {
-    let crate::config::MachineConfig {
-        remote_control,
-        sidebar,
-        theme,
-        ..
-    } = config;
-    snapshot.sidebar = sidebar;
-    snapshot.theme = theme;
+    snapshot.sidebar = config.sidebar.clone();
+    snapshot.theme = config.theme.clone();
 
     // Stamp each agent row's context-severity verdict now that the
     // `[theme.display.context_meter]` bands are known — classified once here, on both the
@@ -743,7 +736,7 @@ pub(crate) fn fold_machine_config_with(
     let mut remote_control_flags: BTreeMap<String, bool> = BTreeMap::new();
     for adapter in crate::agents::ADAPTERS {
         let descriptor = adapter.descriptor();
-        let config_toggle = remote_control_toggle(descriptor.kind, &remote_control);
+        let config_toggle = remote_control_toggle(descriptor.kind, &config.remote_control);
         let pane_auto = descriptor.capabilities.remote_control.pane_sessions
             && adapter
                 .remote_control_status(accounts.get(descriptor.kind))

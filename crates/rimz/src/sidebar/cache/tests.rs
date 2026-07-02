@@ -206,6 +206,7 @@ fn git_cache_freshness_boundaries_are_inclusive() {
         landed: None,
         did_work: None,
         merge_in_progress: None,
+        ..DiffStatsCacheEntry::default()
     };
     let fast = DIFF_STATS_TTL.as_millis() as u64;
     let idle = DIFF_STATS_IDLE_TTL.as_millis() as u64;
@@ -234,6 +235,7 @@ fn git_cache_freshness_boundaries_are_inclusive() {
         landed: Some(true),
         did_work: Some(true),
         merge_in_progress: Some(false),
+        ..DiffStatsCacheEntry::default()
     };
     assert_eq!(
         populated.stats(),

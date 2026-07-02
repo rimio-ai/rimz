@@ -241,7 +241,7 @@ fn auto_continue_tick(
         rimz::sidebar::enrich::FoldOpts {
             producing: true,
             fresh_roots: None,
-            config: Some(Box::new(config)),
+            config: Some(std::sync::Arc::new(config)),
             lanes: None,
         },
         &rimz::diag::DiagSink::disabled(),

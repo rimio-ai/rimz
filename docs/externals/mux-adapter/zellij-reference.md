@@ -353,7 +353,7 @@ Top-level KDL options (`option_name value`). Every one doubles as a kebab-case `
 | `serialize_pane_viewport` | `false` \| `true` | |
 | `scrollback_lines_to_serialize` | int; `0` = all | only with viewport serialization |
 | `serialization_interval` | seconds | default ~1s |
-| `disable_session_metadata` | `false` \| `true` | |
+| `disable_session_metadata` | `false` \| `true` | Rimz passes `true`; gates the per-second session-metadata writer and command-discovery `ps` loop |
 | `post_command_discovery_hook` | shell snippet | rewrites the discovered `$RESURRECT_COMMAND` |
 | `env` | `env { KEY "value" }` | set on every terminal pane |
 | `web_server` | `false` \| `true` | start server on startup; + `web_server_ip` (`127.0.0.1`), `web_server_port` (`8082`), `web_server_cert` / `web_server_key`, `enforce_https_for_localhost` |
@@ -408,4 +408,6 @@ Swap layouts (`*.swap.kdl`, `swap_tiled_layout` / `swap_floating_layout`) drive 
 
 By default every session serializes to the user **cache folder** (`~/.cache/zellij/<contract_version>/session_info/<session>/`) on `serialization_interval` (~1s) as human-readable KDL layouts — the same dialect as `--layout`, shareable across machines. Serialized: the layout plus each pane's *discovered* command (`$RESURRECT_COMMAND`, rewritable via `post_command_discovery_hook`, whose STDOUT replaces the discovered command); optionally the viewport (`serialize_pane_viewport`) and scrollback (`scrollback_lines_to_serialize`).
 
-A dead serialized session lists as `EXITED - attach to resurrect`; attach recreates the layout with every command pane **held at a `Press ENTER to run…` banner** (`PaneInfo.is_held`) — `attach -f/--force-run-commands` runs them immediately instead. `kill-session` keeps the serialized state; `delete-session` / `delete-all-sessions` removes it; `attach --forget` deletes before connecting. `session_serialization false` switches the whole machinery off — Rimz's choice, and why: agents cannot restore their running state, so a resurrected room is a wall of held panes ([multiplexers.md](../../internals/sidebar/multiplexers.md#zellij-backend)).
+A dead serialized session lists as `EXITED - attach to resurrect`; attach recreates the layout with every command pane **held at a `Press ENTER to run…` banner** (`PaneInfo.is_held`) — `attach -f/--force-run-commands` runs them immediately instead. `kill-session` keeps the serialized state; `delete-session` / `delete-all-sessions` removes it; `attach --forget` deletes before connecting. `session_serialization false` switches the resurrection machinery off — Rimz's choice, and why: agents cannot restore their running state, so a resurrected room is a wall of held panes ([multiplexers.md](../../internals/sidebar/multiplexers.md#zellij-backend)).
+
+`disable_session_metadata true` separately stops the live session metadata loop: the periodic `session-metadata.kdl` rewrite and command-discovery `ps` probes that still run when serialization itself is disabled. Rimz passes it for every room birth and attach.

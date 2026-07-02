@@ -179,6 +179,8 @@ fn zellij_options_args(
         bool_value(config.focus_follows_mouse),
         "--session-serialization".to_owned(),
         bool_value(config.session_serialization),
+        "--disable-session-metadata".to_owned(),
+        bool_value(config.disable_session_metadata),
         "--auto-layout".to_owned(),
         bool_value(config.auto_layout),
     ];

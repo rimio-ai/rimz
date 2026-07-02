@@ -11,6 +11,7 @@ use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, SidebarSnapshot, SidebarWorktreeKind, StatePaths};
 use jiff::Timestamp;
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 fn cached_opts() -> FoldOpts<'static> {
     FoldOpts {
@@ -18,6 +19,154 @@ fn cached_opts() -> FoldOpts<'static> {
         fresh_roots: None,
         config: None,
         lanes: None,
+    }
+}
+
+struct StampFixture {
+    _state_root: tempfile::TempDir,
+    _runtime_root: tempfile::TempDir,
+    state: StatePaths,
+    runtime: RuntimePaths,
+}
+
+impl StampFixture {
+    fn new() -> Self {
+        let state_root = tempfile::tempdir().unwrap();
+        let runtime_root = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(state_root.path());
+        let state = StatePaths::under(workspace.clone(), state_root.path()).unwrap();
+        let runtime = RuntimePaths::under(workspace, runtime_root.path()).unwrap();
+        state.ensure_dirs().unwrap();
+        runtime.ensure_dirs().unwrap();
+        std::fs::create_dir_all(&state.messages_dir).unwrap();
+
+        for (name, path) in file_stamp_inputs(&state, &runtime) {
+            write_stamp_file(&path, name);
+        }
+
+        Self {
+            _state_root: state_root,
+            _runtime_root: runtime_root,
+            state,
+            runtime,
+        }
+    }
+}
+
+fn file_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'static str, PathBuf)> {
+    vec![
+        ("events_log", state.events_log.clone()),
+        ("latest_snapshot", state.latest_snapshot.clone()),
+        ("rollup_cache", state.rollup_cache.clone()),
+        ("agents_carryover", state.agents_carryover.clone()),
+        ("workspace_record", state.workspace_record.clone()),
+        ("message_queue", state.messages_dir.join("queue.json")),
+        ("pane_frame", runtime.pane_frame_path()),
+        ("diff_stats", runtime.diff_stats_path()),
+        ("pr_state", runtime.pr_state_path()),
+        ("unread", runtime.unread_path()),
+        ("link_stats", crate::remote::link::stats_path(runtime)),
+        ("accounts", runtime.shared_accounts_path()),
+        ("rate_limits", runtime.shared_rate_limits_path()),
+        ("credits", runtime.shared_credits_path()),
+        ("provider_spending", runtime.shared_provider_spending_path()),
+        ("spending_cursor", runtime.shared_spending_cursor_path()),
+        ("metrics_sample", runtime.root.join("metrics-sample.json")),
+    ]
+}
+
+fn dir_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'static str, PathBuf)> {
+    vec![
+        ("messages_dir", state.messages_dir.clone()),
+        ("agent_context_dir", runtime.agent_context_dir.clone()),
+        ("subagent_context_dir", runtime.subagent_context_dir.clone()),
+        ("agent_activity_dir", runtime.agent_activity_dir.clone()),
+        ("read_marks_dir", runtime.read_marks_dir.clone()),
+        ("runtime_root", runtime.root.clone()),
+    ]
+}
+
+fn write_stamp_file(path: &Path, value: &str) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(path, format!("{value}-baseline")).unwrap();
+}
+
+#[test]
+fn consumer_fold_inputs_stamp_is_stable_for_unchanged_inputs() {
+    let fixture = StampFixture::new();
+
+    assert_eq!(
+        consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
+        consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime)
+    );
+}
+
+#[test]
+fn consumer_fold_inputs_stamp_changes_for_each_file_input() {
+    for name in [
+        "events_log",
+        "latest_snapshot",
+        "rollup_cache",
+        "agents_carryover",
+        "workspace_record",
+        "message_queue",
+        "pane_frame",
+        "diff_stats",
+        "pr_state",
+        "unread",
+        "link_stats",
+        "accounts",
+        "rate_limits",
+        "credits",
+        "provider_spending",
+        "spending_cursor",
+        "metrics_sample",
+    ] {
+        let fixture = StampFixture::new();
+        let before = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
+        let path = file_stamp_inputs(&fixture.state, &fixture.runtime)
+            .into_iter()
+            .find(|(candidate, _)| *candidate == name)
+            .expect("case path")
+            .1;
+
+        std::fs::write(&path, format!("{name}-changed-with-a-longer-body")).unwrap();
+
+        assert_ne!(
+            consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
+            before,
+            "{name} must participate in the consumer fold input stamp",
+        );
+    }
+}
+
+#[test]
+fn consumer_fold_inputs_stamp_changes_for_each_dir_input() {
+    for name in [
+        "messages_dir",
+        "agent_context_dir",
+        "subagent_context_dir",
+        "agent_activity_dir",
+        "read_marks_dir",
+        "runtime_root",
+    ] {
+        let fixture = StampFixture::new();
+        let before = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
+        let path = dir_stamp_inputs(&fixture.state, &fixture.runtime)
+            .into_iter()
+            .find(|(candidate, _)| *candidate == name)
+            .expect("case path")
+            .1;
+
+        std::fs::remove_dir_all(&path).unwrap();
+
+        assert_ne!(
+            consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
+            before,
+            "{name} must participate in the consumer fold input stamp",
+        );
     }
 }
 
@@ -66,6 +215,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
             landed: Some(false),
             did_work: Some(true),
             merge_in_progress: Some(false),
+            ..DiffStatsCacheEntry::default()
         },
     );
     atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &diff).unwrap();

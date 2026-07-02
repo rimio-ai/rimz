@@ -281,6 +281,10 @@ impl LoopState {
         }
         let mut rejected = false;
         if let Some(mut outcome) = latest {
+            if outcome.unchanged {
+                self.fetched_at = Instant::now();
+                return Ok(());
+            }
             let snapshot_ok = outcome.snapshot.is_ok();
             let fresh_pane_frame = outcome.fresh_pane_frame;
             if let Ok(pulled) = outcome.snapshot {
@@ -415,6 +419,7 @@ impl LoopState {
                         snapshot: Ok(fused),
                         final_for_request: false,
                         fresh_pane_frame: false,
+                        unchanged: false,
                     },
                     anim_start,
                     diag,
@@ -1151,6 +1156,7 @@ impl LoopState {
                 snapshot: Ok(fused),
                 final_for_request: false,
                 fresh_pane_frame: false,
+                unchanged: false,
             },
             anim_start,
             diag,

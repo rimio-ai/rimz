@@ -17,10 +17,11 @@
 //! strict [`MachineConfig::load`] and [`MachineConfig::load_from`] back
 //! `rimz config` and `rimz doctor`, which report the precise error.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-use std::time::UNIX_EPOCH;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -105,7 +106,16 @@ pub const MACHINE_THEME_TEMPLATE: &str = include_str!("config/templates/theme.te
 pub const MACHINE_AGENTS_TEMPLATE: &str = include_str!("config/templates/agents.template.toml");
 pub const MACHINE_LOOP_TEMPLATE: &str = include_str!("config/templates/loop.template.toml");
 
-static LOAD_MEMO: OnceLock<Mutex<Option<(ConfigStamp, MachineConfig)>>> = OnceLock::new();
+const CONFIG_STAMP_TTL: Duration = Duration::from_secs(2);
+
+static LOAD_MEMO: OnceLock<Mutex<Option<LoadMemo>>> = OnceLock::new();
+
+#[derive(Debug)]
+struct LoadMemo {
+    stamp: ConfigStamp,
+    config: Arc<MachineConfig>,
+    last_verified: Instant,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigErr {
@@ -213,7 +223,12 @@ impl MachineConfig {
     /// Load from the default per-machine paths. Missing files are defaults —
     /// never an error.
     pub fn load() -> Result<Self> {
-        Self::load_with_memo(&Self::config_path(), &paths::agents_home())
+        Self::load_shared().map(|config| config.as_ref().clone())
+    }
+
+    /// Load from the default per-machine paths and share the memoized config.
+    pub fn load_shared() -> Result<Arc<Self>> {
+        Self::load_shared_with_memo(&Self::config_path(), &paths::agents_home())
     }
 
     /// Load per-machine config for a runtime entry point. A file that fails to
@@ -373,24 +388,60 @@ impl MachineConfig {
         }
     }
 
+    #[cfg(test)]
     fn load_with_memo(config_path: &Path, agents_home: &Path) -> Result<Self> {
-        let stamp = ConfigStamp::from_inputs(config_path, agents_home)?;
+        Self::load_shared_with_memo(config_path, agents_home).map(|config| config.as_ref().clone())
+    }
+
+    fn load_shared_with_memo(config_path: &Path, agents_home: &Path) -> Result<Arc<Self>> {
+        let now = Instant::now();
         if let Ok(memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
-            && let Some((cached_stamp, cached)) = memo.as_ref()
-            && cached_stamp == &stamp
+            && let Some(cached) = memo.as_ref()
+            && now.duration_since(cached.last_verified) <= CONFIG_STAMP_TTL
         {
-            return Ok(cached.clone());
+            return Ok(cached.config.clone());
         }
 
-        let config = Self::load_from(config_path, agents_home)?;
+        let stamp = ConfigStamp::from_inputs(config_path, agents_home)?;
+        if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
+            && let Some(cached) = memo.as_mut()
+            && cached.stamp == stamp
+        {
+            cached.last_verified = now;
+            return Ok(cached.config.clone());
+        }
+
+        let config = Arc::new(Self::load_from(config_path, agents_home)?);
         if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
-            *memo = Some((stamp, config.clone()));
+            *memo = Some(LoadMemo {
+                stamp,
+                config: config.clone(),
+                last_verified: now,
+            });
         }
         Ok(config)
     }
+
+    pub(crate) fn load_stamp_generation() -> u64 {
+        let _ = Self::load_shared();
+        if let Ok(memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
+            && let Some(cached) = memo.as_ref()
+        {
+            return hash_config_stamp(&cached.stamp);
+        }
+        ConfigStamp::from_inputs(&Self::config_path(), &paths::agents_home())
+            .map(|stamp| hash_config_stamp(&stamp))
+            .unwrap_or(0)
+    }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+fn hash_config_stamp(stamp: &ConfigStamp) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    stamp.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct ConfigStamp {
     core: StampedPath,
     theme: StampedPath,
@@ -425,13 +476,13 @@ impl ConfigStamp {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct StampedPath {
     path: PathBuf,
     stamp: FileStamp,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct FileStamp {
     len: u64,
     modified_secs: u64,

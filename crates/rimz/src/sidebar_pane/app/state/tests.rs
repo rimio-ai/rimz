@@ -289,6 +289,7 @@ impl ApplyHarness {
             snapshot: Ok(snapshot),
             final_for_request: true,
             fresh_pane_frame: true,
+            unchanged: false,
         })
     }
 
@@ -783,6 +784,7 @@ fn frameless_fold_does_not_blip_switch_in() {
         snapshot: Ok(frameless),
         final_for_request: false,
         fresh_pane_frame: false,
+        unchanged: false,
     });
     assert_eq!(a.ui.viewing_own_tab, Some(true));
 
@@ -851,6 +853,7 @@ fn non_final_fast_success_keeps_refresh_alert_active() {
         snapshot: Ok(snapshot(&ws)),
         final_for_request: false,
         fresh_pane_frame: false,
+        unchanged: false,
     });
 
     assert!(!applied.should_exit);

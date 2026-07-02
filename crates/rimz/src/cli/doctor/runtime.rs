@@ -590,21 +590,28 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
             tick_loop,
             over_ticks,
             last_wall_ms,
+            last_mux_wait_ms,
             last_fold_bytes,
             last_spawns,
             wall_ms,
+            mux_wait_ms,
             fold_bytes,
             spawns,
             budget_wall_ms,
+            budget_mux_wait_ms,
             budget_fold_bytes,
             budget_spawns,
             recovered_after_ms,
             ..
         } => {
-            let last = format!("last {last_wall_ms}ms/{last_fold_bytes}B/{last_spawns} spawns");
-            let worst = format!("worst {wall_ms}ms/{fold_bytes}B/{spawns} spawns");
-            let budget =
-                format!("budget {budget_wall_ms}ms/{budget_fold_bytes}B/{budget_spawns} spawns");
+            let last = format!(
+                "last {last_wall_ms}ms ({last_mux_wait_ms}ms mux)/{last_fold_bytes}B/{last_spawns} spawns"
+            );
+            let worst =
+                format!("worst {wall_ms}ms ({mux_wait_ms}ms mux)/{fold_bytes}B/{spawns} spawns");
+            let budget = format!(
+                "budget {budget_wall_ms}ms in-process/{budget_mux_wait_ms}ms mux/{budget_fold_bytes}B/{budget_spawns} spawns"
+            );
             match recovered_after_ms {
                 Some(ms) => {
                     format!(
@@ -742,12 +749,15 @@ mod tests {
             tick_loop: TickLoop::Fetch,
             over_ticks,
             last_wall_ms: 1_100,
+            last_mux_wait_ms: 0,
             last_fold_bytes: 0,
             last_spawns: 0,
             wall_ms: 1_500,
+            mux_wait_ms: 0,
             fold_bytes: 0,
             spawns: 0,
             budget_wall_ms: 1_000,
+            budget_mux_wait_ms: 5_000,
             budget_fold_bytes: 262_144,
             budget_spawns: 32,
             since_ms,
@@ -783,19 +793,22 @@ mod tests {
             tick_loop: TickLoop::Fetch,
             over_ticks: 5,
             last_wall_ms: 900,
+            last_mux_wait_ms: 250,
             last_fold_bytes: 1_024,
             last_spawns: 1,
             wall_ms: 1_500,
+            mux_wait_ms: 900,
             fold_bytes: 300_000,
             spawns: 40,
             budget_wall_ms: 1_000,
+            budget_mux_wait_ms: 5_000,
             budget_fold_bytes: 262_144,
             budget_spawns: 32,
             since_ms: 10,
             recovered_after_ms: None,
         });
-        assert!(tick.contains("last 900ms/1024B/1 spawns"));
-        assert!(tick.contains("worst 1500ms/300000B/40 spawns"));
+        assert!(tick.contains("last 900ms (250ms mux)/1024B/1 spawns"));
+        assert!(tick.contains("worst 1500ms (900ms mux)/300000B/40 spawns"));
     }
 
     #[test]

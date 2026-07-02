@@ -112,6 +112,7 @@ fn fold_snapshot(
             snapshot: Ok(snapshot),
             final_for_request: true,
             fresh_pane_frame,
+            unchanged: false,
         })
         .expect("send fetch outcome");
     state
@@ -202,6 +203,7 @@ fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
             snapshot: Ok(agent_snapshot(&ws)),
             final_for_request: true,
             fresh_pane_frame: false,
+            unchanged: false,
         })
         .expect("send fetch outcome");
 
@@ -224,6 +226,43 @@ fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
     assert_eq!(state.current.worktree_groups[0].rows[0].name, "claude");
     assert!(state.last_snapshot.is_some());
     assert!(state.dirty, "the folded snapshot is paint-pending");
+}
+
+#[test]
+fn unchanged_fetch_outcome_clears_in_flight_without_dirtying_frame() {
+    let ws = workspace();
+    let (_dir, mut state) = loop_state(&ws);
+    state.dirty = false;
+    let config = serve_config(&ws);
+    let (mut fetch, request_rx) = fetch_dispatcher();
+    fetch.request(FetchRequest::default(), false);
+    assert!(request_rx.try_recv().is_ok());
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    result_tx
+        .send(FetchOutcome {
+            snapshot: Err("unchanged".to_owned()),
+            final_for_request: true,
+            fresh_pane_frame: false,
+            unchanged: true,
+        })
+        .expect("send unchanged outcome");
+
+    state
+        .on_snapshot(
+            &config,
+            &mut fetch,
+            &result_rx,
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("apply unchanged outcome");
+
+    assert!(!state.dirty);
+    fetch.request(FetchRequest::default(), false);
+    assert!(
+        request_rx.try_recv().is_ok(),
+        "unchanged final outcome must release the single-flight request"
+    );
 }
 
 #[test]

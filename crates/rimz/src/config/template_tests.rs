@@ -6,6 +6,7 @@ const ACTIVE_ZELLIJ_DEFAULTS: &[&str] = &[
     "mouse_click_through",
     "focus_follows_mouse",
     "session_serialization",
+    "disable_session_metadata",
     "auto_layout",
 ];
 

@@ -107,6 +107,15 @@ pub struct DiffStatsCacheEntry {
     /// worktree. `None` means the probe could not inspect git paths.
     #[serde(default)]
     pub merge_in_progress: Option<bool>,
+    /// HEAD sha observed while resolving ancestry facts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_sha: Option<String>,
+    /// Trunk sha observed while resolving ancestry facts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trunk_sha: Option<String>,
+    /// Merge-base between HEAD and the resolved trunk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_base: Option<String>,
 }
 
 impl DiffStatsCacheEntry {
@@ -457,11 +466,25 @@ fn refresh_entry(
 ) -> DiffStatsCacheEntry {
     let mut entry = prior.cloned().unwrap_or_default();
     let worktree = Path::new(path);
-    let trunk = trunk_ref(worktree, configured_trunk);
-    let base = trunk
-        .as_deref()
-        .and_then(|trunk| diff_base(worktree, trunk));
-    let head = head_facts(worktree);
+    let refs = super::git_refs::resolve(worktree, configured_trunk);
+    let trunk = refs
+        .as_ref()
+        .map(|refs| refs.trunk_name.clone())
+        .or_else(|| trunk_ref(worktree, configured_trunk));
+    let base = match (refs.as_ref(), prior) {
+        (Some(refs), Some(prior)) if cached_refs_match(prior, refs) => prior.merge_base.clone(),
+        _ => trunk
+            .as_deref()
+            .and_then(|trunk| diff_base(worktree, trunk)),
+    };
+    let head = refs
+        .as_ref()
+        .map(|refs| HeadFacts {
+            head_sha: Some(refs.head_sha.clone()),
+            branch: refs.head_branch.clone(),
+            merge_in_progress: Some(refs.merge_in_progress),
+        })
+        .unwrap_or_else(|| head_facts(worktree));
 
     if due.local {
         let local = refresh_local_facts(
@@ -490,6 +513,15 @@ fn refresh_entry(
         entry.landed = commit.landed;
         entry.did_work = commit.did_work;
     }
+    if let Some(refs) = refs {
+        entry.head_sha = Some(refs.head_sha);
+        entry.trunk_sha = Some(refs.trunk_sha);
+        entry.merge_base = base;
+    } else {
+        entry.head_sha = head.head_sha.clone();
+        entry.trunk_sha = None;
+        entry.merge_base = base;
+    }
 
     let completed_at_ms = unix_now_ms();
     if due.local {
@@ -499,6 +531,13 @@ fn refresh_entry(
         entry.commit_refreshed_at_ms = Some(completed_at_ms);
     }
     entry
+}
+
+fn cached_refs_match(prior: &DiffStatsCacheEntry, refs: &super::git_refs::GitRefs) -> bool {
+    prior.head_sha.as_deref() == Some(refs.head_sha.as_str())
+        && prior.trunk_sha.as_deref() == Some(refs.trunk_sha.as_str())
+        && prior.trunk.as_deref() == Some(refs.trunk_name.as_str())
+        && prior.merge_base.is_some()
 }
 
 fn refresh_local_facts(
