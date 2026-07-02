@@ -42,6 +42,39 @@ fn raw_lifecycle_at(
     event
 }
 
+fn launch_payload(agent_id: &str, agent_name: &str) -> AgentLaunchPayload {
+    AgentLaunchPayload {
+        agent_id: agent_id.into(),
+        agent_name: agent_name.to_owned(),
+        profile: None,
+        role: None,
+        model: None,
+        effort: None,
+        team: None,
+        launch_group: None,
+        launch_ordinal: None,
+        channel: None,
+        kind_ordinal: None,
+        state: AgentLaunchState::Bound,
+        run_id: None,
+        pane_id: None,
+        runtime_owner: None,
+        worktree_path: Some("/tmp/x".to_owned()),
+        worktree_branch: Some("main".to_owned()),
+        prompt: Some("boot".to_owned()),
+        description: None,
+    }
+}
+
+fn launch_event(kind: &str, payload: AgentLaunchPayload) -> EventEnvelope {
+    EventEnvelope::agent_launched(
+        workspace(),
+        "session",
+        &AgentKind::new_unchecked(kind),
+        payload,
+    )
+}
+
 fn raw_launch(
     state: AgentLaunchState,
     agent_id: &str,
@@ -58,30 +91,13 @@ fn raw_launch_with_description(
     pane_id: Option<&str>,
     description: Option<&str>,
 ) -> EventEnvelope {
-    EventEnvelope::agent_launched(
-        workspace(),
-        "session",
-        &AgentKind::new_unchecked("claude"),
+    launch_event(
+        "claude",
         AgentLaunchPayload {
-            agent_id: agent_id.into(),
-            agent_name: agent_name.to_owned(),
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            kind_ordinal: None,
             state,
-            run_id: None,
             pane_id: pane_id.map(|raw| PaneId::parse(raw).expect("pane id")),
-            runtime_owner: None,
-            worktree_path: Some("/tmp/x".to_owned()),
-            worktree_branch: Some("main".to_owned()),
-            prompt: Some("boot".to_owned()),
             description: description.map(ToOwned::to_owned),
+            ..launch_payload(agent_id, agent_name)
         },
     )
 }
@@ -307,30 +323,12 @@ fn launch_description_reduces_and_survives_provisional_adoption() {
 fn launch_description_without_prompt_creates_idle_card() {
     // Interactive launch (no prompt) must be Idle so a card-only description
     // does not make the agent look busy.
-    let agents = reduce_agent_states(&[EventEnvelope::agent_launched(
-        workspace(),
-        "session",
-        &AgentKind::new_unchecked("codex"),
+    let agents = reduce_agent_states(&[launch_event(
+        "codex",
         AgentLaunchPayload {
-            agent_id: "launch_a".into(),
-            agent_name: "lucid-atlas".to_owned(),
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            kind_ordinal: None,
-            state: AgentLaunchState::Bound,
-            run_id: None,
-            pane_id: None,
-            runtime_owner: None,
-            worktree_path: Some("/tmp/x".to_owned()),
-            worktree_branch: Some("main".to_owned()),
             prompt: None,
             description: Some("port auth".to_owned()),
+            ..launch_payload("launch_a", "lucid-atlas")
         },
     )]);
 
@@ -342,30 +340,14 @@ fn launch_description_without_prompt_creates_idle_card() {
 
 #[test]
 fn launch_cohort_identity_reduces_and_survives_bound_event_without_fields() {
-    let launch = EventEnvelope::agent_launched(
-        workspace(),
-        "session",
-        &AgentKind::new_unchecked("claude"),
+    let launch = launch_event(
+        "claude",
         AgentLaunchPayload {
-            agent_id: "launch_a".into(),
-            agent_name: "lucid-atlas".to_owned(),
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            team: None,
             launch_group: Some("launch_group_1".to_owned()),
             launch_ordinal: Some(1),
-            channel: None,
-            kind_ordinal: None,
             state: AgentLaunchState::Starting,
-            run_id: None,
-            pane_id: None,
-            runtime_owner: None,
-            worktree_path: Some("/tmp/x".to_owned()),
-            worktree_branch: Some("main".to_owned()),
             prompt: None,
-            description: None,
+            ..launch_payload("launch_a", "lucid-atlas")
         },
     );
     let bound = raw_launch(
@@ -384,30 +366,13 @@ fn launch_cohort_identity_reduces_and_survives_bound_event_without_fields() {
 
 #[test]
 fn launch_seeds_model_and_effort_until_lifecycle_observes_them() {
-    let launch = EventEnvelope::agent_launched(
-        workspace(),
-        "session",
-        &AgentKind::new_unchecked("codex"),
+    let launch = launch_event(
+        "codex",
         AgentLaunchPayload {
-            agent_id: "launch_a".into(),
-            agent_name: "lucid-atlas".to_owned(),
-            profile: None,
-            role: None,
             model: Some("gpt-5.5-codex".to_owned()),
             effort: Some("xhigh".to_owned()),
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            kind_ordinal: None,
-            state: AgentLaunchState::Bound,
-            run_id: None,
-            pane_id: None,
-            runtime_owner: None,
-            worktree_path: Some("/tmp/x".to_owned()),
-            worktree_branch: Some("main".to_owned()),
             prompt: None,
-            description: None,
+            ..launch_payload("launch_a", "lucid-atlas")
         },
     );
 
@@ -436,30 +401,17 @@ fn launch_seeds_model_and_effort_until_lifecycle_observes_them() {
 
 #[test]
 fn launch_role_and_profile_survive_roleless_lifecycle() {
-    let launch = EventEnvelope::agent_launched(
-        workspace(),
-        "session",
-        &AgentKind::new_unchecked("codex"),
+    let launch = launch_event(
+        "codex",
         AgentLaunchPayload {
-            agent_id: "launch_a".into(),
-            agent_name: "lucid-atlas".to_owned(),
             profile: Some("codex-coder".to_owned()),
             role: Some("coder".to_owned()),
-            model: None,
-            effort: None,
             team: Some("pcr".to_owned()),
             launch_group: Some("launch_group_1".to_owned()),
             launch_ordinal: Some(2),
-            channel: None,
-            kind_ordinal: None,
             state: AgentLaunchState::Starting,
-            run_id: None,
-            pane_id: None,
-            runtime_owner: None,
-            worktree_path: Some("/tmp/x".to_owned()),
-            worktree_branch: Some("main".to_owned()),
             prompt: None,
-            description: None,
+            ..launch_payload("launch_a", "lucid-atlas")
         },
     );
     let lifecycle = raw_lifecycle(
@@ -484,30 +436,15 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
 
 #[test]
 fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
-    let launch = EventEnvelope::agent_launched(
-        workspace(),
-        "session",
-        &AgentKind::new_unchecked("codex"),
+    let launch = launch_event(
+        "codex",
         AgentLaunchPayload {
-            agent_id: "launch_a".into(),
-            agent_name: "lucid-atlas".to_owned(),
             profile: Some("codex-coder".to_owned()),
             role: Some("coder".to_owned()),
-            model: None,
-            effort: None,
             team: Some("pcr".to_owned()),
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            kind_ordinal: None,
-            state: AgentLaunchState::Bound,
-            run_id: None,
             pane_id: Some(PaneId::parse("zellij:terminal_1").expect("pane id")),
-            runtime_owner: None,
-            worktree_path: Some("/tmp/x".to_owned()),
-            worktree_branch: Some("main".to_owned()),
             prompt: None,
-            description: None,
+            ..launch_payload("launch_a", "lucid-atlas")
         },
     );
     let lifecycle = raw_lifecycle(

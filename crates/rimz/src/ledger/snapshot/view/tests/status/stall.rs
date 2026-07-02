@@ -55,6 +55,14 @@ fn configured_stall_window_controls_running_attention_escalation() {
     );
 }
 
+// ── The precedence ladder, pinned as an ordering ─────────────────────────────
+//
+// docs/internals/agents/agent.md commits to a strict order among the derived display
+// states: a human-blocked `waiting` outranks them all, then a paused-class
+// marker, then the live-subagent exemption, then a failed marker, then the
+// stalled-running fallback (paused when the kind's window is spent, failed
+// otherwise). The single-cause cases each prove one rung; this grid pins the
+// order by stacking causes.
 #[test]
 fn displayed_status_precedence_ladder_holds() {
     for rung in displayed_status_rungs() {
@@ -190,11 +198,4 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
 
 fn spent_windows() -> Vec<RateLimitWindow> {
     vec![window(100, 3_600)]
-}
-
-fn unprojectable_spent_window(resets_in_secs: i64) -> RateLimitWindow {
-    RateLimitWindow {
-        duration_mins: None,
-        ..window(100, resets_in_secs)
-    }
 }

@@ -43,10 +43,12 @@ fn api_error_turn_escalates_running_to_attention() {
 }
 
 #[test]
-fn codex_stop_over_rate_limit_terminal_row_parks_until_budget_resets() {
+fn limit_marker_terminal_row_parks_until_budget_resets() {
     for case in [
         (
             "spent window parks a failed Stop over the rollout marker",
+            "You've hit your usage limit",
+            false,
             vec![window(100, 3_600)],
             vec![window(100, 3_600)],
             AgentStatus::Paused,
@@ -54,6 +56,8 @@ fn codex_stop_over_rate_limit_terminal_row_parks_until_budget_resets() {
         ),
         (
             "recovered fused budget does not turn a live park into an actionable failure",
+            "You've hit your usage limit",
+            false,
             vec![window(100, -60)],
             vec![window(0, 3_600)],
             AgentStatus::Paused,
@@ -61,6 +65,8 @@ fn codex_stop_over_rate_limit_terminal_row_parks_until_budget_resets() {
         ),
         (
             "a reset short window still waits on a longer spent window",
+            "You've hit your usage limit",
+            false,
             vec![window(100, -60), window(100, 86_400)],
             vec![window(100, -60), window(100, 86_400)],
             AgentStatus::Paused,
@@ -68,37 +74,17 @@ fn codex_stop_over_rate_limit_terminal_row_parks_until_budget_resets() {
         ),
         (
             "a spent window with no recovery clock becomes actionable",
+            "You've hit your usage limit",
+            false,
             vec![window(100, -60)],
             vec![unprojectable_spent_window(-60)],
             AgentStatus::Failed,
             Some("You've hit your usage limit"),
         ),
-    ] {
-        let (label, agent_windows, budget_windows, expected_status, expected_error_label) = case;
-        let session = agent("codex", "codex-stop-error", AgentStatus::Failed, 0)
-            .worktree("/repo/main")
-            .in_pane("%1")
-            .turn_started_ago(120)
-            .active_ago(5)
-            .limits(agent_windows)
-            .paused_turn_error(10, "You've hit your usage limit");
-
-        let snapshot = room_with_agent_panes_and_budgets(
-            Vec::new(),
-            vec![session],
-            account_budget("codex", budget_windows),
-        );
-        let row = row(&snapshot, "codex-stop-error");
-        assert_eq!(row.status(), Some(expected_status), "{label}");
-        assert_eq!(row.turn_error_label(), expected_error_label, "{label}");
-    }
-}
-
-#[test]
-fn codex_stop_over_spend_limit_terminal_row_parks_until_budget_resets() {
-    for case in [
         (
             "spent window parks a failed Stop over the rollout marker",
+            "You've hit your monthly spend limit.",
+            true,
             vec![window(100, 3_600)],
             vec![window(100, 3_600)],
             AgentStatus::Paused,
@@ -106,6 +92,8 @@ fn codex_stop_over_spend_limit_terminal_row_parks_until_budget_resets() {
         ),
         (
             "recovered fused budget keeps the spend-limit park non-actionable",
+            "You've hit your monthly spend limit.",
+            true,
             vec![window(100, -60)],
             vec![window(0, 3_600)],
             AgentStatus::Paused,
@@ -113,20 +101,34 @@ fn codex_stop_over_spend_limit_terminal_row_parks_until_budget_resets() {
         ),
         (
             "a spent window with no recovery clock becomes actionable",
+            "You've hit your monthly spend limit.",
+            true,
             vec![window(100, -60)],
             vec![unprojectable_spent_window(-60)],
             AgentStatus::Failed,
             Some("You've hit your monthly spend limit."),
         ),
     ] {
-        let (label, agent_windows, budget_windows, expected_status, expected_error_label) = case;
+        let (
+            label,
+            marker_label,
+            spend_limit,
+            agent_windows,
+            budget_windows,
+            expected_status,
+            expected_error_label,
+        ) = case;
         let session = agent("codex", "codex-stop-error", AgentStatus::Failed, 0)
             .worktree("/repo/main")
             .in_pane("%1")
             .turn_started_ago(120)
             .active_ago(5)
-            .limits(agent_windows)
-            .spend_limit_turn_error(10, "You've hit your monthly spend limit.");
+            .limits(agent_windows);
+        let session = if spend_limit {
+            session.spend_limit_turn_error(10, marker_label)
+        } else {
+            session.paused_turn_error(10, marker_label)
+        };
 
         let snapshot = room_with_agent_panes_and_budgets(
             Vec::new(),
@@ -163,13 +165,6 @@ fn legacy_session_limit_marker_parks_while_budget_is_spent() {
         row.turn_error_label().is_none(),
         "a parked limit keeps the upstream text out of the actionable-failure line"
     );
-}
-
-fn unprojectable_spent_window(resets_in_secs: i64) -> RateLimitWindow {
-    RateLimitWindow {
-        duration_mins: None,
-        ..window(100, resets_in_secs)
-    }
 }
 
 #[test]
@@ -222,72 +217,35 @@ fn api_error_self_clears_when_activity_resumes() {
 }
 
 #[test]
-fn overloaded_turn_error_stays_paused_past_the_stall_window() {
-    let session = agent("claude", "busy-claude", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .in_pane("%1")
-        .active_ago(default_stall_secs() + 3_600)
-        .overloaded_turn_error(10, "API Error: Overloaded");
-
-    let snapshot = room(Vec::new(), vec![session])
-        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
-
-    let row = row(&snapshot, "busy-claude");
-    assert_eq!(
-        row.status(),
-        Some(AgentStatus::Paused),
-        "an overloaded park remains paused even when the generic stall backstop would fail a running row"
-    );
-}
-
-#[test]
-fn transient_server_error_stays_paused_past_the_stall_window() {
+fn paused_class_marker_survives_the_stall_window() {
     let temporary_500 = concat!(
         "API Error: 500 Internal server error. ",
         "This is a server-side issue, usually temporary — try again in a moment."
     );
-    let session = agent("claude", "busy-claude", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .in_pane("%1")
-        .active_ago(default_stall_secs() + 3_600)
-        .overloaded_turn_error(10, temporary_500);
+    for (label, expected) in [
+        (
+            "API Error: Overloaded",
+            "an overloaded park remains paused even when the generic stall backstop would fail a running row",
+        ),
+        (
+            temporary_500,
+            "a transient server-error park remains paused even when the generic stall backstop would fail a running row",
+        ),
+        (
+            "API Error: Response stalled mid-stream. The response above may be incomplete.",
+            "a stalled stream parks for backoff instead of falling through to the stall failure",
+        ),
+    ] {
+        let session = agent("claude", "busy-claude", AgentStatus::Running, 0)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(default_stall_secs() + 3_600)
+            .overloaded_turn_error(10, label);
 
-    let snapshot = room(Vec::new(), vec![session])
-        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+        let snapshot = room(Vec::new(), vec![session])
+            .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
 
-    let row = row(&snapshot, "busy-claude");
-    assert_eq!(
-        row.status(),
-        Some(AgentStatus::Paused),
-        "a transient server-error park remains paused even when the generic stall backstop would fail a running row"
-    );
+        let row = row(&snapshot, "busy-claude");
+        assert_eq!(row.status(), Some(AgentStatus::Paused), "{expected}");
+    }
 }
-
-#[test]
-fn stalled_stream_error_stays_paused_past_the_stall_window() {
-    let label = "API Error: Response stalled mid-stream. The response above may be incomplete.";
-    let session = agent("claude", "busy-claude", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .in_pane("%1")
-        .active_ago(default_stall_secs() + 3_600)
-        .overloaded_turn_error(10, label);
-
-    let snapshot = room(Vec::new(), vec![session])
-        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
-
-    let row = row(&snapshot, "busy-claude");
-    assert_eq!(
-        row.status(),
-        Some(AgentStatus::Paused),
-        "a stalled stream parks for backoff instead of falling through to the stall failure"
-    );
-}
-
-// ── The precedence ladder, pinned as an ordering ─────────────────────────────
-//
-// docs/internals/agents/agent.md commits to a strict order among the derived display
-// states: a human-blocked `waiting` outranks them all, then a paused-class
-// marker, then the live-subagent exemption, then a failed marker, then the
-// stalled-running fallback (paused when the kind's window is spent, failed
-// otherwise). The single-cause cases above each prove one rung; this grid pins
-// the order by stacking causes.

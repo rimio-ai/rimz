@@ -28,186 +28,184 @@ fn ago(secs: u64) -> Timestamp {
 }
 
 #[test]
-fn arms_a_rate_limit_park_at_its_window_reset() {
-    let parked = agent("claude", "limited", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(60)
-        .paused_turn_error(10, "You've hit your usage limit");
-    assert_eq!(
-        arm(&parked, Some(&budget(vec![window(100, 3_600)]))),
-        Some(ResumeArm::RateLimit {
-            deadline: deadline(3_600)
-        })
-    );
-}
-
-#[test]
-fn arms_a_spend_limit_park_at_its_window_reset() {
-    let parked = agent("claude", "limited", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(60)
-        .spend_limit_turn_error(10, "You've hit your monthly spend limit.");
-    assert_eq!(
-        arm(&parked, Some(&budget(vec![window(100, 3_600)]))),
-        Some(ResumeArm::RateLimit {
-            deadline: deadline(3_600)
-        })
-    );
-}
-
-#[test]
-fn spend_limit_with_no_window_arms_nothing() {
-    let parked = agent("claude", "limited", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(60)
-        .spend_limit_turn_error(10, "You've hit your monthly spend limit.");
-    assert_eq!(arm(&parked, None), None);
-}
-
-#[test]
-fn legacy_session_limit_marker_arms_a_rate_limit_park() {
-    let parked = agent("claude", "limited", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(60)
-        .turn_error(10, "You've hit your session limit · resets 10:50am (UTC)");
-    assert_eq!(
-        arm(&parked, Some(&budget(vec![window(100, 3_600)]))),
-        Some(ResumeArm::RateLimit {
-            deadline: deadline(3_600)
-        })
-    );
-}
-
-#[test]
-fn arms_for_the_latest_of_several_spent_windows() {
-    // The turn may resume only once every spent window has reset, so the deadline
-    // is the furthest reset — here the 7d window, not the 5h.
-    let parked = agent("claude", "limited", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(60)
-        .paused_turn_error(10, "You've hit your usage limit");
-    assert_eq!(
-        arm(
-            &parked,
-            Some(&budget(vec![window(100, 3_600), window(100, 86_400)]))
+fn limit_parks_arm_at_the_fused_budget_reset() {
+    for (label, agent, budget, expected) in [
+        (
+            "rate-limit park",
+            agent("claude", "limited", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(60)
+                .paused_turn_error(10, "You've hit your usage limit"),
+            Some(budget(vec![window(100, 3_600)])),
+            Some(ResumeArm::RateLimit {
+                deadline: deadline(3_600),
+            }),
         ),
-        Some(ResumeArm::RateLimit {
-            deadline: deadline(86_400)
-        })
-    );
+        (
+            "spend-limit park",
+            agent("claude", "limited", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(60)
+                .spend_limit_turn_error(10, "You've hit your monthly spend limit."),
+            Some(budget(vec![window(100, 3_600)])),
+            Some(ResumeArm::RateLimit {
+                deadline: deadline(3_600),
+            }),
+        ),
+        (
+            "legacy session-limit marker",
+            agent("claude", "limited", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(60)
+                .turn_error(10, "You've hit your session limit · resets 10:50am (UTC)"),
+            Some(budget(vec![window(100, 3_600)])),
+            Some(ResumeArm::RateLimit {
+                deadline: deadline(3_600),
+            }),
+        ),
+        // The turn may resume only once every spent window has reset, so the deadline
+        // is the furthest reset — here the 7d window, not the 5h.
+        (
+            "latest spent-window reset",
+            agent("claude", "limited", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(60)
+                .paused_turn_error(10, "You've hit your usage limit"),
+            Some(budget(vec![window(100, 3_600), window(100, 86_400)])),
+            Some(ResumeArm::RateLimit {
+                deadline: deadline(86_400),
+            }),
+        ),
+    ] {
+        assert_eq!(arm(&agent, budget.as_ref()), expected, "{label}");
+    }
 }
 
 #[test]
-fn does_not_arm_from_a_recovered_fused_budget() {
-    // The fused account budget is the decision input. A paused agent can keep a
-    // frozen per-session 100% reading, but once the account bar has recovered
-    // there is no new reset deadline to arm.
-    let parked = agent("claude", "limited", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(60)
-        .limits(vec![window(100, -60)])
-        .paused_turn_error(10, "You've hit your usage limit");
-    assert_eq!(arm(&parked, Some(&budget(vec![window(0, 3_600)]))), None);
-}
-
-#[test]
-fn does_not_recreate_an_arm_from_a_refilled_reading() {
-    // Once the agent reports a non-spent window, there is no spent reset
-    // certificate left to distinguish a missed park from a stale marker.
-    let parked = agent("claude", "limited", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(60)
-        .limits(vec![window(20, -60)])
-        .paused_turn_error(10, "You've hit your usage limit");
-    assert_eq!(arm(&parked, Some(&budget(vec![window(20, -60)]))), None);
-}
-
-#[test]
-fn does_not_arm_a_calm_agent_with_a_spent_window() {
-    // A kind whose budget is spent but whose agent never stopped on a limit keeps
-    // working; there is no park to resume.
-    let calm = agent("claude", "calm", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(5)
-        .limits(vec![window(100, 3_600)]);
-    assert_eq!(arm(&calm, Some(&budget(vec![window(100, 3_600)]))), None);
-}
-
-#[test]
-fn arms_an_overloaded_park() {
-    let parked = agent("claude", "busy", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(60)
-        .limits(vec![window(100, 3_600)])
-        .overloaded_turn_error(10, "API Error: Overloaded");
-    assert_eq!(
-        arm(&parked, Some(&budget(vec![window(100, 3_600)]))),
-        Some(ResumeArm::Overloaded {
-            overloaded_at: ago(10)
-        })
-    );
-}
-
-#[test]
-fn overloaded_arm_ignores_spent_windows() {
-    // `overloaded` carries no local reset window, so a reset budget reading does
-    // not suppress the retry-backed arm.
-    let parked = agent("claude", "busy", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(60)
-        .limits(vec![window(100, -60)])
-        .overloaded_turn_error(10, "API Error: Overloaded");
-    assert_eq!(
-        arm(&parked, Some(&budget(vec![window(0, 3_600)]))),
-        Some(ResumeArm::Overloaded {
-            overloaded_at: ago(10)
-        })
-    );
-}
-
-#[test]
-fn does_not_arm_a_failed_park() {
-    let failed = agent("claude", "failed", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(60)
-        .turn_error(10, "API Error: Bad Request");
-    assert_eq!(arm(&failed, Some(&budget(vec![window(100, 3_600)]))), None);
-}
-
-#[test]
-fn arms_a_server_error_park() {
+fn overload_class_parks_arm_on_retry_backoff() {
     let temporary_500 = concat!(
         "API Error: 500 Internal server error. ",
         "This is a server-side issue, usually temporary — try again in a moment."
     );
-    let parked = agent("claude", "busy", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(60)
-        .overloaded_turn_error(10, temporary_500);
-    assert_eq!(
-        arm(&parked, None),
-        Some(ResumeArm::Overloaded {
-            overloaded_at: ago(10)
-        })
-    );
+    const STALL_LABEL: &str =
+        "API Error: Response stalled mid-stream. The response above may be incomplete.";
+
+    for (label, agent, budget, expected) in [
+        (
+            "overloaded park",
+            agent("claude", "busy", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(60)
+                .limits(vec![window(100, 3_600)])
+                .overloaded_turn_error(10, "API Error: Overloaded"),
+            Some(budget(vec![window(100, 3_600)])),
+            Some(ResumeArm::Overloaded {
+                overloaded_at: ago(10),
+            }),
+        ),
+        // `overloaded` carries no local reset window, so a reset budget reading does
+        // not suppress the retry-backed arm.
+        (
+            "overloaded park ignores spent windows",
+            agent("claude", "busy", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(60)
+                .limits(vec![window(100, -60)])
+                .overloaded_turn_error(10, "API Error: Overloaded"),
+            Some(budget(vec![window(0, 3_600)])),
+            Some(ResumeArm::Overloaded {
+                overloaded_at: ago(10),
+            }),
+        ),
+        (
+            "server-error park",
+            agent("claude", "busy", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(60)
+                .overloaded_turn_error(10, temporary_500),
+            None,
+            Some(ResumeArm::Overloaded {
+                overloaded_at: ago(10),
+            }),
+        ),
+        (
+            "stalled-stream park",
+            agent("claude", "busy", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(60)
+                .turn_error_class(
+                    10,
+                    STALL_LABEL,
+                    TurnErrorClass::classify_label(Some(STALL_LABEL)),
+                ),
+            None,
+            Some(ResumeArm::Overloaded {
+                overloaded_at: ago(10),
+            }),
+        ),
+    ] {
+        assert_eq!(arm(&agent, budget.as_ref()), expected, "{label}");
+    }
 }
 
 #[test]
-fn arms_a_stalled_stream_park() {
-    const STALL_LABEL: &str =
-        "API Error: Response stalled mid-stream. The response above may be incomplete.";
-    let parked = agent("claude", "busy", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .active_ago(60)
-        .turn_error_class(
-            10,
-            STALL_LABEL,
-            TurnErrorClass::classify_label(Some(STALL_LABEL)),
-        );
-    assert_eq!(
-        arm(&parked, None),
-        Some(ResumeArm::Overloaded {
-            overloaded_at: ago(10)
-        })
-    );
+fn does_not_arm_without_a_spent_reset_certificate() {
+    for (label, agent, budget, expected) in [
+        (
+            "spend limit with no window",
+            agent("claude", "limited", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(60)
+                .spend_limit_turn_error(10, "You've hit your monthly spend limit."),
+            None,
+            None,
+        ),
+        // The fused account budget is the decision input. A paused agent can keep a
+        // frozen per-session 100% reading, but once the account bar has recovered
+        // there is no new reset deadline to arm.
+        (
+            "recovered fused budget",
+            agent("claude", "limited", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(60)
+                .limits(vec![window(100, -60)])
+                .paused_turn_error(10, "You've hit your usage limit"),
+            Some(budget(vec![window(0, 3_600)])),
+            None,
+        ),
+        // Once the agent reports a non-spent window, there is no spent reset
+        // certificate left to distinguish a missed park from a stale marker.
+        (
+            "refilled reading",
+            agent("claude", "limited", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(60)
+                .limits(vec![window(20, -60)])
+                .paused_turn_error(10, "You've hit your usage limit"),
+            Some(budget(vec![window(20, -60)])),
+            None,
+        ),
+        // A kind whose budget is spent but whose agent never stopped on a limit keeps
+        // working; there is no park to resume.
+        (
+            "calm agent with spent window",
+            agent("claude", "calm", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(5)
+                .limits(vec![window(100, 3_600)]),
+            Some(budget(vec![window(100, 3_600)])),
+            None,
+        ),
+        (
+            "failed park",
+            agent("claude", "failed", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(60)
+                .turn_error(10, "API Error: Bad Request"),
+            Some(budget(vec![window(100, 3_600)])),
+            None,
+        ),
+    ] {
+        assert_eq!(arm(&agent, budget.as_ref()), expected, "{label}");
+    }
 }

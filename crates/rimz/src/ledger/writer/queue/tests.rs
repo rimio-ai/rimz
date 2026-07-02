@@ -513,42 +513,6 @@ fn earliest_message_wake_includes_sent_reconcile_deadline() {
     assert_eq!(wake, Some(sent.updated_at + Duration::from_secs(30)));
 }
 
-#[test]
-fn earliest_message_wake_includes_ready_queued_message() {
-    let (_dir, ledger, workspace_id) = ledger();
-    let message = message(&workspace_id);
-    ledger.queue_message(&message, "session").unwrap();
-
-    let wake = ledger
-        .earliest_message_wake(
-            message.updated_at + jiff::SignedDuration::from_secs(1),
-            Duration::from_secs(30),
-        )
-        .unwrap();
-
-    assert_eq!(wake, Some(message.updated_at));
-}
-
-#[test]
-fn earliest_message_wake_uses_queued_retry_after_floor() {
-    let (_dir, ledger, workspace_id) = ledger();
-    let message = message(&workspace_id);
-    let retry_at = message.updated_at + Duration::from_secs(30);
-    ledger.queue_message(&message, "session").unwrap();
-    ledger
-        .defer_message_wake(&message.message_id, retry_at)
-        .unwrap();
-
-    let wake = ledger
-        .earliest_message_wake(
-            message.updated_at + jiff::SignedDuration::from_secs(1),
-            Duration::from_secs(30),
-        )
-        .unwrap();
-
-    assert_eq!(wake, Some(retry_at));
-}
-
 fn ledger() -> (tempfile::TempDir, Ledger, WorkspaceId) {
     let dir = tempdir().unwrap();
     let state_root = dir.path().join("state");

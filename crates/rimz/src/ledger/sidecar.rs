@@ -194,10 +194,22 @@ mod tests {
 
     #[test]
     fn past_ttl_record_is_skipped() {
+        // A missed tombstone ages out on the TTL exactly: a record *at* the
+        // cutoff is still served, one second past it is gone — an off-by-one
+        // in either direction fails one arm.
         let dir = tempdir().unwrap();
-        write_record(dir.path(), &record("sess-1", 1_700_000_000 - TTL_SECS - 1)).unwrap();
+        write_record(dir.path(), &record("sess-at", 1_700_000_000 - TTL_SECS)).unwrap();
+        write_record(
+            dir.path(),
+            &record("sess-past", 1_700_000_000 - TTL_SECS - 1),
+        )
+        .unwrap();
 
-        assert!(read_all_at(dir.path(), 1_700_000_000).is_empty());
+        let ids: Vec<_> = read_all_at(dir.path(), 1_700_000_000)
+            .into_iter()
+            .map(|record| record.agent_id)
+            .collect();
+        assert_eq!(ids, vec!["sess-at".to_owned()]);
     }
 
     #[test]
@@ -228,5 +240,52 @@ mod tests {
             .unwrap();
         drop(file);
         assert_eq!(read_all_at(dir.path(), 1_700_000_000)[0].agent_id, "sess-9");
+    }
+
+    #[test]
+    fn remove_targets_one_key() {
+        let dir = tempdir().unwrap();
+        write_record(dir.path(), &record("sess-1", 1_700_000_000)).unwrap();
+        write_record(dir.path(), &record("sess-2", 1_700_000_000)).unwrap();
+
+        remove::<TestRecord>(dir.path(), "codex", "sess-1").unwrap();
+
+        let ids: Vec<_> = read_all_at(dir.path(), 1_700_000_000)
+            .into_iter()
+            .map(|record| record.agent_id)
+            .collect();
+        assert_eq!(ids, vec!["sess-2".to_owned()]);
+        remove::<TestRecord>(dir.path(), "codex", "sess-1").unwrap();
+    }
+
+    #[test]
+    fn read_one_reads_directly_without_the_parse_cache() {
+        let dir = tempdir().unwrap();
+        write_record(dir.path(), &record("sess-1", 1_700_000_000)).unwrap();
+        assert_eq!(read_all_at(dir.path(), 1_700_000_000)[0].note, "cached");
+
+        let path = path(dir.path(), TestRecord::FILE_PREFIX, "codex", "sess-1");
+        let original = std::fs::read(&path).unwrap();
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let swapped = String::from_utf8(original)
+            .unwrap()
+            .replace("cached", "direct");
+        std::fs::write(&path, swapped).unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_modified(mtime).unwrap();
+        drop(file);
+
+        assert_eq!(
+            read_one::<TestRecord>(dir.path(), "codex", "sess-1")
+                .unwrap()
+                .note,
+            "direct",
+            "direct reads bypass the stat-keyed parse cache"
+        );
+        assert_eq!(
+            read_all_at(dir.path(), 1_700_000_000)[0].note,
+            "cached",
+            "same (mtime, len) still serves the cached parse"
+        );
     }
 }
