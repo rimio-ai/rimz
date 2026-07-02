@@ -118,7 +118,7 @@ fn non_empty(text: &str) -> Option<&str> {
     (!text.is_empty()).then_some(text)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatEntry {
     pub from: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,10 +126,16 @@ pub struct ChatEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<Timestamp>,
     pub text: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub error: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<AskQuestion>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub answers: Vec<AskAnswer>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[cfg(test)]

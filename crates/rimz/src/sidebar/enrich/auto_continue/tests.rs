@@ -156,6 +156,36 @@ fn limit_agent(activity: i64, error_at: i64) -> AgentState {
     agent
 }
 
+fn overloaded_agent(activity: i64, error_at: i64, label: &str) -> AgentState {
+    let mut agent = agent(activity);
+    agent.context = Some(AgentContext {
+        source: "claude".to_owned(),
+        session_name: None,
+        session_preview: None,
+        model_id: None,
+        model_display_name: None,
+        effort: None,
+        thinking_enabled: None,
+        output_style: None,
+        vim_mode: None,
+        agent_version: None,
+        exceeds_200k_tokens: None,
+        cost: None,
+        tokens: None,
+        rate_limits: None,
+        pr: None,
+        account: None,
+        turn_error: Some(AgentTurnError {
+            class: TurnErrorClass::PausedOverloaded,
+            at: ts(error_at),
+            label: Some(label.to_owned()),
+        }),
+        turn_complete: None,
+        observed_at: ts(error_at),
+    });
+    agent
+}
+
 fn live_pane() -> PaneAgent {
     PaneAgent {
         kind: AgentKind::new_unchecked("claude"),
@@ -348,6 +378,41 @@ fn first_overloaded_nudge_waits_from_the_park_time() {
     let record = overloaded_record(1_000, 100, None, 0);
     assert!(!due(&record, 0, 1_059, &[60, 120, 180], 10));
     assert!(due(&record, 0, 1_060, &[60, 120, 180], 10));
+}
+
+#[test]
+fn stalled_stream_park_uses_default_three_minute_retry() {
+    let (_dir, runtime) = temp_runtime();
+    let path = park_path(&runtime);
+    let label = "API Error: Response stalled mid-stream. The response above may be incomplete.";
+    let config = ResumeConfig {
+        auto_continue: true,
+        ..ResumeConfig::default()
+    };
+    assert_eq!(config.auto_continue_text, "continue");
+    let snapshot_at = |now| {
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            Vec::new(),
+            vec![overloaded_agent(100, 1_000, label)],
+            ts(now),
+        );
+        snapshot.now = ts(now);
+        snapshot.agent_panes = vec![live_pane()];
+        snapshot
+    };
+
+    resume_parked(&snapshot_at(1_179), &runtime, &config, &[]);
+    assert_eq!(
+        read_park(&path),
+        Some(overloaded_record(1_000, 100, None, 0))
+    );
+
+    resume_parked(&snapshot_at(1_180), &runtime, &config, &[]);
+    assert_eq!(
+        read_park(&path),
+        Some(overloaded_record(1_000, 100, Some(1_180), 1))
+    );
 }
 
 #[test]

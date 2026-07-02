@@ -3,6 +3,7 @@ use super::binding_select::{
 };
 use super::lifecycle::append_lifecycle_event;
 use super::lifecycle::fill_root_launch_identity;
+use super::lifecycle::handle_lifecycle_hook;
 use super::proctree::matches_agent_kind;
 use BindingRejectReason::*;
 use BindingSelectionMethod::{ClientFocus, SingleCandidate, TabFocus};
@@ -90,6 +91,38 @@ fn root_observation() -> AgentLifecycleObservation {
         Some(AgentSessionId::from("sess-1")),
         LifecycleSignal::Registered,
     )
+}
+
+fn hooks_test_ledger() -> (tempfile::TempDir, rimz::Ledger) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let workspace_id =
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/hooks-test"));
+    let paths = rimz::ledger::StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    let runtime = rimz::ledger::RuntimePaths::under(workspace_id, dir.path()).unwrap();
+    let ledger = rimz::Ledger::open(paths, runtime).unwrap();
+    (dir, ledger)
+}
+
+fn hooks_test_workspace(worktree_branch: Option<&str>) -> rimz::ResolvedWorkspace {
+    rimz::ResolvedWorkspace {
+        workspace_id: rimz::ids::WorkspaceId::from_project_root(std::path::Path::new(
+            "/tmp/hooks-test",
+        )),
+        project_root: std::path::PathBuf::from("/tmp/hooks-test"),
+        root_class: rimz::workspace::RootClass::Directory,
+        worktree_root: std::path::PathBuf::from("/tmp/hooks-test"),
+        worktree_branch: worktree_branch.map(ToOwned::to_owned),
+        session_name: "hooks-test".to_owned(),
+        mux_hint: None,
+    }
+}
+
+fn hooks_test_globals() -> crate::cli::GlobalFlags {
+    crate::cli::GlobalFlags {
+        mux: None,
+        root: None,
+        color: crate::cli::ColorWhen::Never,
+    }
 }
 
 fn launch_identity_env(
@@ -181,6 +214,43 @@ fn lifecycle_append_gate_keeps_durable_truth_for_progress_signals() {
             Some(transition(TransitionKind::Normal, true))
         ),
         "pre-tool proof-of-work is durable when it closes an open compaction bracket"
+    );
+}
+
+#[test]
+fn stop_failure_records_turn_error_transcript_entry() {
+    let (_dir, ledger) = hooks_test_ledger();
+    let workspace = hooks_test_workspace(Some("main"));
+    let globals = hooks_test_globals();
+
+    handle_lifecycle_hook(
+        &workspace,
+        &ledger,
+        &rimz::agents::ClaudeAdapter,
+        "StopFailure",
+        &serde_json::json!({
+            "session_id": "sess-1",
+            "error": "overloaded",
+            "last_assistant_message": "API Error: Response stalled mid-stream. The response above may be incomplete."
+        }),
+        &globals,
+    )
+    .unwrap();
+
+    let entries = rimz::ledger::transcript_log::read_all(ledger.paths()).unwrap();
+    let [entry] = entries.as_slice() else {
+        panic!("expected one transcript entry, got {entries:?}");
+    };
+    assert_eq!(
+        entry.entry,
+        rimz::ledger::transcript_log::TranscriptKind::Error
+    );
+    assert_eq!(entry.kind.as_str(), "claude");
+    assert_eq!(entry.agent_id.as_str(), "sess-1");
+    assert_eq!(entry.channel.as_deref(), Some("main"));
+    assert_eq!(
+        entry.text,
+        "API Error: Response stalled mid-stream. The response above may be incomplete."
     );
 }
 

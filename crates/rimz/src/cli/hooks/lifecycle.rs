@@ -776,6 +776,7 @@ fn manage_agent_context(ctx: AgentContextHook<'_>) {
     }
     if let Some(context_agent_id) = payload_context_agent_id(payload) {
         merge_agent_context_sidecars(ContextSidecarInput {
+            workspace,
             ledger,
             agent,
             event_name,
@@ -801,6 +802,7 @@ fn manage_agent_context(ctx: AgentContextHook<'_>) {
 }
 
 struct ContextSidecarInput<'a> {
+    workspace: &'a ResolvedWorkspace,
     ledger: &'a Ledger,
     agent: &'a dyn AgentAdapter,
     event_name: &'a str,
@@ -813,6 +815,7 @@ struct ContextSidecarInput<'a> {
 
 fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     let ContextSidecarInput {
+        workspace,
         ledger,
         agent,
         event_name,
@@ -824,16 +827,34 @@ fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     } = input;
     let mut turn_error_updated = false;
     if let Some(marker) = observed_turn_error {
-        turn_error_updated |=
-            merge_turn_error_marker(ledger, agent, event_name, context_agent_id, marker);
+        turn_error_updated |= merge_turn_error_marker_and_transcript(
+            workspace,
+            ledger,
+            agent,
+            event_name,
+            context_agent_id,
+            marker,
+        );
     } else if let Some(marker) = agent.observe_turn_error_from_hook(event_name, payload) {
-        turn_error_updated |=
-            merge_turn_error_marker(ledger, agent, event_name, context_agent_id, marker);
+        turn_error_updated |= merge_turn_error_marker_and_transcript(
+            workspace,
+            ledger,
+            agent,
+            event_name,
+            context_agent_id,
+            marker,
+        );
     } else if turn_error_refresh_event(event_name)
         && let Some(marker) = agent.observe_turn_error(payload)
     {
-        turn_error_updated |=
-            merge_turn_error_marker(ledger, agent, event_name, context_agent_id, marker);
+        turn_error_updated |= merge_turn_error_marker_and_transcript(
+            workspace,
+            ledger,
+            agent,
+            event_name,
+            context_agent_id,
+            marker,
+        );
     }
     if turn_error_updated {
         let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
@@ -1134,6 +1155,66 @@ fn merge_observed_cost(
 
 fn turn_error_refresh_event(event_name: &str) -> bool {
     matches!(event_name, "Stop")
+}
+
+fn merge_turn_error_marker_and_transcript(
+    workspace: &ResolvedWorkspace,
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    context_agent_id: &str,
+    marker: rimz::agents::AgentTurnError,
+) -> bool {
+    let updated =
+        merge_turn_error_marker(ledger, agent, event_name, context_agent_id, marker.clone());
+    if updated {
+        record_turn_error_transcript(
+            workspace,
+            ledger,
+            agent,
+            event_name,
+            context_agent_id,
+            &marker,
+        );
+    }
+    updated
+}
+
+fn record_turn_error_transcript(
+    workspace: &ResolvedWorkspace,
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    context_agent_id: &str,
+    marker: &rimz::agents::AgentTurnError,
+) {
+    let entry = rimz::ledger::transcript_log::TranscriptEntry {
+        at: marker.at,
+        kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+        agent_id: rimz::ids::AgentSessionId::from(context_agent_id),
+        channel: workspace.worktree_branch.clone(),
+        name: None,
+        profile: None,
+        role: None,
+        entry: rimz::ledger::transcript_log::TranscriptKind::Error,
+        request_id: None,
+        from: None,
+        text: marker
+            .label
+            .clone()
+            .unwrap_or_else(|| "provider API error".to_owned()),
+        questions: Vec::new(),
+        answers: Vec::new(),
+    };
+    if let Err(err) = rimz::ledger::transcript_log::append(ledger.paths(), &entry) {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = %event_name,
+            session = %context_agent_id,
+            error = %err,
+            "lifecycle: failed to record turn-error transcript entry",
+        );
+    }
 }
 
 fn merge_turn_error_marker(

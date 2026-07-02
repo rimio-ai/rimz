@@ -425,6 +425,46 @@ pub enum TurnErrorClass {
     Failed,
 }
 
+impl TurnErrorClass {
+    /// Classify a capped upstream provider-error label into the display and
+    /// auto-resume bucket shared by every adapter.
+    pub(crate) fn classify_label(label: Option<&str>) -> Self {
+        let Some(label) = label else {
+            return Self::Failed;
+        };
+        let lower = label.to_ascii_lowercase();
+        if lower.contains("spend limit") {
+            Self::PausedSpendLimit
+        } else if lower.contains("usage limit")
+            || lower.contains("session limit")
+            || lower.contains("rate limit")
+            || lower.contains("quota")
+            || lower.contains("too many requests")
+        {
+            Self::PausedRateLimit
+        } else if is_transient_server_error(&lower) {
+            Self::PausedOverloaded
+        } else {
+            Self::Failed
+        }
+    }
+}
+
+fn is_transient_server_error(lower: &str) -> bool {
+    lower.contains("overloaded")
+        || lower.contains("server is busy")
+        || lower.contains("internal server error")
+        || lower.contains("server error")
+        || lower.contains("service unavailable")
+        || lower.contains("bad gateway")
+        || lower.contains("gateway timeout")
+        || lower.contains("stalled")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("connection error")
+        || lower.contains("network error")
+}
+
 /// A turn that ended on a provider API error. Provider detectors read their
 /// hook payload or local transcript/rollout tail and normalize the death
 /// certificate into this marker. The projection compares [`at`](Self::at)
@@ -558,6 +598,12 @@ mod tests {
                 "paused_spend_limit",
                 "You've hit your monthly spend limit",
             ),
+            (
+                TurnErrorClass::PausedOverloaded,
+                "paused_overloaded",
+                "API Error: Overloaded",
+            ),
+            (TurnErrorClass::Failed, "failed", "API Error: Bad Request"),
         ] {
             let error = AgentTurnError {
                 class,
@@ -576,5 +622,44 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(legacy.class, TurnErrorClass::Failed);
+    }
+
+    #[test]
+    fn turn_error_label_classifier_maps_provider_labels() {
+        for (label, class) in [
+            (
+                "You've hit your monthly spend limit.",
+                TurnErrorClass::PausedSpendLimit,
+            ),
+            (
+                "You've hit your session limit · resets 10:50am (UTC)",
+                TurnErrorClass::PausedRateLimit,
+            ),
+            (
+                "API Error: rate limit exceeded",
+                TurnErrorClass::PausedRateLimit,
+            ),
+            ("API Error: Server Error", TurnErrorClass::PausedOverloaded),
+            (
+                "API Error: Response stalled mid-stream. The response above may be incomplete.",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "API Error: request timed out",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "API Error: connection error",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            ("API Error: Bad Request", TurnErrorClass::Failed),
+        ] {
+            assert_eq!(
+                TurnErrorClass::classify_label(Some(label)),
+                class,
+                "{label}"
+            );
+        }
+        assert_eq!(TurnErrorClass::classify_label(None), TurnErrorClass::Failed);
     }
 }

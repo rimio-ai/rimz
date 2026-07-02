@@ -69,6 +69,7 @@ struct Identity {
     name: Option<String>,
     profile: Option<String>,
     role: Option<String>,
+    last_at: jiff::Timestamp,
     rich: bool,
 }
 
@@ -91,15 +92,17 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         bail!("no transcripts on disk yet");
     }
     let identities = build_identities(&entries);
+    let live_root_keys = live_root_agent_keys(&workspace);
     let scope = resolve_scope(
         args.target.as_deref(),
         args.worktree.as_deref(),
         current.as_deref(),
         &identities,
+        &live_root_keys,
     )?;
     let filtered: Vec<&TranscriptEntry> = entries
         .iter()
-        .filter(|entry| channel_matches(entry.channel.as_deref(), scope.channel_filter.as_deref()))
+        .filter(|entry| entry_in_scope(entry, &scope))
         .collect();
     if filtered.is_empty() {
         bail!("no transcripts on disk for this scope yet");
@@ -130,6 +133,29 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         render_chat(scope.channel.as_deref(), &entries, &tz)?;
     }
     Ok(())
+}
+
+fn live_root_agent_keys(workspace: &rimz::ResolvedWorkspace) -> BTreeSet<AgentKey> {
+    crate::cli::open_ledger(workspace)
+        .ok()
+        .and_then(|ledger| ledger.snapshot_cached().ok())
+        .map(|snapshot| {
+            snapshot
+                .agents
+                .into_iter()
+                .filter(|agent| agent.parent_agent_id.is_none())
+                .map(|agent| (agent.kind, agent.agent_id))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn entry_in_scope(entry: &TranscriptEntry, scope: &Scope) -> bool {
+    scope
+        .focus_keys
+        .as_ref()
+        .is_some_and(|focus| focus.contains(&entry_key(entry)))
+        || channel_matches(entry.channel.as_deref(), scope.channel_filter.as_deref())
 }
 
 fn compare_optional_timestamps(
@@ -169,6 +195,7 @@ fn chat_entry_for_log_entry(
             to: Some(receiver),
             at: Some(entry.at),
             text: entry.text.clone(),
+            error: false,
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
         },
@@ -177,6 +204,7 @@ fn chat_entry_for_log_entry(
             to: Some(receiver),
             at: Some(entry.at),
             text: entry.text.clone(),
+            error: false,
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
         },
@@ -185,14 +213,25 @@ fn chat_entry_for_log_entry(
             to: None,
             at: Some(entry.at),
             text: entry.text.clone(),
+            error: false,
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
+        },
+        TranscriptKind::Error => rimz::agents::ChatEntry {
+            from: receiver,
+            to: None,
+            at: Some(entry.at),
+            text: entry.text.clone(),
+            error: true,
+            questions: Vec::new(),
+            answers: Vec::new(),
         },
         TranscriptKind::Answer => rimz::agents::ChatEntry {
             from: entry.from.clone().unwrap_or_else(|| "resolver".to_owned()),
             to: Some(receiver),
             at: Some(entry.at),
             text: entry.text.clone(),
+            error: false,
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
         },
@@ -295,11 +334,13 @@ fn build_identities(entries: &[TranscriptEntry]) -> HashMap<AgentKey, Identity> 
             name: entry.name.clone(),
             profile: entry.profile.clone(),
             role: entry.role.clone(),
+            last_at: entry.at,
             rich: entry.role.is_some() || entry.name.is_some() || entry.profile.is_some(),
         };
         identities
             .entry(entry_key(entry))
             .and_modify(|existing: &mut Identity| {
+                existing.last_at = existing.last_at.max(candidate.last_at);
                 if existing.channel.is_none() {
                     existing.channel = candidate.channel.clone();
                 }
@@ -321,6 +362,7 @@ fn resolve_scope(
     worktree: Option<&str>,
     current: Option<&str>,
     identities: &HashMap<AgentKey, Identity>,
+    live_root_keys: &BTreeSet<AgentKey>,
 ) -> Result<Scope> {
     match target {
         None => {
@@ -363,14 +405,20 @@ fn resolve_scope(
         }
         Some(raw) => {
             let (selector, inline) = split_agent_target(raw)?;
-            let explicit_or_current = reconcile_channel(raw, inline, worktree, current)?;
-            let matches = matching_identities(selector, explicit_or_current.as_deref(), identities);
-            let (key, identity) = match matches.as_slice() {
-                [(key, identity)] => (*key, *identity),
-                [] => bail!("no agent matches target `{raw}` in the transcript log"),
-                _ => return Err(ambiguous_target(raw, &matches)),
+            let exact_session = exact_session_selector(selector, identities);
+            let requested_channel = reconcile_channel(raw, inline, worktree, current)?;
+            let resolution_channel = (!exact_session)
+                .then_some(requested_channel.as_deref())
+                .flatten();
+            let matches = matching_identities(selector, resolution_channel, identities);
+            let Some((key, identity)) = select_identity_match(&matches, live_root_keys) else {
+                bail!("no agent matches target `{raw}` in the transcript log");
             };
-            let channel = explicit_or_current.or_else(|| identity.channel.clone());
+            let channel = if exact_session {
+                identity.channel.clone()
+            } else {
+                requested_channel.or_else(|| identity.channel.clone())
+            };
             let include_channel = channel.is_none();
             let focus = Some(render_handle(
                 &identity.base_handle,
@@ -430,6 +478,16 @@ fn matching_identities<'a>(
     identities: &'a HashMap<AgentKey, Identity>,
 ) -> Vec<(&'a AgentKey, &'a Identity)> {
     let selector = selector.strip_prefix('@').unwrap_or(selector);
+    let mut exact: Vec<_> = identities
+        .iter()
+        .filter(|(key, _)| key.1.as_str() == selector)
+        .collect();
+    if !exact.is_empty() {
+        exact.sort_by(|left, right| {
+            candidate_label(left.0, left.1).cmp(&candidate_label(right.0, right.1))
+        });
+        return exact;
+    }
     let wanted_handle = format!("@{selector}");
     let mut matches: Vec<_> = identities
         .iter()
@@ -450,13 +508,30 @@ fn matching_identities<'a>(
     matches
 }
 
-fn ambiguous_target(raw: &str, matches: &[(&AgentKey, &Identity)]) -> anyhow::Error {
-    let candidates = matches
-        .iter()
-        .map(|(key, identity)| candidate_label(key, identity))
-        .collect::<Vec<_>>()
-        .join(", ");
-    anyhow::anyhow!("target `{raw}` matched multiple agents in transcript log: {candidates}")
+fn exact_session_selector(selector: &str, identities: &HashMap<AgentKey, Identity>) -> bool {
+    let selector = selector.strip_prefix('@').unwrap_or(selector);
+    identities.keys().any(|key| key.1.as_str() == selector)
+}
+
+fn select_identity_match<'a>(
+    matches: &[(&'a AgentKey, &'a Identity)],
+    live_root_keys: &BTreeSet<AgentKey>,
+) -> Option<(&'a AgentKey, &'a Identity)> {
+    let pool: Vec<_> = if matches.iter().any(|(key, _)| live_root_keys.contains(*key)) {
+        matches
+            .iter()
+            .copied()
+            .filter(|(key, _)| live_root_keys.contains(*key))
+            .collect()
+    } else {
+        matches.to_vec()
+    };
+    pool.into_iter().max_by(|left, right| {
+        left.1
+            .last_at
+            .cmp(&right.1.last_at)
+            .then_with(|| left.0.1.as_str().cmp(right.0.1.as_str()))
+    })
 }
 
 fn candidate_label(key: &AgentKey, identity: &Identity) -> String {
@@ -623,7 +698,11 @@ fn render_chat_to(
             write_ask_card(out, entry, answer)?;
             last_group = None;
         } else {
-            write_body_lines(out, &entry.chat.text)?;
+            if entry.chat.error {
+                write_body_lines_with(out, &entry.chat.text, Some(render::palette::ALARM))?;
+            } else {
+                write_body_lines(out, &entry.chat.text)?;
+            }
             last_group = Some(GroupState::new(entry, grouped, entry_date));
         }
         first_entry = false;
@@ -759,18 +838,22 @@ fn paint_handle(handle: &str, grouped: bool, tones: &mut AgentTones) -> String {
 }
 
 fn write_body_lines(out: &mut impl Write, text: &str) -> Result<()> {
+    write_body_lines_with(out, text, None)
+}
+
+fn write_body_lines_with(
+    out: &mut impl Write,
+    text: &str,
+    style: Option<anstyle::Style>,
+) -> Result<()> {
     for line in text.lines() {
         if line.is_empty() {
             writeln!(out)?;
         } else {
-            writeln!(out, "{BODY_INDENT}{}", paint_mentions(line))?;
+            writeln!(out, "{BODY_INDENT}{}", paint_mentions_with(line, style))?;
         }
     }
     Ok(())
-}
-
-fn paint_mentions(line: &str) -> String {
-    paint_mentions_with(line, None)
 }
 
 fn paint_mentions_with(line: &str, base_style: Option<anstyle::Style>) -> String {
@@ -1483,6 +1566,9 @@ fn print_json(value: &impl Serialize) -> Result<()> {
 }
 
 #[cfg(test)]
+mod retry_on_error;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1513,6 +1599,7 @@ mod tests {
                 to: to.map(ToOwned::to_owned),
                 at: Some(ts(at)),
                 text: text.to_owned(),
+                error: kind == TranscriptKind::Error,
                 questions: Vec::new(),
                 answers: Vec::new(),
             },
@@ -1720,7 +1807,7 @@ mod tests {
 
     #[test]
     fn mention_painting_highlights_agents_and_channels() {
-        let raw = paint_mentions("ping @codex in (#feat-auth). keep email@host plain");
+        let raw = paint_mentions_with("ping @codex in (#feat-auth). keep email@host plain", None);
 
         assert!(raw.contains("\u{1b}["), "{raw:?}");
         assert!(raw.contains("@codex"), "{raw}");

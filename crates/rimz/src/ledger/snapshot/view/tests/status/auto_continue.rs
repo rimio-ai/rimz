@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
-use crate::agents::{AccountBudget, ResumeArm, resume_park};
+use crate::agents::{AccountBudget, ResumeArm, TurnErrorClass, resume_park};
 
 /// The reset deadline the producer would durably arm for one agent this frame, or
 /// `None` when there is nothing to arm. Mirrors what `sidebar::enrich`
@@ -184,6 +184,26 @@ fn arms_a_server_error_park() {
         .worktree("/repo/main")
         .active_ago(60)
         .overloaded_turn_error(10, temporary_500);
+    assert_eq!(
+        arm(&parked, None),
+        Some(ResumeArm::Overloaded {
+            overloaded_at: ago(10)
+        })
+    );
+}
+
+#[test]
+fn arms_a_stalled_stream_park() {
+    const STALL_LABEL: &str =
+        "API Error: Response stalled mid-stream. The response above may be incomplete.";
+    let parked = agent("claude", "busy", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .active_ago(60)
+        .turn_error_class(
+            10,
+            STALL_LABEL,
+            TurnErrorClass::classify_label(Some(STALL_LABEL)),
+        );
     assert_eq!(
         arm(&parked, None),
         Some(ResumeArm::Overloaded {

@@ -261,7 +261,7 @@ The store exposes `list()` (live records) and `list_pending()` (`Queued` records
 
 Routing text to an agent is the write side; the transcript log is the durable record of the resulting conversation, and `rimz transcript` reads it back as a chat timeline. The log is Rimz-owned, distinct from a provider's native session files, so ended agents, past channels, and their asks and answers stay visible after those native files rotate away or leave the live snapshot.
 
-Hook and resolver paths append entries to `transcript/<bucket-start>.jsonl`, append-only and under the workspace lock. `[transcript] file_days` sets the bucket width for file-size control ([configuration.md](../../reference/configuration.md)); buckets are never pruned, and reads sort by recorded timestamp, so a bucket boundary carries no ordering meaning. Each entry stores a kind, the receiving agent's identity and channel, a timestamp, the text, and the structured `from`, `questions`, or `answers` its kind needs. Five kinds cover the conversation surface:
+Hook and resolver paths append entries to `transcript/<bucket-start>.jsonl`, append-only and under the workspace lock. `[transcript] file_days` sets the bucket width for file-size control ([configuration.md](../../reference/configuration.md)); buckets are never pruned, and reads sort by recorded timestamp, so a bucket boundary carries no ordering meaning. Each entry stores a kind, the receiving agent's identity and channel, a timestamp, the text, and the structured `from`, `questions`, or `answers` its kind needs. Six kinds cover the conversation surface:
 
 | Kind | Records | Reads back as |
 | --- | --- | --- |
@@ -270,10 +270,11 @@ Hook and resolver paths append entries to `transcript/<bucket-start>.jsonl`, app
 | `Assistant` | a root turn's final assistant message | `@receiver: text` |
 | `Ask` | a native question ask; its `questions` carry option labels and descriptions | the agent's question |
 | `Answer` | the effective answer, carrying `answers` choices | `you` or the resolver to the agent |
+| `Error` | a hook-path provider error marker newly merged into `AgentContext.turn_error` | `@receiver: error text` with error styling |
 
-A delivery becomes a `Message` entry when the receiver's turn-start hook parses the `from @sender` prefix ([Sender prefix](#sender-prefix)); the delivery queue record stays bookkeeping, never a transcript source. A peer-opened turn also records the receiver's reply, because that reply is its own `Assistant` entry.
+A delivery becomes a `Message` entry when the receiver's turn-start hook parses the `from @sender` prefix ([Sender prefix](#sender-prefix)); the delivery queue record stays bookkeeping, never a transcript source. A peer-opened turn also records the receiver's reply, because that reply is its own `Assistant` entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh). Statusline-only detections stay card/sidebar enrichment, because that path is lock-free and does not write the transcript log.
 
-`rimz transcript` projects these entries into one timestamp-ordered chat log. A channel target (`#channel`, `@all#channel`, or a bare invocation in a worktree) shows every agent in the lane; a single-agent target filters to that agent's sent and received lines. The command surface, flags, and rendered appearance are [cli/agents.md → Inspect transcripts](../../reference/cli/agents.md#inspect-transcripts).
+`rimz transcript` projects these entries into one timestamp-ordered chat log. A channel target (`#channel`, `@all#channel`, or a bare invocation in a worktree) shows every agent in the lane; a single-agent target filters to that agent's sent and received lines. Exact session ids resolve across channels; handle targets prefer live sessions in the current room, then the most recent transcript activity. The command surface, flags, and rendered appearance are [cli/agents.md → Inspect transcripts](../../reference/cli/agents.md#inspect-transcripts).
 
 Two nearby reads are not this log. Supervised-run streaming (`agents wait --stream`, `--output-format stream-json`) tails the provider-native transcript through each adapter's `parse_transcript_messages` ([harness.md → Supervised runs](./harness.md#supervised-runs)), and the context-fill and spend gauges read those same native files ([agent.md → Enrichment](./agent.md#enrichment)). The audit trail below is a third log: operational `message.*` events that carry no message content.
 

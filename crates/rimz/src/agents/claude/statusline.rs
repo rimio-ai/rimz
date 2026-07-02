@@ -197,37 +197,6 @@ pub(crate) fn cap_turn_error_label(text: &str) -> Option<String> {
     Some(text.chars().take(TURN_ERROR_LABEL_MAX).collect())
 }
 
-pub(crate) fn classify_turn_error_label(label: Option<&str>) -> TurnErrorClass {
-    let Some(label) = label else {
-        return TurnErrorClass::Failed;
-    };
-    let lower = label.to_ascii_lowercase();
-    if lower.contains("spend limit") {
-        TurnErrorClass::PausedSpendLimit
-    } else if lower.contains("usage limit")
-        || lower.contains("session limit")
-        || lower.contains("rate limit")
-        || lower.contains("quota")
-        || lower.contains("too many requests")
-    {
-        TurnErrorClass::PausedRateLimit
-    } else if is_transient_server_error(&lower) {
-        TurnErrorClass::PausedOverloaded
-    } else {
-        TurnErrorClass::Failed
-    }
-}
-
-fn is_transient_server_error(lower: &str) -> bool {
-    lower.contains("overloaded")
-        || lower.contains("server is busy")
-        || lower.contains("internal server error")
-        || lower.contains("server error")
-        || lower.contains("service unavailable")
-        || lower.contains("bad gateway")
-        || lower.contains("gateway timeout")
-}
-
 /// Detect a turn that died on a provider API error with no `Stop` hook to
 /// record it. Claude aborts such a turn by writing an `assistant` transcript
 /// entry flagged `isApiErrorMessage: true` (followed by a `system` /
@@ -273,7 +242,7 @@ pub(crate) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
         {
             let label = turn_error_label(&value);
             return Some(AgentTurnError {
-                class: classify_turn_error_label(label.as_deref()),
+                class: TurnErrorClass::classify_label(label.as_deref()),
                 at,
                 label,
             });
@@ -729,6 +698,14 @@ mod tests {
             detect_turn_error(&entry("API Error: Server Error"))
                 .unwrap()
                 .class,
+            TurnErrorClass::PausedOverloaded
+        );
+        assert_eq!(
+            detect_turn_error(&entry(
+                "API Error: Response stalled mid-stream. The response above may be incomplete."
+            ))
+            .unwrap()
+            .class,
             TurnErrorClass::PausedOverloaded
         );
         assert_eq!(

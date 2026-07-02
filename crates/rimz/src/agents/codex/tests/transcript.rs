@@ -189,6 +189,20 @@ fn turn_error_detector_maps_known_error_shapes() {
         crate::agents::TurnErrorClass::PausedOverloaded
     );
 
+    let stalled = json!({
+        "timestamp": "2026-06-11T07:18:30.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "stream_error",
+            "message": "API Error: Response stalled mid-stream. The response above may be incomplete."
+        }
+    })
+    .to_string();
+    assert_eq!(
+        detect_turn_error(&stalled).expect("stalled stream").class,
+        crate::agents::TurnErrorClass::PausedOverloaded
+    );
+
     let transient = json!({
         "timestamp": "2026-06-11T07:19:00.000Z",
         "type": "event_msg",

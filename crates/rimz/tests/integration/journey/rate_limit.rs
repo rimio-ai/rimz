@@ -73,6 +73,49 @@ fn rate_limit_recovery_renders_park_and_reset_countdown() {
     );
 }
 
+#[test]
+fn stalled_stream_error_renders_backoff_park() {
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let room = RoomHarness::launch_wide(&env, MuxName::Tmux);
+
+    room.onboard(&["claude"]);
+    room.agent_hook(
+        "claude",
+        &session_start_at(
+            "sess-stall",
+            "Opus 4.8",
+            "high",
+            env.project_root.display().to_string(),
+            Some("main"),
+        ),
+    );
+    room.agent_hook(
+        "claude",
+        &user_prompt_submit("sess-stall", "finish release notes"),
+    );
+    room.agent_hook_in_room_runtime(
+        "claude",
+        &json!({
+            "hook_event_name": "StopFailure",
+            "session_id": "sess-stall",
+            "error": "overloaded",
+            "last_assistant_message": "API Error: Response stalled mid-stream. The response above may be incomplete."
+        }),
+    );
+
+    let screen = room.wait_for(
+        |s| s.contains("claude") && s.contains('⏸') && s.contains("⏸︎ 1"),
+        SETTLE,
+    );
+    assert!(
+        screen.contains("claude") && screen.contains('⏸') && screen.contains("⏸︎ 1"),
+        "stalled stream should park the row for retry:\n{screen}"
+    );
+}
+
 fn feed_statusline(room: &RoomHarness<'_>, session_id: &str, used: u8, resets_at: Timestamp) {
     let out = room.run_statusline_feed(
         "claude",

@@ -772,7 +772,7 @@ impl AgentAdapter for ClaudeAdapter {
         let class = match error {
             "rate_limit" => TurnErrorClass::PausedRateLimit,
             "overloaded" => TurnErrorClass::PausedOverloaded,
-            _ => statusline::classify_turn_error_label(label.as_deref()),
+            _ => TurnErrorClass::classify_label(label.as_deref()),
         };
         Some(AgentTurnError {
             class,

@@ -663,20 +663,28 @@ impl AgentState {
         if self.status != AgentStatus::Running {
             return self.status;
         }
-        let Some(error) = display_turn_error(
-            self.status,
-            self.context.as_ref(),
-            self.last_activity,
-            self.turn_started_at,
-        ) else {
+        let Some((class, _)) = self.displayed_turn_error() else {
             return self.status;
         };
-        match effective_turn_error_class(error) {
+        match class {
             TurnErrorClass::PausedRateLimit
             | TurnErrorClass::PausedSpendLimit
             | TurnErrorClass::PausedOverloaded => AgentStatus::Paused,
             TurnErrorClass::Failed => self.status,
         }
+    }
+
+    /// Provider API error currently explaining this row's displayed state. The
+    /// returned class includes legacy label remapping, and the label is the
+    /// upstream text to surface on user-facing cards.
+    pub fn displayed_turn_error(&self) -> Option<(TurnErrorClass, Option<&str>)> {
+        let error = display_turn_error(
+            self.status,
+            self.context.as_ref(),
+            self.last_activity,
+            self.turn_started_at,
+        )?;
+        Some((effective_turn_error_class(error), error.label.as_deref()))
     }
 
     /// Tokens currently occupying the window: the folded statusline breakdown,
@@ -938,6 +946,41 @@ mod tests {
         let mut running = test_agent(AgentStatus::Running, 1_000);
         running.context = Some(context_error(TurnErrorClass::Failed, 1_010));
         assert_eq!(running.effective_status(), AgentStatus::Running);
+    }
+
+    #[test]
+    fn displayed_turn_error_projects_active_running_marker() {
+        let mut agent = test_agent(AgentStatus::Running, 1_000);
+        agent.context = Some(context_error(TurnErrorClass::PausedOverloaded, 1_010));
+
+        assert_eq!(
+            agent.displayed_turn_error(),
+            Some((TurnErrorClass::PausedOverloaded, Some("provider parked")))
+        );
+    }
+
+    #[test]
+    fn displayed_turn_error_projects_terminal_marker_in_current_turn() {
+        let mut agent = test_agent(AgentStatus::Failed, 1_100);
+        agent.turn_started_at = Some(Timestamp::from_second(1_000).unwrap());
+        agent.context = Some(context_error(TurnErrorClass::Failed, 1_010));
+
+        assert_eq!(
+            agent.displayed_turn_error(),
+            Some((TurnErrorClass::Failed, Some("provider parked")))
+        );
+    }
+
+    #[test]
+    fn displayed_turn_error_self_clears_when_marker_is_stale() {
+        let mut running = test_agent(AgentStatus::Running, 1_100);
+        running.context = Some(context_error(TurnErrorClass::PausedOverloaded, 1_000));
+        assert_eq!(running.displayed_turn_error(), None);
+
+        let mut failed = test_agent(AgentStatus::Failed, 1_100);
+        failed.turn_started_at = Some(Timestamp::from_second(1_050).unwrap());
+        failed.context = Some(context_error(TurnErrorClass::Failed, 1_000));
+        assert_eq!(failed.displayed_turn_error(), None);
     }
 
     /// The bands come from `[theme.display.context_meter]`, so a custom set moves every

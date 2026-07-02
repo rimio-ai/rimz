@@ -183,9 +183,14 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
     kv.push("session", render::cell(agent.agent_id.to_string()));
     kv.push(
         "status",
-        render::cell(agent_status_label(agent))
-            .fg(render::status::agent(agent.status, agent.phase)),
+        render::cell(agent_status_label(agent)).fg(agent_status_style(agent)),
     );
+    if let Some((_, label)) = agent.displayed_turn_error() {
+        kv.push(
+            "error",
+            render::cell(label.unwrap_or("provider API error")).fg(render::palette::ALARM),
+        );
+    }
     if let Some(ask) = ask.as_ref() {
         kv.push(
             "ask",
@@ -771,8 +776,7 @@ fn print_run_line(run: &RunRecord) -> std::io::Result<()> {
 fn agent_row(agent: &AgentState, peers: &[&AgentState], now: jiff::Timestamp) -> Vec<render::Cell> {
     vec![
         render::cell(rimz::target::agent_handle(agent, peers, false)).fg(render::palette::ACCENT),
-        render::cell(agent_status_label(agent))
-            .fg(render::status::agent(agent.status, agent.phase)),
+        render::cell(agent_status_label(agent)).fg(agent_status_style(agent)),
         render::cell(worktree_label(agent)).dash(),
         model_cell(agent),
         context_cell(agent),
@@ -844,10 +848,34 @@ fn agent_name(agent: &AgentState) -> &str {
 }
 
 fn agent_status_label(agent: &AgentState) -> String {
-    if agent.phase == rimz::agents::TurnPhase::Idle {
-        agent.status.as_str().to_owned()
+    let (status, phase) = agent_status_projection(agent);
+    if phase == rimz::agents::TurnPhase::Idle {
+        status.as_str().to_owned()
     } else {
-        format!("{}:{}", agent.status.as_str(), phase_label(agent.phase))
+        format!("{}:{}", status.as_str(), phase_label(phase))
+    }
+}
+
+fn agent_status_style(agent: &AgentState) -> anstyle::Style {
+    let (status, phase) = agent_status_projection(agent);
+    render::status::agent(status, phase)
+}
+
+fn agent_status_projection(
+    agent: &AgentState,
+) -> (rimz::agents::AgentStatus, rimz::agents::TurnPhase) {
+    match agent.displayed_turn_error().map(|(class, _)| class) {
+        Some(rimz::agents::TurnErrorClass::PausedRateLimit)
+        | Some(rimz::agents::TurnErrorClass::PausedSpendLimit)
+        | Some(rimz::agents::TurnErrorClass::PausedOverloaded) => (
+            rimz::agents::AgentStatus::Paused,
+            rimz::agents::TurnPhase::Idle,
+        ),
+        Some(rimz::agents::TurnErrorClass::Failed) => (
+            rimz::agents::AgentStatus::Failed,
+            rimz::agents::TurnPhase::Idle,
+        ),
+        None => (agent.status, agent.phase),
     }
 }
 

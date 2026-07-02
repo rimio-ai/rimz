@@ -263,6 +263,26 @@ fn transient_server_error_stays_paused_past_the_stall_window() {
     );
 }
 
+#[test]
+fn stalled_stream_error_stays_paused_past_the_stall_window() {
+    let label = "API Error: Response stalled mid-stream. The response above may be incomplete.";
+    let session = agent("claude", "busy-claude", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(default_stall_secs() + 3_600)
+        .overloaded_turn_error(10, label);
+
+    let snapshot = room(Vec::new(), vec![session])
+        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+    let row = row(&snapshot, "busy-claude");
+    assert_eq!(
+        row.status(),
+        Some(AgentStatus::Paused),
+        "a stalled stream parks for backoff instead of falling through to the stall failure"
+    );
+}
+
 // ── The precedence ladder, pinned as an ordering ─────────────────────────────
 //
 // docs/internals/agents/agent.md commits to a strict order among the derived display

@@ -376,14 +376,14 @@ fn transcript_exact_session_target_filters_same_handle_peers() {
     assert!(!one.contains("prompt from b"), "{one}");
     assert!(!one.contains("answer from b"), "{one}");
 
-    let ambiguous = env
-        .rimz()
-        .args(["transcript", &format!("@claude#{branch}")])
-        .output()
-        .expect("spawn transcript");
-    assert!(!ambiguous.status.success(), "ambiguous target should fail");
-    let stderr = String::from_utf8_lossy(&ambiguous.stderr);
-    assert!(stderr.contains("matched multiple agents"), "{stderr}");
+    let latest = run_ok(
+        env.rimz()
+            .args(["transcript", &format!("@claude#{branch}")]),
+    );
+    assert!(!latest.contains("prompt from a"), "{latest}");
+    assert!(!latest.contains("answer from a"), "{latest}");
+    assert!(latest.contains("prompt from b"), "{latest}");
+    assert!(latest.contains("answer from b"), "{latest}");
 }
 
 #[test]

@@ -1211,6 +1211,51 @@ fn exec_subcommand_parses_a_resume_launch() {
     );
 }
 
+#[test]
+fn agents_table_projects_turn_error_statuses() {
+    let now = jiff::Timestamp::from_second(2_000).unwrap();
+    let failed = agent_with_status(
+        "failed-sess",
+        rimz::agents::AgentStatus::Running,
+        rimz::agents::TurnPhase::Reasoning,
+        1_000,
+    )
+    .with_turn_error(
+        rimz::agents::TurnErrorClass::Failed,
+        1_010,
+        "API Error: Bad Request",
+    );
+    let paused = agent_with_status(
+        "paused-sess",
+        rimz::agents::AgentStatus::Running,
+        rimz::agents::TurnPhase::Reasoning,
+        1_000,
+    )
+    .with_turn_error(
+        rimz::agents::TurnErrorClass::PausedOverloaded,
+        1_010,
+        "API Error: Overloaded",
+    );
+    let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
+        Vec::new(),
+        vec![failed, paused],
+        now,
+    );
+    let agents: Vec<&rimz::agents::AgentState> = snapshot.agents.iter().collect();
+
+    let mut out = anstream::StripStream::new(Vec::new());
+    render_agents_table(&mut out, &snapshot, &agents, now).expect("render agents table");
+    let text = String::from_utf8(out.into_inner()).expect("utf8");
+
+    assert!(text.contains("failed"), "{text}");
+    assert!(text.contains("paused"), "{text}");
+    assert!(
+        !text.contains("running:reasoning"),
+        "turn-error rows drop the stale phase suffix:\n{text}"
+    );
+}
+
 fn bare_exec_args() -> ExecArgs {
     ExecArgs {
         kind: "codex".to_owned(),
@@ -1298,6 +1343,99 @@ fn run_record_with_status(status: RunStatus) -> RunRecord {
     );
     record.status = status;
     record
+}
+
+trait AgentTurnErrorFixture {
+    fn with_turn_error(self, class: rimz::agents::TurnErrorClass, at: i64, label: &str) -> Self;
+}
+
+impl AgentTurnErrorFixture for rimz::agents::AgentState {
+    fn with_turn_error(
+        mut self,
+        class: rimz::agents::TurnErrorClass,
+        at: i64,
+        label: &str,
+    ) -> Self {
+        self.context = Some(rimz::agents::AgentContext {
+            source: self.kind.to_string(),
+            session_name: None,
+            session_preview: None,
+            model_id: None,
+            model_display_name: None,
+            effort: None,
+            thinking_enabled: None,
+            output_style: None,
+            vim_mode: None,
+            agent_version: None,
+            exceeds_200k_tokens: None,
+            cost: None,
+            tokens: None,
+            rate_limits: None,
+            pr: None,
+            account: None,
+            turn_error: Some(rimz::agents::AgentTurnError {
+                class,
+                at: jiff::Timestamp::from_second(at).unwrap(),
+                label: Some(label.to_owned()),
+            }),
+            turn_complete: None,
+            observed_at: jiff::Timestamp::from_second(at).unwrap(),
+        });
+        self
+    }
+}
+
+fn agent_with_status(
+    id: &str,
+    status: rimz::agents::AgentStatus,
+    phase: rimz::agents::TurnPhase,
+    activity: i64,
+) -> rimz::agents::AgentState {
+    let at = jiff::Timestamp::from_second(activity).unwrap();
+    rimz::agents::AgentState {
+        agent_id: rimz::ids::AgentSessionId::from(id),
+        kind: AgentKind::new_unchecked("claude"),
+        name: None,
+        kind_ordinal: None,
+        profile: None,
+        role: None,
+        team: None,
+        channel: None,
+        status,
+        phase,
+        pane: None,
+        agent_pid: None,
+        agent_process_start: None,
+        runtime_owner: None,
+        parent_agent_id: None,
+        worktree_path: Some("/tmp/rimz-agents-table".to_owned()),
+        worktree_branch: Some("main".to_owned()),
+        task: None,
+        prompt: None,
+        description: None,
+        transcript_path: None,
+        origin: None,
+        recent_prompts: Vec::new(),
+        model: None,
+        effort: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        cache_read_input_tokens: None,
+        cache_write_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        context: None,
+        subagent_description: None,
+        subagent_started_at: None,
+        turn_started_at: None,
+        compacting_since: None,
+        compaction_count: 0,
+        last_compact_command_tokens: None,
+        last_seen: at,
+        last_activity: at,
+        registered_at: Some(at),
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

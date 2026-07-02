@@ -5,14 +5,13 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_AUTO_CONTINUE_TEXT: &str = "continue";
 
 /// The default backoff ramp, in seconds, between non-clocked auto-continue
-/// nudges. The provider recovers on its own schedule, so the gaps widen — 60s,
-/// 180s, then the last value (300s) held for every later retry — instead of
-/// typing each frame. Override per machine; an empty ramp falls back to a 300s
-/// gap.
-pub const DEFAULT_AUTO_CONTINUE_BACKOFF_SECS: &[u64] = &[60, 180, 300];
+/// nudges. The first retry lands 3 minutes after the marker, then the 5-minute
+/// gap repeats for every later retry. Override per machine; an empty ramp falls
+/// back to a 300s gap.
+pub const DEFAULT_AUTO_CONTINUE_BACKOFF_SECS: &[u64] = &[180, 300];
 
 /// The default ceiling on backoff auto-continue attempts. At the [default ramp][`DEFAULT_AUTO_CONTINUE_BACKOFF_SECS`]
-/// this spans ~59min (60 + 180 + 300x11) before the producer stops attempting
+/// this spans ~63min (180 + 300x12) before the producer stops attempting
 /// and leaves the row parked.
 pub const DEFAULT_AUTO_CONTINUE_MAX_RETRIES: u32 = 13;
 

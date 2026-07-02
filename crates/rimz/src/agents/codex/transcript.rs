@@ -592,7 +592,7 @@ fn classify_turn_error(info: Option<&Value>, label: Option<&str>) -> TurnErrorCl
     if let Some(class) = info.and_then(class_from_codex_error_info) {
         return class;
     }
-    classify_turn_error_label(label)
+    TurnErrorClass::classify_label(label)
 }
 
 fn class_from_codex_error_info(info: &Value) -> Option<TurnErrorClass> {
@@ -618,37 +618,6 @@ fn class_from_codex_error_kind(kind: &str) -> Option<TurnErrorClass> {
         | "other" => Some(TurnErrorClass::Failed),
         _ => None,
     }
-}
-
-fn classify_turn_error_label(label: Option<&str>) -> TurnErrorClass {
-    let Some(label) = label else {
-        return TurnErrorClass::Failed;
-    };
-    let lower = label.to_ascii_lowercase();
-    if lower.contains("spend limit") {
-        TurnErrorClass::PausedSpendLimit
-    } else if lower.contains("usage limit")
-        || lower.contains("session limit")
-        || lower.contains("rate limit")
-        || lower.contains("quota")
-        || lower.contains("too many requests")
-    {
-        TurnErrorClass::PausedRateLimit
-    } else if is_transient_server_error(&lower) {
-        TurnErrorClass::PausedOverloaded
-    } else {
-        TurnErrorClass::Failed
-    }
-}
-
-fn is_transient_server_error(lower: &str) -> bool {
-    lower.contains("overloaded")
-        || lower.contains("server is busy")
-        || lower.contains("internal server error")
-        || lower.contains("server error")
-        || lower.contains("service unavailable")
-        || lower.contains("bad gateway")
-        || lower.contains("gateway timeout")
 }
 
 struct LastUsage {

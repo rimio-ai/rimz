@@ -45,6 +45,7 @@ pub enum TranscriptKind {
     Assistant,
     Ask,
     Answer,
+    Error,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -257,6 +258,7 @@ mod tests {
             TranscriptKind::Assistant,
             TranscriptKind::Ask,
             TranscriptKind::Answer,
+            TranscriptKind::Error,
         ] {
             let entry = entry(kind, "hello", "2026-06-01T00:00:00Z");
             let json = serde_json::to_string(&entry).expect("serialize");
