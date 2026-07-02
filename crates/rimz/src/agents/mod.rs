@@ -86,7 +86,7 @@ pub(crate) use state::{
     rate_limit_window_kinds, resume_park,
 };
 pub use transcript::{
-    AskAnswer, AskQuestion, ChatEntry, TranscriptMessage, TranscriptRole, answers_text,
+    AskAnswer, AskOption, AskQuestion, ChatEntry, TranscriptMessage, TranscriptRole, answers_text,
 };
 pub use transcript_fs::read_transcript_lines;
 pub(crate) use transcript_fs::read_transcript_tail;

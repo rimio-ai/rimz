@@ -25,7 +25,58 @@ pub struct TranscriptMessage {
 pub struct AskQuestion {
     pub question: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<String>,
+    pub options: Vec<AskOption>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "AskOptionWire", into = "AskOptionWire")]
+pub struct AskOption {
+    pub label: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum AskOptionWire {
+    Label(String),
+    Detailed {
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+}
+
+impl From<AskOptionWire> for AskOption {
+    fn from(value: AskOptionWire) -> Self {
+        match value {
+            AskOptionWire::Label(label) => Self {
+                label,
+                description: None,
+            },
+            AskOptionWire::Detailed { label, description } => Self { label, description },
+        }
+    }
+}
+
+impl From<AskOption> for AskOptionWire {
+    fn from(value: AskOption) -> Self {
+        match value.description {
+            Some(description) => AskOptionWire::Detailed {
+                label: value.label,
+                description: Some(description),
+            },
+            None => AskOptionWire::Label(value.label),
+        }
+    }
+}
+
+impl From<String> for AskOption {
+    fn from(label: String) -> Self {
+        Self {
+            label,
+            description: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,4 +130,62 @@ pub struct ChatEntry {
     pub questions: Vec<AskQuestion>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub answers: Vec<AskAnswer>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ask_option_deserializes_legacy_string_shape() {
+        let option: AskOption = serde_json::from_value(json!("safe")).expect("decode option");
+
+        assert_eq!(
+            option,
+            AskOption {
+                label: "safe".to_owned(),
+                description: None,
+            }
+        );
+    }
+
+    #[test]
+    fn ask_option_deserializes_object_shape() {
+        let option: AskOption =
+            serde_json::from_value(json!({"label": "safe", "description": "Use staged rollout"}))
+                .expect("decode option");
+
+        assert_eq!(
+            option,
+            AskOption {
+                label: "safe".to_owned(),
+                description: Some("Use staged rollout".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn ask_option_deserializes_object_without_description() {
+        let option: AskOption =
+            serde_json::from_value(json!({"label": "safe"})).expect("decode option");
+
+        assert_eq!(option, AskOption::from("safe".to_owned()));
+    }
+
+    #[test]
+    fn ask_option_serializes_label_only_as_string_and_description_as_object() {
+        assert_eq!(
+            serde_json::to_value(AskOption::from("safe".to_owned())).expect("serialize option"),
+            json!("safe")
+        );
+        assert_eq!(
+            serde_json::to_value(AskOption {
+                label: "safe".to_owned(),
+                description: Some("Use staged rollout".to_owned()),
+            })
+            .expect("serialize option"),
+            json!({"label": "safe", "description": "Use staged rollout"})
+        );
+    }
 }

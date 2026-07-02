@@ -12,6 +12,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{GlobalFlags, current_channel};
 use crate::cli::render;
+use rimz::agents::AskOption;
 use rimz::feed::FeedItem;
 use rimz::ids::{AgentKind, AgentSessionId, RequestId};
 use rimz::ledger::transcript_log::{TranscriptEntry, TranscriptKind};
@@ -904,7 +905,17 @@ fn write_wrapped_spine_fragments(
     fragments: Vec<StyledFragment>,
     hang_indent: &str,
 ) -> Result<()> {
-    for line in wrap_fragments(fragments, card_content_width(), hang_indent) {
+    write_wrapped_spine_fragments_with_first_indent(out, answered, fragments, "", hang_indent)
+}
+
+fn write_wrapped_spine_fragments_with_first_indent(
+    out: &mut impl Write,
+    answered: bool,
+    fragments: Vec<StyledFragment>,
+    first_indent: &str,
+    hang_indent: &str,
+) -> Result<()> {
+    for line in wrap_fragments(fragments, card_content_width(), first_indent, hang_indent) {
         write_spine_fragments(out, answered, &line)?;
     }
     Ok(())
@@ -913,16 +924,26 @@ fn write_wrapped_spine_fragments(
 fn wrap_fragments(
     fragments: Vec<StyledFragment>,
     width: usize,
+    first_indent: &str,
     hang_indent: &str,
 ) -> Vec<Vec<StyledFragment>> {
     let tokens = fragment_tokens(fragments);
     if tokens.is_empty() {
-        return vec![Vec::new()];
+        return vec![if first_indent.is_empty() {
+            Vec::new()
+        } else {
+            vec![StyledFragment::plain(first_indent)]
+        }];
     }
 
     let mut lines = Vec::new();
-    let mut current = Vec::new();
-    let mut current_width = 0;
+    let first_width = UnicodeWidthStr::width(first_indent);
+    let mut current = if first_indent.is_empty() {
+        Vec::new()
+    } else {
+        vec![StyledFragment::plain(first_indent)]
+    };
+    let mut current_width = first_width;
     let mut has_word = false;
     let hang_width = UnicodeWidthStr::width(hang_indent);
 
@@ -1040,7 +1061,7 @@ fn parse_legacy_question_line(line: &str) -> Option<rimz::agents::AskQuestion> {
         .split(", ")
         .map(str::trim)
         .filter(|option| !option.is_empty())
-        .map(ToOwned::to_owned)
+        .map(|option| AskOption::from(option.to_owned()))
         .collect::<Vec<_>>();
     (!options.is_empty()).then_some(rimz::agents::AskQuestion { question, options })
 }
@@ -1074,7 +1095,11 @@ fn parse_legacy_answer_text(
     let mut answers = Vec::new();
     for (line, question) in lines.into_iter().zip(questions) {
         let (line, note) = strip_legacy_note(line);
-        let chosen = if question.options.iter().any(|option| option == &line) {
+        let chosen = if question
+            .options
+            .iter()
+            .any(|option| option.label.as_str() == line)
+        {
             vec![line]
         } else {
             let parts = line
@@ -1083,9 +1108,12 @@ fn parse_legacy_answer_text(
                 .filter(|part| !part.is_empty())
                 .collect::<Vec<_>>();
             if parts.len() > 1
-                && parts
-                    .iter()
-                    .all(|part| question.options.iter().any(|option| option == part))
+                && parts.iter().all(|part| {
+                    question
+                        .options
+                        .iter()
+                        .any(|option| option.label.as_str() == *part)
+                })
             {
                 parts.into_iter().map(ToOwned::to_owned).collect()
             } else {
@@ -1226,12 +1254,10 @@ fn write_question_block(
                 write_wrapped_spine_fragments(
                     out,
                     false,
-                    vec![StyledFragment::styled(
-                        format!("○ {option}"),
-                        render::palette::FAINT,
-                    )],
+                    vec![StyledFragment::plain(format!("○ {}", option.label))],
                     "  ",
                 )?;
+                write_option_description(out, false, option)?;
             }
             write_unanswered(out)
         }
@@ -1273,7 +1299,7 @@ fn write_free_answer(
 
 fn write_option_answers(
     out: &mut impl Write,
-    options: &[String],
+    options: &[AskOption],
     answer: &rimz::agents::AskAnswer,
     source: Option<&str>,
 ) -> Result<()> {
@@ -1284,10 +1310,10 @@ fn write_option_answers(
         .collect::<Vec<_>>();
     let mut suffix_written = false;
     for option in options {
-        if chosen.iter().any(|choice| *choice == option) {
+        if chosen.contains(&option.label.as_str()) {
             let mut fragments = vec![
                 StyledFragment::styled("●", render::palette::GOOD.bold()),
-                StyledFragment::styled(option, render::palette::GOOD.bold()),
+                StyledFragment::styled(option.label.clone(), render::palette::GOOD.bold()),
             ];
             if let Some(suffix) =
                 answer_suffix_text(source, answer.note.as_deref(), &mut suffix_written)
@@ -1295,21 +1321,27 @@ fn write_option_answers(
                 fragments.push(StyledFragment::styled(suffix, render::palette::MUTED));
             }
             write_wrapped_spine_fragments(out, true, fragments, "  ")?;
+            write_option_description(out, true, option)?;
         } else {
             write_wrapped_spine_fragments(
                 out,
                 true,
                 vec![StyledFragment::styled(
-                    format!("○ {option}"),
-                    render::palette::FAINT,
+                    format!("○ {}", option.label),
+                    render::palette::MUTED,
                 )],
                 "  ",
             )?;
+            write_option_description(out, true, option)?;
         }
     }
     let other = chosen
         .into_iter()
-        .filter(|choice| !options.iter().any(|option| option == choice))
+        .filter(|choice| {
+            !options
+                .iter()
+                .any(|option| option.label.as_str() == *choice)
+        })
         .collect::<Vec<_>>();
     if !other.is_empty() {
         let mut fragments = vec![
@@ -1323,6 +1355,26 @@ fn write_option_answers(
             fragments.push(StyledFragment::styled(suffix, render::palette::MUTED));
         }
         write_wrapped_spine_fragments(out, true, fragments, "  ")?;
+    }
+    Ok(())
+}
+
+fn write_option_description(
+    out: &mut impl Write,
+    answered: bool,
+    option: &AskOption,
+) -> Result<()> {
+    let Some(description) = option.description.as_deref().and_then(non_empty) else {
+        return Ok(());
+    };
+    for line in description.lines().filter_map(non_empty) {
+        write_wrapped_spine_fragments_with_first_indent(
+            out,
+            answered,
+            vec![StyledFragment::styled(line, render::palette::FAINT)],
+            "    ",
+            "    ",
+        )?;
     }
     Ok(())
 }
@@ -1481,6 +1533,17 @@ mod tests {
 
     fn answer_entry(at: &str, text: &str) -> RenderEntry {
         render_entry(TranscriptKind::Answer, "you", Some("@claude"), at, text)
+    }
+
+    fn ask_option(label: &str) -> AskOption {
+        AskOption::from(label.to_owned())
+    }
+
+    fn described_ask_option(label: &str, description: &str) -> AskOption {
+        AskOption {
+            label: label.to_owned(),
+            description: Some(description.to_owned()),
+        }
     }
 
     fn render(entries: &[RenderEntry], today: Date) -> String {
@@ -1673,7 +1736,10 @@ mod tests {
         ask.request_id = Some(request_id.clone());
         ask.chat.questions = vec![rimz::agents::AskQuestion {
             question: "Choose deployment path?".to_owned(),
-            options: vec!["safe".to_owned(), "fast".to_owned()],
+            options: vec![
+                described_ask_option("safe", "Use staged rollout with rollback ready."),
+                described_ask_option("fast", "Ship immediately and monitor closely."),
+            ],
         }];
         let mut answer = answer_entry("2026-06-28T18:01:00Z", "safe");
         answer.request_id = Some(request_id);
@@ -1694,13 +1760,24 @@ mod tests {
             out.contains("  ▌ ● safe — you · “use prod window”"),
             "{out}"
         );
+        assert!(
+            out.contains("  ▌     Use staged rollout with rollback ready."),
+            "{out}"
+        );
         assert!(out.contains("  ▌ ○ fast"), "{out}");
+        assert!(
+            out.contains("  ▌     Ship immediately and monitor closely."),
+            "{out}"
+        );
         assert!(!out.contains("you → @claude"), "{out}");
 
         let mut raw_ask = ask_entry("2026-06-28T18:00:00Z", "");
         raw_ask.chat.questions = vec![rimz::agents::AskQuestion {
             question: "Choose deployment path?".to_owned(),
-            options: vec!["safe".to_owned(), "fast".to_owned()],
+            options: vec![
+                described_ask_option("safe", "Tell @ops before rollout."),
+                ask_option("fast"),
+            ],
         }];
         let mut raw_answer = answer_entry("2026-06-28T18:01:00Z", "safe");
         raw_answer.chat.answers = vec![rimz::agents::AskAnswer {
@@ -1710,6 +1787,8 @@ mod tests {
         }];
         let raw = render_raw(&[raw_ask, raw_answer], jiff::civil::date(2026, 6, 28));
         assert!(raw.contains(&render::paint(render::palette::GOOD.bold(), "safe")));
+        assert!(raw.contains(&render::paint(render::palette::FAINT, "@ops")));
+        assert!(!raw.contains(&render::paint(render::palette::COOL.bold(), "@ops")));
     }
 
     #[test]
@@ -1718,11 +1797,11 @@ mod tests {
         ask.chat.questions = vec![
             rimz::agents::AskQuestion {
                 question: "Merge strategy?".to_owned(),
-                options: vec!["squash".to_owned(), "rebase".to_owned()],
+                options: vec![ask_option("squash"), ask_option("rebase")],
             },
             rimz::agents::AskQuestion {
                 question: "Notify team?".to_owned(),
-                options: vec!["yes".to_owned(), "no".to_owned()],
+                options: vec![ask_option("yes"), ask_option("no")],
             },
         ];
         let mut answer = answer_entry("2026-06-28T18:01:00Z", "live repro first\nyes");
@@ -1809,7 +1888,7 @@ mod tests {
         let mut ask = ask_entry("2026-06-28T18:00:00Z", "");
         ask.chat.questions = vec![rimz::agents::AskQuestion {
             question: "Ask @codex about #cli-docs?".to_owned(),
-            options: vec!["yes".to_owned(), "no".to_owned()],
+            options: vec![ask_option("yes"), ask_option("no")],
         }];
 
         let raw = render_raw(&[ask], jiff::civil::date(2026, 6, 28));
@@ -1824,8 +1903,11 @@ mod tests {
         ask.chat.questions = vec![rimz::agents::AskQuestion {
             question: "Which deployment plan should the release captain choose when the fallback window is narrow and every reviewer needs one clear sentence of context?".to_owned(),
             options: vec![
-                "safe path with a carefully staged rollout and a rollback checkpoint before traffic moves while the on-call lead watches dashboards and keeps incident notes open".to_owned(),
-                "fast path".to_owned(),
+                described_ask_option(
+                    "safe path with a carefully staged rollout and a rollback checkpoint before traffic moves while the on-call lead watches dashboards and keeps incident notes open",
+                    "Choose this path when stakeholders need an especially detailed explanation that keeps wrapping under the option description indentation.",
+                ),
+                ask_option("fast path"),
             ],
         }];
 
@@ -1837,6 +1919,14 @@ mod tests {
         );
         assert!(
             out.contains("\n  ▌   the on-call lead watches dashboards"),
+            "{out}"
+        );
+        assert!(
+            out.contains("\n  ▌     Choose this path when stakeholders need"),
+            "{out}"
+        );
+        assert!(
+            out.contains("\n  ▌     wrapping under the option description indentation."),
             "{out}"
         );
     }

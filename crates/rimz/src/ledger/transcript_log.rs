@@ -192,6 +192,7 @@ fn bucket_file_name(at: Timestamp, file_days: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::AskOption;
     use crate::ids::WorkspaceId;
     use tempfile::tempdir;
 
@@ -273,7 +274,10 @@ mod tests {
         let mut entry = entry(TranscriptKind::Ask, "lead-in", "2026-06-01T00:00:00Z");
         entry.questions = vec![AskQuestion {
             question: "Choose deployment path?".to_owned(),
-            options: vec!["safe".to_owned(), "fast".to_owned()],
+            options: vec![
+                AskOption::from("safe".to_owned()),
+                AskOption::from("fast".to_owned()),
+            ],
         }];
         entry.answers = vec![AskAnswer {
             question: Some("Choose deployment path?".to_owned()),
@@ -287,6 +291,81 @@ mod tests {
         let decoded: TranscriptEntry = serde_json::from_str(&json).expect("decode");
 
         assert_eq!(decoded, entry);
+    }
+
+    #[test]
+    fn read_all_decodes_legacy_string_options() {
+        let (_dir, paths) = paths();
+        fs::create_dir_all(&paths.transcript_dir).expect("mkdir transcript");
+        fs::write(
+            paths.transcript_dir.join("2026-06-01.jsonl"),
+            serde_json::json!({
+                "at": "2026-06-01T00:00:00Z",
+                "kind": "claude",
+                "agent_id": "sess-1",
+                "entry": "ask",
+                "text": "",
+                "questions": [{
+                    "question": "Choose deployment path?",
+                    "options": ["safe", "fast"]
+                }]
+            })
+            .to_string(),
+        )
+        .expect("write log");
+
+        let entries = read_all(&paths).expect("read log");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].questions[0].options,
+            vec![
+                AskOption::from("safe".to_owned()),
+                AskOption::from("fast".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn read_all_decodes_mixed_option_shapes() {
+        let (_dir, paths) = paths();
+        fs::create_dir_all(&paths.transcript_dir).expect("mkdir transcript");
+        fs::write(
+            paths.transcript_dir.join("2026-06-01.jsonl"),
+            serde_json::json!({
+                "at": "2026-06-01T00:00:00Z",
+                "kind": "claude",
+                "agent_id": "sess-1",
+                "entry": "ask",
+                "text": "",
+                "questions": [{
+                    "question": "Choose deployment path?",
+                    "options": [
+                        {
+                            "label": "safe",
+                            "description": "Use staged rollout."
+                        },
+                        "fast"
+                    ]
+                }]
+            })
+            .to_string(),
+        )
+        .expect("write log");
+
+        let entries = read_all(&paths).expect("read log");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].questions[0].options,
+            vec![
+                AskOption {
+                    label: "safe".to_owned(),
+                    description: Some("Use staged rollout.".to_owned()),
+                },
+                AskOption::from("fast".to_owned()),
+            ]
+        );
     }
 
     #[test]

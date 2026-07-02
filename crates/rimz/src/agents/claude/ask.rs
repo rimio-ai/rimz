@@ -1,7 +1,7 @@
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
-use crate::agents::{AskAnswer, AskQuestion};
+use crate::agents::{AskAnswer, AskOption, AskQuestion};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -13,13 +13,14 @@ struct AskUserQuestionInput {
 #[serde(default)]
 struct ClaudeAskQuestion {
     question: Option<String>,
-    options: Vec<AskOption>,
+    options: Vec<ClaudeAskOption>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
-struct AskOption {
+struct ClaudeAskOption {
     label: Option<String>,
+    description: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -71,14 +72,22 @@ fn ask_user_question_detail(tool_input: &Value) -> Option<Vec<AskQuestion>> {
 
 fn structured_question(question: ClaudeAskQuestion) -> Option<AskQuestion> {
     let question_text = non_empty(question.question.as_deref())?;
-    let labels = question
+    let options = question
         .options
         .into_iter()
-        .filter_map(|option| non_empty(option.label.as_deref()))
+        .filter_map(|option| {
+            Some(AskOption {
+                label: non_empty(option.label.as_deref())?,
+                description: option
+                    .description
+                    .as_deref()
+                    .and_then(|description| non_empty(Some(description))),
+            })
+        })
         .collect::<Vec<_>>();
     Some(AskQuestion {
         question: question_text,
-        options: labels,
+        options,
     })
 }
 
@@ -235,8 +244,12 @@ mod tests {
                     {
                         "question": "Choose deployment path?",
                         "options": [
-                            { "label": "safe" },
-                            { "label": "fast" }
+                            {
+                                "label": "safe",
+                                "description": "Use staged rollout"
+                            },
+                            { "label": "fast", "description": "   " },
+                            { "label": "  " }
                         ]
                     },
                     {
@@ -252,7 +265,16 @@ mod tests {
             Some(vec![
                 AskQuestion {
                     question: "Choose deployment path?".to_owned(),
-                    options: vec!["safe".to_owned(), "fast".to_owned()],
+                    options: vec![
+                        AskOption {
+                            label: "safe".to_owned(),
+                            description: Some("Use staged rollout".to_owned()),
+                        },
+                        AskOption {
+                            label: "fast".to_owned(),
+                            description: None,
+                        },
+                    ],
                 },
                 AskQuestion {
                     question: "Notify team?".to_owned(),

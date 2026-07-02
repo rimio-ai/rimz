@@ -166,7 +166,13 @@ fn transcript_records_native_ask_question_context_and_answer() {
             "tool_input": {
                 "questions": [{
                     "question": "Choose deployment path?",
-                    "options": [{ "label": "safe" }, { "label": "fast" }]
+                    "options": [
+                        {
+                            "label": "safe",
+                            "description": "Use staged rollout with rollback ready."
+                        },
+                        { "label": "fast" }
+                    ]
                 }]
             },
             "worktree_branch": branch,
@@ -186,7 +192,13 @@ fn transcript_records_native_ask_question_context_and_answer() {
                 "questions": [{
                     "question": "Choose deployment path?",
                     "header": "Path",
-                    "options": [{ "label": "safe" }, { "label": "fast" }]
+                    "options": [
+                        {
+                            "label": "safe",
+                            "description": "Use staged rollout with rollback ready."
+                        },
+                        { "label": "fast" }
+                    ]
                 }]
             },
             "worktree_branch": branch,
@@ -198,6 +210,10 @@ fn transcript_records_native_ask_question_context_and_answer() {
     assert!(output.contains("here is my read"), "{output}");
     assert!(output.contains("▌ Choose deployment path?"), "{output}");
     assert!(output.contains("▌ ● safe — you"), "{output}");
+    assert!(
+        output.contains("▌     Use staged rollout with rollback ready."),
+        "{output}"
+    );
     assert!(output.contains("▌ ○ fast"), "{output}");
     assert!(!output.contains("you → @claude"), "{output}");
     assert!(!output.contains("\"answers\""), "{output}");
@@ -213,9 +229,15 @@ fn transcript_records_native_ask_question_context_and_answer() {
         entry["questions"].as_array().is_some_and(|questions| {
             questions.first().is_some_and(|question| {
                 question["question"] == "Choose deployment path?"
-                    && question["options"]
-                        .as_array()
-                        .is_some_and(|options| options.len() == 2)
+                    && question["options"].as_array().is_some_and(|options| {
+                        options.len() == 2
+                            && options[0]
+                                == json!({
+                                    "label": "safe",
+                                    "description": "Use staged rollout with rollback ready."
+                                })
+                            && options[1] == json!("fast")
+                    })
             })
         })
     }));
