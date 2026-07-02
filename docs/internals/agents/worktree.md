@@ -1,6 +1,6 @@
 # Rimz-owned worktrees
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. [channels.md](./channels.md) owns the room channel model, and [harness.md](./harness.md) launches agents into channels and triggers worktree cleanup; this doc owns the worktree itself — creation, the ownership marker, file seeding, and the cleanup that proves work landed before reclaiming.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. [message.md § Channels](./message.md#channels) owns the room channel model, and [harness.md](./harness.md) launches agents into channels and triggers worktree cleanup; this doc owns the worktree itself — creation, the ownership marker, file seeding, and the cleanup that proves work landed before reclaiming.
 
 A worktree is one checkout of the repository on its own branch, and one backing for a Rimz channel. Rimz runs the full lifecycle for the ones it creates: spin one up for a line of work, seed it with the untracked files an agent needs, and reclaim it once its work has landed. The feature stands on its own: `rimz worktree new`, `list`, `remove`, and `gc` work whether or not an agent ever launches into the tree.
 
