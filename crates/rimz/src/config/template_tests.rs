@@ -45,8 +45,11 @@ fn template_defaults_deserialize_to_machine_defaults() {
         uncomment_default_lines(MachineConfig::template_loop()),
     )
     .expect("write loop template");
-    let parsed =
-        MachineConfig::load_from(&dir.path().join("config.toml")).expect("template defaults parse");
+    let parsed = MachineConfig::load_from(
+        &dir.path().join("config.toml"),
+        &dir.path().join("missing-agents-home"),
+    )
+    .expect("template defaults parse");
 
     assert_eq!(parsed, MachineConfig::default());
 }

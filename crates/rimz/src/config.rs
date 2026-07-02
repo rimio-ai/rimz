@@ -1,7 +1,8 @@
 //! Per-machine settings, loaded from `~/.config/rimz/config.toml`,
-//! `theme.toml`, `agents.toml`, and `loop.toml`. Agent and team fragments discovered under
-//! `~/.agents/{agents,teams}` are the base layer for `agents.toml`, whose
-//! entries take precedence on name clashes.
+//! `theme.toml`, `agents.toml`, and `loop.toml`. Agent and team fragments
+//! discovered under `~/.agents/{agents,teams}` are the base layer for
+//! `agents.toml`, whose entries take precedence on name clashes. Strict and
+//! lenient load paths merge fragments before validating the agents view.
 //!
 //! This is the personal, never-committed tier. The project-committed tier is
 //! `<root>/.rimz/config.toml`, parsed for the executable-surface hash in
@@ -220,23 +221,14 @@ impl MachineConfig {
     /// aborting the room; the strict [`Self::load`] and [`Self::load_from`]
     /// report the precise error for `rimz config` and `rimz doctor`.
     pub fn load_lenient() -> Self {
-        let mut config = Self::load_lenient_from(&Self::config_path());
-        if let Err(err) = apply_agents_home(
-            &mut config.agents,
-            &paths::agents_home(),
-            &Self::agents_path(),
-        ) {
-            tracing::warn!(
-                error = %err,
-                "~/.agents discovery failed; using per-machine agents config only",
-            );
-        }
-        config
+        Self::load_lenient_from(&Self::config_path(), &paths::agents_home())
     }
 
     /// Load from an explicit config.toml path and its sibling theme.toml and
-    /// agents.toml files — the test and tooling seam.
-    pub fn load_from(config_path: &Path) -> Result<Self> {
+    /// agents.toml files, merging fragments from the explicit agents-home root
+    /// before validation — the test and tooling seam. A nonexistent fragment
+    /// root means no fragments.
+    pub fn load_from(config_path: &Path, agents_home: &Path) -> Result<Self> {
         let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
         let theme_path = dir.join(THEME_FILE);
         let agents_path = dir.join(AGENTS_FILE);
@@ -249,11 +241,11 @@ impl MachineConfig {
 
         let mut config = Self::assemble(core, theme, agents, loop_);
         validate_notifications_config(&config.notifications, config_path)?;
-        validate_agents_config(&mut config.agents, &agents_path)?;
+        apply_agents_home(&mut config.agents, agents_home, &agents_path)?;
         Ok(config)
     }
 
-    fn load_lenient_from(config_path: &Path) -> Self {
+    fn load_lenient_from(config_path: &Path, agents_home: &Path) -> Self {
         let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
         let theme_path = dir.join(THEME_FILE);
         let agents_path = dir.join(AGENTS_FILE);
@@ -272,17 +264,43 @@ impl MachineConfig {
             );
             config.notifications = NotificationsPrefs::default();
         }
-        if let Err(err) = validate_agents_config(&mut config.agents, &agents_path) {
-            tracing::warn!(
-                error = %err,
-                "per-machine agents config invalid; using built-in defaults",
-            );
-            config.agents = AgentsConfig::default();
+        let fragment = match discover_agents_home(agents_home) {
+            Ok(fragment) => fragment,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "~/.agents discovery failed; using per-machine agents config only",
+                );
+                AgentsFragment::default()
+            }
+        };
+        let mut merged = config.agents.clone();
+        overlay_agents_fragment_under(&mut merged, &fragment);
+        match validate_agents_config(&mut merged, &agents_path) {
+            Ok(()) => config.agents = merged,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "per-machine agents config invalid; using built-in defaults",
+                );
+                let mut fallback = AgentsConfig::default();
+                overlay_agents_fragment_under(&mut fallback, &fragment);
+                match validate_agents_config(&mut fallback, &agents_path) {
+                    Ok(()) => config.agents = fallback,
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            "~/.agents fragments invalid; using built-in defaults",
+                        );
+                        config.agents = AgentsConfig::default();
+                    }
+                }
+            }
         }
         config
     }
 
-    pub fn parse_text(path: &Path, text: &str) -> Result<Self> {
+    pub fn parse_text(path: &Path, text: &str, agents_home: &Path) -> Result<Self> {
         match path.file_name().and_then(|name| name.to_str()) {
             Some(THEME_FILE) => Ok(Self::assemble(
                 CoreConfig::default(),
@@ -292,7 +310,7 @@ impl MachineConfig {
             )),
             Some(AGENTS_FILE) => {
                 let mut agents = parse_agents_text(path, text)?;
-                validate_agents_config(&mut agents, path)?;
+                apply_agents_home(&mut agents, agents_home, path)?;
                 Ok(Self::assemble(
                     CoreConfig::default(),
                     ThemeConfig::default(),
@@ -364,9 +382,7 @@ impl MachineConfig {
             return Ok(cached.clone());
         }
 
-        let mut config = Self::load_from(config_path)?;
-        let agents_path = sibling_path(config_path, AGENTS_FILE);
-        apply_agents_home(&mut config.agents, agents_home, &agents_path)?;
+        let config = Self::load_from(config_path, agents_home)?;
         if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
             *memo = Some((stamp, config.clone()));
         }
@@ -508,7 +524,7 @@ struct AgentsFragmentFile {
     agents: AgentsFragment,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 #[serde(default)]
 struct AgentsFragment {
     profiles: ProfilesConfig,
@@ -689,12 +705,16 @@ fn child_dirs(path: &Path) -> Result<Vec<PathBuf>> {
 fn apply_agents_home(agents: &mut AgentsConfig, root: &Path, agents_path: &Path) -> Result<()> {
     let mut merged = agents.clone();
     let fragment = discover_agents_home(root)?;
-    overlay_under(&mut merged.profiles.0, fragment.profiles.0);
-    overlay_under(&mut merged.teams.0, fragment.teams.0);
-    overlay_under(&mut merged.commands.0, fragment.commands.0);
+    overlay_agents_fragment_under(&mut merged, &fragment);
     validate_agents_config(&mut merged, agents_path)?;
     *agents = merged;
     Ok(())
+}
+
+fn overlay_agents_fragment_under(agents: &mut AgentsConfig, fragment: &AgentsFragment) {
+    overlay_under(&mut agents.profiles.0, fragment.profiles.0.clone());
+    overlay_under(&mut agents.teams.0, fragment.teams.0.clone());
+    overlay_under(&mut agents.commands.0, fragment.commands.0.clone());
 }
 
 fn overlay_under<V>(file: &mut BTreeMap<String, V>, fragment: BTreeMap<String, V>) {

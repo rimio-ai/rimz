@@ -27,7 +27,7 @@ use rimz::agents_spec::{self, Cell, LayoutSpec};
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use rimz::ids::WorkspaceId;
 use rimz::ledger::atomic::write_bytes_atomically;
-use rimz::ledger::paths::{RuntimePaths, config_home, runtime_home, state_home};
+use rimz::ledger::paths::{RuntimePaths, agents_home, config_home, runtime_home, state_home};
 use rimz::loop_instances;
 use rimz::loop_run_log::{self, LoopRunRecord, LoopRunResult};
 use rimz::message::DeliveryGate;
@@ -1195,7 +1195,7 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
     root_tasks_table(&mut doc)?.insert(name, Item::Table(table));
 
     let rendered = doc.to_string();
-    MachineConfig::parse_text(&path, &rendered)
+    MachineConfig::parse_text(&path, &rendered, &agents_home())
         .with_context(|| format!("validating `loop.tasks.{name}`"))?;
     write_bytes_atomically(&path, rendered.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;

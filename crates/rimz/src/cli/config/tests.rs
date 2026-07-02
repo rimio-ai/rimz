@@ -122,12 +122,14 @@ fn set_top_level_timezone_keeps_core_config_valid() {
     let mut doc = MachineConfig::template_core()
         .parse::<DocumentMut>()
         .expect("template parses");
+    let agents_home = tempfile::tempdir().expect("agents home");
     let key = parse_key("timezone").expect("key");
     apply_logical_key(
         &mut doc,
         std::path::Path::new("config.toml"),
         &key,
         parse_set_value(&key, "America/New_York"),
+        agents_home.path(),
     )
     .expect("set timezone");
 

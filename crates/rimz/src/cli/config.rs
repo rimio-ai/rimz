@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use rimz::config::{GlyphRole, MachineConfig, validate_glyph_cells};
 use rimz::ledger::atomic::write_bytes_atomically;
+use rimz::ledger::paths;
 use toml_edit::{ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
 use super::GlobalFlags;
@@ -176,7 +177,13 @@ fn merge_one(path: &Path, template: &str) -> Result<FileMergeOutcome> {
             }
         }
     }
-    let kept = apply_merge_keys(path, &mut new_doc, pending, &mut skipped);
+    let kept = apply_merge_keys(
+        path,
+        &mut new_doc,
+        pending,
+        &mut skipped,
+        &paths::agents_home(),
+    );
 
     let rendered = new_doc.to_string();
     write_bytes_atomically(path, rendered.as_bytes())
@@ -257,7 +264,7 @@ fn set(args: SetArgs) -> Result<()> {
     let mut doc = text
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
-    apply_logical_key(&mut doc, &path, &key, value)?;
+    apply_logical_key(&mut doc, &path, &key, value, &paths::agents_home())?;
     let rendered = doc.to_string();
     write_bytes_atomically(&path, rendered.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
@@ -269,10 +276,11 @@ fn apply_logical_key(
     path: &Path,
     logical: &[String],
     value: Value,
+    agents_home: &Path,
 ) -> Result<()> {
     validate_set_value(logical, &value)?;
     set_document_value(doc, &document_key_for_set(logical), value)?;
-    MachineConfig::parse_text(path, &doc.to_string())
+    MachineConfig::parse_text(path, &doc.to_string(), agents_home)
         .map(|_| ())
         .with_context(|| format!("validating `{}`", logical.join(".")))
 }
@@ -326,6 +334,7 @@ fn apply_merge_keys(
     doc: &mut DocumentMut,
     keys: Vec<PendingKey>,
     skipped: &mut Vec<SkippedKey>,
+    agents_home: &Path,
 ) -> usize {
     let mut kept = 0;
     let mut pending = keys;
@@ -334,7 +343,7 @@ fn apply_merge_keys(
         let mut next = Vec::new();
         for PendingKey { logical, value } in pending {
             let mut trial = doc.clone();
-            match apply_logical_key(&mut trial, path, &logical, value.clone()) {
+            match apply_logical_key(&mut trial, path, &logical, value.clone(), agents_home) {
                 Ok(()) => {
                     *doc = trial;
                     kept += 1;

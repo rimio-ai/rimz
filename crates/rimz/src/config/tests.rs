@@ -15,6 +15,20 @@ fn write_named(dir: &tempfile::TempDir, name: &str, text: &str) -> PathBuf {
     dir.path().join("config.toml")
 }
 
+fn no_fragments(path: &Path) -> PathBuf {
+    path.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("missing-agents-home")
+}
+
+fn load_no_fragments(path: &Path) -> Result<MachineConfig> {
+    MachineConfig::load_from(path, &no_fragments(path))
+}
+
+fn load_lenient_no_fragments(path: &Path) -> MachineConfig {
+    MachineConfig::load_lenient_from(path, &no_fragments(path))
+}
+
 fn write_agents_home_fragment(
     root: &Path,
     subdir: &str,
@@ -33,7 +47,7 @@ fn write_agents_home_fragment(
 fn missing_or_empty_file_is_default_off() {
     let dir = tempdir().expect("tempdir");
     for path in [dir.path().join("absent.toml"), write(&dir, "")] {
-        let config = MachineConfig::load_from(&path).expect("load");
+        let config = load_no_fragments(&path).expect("load");
         assert_eq!(config, MachineConfig::default());
         assert!(!config.remote_control.claude);
         assert!(!config.remote_control.codex);
@@ -123,6 +137,168 @@ fn agents_home_validates_cross_fragment_team_profiles() {
     let mut agents = AgentsConfig::default();
     apply_agents_home(&mut agents, root.path(), &root.path().join("agents.toml"))
         .expect("cross-fragment references validate after merge");
+}
+
+#[test]
+fn strict_load_validates_teams_after_agents_home_profiles_merge() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_AGENTS_SUBDIR,
+        "claude-planner",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.claude-planner]\nagent = \"claude\"\n",
+    );
+    let config_path = write_named(
+        &dir,
+        "agents.toml",
+        "[agents.teams.peer]\nlayout = \"claude-planner,codex\"\n",
+    );
+
+    let config = MachineConfig::load_from(&config_path, agents_home.path()).expect("load");
+
+    assert_eq!(
+        config
+            .agents
+            .teams
+            .0
+            .get("peer")
+            .and_then(|team| team.layout.as_deref()),
+        Some("claude-planner,codex")
+    );
+    assert_eq!(
+        config
+            .agents
+            .profiles
+            .0
+            .get("claude-planner")
+            .map(|profile| profile.agent.as_str()),
+        Some("claude")
+    );
+}
+
+#[test]
+fn lenient_load_validates_teams_after_agents_home_profiles_merge() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_AGENTS_SUBDIR,
+        "claude-planner",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.claude-planner]\nagent = \"claude\"\n",
+    );
+    let config_path = write_named(
+        &dir,
+        "agents.toml",
+        "[agents.profiles.codex-reviewer]\n\
+             agent = \"codex\"\n\
+             [agents.teams.peer]\n\
+             layout = \"claude-planner,codex-reviewer\"\n",
+    );
+
+    let config = MachineConfig::load_lenient_from(&config_path, agents_home.path());
+
+    assert_eq!(
+        config
+            .agents
+            .teams
+            .0
+            .get("peer")
+            .and_then(|team| team.layout.as_deref()),
+        Some("claude-planner,codex-reviewer")
+    );
+    assert_eq!(
+        config
+            .agents
+            .profiles
+            .0
+            .get("codex-reviewer")
+            .map(|profile| profile.agent.as_str()),
+        Some("codex")
+    );
+    assert_eq!(
+        config
+            .agents
+            .profiles
+            .0
+            .get("claude-planner")
+            .map(|profile| profile.agent.as_str()),
+        Some("claude")
+    );
+}
+
+#[test]
+fn lenient_load_falls_back_to_defaults_plus_agents_home() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_AGENTS_SUBDIR,
+        "claude-planner",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.claude-planner]\nagent = \"claude\"\n",
+    );
+    let config_path = write_named(
+        &dir,
+        "agents.toml",
+        "[agents.teams.review]\nlayout = \"missing-profile,codex\"\n",
+    );
+
+    let config = MachineConfig::load_lenient_from(&config_path, agents_home.path());
+
+    assert!(!config.agents.teams.0.contains_key("review"));
+    assert_eq!(
+        config
+            .agents
+            .teams
+            .0
+            .get("peer")
+            .and_then(|team| team.layout.as_deref()),
+        Some("claude,codex")
+    );
+    assert_eq!(
+        config
+            .agents
+            .profiles
+            .0
+            .get("claude-planner")
+            .map(|profile| profile.agent.as_str()),
+        Some("claude")
+    );
+}
+
+#[test]
+fn parse_agents_text_validates_after_agents_home_profiles_merge() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    write_agents_home_fragment(
+        agents_home.path(),
+        AGENTS_HOME_AGENTS_SUBDIR,
+        "claude-planner",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.claude-planner]\nagent = \"claude\"\n",
+    );
+    let path = dir.path().join("agents.toml");
+
+    let config = MachineConfig::parse_text(
+        &path,
+        "[agents.teams.peer]\nlayout = \"claude-planner,codex\"\n",
+        agents_home.path(),
+    )
+    .expect("parse");
+
+    assert_eq!(
+        config
+            .agents
+            .teams
+            .0
+            .get("peer")
+            .and_then(|team| team.layout.as_deref()),
+        Some("claude-planner,codex")
+    );
+    assert!(config.agents.profiles.0.contains_key("claude-planner"));
 }
 
 #[test]
@@ -277,11 +453,11 @@ fn agents_home_fragment_name_clashes_are_sorted_last_wins() {
 fn worktree_config_defaults_and_parses() {
     let dir = tempdir().expect("tempdir");
     let defaults_dir = tempdir().expect("tempdir");
-    let defaults = MachineConfig::load_from(&write(&defaults_dir, "")).expect("load");
+    let defaults = load_no_fragments(&write(&defaults_dir, "")).expect("load");
     assert_eq!(defaults.agents.worktree.dir, "../{repo}-worktrees");
     assert_eq!(defaults.agents.worktree.base, WorktreeBase::Head);
 
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "agents.toml",
         "[agents.worktree]\n\
@@ -292,7 +468,7 @@ fn worktree_config_defaults_and_parses() {
     assert_eq!(config.agents.worktree.dir, "../wt-{repo}");
     assert_eq!(config.agents.worktree.base, WorktreeBase::Fresh);
 
-    let explicit = MachineConfig::load_from(&write_named(
+    let explicit = load_no_fragments(&write_named(
         &dir,
         "agents.toml",
         "[agents.worktree]\nbase = \"main\"\n",
@@ -303,7 +479,7 @@ fn worktree_config_defaults_and_parses() {
         WorktreeBase::Explicit("main".to_owned())
     );
     assert!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "agents.toml",
             "[agents.worktree]\nbase = \"\"\n",
@@ -315,7 +491,7 @@ fn worktree_config_defaults_and_parses() {
 #[test]
 fn agent_profiles_commands_and_teams_parse() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "agents.toml",
         "[agents.commands]\n\
@@ -385,7 +561,7 @@ fn profile_system_prompt_file_resolves_against_the_config_dir() {
     // points at the same file wherever the profile later launches — not at the
     // agent cwd.
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "agents.toml",
         "[agents.profiles.planner]\n\
@@ -402,7 +578,7 @@ fn profile_system_prompt_file_resolves_against_the_config_dir() {
     };
     assert_eq!(path, &dir.path().join("prompts/planner.md"));
     // An absolute path is left untouched.
-    let absolute = MachineConfig::load_from(&write_named(
+    let absolute = load_no_fragments(&write_named(
         &dir,
         "agents.toml",
         "[agents.profiles.planner]\n\
@@ -427,7 +603,7 @@ fn loop_tasks_parse_and_default_empty() {
         MachineConfig::default().r#loop.tasks.0.is_empty(),
         "no loop tasks ship by default",
     );
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "loop.toml",
         "[tasks.morning]\n\
@@ -478,7 +654,7 @@ fn loop_tasks_parse_and_default_empty() {
 #[test]
 fn loop_task_bind_mode_parses() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "loop.toml",
         "[tasks.self_wake]\n\
@@ -499,7 +675,7 @@ fn loop_task_bind_mode_parses() {
 #[test]
 fn agents_loop_table_reports_the_loop_toml_migration() {
     let dir = tempdir().expect("tempdir");
-    let err = MachineConfig::load_from(&write_named(
+    let err = load_no_fragments(&write_named(
         &dir,
         "agents.toml",
         "[agents.loop.tasks.old]\n\
@@ -521,7 +697,7 @@ fn agents_loop_table_reports_the_loop_toml_migration() {
 #[test]
 fn retired_split_sections_are_ignored() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(
+    let config = load_no_fragments(&write(
         &dir,
         "[worktree]\n\
              base = \"fresh\"\n\
@@ -562,7 +738,7 @@ fn lenient_load_falls_back_only_for_the_broken_file() {
         "[agents.profiles.planner]\nagent = \"claude\"\n",
     );
 
-    let config = MachineConfig::load_lenient_from(&config_path);
+    let config = load_lenient_no_fragments(&config_path);
     assert_eq!(config.accounts, AccountsConfig::default());
     assert_eq!(config.sidebar, SidebarConfig::default());
     assert_eq!(
@@ -586,7 +762,7 @@ fn lenient_load_resets_invalid_agents_but_keeps_core_config() {
         "[agents.profiles.term]\nagent = \"claude\"\n",
     );
 
-    let config = MachineConfig::load_lenient_from(&config_path);
+    let config = load_lenient_no_fragments(&config_path);
     assert!(config.remote_control.claude);
     assert_eq!(config.agents, AgentsConfig::default());
 }
@@ -595,7 +771,7 @@ fn lenient_load_resets_invalid_agents_but_keeps_core_config() {
 fn profile_tables_reject_unknown_fields_and_missing_agent() {
     let dir = tempdir().expect("tempdir");
     assert!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "agents.toml",
             "[agents.profiles.mixed]\ncommand = \"nvim\"\nagent = \"claude\"\n",
@@ -603,7 +779,7 @@ fn profile_tables_reject_unknown_fields_and_missing_agent() {
         .is_err()
     );
     assert!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "agents.toml",
             "[agents.profiles.missing_agent]\nmode = \"yolo\"\n",
@@ -616,7 +792,7 @@ fn profile_tables_reject_unknown_fields_and_missing_agent() {
 fn profile_name_validation_runs_at_config_load() {
     let dir = tempdir().expect("tempdir");
     assert!(matches!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "agents.toml",
             "[agents.profiles.term]\nagent = \"claude\"\n",
@@ -624,7 +800,7 @@ fn profile_name_validation_runs_at_config_load() {
         Err(ConfigErr::Agents { .. })
     ));
     assert!(matches!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "agents.toml",
             "[agents.profiles.claude-2]\nagent = \"claude\"\n",
@@ -643,14 +819,14 @@ fn removed_agents_tables_fail_fast_with_the_rename() {
     ] {
         assert!(
             matches!(
-                MachineConfig::load_from(&write_named(&dir, "agents.toml", legacy)),
+                load_no_fragments(&write_named(&dir, "agents.toml", legacy)),
                 Err(ConfigErr::RemovedTable { .. })
             ),
             "expected a removed-table error for: {legacy}"
         );
     }
     // The current shape still loads.
-    MachineConfig::load_from(&write_named(
+    load_no_fragments(&write_named(
         &dir,
         "agents.toml",
         "[agents]\nplacement = \"tab\"\n\n[agents.commands]\nvim = \"nvim\"\n",
@@ -662,11 +838,11 @@ fn removed_agents_tables_fail_fast_with_the_rename() {
 fn per_agent_toggles_parse_independently() {
     let dir = tempdir().expect("tempdir");
     let config =
-        MachineConfig::load_from(&write(&dir, "[remote_control]\nclaude = true\n")).expect("load");
+        load_no_fragments(&write(&dir, "[remote_control]\nclaude = true\n")).expect("load");
     assert!(config.remote_control.claude);
     assert!(!config.remote_control.codex, "codex stays off when unset");
 
-    let both = MachineConfig::load_from(&write(
+    let both = load_no_fragments(&write(
         &dir,
         "[remote_control]\nclaude = true\ncodex = true\n",
     ))
@@ -679,7 +855,7 @@ fn per_agent_toggles_parse_independently() {
 fn unknown_keys_are_ignored() {
     let dir = tempdir().expect("tempdir");
     let text = "sound_profile = \"chime\"\n\n[remote_control]\ncodex = true\ncapacity = 16\n";
-    let config = MachineConfig::load_from(&write(&dir, text)).expect("load");
+    let config = load_no_fragments(&write(&dir, text)).expect("load");
     assert!(config.remote_control.codex);
     assert!(!config.remote_control.claude);
 }
@@ -707,7 +883,7 @@ fn notification_defaults_cover_attention_transitions() {
 #[test]
 fn notifications_parse_per_machine_preferences() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(
+    let config = load_no_fragments(&write(
         &dir,
         "[notifications]\n\
              enabled = false\n\
@@ -745,7 +921,7 @@ fn notifications_parse_per_machine_preferences() {
 #[test]
 fn notifications_parse_handlers_and_validate_templates() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(
+    let config = load_no_fragments(&write(
         &dir,
         "[notifications]\n\
              [[notifications.handler]]\n\
@@ -769,7 +945,7 @@ fn notifications_parse_handlers_and_validate_templates() {
         vec!["@planner".to_owned()]
     );
 
-    let err = MachineConfig::load_from(&write(
+    let err = load_no_fragments(&write(
         &dir,
         "[notifications]\n\
              [[notifications.handler]]\n\
@@ -783,7 +959,7 @@ fn notifications_parse_handlers_and_validate_templates() {
 #[test]
 fn sidebar_max_cols_defaults_parses_and_rejects_zero() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.display]\nmax_cols = 100\n",
@@ -799,7 +975,7 @@ fn sidebar_max_cols_defaults_parses_and_rejects_zero() {
         "unset caps the percentage split at the 72-column default",
     );
     assert!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "theme.toml",
             "[theme.display]\nmax_cols = 0\n"
@@ -811,7 +987,7 @@ fn sidebar_max_cols_defaults_parses_and_rejects_zero() {
 #[test]
 fn sidebar_refresh_ms_defaults_parses_and_clamps_at_use() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.display]\nrefresh_ms = 80\n",
@@ -824,7 +1000,7 @@ fn sidebar_refresh_ms_defaults_parses_and_clamps_at_use() {
         crate::sidebar::timing::DEFAULT_REFRESH_MS
     );
 
-    let too_low = MachineConfig::load_from(&write_named(
+    let too_low = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.display]\nrefresh_ms = 1\n",
@@ -835,7 +1011,7 @@ fn sidebar_refresh_ms_defaults_parses_and_clamps_at_use() {
         crate::sidebar::timing::MIN_REFRESH_MS
     );
 
-    let too_high = MachineConfig::load_from(&write_named(
+    let too_high = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.display]\nrefresh_ms = 5000\n",
@@ -850,8 +1026,7 @@ fn sidebar_refresh_ms_defaults_parses_and_clamps_at_use() {
 #[test]
 fn sidebar_trunk_parses_and_defaults_unset() {
     let dir = tempdir().expect("tempdir");
-    let config =
-        MachineConfig::load_from(&write(&dir, "[sidebar]\ntrunk = \"develop\"\n")).expect("load");
+    let config = load_no_fragments(&write(&dir, "[sidebar]\ntrunk = \"develop\"\n")).expect("load");
     assert_eq!(config.sidebar.trunk.as_deref(), Some("develop"));
     assert_eq!(
         MachineConfig::default().sidebar.trunk,
@@ -863,7 +1038,7 @@ fn sidebar_trunk_parses_and_defaults_unset() {
 #[test]
 fn sidebar_spend_headline_window_parses_and_defaults_session() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(
+    let config = load_no_fragments(&write(
         &dir,
         "timezone = \"America/New_York\"\n[sidebar]\nspend_window = \"session\"\n",
     ))
@@ -887,7 +1062,7 @@ fn sidebar_spend_headline_window_parses_and_defaults_session() {
 #[test]
 fn sidebar_afk_window_defaults_parses_and_rejects_zero() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    let config = load_no_fragments(&write(&dir, "")).expect("load");
     assert_eq!(
         config.sidebar.afk_after_secs.get(),
         DEFAULT_AFK_AFTER_SECS,
@@ -895,13 +1070,12 @@ fn sidebar_afk_window_defaults_parses_and_rejects_zero() {
     );
     assert_eq!(config.sidebar.afk_after_ms(), 15 * 60 * 1_000);
 
-    let tuned =
-        MachineConfig::load_from(&write(&dir, "[sidebar]\nafk_after_secs = 60\n")).expect("load");
+    let tuned = load_no_fragments(&write(&dir, "[sidebar]\nafk_after_secs = 60\n")).expect("load");
     assert_eq!(tuned.sidebar.afk_after_secs.get(), 60);
     assert_eq!(tuned.sidebar.afk_after_ms(), 60_000);
 
     assert!(
-        MachineConfig::load_from(&write(&dir, "[sidebar]\nafk_after_secs = 0\n")).is_err(),
+        load_no_fragments(&write(&dir, "[sidebar]\nafk_after_secs = 0\n")).is_err(),
         "zero cannot disable the AFK badge"
     );
 }
@@ -909,7 +1083,7 @@ fn sidebar_afk_window_defaults_parses_and_rejects_zero() {
 #[test]
 fn sidebar_scrollbar_parses_and_defaults_auto() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.display]\nscrollbar = \"never\"\n",
@@ -922,7 +1096,7 @@ fn sidebar_scrollbar_parses_and_defaults_auto() {
         "unset auto-hides: the bar shows only while the viewport moves",
     );
     assert!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "theme.toml",
             "[theme.display]\nscrollbar = \"bogus\"\n"
@@ -934,14 +1108,14 @@ fn sidebar_scrollbar_parses_and_defaults_auto() {
 #[test]
 fn attention_config_defaults_parses_and_rejects_zero() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    let config = load_no_fragments(&write(&dir, "")).expect("load");
     assert_eq!(
         config.agents.attention.stalled_after_secs.get(),
         crate::agents::DEFAULT_STALL_AFTER_SECS,
         "unset uses the shipped 30-minute stall window",
     );
 
-    let tuned = MachineConfig::load_from(&write_named(
+    let tuned = load_no_fragments(&write_named(
         &dir,
         "agents.toml",
         "[agents.attention]\nstalled_after_secs = 2700\n",
@@ -950,12 +1124,11 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     assert_eq!(tuned.agents.attention.stalled_after_secs.get(), 2700);
 
     let partial =
-        MachineConfig::load_from(&write_named(&dir, "agents.toml", "[agents.attention]\n"))
-            .expect("load");
+        load_no_fragments(&write_named(&dir, "agents.toml", "[agents.attention]\n")).expect("load");
     assert_eq!(partial.agents.attention, AttentionConfig::default());
 
     assert!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "agents.toml",
             "[agents.attention]\nstalled_after_secs = 0\n",
@@ -967,7 +1140,7 @@ fn attention_config_defaults_parses_and_rejects_zero() {
 #[test]
 fn sidebar_theme_parses_defaults_unset_and_rejects_out_of_range() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme]\nmode = 256\nscheme = \"TokyoNight Night\"\ngood = 34\nselection = \"#8ab3e0\"\n",
@@ -982,12 +1155,9 @@ fn sidebar_theme_parses_defaults_unset_and_rejects_out_of_range() {
     );
     assert_eq!(config.theme.alarm, None, "unset slots stay builtin");
     assert!(MachineConfig::default().theme.is_unset());
+    assert!(load_no_fragments(&write_named(&dir, "theme.toml", "[theme]\ngood = 300\n")).is_err());
     assert!(
-        MachineConfig::load_from(&write_named(&dir, "theme.toml", "[theme]\ngood = 300\n"))
-            .is_err()
-    );
-    assert!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "theme.toml",
             "[theme]\nselection = \"#bad\"\n"
@@ -999,7 +1169,7 @@ fn sidebar_theme_parses_defaults_unset_and_rejects_out_of_range() {
 #[test]
 fn sidebar_animations_parse_as_partial_role_overrides() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.animations.thinking]\n\
@@ -1028,7 +1198,7 @@ fn sidebar_animations_parse_as_partial_role_overrides() {
 fn sidebar_animations_accept_attention_frames_and_reject_bad_shapes() {
     let dir = tempdir().expect("tempdir");
     assert!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "theme.toml",
             "[theme.animations.waiting]\nframes = \"?!\"\n",
@@ -1037,7 +1207,7 @@ fn sidebar_animations_accept_attention_frames_and_reject_bad_shapes() {
         "waiting now follows the uniform frame model"
     );
     assert!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "theme.toml",
             "[theme.animations.idle]\nframes = [\"...\"]\n",
@@ -1051,7 +1221,7 @@ fn sidebar_glyphs_parse_and_default_unicode() {
     let dir = tempdir().expect("tempdir");
     assert!(MachineConfig::default().theme.glyphs.is_unset());
 
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.glyphs]\n\
@@ -1070,7 +1240,7 @@ fn sidebar_glyphs_parse_and_default_unicode() {
     );
 
     assert!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "theme.toml",
             "[theme.glyphs.unicode.tokens]\ntotal = \"abc\"\n",
@@ -1080,7 +1250,7 @@ fn sidebar_glyphs_parse_and_default_unicode() {
     );
 
     assert!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "theme.toml",
             "[theme.glyphs.unicode.makr]\ntotal = \"Σ\"\n",
@@ -1098,14 +1268,14 @@ fn sidebar_glow_parses_and_defaults_auto() {
         GlowMode::Auto,
         "transition flashes ship following the terminal's advertisement",
     );
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.display]\nglow = \"always\"\n",
     ))
     .expect("load");
     assert_eq!(config.theme.display.glow, GlowMode::Always);
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.display]\nglow = \"never\"\n",
@@ -1113,7 +1283,7 @@ fn sidebar_glow_parses_and_defaults_auto() {
     .expect("load");
     assert_eq!(config.theme.display.glow, GlowMode::Never);
     assert!(
-        MachineConfig::load_from(&write_named(
+        load_no_fragments(&write_named(
             &dir,
             "theme.toml",
             "[theme.display]\nglow = false\n"
@@ -1125,7 +1295,7 @@ fn sidebar_glow_parses_and_defaults_auto() {
 #[test]
 fn zellij_room_defaults_are_agent_friendly() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    let config = load_no_fragments(&write(&dir, "")).expect("load");
     assert_eq!(config.zellij.mouse_mode, None);
     assert!(config.zellij.mouse_click_through);
     assert_eq!(config.zellij.advanced_mouse_actions, None);
@@ -1147,7 +1317,7 @@ fn zellij_room_defaults_are_agent_friendly() {
 #[test]
 fn zellij_room_options_parse() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(
+    let config = load_no_fragments(&write(
         &dir,
         "[zellij]\n\
              pane_frames = true\n\
@@ -1185,7 +1355,7 @@ fn zellij_room_options_parse() {
 #[test]
 fn zellij_default_mode_config_is_legacy_noop() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(&dir, "[zellij]\ndefault_mode = \"normal\"\n"))
+    let config = load_no_fragments(&write(&dir, "[zellij]\ndefault_mode = \"normal\"\n"))
         .expect("legacy default_mode key is ignored");
     assert_eq!(config.zellij, ZellijConfig::default());
 }
@@ -1193,7 +1363,7 @@ fn zellij_default_mode_config_is_legacy_noop() {
 #[test]
 fn tmux_room_defaults_are_agent_friendly() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    let config = load_no_fragments(&write(&dir, "")).expect("load");
     assert!(config.tmux.mouse);
     assert!(config.tmux.focus_events);
     assert_eq!(config.tmux.history_limit, 100_000);
@@ -1214,7 +1384,7 @@ fn tmux_room_defaults_are_agent_friendly() {
 #[test]
 fn tmux_room_options_parse() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(
+    let config = load_no_fragments(&write(
         &dir,
         "[tmux]\n\
              set_clipboard = \"external\"\n\
@@ -1241,7 +1411,7 @@ fn tmux_room_options_parse() {
 #[test]
 fn malformed_toml_surfaces_an_error() {
     let dir = tempdir().expect("tempdir");
-    let err = MachineConfig::load_from(&write(&dir, "[remote_control]\nclaude = \"yes\"\n"))
+    let err = load_no_fragments(&write(&dir, "[remote_control]\nclaude = \"yes\"\n"))
         .expect_err("type mismatch should fail");
     assert!(matches!(err, ConfigErr::Parse { .. }));
 }
@@ -1249,11 +1419,11 @@ fn malformed_toml_surfaces_an_error() {
 #[test]
 fn provider_block_cap_defaults_to_three() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    let config = load_no_fragments(&write(&dir, "")).expect("load");
     assert_eq!(config.theme.display.max_provider_blocks, 3);
     assert_eq!(config.theme.display.provider_tabs, ProviderTabsMode::Auto);
     assert!(config.theme.display.provider_list.is_empty());
-    let partial = MachineConfig::load_from(&write_named(
+    let partial = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.display]\nmax_cols = 60\n",
@@ -1267,7 +1437,7 @@ fn provider_block_cap_defaults_to_three() {
 #[test]
 fn provider_dashboard_tabs_and_list_parse_and_round_trip() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.display]\nprovider_tabs = \"always\"\nprovider_list = [\"codex\", \"all\"]\n",
@@ -1285,7 +1455,7 @@ fn provider_dashboard_tabs_and_list_parse_and_round_trip() {
 #[test]
 fn sidebar_pets_defaults_parse_and_round_trip() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write_named(
+    let config = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.pets]\nenabled = true\npet = \"dewey\"\nglyphs = \"pixel\"\nvoice = false\n",
@@ -1297,7 +1467,7 @@ fn sidebar_pets_defaults_parse_and_round_trip() {
     assert!(!config.theme.pets.voice);
 
     let defaults_dir = tempdir().expect("tempdir");
-    let defaults = MachineConfig::load_from(&write(&defaults_dir, "")).expect("load");
+    let defaults = load_no_fragments(&write(&defaults_dir, "")).expect("load");
     assert_eq!(defaults.theme.pets, PetsConfig::default());
     assert!(defaults.theme.pets.is_default());
 
@@ -1309,7 +1479,7 @@ fn sidebar_pets_defaults_parse_and_round_trip() {
 #[test]
 fn context_severity_bands_default_and_parse() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    let config = load_no_fragments(&write(&dir, "")).expect("load");
     let defaults = ContextMeterConfig::default();
     assert_eq!(config.theme.display.context_meter, defaults);
     assert_eq!(
@@ -1325,7 +1495,7 @@ fn context_severity_bands_default_and_parse() {
         (75, 258_000)
     );
     assert_eq!((defaults.red.percent, defaults.red.tokens), (90, 420_000));
-    let tuned = MachineConfig::load_from(&write_named(
+    let tuned = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.display.context_meter]\nred = { percent = 50, tokens = 100000 }\n",
@@ -1346,7 +1516,7 @@ fn context_severity_bands_default_and_parse() {
 #[test]
 fn budget_zones_default_and_parse() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    let config = load_no_fragments(&write(&dir, "")).expect("load");
     let defaults = BudgetBarConfig::default();
     assert_eq!(config.theme.display.budget_bar, defaults);
     assert_eq!(
@@ -1362,7 +1532,7 @@ fn budget_zones_default_and_parse() {
         (100, 150, 200)
     );
 
-    let tuned = MachineConfig::load_from(&write_named(
+    let tuned = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
         "[theme.display.budget_bar]\nred = 20\n[theme.display.budget_bar.burn_rate]\nred = 300\n",
@@ -1393,7 +1563,7 @@ fn budget_zones_default_and_parse() {
 fn provider_style_parses_art_and_color() {
     let dir = tempdir().expect("tempdir");
     let text = "[theme.providers.claude]\ncolor = \"#D97757\"\nascii_art = \" ▐▛███▜▌\"\n";
-    let config = MachineConfig::load_from(&write_named(&dir, "theme.toml", text)).expect("load");
+    let config = load_no_fragments(&write_named(&dir, "theme.toml", text)).expect("load");
     let claude = config
         .theme
         .providers
@@ -1407,11 +1577,11 @@ fn provider_style_parses_art_and_color() {
 #[test]
 fn sentry_config_defaults_off_and_parses() {
     let dir = tempdir().expect("tempdir");
-    let defaults = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    let defaults = load_no_fragments(&write(&dir, "")).expect("load");
     assert_eq!(defaults.sentry, SentryConfig::default());
     assert!(defaults.sentry.dsn.is_none());
 
-    let config = MachineConfig::load_from(&write(
+    let config = load_no_fragments(&write(
         &dir,
         "[sentry]\n\
              dsn = \"https://key@o1.ingest.sentry.io/2\"\n\

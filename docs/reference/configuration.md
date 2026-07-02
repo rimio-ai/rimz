@@ -65,7 +65,7 @@ Later layers win:
 
 Today the per-machine layer is live, CLI/env overrides apply where the commands define them, and the project layer is read for trust. **Launch names invert this on purpose:** trusted project `[profiles]` and `[agents.teams]` overlay machine config and win on a name collision, so a repository can pin the launch surface it hashes (see [Project config](#project-config)).
 
-Rimz also discovers drop-in fragments under `~/.agents/agents/<name>/agent.toml` and `~/.agents/teams/<name>/team.toml`, in the same `[agents.profiles]` / `[agents.teams]` shape as `agents.toml`; an entry in `agents.toml` overrides a fragment of the same name. Set `RIMZ_AGENTS_HOME` to relocate the fragment root.
+Rimz also discovers drop-in fragments under `~/.agents/agents/<name>/agent.toml` and `~/.agents/teams/<name>/team.toml`, in the same `[agents.profiles]` / `[agents.teams]` shape as `agents.toml`; an entry in `agents.toml` overrides a fragment of the same name. Validation runs on the merged view, so `agents.toml` teams can reference profiles defined in fragments. Set `RIMZ_AGENTS_HOME` to relocate the fragment root.
 
 ## Agent profiles, commands, and teams
 
