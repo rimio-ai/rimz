@@ -356,8 +356,9 @@ pub struct DiffStatsCacheEntry {
     /// `None` means unknown or an old cache entry.
     #[serde(default)]
     pub landed: Option<bool>,
-    /// Whether the worktree HEAD differs from the Rimz worktree marker's
-    /// `base_ref`. `None` means the checkout is unmarked or unreadable.
+    /// Whether the worktree carries work of its own: HEAD moved past the Rimz
+    /// worktree marker's `base_ref` on a lineage outside the trunk's
+    /// first-parent chain. `None` means the checkout is unmarked or unreadable.
     #[serde(default)]
     pub did_work: Option<bool>,
     /// Whether git reports an in-progress rebase, merge, or cherry-pick in the

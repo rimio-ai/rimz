@@ -364,7 +364,16 @@ fn refresh_commit_facts(
     let did_work = worktree::read_marker_for_worktree(worktree)
         .ok()
         .flatten()
-        .and_then(|marker| head_sha.map(|head| head != marker.base_ref.as_str()));
+        .and_then(|marker| {
+            let head = head_sha?;
+            Some(if head == marker.base_ref.as_str() {
+                false
+            } else if let Some(trunk) = trunk {
+                !worktree::on_trunk_first_parent(worktree, trunk, head)
+            } else {
+                true
+            })
+        });
     CommitFacts {
         commits,
         behind,

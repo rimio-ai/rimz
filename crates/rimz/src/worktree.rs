@@ -731,6 +731,22 @@ pub fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> Lande
     }
 }
 
+/// True when `head` sits on the trunk's first-parent lineage — the chain the
+/// trunk itself advanced through. A HEAD there holds no work of its own: it only
+/// tracked the trunk by fresh fork, rebase onto a newer trunk, or fast-forward.
+/// Landed side-branch tips stay off this lineage. Scan capped at
+/// [`LANDED_BASE_SCAN_CAP`].
+pub fn on_trunk_first_parent(cwd: &Path, trunk: &str, head: &str) -> bool {
+    let cap = LANDED_BASE_SCAN_CAP.to_string();
+    let Ok(commits) = git_stdout(
+        cwd,
+        ["rev-list", "--first-parent", "-n", cap.as_str(), trunk],
+    ) else {
+        return false;
+    };
+    commits.lines().map(str::trim).any(|commit| commit == head)
+}
+
 fn tree_id(cwd: &Path, ref_name: &str) -> Option<String> {
     let tree_ref = format!("{ref_name}^{{tree}}");
     git_stdout(cwd, ["rev-parse", tree_ref.as_str()]).ok()

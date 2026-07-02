@@ -57,6 +57,24 @@ fn runtime_for(path: &Path) -> (tempfile::TempDir, crate::RuntimePaths) {
     (dir, runtime)
 }
 
+fn write_rimz_worktree_marker(repo: &GitFixture, base_ref: &str) {
+    let marker = crate::worktree::WorktreeMarker {
+        version: 1,
+        name: "feature".to_owned(),
+        branch: "feature".to_owned(),
+        base_branch: Some("main".to_owned()),
+        base_ref: base_ref.to_owned(),
+        repo_root: repo.path().to_path_buf(),
+        worktree_path: repo.path().to_path_buf(),
+        created_at: jiff::Timestamp::now(),
+    };
+    crate::ledger::atomic::write_temp_then_rename(
+        &crate::worktree::marker_path(repo.path()).unwrap(),
+        &marker,
+    )
+    .unwrap();
+}
+
 #[test]
 fn parse_numstat_sums_text_diff_and_ignores_binary_rows() {
     let stats = parse_numstat("12\t4\tsrc/lib.rs\n-\t-\tassets/logo.png\n3\t0\tREADME.md\n");
@@ -472,21 +490,7 @@ fn did_work_reads_head_against_rimz_worktree_marker_base_ref() {
     let _ = repo.git(&["add", "base.txt"]);
     let _ = repo.git(&["commit", "-q", "-m", "base"]);
     let base_ref = git_line(repo.path(), &["rev-parse", "HEAD"]).unwrap();
-    let marker = crate::worktree::WorktreeMarker {
-        version: 1,
-        name: "feature".to_owned(),
-        branch: "feature".to_owned(),
-        base_branch: Some("main".to_owned()),
-        base_ref,
-        repo_root: repo.path().to_path_buf(),
-        worktree_path: repo.path().to_path_buf(),
-        created_at: jiff::Timestamp::now(),
-    };
-    crate::ledger::atomic::write_temp_then_rename(
-        &crate::worktree::marker_path(repo.path()).unwrap(),
-        &marker,
-    )
-    .unwrap();
+    write_rimz_worktree_marker(&repo, &base_ref);
 
     assert_eq!(
         refresh_entry(repo.path_str(), None, DueFacts::all(), None).did_work,
@@ -494,6 +498,7 @@ fn did_work_reads_head_against_rimz_worktree_marker_base_ref() {
         "a fresh fork has not moved past its marker base_ref"
     );
 
+    assert!(repo.git(&["checkout", "-q", "-b", "feature"]));
     repo.write("feature.txt", "feature\n");
     let _ = repo.git(&["add", "feature.txt"]);
     let _ = repo.git(&["commit", "-q", "-m", "feature"]);
@@ -502,6 +507,89 @@ fn did_work_reads_head_against_rimz_worktree_marker_base_ref() {
         Some(true),
         "a worktree commit is visible even when later ancestry collapses"
     );
+}
+
+#[test]
+fn did_work_treats_rebased_empty_worktree_as_trunk_lineage() {
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    if !repo.initialized {
+        assert_eq!(
+            refresh_entry(repo.path_str(), None, DueFacts::all(), None).did_work,
+            None
+        );
+        return;
+    }
+    repo.write("base.txt", "base\n");
+    let _ = repo.git(&["add", "base.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "base"]);
+    let base_ref = git_line(repo.path(), &["rev-parse", "HEAD"]).unwrap();
+    write_rimz_worktree_marker(&repo, &base_ref);
+
+    assert!(repo.git(&["checkout", "-q", "-b", "feature"]));
+    assert!(repo.git(&["checkout", "-q", "main"]));
+    repo.write("other.txt", "other\n");
+    let _ = repo.git(&["add", "other.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "other"]);
+    assert!(repo.git(&["checkout", "-q", "feature"]));
+    assert!(repo.git(&["rebase", "main"]));
+
+    let entry = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    assert_eq!(
+        entry.did_work,
+        Some(false),
+        "a rebase that only tracks trunk does not create own work"
+    );
+    assert_eq!(entry.commits, Some(0));
+    assert_eq!(entry.behind, Some(0));
+
+    assert!(repo.git(&["checkout", "-q", "main"]));
+    repo.write("later.txt", "later\n");
+    let _ = repo.git(&["add", "later.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "later"]);
+    assert!(repo.git(&["checkout", "-q", "feature"]));
+
+    let entry = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    assert_eq!(
+        entry.did_work,
+        Some(false),
+        "trunk advancing again must not turn tracked trunk history into work"
+    );
+    assert_eq!(entry.commits, Some(0));
+    assert_eq!(entry.behind, Some(1));
+}
+
+#[test]
+fn did_work_stays_true_for_no_ff_merged_branch_tip() {
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    if !repo.initialized {
+        assert_eq!(
+            refresh_entry(repo.path_str(), None, DueFacts::all(), None).did_work,
+            None
+        );
+        return;
+    }
+    repo.write("base.txt", "base\n");
+    let _ = repo.git(&["add", "base.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "base"]);
+    let base_ref = git_line(repo.path(), &["rev-parse", "HEAD"]).unwrap();
+    write_rimz_worktree_marker(&repo, &base_ref);
+
+    assert!(repo.git(&["checkout", "-q", "-b", "feature"]));
+    repo.write("feature.txt", "feature\n");
+    let _ = repo.git(&["add", "feature.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "feature"]);
+    assert!(repo.git(&["checkout", "-q", "main"]));
+    assert!(repo.git(&["merge", "--no-ff", "feature", "-m", "merge feature"]));
+    assert!(repo.git(&["checkout", "-q", "feature"]));
+
+    let entry = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    assert_eq!(
+        entry.did_work,
+        Some(true),
+        "side-lineage branch tips remain own work after a no-ff merge"
+    );
+    assert_eq!(entry.landed, Some(true));
+    assert_eq!(entry.commits, Some(0));
 }
 
 #[test]
