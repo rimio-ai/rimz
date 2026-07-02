@@ -1945,7 +1945,8 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
 
 /// A tab opened while tmux's latest client is narrow is still laid out at the
 /// full attached width: the hook sidebar is re-asserted to the birth width before
-/// agent columns split, and autosizing is restored after the birth correction.
+/// agent columns split, a stale caller verdict is ignored, and autosizing is
+/// restored after the birth correction.
 #[test]
 fn open_tab_from_narrow_client_normalizes_to_full_width() {
     require_tmux!();
@@ -2011,6 +2012,8 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
     let work_pane = || PaneCmd {
         argv: vec!["sleep".to_owned(), "600".to_owned()],
     };
+    let mut stale_sidebar = sidebar.clone();
+    stale_sidebar.birth_size = width.birth_size(Some(110));
     server
         .backend
         .open_tab(&TabOptions {
@@ -2025,7 +2028,7 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
             },
             focus: false,
             dock_sidebar: true,
-            sidebar,
+            sidebar: stale_sidebar,
         })
         .expect("open_tab");
 
@@ -2058,7 +2061,7 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
     let lower = cap.saturating_sub(2);
     assert!(
         sidebar.width >= lower && sidebar.width <= cap,
-        "sidebar should stay near capped {cap} cols after narrow birth: {panes:?}",
+        "sidebar should stay near capped {cap} cols instead of the stale caller width: {panes:?}",
     );
 
     let work: Vec<_> = panes.iter().filter(|pane| pane.left > 0).collect();

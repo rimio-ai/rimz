@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     env,
+    num::NonZeroU16,
 };
 
 use jiff::Timestamp;
@@ -69,6 +70,36 @@ pub(super) fn tabs_with_sidebars(panes: &[RawPane]) -> HashSet<String> {
         .filter(|view| !view.sidebar_panes.is_empty())
         .map(|view| view.view)
         .collect()
+}
+
+pub(super) fn docked_sidebar_cols(panes: &[RawPane]) -> Option<NonZeroU16> {
+    let mut widths: BTreeMap<NonZeroU16, (usize, u64)> = BTreeMap::new();
+    for pane in panes
+        .iter()
+        .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane) && pane.pane_x == Some(0))
+    {
+        let Some(cols) = pane
+            .pane_columns
+            .and_then(|cols| u16::try_from(cols).ok())
+            .and_then(NonZeroU16::new)
+        else {
+            continue;
+        };
+        let (count, first_tab) = widths.entry(cols).or_insert((0, pane.tab_id));
+        *count += 1;
+        *first_tab = (*first_tab).min(pane.tab_id);
+    }
+    widths
+        .into_iter()
+        .fold(None, |best, (cols, (count, first_tab))| match best {
+            Some((best_cols, best_count, best_first_tab))
+                if best_count > count || (best_count == count && best_first_tab <= first_tab) =>
+            {
+                Some((best_cols, best_count, best_first_tab))
+            }
+            _ => Some((cols, count, first_tab)),
+        })
+        .map(|(cols, _, _)| cols)
 }
 
 pub(super) fn leftmost_live_work_pane(panes: &[RawPane], tab_id: u64) -> Option<u64> {

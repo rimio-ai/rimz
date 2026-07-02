@@ -460,7 +460,10 @@ impl MuxBackend for TmuxBackend {
         let (_window_id, first_content) = parse_new_window_ids(&output.stdout)?;
         let mut first_daemon_pane = None;
         if let Some((first, rest)) = opts.view.hosts.split_first() {
-            let size = opts.sidebar.birth_size.cols.to_string();
+            let size = self
+                .after_new_window_hook_cols(session)
+                .unwrap_or(opts.sidebar.birth_size.cols)
+                .to_string();
             let first_daemon = self.split_printed_with_reason(
                 "-h",
                 &first_content,

@@ -10,9 +10,9 @@ use super::parse::{
     strip_ansi,
 };
 use super::raw_pane::{
-    SidebarDock, is_sidebar_pane, leftmost_live_work_pane, mounted_sidebar_pane, parse_new_pane_id,
-    parse_terminal_id, repairable_nested_work_pane_ids, sidebar_dock_verdict,
-    sidebar_width_off_spec,
+    SidebarDock, docked_sidebar_cols, is_sidebar_pane, leftmost_live_work_pane,
+    mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id, repairable_nested_work_pane_ids,
+    sidebar_dock_verdict, sidebar_width_off_spec,
 };
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
@@ -684,10 +684,38 @@ impl ZellijBackend {
         Ok(self.tab_names(session)?.iter().any(|name| name == tab_name))
     }
 
+    /// The session's fixed sidebar width. `rimz agents <spec>` supplies its own
+    /// layout and therefore bypasses the template, so it mirrors the session's
+    /// width explicitly: first from the `new_tab_template`, then from live docked
+    /// sidebars when Zellij cannot report the template.
+    pub(super) fn session_sidebar_cols(&self, session: &str) -> Option<NonZeroU16> {
+        match self.new_tab_template_sidebar_cols(session) {
+            Ok(Some(cols)) => return Some(cols),
+            Ok(None) => tracing::debug!(
+                session = %session,
+                "dump-layout did not report a new_tab_template sidebar width; falling back to live sidebars",
+            ),
+            Err(err) => tracing::debug!(
+                session = %session,
+                error = &err as &dyn std::error::Error,
+                "dump-layout failed; falling back to live sidebars",
+            ),
+        }
+        let panes = match self.list_panes_with_session(Some(session)) {
+            Ok(panes) => panes,
+            Err(err) => {
+                tracing::debug!(
+                    session = %session,
+                    error = &err as &dyn std::error::Error,
+                    "list-panes failed while resolving the session sidebar width",
+                );
+                return None;
+            }
+        };
+        docked_sidebar_cols(&panes)
+    }
+
     /// The fixed sidebar width carried by Zellij's `new_tab_template`.
-    /// `rimz agents <spec>` supplies its own layout and therefore bypasses that
-    /// template, so it mirrors the template's width explicitly when Zellij can
-    /// report it. A failure falls back to this command's birth verdict.
     pub(super) fn new_tab_template_sidebar_cols(
         &self,
         session: &str,

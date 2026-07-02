@@ -511,6 +511,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
     let detected_size = rimz::mux::detect_terminal_size();
+    let was_live = backend.list_sessions()?.contains(&workspace.session_name);
     let ledger = crate::cli::open_ledger(&workspace)?;
     if let Some(channel) = args.channel.as_deref() {
         crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
@@ -537,7 +538,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
         cwd: &launch.cwd,
         mux_config: &mux_config,
         width,
-        detected_size,
+        detected_size: if was_live { None } else { detected_size },
         refresh_ms: None,
     };
     crate::cli::room::launch_sidebar_for_workspace(backend.as_ref(), &room, None, &[]);

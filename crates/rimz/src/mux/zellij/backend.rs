@@ -564,9 +564,7 @@ impl MuxBackend for ZellijBackend {
         // working panes survive.
         let panes = self.list_panes_with_session(Some(&opts.session_name))?;
         let canonical = self
-            .new_tab_template_sidebar_cols(&opts.session_name)
-            .ok()
-            .flatten()
+            .session_sidebar_cols(&opts.session_name)
             .unwrap_or(opts.birth_size.cols);
         let mut opts = opts.clone();
         opts.birth_size.cols = canonical;
@@ -732,10 +730,7 @@ impl MuxBackend for ZellijBackend {
         let restore = (!opts.focus)
             .then(|| self.focus_restore_target(&opts.session_name))
             .flatten();
-        let template_sidebar_cols = self
-            .new_tab_template_sidebar_cols(&opts.session_name)
-            .ok()
-            .flatten();
+        let template_sidebar_cols = self.session_sidebar_cols(&opts.session_name);
         let layout = TempLayoutFile::new(render_tab_layout(opts, template_sidebar_cols)?)?;
         let args = [
             "new-tab".to_owned(),

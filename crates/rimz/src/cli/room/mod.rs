@@ -602,9 +602,10 @@ pub(crate) struct RoomTarget<'a> {
     pub(crate) cwd: &'a Path,
     pub(crate) mux_config: &'a rimz::config::MultiplexerConfig,
     pub(crate) width: SidebarWidth,
-    /// The launching terminal's `(cols, rows)`, probed once per command
-    /// ([`rimz::mux::detect_terminal_size`]): the width picks the sidebar's
-    /// birth size, the pair sizes a detached tmux birth.
+    /// The launching terminal's `(cols, rows)`, probed once per command that can
+    /// birth the session ([`rimz::mux::detect_terminal_size`]): the width picks
+    /// the sidebar's birth size, the pair sizes a detached tmux birth. Commands
+    /// targeting an already-live session leave this `None`.
     pub(crate) detected_size: Option<(u16, u16)>,
     /// One-shot sidebar render-cadence override for panes born during this
     /// launch. Recovery rebuilt from workspace state falls back to config.

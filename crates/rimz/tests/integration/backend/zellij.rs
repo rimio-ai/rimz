@@ -2687,6 +2687,61 @@ fn capped_birth_size_lands_the_cap_in_every_tab() {
     );
 }
 
+/// A backend-opened tab targets an existing live session, so a stale caller
+/// verdict from the invoking pane must not replace the session's birth verdict.
+#[test]
+fn open_tab_uses_live_session_width_over_caller_verdict() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("tabwidth");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let width = SidebarWidth::default();
+    let sidebar = sidebar_opts(&name, cwd.path(), stub, 340);
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    backend.open_sidebar(&sidebar, None).expect("open_sidebar");
+    wait_for_pane_count(xdg.path(), &name, 2);
+
+    let _client = AttachedClient::attach(xdg.path(), &name, 340, 80);
+    wait_for_attached_client(xdg.path(), &name);
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[69..=72]),
+        "birth sidebar should settle near the 72-column cap, got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+
+    let mut stale_sidebar = sidebar.clone();
+    stale_sidebar.birth_size = width.birth_size(Some(110));
+    backend
+        .open_tab(&TabOptions {
+            session_name: name.clone(),
+            title: "agents".to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                }])],
+            },
+            focus: true,
+            dock_sidebar: true,
+            sidebar: stale_sidebar,
+        })
+        .expect("open_tab");
+
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[69..=72, 69..=72]),
+        "new tab should mirror the live session width, not the stale 33-column \
+         caller verdict, got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+}
+
 /// A tab layout keeps the fixed sidebar outside the user's work area. Closing
 /// back to `sidebar | one work pane` and then opening a no-direction terminal
 /// must split the work area, not rebalance a flat root that still carries the

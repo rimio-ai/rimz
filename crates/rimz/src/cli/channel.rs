@@ -236,7 +236,6 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
     let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
-    let detected_size = rimz::mux::detect_terminal_size();
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
@@ -244,7 +243,7 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
         cwd: &workspace.worktree_root,
         mux_config: &mux_config,
         width,
-        detected_size,
+        detected_size: None,
         refresh_ms: None,
     };
     let Ok(sidebar) = build_sidebar_opts(&room, Vec::new()) else {

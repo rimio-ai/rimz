@@ -160,6 +160,68 @@ fn views_with_sidebars_classifies_working_orphan_and_daemon_tabs() {
 }
 
 #[test]
+fn docked_sidebar_cols_returns_single_live_left_sidebar_width() {
+    let json = r#"[
+          {"id": 1, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 72},
+          {"id": 2, "is_plugin": false, "tab_id": 0, "title": "zsh",
+           "pane_x": 72, "pane_columns": 228}
+        ]"#;
+    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+
+    assert_eq!(docked_sidebar_cols(&panes).map(|cols| cols.get()), Some(72));
+}
+
+#[test]
+fn docked_sidebar_cols_prefers_majority_width() {
+    let json = r#"[
+          {"id": 1, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 72},
+          {"id": 2, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 33},
+          {"id": 3, "is_plugin": false, "tab_id": 2, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 72}
+        ]"#;
+    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+
+    assert_eq!(docked_sidebar_cols(&panes).map(|cols| cols.get()), Some(72));
+}
+
+#[test]
+fn docked_sidebar_cols_breaks_ties_by_earliest_tab() {
+    let json = r#"[
+          {"id": 1, "is_plugin": false, "tab_id": 4, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 72},
+          {"id": 2, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 33}
+        ]"#;
+    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+
+    assert_eq!(docked_sidebar_cols(&panes).map(|cols| cols.get()), Some(33));
+}
+
+#[test]
+fn docked_sidebar_cols_filters_non_live_or_non_docked_panes() {
+    let json = r#"[
+          {"id": 1, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar",
+           "pane_x": 72, "pane_columns": 72},
+          {"id": 2, "is_plugin": false, "exited": true, "tab_id": 1,
+           "title": "rimz-sidebar", "pane_x": 0, "pane_columns": 72},
+          {"id": 3, "is_plugin": true, "tab_id": 2, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 72},
+          {"id": 4, "is_plugin": false, "tab_id": 3, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 0},
+          {"id": 5, "is_plugin": false, "tab_id": 4, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 70000},
+          {"id": 6, "is_plugin": false, "tab_id": 5, "title": "zsh",
+           "pane_x": 0, "pane_columns": 72}
+        ]"#;
+    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
+
+    assert_eq!(docked_sidebar_cols(&panes), None);
+}
+
+#[test]
 fn listed_pane_includes_live_floating_but_live_terminal_does_not() {
     let json = r#"[
           {"id": 0, "is_plugin": false, "is_suppressed": false, "tab_id": 0},

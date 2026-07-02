@@ -59,7 +59,6 @@ pub(super) fn launch_layout(
 
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
-    let detected_size = rimz::mux::detect_terminal_size();
     let launch = agents_launch::resolve_cwd(
         &workspace,
         &machine_config.agents.worktree,
@@ -116,7 +115,7 @@ pub(super) fn launch_layout(
         cwd: &cwd,
         mux_config: &mux_config,
         width,
-        detected_size,
+        detected_size: None,
         refresh_ms: None,
     };
     let sidebar = build_sidebar_opts(&room, Vec::new())?;

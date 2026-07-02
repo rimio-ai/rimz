@@ -1,6 +1,8 @@
-//! Sidebar sizing math: the width a launch resolves once and every pane of the
-//! session is born with. Pure domain arithmetic — the backends spell the
-//! verdict into layouts, splits, and hooks; this file only computes it.
+//! Sidebar sizing math: the width the session-birth command resolves once and
+//! every pane of the session is born with. Commands targeting a live session
+//! mirror the verdict the mux already carries and use the probe-less cap only as
+//! a fallback. Pure domain arithmetic — the backends spell the verdict into
+//! layouts, splits, and hooks; this file only computes it.
 
 use std::num::NonZeroU16;
 
@@ -9,11 +11,14 @@ use std::num::NonZeroU16;
 const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
 
 /// Sidebar pane width: a percentage of the view, capped at `max_cols` columns
-/// (`theme.display.max_cols`). The width is resolved once per launch command: the
-/// launch paths probe the invoking terminal ([`detect_terminal_size`]) and
-/// [`SidebarWidth::birth_size`] turns the probe into the one [`BirthSize`]
+/// (`theme.display.max_cols`). The width is resolved once by the command that
+/// births the session: the birth path probes its terminal ([`detect_terminal_size`])
+/// and [`SidebarWidth::birth_size`] turns the probe into the one [`BirthSize`]
 /// verdict every pane of the session is born with — constant for the session's
-/// life. Birth-time only: a `max_cols` edit applies at the next launch.
+/// life. Commands targeting a live session mirror that verdict from the mux
+/// (Zellij's template or live docked sidebars, tmux's hook) and fall back to
+/// `birth_size(None)`. Birth-time only: a `max_cols` edit applies at the next
+/// launch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SidebarWidth {
     /// Percentage of the view width — tracks terminal size below the cap.
@@ -87,7 +92,7 @@ impl Default for SidebarWidth {
 
 /// The one width verdict every sidebar pane of a launch is born with —
 /// resolved once per command by [`SidebarWidth::birth_size`] from the
-/// invoking terminal, then constant for the session's life. Two spellings of
+/// session-birth terminal, then constant for the session's life. Two spellings of
 /// the same verdict: `cols` pins panes that instantiate at known geometry
 /// (the Zellij `new_tab_template` an attached client opens tabs from, the
 /// tmux `after-new-window` hook), and `percent` covers panes that materialize
@@ -106,7 +111,7 @@ pub struct BirthSize {
 }
 
 /// The invoking terminal's `(cols, rows)`, when stdout is attached to one.
-/// Probed once per launch command; the width feeds
+/// Probed by the command that can birth the session; the width feeds
 /// [`SidebarWidth::birth_size`] and the pair sizes a detached tmux birth.
 pub fn detect_terminal_size() -> Option<(u16, u16)> {
     terminal_size::terminal_size().map(|(width, height)| (width.0, height.0))

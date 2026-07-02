@@ -129,6 +129,9 @@ impl TmuxBackend {
         if let Some(sidebar_pane) = self.leftmost_pane(window_id)
             && sidebar_pane != first_pane
         {
+            let sidebar_cols = self
+                .after_new_window_hook_cols(&sidebar.session_name)
+                .unwrap_or(sidebar.birth_size.cols);
             let _ = self
                 .cmd()
                 .args([
@@ -136,7 +139,7 @@ impl TmuxBackend {
                     "-t".to_owned(),
                     sidebar_pane,
                     "-x".to_owned(),
-                    sidebar.birth_size.cols.to_string(),
+                    sidebar_cols.to_string(),
                 ])
                 .run();
         }
