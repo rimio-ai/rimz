@@ -154,10 +154,16 @@ pub(super) fn footer_lines(
     theme: &Theme,
     width: usize,
 ) -> Vec<Line<'static>> {
-    vec![footer_line(snapshot, theme, width)]
+    vec![footer_line(footer_parts(snapshot, theme, width), width)]
 }
 
-fn footer_line(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Line<'static> {
+#[derive(Clone)]
+pub(super) struct FooterParts {
+    pub(super) left: Vec<Span<'static>>,
+    pub(super) help: Span<'static>,
+}
+
+pub(super) fn footer_parts(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> FooterParts {
     const HELP_TEXT: &str = "? for help";
 
     let presence = presence_badge(snapshot.presence, theme, width);
@@ -169,26 +175,45 @@ fn footer_line(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Line<
     let help_text = layout::clip(HELP_TEXT, width);
     let help = Span::styled(help_text, theme.faint());
     let help_start = width.saturating_sub(help.width());
-    let help_slot = Some((help_start, help.clone()));
 
-    if let Some(line) = positioned_footer_line(
-        footer_left_spans(presence.clone(), link.clone()),
-        help_slot.clone(),
-    ) {
-        return line;
+    let left = footer_left_spans(presence.clone(), link.clone());
+    if footer_left_fits(&left, help_start) {
+        return FooterParts { left, help };
     }
-    if has_presence
-        && let Some(line) =
-            positioned_footer_line(footer_left_spans(presence, None), help_slot.clone())
-    {
-        return line;
+    if has_presence {
+        let left = footer_left_spans(presence, None);
+        if footer_left_fits(&left, help_start) {
+            return FooterParts { left, help };
+        }
     }
-    if !has_presence
-        && let Some(line) = positioned_footer_line(footer_left_spans(None, link), help_slot.clone())
-    {
-        return line;
+    if !has_presence {
+        let left = footer_left_spans(None, link);
+        if footer_left_fits(&left, help_start) {
+            return FooterParts { left, help };
+        }
     }
-    positioned_footer_line(Vec::new(), help_slot).unwrap_or_else(|| Line::from(vec![help]))
+    FooterParts {
+        left: Vec::new(),
+        help,
+    }
+}
+
+fn footer_line(parts: FooterParts, width: usize) -> Line<'static> {
+    let help_start = width.saturating_sub(parts.help.width());
+    positioned_footer_line(parts.left, Some((help_start, parts.help)))
+        .unwrap_or_else(|| Line::from(Vec::<Span<'static>>::new()))
+}
+
+fn footer_left_fits(left: &[Span<'static>], help_start: usize) -> bool {
+    let mut cursor = 0;
+    for span in left {
+        let width = span.width();
+        if width == 0 {
+            return false;
+        }
+        cursor += width;
+    }
+    help_start > cursor || left.is_empty()
 }
 
 fn positioned_footer_line(

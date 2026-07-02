@@ -6,7 +6,7 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use super::chrome::{
-    alert_lines, footer_lines, gate_notice_lines, hairline_rule, repo_header_lines,
+    alert_lines, footer_lines, footer_parts, gate_notice_lines, hairline_rule, repo_header_lines,
     truth_notice_lines,
 };
 use super::sections::{
@@ -250,9 +250,7 @@ pub(super) fn build_bottom_chrome(
         && snapshot.truth_degraded.is_none()
         && ui.gate_notice.is_none()
         && alert.is_none();
-    let folded_footer = fold_footer_into_dashboard
-        .then(|| footer_lines(snapshot, theme, inner).into_iter().next())
-        .flatten();
+    let folded_footer = fold_footer_into_dashboard.then(|| footer_parts(snapshot, theme, inner));
     if dashboard_present {
         // The pinned separator lifts the dashboard off the cards. It is part
         // of bottom chrome, so the viewport reserves it before windowing.

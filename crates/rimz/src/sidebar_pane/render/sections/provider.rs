@@ -480,7 +480,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
     fleet_tally: Option<&SpendTally>,
     pet: Option<&PetView>,
     pets_enabled: bool,
-    folded_footer: Option<Line<'static>>,
+    folded_footer: Option<super::super::chrome::FooterParts>,
     width: usize,
     zones: &BudgetBarConfig,
     now: Timestamp,
@@ -564,7 +564,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
                     });
                 let footer = folded_footer
                     .clone()
-                    .map(|footer| folded_footer_line(theme, footer, block_w));
+                    .map(|footer| folded_footer_line(footer, block_w));
                 let layout = ProviderPetZipLayout {
                     pet_top,
                     rows,
@@ -641,7 +641,7 @@ struct ActiveProviderBlockOptions<'a> {
     fleet_tally: Option<&'a SpendTally>,
     allow_wide: bool,
     include_totals: bool,
-    folded_footer: Option<Line<'static>>,
+    folded_footer: Option<super::super::chrome::FooterParts>,
 }
 
 fn active_provider_block_lines(
@@ -665,45 +665,13 @@ fn active_provider_block_lines(
         lines.extend(total_spend_lines(theme, options.fleet_tally, width, layout));
     }
     if let Some(footer) = options.folded_footer {
-        lines.push(folded_footer_line(theme, footer, width));
+        lines.push(folded_footer_line(footer, width));
     }
     lines
 }
 
-fn folded_footer_line(theme: &Theme, line: Line<'static>, width: usize) -> Line<'static> {
-    let (left, right) = split_footer_spans(theme, line.spans);
-    if right.is_empty() {
-        return Line::from(trim_spans_to_width(left, width));
-    }
-    pin_right(left, right, width)
-}
-
-fn split_footer_spans(
-    theme: &Theme,
-    spans: Vec<Span<'static>>,
-) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
-    let mut left = Vec::new();
-    let mut right = Vec::new();
-    let mut saw_left = false;
-    for span in spans {
-        let content = span.content.as_ref();
-        if content.chars().all(char::is_whitespace) {
-            continue;
-        }
-        if content.contains("? for help") {
-            right.push(span);
-            continue;
-        }
-        if saw_left {
-            left.push(Span::raw("  "));
-        }
-        left.push(span);
-        saw_left = true;
-    }
-    if right.is_empty() {
-        right.push(Span::styled("? for help".to_owned(), theme.faint()));
-    }
-    (left, right)
+fn folded_footer_line(parts: super::super::chrome::FooterParts, width: usize) -> Line<'static> {
+    pin_right(parts.left, vec![parts.help], width)
 }
 
 fn pet_column_width(theme: &Theme, pet: Option<&PetView>) -> Option<usize> {
