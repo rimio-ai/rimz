@@ -29,8 +29,7 @@ pub(super) fn launch_layout(
     }
     apply_launch_mode_and_passthrough(
         &mut layout,
-        interactive_permission_mode_from_flags(args.ask, args.yolo)?
-            .map(LaunchModeApplication::explicit),
+        interactive_permission_mode_from_flags(args.ask, args.yolo)?,
         &launch_override_preset(&args)?,
         &args.passthrough,
     )?;
@@ -404,18 +403,17 @@ pub(super) fn interactive_permission_mode_from_flags(
 pub(super) fn supervised_permission_mode_from_flags(
     ask: bool,
     yolo: bool,
-) -> Result<LaunchModeApplication> {
+) -> Result<PermissionMode> {
     if ask && yolo {
         bail!("choose at most one of --ask and --yolo");
     }
-    let mode = if yolo {
-        LaunchModeApplication::explicit(PermissionMode::Yolo)
+    Ok(if yolo {
+        PermissionMode::Yolo
     } else if ask {
-        LaunchModeApplication::explicit(PermissionMode::Ask)
+        PermissionMode::Ask
     } else {
-        LaunchModeApplication::implicit_default(PermissionMode::Auto)
-    };
-    Ok(mode)
+        PermissionMode::Auto
+    })
 }
 
 pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> {
@@ -613,7 +611,7 @@ pub(super) fn reject_prompt_that_looks_like_spec(
 
 pub(super) fn apply_launch_mode_and_passthrough(
     layout: &mut LayoutSpec,
-    mode: Option<LaunchModeApplication>,
+    mode: Option<PermissionMode>,
     preset: &rimz::agents::LaunchPreset,
     passthrough: &[String],
 ) -> Result<()> {
@@ -631,12 +629,12 @@ pub(super) fn apply_launch_mode_and_passthrough(
                 continue;
             };
             let adapter = rimz::agents::find_adapter(kind);
-            if let Some(application) = mode
-                && application.applies_to(*cell_mode)
+            if let Some(mode) = mode
+                && cell_mode.is_none()
                 && let Some(adapter) = adapter
             {
-                args.extend(adapter.permission_args(application.mode));
-                *cell_mode = Some(application.mode);
+                args.extend(adapter.permission_args(mode));
+                *cell_mode = Some(mode);
             }
             if !preset.is_empty() {
                 let adapter = adapter
@@ -718,25 +716,6 @@ fn launch_option_error(err: rimz::agents::PresetErr) -> anyhow::Error {
         rimz::agents::PresetErr::UnsupportedField { agent, field } => {
             anyhow::anyhow!("{agent} does not support --{field}")
         }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct LaunchModeApplication {
-    pub(super) mode: PermissionMode,
-}
-
-impl LaunchModeApplication {
-    pub(super) fn explicit(mode: PermissionMode) -> Self {
-        Self { mode }
-    }
-
-    pub(super) fn implicit_default(mode: PermissionMode) -> Self {
-        Self { mode }
-    }
-
-    pub(super) fn applies_to(self, cell_mode: Option<PermissionMode>) -> bool {
-        cell_mode.is_none()
     }
 }
 

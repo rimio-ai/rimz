@@ -19,6 +19,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -28,6 +29,7 @@ use toml_edit::{DocumentMut, Item, Table, value};
 
 use rimz::agents::{find_adapter, hook_trust_fix};
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
+use rimz::harness::run::PermissionMode;
 use rimz::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunRecord, LoopRunResult,
 };
@@ -829,7 +831,12 @@ fn execute_task(
         .as_deref()
         .map(resolve_config_path)
         .transpose()?;
-    let (ask, yolo) = mode_flags(entry.mode.as_deref())?;
+    let task_mode = entry
+        .mode
+        .as_deref()
+        .filter(|mode| !mode.trim().is_empty())
+        .map(parse_mode_value)
+        .transpose()?;
     let timeout = entry
         .timeout
         .as_deref()
@@ -851,8 +858,7 @@ fn execute_task(
         spec: spec.to_owned(),
         prompt: Some(prompt),
         worktree: entry.worktree.clone(),
-        ask,
-        yolo,
+        mode: task_mode,
         effort,
         system_prompt_file,
         timeout,
@@ -1387,12 +1393,7 @@ fn weekday_name(day: jiff::civil::Weekday) -> &'static str {
 }
 
 fn parse_mode(raw: &str) -> Result<String> {
-    match raw.trim() {
-        "auto" => Ok("auto".to_owned()),
-        "ask" => Ok("ask".to_owned()),
-        "yolo" => Ok("yolo".to_owned()),
-        other => bail!("unknown loop mode `{other}`; use auto, ask, or yolo"),
-    }
+    Ok(mode_name(parse_mode_value(raw)?).to_owned())
 }
 
 fn parse_check_on(raw: &str) -> Result<CheckOn> {
@@ -1403,12 +1404,24 @@ fn parse_check_on(raw: &str) -> Result<CheckOn> {
     }
 }
 
-fn mode_flags(raw: Option<&str>) -> Result<(bool, bool)> {
-    match raw.map(str::trim).filter(|mode| !mode.is_empty()) {
-        None | Some("auto") => Ok((false, false)),
-        Some("ask") => Ok((true, false)),
-        Some("yolo") => Ok((false, true)),
-        Some(other) => bail!("unknown loop mode `{other}`; use auto, ask, or yolo"),
+fn parse_mode_value(raw: &str) -> Result<PermissionMode> {
+    let trimmed = raw.trim();
+    match PermissionMode::from_str(trimmed) {
+        Ok(PermissionMode::Plan) | Err(_) => {
+            bail!("unknown loop mode `{trimmed}`; use auto, ask, or yolo")
+        }
+        Ok(mode) => Ok(mode),
+    }
+}
+
+fn mode_name(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Auto => "auto",
+        PermissionMode::Ask => "ask",
+        PermissionMode::Yolo => "yolo",
+        PermissionMode::Plan => {
+            unreachable!("loop mode parser rejects plan")
+        }
     }
 }
 

@@ -1040,9 +1040,7 @@ fn interactive_launch_without_mode_keeps_native_agent_permissions() {
 
     apply_launch_mode_and_passthrough(
         &mut layout,
-        interactive_permission_mode_from_flags(false, false)
-            .unwrap()
-            .map(LaunchModeApplication::explicit),
+        interactive_permission_mode_from_flags(false, false).unwrap(),
         &rimz::agents::LaunchPreset::default(),
         &[],
     )
@@ -1068,9 +1066,7 @@ fn explicit_interactive_mode_applies_even_when_profile_added_args() {
 
     apply_launch_mode_and_passthrough(
         &mut layout,
-        interactive_permission_mode_from_flags(false, true)
-            .unwrap()
-            .map(LaunchModeApplication::explicit),
+        interactive_permission_mode_from_flags(false, true).unwrap(),
         &rimz::agents::LaunchPreset::default(),
         &[],
     )
@@ -1151,9 +1147,7 @@ fn supervised_default_mode_skips_cells_with_virtual_or_profile_mode() {
 
     apply_launch_mode_and_passthrough(
         &mut layout,
-        Some(LaunchModeApplication::implicit_default(
-            PermissionMode::Auto,
-        )),
+        Some(PermissionMode::Auto),
         &rimz::agents::LaunchPreset::default(),
         &[],
     )
@@ -1183,7 +1177,7 @@ fn explicit_mode_skips_cells_with_virtual_or_profile_mode() {
 
     apply_launch_mode_and_passthrough(
         &mut layout,
-        Some(LaunchModeApplication::explicit(PermissionMode::Yolo)),
+        Some(PermissionMode::Yolo),
         &rimz::agents::LaunchPreset::default(),
         &[],
     )
@@ -1765,8 +1759,7 @@ fn for_task_builds_a_blocking_supervised_turn() {
         spec: "claude-ping".to_owned(),
         prompt: Some("ping".to_owned()),
         worktree: Some("main".to_owned()),
-        ask: false,
-        yolo: false,
+        mode: None,
         effort: Some("low".to_owned()),
         system_prompt_file: None,
         timeout: None,
@@ -1800,8 +1793,7 @@ fn for_task_builds_a_blocking_supervised_turn() {
             spec: "codex".to_owned(),
             prompt: Some("check status".to_owned()),
             worktree: None,
-            ask: false,
-            yolo: false,
+            mode: None,
             effort: None,
             system_prompt_file: None,
             timeout: None,

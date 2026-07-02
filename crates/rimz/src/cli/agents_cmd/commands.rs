@@ -429,10 +429,10 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
         &teams,
     )?;
     ensure_profile_prompt_files(&layout)?;
-    let mode_application = supervised_permission_mode_from_flags(args.ask, args.yolo)?;
+    let mode = supervised_permission_mode_from_flags(args.ask, args.yolo)?;
     apply_launch_mode_and_passthrough(
         &mut layout,
-        Some(mode_application),
+        Some(mode),
         &launch_override_preset(&args)?,
         &args.passthrough,
     )?;
@@ -529,7 +529,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
         machine_config.sidebar.focus_key_label(),
     );
 
-    let permission_mode = agent_cell.mode.unwrap_or(mode_application.mode);
+    let permission_mode = agent_cell.mode.unwrap_or(mode);
     let mut record = RunRecord::new(
         workspace.workspace_id.clone(),
         AgentKind::new_unchecked(adapter.descriptor().kind),
