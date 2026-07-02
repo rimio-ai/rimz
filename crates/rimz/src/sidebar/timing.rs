@@ -1,7 +1,7 @@
-//! Sidebar timing constants and cadence registry.
+//! Sidebar timing constants.
 //!
 //! This module owns every sidebar cadence and TTL so the runtime, tests, and
-//! docs answer "how fresh is this lane?" from one table. Callers may still
+//! docs answer "how fresh is this lane?" from named constants. Callers may still
 //! re-export values through their local facades when that keeps older paths
 //! stable.
 
@@ -332,104 +332,6 @@ pub const MAX_REFRESH_MS: u16 = 1_000;
 /// smooth breathe's truecolor lightness ramp does not visibly band, and is
 /// clamped at runtime to never be faster than the configured base grid.
 pub const BREATH_ANIMATION_FRAME: Duration = Duration::from_millis(120);
-
-/// Declarative pull cadence entry for docs and future diagnostics.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PullCadence {
-    pub name: &'static str,
-    pub ttl: Duration,
-    pub idle_ttl: Option<Duration>,
-    pub retry_ttl: Option<Duration>,
-}
-
-/// The pull-side cadence registry. It is descriptive: individual enrichment
-/// lanes still own their gating logic because idle and retry semantics differ.
-pub const PULL_CADENCES: &[PullCadence] = &[
-    PullCadence {
-        name: "panes.poll",
-        ttl: SNAPSHOT_CACHE_TTL,
-        idle_ttl: Some(EVENT_PANE_TTL),
-        retry_ttl: None,
-    },
-    PullCadence {
-        name: "presence.stamp",
-        ttl: PRESENCE_STAMP_FRESH,
-        idle_ttl: None,
-        retry_ttl: None,
-    },
-    PullCadence {
-        name: "zellij.pane_topology",
-        ttl: PRESENCE_STAMP_FRESH,
-        idle_ttl: None,
-        retry_ttl: None,
-    },
-    PullCadence {
-        name: "presence.focus_stranded",
-        ttl: FOCUS_STRANDED_EVENT_TTL,
-        idle_ttl: None,
-        retry_ttl: None,
-    },
-    PullCadence {
-        name: "git.diff_stats",
-        ttl: DIFF_STATS_TTL,
-        idle_ttl: Some(DIFF_STATS_IDLE_TTL),
-        retry_ttl: None,
-    },
-    PullCadence {
-        name: "git.diff_stats.focused",
-        ttl: DIFF_STATS_FOCUSED_LOCAL_TTL,
-        idle_ttl: Some(DIFF_STATS_FOCUSED_COMMIT_TTL),
-        retry_ttl: None,
-    },
-    PullCadence {
-        name: "git.activity_window",
-        ttl: GIT_ACTIVITY_WINDOW,
-        idle_ttl: None,
-        retry_ttl: None,
-    },
-    PullCadence {
-        name: "git.worktree_roots",
-        ttl: WORKTREE_ROOTS_TTL,
-        idle_ttl: None,
-        retry_ttl: None,
-    },
-    PullCadence {
-        name: "accounts",
-        ttl: ACCOUNTS_TTL,
-        idle_ttl: None,
-        retry_ttl: Some(ACCOUNTS_RETRY_TTL),
-    },
-    PullCadence {
-        name: "metrics.sample",
-        ttl: METRICS_FOCUSED_SAMPLE_TTL,
-        idle_ttl: Some(METRICS_BACKGROUND_SAMPLE_TTL),
-        retry_ttl: None,
-    },
-    PullCadence {
-        name: "spending",
-        ttl: SPENDING_TTL,
-        idle_ttl: None,
-        retry_ttl: None,
-    },
-    PullCadence {
-        name: "codex.rate_limit",
-        ttl: CODEX_RATE_LIMIT_REFRESH_INTERVAL,
-        idle_ttl: None,
-        retry_ttl: None,
-    },
-    PullCadence {
-        name: "account.credits",
-        ttl: CREDITS_TTL,
-        idle_ttl: Some(CREDITS_DISPLAY_MAX_AGE),
-        retry_ttl: Some(CREDITS_RETRY_TTL),
-    },
-    PullCadence {
-        name: "link.stats",
-        ttl: LINK_STATS_STALE,
-        idle_ttl: None,
-        retry_ttl: None,
-    },
-];
 
 /// Configured base render frame.
 pub fn animation_frame(refresh_ms: u16) -> Duration {

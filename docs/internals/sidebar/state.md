@@ -110,7 +110,7 @@ Expired events disappear by receiver-clock TTL, and any wrong verdict from a mis
 
 ## Pull-Tick Table
 
-The table names staleness-budget semantics; exact values and rationale live in [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs) under `PULL_CADENCES`.
+The table names staleness-budget semantics; exact values and rationale live as named constants in [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs).
 
 | Lane | Cadence | Where felt |
 | --- | --- | --- |
