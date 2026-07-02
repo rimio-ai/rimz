@@ -9,9 +9,9 @@ use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
 use rimz::config::{CheckOn, TaskEntry, TaskTarget, Tasks};
-use rimz::loop_instances;
-use rimz::loop_run_log::{self, LoopRunRecord, LoopRunResult};
 use rimz::message::MessageStatus;
+use rimz::schedule::instances;
+use rimz::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
 
 use crate::common::Env;
 
@@ -1376,7 +1376,7 @@ fn write_loop_config(env: &Env, text: &str) {
 }
 
 fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
-    let path = loop_run_log::log_path(&env.state_root());
+    let path = run_log::log_path(&env.state_root());
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
@@ -1386,7 +1386,7 @@ fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
 }
 
 fn read_loop_instances(env: &Env) -> Tasks {
-    let path = loop_instances::path(&env.state_root());
+    let path = instances::path(&env.state_root());
     let Ok(text) = std::fs::read_to_string(path) else {
         return Tasks::default();
     };
@@ -1394,7 +1394,7 @@ fn read_loop_instances(env: &Env) -> Tasks {
 }
 
 fn write_loop_instances(env: &Env, tasks: Tasks) {
-    let path = loop_instances::path(&env.state_root());
+    let path = instances::path(&env.state_root());
     std::fs::create_dir_all(path.parent().expect("instances parent")).expect("mkdir state");
     std::fs::write(path, serde_json::to_vec_pretty(&tasks).expect("json"))
         .expect("write loop instances");

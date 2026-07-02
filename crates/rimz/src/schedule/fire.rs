@@ -11,10 +11,11 @@ use std::process::{Command, Stdio};
 
 use jiff::{Timestamp, Zoned};
 
+use super::instances;
 use crate::config::{MachineConfig, TaskEntry};
 use crate::ids::WorkspaceId;
 use crate::ledger::atomic::write_temp_then_rename_cache;
-use crate::{RuntimePaths, loop_instances, schedule};
+use crate::{RuntimePaths, schedule};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
@@ -96,7 +97,7 @@ fn workspace_tasks(
 fn load_all_tasks() -> BTreeMap<String, TaskEntry> {
     merge_task_maps(
         MachineConfig::load_lenient().r#loop.tasks.0,
-        loop_instances::load().0,
+        instances::load().0,
     )
 }
 

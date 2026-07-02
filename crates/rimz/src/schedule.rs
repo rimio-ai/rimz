@@ -15,6 +15,10 @@ use std::time::Duration;
 use crate::config::TaskEntry;
 use jiff::{SignedDuration, Timestamp, Zoned};
 
+pub(crate) mod fire;
+pub mod instances;
+pub mod run_log;
+
 /// Errors from parsing or validating a schedule entry.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ScheduleErr {

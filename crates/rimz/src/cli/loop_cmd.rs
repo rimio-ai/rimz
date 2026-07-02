@@ -12,6 +12,9 @@
 //! spawns. The runner appends exactly one history record after loading a task:
 //! the pure executor returns an outcome, and this wrapper records success,
 //! failure, or error with capped forensics.
+//! Pure schedule parsing and due evaluation live in [`rimz::schedule`];
+//! delivery mode reuses the shared message seam, and ephemeral self-wakes live
+//! in [`rimz::schedule::instances`].
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -34,10 +37,9 @@ use rimz::ledger::atomic::write_bytes_atomically;
 use rimz::ledger::paths::{
     RuntimePaths, StatePaths, agents_home, config_home, runtime_home, state_home,
 };
-use rimz::loop_instances;
-use rimz::loop_run_log::{self, CheckRecord, LoopRunMode, LoopRunRecord, LoopRunResult};
 use rimz::message::DeliveryGate;
-use rimz::schedule;
+use rimz::schedule::run_log::{self, CheckRecord, LoopRunMode, LoopRunRecord, LoopRunResult};
+use rimz::schedule::{self, instances};
 use rimz::sidebar::enrich::shortest_window_running;
 use rimz::sidebar::fresh_sidebar_present;
 use rimz::workspace::WorkspaceResolver;
@@ -291,9 +293,9 @@ fn add(args: AddArgs) -> Result<()> {
     }
     if is_ephemeral(&entry) {
         config_remove(&args.name)?;
-        loop_instances::insert(&args.name, &entry)?;
+        instances::insert(&args.name, &entry)?;
     } else {
-        loop_instances::remove(&args.name)?;
+        instances::remove(&args.name)?;
         config_set_entry(&args.name, &entry)?;
     }
 
@@ -318,7 +320,7 @@ fn add(args: AddArgs) -> Result<()> {
 }
 
 fn remove(name: &str) -> Result<()> {
-    let removed = loop_instances::remove(name)? | config_remove(name)?;
+    let removed = instances::remove(name)? | config_remove(name)?;
     let mut out = ui::out();
     if removed {
         writeln!(out, "removed loop task `{name}`")?;
@@ -337,7 +339,7 @@ fn rename(name: &str, new_name: &str) -> Result<()> {
         bail!("loop task `{new_name}` already exists");
     }
 
-    let renamed = loop_instances::rename(name, new_name)? | config_rename(name, new_name)?;
+    let renamed = instances::rename(name, new_name)? | config_rename(name, new_name)?;
     let mut out = ui::out();
     if renamed {
         writeln!(out, "renamed loop task `{name}` to `{new_name}`")?;
@@ -356,7 +358,7 @@ fn list() -> Result<()> {
         writeln!(out, "no loop tasks; add one with `rimz loop add`")?;
         return Ok(());
     }
-    let stats = loop_run_log::stats(&state_home());
+    let stats = run_log::stats(&state_home());
     let now = Timestamp::now();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let mut table = ui::Table::new([
@@ -378,7 +380,7 @@ fn list() -> Result<()> {
         };
         let stamps = runtime
             .as_ref()
-            .map(rimz::loop_fire::last_stamps)
+            .map(rimz::schedule::fire::last_stamps)
             .unwrap_or_default();
         let next = parsed
             .ok()
@@ -440,7 +442,7 @@ fn show(args: ShowArgs) -> Result<()> {
     let runtime = runtime_for_root(&root);
     let stamps = runtime
         .as_ref()
-        .map(rimz::loop_fire::last_stamps)
+        .map(rimz::schedule::fire::last_stamps)
         .unwrap_or_default();
     let room = if runtime.as_ref().is_some_and(fresh_sidebar_present) {
         "open"
@@ -474,7 +476,7 @@ fn show(args: ShowArgs) -> Result<()> {
     kv.push("next", ui::cell(next));
     kv.render(&mut out)?;
 
-    let records = loop_run_log::task_records(&state_home(), &args.name);
+    let records = run_log::task_records(&state_home(), &args.name);
     if records.is_empty() {
         writeln!(out, "no runs recorded; try `rimz loop fire {}`", args.name)?;
         return Ok(());
@@ -682,7 +684,7 @@ fn run_one(name: &str, mode: LoopRunMode, globals: &GlobalFlags) -> Result<()> {
         Ok(Some(guard)) => guard,
         Ok(None) => {
             let duration_ms = elapsed_ms(started);
-            loop_run_log::append(&LoopRunRecord {
+            run_log::append(&LoopRunRecord {
                 task: name.to_owned(),
                 at: Timestamp::now(),
                 result: LoopRunResult::Overlapped,
@@ -709,7 +711,7 @@ fn run_one(name: &str, mode: LoopRunMode, globals: &GlobalFlags) -> Result<()> {
         Ok(outcome) => {
             let duration_ms = elapsed_ms(started);
             let record = loop_record(name, mode, duration_ms, &outcome);
-            loop_run_log::append(&record);
+            run_log::append(&record);
             print_run_summary(name, duration_ms, &outcome)?;
             if let Some(code) = outcome.exit_code {
                 std::process::exit(code);
@@ -726,7 +728,7 @@ fn run_one(name: &str, mode: LoopRunMode, globals: &GlobalFlags) -> Result<()> {
 fn append_error_record(name: &str, mode: LoopRunMode, started: Instant, err: &anyhow::Error) {
     let duration_ms = elapsed_ms(started);
     let error = format!("{err:#}");
-    loop_run_log::append(&LoopRunRecord {
+    run_log::append(&LoopRunRecord {
         task: name.to_owned(),
         at: Timestamp::now(),
         result: LoopRunResult::Errored,
@@ -1463,7 +1465,7 @@ fn load_tasks() -> std::collections::BTreeMap<String, TaskEntry> {
 }
 
 fn load_all() -> std::collections::BTreeMap<String, (TaskEntry, TaskSource)> {
-    let mut tasks: std::collections::BTreeMap<_, _> = loop_instances::load()
+    let mut tasks: std::collections::BTreeMap<_, _> = instances::load()
         .0
         .into_iter()
         .map(|(name, entry)| (name, (entry, TaskSource::Instance)))
@@ -1477,7 +1479,7 @@ fn load_all() -> std::collections::BTreeMap<String, (TaskEntry, TaskSource)> {
 }
 
 fn load_entry(name: &str) -> Result<(TaskEntry, TaskSource)> {
-    if let Some(entry) = loop_instances::load().0.remove(name) {
+    if let Some(entry) = instances::load().0.remove(name) {
         return Ok((entry, TaskSource::Instance));
     }
     load_tasks()
@@ -1489,7 +1491,7 @@ fn load_entry(name: &str) -> Result<(TaskEntry, TaskSource)> {
 fn remove_task(name: &str, source: TaskSource) -> Result<bool> {
     match source {
         TaskSource::Config => config_remove(name),
-        TaskSource::Instance => loop_instances::remove(name).map_err(Into::into),
+        TaskSource::Instance => instances::remove(name).map_err(Into::into),
     }
 }
 
