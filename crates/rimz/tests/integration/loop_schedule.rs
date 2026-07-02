@@ -295,8 +295,10 @@ fn loop_check_failure_show_prints_exit_and_output() {
         fire_stdout.contains(command),
         "fire should print check output tail: {fire_stdout}"
     );
+    loop_ok(&env, &["loop", "fire", "missing"]);
 
     let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 2);
     let record = records.last().expect("check record");
     assert_eq!(record.result, LoopRunResult::Failed);
     let check = record.check.as_ref().expect("check detail");
@@ -309,8 +311,26 @@ fn loop_check_failure_show_prints_exit_and_output() {
         "show should print runs table: {stdout}"
     );
     assert!(
+        stdout
+            .lines()
+            .any(|line| { line.contains("failed x2") && line.contains(command) }),
+        "show should collapse repeated failures and print note: {stdout}"
+    );
+    assert!(
         stdout.contains("last run output (exit 127)") && stdout.contains(command),
         "show should print output detail: {stdout}"
+    );
+
+    let stdout = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        stdout.contains("NOTE"),
+        "list should include NOTE: {stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| {
+            line.starts_with("missing") && line.contains("failed x2") && line.contains(command)
+        }),
+        "list should print failure streak and note: {stdout}"
     );
 }
 

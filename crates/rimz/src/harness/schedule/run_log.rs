@@ -115,6 +115,7 @@ impl From<RunStatus> for LoopRunResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoopRunStats {
     pub runs: usize,
+    pub streak: usize,
     pub last: LoopRunRecord,
 }
 
@@ -162,11 +163,17 @@ fn fold_file(path: &Path, stats: &mut BTreeMap<String, LoopRunStats>) {
             .and_modify(|entry| {
                 entry.runs += 1;
                 if record.at > entry.last.at {
+                    entry.streak = if record.result == entry.last.result {
+                        entry.streak + 1
+                    } else {
+                        1
+                    };
                     entry.last = record.clone();
                 }
             })
             .or_insert(LoopRunStats {
                 runs: 1,
+                streak: 1,
                 last: record,
             });
     }
@@ -245,6 +252,7 @@ mod tests {
         let stats = stats(dir.path());
         let wake = stats.get("wake").expect("wake stats");
         assert_eq!(wake.runs, 2);
+        assert_eq!(wake.streak, 1);
         assert_eq!(wake.last.result, LoopRunResult::TargetGone);
     }
 
@@ -270,7 +278,31 @@ mod tests {
         let stats = stats(dir.path());
         let wake = stats.get("wake").expect("wake stats");
         assert_eq!(wake.runs, 2);
+        assert_eq!(wake.streak, 1);
         assert_eq!(wake.last.result, LoopRunResult::Completed);
+    }
+
+    #[test]
+    fn stats_tracks_matching_result_streak_across_rotated_and_current_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = log_path(dir.path());
+        std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
+        std::fs::write(
+            rotated_path(&path),
+            serde_json::to_string(&record("wake", 10, LoopRunResult::Failed)).expect("json") + "\n",
+        )
+        .expect("write rotated");
+        std::fs::write(
+            path,
+            serde_json::to_string(&record("wake", 20, LoopRunResult::Failed)).expect("json") + "\n",
+        )
+        .expect("write current");
+
+        let stats = stats(dir.path());
+        let wake = stats.get("wake").expect("wake stats");
+        assert_eq!(wake.runs, 2);
+        assert_eq!(wake.streak, 2);
+        assert_eq!(wake.last.result, LoopRunResult::Failed);
     }
 
     #[test]

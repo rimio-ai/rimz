@@ -2,6 +2,8 @@
 
 use super::*;
 
+const NOTE_MAX: usize = 60;
+
 // ---- list -------------------------------------------------------------------
 
 pub(super) fn list() -> Result<()> {
@@ -15,7 +17,8 @@ pub(super) fn list() -> Result<()> {
     let now = Timestamp::now();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let mut table = ui::Table::new([
-        "NAME", "SOURCE", "SPEC", "SCHEDULE", "NEXT", "ROOM", "RUNS", "LAST RUN", "RESULT", "ROOT",
+        "NAME", "SOURCE", "SPEC", "SCHEDULE", "NEXT", "ROOM", "RUNS", "LAST RUN", "RESULT", "NOTE",
+        "ROOT",
     ])
     .right(&[6]);
     for (name, (entry, source)) in &tasks {
@@ -48,7 +51,12 @@ pub(super) fn list() -> Result<()> {
             ui::cell("-").dash()
         };
         let result = task_stats
-            .map(|stats| loop_result_cell(stats.last.result))
+            .map(|stats| loop_result_cell(stats.last.result, stats.streak))
+            .unwrap_or_else(|| ui::cell("-").dash());
+        let note = task_stats
+            .map(|stats| {
+                ui::cell(record_note(&stats.last).unwrap_or_else(|| "-".to_owned())).dash()
+            })
             .unwrap_or_else(|| ui::cell("-").dash());
         let root_text = root.to_string_lossy();
         table.row([
@@ -61,6 +69,7 @@ pub(super) fn list() -> Result<()> {
             ui::cell(runs.to_string()),
             last_run,
             result,
+            note,
             ui::cell(ui::home_relative(root_text.as_ref())),
         ]);
     }
@@ -139,12 +148,14 @@ pub(super) fn show(args: ShowArgs) -> Result<()> {
 
     writeln!(out)?;
     let mut table = ui::Table::new(["WHEN", "MODE", "RESULT", "TIME", "EXIT", "NOTE"]);
-    let start = records.len().saturating_sub(args.runs);
-    for record in &records[start..] {
+    let rows = collapsed_run_rows(&records);
+    let start = rows.len().saturating_sub(args.runs);
+    for row in &rows[start..] {
+        let record = row.latest;
         table.row([
             ui::cell(ui::rel_age(record.at, now)),
-            ui::cell(record.mode.map_or("-", LoopRunMode::label)).dash(),
-            loop_result_cell(record.result),
+            ui::cell(row.key.mode.map_or("-", LoopRunMode::label)).dash(),
+            loop_result_cell(row.key.result, row.count),
             ui::cell(
                 record
                     .duration_ms
@@ -152,8 +163,8 @@ pub(super) fn show(args: ShowArgs) -> Result<()> {
                     .unwrap_or_else(|| "-".to_owned()),
             )
             .dash(),
-            ui::cell(record_exit(record).unwrap_or_else(|| "-".to_owned())).dash(),
-            ui::cell(record_note(record).unwrap_or_else(|| "-".to_owned())).dash(),
+            ui::cell(row.key.exit.as_deref().unwrap_or("-")).dash(),
+            ui::cell(row.key.note.as_deref().unwrap_or("-")).dash(),
         ]);
     }
     table.render(&mut out)?;
@@ -169,7 +180,53 @@ pub(super) fn show(args: ShowArgs) -> Result<()> {
     Ok(())
 }
 
-fn loop_result_cell(result: LoopRunResult) -> ui::Cell {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RunRowKey {
+    mode: Option<LoopRunMode>,
+    result: LoopRunResult,
+    exit: Option<String>,
+    note: Option<String>,
+}
+
+impl RunRowKey {
+    fn new(record: &LoopRunRecord) -> Self {
+        Self {
+            mode: record.mode,
+            result: record.result,
+            exit: record_exit(record),
+            note: record_note(record),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CollapsedRunRow<'a> {
+    key: RunRowKey,
+    latest: &'a LoopRunRecord,
+    count: usize,
+}
+
+fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
+    let mut rows = Vec::<CollapsedRunRow<'_>>::new();
+    for record in records {
+        let key = RunRowKey::new(record);
+        if let Some(row) = rows.last_mut().filter(|row| row.key == key) {
+            row.count += 1;
+            if record.at >= row.latest.at {
+                row.latest = record;
+            }
+        } else {
+            rows.push(CollapsedRunRow {
+                key,
+                latest: record,
+                count: 1,
+            });
+        }
+    }
+    rows
+}
+
+fn loop_result_cell(result: LoopRunResult, count: usize) -> ui::Cell {
     let style = match result {
         LoopRunResult::Completed | LoopRunResult::Delivered => ui::palette::GOOD,
         LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::Errored => {
@@ -182,7 +239,12 @@ fn loop_result_cell(result: LoopRunResult) -> ui::Cell {
         | LoopRunResult::SkippedWindow => ui::palette::WARN,
         LoopRunResult::CheckSkipped => ui::palette::MUTED,
     };
-    ui::cell(result.label()).fg(style)
+    let label = if count > 1 {
+        format!("{} x{count}", result.label())
+    } else {
+        result.label().to_owned()
+    };
+    ui::cell(label).fg(style)
 }
 
 pub(super) fn format_duration_ms(ms: u64) -> String {
@@ -222,12 +284,26 @@ fn spawn_exit_code(result: LoopRunResult) -> Option<i32> {
 }
 
 fn record_note(record: &LoopRunRecord) -> Option<String> {
-    record
+    let note = record
         .error
         .as_deref()
-        .or(record.last_message.as_deref())
-        .or(record.target.as_deref())
-        .map(|note| truncate_note(first_line(note), 60))
+        .map(first_line)
+        .or_else(|| check_failure_line(record))
+        .or_else(|| record.last_message.as_deref().map(first_line))
+        .or_else(|| record.target.as_deref().map(first_line))?;
+    Some(truncate_note(note, NOTE_MAX))
+}
+
+fn check_failure_line(record: &LoopRunRecord) -> Option<&str> {
+    let check = record.check.as_ref()?;
+    if !check.timed_out && check.code == Some(0) {
+        return None;
+    }
+    check
+        .output
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
 }
 
 fn first_line(text: &str) -> &str {
@@ -300,4 +376,94 @@ fn transcript_path_for_record(entry: &TaskEntry, run_id: &str) -> Option<String>
     rimz::harness::run::load(&paths, &run_id)
         .ok()
         .and_then(|record| record.transcript_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
+        LoopRunRecord {
+            task: "wake".to_owned(),
+            at: Timestamp::from_second(second).expect("timestamp"),
+            result,
+            mode: None,
+            duration_ms: None,
+            error: None,
+            check: None,
+            run_id: None,
+            last_message: None,
+            target: None,
+        }
+    }
+
+    #[test]
+    fn check_failure_line_uses_last_non_empty_failed_check_line() {
+        let mut failed = record(10, LoopRunResult::Failed);
+        failed.check = Some(CheckRecord {
+            code: Some(127),
+            timed_out: false,
+            output: "ignored\n\nmissing command\n".to_owned(),
+        });
+        assert_eq!(check_failure_line(&failed), Some("missing command"));
+
+        let mut passed = record(11, LoopRunResult::Completed);
+        passed.check = Some(CheckRecord {
+            code: Some(0),
+            timed_out: false,
+            output: "ok".to_owned(),
+        });
+        assert_eq!(check_failure_line(&passed), None);
+    }
+
+    #[test]
+    fn record_note_prefers_error_then_failed_check_output() {
+        let mut failed = record(10, LoopRunResult::Failed);
+        failed.check = Some(CheckRecord {
+            code: Some(1),
+            timed_out: false,
+            output: "first\ncheck failed".to_owned(),
+        });
+        failed.last_message = Some("last message".to_owned());
+        assert_eq!(record_note(&failed), Some("check failed".to_owned()));
+
+        failed.error = Some("outer error\nignored detail".to_owned());
+        assert_eq!(record_note(&failed), Some("outer error".to_owned()));
+    }
+
+    #[test]
+    fn collapsed_run_rows_merge_adjacent_matching_render_columns() {
+        let mut first = record(10, LoopRunResult::Failed);
+        first.mode = Some(LoopRunMode::Scheduled);
+        first.duration_ms = Some(10);
+        first.check = Some(CheckRecord {
+            code: Some(1),
+            timed_out: false,
+            output: "boom".to_owned(),
+        });
+        let mut second = first.clone();
+        second.at = Timestamp::from_second(20).expect("timestamp");
+        second.duration_ms = Some(20);
+        let mut third = second.clone();
+        third.at = Timestamp::from_second(30).expect("timestamp");
+        third.check = Some(CheckRecord {
+            code: Some(1),
+            timed_out: false,
+            output: "different".to_owned(),
+        });
+        let records = vec![first, second, third];
+
+        let rows = collapsed_run_rows(&records);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].count, 2);
+        assert_eq!(
+            rows[0].latest.at,
+            Timestamp::from_second(20).expect("timestamp")
+        );
+        assert_eq!(rows[0].latest.duration_ms, Some(20));
+        assert_eq!(rows[0].key.note.as_deref(), Some("boom"));
+        assert_eq!(rows[1].count, 1);
+        assert_eq!(rows[1].key.note.as_deref(), Some("different"));
+    }
 }

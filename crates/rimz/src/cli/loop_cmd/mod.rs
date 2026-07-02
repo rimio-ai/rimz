@@ -162,7 +162,7 @@ struct RenameArgs {
 #[derive(Debug, Args)]
 struct ShowArgs {
     name: String,
-    /// Number of recent runs to show.
+    /// Number of recent run rows to show; consecutive identical runs collapse into one.
     #[arg(short = 'n', long = "runs", default_value_t = 10)]
     runs: usize,
 }
