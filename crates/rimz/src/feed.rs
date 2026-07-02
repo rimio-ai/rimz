@@ -450,6 +450,20 @@ pub fn pending_ask_for<'a>(
     })
 }
 
+/// The pending ask currently blocking `agent` in a sidebar snapshot.
+pub fn pending_ask_in_snapshot<'a>(
+    agent: &AgentState,
+    snapshot: &'a crate::SidebarSnapshot,
+) -> Option<&'a FeedItem> {
+    pending_ask_for(
+        agent,
+        snapshot
+            .needs_attention
+            .iter()
+            .chain(snapshot.resolver_working.iter()),
+    )
+}
+
 pub fn ask_summary(title: &str, body: Option<&str>, options: &[String]) -> String {
     let mut text = title.to_owned();
     if let Some(body) = body.map(str::trim).filter(|body| !body.is_empty()) {

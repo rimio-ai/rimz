@@ -271,17 +271,6 @@ fn current_channel_for_team(
     }
 }
 
-/// A human handle for an agent: its pet name, else `kind-ordinal`, else kind.
-pub(crate) fn agent_label(agent: &AgentState) -> String {
-    agent
-        .name
-        .clone()
-        .unwrap_or_else(|| match agent.kind_ordinal {
-            Some(ordinal) => format!("{}-{}", agent.kind, ordinal),
-            None => agent.kind.to_string(),
-        })
-}
-
 /// Refuse a plain selector that matched several agents. A bare `@<kind>`/`@<profile>`
 /// names a profile, not "everyone", so several matches is a "pick one" error: it
 /// lists the disambiguating handles to retype and names `--all` as the opt-in to
@@ -313,20 +302,6 @@ pub(crate) fn resolve_agent_one<'a>(
     )
 }
 
-/// Resolve a ref to every matching rollup agent for a broadcast or the durable
-/// identity side of parked messages.
-pub(crate) fn resolve_agent_many<'a>(
-    snapshot: &'a rimz::SidebarSnapshot,
-    raw: &str,
-    worktree_flag: Option<&str>,
-    current_channel: Option<&str>,
-) -> Result<Vec<&'a AgentState>> {
-    map_resolve(
-        raw,
-        rimz::target::resolve_many(snapshot, raw, worktree_flag, current_channel),
-    )
-}
-
 /// Resolve a ref to every matching live agent pane for `message --steer` and
 /// send-now messages: the producer's bound panes, so a target reaches exactly the agent
 /// panes the producer saw — bound sessions (at their live pane) and lazy panes
@@ -355,71 +330,11 @@ pub(crate) fn resolution_snapshot(
     ledger: &Ledger,
     globals: &GlobalFlags,
 ) -> Result<rimz::SidebarSnapshot> {
-    use rimz::sidebar::cache::unix_now_ms;
-    use rimz::sidebar::consumer::RollupCursor;
-    use rimz::sidebar::produce::{
-        ProduceOptions, pane_fixture_active, produce_resolution_snapshot,
-    };
-
-    let mux = globals
-        .mux
-        .or_else(|| rimz::mux::auto_detect_backend(None).ok())
-        // A deterministic pane fixture stands in for the mux in tests; produce
-        // reads it without touching the real backend, so any mux value serves.
-        .or_else(|| pane_fixture_active().then_some(MuxName::Zellij));
-    let Some(mux) = mux else {
-        return rollup_resolution_snapshot(ledger);
-    };
-    let state = StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing state paths")?;
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
-    let opts = ProduceOptions {
-        mux,
-        session_name: workspace.session_name.clone(),
-        exclude: None,
-        min_pane_cache_ms: Some(unix_now_ms()),
-        diag: None,
-        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
-    };
-    match produce_resolution_snapshot(&mut RollupCursor::new(), &state, &runtime, &opts) {
-        Ok(snapshot) => Ok(snapshot),
-        // No live session / pane discovery failed: fall back to the rollup's own
-        // stamped panes so a bound agent still resolves, exactly as before.
-        Err(_) => rollup_resolution_snapshot(ledger),
-    }
-}
-
-/// The no-frame fallback: the rollup, with `agent_panes` synthesized from each
-/// registered session's stamped pane. Without a live frame there is nothing to
-/// cwd-bind or verify, so launch placeholders stay pane-less and only registered
-/// sessions that already carry a pane are reachable — the pre-fold message
-/// behaviour.
-fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<rimz::SidebarSnapshot> {
-    let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    snapshot.agent_panes = snapshot
-        .agents
-        .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
-        .filter(|agent| !agent.agent_id.is_provisional())
-        .filter_map(|agent| {
-            let pane = agent.pane.as_ref()?;
-            Some(rimz::PaneAgent {
-                kind: agent.kind.clone(),
-                kind_ordinal: agent.kind_ordinal,
-                name: agent.name.clone(),
-                profile: agent.profile.clone(),
-                role: agent.role.clone(),
-                team: agent.team.clone(),
-                channel: agent.channel.clone(),
-                agent_id: Some(agent.agent_id.clone()),
-                pane_id: pane.pane_id.clone(),
-                worktree_path: agent.worktree_path.clone(),
-                worktree_branch: agent.worktree_branch.clone(),
-            })
-        })
-        .collect();
-    Ok(snapshot)
+    Ok(rimz::sidebar::produce::resolution_snapshot(
+        workspace,
+        ledger,
+        globals.mux,
+    )?)
 }
 
 /// Turn a clean target miss into the launch-profile/command/layout hint when

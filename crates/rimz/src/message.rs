@@ -1,9 +1,14 @@
-//! Durable per-agent message queue domain model.
+//! Durable per-agent message queue domain model and delivery pipeline.
 
 use std::time::Duration;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+
+pub mod deliver;
+pub mod dispatch;
+pub(crate) mod fire;
+pub mod send;
 
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{AgentState, AgentStatus};

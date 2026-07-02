@@ -37,7 +37,7 @@ use crate::sidebar::enrich::{
     EnrichMode, HeavyLanes, enrich, wired_lazy_default_models, wired_lazy_kinds,
 };
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
-use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
+use crate::{Ledger, ResolvedWorkspace, RuntimePaths, SidebarSnapshot, StatePaths};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProduceErr {
@@ -55,6 +55,12 @@ pub enum ProduceErr {
     /// The ledger rollup could not be read or projected.
     #[error(transparent)]
     Rollup(#[from] crate::ledger::snapshot::SnapshotErr),
+    /// State or runtime paths could not be prepared for the workspace.
+    #[error(transparent)]
+    Path(#[from] crate::ledger::paths::PathErr),
+    /// The cached ledger snapshot fallback could not be read.
+    #[error(transparent)]
+    Ledger(#[from] crate::ledger::LedgerErr),
 }
 
 pub type Result<T> = std::result::Result<T, ProduceErr>;
@@ -144,6 +150,71 @@ pub fn produce_resolution_snapshot(
         wired_lazy_kinds(),
         wired_lazy_default_models(),
     ))
+}
+
+/// Produce the snapshot used by commands that resolve message recipients. It
+/// folds a fresh pane frame into the event-fresh rollup without the render
+/// spine, so just-started sessionless panes are addressable while the command
+/// pays only one pane enumeration. When no mux is available, or pane discovery
+/// fails, it falls back to the rollup's stamped panes.
+pub fn resolution_snapshot(
+    workspace: &ResolvedWorkspace,
+    ledger: &Ledger,
+    mux: Option<MuxName>,
+) -> Result<SidebarSnapshot> {
+    let mux = mux
+        .or_else(|| crate::mux::auto_detect_backend(None).ok())
+        // A deterministic pane fixture stands in for the mux in tests; produce
+        // reads it without touching the real backend, so any mux value serves.
+        .or_else(|| pane_fixture_active().then_some(MuxName::Zellij));
+    let Some(mux) = mux else {
+        return rollup_resolution_snapshot(ledger);
+    };
+    let state = StatePaths::for_workspace(workspace.workspace_id.clone())?;
+    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+    let opts = ProduceOptions {
+        mux,
+        session_name: workspace.session_name.clone(),
+        exclude: None,
+        min_pane_cache_ms: Some(crate::sidebar::cache::unix_now_ms()),
+        diag: None,
+        heavy_lanes: HeavyLaneMode::Refresh,
+    };
+    match produce_resolution_snapshot(&mut RollupCursor::new(), &state, &runtime, &opts) {
+        Ok(snapshot) => Ok(snapshot),
+        // No live session / pane discovery failed: fall back to the rollup's own
+        // stamped panes so a bound agent still resolves, exactly as before.
+        Err(_) => rollup_resolution_snapshot(ledger),
+    }
+}
+
+/// The no-frame fallback: the rollup, with `agent_panes` synthesized from each
+/// registered session's stamped pane. Without a live frame there is nothing to
+/// cwd-bind or verify, so launch placeholders stay pane-less and only registered
+/// sessions that already carry a pane are reachable.
+fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<SidebarSnapshot> {
+    let mut snapshot = ledger.snapshot_cached()?;
+    snapshot.agent_panes = snapshot
+        .root_agents()
+        .filter(|agent| !agent.agent_id.is_provisional())
+        .filter_map(|agent| {
+            let pane = agent.pane.as_ref()?;
+            Some(crate::PaneAgent {
+                kind: agent.kind.clone(),
+                kind_ordinal: agent.kind_ordinal,
+                name: agent.name.clone(),
+                profile: agent.profile.clone(),
+                role: agent.role.clone(),
+                team: agent.team.clone(),
+                channel: agent.channel.clone(),
+                agent_id: Some(agent.agent_id.clone()),
+                pane_id: pane.pane_id.clone(),
+                worktree_path: agent.worktree_path.clone(),
+                worktree_branch: agent.worktree_branch.clone(),
+            })
+        })
+        .collect();
+    Ok(snapshot)
 }
 
 /// The producer enrichments over the bare rollup, with no pane frame — the

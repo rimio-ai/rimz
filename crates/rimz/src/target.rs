@@ -253,11 +253,7 @@ pub fn resolve_targets<'a>(
 }
 
 fn root_agents(snapshot: &SidebarSnapshot) -> Vec<&AgentState> {
-    snapshot
-        .agents
-        .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
-        .collect()
+    snapshot.root_agents().collect()
 }
 
 /// The shared mention/pane resolution over any candidate source. `candidates`

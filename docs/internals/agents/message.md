@@ -75,7 +75,7 @@ A record stores:
 | `auto_compact` | context-fill threshold that triggers a `/compact` before delivery |
 | `compacted_context_tokens` | baseline reading that suppresses duplicate compaction |
 
-The full record is the field catalog; the [lifecycle](#message-lifecycle) below is the contract. Domain model: [`message.rs`](../../../crates/rimz/src/message.rs).
+The full record is the field catalog; the [lifecycle](#message-lifecycle) below is the contract. Domain model: [`message.rs`](../../../crates/rimz/src/message.rs); live sends, park-vs-live dispatch, and queued delivery live in [`message/send.rs`](../../../crates/rimz/src/message/send.rs), [`message/dispatch.rs`](../../../crates/rimz/src/message/dispatch.rs), and [`message/deliver.rs`](../../../crates/rimz/src/message/deliver.rs).
 
 ## Message lifecycle
 

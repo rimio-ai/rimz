@@ -28,7 +28,6 @@ pub(crate) mod loop_fire;
 pub mod loop_instances;
 pub mod loop_run_log;
 pub mod message;
-pub(crate) mod message_fire;
 pub mod mux;
 pub mod notify_log;
 pub mod observability;

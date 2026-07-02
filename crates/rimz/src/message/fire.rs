@@ -5,13 +5,13 @@
 //! spawns the hidden `rimz message sweep` helper; ledger reads and writes stay in
 //! that helper.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use jiff::{Timestamp, Zoned};
 
 use crate::RuntimePaths;
-use crate::message::MESSAGE_WAKE_FILE;
+use crate::message::deliver::wake_stamp_path;
 
 pub(crate) fn wake_due_messages(runtime: &RuntimePaths, now: &Zoned) {
     let path = wake_stamp_path(runtime);
@@ -34,16 +34,12 @@ fn read_stamp(path: &Path) -> Option<Timestamp> {
         .flatten()
 }
 
-fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join(MESSAGE_WAKE_FILE)
-}
-
 fn spawn_message_sweep(runtime: &RuntimePaths) {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(err) => {
             tracing::warn!(
-                tags.operation = "message_fire.locate_exe",
+                tags.operation = "message.fire.locate_exe",
                 error = &err as &dyn std::error::Error,
                 "sidebar: cannot locate rimz to sweep scheduled messages",
             );
@@ -68,7 +64,7 @@ fn spawn_message_sweep(runtime: &RuntimePaths) {
         // stays an environment fact. Keep it at debug! so Sentry ignores it,
         // and the next elder tick retries.
         tracing::debug!(
-            tags.operation = "message_fire.spawn",
+            tags.operation = "message.fire.spawn",
             error = &err as &dyn std::error::Error,
             "sidebar: failed to spawn scheduled-message sweep",
         );

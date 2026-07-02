@@ -368,6 +368,14 @@ impl SidebarSnapshot {
         }
     }
 
+    /// Top-level agent sessions in this snapshot; subagents stay attached to
+    /// their parent card and are not independently addressable.
+    pub fn root_agents(&self) -> impl Iterator<Item = &AgentState> {
+        self.agents
+            .iter()
+            .filter(|agent| agent.parent_agent_id.is_none())
+    }
+
     /// Record the project root so a frame-admitted row whose cwd is neither
     /// under it nor inside one of the repo's worktrees lands in the `external`
     /// catch-all instead of its own pod. Callers set this from the workspace

@@ -14,11 +14,9 @@ use std::time::Duration;
 
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use rimz::ledger::workspace_record;
-use rimz::message::{DeliveryGate, MessageRecord, MessageSender};
+use rimz::message::{DeliveryGate, MessageRecord, MessageSender, deliver};
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{Ledger, RuntimePaths, StatePaths};
-
-use crate::cli::{ColorWhen, GlobalFlags};
 
 #[derive(Debug, Args)]
 pub struct AutoContinueArgs {
@@ -75,13 +73,9 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         session_name: record.session_name,
         mux_hint: Some(pane_id.mux()),
     };
-    let globals = GlobalFlags {
-        mux: Some(pane_id.mux()),
-        root: Some(workspace.project_root.clone()),
-        color: ColorWhen::Auto,
-    };
-    let mut snapshot = crate::cli::resolution_snapshot(&workspace, &ledger, &globals)
-        .context("reading auto-continue delivery snapshot")?;
+    let mut snapshot =
+        rimz::sidebar::produce::resolution_snapshot(&workspace, &ledger, Some(pane_id.mux()))
+            .context("reading auto-continue delivery snapshot")?;
     snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(
         ledger.runtime_paths(),
     ));
@@ -112,19 +106,19 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         )
         .with_channel(rimz::target::agent_channel(agent))
         .with_sender(MessageSender::Human)
-        .with_pane_id(pane_id);
+        .with_pane_id(pane_id.clone());
         let message_id = message.message_id.clone();
         ledger
             .queue_message(&message, &workspace.session_name)
             .context("queueing auto-continue resume message")?;
         message_id
     };
-    let delivered = crate::cli::message::deliver_one(
+    let delivered = deliver::deliver_one(
         &workspace,
         &ledger,
         &message_id,
         Duration::ZERO,
-        &globals,
+        Some(pane_id.mux()),
     )
     .context("delivering auto-continue resume message")?;
     if !delivered {
