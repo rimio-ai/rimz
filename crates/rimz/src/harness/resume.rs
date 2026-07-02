@@ -261,37 +261,33 @@ fn unique_label(base: &str, used: &mut HashSet<String>) -> String {
 }
 
 fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
-    let mut command = vec![
-        rimz_bin.to_string_lossy().into_owned(),
-        "agents".to_owned(),
-        "exec".to_owned(),
-        agent.kind.as_str().to_owned(),
-        "--resume".to_owned(),
-        agent.agent_id.as_str().to_owned(),
-        "--close-pane-on-exit".to_owned(),
-    ];
-    if let Some(name) = agent.name.as_deref() {
-        command.extend(["--agent-name".to_owned(), name.to_owned()]);
-    }
-    if let Some(profile) = agent.profile.as_deref() {
-        command.extend(["--agent-profile".to_owned(), profile.to_owned()]);
-    }
-    if let Some(role) = agent.role.as_deref() {
-        command.extend(["--agent-role".to_owned(), role.to_owned()]);
-    }
-    if let Some(team) = agent.team.as_deref() {
-        command.extend(["--agent-team".to_owned(), team.to_owned()]);
-    }
-    if let Some(launch_group) = agent.launch_group.as_deref() {
-        command.extend(["--launch-group".to_owned(), launch_group.to_owned()]);
-    }
-    if let Some(launch_ordinal) = agent.launch_ordinal {
-        command.extend(["--launch-ordinal".to_owned(), launch_ordinal.to_string()]);
-    }
-    if let Some(channel) = agent.channel.as_deref() {
-        command.extend(["--agent-channel".to_owned(), channel.to_owned()]);
-    }
-    command
+    crate::harness::launch::exec_argv(
+        rimz_bin,
+        &crate::harness::launch::ExecInvocation {
+            kind: agent.kind.as_str(),
+            action: crate::harness::launch::ExecAction::Resume {
+                session_id: agent.agent_id.as_str(),
+            },
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: true,
+            exit_on_run_completion: false,
+            identity: crate::harness::launch::ExecIdentity {
+                name: agent.name.as_deref(),
+                profile: agent.profile.as_deref(),
+                role: agent.role.as_deref(),
+                team: agent.team.as_deref(),
+                launch_group: agent.launch_group.as_deref(),
+                launch_ordinal: agent.launch_ordinal,
+                channel: agent.channel.as_deref(),
+                // Resume did not replay model/effort before the wrapper grammar
+                // moved here; keep argv behavior stable.
+                model: None,
+                effort: None,
+                ..crate::harness::launch::ExecIdentity::default()
+            },
+        },
+    )
 }
 
 /// A short, view-safe label for a resumed agent: `kind:branch`, falling back to
@@ -527,7 +523,6 @@ mod tests {
                 "claude",
                 "--resume",
                 "a1",
-                "--close-pane-on-exit",
                 "--agent-name",
                 "swift-otter",
                 "--agent-profile",
@@ -540,6 +535,7 @@ mod tests {
                 "launch_group_1",
                 "--launch-ordinal",
                 "2",
+                "--close-pane-on-exit",
             ]
         );
     }

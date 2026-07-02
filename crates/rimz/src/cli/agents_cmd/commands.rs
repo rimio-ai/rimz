@@ -450,19 +450,31 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
     let agent_cell = agent_cells[0];
     let adapter = rimz::agents::find_adapter(agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
+    let launch_invocation = rimz::harness::launch::ExecInvocation {
+        kind: agent_cell.kind,
+        action: rimz::harness::launch::ExecAction::Launch {
+            prompt: Some(&prompt),
+            extra_args: &[],
+        },
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        identity: rimz::harness::launch::ExecIdentity {
+            profile: agent_cell.profile,
+            role: agent_cell.role,
+            channel: args.channel.as_deref(),
+            model: agent_cell.model,
+            effort: agent_cell.effort,
+            ..rimz::harness::launch::ExecIdentity::default()
+        },
+    };
     let launch_env = full_agent_launch_env(
         &workspace.project_root,
         adapter,
         machine_config.harness.rtk,
         machine_config.transcript.file_days,
-        AgentLaunchEnvIdentity {
-            agent_profile: agent_cell.profile,
-            agent_role: agent_cell.role,
-            agent_channel: args.channel.as_deref(),
-            agent_model: agent_cell.model,
-            agent_effort: agent_cell.effort,
-            ..AgentLaunchEnvIdentity::default()
-        },
+        &launch_invocation,
     )?;
     supervised::preflight_agent(adapter)?;
     supervised::preflight_program(adapter, agent_cell.args, &prompt, &launch_env)?;

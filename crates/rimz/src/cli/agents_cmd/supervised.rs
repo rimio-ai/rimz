@@ -92,49 +92,29 @@ pub(super) struct RunPaneCmdArgs<'a> {
 
 pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
-    let mut argv = vec![
-        rimz_bin.to_string_lossy().into_owned(),
-        "agents".to_owned(),
-        "exec".to_owned(),
-        args.adapter.descriptor().kind.to_owned(),
-        "--run-id".to_owned(),
-        args.run_id.to_string(),
-    ];
-    if let Some(agent_name) = args.agent_name {
-        argv.extend(["--agent-name".to_owned(), agent_name.to_owned()]);
-    }
-    if let Some(agent_profile) = args.agent_profile {
-        argv.extend(["--agent-profile".to_owned(), agent_profile.to_owned()]);
-    }
-    if let Some(agent_role) = args.agent_role {
-        argv.extend(["--agent-role".to_owned(), agent_role.to_owned()]);
-    }
-    if let Some(agent_model) = args.agent_model {
-        argv.extend(["--agent-model".to_owned(), agent_model.to_owned()]);
-    }
-    if let Some(agent_effort) = args.agent_effort {
-        argv.extend(["--agent-effort".to_owned(), agent_effort.to_owned()]);
-    }
-    if let Some(launch_id) = args.launch_id {
-        argv.extend(["--launch-id".to_owned(), launch_id.as_str().to_owned()]);
-    }
-    if args.self_cleanup_on_completion {
-        argv.extend([
-            "--exit-on-run-completion".to_owned(),
-            "--close-pane-on-exit".to_owned(),
-        ]);
-    }
-    if args.cleanup_worktree {
-        argv.extend([
-            "--worktree-path".to_owned(),
-            args.cwd.to_string_lossy().into_owned(),
-        ]);
-    }
-    argv.extend(["--prompt".to_owned(), args.prompt.to_owned()]);
-    if !args.permission_args.is_empty() {
-        argv.push("--".to_owned());
-        argv.extend(args.permission_args.iter().cloned());
-    }
+    let argv = rimz::harness::launch::exec_argv(
+        &rimz_bin,
+        &rimz::harness::launch::ExecInvocation {
+            kind: args.adapter.descriptor().kind,
+            action: rimz::harness::launch::ExecAction::Launch {
+                prompt: Some(args.prompt),
+                extra_args: args.permission_args,
+            },
+            run_id: Some(args.run_id.as_str()),
+            worktree_path: args.cleanup_worktree.then_some(args.cwd),
+            close_pane_on_exit: args.self_cleanup_on_completion,
+            exit_on_run_completion: args.self_cleanup_on_completion,
+            identity: rimz::harness::launch::ExecIdentity {
+                name: args.agent_name,
+                launch_id: args.launch_id.map(rimz::ids::AgentSessionId::as_str),
+                profile: args.agent_profile,
+                role: args.agent_role,
+                model: args.agent_model,
+                effort: args.agent_effort,
+                ..rimz::harness::launch::ExecIdentity::default()
+            },
+        },
+    );
     Ok(PaneCmd { argv })
 }
 

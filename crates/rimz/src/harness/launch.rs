@@ -1,4 +1,4 @@
-//! Agent and shell launch helpers.
+//! Agent exec-wrapper and shell launch helpers.
 
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
@@ -113,6 +113,182 @@ pub fn channel_label_shell_argv(
         return vec![user_shell_program()];
     };
     channel_shell_argv(workspace_id, project_root, worktree_path, channel)
+}
+
+/// The identity a `rimz agents exec` pane carries: rendered as `--agent-*`
+/// flags (parsed back by the CLI's ExecArgs) and as RIMZ_* env
+/// (crate::harness::run::ENV_*) for lifecycle hooks and peer attribution.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExecIdentity<'a> {
+    pub name: Option<&'a str>,
+    /// Provisional launch row id; rendered only alongside `name`
+    /// (`--launch-id` requires `--agent-name` at the parse side).
+    pub launch_id: Option<&'a str>,
+    pub profile: Option<&'a str>,
+    pub role: Option<&'a str>,
+    pub team: Option<&'a str>,
+    pub launch_group: Option<&'a str>,
+    pub launch_ordinal: Option<u32>,
+    pub channel: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub effort: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ExecAction<'a> {
+    Launch {
+        prompt: Option<&'a str>,
+        extra_args: &'a [String],
+    },
+    Resume {
+        session_id: &'a str,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ExecInvocation<'a> {
+    pub kind: &'a str,
+    pub action: ExecAction<'a>,
+    pub run_id: Option<&'a str>,
+    pub worktree_path: Option<&'a Path>,
+    pub close_pane_on_exit: bool,
+    pub exit_on_run_completion: bool,
+    pub identity: ExecIdentity<'a>,
+}
+
+pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
+    let mut argv = vec![
+        rimz_bin.to_string_lossy().into_owned(),
+        "agents".to_owned(),
+        "exec".to_owned(),
+        inv.kind.to_owned(),
+    ];
+    if let ExecAction::Resume { session_id } = inv.action {
+        argv.extend(["--resume".to_owned(), session_id.to_owned()]);
+    }
+    if let Some(run_id) = inv.run_id {
+        argv.extend(["--run-id".to_owned(), run_id.to_owned()]);
+    }
+    if let Some(name) = inv.identity.name {
+        argv.extend(["--agent-name".to_owned(), name.to_owned()]);
+        if let Some(launch_id) = inv.identity.launch_id {
+            argv.extend(["--launch-id".to_owned(), launch_id.to_owned()]);
+        }
+    }
+    if let Some(profile) = inv.identity.profile {
+        argv.extend(["--agent-profile".to_owned(), profile.to_owned()]);
+    }
+    if let Some(role) = inv.identity.role {
+        argv.extend(["--agent-role".to_owned(), role.to_owned()]);
+    }
+    if let Some(team) = inv.identity.team {
+        argv.extend(["--agent-team".to_owned(), team.to_owned()]);
+    }
+    if let Some(launch_group) = inv.identity.launch_group {
+        argv.extend(["--launch-group".to_owned(), launch_group.to_owned()]);
+    }
+    if let Some(launch_ordinal) = inv.identity.launch_ordinal {
+        argv.extend(["--launch-ordinal".to_owned(), launch_ordinal.to_string()]);
+    }
+    if let Some(channel) = inv.identity.channel {
+        argv.extend(["--agent-channel".to_owned(), channel.to_owned()]);
+    }
+    if let Some(model) = inv.identity.model {
+        argv.extend(["--agent-model".to_owned(), model.to_owned()]);
+    }
+    if let Some(effort) = inv.identity.effort {
+        argv.extend(["--agent-effort".to_owned(), effort.to_owned()]);
+    }
+    if inv.exit_on_run_completion {
+        argv.push("--exit-on-run-completion".to_owned());
+    }
+    if inv.close_pane_on_exit {
+        argv.push("--close-pane-on-exit".to_owned());
+    }
+    if let Some(path) = inv.worktree_path {
+        argv.extend([
+            "--worktree-path".to_owned(),
+            path.to_string_lossy().into_owned(),
+        ]);
+    }
+    if let ExecAction::Launch { prompt, extra_args } = inv.action {
+        if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
+            argv.extend(["--prompt".to_owned(), prompt.to_owned()]);
+        }
+        if !extra_args.is_empty() {
+            argv.push("--".to_owned());
+            argv.extend(extra_args.iter().cloned());
+        }
+    }
+    argv
+}
+
+/// The RIMZ_* identity env for one invocation (kind, run id, identity fields).
+/// Callers merge trust env, adapter launch env, rtk, and transcript-days around it.
+pub fn exec_identity_env(inv: &ExecInvocation<'_>) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    env.insert(
+        crate::harness::run::ENV_AGENT_KIND.to_owned(),
+        inv.kind.to_owned(),
+    );
+    if let Some(run_id) = inv.run_id {
+        env.insert(
+            crate::harness::run::ENV_RUN_ID.to_owned(),
+            run_id.to_owned(),
+        );
+    }
+    if let Some(name) = inv.identity.name {
+        env.insert(
+            crate::harness::run::ENV_AGENT_NAME.to_owned(),
+            name.to_owned(),
+        );
+    }
+    if let Some(profile) = inv.identity.profile {
+        env.insert(
+            crate::harness::run::ENV_AGENT_PROFILE.to_owned(),
+            profile.to_owned(),
+        );
+    }
+    if let Some(role) = inv.identity.role {
+        env.insert(
+            crate::harness::run::ENV_AGENT_ROLE.to_owned(),
+            role.to_owned(),
+        );
+    }
+    if let Some(team) = inv.identity.team {
+        env.insert(crate::harness::run::ENV_TEAM.to_owned(), team.to_owned());
+    }
+    if let Some(launch_group) = inv.identity.launch_group {
+        env.insert(
+            crate::harness::run::ENV_LAUNCH_GROUP.to_owned(),
+            launch_group.to_owned(),
+        );
+    }
+    if let Some(launch_ordinal) = inv.identity.launch_ordinal {
+        env.insert(
+            crate::harness::run::ENV_LAUNCH_ORDINAL.to_owned(),
+            launch_ordinal.to_string(),
+        );
+    }
+    if let Some(channel) = inv.identity.channel {
+        env.insert(
+            crate::harness::run::ENV_CHANNEL.to_owned(),
+            channel.to_owned(),
+        );
+    }
+    if let Some(model) = inv.identity.model {
+        env.insert(
+            crate::harness::run::ENV_AGENT_MODEL.to_owned(),
+            model.to_owned(),
+        );
+    }
+    if let Some(effort) = inv.identity.effort {
+        env.insert(
+            crate::harness::run::ENV_AGENT_EFFORT.to_owned(),
+            effort.to_owned(),
+        );
+    }
+    env
 }
 
 /// Wrap an agent command in the user's default shell startup path so shell rc
@@ -471,6 +647,262 @@ mod tests {
 
     fn argv(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
+    #[test]
+    fn exec_argv_renders_interactive_launch_identity() {
+        let extra_args = argv(&["--dangerously-skip-permissions"]);
+        let invocation = ExecInvocation {
+            kind: "claude",
+            action: ExecAction::Launch {
+                prompt: Some("fix it"),
+                extra_args: &extra_args,
+            },
+            run_id: None,
+            worktree_path: Some(Path::new("/repo/worktree")),
+            close_pane_on_exit: true,
+            exit_on_run_completion: false,
+            identity: ExecIdentity {
+                name: Some("swift-otter"),
+                launch_id: Some("launch_123"),
+                profile: Some("planner"),
+                role: Some("coder"),
+                team: Some("pcr"),
+                launch_group: Some("launch_group_1"),
+                launch_ordinal: Some(2),
+                channel: Some("design"),
+                model: Some("opus"),
+                effort: Some("high"),
+            },
+        };
+
+        assert_eq!(
+            exec_argv(Path::new("/bin/rimz"), &invocation),
+            argv(&[
+                "/bin/rimz",
+                "agents",
+                "exec",
+                "claude",
+                "--agent-name",
+                "swift-otter",
+                "--launch-id",
+                "launch_123",
+                "--agent-profile",
+                "planner",
+                "--agent-role",
+                "coder",
+                "--agent-team",
+                "pcr",
+                "--launch-group",
+                "launch_group_1",
+                "--launch-ordinal",
+                "2",
+                "--agent-channel",
+                "design",
+                "--agent-model",
+                "opus",
+                "--agent-effort",
+                "high",
+                "--close-pane-on-exit",
+                "--worktree-path",
+                "/repo/worktree",
+                "--prompt",
+                "fix it",
+                "--",
+                "--dangerously-skip-permissions",
+            ])
+        );
+    }
+
+    #[test]
+    fn exec_argv_renders_supervised_run_cleanup() {
+        let permission_args = argv(&["--ask"]);
+        let invocation = ExecInvocation {
+            kind: "codex",
+            action: ExecAction::Launch {
+                prompt: Some("ship"),
+                extra_args: &permission_args,
+            },
+            run_id: Some("run_123"),
+            worktree_path: Some(Path::new("/repo")),
+            close_pane_on_exit: true,
+            exit_on_run_completion: true,
+            identity: ExecIdentity {
+                name: Some("direct-codex"),
+                launch_id: Some("launch_abc"),
+                profile: Some("reviewer"),
+                role: Some("qa"),
+                model: Some("gpt-5.5"),
+                effort: Some("xhigh"),
+                ..ExecIdentity::default()
+            },
+        };
+
+        assert_eq!(
+            exec_argv(Path::new("/bin/rimz"), &invocation),
+            argv(&[
+                "/bin/rimz",
+                "agents",
+                "exec",
+                "codex",
+                "--run-id",
+                "run_123",
+                "--agent-name",
+                "direct-codex",
+                "--launch-id",
+                "launch_abc",
+                "--agent-profile",
+                "reviewer",
+                "--agent-role",
+                "qa",
+                "--agent-model",
+                "gpt-5.5",
+                "--agent-effort",
+                "xhigh",
+                "--exit-on-run-completion",
+                "--close-pane-on-exit",
+                "--worktree-path",
+                "/repo",
+                "--prompt",
+                "ship",
+                "--",
+                "--ask",
+            ])
+        );
+    }
+
+    #[test]
+    fn exec_argv_renders_resume() {
+        let invocation = ExecInvocation {
+            kind: "claude",
+            action: ExecAction::Resume {
+                session_id: "session-1",
+            },
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: true,
+            exit_on_run_completion: false,
+            identity: ExecIdentity {
+                name: Some("swift-otter"),
+                profile: Some("planner"),
+                role: Some("coder"),
+                team: Some("pcr"),
+                launch_group: Some("launch_group_1"),
+                launch_ordinal: Some(2),
+                channel: Some("design"),
+                ..ExecIdentity::default()
+            },
+        };
+
+        assert_eq!(
+            exec_argv(Path::new("/bin/rimz"), &invocation),
+            argv(&[
+                "/bin/rimz",
+                "agents",
+                "exec",
+                "claude",
+                "--resume",
+                "session-1",
+                "--agent-name",
+                "swift-otter",
+                "--agent-profile",
+                "planner",
+                "--agent-role",
+                "coder",
+                "--agent-team",
+                "pcr",
+                "--launch-group",
+                "launch_group_1",
+                "--launch-ordinal",
+                "2",
+                "--agent-channel",
+                "design",
+                "--close-pane-on-exit",
+            ])
+        );
+    }
+
+    #[test]
+    fn exec_identity_env_maps_identity_fields() {
+        let invocation = ExecInvocation {
+            kind: "claude",
+            action: ExecAction::Launch {
+                prompt: None,
+                extra_args: &[],
+            },
+            run_id: Some("run_123"),
+            worktree_path: None,
+            close_pane_on_exit: false,
+            exit_on_run_completion: false,
+            identity: ExecIdentity {
+                name: Some("swift-otter"),
+                profile: Some("planner"),
+                role: Some("coder"),
+                team: Some("pcr"),
+                launch_group: Some("launch_group_1"),
+                launch_ordinal: Some(2),
+                channel: Some("design"),
+                model: Some("opus"),
+                effort: Some("high"),
+                ..ExecIdentity::default()
+            },
+        };
+
+        let env = exec_identity_env(&invocation);
+
+        assert_eq!(
+            env.get(crate::harness::run::ENV_AGENT_KIND)
+                .map(String::as_str),
+            Some("claude")
+        );
+        assert_eq!(
+            env.get(crate::harness::run::ENV_RUN_ID).map(String::as_str),
+            Some("run_123")
+        );
+        assert_eq!(
+            env.get(crate::harness::run::ENV_AGENT_NAME)
+                .map(String::as_str),
+            Some("swift-otter")
+        );
+        assert_eq!(
+            env.get(crate::harness::run::ENV_AGENT_PROFILE)
+                .map(String::as_str),
+            Some("planner")
+        );
+        assert_eq!(
+            env.get(crate::harness::run::ENV_AGENT_ROLE)
+                .map(String::as_str),
+            Some("coder")
+        );
+        assert_eq!(
+            env.get(crate::harness::run::ENV_TEAM).map(String::as_str),
+            Some("pcr")
+        );
+        assert_eq!(
+            env.get(crate::harness::run::ENV_LAUNCH_GROUP)
+                .map(String::as_str),
+            Some("launch_group_1")
+        );
+        assert_eq!(
+            env.get(crate::harness::run::ENV_LAUNCH_ORDINAL)
+                .map(String::as_str),
+            Some("2")
+        );
+        assert_eq!(
+            env.get(crate::harness::run::ENV_CHANNEL)
+                .map(String::as_str),
+            Some("design")
+        );
+        assert_eq!(
+            env.get(crate::harness::run::ENV_AGENT_MODEL)
+                .map(String::as_str),
+            Some("opus")
+        );
+        assert_eq!(
+            env.get(crate::harness::run::ENV_AGENT_EFFORT)
+                .map(String::as_str),
+            Some("high")
+        );
     }
 
     #[test]

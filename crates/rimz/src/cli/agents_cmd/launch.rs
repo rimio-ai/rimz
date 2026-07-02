@@ -351,96 +351,19 @@ pub(super) fn agent_launch_env(
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub(super) struct AgentLaunchEnvIdentity<'a> {
-    pub(super) run_id: Option<&'a rimz::RunId>,
-    pub(super) agent_name: Option<&'a str>,
-    pub(super) agent_profile: Option<&'a str>,
-    pub(super) agent_role: Option<&'a str>,
-    pub(super) agent_team: Option<&'a str>,
-    pub(super) launch_group: Option<&'a str>,
-    pub(super) launch_ordinal: Option<u32>,
-    pub(super) agent_channel: Option<&'a str>,
-    pub(super) agent_model: Option<&'a str>,
-    pub(super) agent_effort: Option<&'a str>,
-}
-
 pub(super) fn full_agent_launch_env(
     project_root: &Path,
     adapter: &dyn AgentAdapter,
     rtk: rimz::config::RtkMode,
     transcript_file_days: u32,
-    identity: AgentLaunchEnvIdentity<'_>,
+    inv: &rimz::harness::launch::ExecInvocation<'_>,
 ) -> Result<BTreeMap<String, String>> {
     let kind = adapter.descriptor().kind;
     let mut env = agent_launch_env(project_root, kind)?;
     for (key, value) in adapter.launch_env() {
         env.insert(key.to_owned(), value.to_owned());
     }
-    env.insert(
-        rimz::harness::run::ENV_AGENT_KIND.to_owned(),
-        kind.to_owned(),
-    );
-    if let Some(run_id) = identity.run_id {
-        env.insert(
-            rimz::harness::run::ENV_RUN_ID.to_owned(),
-            run_id.as_str().to_owned(),
-        );
-    }
-    if let Some(agent_name) = identity.agent_name {
-        env.insert(
-            rimz::harness::run::ENV_AGENT_NAME.to_owned(),
-            agent_name.to_owned(),
-        );
-    }
-    if let Some(agent_profile) = identity.agent_profile {
-        env.insert(
-            rimz::harness::run::ENV_AGENT_PROFILE.to_owned(),
-            agent_profile.to_owned(),
-        );
-    }
-    if let Some(agent_role) = identity.agent_role {
-        env.insert(
-            rimz::harness::run::ENV_AGENT_ROLE.to_owned(),
-            agent_role.to_owned(),
-        );
-    }
-    if let Some(agent_team) = identity.agent_team {
-        env.insert(
-            rimz::harness::run::ENV_TEAM.to_owned(),
-            agent_team.to_owned(),
-        );
-    }
-    if let Some(launch_group) = identity.launch_group {
-        env.insert(
-            rimz::harness::run::ENV_LAUNCH_GROUP.to_owned(),
-            launch_group.to_owned(),
-        );
-    }
-    if let Some(launch_ordinal) = identity.launch_ordinal {
-        env.insert(
-            rimz::harness::run::ENV_LAUNCH_ORDINAL.to_owned(),
-            launch_ordinal.to_string(),
-        );
-    }
-    if let Some(agent_channel) = identity.agent_channel {
-        env.insert(
-            rimz::harness::run::ENV_CHANNEL.to_owned(),
-            agent_channel.to_owned(),
-        );
-    }
-    if let Some(agent_model) = identity.agent_model {
-        env.insert(
-            rimz::harness::run::ENV_AGENT_MODEL.to_owned(),
-            agent_model.to_owned(),
-        );
-    }
-    if let Some(agent_effort) = identity.agent_effort {
-        env.insert(
-            rimz::harness::run::ENV_AGENT_EFFORT.to_owned(),
-            agent_effort.to_owned(),
-        );
-    }
+    env.extend(rimz::harness::launch::exec_identity_env(inv));
     env.insert(
         rimz::harness::run::ENV_RTK.to_owned(),
         rtk.as_str().to_owned(),
@@ -1048,61 +971,37 @@ pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Re
             effort,
             ..
         } => {
-            let mut argv = vec![
-                options.rimz_bin.to_string_lossy().into_owned(),
-                "agents".to_owned(),
-                "exec".to_owned(),
-                kind.as_str().to_owned(),
-            ];
-            if !options.cleanup_worktree && !options.in_place {
-                argv.push("--close-pane-on-exit".to_owned());
-            }
-            if let Some(profile) = profile {
-                argv.extend(["--agent-profile".to_owned(), profile.clone()]);
-            }
-            if let Some(role) = role {
-                argv.extend(["--agent-role".to_owned(), role.clone()]);
-            }
-            if let Some(team) = options.team {
-                argv.extend(["--agent-team".to_owned(), team.to_owned()]);
-            }
-            if let Some(channel) = options.channel {
-                argv.extend(["--agent-channel".to_owned(), channel.to_owned()]);
-            }
-            if let Some(model) = model {
-                argv.extend(["--agent-model".to_owned(), model.clone()]);
-            }
-            if let Some(effort) = effort {
-                argv.extend(["--agent-effort".to_owned(), effort.clone()]);
-            }
             if let Some(launch) = options.launch {
                 validate_agent_name(&launch.name)?;
-                argv.extend(["--agent-name".to_owned(), launch.name.clone()]);
-                argv.extend([
-                    "--launch-id".to_owned(),
-                    launch.agent_id.as_str().to_owned(),
-                ]);
-                if let Some(launch_group) = launch.launch_group.as_deref() {
-                    argv.extend(["--launch-group".to_owned(), launch_group.to_owned()]);
-                }
-                if let Some(launch_ordinal) = launch.launch_ordinal {
-                    argv.extend(["--launch-ordinal".to_owned(), launch_ordinal.to_string()]);
-                }
             }
-            if options.cleanup_worktree {
-                argv.extend([
-                    "--worktree-path".to_owned(),
-                    options.cwd.to_string_lossy().into_owned(),
-                ]);
-            }
-            if let Some(prompt) = options.prompt.filter(|value| !value.is_empty()) {
-                argv.extend(["--prompt".to_owned(), prompt.to_owned()]);
-            }
-            if !args.is_empty() {
-                argv.push("--".to_owned());
-                argv.extend(args.iter().cloned());
-            }
-            argv
+            rimz::harness::launch::exec_argv(
+                options.rimz_bin,
+                &rimz::harness::launch::ExecInvocation {
+                    kind: kind.as_str(),
+                    action: rimz::harness::launch::ExecAction::Launch {
+                        prompt: options.prompt,
+                        extra_args: args,
+                    },
+                    run_id: None,
+                    worktree_path: options.cleanup_worktree.then_some(options.cwd),
+                    close_pane_on_exit: !options.cleanup_worktree && !options.in_place,
+                    exit_on_run_completion: false,
+                    identity: rimz::harness::launch::ExecIdentity {
+                        name: options.launch.map(|launch| launch.name.as_str()),
+                        launch_id: options.launch.map(|launch| launch.agent_id.as_str()),
+                        profile: profile.as_deref(),
+                        role: role.as_deref(),
+                        team: options.team,
+                        launch_group: options
+                            .launch
+                            .and_then(|launch| launch.launch_group.as_deref()),
+                        launch_ordinal: options.launch.and_then(|launch| launch.launch_ordinal),
+                        channel: options.channel,
+                        model: model.as_deref(),
+                        effort: effort.as_deref(),
+                    },
+                },
+            )
         }
     };
     Ok(PaneCmd { argv })

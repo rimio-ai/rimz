@@ -150,22 +150,34 @@ fn agents_bare_json_parses_as_list_flag() {
 fn full_launch_env_marks_agent_kind() {
     let dir = tempfile::tempdir().expect("tempdir");
     let adapter = rimz::agents::find_adapter("claude").expect("claude adapter");
+    let invocation = rimz::harness::launch::ExecInvocation {
+        kind: "claude",
+        action: rimz::harness::launch::ExecAction::Launch {
+            prompt: None,
+            extra_args: &[],
+        },
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        identity: rimz::harness::launch::ExecIdentity {
+            name: Some("swift-otter"),
+            profile: Some("planner"),
+            role: Some("coder"),
+            team: Some("pcr"),
+            launch_group: Some("launch_group_1"),
+            launch_ordinal: Some(2),
+            model: Some("gpt-5.5"),
+            effort: Some("xhigh"),
+            ..rimz::harness::launch::ExecIdentity::default()
+        },
+    };
     let env = full_agent_launch_env(
         dir.path(),
         adapter,
         rimz::config::RtkMode::On,
         30,
-        AgentLaunchEnvIdentity {
-            agent_name: Some("swift-otter"),
-            agent_profile: Some("planner"),
-            agent_role: Some("coder"),
-            agent_team: Some("pcr"),
-            launch_group: Some("launch_group_1"),
-            launch_ordinal: Some(2),
-            agent_model: Some("gpt-5.5"),
-            agent_effort: Some("xhigh"),
-            ..AgentLaunchEnvIdentity::default()
-        },
+        &invocation,
     )
     .expect("launch env");
 
@@ -260,7 +272,6 @@ fn pane_command_stamps_agent_role_and_team() {
             "agents",
             "exec",
             "claude",
-            "--close-pane-on-exit",
             "--agent-profile",
             "claude-planner",
             "--agent-role",
@@ -271,6 +282,7 @@ fn pane_command_stamps_agent_role_and_team() {
             "claude-sonnet",
             "--agent-effort",
             "high",
+            "--close-pane-on-exit",
         ]
     );
 }

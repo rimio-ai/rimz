@@ -43,23 +43,39 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .launch_command(&args.extra_args, args.prompt.as_deref())
             .ok_or_else(|| anyhow::anyhow!("agent `{}` has no launch command", args.kind))?,
     };
+    let exec_action = match args.resume.as_deref() {
+        Some(session_id) => rimz::harness::launch::ExecAction::Resume { session_id },
+        None => rimz::harness::launch::ExecAction::Launch {
+            prompt: args.prompt.as_deref(),
+            extra_args: &args.extra_args,
+        },
+    };
+    let exec_invocation = rimz::harness::launch::ExecInvocation {
+        kind: &args.kind,
+        action: exec_action,
+        run_id: args.run_id.as_ref().map(|run_id| run_id.as_str()),
+        worktree_path: args.worktree_path.as_deref(),
+        close_pane_on_exit: args.close_pane_on_exit,
+        exit_on_run_completion: args.exit_on_run_completion,
+        identity: rimz::harness::launch::ExecIdentity {
+            name: args.agent_name.as_deref(),
+            profile: args.agent_profile.as_deref(),
+            role: args.agent_role.as_deref(),
+            team: args.agent_team.as_deref(),
+            launch_group: args.launch_group.as_deref(),
+            launch_ordinal: args.launch_ordinal,
+            channel: args.agent_channel.as_deref(),
+            model: args.agent_model.as_deref(),
+            effort: args.agent_effort.as_deref(),
+            ..rimz::harness::launch::ExecIdentity::default()
+        },
+    };
     let rimz_env = full_agent_launch_env(
         &workspace.project_root,
         adapter,
         rtk,
         machine_config.transcript.file_days,
-        AgentLaunchEnvIdentity {
-            run_id: args.run_id.as_ref(),
-            agent_name: args.agent_name.as_deref(),
-            agent_profile: args.agent_profile.as_deref(),
-            agent_role: args.agent_role.as_deref(),
-            agent_team: args.agent_team.as_deref(),
-            launch_group: args.launch_group.as_deref(),
-            launch_ordinal: args.launch_ordinal,
-            agent_channel: args.agent_channel.as_deref(),
-            agent_model: args.agent_model.as_deref(),
-            agent_effort: args.agent_effort.as_deref(),
-        },
+        &exec_invocation,
     )?;
     let argv = rimz::harness::launch::login_shell_argv(&rimz_env, &argv);
     let (program, rest) = argv
