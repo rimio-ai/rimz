@@ -150,7 +150,7 @@ fn group_thousands(n: u64) -> String {
 pub(super) fn model_label(display: &str) -> String {
     let cleaned = strip_window_qualifier(display);
     if looks_like_slug(&cleaned) {
-        prettify_model_slug(&cleaned)
+        crate::agents::model_display::display_model(&cleaned)
     } else {
         cleaned.replace('-', " ")
     }
@@ -185,51 +185,6 @@ fn looks_like_slug(value: &str) -> bool {
         && !value.contains(' ')
         && !value.contains('(')
         && !value.chars().any(|c| c.is_ascii_uppercase())
-}
-
-/// Prettify a raw model slug into a display name: drop a leading vendor token
-/// so the family name leads, join split version digits with a dot (`4-8` →
-/// `4.8`), and title-case the words (acronyms like `gpt` upper-cased), so
-/// `claude-opus-4-8` reads `Opus 4.8` and `gpt-5.5-codex` reads `GPT 5.5 Codex`.
-fn prettify_model_slug(slug: &str) -> String {
-    let segments: Vec<&str> = slug.split('-').filter(|seg| !seg.is_empty()).collect();
-    // A leading vendor prefix is redundant with the brand emblem and product
-    // header, so the family name leads; a single-segment product keeps its name.
-    let start = usize::from(segments.len() > 1 && matches!(segments[0], "claude" | "anthropic"));
-    let mut words: Vec<String> = Vec::new();
-    for segment in &segments[start..] {
-        let is_int = segment.chars().all(|c| c.is_ascii_digit());
-        let prev_is_version = words
-            .last()
-            .is_some_and(|prev| prev.chars().all(|c| c.is_ascii_digit() || c == '.'));
-        if is_int && prev_is_version {
-            // A split `major-minor`: glue onto the running version (`4` then `8`).
-            let version = words.last_mut().expect("prev_is_version implies a word");
-            version.push('.');
-            version.push_str(segment);
-        } else {
-            words.push(title_word(segment));
-        }
-    }
-    words.join(" ")
-}
-
-/// Title-case one slug segment: known acronyms upper-case, a version-like
-/// segment (digits and dots) passes through, every other word capitalizes its
-/// first letter.
-fn title_word(word: &str) -> String {
-    match word {
-        "gpt" => "GPT".to_owned(),
-        "codex" => "Codex".to_owned(),
-        _ if word.chars().all(|c| c.is_ascii_digit() || c == '.') => word.to_owned(),
-        _ => {
-            let mut chars = word.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        }
-    }
 }
 
 /// A token count as a whole-unit magnitude with no decimal — `523`, `76k`,
@@ -381,6 +336,7 @@ mod tests {
             ("GPT-5.5", "GPT 5.5"),
             ("Sonnet 3.5 (New)", "Sonnet 3.5 (New)"),
             ("claude-opus-4-8", "Opus 4.8"),
+            ("claude-opus-4-8-20260101", "Opus 4.8"),
             ("gpt-5.5-codex", "GPT 5.5 Codex"),
             ("GPT-5.5 Codex", "GPT 5.5 Codex"),
         ] {

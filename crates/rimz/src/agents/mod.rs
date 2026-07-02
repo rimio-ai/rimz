@@ -26,6 +26,7 @@ pub(crate) mod identity;
 pub mod lifecycle;
 pub(crate) mod locate;
 pub(crate) mod managed_source;
+pub mod model_display;
 mod observation;
 pub mod opencode;
 pub(crate) mod payload;

@@ -555,7 +555,7 @@ fn model_breakdown_ranks_by_usd_before_tokens() {
     let models = model_breakdown(&stats, Window::AllTime);
 
     assert_eq!(models[0].0, "Opus 4.8");
-    assert_eq!(models[1].0, "GPT-5");
+    assert_eq!(models[1].0, "GPT 5");
 }
 
 #[test]
@@ -811,15 +811,17 @@ fn insights_sessions_scope_to_the_active_window() {
 }
 
 #[test]
-fn friendly_model_names() {
-    assert_eq!(friendly_model("claude-opus-4-8"), "Opus 4.8");
-    assert_eq!(friendly_model("claude-haiku-4-5"), "Haiku 4.5");
-    assert_eq!(friendly_model("claude-fable-5"), "Fable 5");
-    assert_eq!(friendly_model("claude-opus-4-7-20260101"), "Opus 4.7");
-    assert_eq!(friendly_model("gpt-5"), "GPT-5");
-    assert_eq!(friendly_model("gpt-5-codex"), "GPT-5 Codex");
-    assert_eq!(friendly_model("gpt-5.1-codex-max"), "GPT-5.1 Codex Max");
-    assert_eq!(friendly_model("mystery-model"), "mystery-model");
+fn model_display_names() {
+    use rimz::agents::model_display::display_model;
+
+    assert_eq!(display_model("claude-opus-4-8"), "Opus 4.8");
+    assert_eq!(display_model("claude-haiku-4-5"), "Haiku 4.5");
+    assert_eq!(display_model("claude-fable-5"), "Fable 5");
+    assert_eq!(display_model("claude-opus-4-7-20260101"), "Opus 4.7");
+    assert_eq!(display_model("gpt-5"), "GPT 5");
+    assert_eq!(display_model("gpt-5-codex"), "GPT 5 Codex");
+    assert_eq!(display_model("gpt-5.1-codex-max"), "GPT 5.1 Codex Max");
+    assert_eq!(display_model("mystery-model"), "Mystery Model");
 }
 
 #[test]

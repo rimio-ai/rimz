@@ -1127,7 +1127,7 @@ fn model_breakdown(stats: &Stats, active: Window) -> Vec<(String, SpendWindow)> 
         if id.is_empty() {
             fold_window(&mut other, &spend);
         } else {
-            named.push((friendly_model(id), spend));
+            named.push((rimz::agents::model_display::display_model(id), spend));
         }
     }
     named.sort_by(|a, b| {
@@ -1370,7 +1370,15 @@ fn emit_stat_section(
 fn agent_display_name(kind: &str) -> String {
     rimz::agents::descriptor_by_kind(kind)
         .map(|descriptor| descriptor.display_name.to_owned())
-        .unwrap_or_else(|| capitalize(kind))
+        .unwrap_or_else(|| agent_kind_label(kind))
+}
+
+fn agent_kind_label(kind: &str) -> String {
+    let mut chars = kind.chars();
+    match chars.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// Sessions, active-day ratio, most active day, and longest / current streak.
@@ -1635,49 +1643,6 @@ fn ramp_styles() -> [anstyle::Style; 5] {
     ]
 }
 
-// ── Model names ────────────────────────────────────────────────────────────────
-
-/// A transcript model id rendered for people: `claude-opus-4-8` → `Opus 4.8`,
-/// `gpt-5-codex` → `GPT-5 Codex`. An 8-digit date suffix is dropped; an
-/// unrecognised id falls back to itself.
-fn friendly_model(id: &str) -> String {
-    let id = strip_date_suffix(id.trim());
-    if let Some(rest) = id.strip_prefix("claude-") {
-        let mut parts = rest.splitn(2, '-');
-        let family = capitalize(parts.next().unwrap_or(rest));
-        return match parts.next() {
-            Some(ver) if !ver.is_empty() => format!("{family} {}", ver.replace('-', ".")),
-            _ => family,
-        };
-    }
-    let parts: Vec<&str> = id.split('-').collect();
-    if parts.first() == Some(&"gpt") && parts.len() >= 2 {
-        let mut name = format!("GPT-{}", parts[1]);
-        for token in &parts[2..] {
-            name.push(' ');
-            name.push_str(&capitalize(token));
-        }
-        return name;
-    }
-    id.to_string()
-}
-
-/// Drop a trailing `-YYYYMMDD` 8-digit date stamp, leaving the base model id.
-fn strip_date_suffix(id: &str) -> &str {
-    match id.rsplit_once('-') {
-        Some((base, tail)) if tail.len() == 8 && tail.bytes().all(|b| b.is_ascii_digit()) => base,
-        _ => id,
-    }
-}
-
-fn capitalize(word: &str) -> String {
-    let mut chars = word.chars();
-    match chars.next() {
-        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
 // ── Number formatting ──────────────────────────────────────────────────────────
 
 /// Tokens as `412M`, `5.2B`, `950K`. Billions keep one decimal; smaller units
@@ -1826,7 +1791,7 @@ fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
                 name: if id.is_empty() {
                     "Other".to_string()
                 } else {
-                    friendly_model(id)
+                    rimz::agents::model_display::display_model(id)
                 },
                 tokens: stats_tokens(&spend),
                 input: spend.input,
