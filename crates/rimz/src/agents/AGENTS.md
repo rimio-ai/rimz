@@ -6,10 +6,10 @@ Topic detail lives in the internals leaves the root map describes — [agent.md]
 
 ## Layout
 
-- Shared, provider-agnostic code sits at the top level — the [`AgentAdapter`](./mod.rs) trait, [`state.rs`](./state.rs) rollup types, descriptor/registry/lifecycle/context companions, the wire enums, the account probe contract, [`spending`](./spending.rs) aggregation, the [`pricing/`](./pricing/mod.rs) tables, and helper modules for payloads ([`payload.rs`](./payload.rs)), identity ([`identity.rs`](./identity.rs)), location ([`locate.rs`](./locate.rs)), and whole-file managed sources ([`managed_source.rs`](./managed_source.rs)); per-file detail lives in the `//!` headers.
-- Each provider is a sibling directory ([`claude/`](./claude/mod.rs), [`codex/`](./codex/mod.rs), [`pi/`](./pi/mod.rs)) owning its integration, typed payloads, rich-context transport, account probe, and `spend.rs`.
+- Shared, kind-agnostic code sits at the top level — the [`AgentAdapter`](./mod.rs) trait, [`state.rs`](./state.rs) rollup types, descriptor/registry/lifecycle/context companions, the wire enums, the account probe contract, [`spending`](./spending.rs) aggregation, the [`pricing/`](./pricing/mod.rs) tables, and helper modules for payloads ([`payload.rs`](./payload.rs)), identity ([`identity.rs`](./identity.rs)), location ([`locate.rs`](./locate.rs)), and whole-file managed sources ([`managed_source.rs`](./managed_source.rs)); per-file detail lives in the `//!` headers.
+- Each agent kind is a sibling directory ([`claude/`](./claude/mod.rs), [`codex/`](./codex/mod.rs), [`pi/`](./pi/mod.rs), [`opencode/`](./opencode/mod.rs)) owning its integration, typed payloads, rich-context transport, account and OAuth-usage probes, and `spend.rs`.
 - `spend.rs` is the read-only, sidebar-safe full-history cost parser; a CI grep keeps every `spend.rs` free of ledger-write, bridge, and broker imports.
-- Pi owns its wire: pi has no hook config — install ships the Rimz-authored [`pi/extension.ts`](./pi/extension.ts), so the payload schema is Rimz's by design and drift is a Rimz bug, never an upstream one.
+- Pi and OpenCode own their wire: both integrate through Rimz-authored in-process TypeScript installed whole-file — [`pi/extension.ts`](./pi/extension.ts) and [`opencode/plugin.ts`](./opencode/plugin.ts) — so the payload schema is Rimz's by design and drift is a Rimz bug, never an upstream one.
 
 ## The boundary
 
@@ -17,7 +17,7 @@ An adapter is the *single* place a native agent protocol is normalized. It owns 
 
 - **Adapters never touch the ledger.** They are pure mappers; [`cli/hooks.rs`](../cli/hooks.rs) owns every ledger write and all bridge I/O, calling the adapter for classification, rendering, and normalized run output.
 - **Emit only the normalized outputs downstream consumes** — an `AgentLifecycleObservation`, a decision `Value`, and a supervised-run final assistant message. A native event name or payload field reached for outside this module is a mapping that belongs *in* an adapter.
-- **Decision JSON is per-agent.** Never reuse one agent's decision shape for another — the providers diverge (e.g. Codex rejects `updatedInput` / `interrupt`). Render each agent's own shape.
+- **Decision JSON is per-agent.** Never reuse one agent's decision shape for another — the kinds diverge (e.g. Codex rejects `updatedInput` / `interrupt`). Render each agent's own shape.
 
 ## Hook discipline
 
