@@ -315,8 +315,11 @@ fn send_prompt_records_to_live_pane(
     let payload = batch
         .iter()
         .map(|message| {
-            match crate::target::sender_prefix(&message.sender, &peers, message.channel.as_deref())
-            {
+            match crate::harness::target::sender_prefix(
+                &message.sender,
+                &peers,
+                message.channel.as_deref(),
+            ) {
                 Some(prefix) => format!("{prefix}{}", message.text),
                 None => message.text.clone(),
             }
