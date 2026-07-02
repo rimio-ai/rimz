@@ -21,6 +21,7 @@ pub mod diag;
 pub mod feed;
 pub mod forge;
 pub mod ids;
+pub mod lane;
 pub mod launch;
 pub mod ledger;
 pub mod message;

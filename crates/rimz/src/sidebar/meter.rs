@@ -3,12 +3,14 @@
 //! The meter observes producer work and records diagnostics only; producer ticks
 //! proceed unchanged. The budgets live beside the detector and are maintained
 //! with the cost map in `docs/internals/health/performance.md`.
-//! Counter deltas are process-global, so concurrent thread work can co-attribute
-//! to the observing loop's tick.
+//! Counter deltas are scoped by producer lane so concurrent fetch and cache
+//! refresh work attribute their forks and ledger reads to the loop that caused
+//! them.
 
 use std::time::{Duration, Instant};
 
 use crate::diag::DiagSink;
+use crate::lane::WorkLane;
 use crate::schema::diag::{DiagEvent, TickLoop};
 
 /// Lifecycle frames are pinned under 1KiB; a 100-agent burst folds about 100KiB,
@@ -54,9 +56,11 @@ pub(crate) struct TickStart {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TickMeter {
     tick_loop: TickLoop,
+    work_lane: WorkLane,
     budget_wall_ms: u64,
     streak: u32,
     since_ms: u64,
+    last: TickSample,
     worst: TickSample,
 }
 
@@ -68,9 +72,11 @@ impl TickMeter {
     pub(crate) fn new(tick_loop: TickLoop, tick: Duration) -> Self {
         Self {
             tick_loop,
+            work_lane: work_lane(tick_loop),
             budget_wall_ms: duration_ms(tick),
             streak: 0,
             since_ms: 0,
+            last: TickSample::default(),
             worst: TickSample::default(),
         }
     }
@@ -78,22 +84,23 @@ impl TickMeter {
     pub(crate) fn begin(&self) -> TickStart {
         TickStart {
             started_at: Instant::now(),
-            bytes_read: crate::ledger::event_log::testkit::bytes_read(),
-            spawns: crate::proc::testkit::spawn_count(),
+            bytes_read: crate::lane::event_log_bytes_read(self.work_lane),
+            spawns: crate::lane::spawn_count(self.work_lane),
         }
     }
 
     pub(crate) fn finish(&mut self, start: TickStart, at_ms: u64) -> Option<DiagEvent> {
         let sample = TickSample {
             wall_ms: duration_ms(start.started_at.elapsed()),
-            fold_bytes: crate::ledger::event_log::testkit::bytes_read()
+            fold_bytes: crate::lane::event_log_bytes_read(self.work_lane)
                 .saturating_sub(start.bytes_read),
-            spawns: crate::proc::testkit::spawn_count().saturating_sub(start.spawns),
+            spawns: crate::lane::spawn_count(self.work_lane).saturating_sub(start.spawns),
         };
         self.finish_sample(sample, at_ms)
     }
 
     fn finish_sample(&mut self, sample: TickSample, at_ms: u64) -> Option<DiagEvent> {
+        self.last = sample;
         if !sample.exceeds_budget(self.budget_wall_ms) {
             return self.finish_under_budget(at_ms);
         }
@@ -120,6 +127,9 @@ impl TickMeter {
         DiagEvent::TickBudgetBreach {
             tick_loop: self.tick_loop,
             over_ticks: self.streak,
+            last_wall_ms: self.last.wall_ms,
+            last_fold_bytes: self.last.fold_bytes,
+            last_spawns: self.last.spawns,
             wall_ms: self.worst.wall_ms,
             fold_bytes: self.worst.fold_bytes,
             spawns: self.worst.spawns,
@@ -134,6 +144,7 @@ impl TickMeter {
     fn reset(&mut self) {
         self.streak = 0;
         self.since_ms = 0;
+        self.last = TickSample::default();
         self.worst = TickSample::default();
     }
 }
@@ -143,6 +154,9 @@ pub(crate) fn report(diag: Option<&DiagSink>, event: DiagEvent) {
         DiagEvent::TickBudgetBreach {
             tick_loop,
             over_ticks,
+            last_wall_ms,
+            last_fold_bytes,
+            last_spawns,
             wall_ms,
             fold_bytes,
             spawns,
@@ -151,6 +165,9 @@ pub(crate) fn report(diag: Option<&DiagSink>, event: DiagEvent) {
         } if *over_ticks == TICK_BUDGET_BREACH_TICKS => {
             tracing::warn!(
                 tick_loop = ?tick_loop,
+                last_wall_ms = *last_wall_ms,
+                last_fold_bytes = *last_fold_bytes,
+                last_spawns = *last_spawns,
                 wall_ms = *wall_ms,
                 fold_bytes = *fold_bytes,
                 spawns = *spawns,
@@ -161,6 +178,13 @@ pub(crate) fn report(diag: Option<&DiagSink>, event: DiagEvent) {
     }
     if let Some(diag) = diag {
         diag.emit(event);
+    }
+}
+
+fn work_lane(tick_loop: TickLoop) -> WorkLane {
+    match tick_loop {
+        TickLoop::Fetch => WorkLane::Fetch,
+        TickLoop::CacheRefresh => WorkLane::CacheRefresh,
     }
 }
 
@@ -194,11 +218,27 @@ mod tests {
         sample(1, 0, 0)
     }
 
-    fn event_fields(event: DiagEvent) -> (TickLoop, u32, u64, u64, u64, u64, Option<u64>) {
+    fn event_fields(
+        event: DiagEvent,
+    ) -> (
+        TickLoop,
+        u32,
+        u64,
+        u64,
+        u64,
+        u64,
+        u64,
+        u64,
+        u64,
+        Option<u64>,
+    ) {
         match event {
             DiagEvent::TickBudgetBreach {
                 tick_loop,
                 over_ticks,
+                last_wall_ms,
+                last_fold_bytes,
+                last_spawns,
                 wall_ms,
                 fold_bytes,
                 spawns,
@@ -208,6 +248,9 @@ mod tests {
             } => (
                 tick_loop,
                 over_ticks,
+                last_wall_ms,
+                last_fold_bytes,
+                last_spawns,
                 wall_ms,
                 fold_bytes,
                 spawns,
@@ -270,6 +313,9 @@ mod tests {
             (
                 TickLoop::Fetch,
                 TICK_BUDGET_BREACH_TICKS,
+                DEFAULT_WALL_MS + 1,
+                TICK_FOLD_BYTES_BUDGET + 5,
+                TICK_SPAWN_BUDGET + 2,
                 DEFAULT_WALL_MS + 13,
                 TICK_FOLD_BYTES_BUDGET + 5,
                 TICK_SPAWN_BUDGET + 2,
@@ -298,6 +344,9 @@ mod tests {
                 DEFAULT_WALL_MS + 50,
                 0,
                 0,
+                DEFAULT_WALL_MS + 50,
+                0,
+                0,
                 10,
                 None
             )
@@ -320,6 +369,9 @@ mod tests {
             (
                 TickLoop::CacheRefresh,
                 TICK_BUDGET_BREACH_TICKS,
+                1,
+                0,
+                0,
                 DEFAULT_WALL_MS + 1,
                 0,
                 0,

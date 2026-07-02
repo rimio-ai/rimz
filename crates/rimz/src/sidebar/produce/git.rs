@@ -232,12 +232,14 @@ fn refresh_entries(
 ) -> Vec<(String, DiffStatsCacheEntry)> {
     let mut out = Vec::with_capacity(paths.len());
     for chunk in paths.chunks(MAX_PARALLEL_GIT) {
+        let lane = crate::lane::current();
         std::thread::scope(|scope| {
             let handles: Vec<_> = chunk
                 .iter()
                 .map(|(path, due)| {
                     let prior = cache.entries.get(path.as_str()).cloned();
                     scope.spawn(move || {
+                        crate::lane::set(lane);
                         (
                             path.clone(),
                             refresh_entry(path, prior.as_ref(), *due, configured_trunk),

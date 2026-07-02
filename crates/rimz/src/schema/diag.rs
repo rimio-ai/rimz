@@ -160,6 +160,13 @@ pub enum DiagEvent {
         tick_loop: TickLoop,
         /// Consecutive over-budget ticks at emit time.
         over_ticks: u32,
+        /// Values from the tick that emitted this record.
+        #[serde(default)]
+        last_wall_ms: u64,
+        #[serde(default)]
+        last_fold_bytes: u64,
+        #[serde(default)]
+        last_spawns: u64,
         /// Worst values observed in the streak.
         wall_ms: u64,
         fold_bytes: u64,
@@ -778,6 +785,9 @@ mod tests {
             DiagEvent::TickBudgetBreach {
                 tick_loop: TickLoop::Fetch,
                 over_ticks: 5,
+                last_wall_ms: 1_200,
+                last_fold_bytes: 300_000,
+                last_spawns: 0,
                 wall_ms: 1_200,
                 fold_bytes: 300_000,
                 spawns: 0,
@@ -790,6 +800,9 @@ mod tests {
             DiagEvent::TickBudgetBreach {
                 tick_loop: TickLoop::CacheRefresh,
                 over_ticks: 7,
+                last_wall_ms: 900,
+                last_fold_bytes: 1_024,
+                last_spawns: 1,
                 wall_ms: 1_500,
                 fold_bytes: 512_000,
                 spawns: 40,
@@ -922,6 +935,43 @@ mod tests {
     }
 
     #[test]
+    fn tick_budget_breach_deserializes_legacy_records_without_last_sample() {
+        let value = serde_json::json!({
+            "kind": "tick_budget_breach",
+            "tick_loop": "fetch",
+            "over_ticks": 5,
+            "wall_ms": 1_200,
+            "fold_bytes": 300_000,
+            "spawns": 2,
+            "budget_wall_ms": 1_000,
+            "budget_fold_bytes": 262_144,
+            "budget_spawns": 32,
+            "since_ms": 10
+        });
+
+        let decoded: DiagEvent = serde_json::from_value(value).expect("decode legacy breach");
+
+        assert_eq!(
+            decoded,
+            DiagEvent::TickBudgetBreach {
+                tick_loop: TickLoop::Fetch,
+                over_ticks: 5,
+                last_wall_ms: 0,
+                last_fold_bytes: 0,
+                last_spawns: 0,
+                wall_ms: 1_200,
+                fold_bytes: 300_000,
+                spawns: 2,
+                budget_wall_ms: 1_000,
+                budget_fold_bytes: 262_144,
+                budget_spawns: 32,
+                since_ms: 10,
+                recovered_after_ms: None,
+            }
+        );
+    }
+
+    #[test]
     fn new_envelopes_carry_the_writer_build() {
         let envelope = DiagEnvelope::new(
             WorkspaceId::from_project_root(std::path::Path::new("/repo")),
@@ -1027,6 +1077,9 @@ mod tests {
         DiagEvent::TickBudgetBreach {
             tick_loop,
             over_ticks: 5,
+            last_wall_ms: 1_200,
+            last_fold_bytes: 300_000,
+            last_spawns: 2,
             wall_ms: 1_200,
             fold_bytes: 300_000,
             spawns: 2,

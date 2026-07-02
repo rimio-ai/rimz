@@ -26,6 +26,7 @@ pub(super) fn spawn(
 }
 
 fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: Option<crate::diag::DiagSink>) {
+    crate::lane::set(crate::lane::WorkLane::CacheRefresh);
     let mut cursor = RollupCursor::new();
     let mut spending_walker = SpendingWalker::new();
     let mut meter = TickMeter::new(TickLoop::CacheRefresh, tick_for(config.tick_seconds));

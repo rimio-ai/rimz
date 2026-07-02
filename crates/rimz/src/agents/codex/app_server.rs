@@ -8,7 +8,7 @@
 //! `thread/loaded/list` — and never `thread/resume` or `turn/start` (which would
 //! rejoin/own the user's live Codex thread). It is the out-of-band producer
 //! behind `rimz codex refresh-context` and the daemon-mode liveness probe behind
-//! the sidebar's ghost-session reap;
+//! the sidebar cache refresher's TTL-gated ghost-session reap;
 //! storage
 //! ([`crate::ledger::agent_context`]) and the snapshot fold-in are
 //! transport-agnostic, exactly as for Claude.
@@ -67,7 +67,8 @@ const APP_SERVER_DEADLINE: Duration = Duration::from_secs(6);
 
 /// Shorter budget for the daemon `proxy` probe. The proxy either bridges to a
 /// live daemon promptly or it does not; a tight bound means a stale socket
-/// costs little before the cold-spawn fallback takes over.
+/// costs little before the cold-spawn fallback takes over. The sidebar's daemon
+/// ghost reap pays this only from the cache refresher, behind its own TTL.
 const PROXY_PROBE_DEADLINE: Duration = Duration::from_secs(2);
 
 /// Override for the daemon control socket. A path re-uses that daemon via
@@ -138,7 +139,8 @@ impl CodexAppServer<FramedTransport> {
     /// `app-server` holds no threads, so reporting its empty loaded set would mass-
     /// reap every daemon-mode session. `None` when no daemon control socket exists
     /// or it does not handshake — the liveness caller reads that as "unknown, keep
-    /// all", never as "zero loaded". Used only by the sidebar producer's ghost reap.
+    /// all", never as "zero loaded". Used only by the sidebar cache refresher's
+    /// TTL-gated ghost reap.
     pub(crate) fn connect_daemon() -> Option<Self> {
         let socket = daemon_socket().filter(|path| path.exists())?;
         let bin = codex_bin();

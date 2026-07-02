@@ -626,6 +626,9 @@ fn diagnostic_summary(event: &rimz::schema::diag::DiagEvent) -> String {
         DiagEvent::TickBudgetBreach {
             tick_loop,
             over_ticks,
+            last_wall_ms,
+            last_fold_bytes,
+            last_spawns,
             wall_ms,
             fold_bytes,
             spawns,
@@ -635,18 +638,19 @@ fn diagnostic_summary(event: &rimz::schema::diag::DiagEvent) -> String {
             recovered_after_ms,
             ..
         } => {
-            let sample = format!("worst {wall_ms}ms/{fold_bytes}B/{spawns} spawns");
+            let last = format!("last {last_wall_ms}ms/{last_fold_bytes}B/{last_spawns} spawns");
+            let worst = format!("worst {wall_ms}ms/{fold_bytes}B/{spawns} spawns");
             let budget =
                 format!("budget {budget_wall_ms}ms/{budget_fold_bytes}B/{budget_spawns} spawns");
             match recovered_after_ms {
                 Some(ms) => {
                     format!(
-                        "{tick_loop:?} tick recovered after {ms}ms; {over_ticks} over ticks; {sample}; {budget}"
+                        "{tick_loop:?} tick recovered after {ms}ms; {over_ticks} over ticks; {last}; {worst}; {budget}"
                     )
                 }
                 None => {
                     format!(
-                        "{tick_loop:?} tick over budget for {over_ticks} ticks; {sample}; {budget}"
+                        "{tick_loop:?} tick over budget for {over_ticks} ticks; {last}; {worst}; {budget}"
                     )
                 }
             }
@@ -731,7 +735,7 @@ fn summary_with_suppressed(summary: String, suppressed_since_last: u32) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rimz::schema::diag::{DiagEvent, FrameRejectReason};
+    use rimz::schema::diag::{DiagEvent, FrameRejectReason, TickLoop};
 
     fn sidebar(raw: &str) -> rimz::SidebarInstanceId {
         rimz::SidebarInstanceId::parse(raw).expect("valid sidebar id")
@@ -775,6 +779,24 @@ mod tests {
             })
             .contains(elder.as_str())
         );
+
+        let tick = diagnostic_summary(&DiagEvent::TickBudgetBreach {
+            tick_loop: TickLoop::Fetch,
+            over_ticks: 5,
+            last_wall_ms: 900,
+            last_fold_bytes: 1_024,
+            last_spawns: 1,
+            wall_ms: 1_500,
+            fold_bytes: 300_000,
+            spawns: 40,
+            budget_wall_ms: 1_000,
+            budget_fold_bytes: 262_144,
+            budget_spawns: 32,
+            since_ms: 10,
+            recovered_after_ms: None,
+        });
+        assert!(tick.contains("last 900ms/1024B/1 spawns"));
+        assert!(tick.contains("worst 1500ms/300000B/40 spawns"));
     }
 
     #[test]

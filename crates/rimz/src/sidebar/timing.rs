@@ -208,6 +208,11 @@ pub const CODEX_PROBE_MARKER_TTL: Duration = Duration::from_secs(5 * 60);
 /// stamps.
 pub const CODEX_PROBE_MARKER_PREFIX: &str = "rate-limit-probe.codex.";
 
+/// Minimum gap between Codex daemon ghost-reap probes. A failed daemon proxy
+/// attempt can burn the full 2s app-server proxy deadline, so success and
+/// failure share one coarse cache stamp and the fetch lane only reads it.
+pub const CODEX_DAEMON_REAP_TTL: Duration = Duration::from_secs(30);
+
 /// Minimum gap between auto-continue nudges to one rate-limit-parked agent. One
 /// nudge resumes the turn within a frame, so this mostly bounds the brief window
 /// before the agent's first hook lands; if a nudge fails to wake a still-parked

@@ -34,7 +34,7 @@ use super::cache::{
     read_diff_stats_cache, unix_now_ms, write_codex_daemon_reap,
 };
 use super::frame::{PaneFrame, PaneMetrics};
-use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
+use super::timing::{CODEX_DAEMON_REAP_TTL, LINK_STATS_EXPIRE, LINK_STATS_STALE};
 
 mod accounts;
 mod auto_continue;
@@ -86,6 +86,47 @@ fn account_budgets_from_caches(
             )
         })
         .collect()
+}
+
+fn daemon_reap_due(cache: &Option<CodexDaemonReap>, now_ms: u64) -> bool {
+    cache.as_ref().is_none_or(|cache| {
+        now_ms.saturating_sub(cache.produced_at_ms) > CODEX_DAEMON_REAP_TTL.as_millis() as u64
+    })
+}
+
+fn should_probe_codex_daemon_reap(snapshot: &SidebarSnapshot) -> bool {
+    snapshot.agents.iter().any(|agent| {
+        agent.kind == "codex" && agent.pane.is_none() && agent.parent_agent_id.is_none()
+    })
+}
+
+fn refresh_codex_daemon_reap_cache(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    now_ms: u64,
+) -> CodexDaemonReap {
+    let current = read_codex_daemon_reap(runtime);
+    if !should_probe_codex_daemon_reap(snapshot) || !daemon_reap_due(&current, now_ms) {
+        return current.unwrap_or_default();
+    }
+    let daemon_pids = crate::remote_control::codex_daemon_pids();
+    let loaded = if daemon_pids.is_empty() {
+        None
+    } else {
+        crate::agents::codex::loaded_daemon_threads()
+    };
+    let inputs = CodexDaemonReap {
+        produced_at_ms: now_ms,
+        daemon_pids,
+        loaded,
+    };
+    if let Err(err) = write_codex_daemon_reap(runtime, &inputs) {
+        tracing::debug!(
+            error = %err,
+            "codex daemon reap cache write failed"
+        );
+    }
+    inputs
 }
 
 /// Whether a hidden resume-gated message may enter a paused agent now. The
@@ -579,41 +620,23 @@ pub fn enrich(
     let read_marks = super::read_marks::ReadMarks::load_merged(runtime);
     let unread_row_ids = episodes.unread_row_ids(&read_marks);
 
-    // Reap daemon-mode Codex ghosts the app-server no longer holds. The
-    // producer publishes the live daemon pids plus `thread/loaded/list`; the
-    // cached lane reuses that file, so consumers never scan proc or spawn the
-    // app-server. The probe itself stays gated on a pane-less root `codex`
-    // session, so the common room pays no proc scan. Best-effort and fail-safe:
-    // no daemon process, absent cache, or an untrusted loaded list keeps every
-    // session.
-    let daemon_inputs = if producing {
-        let should_probe = snapshot.agents.iter().any(|agent| {
-            agent.kind == "codex" && agent.pane.is_none() && agent.parent_agent_id.is_none()
-        });
-        let daemon_pids = if should_probe {
-            crate::remote_control::codex_daemon_pids()
-        } else {
-            BTreeSet::new()
-        };
-        let loaded = if daemon_pids.is_empty() {
-            None
-        } else {
-            crate::agents::codex::loaded_daemon_threads()
-        };
-        let inputs = CodexDaemonReap {
-            produced_at_ms: unix_now_ms(),
-            daemon_pids,
-            loaded,
-        };
-        if let Err(err) = write_codex_daemon_reap(runtime, &inputs) {
-            tracing::debug!(
-                error = %err,
-                "codex daemon reap cache write failed"
-            );
-        }
-        inputs
-    } else {
-        read_codex_daemon_reap(runtime).unwrap_or_default()
+    // Reap daemon-mode Codex ghosts the app-server no longer holds. The cache
+    // refresher publishes the live daemon pids plus `thread/loaded/list` on the
+    // reap TTL; the fetch and consumer lanes read that file, so they never scan
+    // proc or spawn the app-server. The probe itself stays gated on a pane-less
+    // root `codex` session, so the common room pays no proc scan. Best-effort
+    // and fail-safe: no daemon process, absent cache, or an untrusted loaded
+    // list keeps every session.
+    let daemon_inputs = match &mode {
+        EnrichMode::Producing {
+            heavy: HeavyLanes::Refresh { .. },
+            ..
+        } => refresh_codex_daemon_reap_cache(&snapshot, runtime, unix_now_ms()),
+        EnrichMode::Cached
+        | EnrichMode::Producing {
+            heavy: HeavyLanes::Project,
+            ..
+        } => read_codex_daemon_reap(runtime).unwrap_or_default(),
     };
     snapshot.drop_dead_daemon_sessions(&daemon_inputs.daemon_pids, daemon_inputs.loaded.as_ref());
 
@@ -851,6 +874,7 @@ pub(crate) fn fold_machine_config_producing(
 ) -> SidebarSnapshot {
     let accounts_config = config.accounts.clone();
     let resume_config = config.resume.clone();
+    let _ = refresh_codex_daemon_reap_cache(&snapshot, runtime, unix_now_ms());
     let accounts = produce_accounts(&snapshot, runtime);
     let pr_states = produce_pr_states(&snapshot, runtime);
     let mut snapshot = fold_machine_config_with(snapshot, config, accounts, provider_spending);

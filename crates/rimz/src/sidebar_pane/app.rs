@@ -124,6 +124,7 @@ pub type Result<T> = std::result::Result<T, SidebarAppErr>;
 
 pub fn serve(config: ServeConfig) -> Result<()> {
     crate::build_id::warm();
+    reap_inherited_zombies();
     set_terminal_title()?;
     let runtime = RuntimePaths::for_workspace(config.workspace_id.clone())?;
     runtime.ensure_dirs()?;
@@ -364,6 +365,43 @@ fn panic_message(info: &std::panic::PanicHookInfo<'_>) -> String {
         "renderer panicked".to_owned()
     }
 }
+
+#[cfg(unix)]
+fn reap_inherited_zombies() {
+    use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+    use nix::unistd::Pid;
+
+    // A reload re-exec can orphan an in-flight Codex app-server proxy child by
+    // replacing the process image while its `Child` handle exists. At serve
+    // startup no Rust-owned child handles exist yet, so a non-blocking
+    // waitpid(-1) drain cannot steal another component's child status.
+    loop {
+        match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
+            Ok(WaitStatus::StillAlive) => break,
+            Ok(WaitStatus::Exited(pid, status)) => {
+                debug!(pid = pid.as_raw(), status, "reaped inherited zombie child");
+            }
+            Ok(WaitStatus::Signaled(pid, signal, _)) => {
+                debug!(
+                    pid = pid.as_raw(),
+                    signal = ?signal,
+                    "reaped inherited zombie child"
+                );
+            }
+            Ok(status) => {
+                debug!(status = ?status, "reaped inherited child status");
+            }
+            Err(nix::errno::Errno::ECHILD) => break,
+            Err(err) => {
+                debug!(error = %err, "inherited zombie reap failed");
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn reap_inherited_zombies() {}
 
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {

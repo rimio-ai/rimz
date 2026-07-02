@@ -566,6 +566,7 @@ pub(super) fn spawn_fetch_worker(
     result_tx: std::sync::mpsc::Sender<FetchOutcome>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
+        crate::lane::set(crate::lane::WorkLane::Fetch);
         let waker = UnixDatagram::unbound().ok();
         // The worker's in-memory fold base, shared by the fast lane and the
         // produce: each cycle's rollup read folds only the log bytes appended

@@ -253,6 +253,7 @@ pub mod testkit {
 
     pub(crate) fn count_spawn() {
         SPAWNS.fetch_add(1, Ordering::Relaxed);
+        crate::lane::count_spawn();
     }
 }
 

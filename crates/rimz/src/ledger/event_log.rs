@@ -167,6 +167,7 @@ pub mod testkit {
 
     pub(super) fn count_bytes_read(n: u64) {
         BYTES_READ.fetch_add(n, Ordering::Relaxed);
+        crate::lane::count_event_log_bytes_read(n);
     }
 
     pub(super) fn count_bytes_written(n: u64) {
