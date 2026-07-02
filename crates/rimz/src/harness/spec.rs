@@ -812,26 +812,12 @@ fn virtual_agent_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cel
     if mode != PermissionMode::Ask && mode != PermissionMode::Plan && posture.is_empty() {
         return Ok(None);
     }
-    let mut args = match profile_name.as_deref() {
-        Some(profile) => {
-            let mut base = resolved.clone();
-            base.mode = None;
-            render_profile_args(profile, &base)?
-        }
-        None => Vec::new(),
-    };
-    args.extend(posture);
-    Ok(Some(Cell::Agent {
-        kind: resolved.kind,
-        args,
-        mode: Some(mode),
-        system_prompt_file: resolved.system_prompt_file,
-        append_system_prompt_file: resolved.append_system_prompt_file,
-        profile: profile_name,
-        role: None,
-        model: resolved.model,
-        effort: resolved.effort,
-    }))
+    Ok(Some(virtual_cell_from(
+        resolved,
+        profile_name,
+        posture,
+        Some(mode),
+    )?))
 }
 
 fn virtual_ping_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cell>> {
@@ -850,6 +836,20 @@ fn virtual_ping_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cell
     let Some(ping_args) = adapter.ping_args() else {
         return Ok(None);
     };
+    Ok(Some(virtual_cell_from(
+        resolved,
+        profile_name,
+        ping_args,
+        None,
+    )?))
+}
+
+fn virtual_cell_from(
+    resolved: ResolvedProfile,
+    profile_name: Option<String>,
+    extra_args: Vec<String>,
+    mode: Option<PermissionMode>,
+) -> Result<Cell> {
     let mut args = match profile_name.as_deref() {
         Some(profile) => {
             let mut base = resolved.clone();
@@ -858,18 +858,18 @@ fn virtual_ping_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cell
         }
         None => Vec::new(),
     };
-    args.extend(ping_args);
-    Ok(Some(Cell::Agent {
+    args.extend(extra_args);
+    Ok(Cell::Agent {
         kind: resolved.kind,
         args,
-        mode: None,
+        mode,
         system_prompt_file: resolved.system_prompt_file,
         append_system_prompt_file: resolved.append_system_prompt_file,
         profile: profile_name,
         role: None,
         model: resolved.model,
         effort: resolved.effort,
-    }))
+    })
 }
 
 fn virtual_base(
