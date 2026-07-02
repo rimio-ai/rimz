@@ -115,7 +115,7 @@ struct FetchCycle<'a> {
     notification_prefs: &'a NotificationsPrefs,
     notifications: &'a mut NotificationState,
     link_notifications: &'a mut LinkNotificationState,
-    diag: Option<&'a crate::diag::DiagSink>,
+    diag: &'a crate::diag::DiagSink,
     last_election: &'a mut Option<ProducerElection>,
 }
 
@@ -229,7 +229,7 @@ fn run_fetch_cycle(
             session_name: config.session_name.clone(),
             exclude,
             min_pane_cache_ms: request.min_pane_cache_ms,
-            diag: diag.cloned(),
+            diag: (*diag).clone(),
         };
         let produced = run_produce_guarded(cursor, |cursor| {
             crate::sidebar::produce::produce_snapshot(cursor, state, runtime, &opts)
@@ -267,14 +267,11 @@ fn run_fetch_cycle(
 }
 
 fn emit_producer_transition(
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
     last_election: &mut Option<ProducerElection>,
     election: ProducerElection,
 ) {
     let Some(prior) = last_election.replace(election.clone()) else {
-        return;
-    };
-    let Some(diag) = diag else {
         return;
     };
     match (prior.elder, election.elder) {
@@ -293,7 +290,7 @@ fn evaluate_notifications(
     prefs: &NotificationsPrefs,
     state: &mut NotificationState,
     link_state: &mut LinkNotificationState,
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
     snapshot: &mut SidebarSnapshot,
 ) -> Vec<NotificationDelivery> {
     let now_ms = crate::sidebar::timing::unix_now_ms();
@@ -301,9 +298,7 @@ fn evaluate_notifications(
     let silent_opens = episodes.was_absent_on_load();
     let marks = ReadMarks::load_merged(runtime);
     let unread = episodes.reconcile(snapshot, &marks, silent_opens);
-    if let Some(diag) = diag {
-        emit_unread_reconcile_trace(diag, &unread.opened, &unread.cleared);
-    }
+    emit_unread_reconcile_trace(diag, &unread.opened, &unread.cleared);
     if (episodes.was_absent_on_load() || unread.changed)
         && let Err(err) = episodes.persist(runtime)
     {
@@ -332,7 +327,7 @@ fn deliver_notifications(
     config: &ServeConfig,
     runtime: &RuntimePaths,
     prefs: &NotificationsPrefs,
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
     deliveries: Vec<NotificationDelivery>,
 ) {
     for delivery in deliveries {
@@ -340,9 +335,7 @@ fn deliver_notifications(
         if prefs.has_handlers() {
             crate::sidebar::notify::spawn_notify_handlers(prefs, &notification);
         }
-        if let Some(diag) = diag {
-            diag.trace_notify(notification_emitted_trace(&notification, &delivery.panes));
-        }
+        diag.trace_notify(notification_emitted_trace(&notification, &delivery.panes));
         if let Err(err) = crate::ledger::wakeup::broadcast_sidebar_event(
             runtime,
             Some(&config.session_name),
@@ -402,10 +395,7 @@ fn notification_emitted_trace(
     }
 }
 
-fn emit_link_alert(diag: Option<&crate::diag::DiagSink>, alert: LinkAlert) {
-    let Some(diag) = diag else {
-        return;
-    };
+fn emit_link_alert(diag: &crate::diag::DiagSink, alert: LinkAlert) {
     diag.emit(crate::schema::diag::DiagEvent::LinkAlert {
         tier: alert.tier,
         rtt_ms: alert.rtt_ms,
@@ -541,7 +531,7 @@ pub(super) fn spawn_fetch_worker(
     runtime: RuntimePaths,
     socket_path: PathBuf,
     notification_prefs: NotificationsPrefs,
-    diag: Option<crate::diag::DiagSink>,
+    diag: crate::diag::DiagSink,
     request_rx: std::sync::mpsc::Receiver<FetchRequest>,
     result_tx: std::sync::mpsc::Sender<FetchOutcome>,
 ) -> std::thread::JoinHandle<()> {
@@ -593,7 +583,7 @@ pub(super) fn spawn_fetch_worker(
                             notification_prefs: &notification_prefs,
                             notifications: &mut notifications,
                             link_notifications: &mut link_notifications,
-                            diag: diag.as_ref(),
+                            diag: &diag,
                             last_election: &mut last_election,
                         },
                         request,
@@ -601,7 +591,7 @@ pub(super) fn spawn_fetch_worker(
                         &mut post,
                     );
                     if let Some(event) = meter.finish(tick, crate::sidebar::timing::unix_now_ms()) {
-                        crate::sidebar::meter::report(diag.as_ref(), event);
+                        crate::sidebar::meter::report(&diag, event);
                     }
                 }
                 Err(err) => post(FetchOutcome {

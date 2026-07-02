@@ -276,7 +276,7 @@ pub fn enrich(
     messages_dir: Option<&Path>,
     exclude: Option<&PaneId>,
     mut opts: FoldOpts<'_>,
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
 ) -> SidebarSnapshot {
     let producing = opts.producing;
     let machine_config = opts
@@ -434,9 +434,7 @@ pub fn enrich(
         );
         snapshot = next_snapshot;
         for event in diagnostics {
-            if let Some(diag) = diag {
-                diag.emit(event);
-            }
+            diag.emit(event);
         }
         apply_pane_metrics(&mut snapshot, metrics);
     }

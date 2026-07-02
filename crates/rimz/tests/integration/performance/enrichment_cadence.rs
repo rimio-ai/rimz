@@ -196,7 +196,7 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         session_name: session.clone(),
         exclude: None,
         min_pane_cache_ms: None,
-        diag: None,
+        diag: rimz::diag::DiagSink::disabled(),
     };
     let project = rimz::sidebar::produce::produce_snapshot(
         &mut RollupCursor::new(),

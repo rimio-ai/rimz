@@ -33,11 +33,16 @@ static DIAG_FRAME_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
 pub struct DiagSink {
+    inner: Option<Arc<Inner>>,
+}
+
+#[derive(Debug)]
+struct Inner {
     state_root: PathBuf,
     workspace_id: WorkspaceId,
     session_name: String,
     instance_id: Option<SidebarInstanceId>,
-    limiter: Arc<Mutex<Limiter>>,
+    limiter: Mutex<Limiter>,
 }
 
 #[derive(Clone, Debug)]
@@ -90,20 +95,15 @@ impl DiagSink {
         workspace_id: WorkspaceId,
         session_name: impl Into<String>,
         instance_id: Option<SidebarInstanceId>,
-    ) -> Option<Self> {
+    ) -> Self {
         let state = match crate::StatePaths::for_workspace(workspace_id.clone()) {
             Ok(state) => state,
             Err(err) => {
                 tracing::debug!(error = %err, "diagnostic sink unavailable");
-                return None;
+                return Self::disabled();
             }
         };
-        Some(Self::under(
-            state.root,
-            workspace_id,
-            session_name,
-            instance_id,
-        ))
+        Self::under(state.root, workspace_id, session_name, instance_id)
     }
 
     pub fn under(
@@ -113,29 +113,41 @@ impl DiagSink {
         instance_id: Option<SidebarInstanceId>,
     ) -> Self {
         Self {
-            state_root,
-            workspace_id,
-            session_name: session_name.into(),
-            instance_id,
-            limiter: Arc::new(Mutex::new(Limiter::new(DIAG_RATE_LIMIT_WINDOW))),
+            inner: Some(Arc::new(Inner {
+                state_root,
+                workspace_id,
+                session_name: session_name.into(),
+                instance_id,
+                limiter: Mutex::new(Limiter::new(DIAG_RATE_LIMIT_WINDOW)),
+            })),
         }
     }
 
-    pub fn log_path(&self) -> PathBuf {
-        self.state_root.join(DIAG_LOG_NAME)
+    pub fn disabled() -> Self {
+        Self { inner: None }
     }
 
-    pub fn frames_dir(&self) -> PathBuf {
-        frames_dir_under(&self.state_root)
+    pub fn is_enabled(&self) -> bool {
+        self.inner.is_some()
+    }
+
+    pub fn log_path(&self) -> Option<PathBuf> {
+        Some(self.inner.as_ref()?.log_path())
+    }
+
+    pub fn frames_dir(&self) -> Option<PathBuf> {
+        Some(self.inner.as_ref()?.frames_dir())
     }
 
     pub fn session_name(&self) -> &str {
-        &self.session_name
+        self.inner
+            .as_ref()
+            .map_or("", |inner| inner.session_name.as_str())
     }
 
     #[cfg(test)]
-    pub(crate) fn frame_capture_path(&self, frames_ref: &str) -> PathBuf {
-        self.state_root.join(DIAG_FRAMES_DIR).join(frames_ref)
+    pub(crate) fn frame_capture_path(&self, frames_ref: &str) -> Option<PathBuf> {
+        Some(self.inner.as_ref()?.frames_dir().join(frames_ref))
     }
 
     pub fn emit(&self, event: DiagEvent) {
@@ -143,14 +155,20 @@ impl DiagSink {
     }
 
     pub fn emit_at_ms(&self, event: DiagEvent, at_ms: u64) {
-        let Some(suppressed_since_last) = self.suppression(&event, at_ms) else {
+        let Some(inner) = self.inner.as_ref() else {
             return;
         };
-        self.append(event, at_ms, suppressed_since_last);
+        let Some(suppressed_since_last) = inner.suppression(&event, at_ms) else {
+            return;
+        };
+        inner.append(event, at_ms, suppressed_since_last);
     }
 
     pub fn emit_unlimited(&self, event: DiagEvent) {
-        self.append(event, crate::sidebar::timing::unix_now_ms(), 0);
+        let Some(inner) = self.inner.as_ref() else {
+            return;
+        };
+        inner.append(event, crate::sidebar::timing::unix_now_ms(), 0);
     }
 
     /// Append a notification trace record to the sibling `notify.log.jsonl`.
@@ -162,14 +180,17 @@ impl DiagSink {
     }
 
     pub fn trace_notify_at_ms(&self, event: NotifyTraceEvent, at_ms: u64) {
+        let Some(inner) = self.inner.as_ref() else {
+            return;
+        };
         let envelope = NotifyTraceEnvelope::new(
-            self.workspace_id.clone(),
-            self.session_name.clone(),
-            self.instance_id.clone(),
+            inner.workspace_id.clone(),
+            inner.session_name.clone(),
+            inner.instance_id.clone(),
             at_ms,
             event,
         );
-        notify::log(&self.state_root).append(&envelope);
+        notify::log(&inner.state_root).append(&envelope);
     }
 
     pub fn capture_frame_pair<T: Serialize>(
@@ -179,7 +200,8 @@ impl DiagSink {
         offending: &T,
         at_ms: u64,
     ) -> Option<String> {
-        let dir = self.frames_dir();
+        let inner = self.inner.as_ref()?;
+        let dir = inner.frames_dir();
         if let Err(err) = ensure_private_dir(&dir) {
             tracing::debug!(path = %dir.display(), error = %err, "diagnostic frame dir unavailable");
             return None;
@@ -197,6 +219,16 @@ impl DiagSink {
         }
         prune_frame_ring(&dir);
         Some(file_name)
+    }
+}
+
+impl Inner {
+    fn log_path(&self) -> PathBuf {
+        self.state_root.join(DIAG_LOG_NAME)
+    }
+
+    fn frames_dir(&self) -> PathBuf {
+        frames_dir_under(&self.state_root)
     }
 
     fn append(&self, event: DiagEvent, at_ms: u64, suppressed_since_last: u32) {
@@ -332,6 +364,34 @@ mod tests {
     }
 
     #[test]
+    fn disabled_sink_accepts_diagnostics_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = DiagSink::disabled();
+
+        sink.emit_at_ms(
+            DiagEvent::DuplicatePaneId {
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+            },
+            1_000,
+        );
+        sink.trace_notify_at_ms(
+            NotifyTraceEvent::BellRing {
+                notification_kind: "waiting".to_owned(),
+                fired: false,
+                recheck_unread: true,
+                panes: Vec::new(),
+                suppressed: Some("not_unread".to_owned()),
+            },
+            1_000,
+        );
+
+        assert!(sink.capture_frame_pair("disabled", &1, &2, 1_000).is_none());
+        assert!(sink.log_path().is_none());
+        assert!(sink.frames_dir().is_none());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
     fn rate_limit_suppresses_identical_events_but_allows_distinct() {
         let dir = tempfile::tempdir().unwrap();
         let sink = sink(dir.path());
@@ -360,7 +420,7 @@ mod tests {
             1_002,
         );
 
-        let text = std::fs::read_to_string(sink.log_path()).unwrap();
+        let text = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
         assert_eq!(text.lines().count(), 2);
     }
 
@@ -380,7 +440,7 @@ mod tests {
             );
         }
 
-        let text = std::fs::read_to_string(sink.log_path()).unwrap();
+        let text = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
         assert_eq!(
             text.lines().count(),
             2,
@@ -404,7 +464,7 @@ mod tests {
             );
         }
 
-        let text = std::fs::read_to_string(sink.log_path()).unwrap();
+        let text = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
         let records = text
             .lines()
             .map(|line| serde_json::from_str::<DiagEnvelope>(line).unwrap())
@@ -453,7 +513,7 @@ mod tests {
             33_000,
         );
 
-        let text = std::fs::read_to_string(sink.log_path()).unwrap();
+        let text = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
         let records = text
             .lines()
             .map(|line| serde_json::from_str::<DiagEnvelope>(line).unwrap())
@@ -474,7 +534,7 @@ mod tests {
             });
         }
 
-        let text = std::fs::read_to_string(sink.log_path()).unwrap();
+        let text = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
         assert_eq!(text.lines().count(), 2);
     }
 

@@ -83,6 +83,6 @@ pub fn read_published_snapshot(
             config: None,
             lanes: None,
         },
-        None,
+        &crate::diag::DiagSink::disabled(),
     ))
 }

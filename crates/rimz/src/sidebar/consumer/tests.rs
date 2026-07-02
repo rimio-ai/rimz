@@ -333,7 +333,7 @@ fn no_frame_enrich_preserves_rollup_metadata_but_emits_no_groups() {
         None,
         None,
         cached_opts(),
-        None,
+        &crate::diag::DiagSink::disabled(),
     );
 
     assert_eq!(snapshot.panes_produced_at_ms, None);
@@ -368,7 +368,7 @@ fn enrich_maps_carried_frame_to_truth_notice() {
         None,
         None,
         cached_opts(),
-        None,
+        &crate::diag::DiagSink::disabled(),
     );
 
     assert_eq!(

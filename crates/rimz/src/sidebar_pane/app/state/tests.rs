@@ -55,7 +55,7 @@ fn active_alert(health: &Health) -> &Alert {
 }
 
 fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<DiagEvent> {
-    std::fs::read_to_string(sink.log_path())
+    std::fs::read_to_string(sink.log_path().unwrap())
         .expect("diagnostic log")
         .lines()
         .map(|line| {
@@ -294,7 +294,12 @@ impl ApplyHarness {
 
     fn apply_outcome(&mut self, outcome: FetchOutcome) -> ApplyOutcome {
         self.state
-            .apply_fetch_outcome(&self.config, outcome, std::time::Instant::now(), None)
+            .apply_fetch_outcome(
+                &self.config,
+                outcome,
+                std::time::Instant::now(),
+                &crate::diag::DiagSink::disabled(),
+            )
             .expect("apply fetch outcome")
     }
 }
@@ -905,7 +910,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
     };
 
     emit_diagnostics(
-        Some(&sink),
+        &sink,
         FetchDiagnostics {
             prev_snapshot: &prev,
             incoming_snapshot: &prev,
@@ -924,7 +929,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
         },
     );
     emit_diagnostics(
-        Some(&sink),
+        &sink,
         FetchDiagnostics {
             prev_snapshot: &prev,
             incoming_snapshot: &incoming,
@@ -940,7 +945,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
         },
     );
     emit_diagnostics(
-        Some(&sink),
+        &sink,
         FetchDiagnostics {
             prev_snapshot: &prev,
             incoming_snapshot: &prev,

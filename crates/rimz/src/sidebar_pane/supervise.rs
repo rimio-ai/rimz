@@ -109,17 +109,16 @@ fn record_signal_death(
     exit_code: Option<i32>,
     stderr_excerpt: String,
 ) {
-    if let Some(diag) = crate::diag::DiagSink::for_workspace(
+    let diag = crate::diag::DiagSink::for_workspace(
         config.workspace_id.clone(),
         config.session_name.clone(),
         Some(config.instance_id.clone()),
-    ) {
-        diag.emit(DiagEvent::RendererSignalDeath {
-            signal,
-            exit_code,
-            stderr_excerpt: stderr_excerpt.clone(),
-        });
-    }
+    );
+    diag.emit(DiagEvent::RendererSignalDeath {
+        signal,
+        exit_code,
+        stderr_excerpt: stderr_excerpt.clone(),
+    });
     report_sentry_signal_death(signal, exit_code, &stderr_excerpt);
 }
 

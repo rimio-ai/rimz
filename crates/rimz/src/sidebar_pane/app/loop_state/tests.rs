@@ -115,7 +115,13 @@ fn fold_snapshot(
         })
         .expect("send fetch outcome");
     state
-        .on_snapshot(config, fetch, &result_rx, Instant::now(), None)
+        .on_snapshot(
+            config,
+            fetch,
+            &result_rx,
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
         .expect("fold snapshot");
 }
 
@@ -208,7 +214,7 @@ fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
                 socket_path: &socket_path,
                 result_rx: &result_rx,
                 anim_start: Instant::now(),
-                diag: None,
+                diag: &crate::diag::DiagSink::disabled(),
                 tick: Duration::from_secs(60),
             },
         )
@@ -246,7 +252,7 @@ fn maintenance_requests_releasing_fetch_when_order_hold_expires() {
                 socket_path: &socket_path,
                 result_rx: &result_rx,
                 anim_start: Instant::now(),
-                diag: None,
+                diag: &crate::diag::DiagSink::disabled(),
                 tick: Duration::from_secs(60),
             },
         )
@@ -315,7 +321,7 @@ fn frame_timing_resumes_on_own_pane_focus() {
                     },
                 ),
                 Instant::now(),
-                None,
+                &crate::diag::DiagSink::disabled(),
             )
             .expect("focus event folds");
         state.dirty = false;
@@ -407,7 +413,7 @@ fn input_browse_arms_order_hold_before_next_fold() {
             &mut terminal,
             &mut fetch,
             Instant::now(),
-            None,
+            &crate::diag::DiagSink::disabled(),
         )
         .expect("browse input");
 

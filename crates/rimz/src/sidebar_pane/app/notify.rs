@@ -16,7 +16,7 @@ pub(super) fn emit_terminal_notification(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     snapshot: &SidebarSnapshot,
     notice: BellNotice<'_>,
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
 ) -> io::Result<bool> {
     let prefs = &config.notification_prefs;
     let mut bytes = Vec::new();
@@ -29,15 +29,13 @@ pub(super) fn emit_terminal_notification(
         ));
     }
     let bell = bell_decision(snapshot, notice.panes, notice.recheck_unread);
-    if let Some(diag) = diag {
-        diag.trace_notify(crate::schema::notify_trace::NotifyTraceEvent::BellRing {
-            notification_kind: notice.kind.to_owned(),
-            fired: bell.fired(),
-            recheck_unread: notice.recheck_unread,
-            panes: notice.panes.to_vec(),
-            suppressed: bell.suppressed_reason().map(str::to_owned),
-        });
-    }
+    diag.trace_notify(crate::schema::notify_trace::NotifyTraceEvent::BellRing {
+        notification_kind: notice.kind.to_owned(),
+        fired: bell.fired(),
+        recheck_unread: notice.recheck_unread,
+        panes: notice.panes.to_vec(),
+        suppressed: bell.suppressed_reason().map(str::to_owned),
+    });
     if bell.fired() {
         bytes.extend(osc::sound_notification_bytes(prefs.sound));
     }

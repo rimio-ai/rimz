@@ -71,7 +71,7 @@ pub struct ProduceOptions {
     pub session_name: String,
     pub exclude: Option<PaneId>,
     pub min_pane_cache_ms: Option<u64>,
-    pub diag: Option<crate::diag::DiagSink>,
+    pub diag: crate::diag::DiagSink,
 }
 
 #[derive(Clone, Copy)]
@@ -80,7 +80,7 @@ struct ProducerEnrich<'a> {
     messages_dir: &'a Path,
     exclude: Option<&'a PaneId>,
     min_pane_cache_ms: Option<u64>,
-    diag: Option<&'a crate::diag::DiagSink>,
+    diag: &'a crate::diag::DiagSink,
 }
 
 #[cfg(feature = "testkit")]
@@ -113,7 +113,7 @@ pub fn produce_snapshot(
             messages_dir: &state.messages_dir,
             exclude: opts.exclude.as_ref(),
             min_pane_cache_ms: opts.min_pane_cache_ms,
-            diag: opts.diag.as_ref(),
+            diag: &opts.diag,
         },
     ))
 }
@@ -137,7 +137,7 @@ pub fn produce_snapshot_with_refresh(
             messages_dir: &state.messages_dir,
             exclude: opts.exclude.as_ref(),
             min_pane_cache_ms: opts.min_pane_cache_ms,
-            diag: opts.diag.as_ref(),
+            diag: &opts.diag,
         },
     ))
 }
@@ -188,7 +188,7 @@ pub fn resolution_snapshot(
         session_name: workspace.session_name.clone(),
         exclude: None,
         min_pane_cache_ms: Some(crate::sidebar::timing::unix_now_ms()),
-        diag: None,
+        diag: crate::diag::DiagSink::disabled(),
     };
     match produce_resolution_snapshot(&mut RollupCursor::new(), &state, &runtime, &opts) {
         Ok(snapshot) => Ok(snapshot),
@@ -243,7 +243,7 @@ pub fn produce_rollup_snapshot_with_refresh(
             messages_dir: &state.messages_dir,
             exclude,
             min_pane_cache_ms,
-            diag: None,
+            diag: &crate::diag::DiagSink::disabled(),
         },
     ))
 }
@@ -303,7 +303,7 @@ fn produce_pane_frame(runtime: &RuntimePaths, opts: &ProduceOptions) -> Result<P
             &opts.session_name,
             opts.min_pane_cache_ms,
             opts.exclude.as_ref(),
-            opts.diag.as_ref(),
+            &opts.diag,
         )?),
     }
 }

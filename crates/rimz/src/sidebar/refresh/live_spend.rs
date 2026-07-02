@@ -211,7 +211,7 @@ mod tests {
             None,
             None,
             cached_opts(),
-            None,
+            &crate::diag::DiagSink::disabled(),
         );
         assert!(
             !baseline_path.exists(),
@@ -230,7 +230,7 @@ mod tests {
             None,
             None,
             cached_opts(),
-            None,
+            &crate::diag::DiagSink::disabled(),
         );
         assert_eq!(
             crate::agents::spending::read_live_spend_baselines(&baseline_path),
@@ -261,7 +261,7 @@ mod tests {
                 config: Some(Box::new(crate::config::MachineConfig::default())),
                 lanes: Some(&lanes),
             },
-            None,
+            &crate::diag::DiagSink::disabled(),
         );
         let advanced = crate::agents::spending::read_live_spend_baselines(&baseline_path);
         assert_eq!(advanced.observed_walk_ms, walk_ms);

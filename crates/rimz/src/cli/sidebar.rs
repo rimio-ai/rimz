@@ -446,7 +446,7 @@ fn emit_producer_snapshot(
         session_name,
         exclude: context.exclude.clone(),
         min_pane_cache_ms: context.min_pane_cache_ms,
-        diag: None,
+        diag: rimz::diag::DiagSink::disabled(),
     };
     match produce_snapshot_with_refresh(
         &mut RollupCursor::new(),
@@ -819,26 +819,25 @@ fn mark_read(globals: &GlobalFlags, target: String, worktree: Option<String>) ->
             .persist(&resolved.runtime)
             .context("writing unread episodes")?;
     }
-    if let Some(diag) = diag_for_workspace(&resolved.workspace) {
-        for row in cleared {
-            diag.trace_notify(
-                rimz::schema::notify_trace::NotifyTraceEvent::UnreadCleared {
-                    row_id: row.id.clone(),
-                    label: Some(rimz::sidebar::unread::row_label(row)),
-                    agent_kind: Some(AgentKind::new_unchecked(row.name.clone())),
-                    agent_id: Some(AgentSessionId::from(row.id.clone())),
-                    worktree: row
-                        .worktree_branch
-                        .clone()
-                        .or_else(|| row.worktree_path.clone()),
-                    pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
-                    cause: rimz::sidebar::unread::UnreadClearCause::MarkRead
-                        .as_str()
-                        .to_owned(),
-                    cleared_at_ms: Some(now_ms),
-                },
-            );
-        }
+    let diag = diag_for_workspace(&resolved.workspace);
+    for row in cleared {
+        diag.trace_notify(
+            rimz::schema::notify_trace::NotifyTraceEvent::UnreadCleared {
+                row_id: row.id.clone(),
+                label: Some(rimz::sidebar::unread::row_label(row)),
+                agent_kind: Some(AgentKind::new_unchecked(row.name.clone())),
+                agent_id: Some(AgentSessionId::from(row.id.clone())),
+                worktree: row
+                    .worktree_branch
+                    .clone()
+                    .or_else(|| row.worktree_path.clone()),
+                pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
+                cause: rimz::sidebar::unread::UnreadClearCause::MarkRead
+                    .as_str()
+                    .to_owned(),
+                cleared_at_ms: Some(now_ms),
+            },
+        );
     }
     wake_sidebars(&resolved.runtime);
     emit_hidden_count("Marked read", resolved.rows.len())
@@ -849,19 +848,18 @@ fn mark_unread(globals: &GlobalFlags, target: String, worktree: Option<String>) 
     let now_ms = unix_now_ms_i64();
     let opened = rimz::sidebar::unread::mark_rows_unread(&resolved.runtime, &resolved.rows, now_ms)
         .context("writing unread episodes")?;
-    if let Some(diag) = diag_for_workspace(&resolved.workspace) {
-        for item in &opened {
-            diag.trace_notify(rimz::schema::notify_trace::NotifyTraceEvent::UnreadMarked {
-                row_id: item.row_id.clone(),
-                label: Some(item.label.clone()),
-                agent_kind: Some(item.agent_kind.clone()),
-                agent_id: Some(item.agent_id.clone()),
-                worktree: item.worktree.clone(),
-                pane_id: item.pane_id.clone(),
-                status: item.status.as_str().to_owned(),
-                episode_ms: item.episode_ms,
-            });
-        }
+    let diag = diag_for_workspace(&resolved.workspace);
+    for item in &opened {
+        diag.trace_notify(rimz::schema::notify_trace::NotifyTraceEvent::UnreadMarked {
+            row_id: item.row_id.clone(),
+            label: Some(item.label.clone()),
+            agent_kind: Some(item.agent_kind.clone()),
+            agent_id: Some(item.agent_id.clone()),
+            worktree: item.worktree.clone(),
+            pane_id: item.pane_id.clone(),
+            status: item.status.as_str().to_owned(),
+            episode_ms: item.episode_ms,
+        });
     }
     wake_sidebars(&resolved.runtime);
     emit_hidden_count("Marked unread", resolved.rows.len())
@@ -1116,7 +1114,7 @@ fn notification_kind_from_cli(value: &str) -> Result<NotificationKind> {
     }
 }
 
-fn diag_for_workspace(workspace: &rimz::ResolvedWorkspace) -> Option<rimz::diag::DiagSink> {
+fn diag_for_workspace(workspace: &rimz::ResolvedWorkspace) -> rimz::diag::DiagSink {
     rimz::diag::DiagSink::for_workspace(
         workspace.workspace_id.clone(),
         workspace.session_name.clone(),

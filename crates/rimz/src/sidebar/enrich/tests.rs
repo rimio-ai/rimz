@@ -502,7 +502,7 @@ fn cached_enrich_reaps_codex_clear_session_before_pane_binding() {
         None,
         None,
         cached_opts(),
-        None,
+        &crate::diag::DiagSink::disabled(),
     );
 
     assert_eq!(
@@ -545,7 +545,7 @@ fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
         None,
         None,
         cached_opts(),
-        None,
+        &crate::diag::DiagSink::disabled(),
     );
 
     assert_eq!(
@@ -573,7 +573,7 @@ fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
         None,
         None,
         cached_opts(),
-        None,
+        &crate::diag::DiagSink::disabled(),
     );
     assert_eq!(snapshot.agents.len(), 1, "absent cache reaps nothing");
 }
@@ -604,7 +604,7 @@ fn project_lane_enrich_reads_stale_codex_daemon_reap_without_rewriting() {
         None,
         None,
         producing_opts(),
-        None,
+        &crate::diag::DiagSink::disabled(),
     );
 
     assert_eq!(
@@ -637,7 +637,7 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
         None,
         None,
         cached_opts(),
-        None,
+        &crate::diag::DiagSink::disabled(),
     );
 
     assert_eq!(snapshot.viewed_panes, vec![pane_id]);
@@ -667,7 +667,7 @@ fn frame_fold_carries_presence_onto_snapshot() {
         None,
         None,
         cached_opts(),
-        None,
+        &crate::diag::DiagSink::disabled(),
     );
 
     assert_eq!(snapshot.presence, Some(crate::SidebarPresence::Detached));
@@ -695,7 +695,7 @@ fn enrich_presence_with_default_config(
         None,
         None,
         producing_opts(),
-        None,
+        &crate::diag::DiagSink::disabled(),
     )
 }
 
@@ -916,7 +916,15 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
         &scoped,
     );
 
-    snapshot = enrich(snapshot, None, &runtime, None, None, cached_opts(), None);
+    snapshot = enrich(
+        snapshot,
+        None,
+        &runtime,
+        None,
+        None,
+        cached_opts(),
+        &crate::diag::DiagSink::disabled(),
+    );
 
     assert_eq!(
         snapshot
@@ -955,7 +963,15 @@ fn cached_enrich_ignores_old_provider_spending_version() {
     };
     atomic::write_temp_then_rename_cache(&runtime.shared_provider_spending_path(), &old).unwrap();
 
-    let snapshot = enrich(snapshot, None, &runtime, None, None, cached_opts(), None);
+    let snapshot = enrich(
+        snapshot,
+        None,
+        &runtime,
+        None,
+        None,
+        cached_opts(),
+        &crate::diag::DiagSink::disabled(),
+    );
 
     assert_eq!(
         snapshot.value_tally, None,
@@ -1041,7 +1057,15 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
             &project,
         )],
     )];
-    let snapshot = enrich(snapshot, None, &runtime, None, None, cached_opts(), None);
+    let snapshot = enrich(
+        snapshot,
+        None,
+        &runtime,
+        None,
+        None,
+        cached_opts(),
+        &crate::diag::DiagSink::disabled(),
+    );
 
     assert_eq!(
         snapshot.workspace_value_tally.as_ref().map(|tally| (

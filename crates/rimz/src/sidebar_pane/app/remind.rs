@@ -38,7 +38,7 @@ impl RemindState {
         config: &ServeConfig,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         snapshot: &SidebarSnapshot,
-        diag: Option<&crate::diag::DiagSink>,
+        diag: &crate::diag::DiagSink,
     ) {
         let scope = unread_reminder_scope(snapshot, &config.notification_prefs);
         if scope.count == 0

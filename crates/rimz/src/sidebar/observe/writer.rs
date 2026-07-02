@@ -410,7 +410,7 @@ mod tests {
         let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime");
         let sink =
             crate::diag::DiagSink::under(dir.path().to_path_buf(), workspace, "rimz-test", None);
-        let log_path = sink.log_path();
+        let log_path = sink.log_path().unwrap();
         let instance = SidebarInstanceId::new();
         let (tx, rx) = std::sync::mpsc::sync_channel::<ObserveMsg>(4);
 

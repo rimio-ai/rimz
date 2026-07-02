@@ -20,12 +20,12 @@ use super::{ServeConfig, tick_for};
 pub(super) fn spawn(
     config: ServeConfig,
     runtime: RuntimePaths,
-    diag: Option<crate::diag::DiagSink>,
+    diag: crate::diag::DiagSink,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || refresh_loop(config, runtime, diag))
 }
 
-fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: Option<crate::diag::DiagSink>) {
+fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: crate::diag::DiagSink) {
     crate::lane::set(crate::lane::WorkLane::CacheRefresh);
     let mut cursor = RollupCursor::new();
     let mut spending_walker = SpendingWalker::new();
@@ -57,7 +57,7 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: Option<crate::
             )
         });
         if let Some(event) = meter.finish(tick, crate::sidebar::timing::unix_now_ms()) {
-            crate::sidebar::meter::report(diag.as_ref(), event);
+            crate::sidebar::meter::report(&diag, event);
         }
         if let Err(err) = result {
             debug!(error = %err, "sidebar cache refresh failed");

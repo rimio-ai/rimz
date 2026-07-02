@@ -35,7 +35,7 @@ fn warm_produce_stays_inside_the_data_tick_at_fleet_scale() {
         session_name: SESSION_NAME.to_owned(),
         exclude: None,
         min_pane_cache_ms: None,
-        diag: None,
+        diag: rimz::diag::DiagSink::disabled(),
     };
     let mut cursor = RollupCursor::new();
 
@@ -90,7 +90,7 @@ fn project_produce_over_stale_heavy_caches_forks_zero_subprocesses() {
         session_name: SESSION_NAME.to_owned(),
         exclude: None,
         min_pane_cache_ms: None,
-        diag: None,
+        diag: rimz::diag::DiagSink::disabled(),
     };
     let mut cursor = RollupCursor::new();
 

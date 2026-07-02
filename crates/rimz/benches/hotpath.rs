@@ -320,7 +320,7 @@ fn enrich_cached(bencher: Bencher) {
                     config: None,
                     lanes: None,
                 },
-                None,
+                &rimz::diag::DiagSink::disabled(),
             ));
         });
 }

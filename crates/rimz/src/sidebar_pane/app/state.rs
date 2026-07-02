@@ -123,13 +123,7 @@ pub(super) struct FetchDiagnostics<'a> {
     pub(super) now: Timestamp,
 }
 
-pub(super) fn emit_diagnostics(
-    diag: Option<&crate::diag::DiagSink>,
-    diagnostics: FetchDiagnostics<'_>,
-) {
-    let Some(diag) = diag else {
-        return;
-    };
+pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchDiagnostics<'_>) {
     let FetchDiagnostics {
         prev_snapshot,
         incoming_snapshot,

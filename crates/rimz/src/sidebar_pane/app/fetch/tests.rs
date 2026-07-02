@@ -92,15 +92,15 @@ fn diagnostics_name_producer_transitions_and_link_alerts() {
 
     let mut last = None;
     emit_producer_transition(
-        Some(&sink),
+        &sink,
         &mut last,
         ProducerElection {
             elder: Some(elder.clone()),
         },
     );
-    emit_producer_transition(Some(&sink), &mut last, ProducerElection { elder: None });
+    emit_producer_transition(&sink, &mut last, ProducerElection { elder: None });
     emit_producer_transition(
-        Some(&sink),
+        &sink,
         &mut last,
         ProducerElection {
             elder: Some(new_elder.clone()),
@@ -121,7 +121,7 @@ fn diagnostics_name_producer_transitions_and_link_alerts() {
     ));
 
     emit_link_alert(
-        Some(&sink),
+        &sink,
         LinkAlert {
             tier: crate::remote::link::LinkTier::Degraded,
             rtt_ms: Some(230),
@@ -206,7 +206,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
             notification_prefs: &NotificationsPrefs::default(),
             notifications: &mut notifications,
             link_notifications: &mut link_notifications,
-            diag: None,
+            diag: &crate::diag::DiagSink::disabled(),
             last_election: &mut last_election,
         },
         request,
@@ -349,7 +349,7 @@ fn test_config(workspace_id: WorkspaceId, instance_id: SidebarInstanceId) -> Ser
 }
 
 fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::schema::diag::DiagEvent> {
-    std::fs::read_to_string(sink.log_path())
+    std::fs::read_to_string(sink.log_path().unwrap())
         .expect("diagnostic log")
         .lines()
         .map(|line| {
@@ -413,7 +413,7 @@ impl ConsumerFixture {
                 notification_prefs: &NotificationsPrefs::default(),
                 notifications: &mut notifications,
                 link_notifications: &mut link_notifications,
-                diag: None,
+                diag: &crate::diag::DiagSink::disabled(),
                 last_election: &mut last_election,
             },
             request,

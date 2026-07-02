@@ -170,7 +170,7 @@ fn fresh_publishable_snapshot_cache_rejects_invalid_cached_frames() {
             None,
             SNAPSHOT_CACHE_TTL,
             Some(&own),
-            None,
+            &crate::diag::DiagSink::disabled(),
         )
         .is_none(),
         "a cache missing the renderer's own pane must not short-circuit produce"
@@ -190,7 +190,7 @@ fn fresh_publishable_snapshot_cache_rejects_invalid_cached_frames() {
             None,
             SNAPSHOT_CACHE_TTL,
             Some(&own),
-            None,
+            &crate::diag::DiagSink::disabled(),
         )
         .is_some()
     );
@@ -237,7 +237,7 @@ fn rejected_frame_holds_only_a_publishable_prior() {
         empty_fresh,
         Some(valid_prior),
         None,
-        None,
+        &crate::diag::DiagSink::disabled(),
         false,
         &runtime,
         &cache_path,
@@ -251,7 +251,7 @@ fn rejected_frame_holds_only_a_publishable_prior() {
         empty_fresh,
         Some(invalid_prior),
         None,
-        None,
+        &crate::diag::DiagSink::disabled(),
         false,
         &runtime,
         &cache_path,
@@ -295,7 +295,7 @@ fn missing_own_rejection_captures_prior_and_offending_frames() {
         fresh,
         Some(prior),
         Some(&own),
-        Some(&sink),
+        &sink,
         false,
         &runtime,
         &cache_path,
@@ -313,7 +313,7 @@ fn missing_own_rejection_captures_prior_and_offending_frames() {
         panic!("expected missing-own frame rejection with frame capture");
     };
     assert!(
-        sink.frame_capture_path(&frames_ref).exists(),
+        sink.frame_capture_path(&frames_ref).unwrap().exists(),
         "the frame reference points at a captured prior/offending pair"
     );
 }
@@ -334,9 +334,16 @@ fn missing_own_pane_without_prior_publishes() {
         "s",
     );
 
-    let published =
-        validate_frame_for_publish(fresh, None, Some(&own), None, true, &runtime, &cache_path)
-            .expect("missing-own frame without prior remains publishable");
+    let published = validate_frame_for_publish(
+        fresh,
+        None,
+        Some(&own),
+        &crate::diag::DiagSink::disabled(),
+        true,
+        &runtime,
+        &cache_path,
+    )
+    .expect("missing-own frame without prior remains publishable");
 
     assert_eq!(pane_count(&published), 1);
     let cached = read_snapshot_cache(&cache_path, "s").expect("published frame");
@@ -395,7 +402,7 @@ fn degraded_first_read_publishes_verified_repull_result() {
                 calls.set(calls.get() + 1);
                 Ok(verified.clone())
             },
-            None,
+            &crate::diag::DiagSink::disabled(),
             true,
             &runtime,
         )
@@ -408,7 +415,7 @@ fn degraded_first_read_publishes_verified_repull_result() {
             repulled,
             Some(prior),
             None,
-            None,
+            &crate::diag::DiagSink::disabled(),
             true,
             &runtime,
             &cache_path,
@@ -464,7 +471,7 @@ fn ambiguous_plain_process_absence_repull_matrix() {
                 calls.set(calls.get() + 1);
                 Ok(verified.clone())
             },
-            None,
+            &crate::diag::DiagSink::disabled(),
             true,
             &runtime,
         )
@@ -514,7 +521,7 @@ fn refuted_initial_carry_records_diagnostic() {
             assert!(min_topology_produced_at_ms.is_some());
             Ok(verified.clone())
         },
-        Some(&sink),
+        &sink,
         true,
         &runtime,
     )
@@ -581,7 +588,7 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
             calls.set(calls.get() + 1);
             Ok(fresh.clone())
         },
-        Some(&sink),
+        &sink,
         true,
         &runtime,
     )
@@ -639,7 +646,7 @@ fn prior_frame_from_another_build_records_mixed_writers() {
         fresh.clone(),
         Some(prior),
         Some(&own),
-        Some(&sink),
+        &sink,
         false,
         &runtime,
         &cache_path,
@@ -650,7 +657,7 @@ fn prior_frame_from_another_build_records_mixed_writers() {
         fresh.clone(),
         Some(fresh),
         Some(&own),
-        Some(&sink),
+        &sink,
         false,
         &runtime,
         &cache_path,
@@ -679,7 +686,7 @@ fn prior_frame_from_another_build_records_mixed_writers() {
 }
 
 fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::schema::diag::DiagEvent> {
-    std::fs::read_to_string(sink.log_path())
+    std::fs::read_to_string(sink.log_path().unwrap())
         .expect("diagnostic log")
         .lines()
         .map(|line| {
@@ -716,7 +723,7 @@ fn metrics_only_refresh_preserves_the_pane_frame_timestamp() {
         None,
         SNAPSHOT_CACHE_TTL,
         None,
-        None,
+        &crate::diag::DiagSink::disabled(),
     );
 
     assert_eq!(refreshed.produced_at_ms, produced_at_ms);

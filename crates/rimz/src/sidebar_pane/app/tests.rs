@@ -352,7 +352,7 @@ fn suppressed_produce_panic_hook_chains_without_renderer_diagnostic() {
     std::panic::set_hook(Box::new(move |_| {
         prior_called_hook.store(true, std::sync::atomic::Ordering::SeqCst);
     }));
-    install_panic_diagnostic_hook(Some(sink.clone()));
+    install_panic_diagnostic_hook(sink.clone());
 
     let result = with_produce_panic_diagnostic_suppressed(|| {
         std::panic::catch_unwind(|| panic!("caught produce panic"))
@@ -366,7 +366,7 @@ fn suppressed_produce_panic_hook_chains_without_renderer_diagnostic() {
         "the suppressed diagnostic branch still chains the previously installed panic hook"
     );
     assert!(
-        !sink.log_path().exists(),
+        !sink.log_path().unwrap().exists(),
         "caught producer panics are converted to fetch failures, not renderer-panic diagnostics"
     );
 }

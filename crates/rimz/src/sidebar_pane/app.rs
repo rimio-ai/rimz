@@ -161,10 +161,10 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // Without a diagnostics sink there is nowhere to record anomalies, so the
     // receiver drops here and the loop's sends simply count as dropped.
     let (observe_tx, observe_rx) = std::sync::mpsc::sync_channel::<ObserveMsg>(64);
-    let _observe_handle = diag.clone().map(|sink| {
+    let _observe_handle = diag.is_enabled().then(|| {
         observe::writer::spawn(
             runtime.clone(),
-            sink,
+            diag.clone(),
             config.instance_id.clone(),
             observe_rx,
         )
@@ -258,7 +258,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         socket.set_read_timeout(Some(timeout))?;
         match wait_for_wakeup(&socket)? {
             Wakeup::Snapshot => {
-                state.on_snapshot(&config, &mut fetch, &result_rx, anim_start, diag.as_ref())?;
+                state.on_snapshot(&config, &mut fetch, &result_rx, anim_start, &diag)?;
             }
             Wakeup::Event(envelope) => {
                 match state.on_event(
@@ -267,7 +267,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     &mut terminal,
                     envelope,
                     anim_start,
-                    diag.as_ref(),
+                    &diag,
                 )? {
                     LoopFlow::Continue => {}
                     LoopFlow::Repoll => continue,
@@ -298,7 +298,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     &mut terminal,
                     &mut fetch,
                     anim_start,
-                    diag.as_ref(),
+                    &diag,
                 )?;
             }
         }
@@ -311,11 +311,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 socket_path: &socket_path,
                 result_rx: &result_rx,
                 anim_start,
-                diag: diag.as_ref(),
+                diag: &diag,
                 tick,
             },
         )?;
-        state.maybe_remind(&config, &mut terminal, diag.as_ref());
+        state.maybe_remind(&config, &mut terminal, &diag);
         state.paint_frame_if_due(&mut terminal, anim_start, active)?;
     }
     if state.tab_emptied {
@@ -334,10 +334,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     Ok(())
 }
 
-fn install_panic_diagnostic_hook(diag: Option<crate::diag::DiagSink>) {
-    let Some(diag) = diag else {
-        return;
-    };
+fn install_panic_diagnostic_hook(diag: crate::diag::DiagSink) {
     let prior = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if produce_panic_diagnostic_suppressed() {

@@ -258,7 +258,7 @@ pub fn repaired_pane_frame_for_binding(
         session.to_owned(),
         None,
     );
-    emit_frame_diagnostics(diag.as_ref(), diagnostics);
+    emit_frame_diagnostics(&diag, diagnostics);
     repair_pane_frame(&mut frame, runtime, prior.as_ref(), session, false);
     Ok(frame)
 }
@@ -480,7 +480,7 @@ pub(super) fn cached_panes_or_produce(
     session: &str,
     min_pane_cache_ms: Option<u64>,
     own_pane: Option<&PaneId>,
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
 ) -> Result<PaneFrame> {
     let cache_path = runtime.pane_frame_path();
 
@@ -654,7 +654,7 @@ pub(super) fn cached_panes_or_produce(
 fn filter_foreign_session_panes(
     panes: Vec<crate::pane::PaneRef>,
     session: &str,
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
 ) -> Vec<crate::pane::PaneRef> {
     panes
         .into_iter()
@@ -662,23 +662,19 @@ fn filter_foreign_session_panes(
             if pane.session_name == session {
                 Some(pane)
             } else {
-                if let Some(diag) = diag {
-                    diag.emit(DiagEvent::ForeignSessionPane {
-                        pane_id: pane.pane_id,
-                        session: pane.session_name,
-                    });
-                }
+                diag.emit(DiagEvent::ForeignSessionPane {
+                    pane_id: pane.pane_id,
+                    session: pane.session_name,
+                });
                 None
             }
         })
         .collect()
 }
 
-fn emit_frame_diagnostics(diag: Option<&crate::diag::DiagSink>, events: Vec<DiagEvent>) {
-    if let Some(diag) = diag {
-        for event in events {
-            diag.emit(event);
-        }
+fn emit_frame_diagnostics(diag: &crate::diag::DiagSink, events: Vec<DiagEvent>) {
+    for event in events {
+        diag.emit(event);
     }
 }
 
@@ -687,7 +683,7 @@ fn confirm_and_carry(
     prior: Option<&PaneFrame>,
     own_pane: Option<&PaneId>,
     produce_candidate: &dyn Fn(bool, Option<u64>) -> Result<PaneFrame>,
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
     enrich_metrics: bool,
     runtime: &crate::RuntimePaths,
 ) -> Result<PaneFrame> {
@@ -736,7 +732,6 @@ fn confirm_and_carry(
         }
         if verified_count == pane_count(&initial.frame)
             && shrink_needs_verification(&initial.frame, prior)
-            && let Some(diag) = diag
         {
             diag.emit(DiagEvent::FrameShrinkVerified {
                 prior: prior_count,
@@ -767,7 +762,7 @@ fn live_start_ticks(stat: crate::proc::StatMetrics) -> Option<u64> {
 }
 
 fn emit_pane_carry_forward(
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
     prior: Option<&PaneFrame>,
     offending_frame: &PaneFrame,
     outcome: &CarryOutcome,
@@ -775,9 +770,6 @@ fn emit_pane_carry_forward(
     fresh_count: usize,
     at_ms: u64,
 ) {
-    let Some(diag) = diag else {
-        return;
-    };
     let carried = outcome
         .carried
         .iter()
@@ -804,15 +796,12 @@ fn emit_pane_carry_forward(
 }
 
 fn emit_pane_carry_refuted(
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
     outcome: &CarryOutcome,
     prior_count: usize,
     fresh_count: usize,
     verified_count: usize,
 ) {
-    let Some(diag) = diag else {
-        return;
-    };
     let carried = outcome
         .carried
         .iter()
@@ -835,10 +824,7 @@ fn emit_pane_carry_refuted(
     });
 }
 
-fn emit_carry_expired(diag: Option<&crate::diag::DiagSink>, outcome: &CarryOutcome) {
-    let Some(diag) = diag else {
-        return;
-    };
+fn emit_carry_expired(diag: &crate::diag::DiagSink, outcome: &CarryOutcome) {
     for expired in &outcome.expired {
         diag.emit(DiagEvent::CarryForwardExpired {
             pane_id: expired.pane_id.clone(),
@@ -852,7 +838,7 @@ fn validate_frame_for_publish(
     frame: PaneFrame,
     prior: Option<PaneFrame>,
     own_pane: Option<&PaneId>,
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
     publish: bool,
     runtime: &crate::RuntimePaths,
     cache_path: &Path,
@@ -894,7 +880,7 @@ fn fresh_publishable_snapshot_cache(
     min_produced_at_ms: Option<u64>,
     ttl: Duration,
     own_pane: Option<&PaneId>,
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
 ) -> Option<PaneFrame> {
     let cache = fresh_snapshot_cache(cache_path, session, min_produced_at_ms, ttl)?;
     publishable_cached_frame(cache, own_pane, diag)
@@ -903,7 +889,7 @@ fn fresh_publishable_snapshot_cache(
 fn publishable_prior(
     frame: PaneFrame,
     own_pane: Option<&PaneId>,
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
 ) -> Option<PaneFrame> {
     publishable_cached_frame(frame, own_pane, diag)
 }
@@ -912,8 +898,8 @@ fn publishable_prior(
 /// writing this workspace's snapshot — the upgrade-overlap window where stale
 /// producers cause the subtlest regressions. Info evidence, rate-limited per
 /// build pair; legacy frames without a stamp stay silent.
-fn emit_mixed_build_writers(diag: Option<&crate::diag::DiagSink>, prior: Option<&PaneFrame>) {
-    let (Some(diag), Some(prior)) = (diag, prior) else {
+fn emit_mixed_build_writers(diag: &crate::diag::DiagSink, prior: Option<&PaneFrame>) {
+    let Some(prior) = prior else {
         return;
     };
     let (Some(prior_build), Some(own_build)) = (prior.build.as_deref(), crate::build_id::current())
@@ -932,7 +918,7 @@ fn emit_mixed_build_writers(diag: Option<&crate::diag::DiagSink>, prior: Option<
 fn publishable_cached_frame(
     frame: PaneFrame,
     own_pane: Option<&PaneId>,
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
 ) -> Option<PaneFrame> {
     match frame_publish_verdict(&frame, own_pane) {
         PublishVerdict::Publish => Some(frame),
@@ -944,14 +930,11 @@ fn publishable_cached_frame(
 }
 
 fn emit_mux_error(
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
     cache_path: &Path,
     session: &str,
     err: &dyn std::fmt::Display,
 ) {
-    let Some(diag) = diag else {
-        return;
-    };
     let prior = read_snapshot_cache(cache_path, session);
     diag.emit(DiagEvent::FrameRejected {
         reason: FrameRejectReason::MuxError {
@@ -964,36 +947,31 @@ fn emit_mux_error(
 }
 
 fn emit_frame_rejected(
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
     reason: FrameRejectReason,
     prior: Option<&PaneFrame>,
     fresh: &PaneFrame,
     at_ms: u64,
 ) {
-    if let Some(diag) = diag {
-        let frames_ref = if matches!(reason, FrameRejectReason::MissingOwnPane) {
-            prior.and_then(|prior| diag.capture_frame_pair("frame_rejected", prior, fresh, at_ms))
-        } else {
-            None
-        };
-        diag.emit(DiagEvent::FrameRejected {
-            reason,
-            prior_pane_count: prior.map(pane_count).unwrap_or_default(),
-            fresh_pane_count: pane_count(fresh),
-            frames_ref,
-        });
-    }
+    let frames_ref = if matches!(reason, FrameRejectReason::MissingOwnPane) {
+        prior.and_then(|prior| diag.capture_frame_pair("frame_rejected", prior, fresh, at_ms))
+    } else {
+        None
+    };
+    diag.emit(DiagEvent::FrameRejected {
+        reason,
+        prior_pane_count: prior.map(pane_count).unwrap_or_default(),
+        fresh_pane_count: pane_count(fresh),
+        frames_ref,
+    });
 }
 
 fn emit_pane_count_drop(
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
     prior: Option<&PaneFrame>,
     fresh: &PaneFrame,
     at_ms: u64,
 ) {
-    let Some(diag) = diag else {
-        return;
-    };
     let Some(prior) = prior else {
         return;
     };
@@ -1062,7 +1040,7 @@ fn refresh_cached_metrics(
     min_pane_cache_ms: Option<u64>,
     pane_ttl: Duration,
     own_pane: Option<&PaneId>,
-    diag: Option<&crate::diag::DiagSink>,
+    diag: &crate::diag::DiagSink,
 ) -> PaneFrame {
     if !super::metrics::pane_metrics_due(&frame, runtime) {
         return frame;

@@ -162,7 +162,7 @@ impl TickMeter {
     }
 }
 
-pub(crate) fn report(diag: Option<&DiagSink>, event: DiagEvent) {
+pub(crate) fn report(diag: &DiagSink, event: DiagEvent) {
     match &event {
         DiagEvent::TickBudgetBreach {
             tick_loop,
@@ -189,9 +189,7 @@ pub(crate) fn report(diag: Option<&DiagSink>, event: DiagEvent) {
         }
         _ => {}
     }
-    if let Some(diag) = diag {
-        diag.emit(event);
-    }
+    diag.emit(event);
 }
 
 fn work_lane(tick_loop: TickLoop) -> WorkLane {

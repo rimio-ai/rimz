@@ -43,7 +43,8 @@ fn sidebar_supervisor_records_worker_abort() {
         "rimz-test",
         None,
     )
-    .log_path();
+    .log_path()
+    .unwrap();
     let text = std::fs::read_to_string(&diag_path)
         .unwrap_or_else(|err| panic!("read {}: {err}", diag_path.display()));
     let record: DiagEnvelope = text

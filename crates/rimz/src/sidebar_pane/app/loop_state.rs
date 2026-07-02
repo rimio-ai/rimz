@@ -23,7 +23,7 @@ pub(super) struct MaintenanceContext<'a> {
     pub(super) socket_path: &'a Path,
     pub(super) result_rx: &'a Receiver<FetchOutcome>,
     pub(super) anim_start: Instant,
-    pub(super) diag: Option<&'a crate::diag::DiagSink>,
+    pub(super) diag: &'a crate::diag::DiagSink,
     pub(super) tick: Duration,
 }
 
@@ -233,7 +233,7 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         result_rx: &Receiver<FetchOutcome>,
         anim_start: Instant,
-        diag: Option<&crate::diag::DiagSink>,
+        diag: &crate::diag::DiagSink,
     ) -> Result<()> {
         let mut latest = None;
         let mut saw_final = false;
@@ -295,7 +295,7 @@ impl LoopState {
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         envelope: SidebarEventEnvelope,
         anim_start: Instant,
-        diag: Option<&crate::diag::DiagSink>,
+        diag: &crate::diag::DiagSink,
     ) -> Result<LoopFlow> {
         if !event_targets_this_renderer(&envelope, config) {
             return Ok(LoopFlow::Repoll);
@@ -496,7 +496,7 @@ impl LoopState {
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         fetch: &mut FetchDispatcher,
         anim_start: Instant,
-        diag: Option<&crate::diag::DiagSink>,
+        diag: &crate::diag::DiagSink,
     ) -> Result<()> {
         let applied = apply_input(
             wakeup,
@@ -551,7 +551,7 @@ impl LoopState {
         config: &ServeConfig,
         fetch: &mut FetchDispatcher,
         row_id: &str,
-        diag: Option<&crate::diag::DiagSink>,
+        diag: &crate::diag::DiagSink,
     ) {
         if self.ui.unread_guard.as_deref() == Some(row_id) {
             self.ui.unread_guard = None;
@@ -577,9 +577,7 @@ impl LoopState {
             return;
         }
         set_rows_unread(&mut self.current, &clear.ids, false);
-        if let Some(diag) = diag {
-            emit_unread_cleared_trace(diag, &clear.trace);
-        }
+        emit_unread_cleared_trace(diag, &clear.trace);
         wake_room(&runtime);
         self.dirty = true;
         self.next_frame = Instant::now();
@@ -595,7 +593,7 @@ impl LoopState {
         config: &ServeConfig,
         fetch: &mut FetchDispatcher,
         row_id: &str,
-        diag: Option<&crate::diag::DiagSink>,
+        diag: &crate::diag::DiagSink,
     ) {
         let Ok(runtime) = RuntimePaths::for_workspace(config.workspace_id.clone()) else {
             return;
@@ -620,10 +618,8 @@ impl LoopState {
         };
         set_rows_unread(&mut self.current, std::slice::from_ref(&row.id), true);
         self.ui.unread_guard = Some(row.id.clone());
-        if let Some(diag) = diag {
-            for item in &opened {
-                diag.trace_notify(item.trace_event());
-            }
+        for item in &opened {
+            diag.trace_notify(item.trace_event());
         }
         wake_room(&runtime);
         self.dirty = true;
@@ -684,7 +680,7 @@ impl LoopState {
         &mut self,
         config: &ServeConfig,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-        diag: Option<&crate::diag::DiagSink>,
+        diag: &crate::diag::DiagSink,
     ) {
         self.remind
             .maybe_remind(config, terminal, &self.current, diag);
@@ -814,7 +810,7 @@ impl LoopState {
         config: &ServeConfig,
         outcome: FetchOutcome,
         anim_start: Instant,
-        diag: Option<&crate::diag::DiagSink>,
+        diag: &crate::diag::DiagSink,
     ) -> Result<ApplyOutcome> {
         let last_snapshot = &mut self.last_snapshot;
         let current = &mut self.current;
@@ -929,9 +925,7 @@ impl LoopState {
         apply_manual_unread_guard(ui, focused_row_id.as_deref(), &mut clear);
         read_marks.observe_fold(clear.ids.clone(), now.as_millisecond(), &live);
         set_rows_unread(current, &clear.ids, false);
-        if let Some(diag) = diag {
-            emit_unread_cleared_trace(diag, &clear.trace);
-        }
+        emit_unread_cleared_trace(diag, &clear.trace);
         // Presentation sort only reorders the producer's already-capped visible set.
         // The order hold below can keep this sorted order stable across a read-clear
         // long enough for the user to confirm where they landed.
@@ -1044,7 +1038,7 @@ impl LoopState {
         config: &ServeConfig,
         outcome: FetchOutcome,
         anim_start: Instant,
-        diag: Option<&crate::diag::DiagSink>,
+        diag: &crate::diag::DiagSink,
     ) -> Result<bool> {
         let applied = self.apply_fetch_outcome(config, outcome, anim_start, diag)?;
         self.should_exit = applied.should_exit;
@@ -1092,7 +1086,7 @@ impl LoopState {
         config: &ServeConfig,
         pane: PaneId,
         anim_start: Instant,
-        diag: Option<&crate::diag::DiagSink>,
+        diag: &crate::diag::DiagSink,
     ) -> Result<()> {
         let now_ms = crate::sidebar::timing::unix_now_ms();
         let event = SidebarEvent::FocusChanged {
