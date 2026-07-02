@@ -223,8 +223,8 @@ fn draw_into(
     ui.focus_group_reveal = false;
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
-    let theme = Theme::for_sidebar(&snapshot.theme);
     if ui.help_visible {
+        let theme = Theme::for_sidebar(&snapshot.theme);
         draw_help_overlay(
             frame,
             &theme,
