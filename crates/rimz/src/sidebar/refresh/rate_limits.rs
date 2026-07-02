@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use fs4::FileExt;
 use jiff::Timestamp;
 
 use crate::agents::{
@@ -199,7 +198,7 @@ fn try_rate_limits_cache_lock(path: &Path) -> Option<std::fs::File> {
         .truncate(false)
         .open(path)
         .ok()?;
-    FileExt::try_lock(&file).ok()?;
+    file.try_lock().ok()?;
     Some(file)
 }
 

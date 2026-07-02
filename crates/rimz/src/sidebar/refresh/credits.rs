@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use fs4::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::ExtraCredits;
@@ -136,7 +135,7 @@ fn try_credits_cache_lock(path: &Path) -> Option<std::fs::File> {
         .truncate(false)
         .open(path)
         .ok()?;
-    FileExt::try_lock(&file).ok()?;
+    file.try_lock().ok()?;
     Some(file)
 }
 

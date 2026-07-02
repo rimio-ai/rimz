@@ -444,7 +444,7 @@ fn held_rate_limit_lock_makes_producer_read_only_instead_of_dropping_other_kinds
         .truncate(false)
         .open(runtime.shared_rate_limits_lock())
         .unwrap();
-    <std::fs::File as fs4::FileExt>::try_lock(&lock_file).unwrap();
+    lock_file.try_lock().unwrap();
 
     let mut contending = snapshot_with_panels(
         workspace,
@@ -466,7 +466,7 @@ fn held_rate_limit_lock_makes_producer_read_only_instead_of_dropping_other_kinds
         !cache.windows.contains_key("codex"),
         "the contending producer does not publish its partial provider set"
     );
-    <std::fs::File as fs4::FileExt>::unlock(&lock_file).unwrap();
+    lock_file.unlock().unwrap();
 }
 
 // ── fuse_window: source- and time-aware refill trust ────────────────────────
