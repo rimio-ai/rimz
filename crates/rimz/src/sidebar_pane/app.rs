@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
-use crate::config::{NotificationsPrefs, PetsGlyphMode};
+use crate::config::NotificationsPrefs;
 use crate::ids::PaneId;
 use crate::ledger::paths::PathErr;
 use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
@@ -27,7 +27,7 @@ use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL};
 use crate::sidebar_pane::osc;
 use crate::sidebar_pane::pets::{
-    PetAssets, PetPixelView, PetRenderCaps, PetViewFrame, PixelPainter, dashboard_pet_size,
+    PetAssets, PetBody, PetPixelView, PetRenderCaps, PetViewFrame, PixelPainter,
     detect_pet_render_caps, effective_render_tier,
 };
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
@@ -92,9 +92,6 @@ pub struct ServeConfig {
     pub refresh_ms_override: Option<u16>,
     pub timezone: jiff::tz::TimeZone,
     pub notification_prefs: NotificationsPrefs,
-    /// Initial pet render tier from machine theme config, used before the first
-    /// produced snapshot arrives.
-    pub pet_glyphs: PetsGlyphMode,
     /// The sidebar's own mux pane, resolved once from the per-pane env at
     /// launch (`crate::mux::own_pane_id`) — the fold's self-exclusion and the
     /// heartbeat's pane claim. `None` outside a pane. Carried here rather than
@@ -154,8 +151,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // ledger uses, so a resize is just another wakeup; without it the first
     // usable frame waits for the next `tick`, reading as a blank sidebar.
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout)?;
-    let pet_render_caps =
-        detect_pet_render_caps(config.mux, config.pet_glyphs, &config.session_name);
+    let pet_render_caps = detect_pet_render_caps(config.mux, &config.session_name);
     spawn_event_waker(socket_path.clone());
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -532,10 +528,10 @@ fn refresh_pet_view(
         caps,
         !snapshot.providers.is_empty() && render::pet_body_enabled(snapshot),
     );
-    let size = (snapshot.theme.pets.enabled
+    let body = (snapshot.theme.pets.enabled
         && render::dashboard_present(snapshot, alert_active)
         && render::pet_body_enabled(snapshot))
-    .then(|| dashboard_pet_size(tier));
+    .then_some(tier);
     let unread_triggered = if snapshot.theme.pets.enabled {
         pet_assets.observe_unread_rows(render::unread_pet_row_ids(snapshot))
     } else {
@@ -547,10 +543,9 @@ fn refresh_pet_view(
             action,
             phase: ui.animation_phase,
             refresh_ms: snapshot.theme.display.resolved_refresh_ms(),
-            size,
+            body,
             motion_enabled: render::pet_motion_enabled(snapshot, action),
             unread_triggered,
-            tier,
         },
     );
 }
@@ -594,7 +589,9 @@ fn paintable_pet_pixel<'a>(
     pet_assets: &PetAssets,
 ) -> Option<(ratatui::layout::Rect, &'a PetPixelView)> {
     let rect = ui.pet_pixel_rect?;
-    let pixel = ui.pet.as_ref()?.pixel.as_ref()?;
+    let PetBody::Pixel(pixel) = ui.pet.as_ref()?.body.as_ref()? else {
+        return None;
+    };
     pet_assets
         .pixel_frame(&pixel.pet_id, pixel.sprite_index)
         .map(|_| (rect, pixel))

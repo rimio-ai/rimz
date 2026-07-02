@@ -474,9 +474,9 @@ impl LoopState {
         &mut self,
         mux: MuxName,
         session_name: &str,
-        detect: impl FnOnce(MuxName, crate::config::PetsGlyphMode, &str) -> PetRenderCaps,
+        detect: impl FnOnce(MuxName, &str) -> PetRenderCaps,
     ) {
-        self.pet_render_caps = detect(mux, self.current.theme.pets.glyphs, session_name);
+        self.pet_render_caps = detect(mux, session_name);
     }
 
     pub(super) fn on_input(

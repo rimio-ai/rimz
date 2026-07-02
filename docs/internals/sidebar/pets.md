@@ -4,7 +4,7 @@
 
 Pets are renderer-local attention art for the provider dashboard. One animated companion follows the selected agent or process card, while the card rows stay stable and the bottom panel carries the extra motion.
 
-The renderer receives a `PetView`: optional cell art, optional pixel placement metadata, caption text, loading state, current action, and active animation track. Network fetches, disk cache reads, WebP decode, frame slicing, animation selection, and memoized cell-art conversion stay in `src/sidebar_pane/pets/`; the on-screen placement contract lives with [the provider dashboard](../../interface/sidebar.md#zone-3--the-provider-dashboard).
+The renderer receives a `PetView`: one optional body, caption text, loading state, current action, and active animation track. The body is either cell art or pixel placement metadata. Network fetches, disk cache reads, WebP decode, frame slicing, animation selection, and memoized cell-art conversion stay in `src/sidebar_pane/pets/`; the on-screen placement contract lives with [the provider dashboard](../../interface/sidebar.md#zone-3--the-provider-dashboard).
 
 ## Module map
 
@@ -23,11 +23,11 @@ The renderer receives a `PetView`: optional cell art, optional pixel placement m
 
 ## Data flow
 
-Each frame starts from `[theme.pets] pet`. `asset::resolve_pet_source` turns the selector into a built-in CDN asset, HTTPS URL, local sheet, or petdex install. `PetAssets` owns the load state: `loading` holds the background loader receiver, `loaded` holds decoded frames plus animation metadata and the memoized cell-art cache, and `failed` records an unavailable caption plus a retry cooldown.
+Each frame starts from `[theme.pets] pet`. `asset::resolve_pet_source` turns the selector into a built-in CDN asset, HTTPS URL, local sheet, or petdex install. `PetAssets` owns the load state: `loading` holds the background loader receiver, `loaded` holds decoded frames plus the memoized cell-art cache, and `failed` records an unavailable caption plus a retry cooldown.
 
 The loader path resolves bytes through `asset`, decodes and slices the WebP sheet through `frames`, and stores frames in `LoadedPet`. A failed fetched cache entry can be removed; local user sheets are read directly. A latched failed load retries after the cooldown so a transient miss heals without a per-frame fetch storm.
 
-The serve loop in `app.rs` projects the selected visible row into a `PetAction`, observes newly unread rows, resolves the effective render tier, computes the fixed pet footprint, and calls `PetAssets::view`. `PetAssets` chooses the track in `model`: action changes and newly unread rows play `jumping` once, then the steady action track takes over. The selected sprite becomes either a memoized `PetCellGrid` through `cellart` or a `PetPixelView` for the post-ratatui kitty graphics paint path.
+The serve loop in `app.rs` projects the selected visible row into a `PetAction`, observes newly unread rows, resolves the effective render tier, passes the optional body tier, and calls `PetAssets::view`. `PetAssets` chooses the track in `model`: action changes and newly unread rows play `jumping` once, then the steady action track takes over. The selected sprite becomes a single `PetView` body: either a memoized `PetCellGrid` through `cellart` or a `PetPixelView` for the post-ratatui kitty graphics paint path.
 
 Rendering consumes only the resulting `PetView`. Cell art is copied into the ratatui buffer. Pixel art reserves blank placeholder cells in the dashboard and the serve loop writes the kitty graphics placement after ratatui flushes stdout.
 
@@ -37,7 +37,7 @@ Rendering consumes only the resulting `PetView`. Cell art is copied into the rat
 
 `effective_render_tier` folds in frame-local paintability for the live dashboard. A resolved pixel tier becomes `Cell` when pixels have no provider block to ride beside or the pet body is suppressed. Cell tiers pass through unchanged, so `glyphs = "sextant"` stays sextant when pixels cannot paint.
 
-Pixel capability in the live sidebar is a tmux enrichment: tmux 3.6 or newer, `allow-passthrough` set to `on` or `all`, and in `auto` mode an attached rendering client whose terminfo is `xterm-ghostty`, `ghostty`, `xterm-kitty`, or `kitty`. `glyphs = "pixel"` skips the terminal-name allowlist while keeping the tmux and passthrough gates. Zellij resolves to cell art. `rimz list-pets` can use native kitty graphics in standalone Ghostty or kitty, and wraps the same graphics stream through tmux passthrough when run inside tmux.
+Pixel capability in the live sidebar is a tmux enrichment: tmux 3.6 or newer and `allow-passthrough` set to `on` or `all` provide the pixel transport fact; an attached rendering client whose terminfo is `xterm-ghostty`, `ghostty`, `xterm-kitty`, or `kitty` provides the kitty-terminal fact. `glyphs = "auto"` requires both facts, while `glyphs = "pixel"` requires only the transport fact. Zellij resolves to cell art. `rimz list-pets` can use native kitty graphics in standalone Ghostty or kitty, and wraps the same graphics stream through tmux passthrough when run inside tmux.
 
 The downgrade target is sextant because it is the portable cell-art baseline. Capability misses, Zellij, `NO_COLOR`, bodyless frames, and sessions with no provider block all converge on a cell path; a narrow rendered dashboard can still clear a pixel placement when the placeholder rect has no usable room.
 
@@ -59,7 +59,7 @@ The renderer projects the selected visible row into one pet action before choosi
 
 Any pet-action change plays `jumping` once before switching to the new steady track. A newly unread row also plays `jumping` once, even when the selected card's action holds. Static role animation overrides skip one-shots and freeze the steady action track on its first frame.
 
-The built-in catalog follows the Codex/petdex sheet rows: row 0 `idle` (6 frames), row 1 `run-right` (8), row 2 `run-left` (8), row 3 `waving` (4), row 4 `jumping` (5), row 5 `failed` (8), row 6 `waiting` (6), row 7 `running` (6), and row 8 `review` (6). The default mapping uses `idle`, `thinking`, `running`, `waiting`, `review`, `ask`, `jumping`, and `failed`; `moving`, `run-right`, `run-left`, and `waving` remain catalog tracks for compatibility and composed tracks.
+The built-in catalog follows the Codex/petdex sheet rows: row 0 `idle` (6 frames), row 1 `run-right` (8), row 2 `run-left` (8), row 3 `waving` (4), row 4 `jumping` (5), row 5 `failed` (8), row 6 `waiting` (6), row 7 `running` (6), and row 8 `review` (6). The shipped animation tracks are `idle`, `thinking`, `running`, `waiting`, `review`, `ask`, `jumping`, and `failed`; `thinking` composes repeated `run-left` and `run-right` rows, while `ask` composes the `waving` and `waiting` rows.
 
 Captions are canned renderer strings. They read action transitions only, and `[theme.pets] voice = false` disables them.
 

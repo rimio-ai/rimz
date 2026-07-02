@@ -32,7 +32,7 @@ pub fn serve_fixture(
 
     let mut ui = UiState::default();
     let mut pets = PetAssets::default();
-    let caps = detect_pet_render_caps(mux, snapshot.theme.pets.glyphs, session_name);
+    let caps = detect_pet_render_caps(mux, session_name);
     let mut pixel_painter = PixelPainter::new(mux == MuxName::Tmux);
     let anim_start = Instant::now();
     let cadence = Duration::from_millis(u64::from(refresh_ms));
@@ -71,13 +71,7 @@ pub fn serve_gallery(
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let glyphs = columns
-        .iter()
-        .map(|(snapshot, _)| snapshot)
-        .find(|snapshot| snapshot.theme.pets.enabled)
-        .map(|snapshot| snapshot.theme.pets.glyphs)
-        .unwrap_or_default();
-    let caps = detect_pet_render_caps(mux, glyphs, session_name);
+    let caps = detect_pet_render_caps(mux, session_name);
     let id_base = PixelPainter::runtime_id_base();
     let mut states = columns
         .into_iter()

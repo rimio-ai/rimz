@@ -1,4 +1,4 @@
-use crate::sidebar_pane::pets::{PetCellGrid, PetView};
+use crate::sidebar_pane::pets::{PetBody, PetCellGrid, PetView};
 use crate::sidebar_pane::render::theme::Theme;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -17,20 +17,14 @@ pub(super) fn pet_panel_lines(
     let caption = pet_caption(pet);
     let grid = theme
         .pet_body_enabled()
-        .then(|| pet.and_then(|view| view.grid.as_ref()))
+        .then(|| pet.and_then(|view| pet_cell_grid(view)))
         .flatten();
 
     if let Some(grid) = grid {
         return body_lines(grid, caption, theme, width);
     }
 
-    let fallback = caption.unwrap_or_else(|| {
-        if pet.is_some_and(|view| view.loading) {
-            "fetching pet..."
-        } else {
-            "resting"
-        }
-    });
+    let fallback = caption.unwrap_or("resting");
     vec![centered_caption(fallback, theme, width)]
 }
 
@@ -45,7 +39,7 @@ pub(super) fn dashboard_pet_grid_lines(
 ) -> Vec<Line<'static>> {
     if let Some(pixel) = theme
         .pet_body_enabled()
-        .then(|| pet.and_then(|view| view.pixel.as_ref()))
+        .then(|| pet.and_then(|view| pet_pixel(view)))
         .flatten()
     {
         let mut lines = (0..pixel.size.rows)
@@ -56,7 +50,7 @@ pub(super) fn dashboard_pet_grid_lines(
     }
     let Some(grid) = theme
         .pet_body_enabled()
-        .then(|| pet.and_then(|view| view.grid.as_ref()))
+        .then(|| pet.and_then(|view| pet_cell_grid(view)))
         .flatten()
     else {
         return Vec::new();
@@ -68,7 +62,20 @@ pub(super) fn dashboard_pet_grid_lines(
 
 fn pet_caption(pet: Option<&PetView>) -> Option<&str> {
     pet.and_then(|view| view.caption.as_deref())
-        .or_else(|| pet.and_then(|view| view.loading.then_some("fetching pet...")))
+}
+
+fn pet_cell_grid(view: &PetView) -> Option<&PetCellGrid> {
+    match view.body.as_ref()? {
+        PetBody::Cell(grid) => Some(grid),
+        PetBody::Pixel(_) => None,
+    }
+}
+
+fn pet_pixel(view: &PetView) -> Option<&crate::sidebar_pane::pets::PetPixelView> {
+    match view.body.as_ref()? {
+        PetBody::Pixel(pixel) => Some(pixel),
+        PetBody::Cell(_) => None,
+    }
 }
 
 /// The sprite pinned to the right edge, with its caption set to the left,

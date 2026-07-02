@@ -5,7 +5,7 @@ fn frame(
     action: PetAction,
     phase: u64,
     refresh_ms: u16,
-    size: Option<PetGridSize>,
+    body: Option<PetRenderTier>,
     motion_enabled: bool,
     unread_triggered: bool,
 ) -> PetViewFrame {
@@ -13,10 +13,9 @@ fn frame(
         action,
         phase,
         refresh_ms,
-        size,
+        body,
         motion_enabled,
         unread_triggered,
-        tier: PetRenderTier::Cell,
     }
 }
 
@@ -34,12 +33,17 @@ fn dashboard_pet_size_uses_fixed_tier_footprints() {
 #[test]
 fn render_tier_resolves_mode_and_caps() {
     use PetsGlyphMode::{Auto, Pixel, Sextant};
-    let caps = |pixel| PetRenderCaps { pixel };
+    let caps = |pixel_transport, kitty_term| PetRenderCaps {
+        pixel_transport,
+        kitty_term,
+    };
     for (mode, caps, tier) in [
-        (Auto, caps(true), PetRenderTier::Pixel),
-        (Auto, caps(false), PetRenderTier::Cell),
-        (Pixel, caps(false), PetRenderTier::Cell),
-        (Sextant, caps(true), PetRenderTier::Cell),
+        (Auto, caps(true, true), PetRenderTier::Pixel),
+        (Auto, caps(true, false), PetRenderTier::Cell),
+        (Auto, caps(false, true), PetRenderTier::Cell),
+        (Pixel, caps(true, false), PetRenderTier::Pixel),
+        (Pixel, caps(false, true), PetRenderTier::Cell),
+        (Sextant, caps(true, true), PetRenderTier::Cell),
     ] {
         assert_eq!(resolve_render_tier(mode, caps), tier);
     }
@@ -48,7 +52,10 @@ fn render_tier_resolves_mode_and_caps() {
 #[test]
 fn effective_render_tier_downgrades_only_unpaintable_pixels() {
     use PetsGlyphMode::{Pixel, Sextant};
-    let pixel_caps = PetRenderCaps { pixel: true };
+    let pixel_caps = PetRenderCaps {
+        pixel_transport: true,
+        kitty_term: true,
+    };
 
     assert_eq!(
         effective_render_tier(Pixel, pixel_caps, true),
@@ -86,7 +93,7 @@ fn disabled_config_clears_runtime_state() {
                     PetAction::Idle,
                     0,
                     100,
-                    Some(PetGridSize { cols: 12, rows: 6 }),
+                    Some(PetRenderTier::Cell),
                     true,
                     false,
                 ),
@@ -124,13 +131,13 @@ fn empty_pet_selector_rests_with_no_pet() {
                 PetAction::Idle,
                 0,
                 100,
-                Some(PetGridSize { cols: 12, rows: 6 }),
+                Some(PetRenderTier::Cell),
                 true,
                 false,
             ),
         )
         .expect("enabled pets produce a view");
-    assert_eq!(view.grid, None);
+    assert_eq!(view.body, None);
     assert_eq!(view.caption.as_deref(), Some("no pet selected"));
     assert!(assets.loading.is_none(), "an empty selector loads nothing");
     assert!(assets.loaded.is_none());
@@ -161,13 +168,13 @@ fn local_pet_path_begins_loading_under_its_own_id() {
                 PetAction::Idle,
                 0,
                 100,
-                Some(PetGridSize { cols: 12, rows: 6 }),
+                Some(PetRenderTier::Cell),
                 true,
                 false,
             ),
         )
         .expect("enabled pets produce a view");
-    assert_eq!(view.grid, None);
+    assert_eq!(view.body, None);
     assert!(view.loading, "a local-path selector spawns a loader");
     assert!(
         assets
@@ -192,7 +199,7 @@ fn missing_body_size_does_not_start_asset_loading() {
         .view(&config, frame(PetAction::Idle, 0, 100, None, true, false))
         .expect("enabled pets produce a view");
 
-    assert_eq!(view.grid, None);
+    assert_eq!(view.body, None);
     assert!(!view.loading);
     assert_eq!(view.caption.as_deref(), Some("resting"));
     assert!(assets.loading.is_none());
@@ -223,7 +230,7 @@ fn failed_loader_settles_without_immediate_retry() {
                 PetAction::Idle,
                 0,
                 100,
-                Some(PetGridSize { cols: 12, rows: 6 }),
+                Some(PetRenderTier::Cell),
                 true,
                 false,
             ),
@@ -241,7 +248,7 @@ fn failed_loader_settles_without_immediate_retry() {
                 PetAction::Idle,
                 1,
                 100,
-                Some(PetGridSize { cols: 12, rows: 6 }),
+                Some(PetRenderTier::Cell),
                 true,
                 false,
             ),
@@ -268,19 +275,19 @@ fn action_transition_jumps_once_then_settles() {
     let refresh_ms = 100;
     let mut assets = loaded_assets(Some(PetAction::Running));
     let config = enabled_config();
-    let size = Some(PetGridSize { cols: 12, rows: 6 });
+    let body = Some(PetRenderTier::Cell);
 
     let view = assets
         .view(
             &config,
-            frame(PetAction::Ask, 10, refresh_ms, size, true, false),
+            frame(PetAction::Ask, 10, refresh_ms, body, true, false),
         )
         .expect("enabled pets produce a view");
     assert_eq!(view.active_track, model::TRACK_JUMPING);
     assert_eq!(assets.jump_started_phase, Some(10));
 
-    let jump = model::default_animations()
-        .remove(model::TRACK_JUMPING)
+    let jump = model::animations()
+        .get(model::TRACK_JUMPING)
         .expect("jumping track");
     let phases = jump
         .loop_duration(refresh_ms)
@@ -293,7 +300,7 @@ fn action_transition_jumps_once_then_settles() {
                 PetAction::Ask,
                 10 + phases as u64,
                 refresh_ms,
-                size,
+                body,
                 true,
                 false,
             ),
@@ -308,19 +315,19 @@ fn unread_trigger_jumps_once_without_action_change() {
     let refresh_ms = 100;
     let mut assets = loaded_assets(Some(PetAction::Running));
     let config = enabled_config();
-    let size = Some(PetGridSize { cols: 12, rows: 6 });
+    let body = Some(PetRenderTier::Cell);
 
     let view = assets
         .view(
             &config,
-            frame(PetAction::Running, 10, refresh_ms, size, true, true),
+            frame(PetAction::Running, 10, refresh_ms, body, true, true),
         )
         .expect("enabled pets produce a view");
     assert_eq!(view.active_track, model::TRACK_JUMPING);
     assert_eq!(assets.jump_started_phase, Some(10));
 
-    let jump = model::default_animations()
-        .remove(model::TRACK_JUMPING)
+    let jump = model::animations()
+        .get(model::TRACK_JUMPING)
         .expect("jumping track");
     let phases = jump
         .loop_duration(refresh_ms)
@@ -333,7 +340,7 @@ fn unread_trigger_jumps_once_without_action_change() {
                 PetAction::Running,
                 10 + phases as u64,
                 refresh_ms,
-                size,
+                body,
                 true,
                 false,
             ),
@@ -353,7 +360,7 @@ fn static_mode_skips_transition_jump() {
                 PetAction::Idle,
                 10,
                 100,
-                Some(PetGridSize { cols: 12, rows: 6 }),
+                Some(PetRenderTier::Cell),
                 false,
                 false,
             ),
@@ -368,7 +375,6 @@ fn static_mode_skips_transition_jump() {
 fn pixel_view_resolves_sprite_without_cell_grid() {
     let mut assets = loaded_assets(Some(PetAction::Running));
     let config = enabled_config();
-    let size = PetGridSize { cols: 12, rows: 6 };
 
     let view = assets
         .view(
@@ -377,18 +383,18 @@ fn pixel_view_resolves_sprite_without_cell_grid() {
                 action: PetAction::Idle,
                 phase: 0,
                 refresh_ms: 100,
-                size: Some(size),
+                body: Some(PetRenderTier::Pixel),
                 motion_enabled: true,
                 unread_triggered: false,
-                tier: PetRenderTier::Pixel,
             },
         )
         .expect("enabled pets produce a view");
 
-    assert_eq!(view.grid, None);
-    let pixel = view.pixel.expect("pixel view");
+    let PetBody::Pixel(pixel) = view.body.expect("pixel view") else {
+        panic!("expected pixel body");
+    };
     assert_eq!(pixel.pet_id, "codex");
-    assert_eq!(pixel.size, size);
+    assert_eq!(pixel.size, DASHBOARD_PIXEL_PET);
     assert_eq!(view.active_track, model::TRACK_JUMPING);
     assert!(
         assets
@@ -409,7 +415,6 @@ fn memoized_grids_are_evicted_on_resize() {
         loaded: Some(LoadedPet {
             id: "codex".to_owned(),
             frames: vec![frame; catalog::FRAME_COUNT],
-            animations: model::default_animations(),
             memo: HashMap::new(),
         }),
         ..PetAssets::default()
@@ -417,40 +422,14 @@ fn memoized_grids_are_evicted_on_resize() {
 
     assert!(
         assets
-            .loaded_grid(LoadedGridRequest {
-                pet_id: "codex",
-                previous_action: None,
-                frame: PetViewFrame {
-                    action: PetAction::Idle,
-                    phase: 0,
-                    refresh_ms: 100,
-                    size: Some(PetGridSize { cols: 12, rows: 6 }),
-                    motion_enabled: true,
-                    unread_triggered: false,
-                    tier: PetRenderTier::Cell,
-                },
-                size: PetGridSize { cols: 12, rows: 6 },
-            })
+            .loaded_grid("codex", 0, PetGridSize { cols: 12, rows: 6 })
             .is_some()
     );
     assert_eq!(assets.loaded.as_ref().expect("loaded").memo.len(), 1);
 
     assert!(
         assets
-            .loaded_grid(LoadedGridRequest {
-                pet_id: "codex",
-                previous_action: None,
-                frame: PetViewFrame {
-                    action: PetAction::Idle,
-                    phase: 0,
-                    refresh_ms: 100,
-                    size: Some(PetGridSize { cols: 13, rows: 6 }),
-                    motion_enabled: true,
-                    unread_triggered: false,
-                    tier: PetRenderTier::Cell,
-                },
-                size: PetGridSize { cols: 13, rows: 6 },
-            })
+            .loaded_grid("codex", 0, PetGridSize { cols: 13, rows: 6 })
             .is_some()
     );
     let memo = &assets.loaded.as_ref().expect("loaded").memo;
@@ -477,7 +456,6 @@ fn loaded_assets(previous_action: Option<PetAction>) -> PetAssets {
         loaded: Some(LoadedPet {
             id: "codex".to_owned(),
             frames: vec![frame; catalog::FRAME_COUNT],
-            animations: model::default_animations(),
             memo: HashMap::new(),
         }),
         previous_action,

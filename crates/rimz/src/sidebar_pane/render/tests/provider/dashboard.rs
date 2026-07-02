@@ -120,12 +120,13 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
 fn render_pets_dashboard_body_uses_pet_view() {
     let theme = Theme::fixed(false);
     let pet = crate::sidebar_pane::pets::PetView {
-        grid: Some(vec![vec![crate::sidebar_pane::pets::PetCell {
-            ch: '▀',
-            fg: Color::Rgb(200, 20, 20),
-            bg: Color::Rgb(20, 20, 200),
-        }]]),
-        pixel: None,
+        body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
+            crate::sidebar_pane::pets::PetCell {
+                ch: '▀',
+                fg: Color::Rgb(200, 20, 20),
+                bg: Color::Rgb(20, 20, 200),
+            },
+        ]])),
         caption: Some("all caught up".to_owned()),
         loading: false,
         action: crate::sidebar_pane::pets::PetAction::Idle,
@@ -156,12 +157,13 @@ fn render_pets_dashboard_body_uses_pet_view() {
 fn render_pets_dashboard_body_drops_sprite_under_no_color() {
     let theme = Theme::fixed(true);
     let pet = crate::sidebar_pane::pets::PetView {
-        grid: Some(vec![vec![crate::sidebar_pane::pets::PetCell {
-            ch: '▀',
-            fg: Color::Rgb(200, 20, 20),
-            bg: Color::Rgb(20, 20, 200),
-        }]]),
-        pixel: None,
+        body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
+            crate::sidebar_pane::pets::PetCell {
+                ch: '▀',
+                fg: Color::Rgb(200, 20, 20),
+                bg: Color::Rgb(20, 20, 200),
+            },
+        ]])),
         caption: Some("someone needs you".to_owned()),
         loading: false,
         action: crate::sidebar_pane::pets::PetAction::Ask,
@@ -191,12 +193,13 @@ fn render_provider_dashboard_pixel_pet_reserves_blank_column_and_records_rect() 
     let theme = Theme::fixed(false);
     let providers = two_provider_panels();
     let pet = crate::sidebar_pane::pets::PetView {
-        grid: None,
-        pixel: Some(crate::sidebar_pane::pets::PetPixelView {
-            pet_id: "codex".to_owned(),
-            sprite_index: 0,
-            size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
-        }),
+        body: Some(crate::sidebar_pane::pets::PetBody::Pixel(
+            crate::sidebar_pane::pets::PetPixelView {
+                pet_id: "codex".to_owned(),
+                sprite_index: 0,
+                size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
+            },
+        )),
         caption: Some("ready".to_owned()),
         loading: false,
         action: crate::sidebar_pane::pets::PetAction::Idle,
@@ -260,12 +263,13 @@ fn render_provider_dashboard_pixel_pet_rect_is_absolute_in_composed_frame() {
     snapshot.theme.pets.enabled = true;
     let ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
-            grid: None,
-            pixel: Some(crate::sidebar_pane::pets::PetPixelView {
-                pet_id: "codex".to_owned(),
-                sprite_index: 0,
-                size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
-            }),
+            body: Some(crate::sidebar_pane::pets::PetBody::Pixel(
+                crate::sidebar_pane::pets::PetPixelView {
+                    pet_id: "codex".to_owned(),
+                    sprite_index: 0,
+                    size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
+                },
+            )),
             caption: Some("ready".to_owned()),
             loading: false,
             action: crate::sidebar_pane::pets::PetAction::Idle,
@@ -297,12 +301,13 @@ fn render_provider_dashboard_pixel_pet_keeps_total_spacer_row() {
     let theme = Theme::fixed(false);
     let providers = two_provider_panels();
     let pet = crate::sidebar_pane::pets::PetView {
-        grid: None,
-        pixel: Some(crate::sidebar_pane::pets::PetPixelView {
-            pet_id: "codex".to_owned(),
-            sprite_index: 0,
-            size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
-        }),
+        body: Some(crate::sidebar_pane::pets::PetBody::Pixel(
+            crate::sidebar_pane::pets::PetPixelView {
+                pet_id: "codex".to_owned(),
+                sprite_index: 0,
+                size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
+            },
+        )),
         caption: Some("ready".to_owned()),
         loading: false,
         action: crate::sidebar_pane::pets::PetAction::Idle,
@@ -350,12 +355,11 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
         bg: Color::Rgb(20, 20, 200),
     };
     let pet = crate::sidebar_pane::pets::PetView {
-        grid: Some(
+        body: Some(crate::sidebar_pane::pets::PetBody::Cell(
             (0..usize::from(crate::sidebar_pane::pets::DASHBOARD_CELL_PET.rows))
                 .map(|_| vec![cell.clone(), cell.clone()])
                 .collect(),
-        ),
-        pixel: None,
+        )),
         caption: Some("all caught up".to_owned()),
         loading: false,
         action: crate::sidebar_pane::pets::PetAction::Idle,
@@ -522,8 +526,9 @@ fn render_provider_dashboard_pet_caption_leaves_inner_gap() {
         bg: Color::Rgb(20, 20, 200),
     };
     let pet = crate::sidebar_pane::pets::PetView {
-        grid: Some((0..3).map(|_| vec![cell.clone(); 12]).collect()),
-        pixel: None,
+        body: Some(crate::sidebar_pane::pets::PetBody::Cell(
+            (0..3).map(|_| vec![cell.clone(); 12]).collect(),
+        )),
         caption: Some("ready".to_owned()),
         loading: false,
         action: crate::sidebar_pane::pets::PetAction::Idle,
@@ -562,8 +567,9 @@ fn render_provider_dashboard_pet_caption_uses_full_width() {
         bg: Color::Rgb(20, 20, 200),
     };
     let pet = crate::sidebar_pane::pets::PetView {
-        grid: Some((0..3).map(|_| vec![cell.clone(); 12]).collect()),
-        pixel: None,
+        body: Some(crate::sidebar_pane::pets::PetBody::Cell(
+            (0..3).map(|_| vec![cell.clone(); 12]).collect(),
+        )),
         caption: Some("rough patch - take a look".to_owned()),
         loading: false,
         action: crate::sidebar_pane::pets::PetAction::Failed,

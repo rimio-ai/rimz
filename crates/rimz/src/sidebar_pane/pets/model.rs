@@ -1,6 +1,7 @@
 //! Maps sidebar attention states to pet actions, tracks, and animation timing.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 const IDLE_FPS: f64 = 1.6;
@@ -12,13 +13,11 @@ const WAITING_FPS: f64 = 3.5;
 const REVIEW_FPS: f64 = 3.5;
 
 pub(crate) const TRACK_IDLE: &str = "idle";
-pub(crate) const TRACK_MOVING: &str = "moving";
 pub(crate) const TRACK_THINKING: &str = "thinking";
 pub(crate) const TRACK_RUNNING: &str = "running";
 pub(crate) const TRACK_WAITING: &str = "waiting";
 pub(crate) const TRACK_REVIEW: &str = "review";
 pub(crate) const TRACK_ASK: &str = "ask";
-pub(crate) const TRACK_WAVING: &str = "waving";
 pub(crate) const TRACK_JUMPING: &str = "jumping";
 pub(crate) const TRACK_FAILED: &str = "failed";
 
@@ -58,19 +57,21 @@ impl Animation {
     }
 
     pub(crate) fn loop_duration(&self, refresh_ms: u16) -> Duration {
-        let frame_ms = frame_duration_for_fps(self.fps, refresh_ms).as_millis() as u64;
+        let frame_ms = self.frame_duration(refresh_ms).as_millis() as u64;
         Duration::from_millis(frame_ms.saturating_mul(self.sprites.len() as u64))
+    }
+
+    pub(crate) fn frame_duration(&self, refresh_ms: u16) -> Duration {
+        frame_duration_for_fps(self.fps, refresh_ms)
     }
 }
 
 pub(crate) type AnimationSet = BTreeMap<&'static str, Animation>;
 
-pub(crate) fn default_animations() -> AnimationSet {
+static ANIMATIONS: LazyLock<AnimationSet> = LazyLock::new(|| {
     let row = |row: usize, count: usize| (0..count).map(|col| row * 8 + col).collect::<Vec<_>>();
     let run_right = row(1, 8);
     let run_left = row(2, 8);
-    let mut moving = run_right.clone();
-    moving.extend(run_left.iter().copied());
     let mut thinking = Vec::with_capacity((run_left.len() + run_right.len()) * 3);
     for _ in 0..3 {
         thinking.extend(run_left.iter().copied());
@@ -86,18 +87,18 @@ pub(crate) fn default_animations() -> AnimationSet {
 
     BTreeMap::from([
         (TRACK_IDLE, Animation::new(row(0, 6), IDLE_FPS)),
-        ("run-right", Animation::new(run_right, MOVING_FPS)),
-        ("run-left", Animation::new(run_left, MOVING_FPS)),
         (TRACK_THINKING, Animation::new(thinking, MOVING_FPS)),
-        (TRACK_WAVING, Animation::new(row(3, 4), WAVING_FPS)),
         (TRACK_JUMPING, Animation::new(row(4, 5), JUMPING_FPS)),
         (TRACK_FAILED, Animation::new(row(5, 8), FAILED_FPS)),
         (TRACK_WAITING, Animation::new(waiting, WAITING_FPS)),
         (TRACK_RUNNING, Animation::new(row(7, 6), MOVING_FPS)),
         (TRACK_REVIEW, Animation::new(row(8, 6), REVIEW_FPS)),
         (TRACK_ASK, Animation::new(ask, WAVING_FPS)),
-        (TRACK_MOVING, Animation::new(moving, MOVING_FPS)),
     ])
+});
+
+pub(crate) fn animations() -> &'static AnimationSet {
+    &ANIMATIONS
 }
 
 pub(crate) fn action_track(action: PetAction) -> &'static str {
@@ -117,18 +118,11 @@ pub(crate) fn action_changed(previous: Option<PetAction>, current: PetAction) ->
 }
 
 pub(crate) fn track_frame_duration(track: &str, refresh_ms: u16) -> Duration {
-    let fps = match track {
-        TRACK_IDLE => IDLE_FPS,
-        "run-right" | "run-left" | TRACK_MOVING | TRACK_THINKING | TRACK_RUNNING => MOVING_FPS,
-        TRACK_WAVING => WAVING_FPS,
-        TRACK_JUMPING => JUMPING_FPS,
-        TRACK_FAILED => FAILED_FPS,
-        TRACK_WAITING => WAITING_FPS,
-        TRACK_REVIEW => REVIEW_FPS,
-        TRACK_ASK => WAVING_FPS,
-        _ => IDLE_FPS,
-    };
-    frame_duration_for_fps(fps, refresh_ms)
+    animations()
+        .get(track)
+        .or_else(|| animations().get(TRACK_IDLE))
+        .map(|animation| animation.frame_duration(refresh_ms))
+        .unwrap_or_else(|| frame_duration_for_fps(IDLE_FPS, refresh_ms))
 }
 
 fn frame_duration_for_fps(fps: f64, refresh_ms: u16) -> Duration {
@@ -153,12 +147,7 @@ mod tests {
 
     #[test]
     fn default_catalog_matches_petdex_rows() {
-        let animations = default_animations();
-        assert_eq!(
-            animations[TRACK_MOVING].sprites,
-            (8..24).collect::<Vec<_>>()
-        );
-        assert_eq!(animations[TRACK_WAVING].sprites, vec![24, 25, 26, 27]);
+        let animations = animations();
         assert_eq!(animations[TRACK_JUMPING].sprites, vec![32, 33, 34, 35, 36]);
         assert_eq!(
             animations[TRACK_FAILED].sprites,
@@ -214,7 +203,7 @@ mod tests {
             Duration::from_millis(625)
         );
         assert_eq!(
-            track_frame_duration(TRACK_MOVING, 100),
+            track_frame_duration(TRACK_THINKING, 100),
             Duration::from_millis(250)
         );
         assert_eq!(
@@ -222,7 +211,7 @@ mod tests {
             Duration::from_millis(286)
         );
         assert_eq!(
-            track_frame_duration(TRACK_MOVING, 500),
+            track_frame_duration(TRACK_THINKING, 500),
             Duration::from_millis(500)
         );
     }

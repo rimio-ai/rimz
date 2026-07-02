@@ -7,21 +7,16 @@ pub(super) fn is_animating(
     alert_active: bool,
 ) -> bool {
     render::has_live_animation(snapshot)
-        || pet_animating(snapshot, ui, alert_active)
+        || pet_frame_interval(
+            snapshot,
+            ui,
+            alert_active,
+            snapshot.theme.display.resolved_refresh_ms(),
+        )
+        .is_some()
         || ui.tally.any_rolling(phase)
         || ui.cost_rolls.any_rolling(phase)
         || ui.scrollbar.fading(phase)
-}
-
-fn pet_animating(snapshot: &SidebarSnapshot, ui: &UiState, alert_active: bool) -> bool {
-    snapshot.theme.pets.enabled
-        && render::dashboard_present(snapshot, alert_active)
-        && ui.pet.as_ref().is_some_and(|view| {
-            view.loading
-                || (view.has_body()
-                    && render::pet_body_enabled(snapshot)
-                    && render::pet_motion_enabled(snapshot, view.action))
-        })
 }
 
 fn pet_frame_interval(

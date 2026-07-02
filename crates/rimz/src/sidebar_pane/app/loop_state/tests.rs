@@ -19,7 +19,6 @@ fn serve_config(ws: &WorkspaceId) -> ServeConfig {
         refresh_ms_override: None,
         timezone: jiff::tz::TimeZone::UTC,
         notification_prefs: crate::config::NotificationsPrefs::default(),
-        pet_glyphs: crate::config::PetsGlyphMode::Auto,
         own_pane: None,
     }
 }
@@ -884,36 +883,44 @@ fn arm_paint_hold_does_not_engage_before_a_sibling_is_seen() {
 }
 
 #[test]
-fn resize_reprobe_refreshes_pet_render_caps_with_current_glyph_mode() {
+fn resize_reprobe_refreshes_pet_render_caps_for_session() {
     let ws = workspace();
     let (_dir, mut state) = loop_state(&ws);
-    state.current.theme.pets.glyphs = crate::config::PetsGlyphMode::Pixel;
     let mut observed = None;
 
-    state.refresh_pet_render_caps_with(crate::MuxName::Tmux, "rimz-test", |mux, mode, session| {
-        observed = Some((mux, mode, session.to_owned()));
-        PetRenderCaps { pixel: true }
+    state.refresh_pet_render_caps_with(crate::MuxName::Tmux, "rimz-test", |mux, session| {
+        observed = Some((mux, session.to_owned()));
+        PetRenderCaps {
+            pixel_transport: true,
+            kitty_term: true,
+        }
     });
 
     assert_eq!(
         observed,
-        Some((
-            crate::MuxName::Tmux,
-            crate::config::PetsGlyphMode::Pixel,
-            "rimz-test".to_owned()
-        ))
+        Some((crate::MuxName::Tmux, "rimz-test".to_owned()))
     );
-    assert_eq!(state.pet_render_caps, PetRenderCaps { pixel: true });
+    assert_eq!(
+        state.pet_render_caps,
+        PetRenderCaps {
+            pixel_transport: true,
+            kitty_term: true,
+        }
+    );
 }
 
 #[test]
 fn resize_reprobe_can_downgrade_enabled_pet_render_caps() {
     let ws = workspace();
     let (_dir, mut state) = loop_state(&ws);
-    state.pet_render_caps = PetRenderCaps { pixel: true };
+    state.pet_render_caps = PetRenderCaps {
+        pixel_transport: true,
+        kitty_term: true,
+    };
 
-    state.refresh_pet_render_caps_with(crate::MuxName::Tmux, "rimz-test", |_, _, _| {
-        PetRenderCaps { pixel: false }
+    state.refresh_pet_render_caps_with(crate::MuxName::Tmux, "rimz-test", |_, _| PetRenderCaps {
+        pixel_transport: false,
+        kitty_term: false,
     });
 
     assert_eq!(state.pet_render_caps, PetRenderCaps::default());

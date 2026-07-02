@@ -3,7 +3,6 @@
 use std::io;
 use std::time::Duration;
 
-use crate::config::PetsGlyphMode;
 use crate::ids::MuxName;
 use crate::mux::CommandSpec;
 
@@ -12,15 +11,16 @@ const COMMAND_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PetRenderCaps {
-    pub pixel: bool,
+    pub pixel_transport: bool,
+    pub kitty_term: bool,
 }
 
-pub(crate) fn detect(mux: MuxName, mode: PetsGlyphMode, session_name: &str) -> PetRenderCaps {
-    detect_with(mux, mode, session_name, &LiveProbe)
+pub(crate) fn detect(mux: MuxName, session_name: &str) -> PetRenderCaps {
+    detect_with(mux, session_name, &LiveProbe)
 }
 
-pub fn detect_env(mode: PetsGlyphMode) -> (PetRenderCaps, bool) {
-    detect_env_with(mode, &LiveProbe)
+pub fn detect_env() -> (PetRenderCaps, bool) {
+    detect_env_with(&LiveProbe)
 }
 
 trait Probe {
@@ -31,33 +31,28 @@ trait Probe {
     fn env_var(&self, key: &str) -> Option<String>;
 }
 
-fn detect_with(
-    probed_mux: MuxName,
-    mode: PetsGlyphMode,
-    session_name: &str,
-    probe: &impl Probe,
-) -> PetRenderCaps {
+fn detect_with(probed_mux: MuxName, session_name: &str, probe: &impl Probe) -> PetRenderCaps {
     match probed_mux {
-        MuxName::Tmux => detect_tmux(mode, session_name, probe),
+        MuxName::Tmux => detect_tmux(session_name, probe),
         MuxName::Zellij => detect_zellij(probe),
     }
 }
 
-fn detect_env_with(mode: PetsGlyphMode, probe: &impl Probe) -> (PetRenderCaps, bool) {
+fn detect_env_with(probe: &impl Probe) -> (PetRenderCaps, bool) {
     if env_present(probe, "TMUX") {
         let caps = probe
             .tmux_session_name()
-            .map(|session_name| detect_tmux(mode, &session_name, probe))
+            .map(|session_name| detect_tmux(&session_name, probe))
             .unwrap_or_default();
         return (caps, true);
     }
     if env_present(probe, "ZELLIJ") {
         return (detect_zellij(probe), false);
     }
-    (detect_standalone(mode, probe), false)
+    (detect_standalone(probe), false)
 }
 
-fn detect_tmux(mode: PetsGlyphMode, session_name: &str, probe: &impl Probe) -> PetRenderCaps {
+fn detect_tmux(session_name: &str, probe: &impl Probe) -> PetRenderCaps {
     let kitty_term = probe
         .tmux_client_termnames(session_name)
         .is_ok_and(|termnames| termnames_allowed(&termnames));
@@ -70,18 +65,19 @@ fn detect_tmux(mode: PetsGlyphMode, session_name: &str, probe: &impl Probe) -> P
         .tmux_allow_passthrough()
         .is_ok_and(|allow| matches!(allow.trim(), "on" | "all"));
     PetRenderCaps {
-        pixel: version_ok && passthrough_ok && (kitty_term || mode == PetsGlyphMode::Pixel),
+        pixel_transport: version_ok && passthrough_ok,
+        kitty_term,
     }
 }
 
 fn detect_zellij(_probe: &impl Probe) -> PetRenderCaps {
-    PetRenderCaps { pixel: false }
+    PetRenderCaps::default()
 }
 
-fn detect_standalone(mode: PetsGlyphMode, probe: &impl Probe) -> PetRenderCaps {
-    let kitty_term = standalone_term_allowed(probe);
+fn detect_standalone(probe: &impl Probe) -> PetRenderCaps {
     PetRenderCaps {
-        pixel: kitty_term || mode == PetsGlyphMode::Pixel,
+        pixel_transport: true,
+        kitty_term: standalone_term_allowed(probe),
     }
 }
 
@@ -224,23 +220,20 @@ mod tests {
     #[test]
     fn tmux_pixel_gate_requires_version_passthrough_and_allowed_termname() {
         assert_eq!(
-            detect_with(
-                MuxName::Tmux,
-                PetsGlyphMode::Auto,
-                TEST_SESSION,
-                &FakeProbe::ok()
-            ),
-            PetRenderCaps { pixel: true }
+            detect_with(MuxName::Tmux, TEST_SESSION, &FakeProbe::ok()),
+            PetRenderCaps {
+                pixel_transport: true,
+                kitty_term: true,
+            }
         );
 
         assert_eq!(
             detect_with(
                 MuxName::Zellij,
-                PetsGlyphMode::Auto,
                 TEST_SESSION,
                 &FakeProbe::ok().with_env("TERM", "xterm-ghostty")
             ),
-            PetRenderCaps { pixel: false }
+            PetRenderCaps::default()
         );
 
         let old = FakeProbe {
@@ -248,8 +241,11 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert_eq!(
-            detect_with(MuxName::Tmux, PetsGlyphMode::Auto, TEST_SESSION, &old),
-            PetRenderCaps { pixel: false }
+            detect_with(MuxName::Tmux, TEST_SESSION, &old),
+            PetRenderCaps {
+                pixel_transport: false,
+                kitty_term: true,
+            }
         );
 
         let off = FakeProbe {
@@ -257,8 +253,11 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert_eq!(
-            detect_with(MuxName::Tmux, PetsGlyphMode::Auto, TEST_SESSION, &off),
-            PetRenderCaps { pixel: false }
+            detect_with(MuxName::Tmux, TEST_SESSION, &off),
+            PetRenderCaps {
+                pixel_transport: false,
+                kitty_term: true,
+            }
         );
 
         let unsupported_term = FakeProbe {
@@ -266,13 +265,11 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert_eq!(
-            detect_with(
-                MuxName::Tmux,
-                PetsGlyphMode::Auto,
-                TEST_SESSION,
-                &unsupported_term
-            ),
-            PetRenderCaps::default()
+            detect_with(MuxName::Tmux, TEST_SESSION, &unsupported_term),
+            PetRenderCaps {
+                pixel_transport: true,
+                kitty_term: false,
+            }
         );
     }
 
@@ -283,7 +280,7 @@ mod tests {
             ..FakeProbe::ok()
         };
 
-        assert!(detect_with(MuxName::Tmux, PetsGlyphMode::Auto, TEST_SESSION, &all).pixel);
+        assert!(detect_with(MuxName::Tmux, TEST_SESSION, &all).pixel_transport);
     }
 
     #[test]
@@ -301,7 +298,7 @@ mod tests {
             };
 
             assert!(
-                detect_with(MuxName::Tmux, PetsGlyphMode::Auto, TEST_SESSION, &probe).pixel,
+                detect_with(MuxName::Tmux, TEST_SESSION, &probe).kitty_term,
                 "{termname} should enable pixels"
             );
         }
@@ -313,7 +310,7 @@ mod tests {
             termnames: Some(vec!["xterm-ghostty".to_owned(), "kitty".to_owned()]),
             ..FakeProbe::ok()
         };
-        assert!(detect_with(MuxName::Tmux, PetsGlyphMode::Auto, TEST_SESSION, &allowed).pixel);
+        assert!(detect_with(MuxName::Tmux, TEST_SESSION, &allowed).kitty_term);
 
         let mixed = FakeProbe {
             termnames: Some(vec![
@@ -322,7 +319,7 @@ mod tests {
             ]),
             ..FakeProbe::ok()
         };
-        assert!(!detect_with(MuxName::Tmux, PetsGlyphMode::Auto, TEST_SESSION, &mixed).pixel);
+        assert!(!detect_with(MuxName::Tmux, TEST_SESSION, &mixed).kitty_term);
     }
 
     #[test]
@@ -336,7 +333,7 @@ mod tests {
             termnames: Some(rendering_termnames("0 xterm-ghostty\n1 tmux-256color")),
             ..FakeProbe::ok()
         };
-        assert!(detect_with(MuxName::Tmux, PetsGlyphMode::Auto, TEST_SESSION, &probe).pixel);
+        assert!(detect_with(MuxName::Tmux, TEST_SESSION, &probe).kitty_term);
     }
 
     #[test]
@@ -347,7 +344,7 @@ mod tests {
             ..FakeProbe::ok()
         };
 
-        assert!(detect_with(MuxName::Tmux, PetsGlyphMode::Auto, "room-a", &probe).pixel);
+        assert!(detect_with(MuxName::Tmux, "room-a", &probe).kitty_term);
     }
 
     #[test]
@@ -358,48 +355,11 @@ mod tests {
         };
 
         assert_eq!(
-            detect_with(
-                MuxName::Tmux,
-                PetsGlyphMode::Auto,
-                TEST_SESSION,
-                &unattached
-            ),
-            PetRenderCaps::default()
-        );
-    }
-
-    #[test]
-    fn explicit_pixel_mode_skips_termname_only_for_pixel_gate() {
-        let unsupported_term = FakeProbe {
-            termnames: Some(vec!["wezterm".to_owned()]),
-            ..FakeProbe::ok()
-        };
-        assert_eq!(
-            detect_with(
-                MuxName::Tmux,
-                PetsGlyphMode::Pixel,
-                TEST_SESSION,
-                &unsupported_term
-            ),
-            PetRenderCaps { pixel: true }
-        );
-
-        let old = FakeProbe {
-            version: Some("tmux 3.5a".to_owned()),
-            ..unsupported_term
-        };
-        assert_eq!(
-            detect_with(MuxName::Tmux, PetsGlyphMode::Pixel, TEST_SESSION, &old),
-            PetRenderCaps::default()
-        );
-
-        let off = FakeProbe {
-            allow_passthrough: Some("off".to_owned()),
-            ..FakeProbe::ok()
-        };
-        assert_eq!(
-            detect_with(MuxName::Tmux, PetsGlyphMode::Pixel, TEST_SESSION, &off),
-            PetRenderCaps { pixel: false }
+            detect_with(MuxName::Tmux, TEST_SESSION, &unattached),
+            PetRenderCaps {
+                pixel_transport: true,
+                kitty_term: false,
+            }
         );
     }
 
@@ -407,26 +367,28 @@ mod tests {
     fn standalone_env_detects_native_kitty_and_wrap_mode() {
         let plain = FakeProbe::ok().with_env("TERM", "xterm-kitty");
         assert_eq!(
-            detect_env_with(PetsGlyphMode::Auto, &plain),
-            (PetRenderCaps { pixel: true }, false)
+            detect_env_with(&plain),
+            (
+                PetRenderCaps {
+                    pixel_transport: true,
+                    kitty_term: true,
+                },
+                false
+            )
         );
 
         let tmux = FakeProbe::ok()
             .with_env("TMUX", "/tmp/tmux-1000/default,123,0")
             .with_env("TERM", "screen-256color");
         assert_eq!(
-            detect_env_with(PetsGlyphMode::Auto, &tmux),
-            (PetRenderCaps { pixel: true }, true)
-        );
-    }
-
-    #[test]
-    fn standalone_explicit_pixel_bypasses_term_allowlist() {
-        let plain = FakeProbe::ok().with_env("TERM", "xterm-256color");
-
-        assert_eq!(
-            detect_env_with(PetsGlyphMode::Pixel, &plain),
-            (PetRenderCaps { pixel: true }, false)
+            detect_env_with(&tmux),
+            (
+                PetRenderCaps {
+                    pixel_transport: true,
+                    kitty_term: true,
+                },
+                true
+            )
         );
     }
 }

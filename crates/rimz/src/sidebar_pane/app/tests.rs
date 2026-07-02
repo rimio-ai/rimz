@@ -137,12 +137,13 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
     snapshot.theme.pets.enabled = true;
     let ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
-            grid: Some(vec![vec![crate::sidebar_pane::pets::PetCell {
-                ch: '▀',
-                fg: ratatui::style::Color::White,
-                bg: ratatui::style::Color::Black,
-            }]]),
-            pixel: None,
+            body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
+                crate::sidebar_pane::pets::PetCell {
+                    ch: '▀',
+                    fg: ratatui::style::Color::White,
+                    bg: ratatui::style::Color::Black,
+                },
+            ]])),
             caption: Some("resting".to_owned()),
             loading: false,
             action: crate::sidebar_pane::pets::PetAction::Idle,
@@ -171,7 +172,7 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
         );
         let mut loading_ui = ui.clone();
         let pet = loading_ui.pet.as_mut().expect("pet");
-        pet.grid = None;
+        pet.body = None;
         pet.loading = true;
         assert!(is_animating(&snapshot, &loading_ui, 0, false));
         assert_eq!(
@@ -192,12 +193,13 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
     snapshot.theme.pets.enabled = true;
     let ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
-            grid: Some(vec![vec![crate::sidebar_pane::pets::PetCell {
-                ch: '▀',
-                fg: ratatui::style::Color::White,
-                bg: ratatui::style::Color::Black,
-            }]]),
-            pixel: None,
+            body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
+                crate::sidebar_pane::pets::PetCell {
+                    ch: '▀',
+                    fg: ratatui::style::Color::White,
+                    bg: ratatui::style::Color::Black,
+                },
+            ]])),
             caption: Some("resting".to_owned()),
             loading: false,
             action: crate::sidebar_pane::pets::PetAction::Idle,
@@ -241,7 +243,7 @@ fn refresh_pet_view_uses_fixed_pet_size_when_dashboard_present() {
     );
 
     let pet = ui.pet.expect("pet view");
-    assert_eq!(pet.grid, None);
+    assert_eq!(pet.body, None);
     if render::pet_body_enabled(&snapshot) {
         assert!(pet.loading);
     } else {
@@ -269,8 +271,7 @@ fn pixel_shift_clear_uses_fresh_rect_from_draw() {
     let stale_rect = ratatui::layout::Rect::new(0, 0, 2, 1);
     let mut ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
-            grid: None,
-            pixel: Some(pixel.clone()),
+            body: Some(crate::sidebar_pane::pets::PetBody::Pixel(pixel.clone())),
             caption: Some("resting".to_owned()),
             loading: false,
             action: crate::sidebar_pane::pets::PetAction::Idle,

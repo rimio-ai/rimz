@@ -5,14 +5,12 @@ use std::thread;
 
 use ratatui::style::Color;
 
-use crate::config::PetsGlyphMode;
-
+use super::PetGridSize;
 use super::asset::{self, PetSource};
 use super::catalog::BUILTIN_PETS;
 use super::cellart::{self, PetCell};
 use super::frames::RgbaImage;
-use super::model::{self, Animation, default_animations};
-use super::{PetRenderCaps, PetRenderTier, resolve_render_tier};
+use super::model;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreviewCell {
@@ -59,85 +57,65 @@ pub fn listable_ids() -> Vec<String> {
         .collect()
 }
 
-pub fn load_previews_with_caps(
-    cols: u16,
-    rows: u16,
-    glyphs: PetsGlyphMode,
-    caps: PetRenderCaps,
-) -> impl Iterator<Item = PetPreview> {
-    // `previews_use_pixels` owns the pixel-vs-cell branch; this loader is the
-    // cell branch.
-    let _ = (glyphs, caps);
-    load_previews_for_tier(cols, rows)
-}
-
-/// Whether CLI previews should render the pixel branch, mirroring the live
-/// dashboard resolver. Previews have no provider block, so they use the pure
-/// resolver without the live dashboard paintability gate.
-pub fn previews_use_pixels(glyphs: PetsGlyphMode, caps: PetRenderCaps) -> bool {
-    matches!(resolve_render_tier(glyphs, caps), PetRenderTier::Pixel)
-}
-
-fn load_previews_for_tier(cols: u16, rows: u16) -> impl Iterator<Item = PetPreview> {
+fn load_preview_results<T>(
+    load: impl Fn(PetSource) -> Result<T, String> + Copy + Send + 'static,
+) -> Vec<(String, Result<T, String>)>
+where
+    T: Send + 'static,
+{
     let sources = listable_sources();
     let handles = sources
         .iter()
         .map(|(_id, source)| {
             let source = source.clone();
-            thread::spawn(move || {
-                super::load_pet(source)
-                    .map_err(|err| err.to_string())
-                    .map(|frames| render_sprite(&frames, cols, rows))
-            })
+            thread::spawn(move || load(source))
         })
         .collect::<Vec<_>>();
 
     sources
         .into_iter()
         .zip(handles)
-        .map(|((id, _source), handle)| PetPreview {
-            id,
-            grid: handle
+        .map(|((id, _source), handle)| {
+            let result = handle
                 .join()
-                .unwrap_or_else(|_| Err("pet preview loader stopped".to_owned())),
+                .unwrap_or_else(|_| Err("pet preview loader stopped".to_owned()));
+            (id, result)
         })
+        .collect()
 }
 
-pub fn load_pixel_previews() -> impl Iterator<Item = PetPixelPreview> {
-    let sources = listable_sources();
-    let handles = sources
-        .iter()
-        .map(|(_id, source)| {
-            let source = source.clone();
-            thread::spawn(move || {
-                super::load_pet(source)
-                    .map_err(|err| err.to_string())
-                    .and_then(|frames| {
-                        idle_sprite(&frames)
-                            .cloned()
-                            .map(PixelPreviewFrame::from)
-                            .ok_or_else(|| "pet sheet has no frames".to_owned())
-                    })
+pub fn load_cell_previews(size: PetGridSize) -> Vec<PetPreview> {
+    load_preview_results(move |source| {
+        super::load_pet(source)
+            .map_err(|err| err.to_string())
+            .map(|frames| render_sprite(&frames, size))
+    })
+    .into_iter()
+    .map(|(id, grid)| PetPreview { id, grid })
+    .collect()
+}
+
+pub fn load_pixel_previews() -> Vec<PetPixelPreview> {
+    load_preview_results(|source| {
+        super::load_pet(source)
+            .map_err(|err| err.to_string())
+            .and_then(|frames| {
+                idle_sprite(&frames)
+                    .cloned()
+                    .map(PixelPreviewFrame::from)
+                    .ok_or_else(|| "pet sheet has no frames".to_owned())
             })
-        })
-        .collect::<Vec<_>>();
-
-    sources
-        .into_iter()
-        .zip(handles)
-        .map(|((id, _source), handle)| PetPixelPreview {
-            id,
-            frame: handle
-                .join()
-                .unwrap_or_else(|_| Err("pet preview loader stopped".to_owned())),
-        })
+    })
+    .into_iter()
+    .map(|(id, frame)| PetPixelPreview { id, frame })
+    .collect()
 }
 
-fn render_sprite(frames: &[RgbaImage], cols: u16, rows: u16) -> Vec<Vec<PreviewCell>> {
+fn render_sprite(frames: &[RgbaImage], size: PetGridSize) -> Vec<Vec<PreviewCell>> {
     let Some(sprite) = idle_sprite(frames) else {
         return Vec::new();
     };
-    cellart::render_frame(sprite, cols, rows)
+    cellart::render_frame(sprite, size.cols, size.rows)
         .iter()
         .map(|row| row.iter().map(preview_cell).collect())
         .collect()
@@ -147,9 +125,9 @@ fn idle_sprite(frames: &[RgbaImage]) -> Option<&RgbaImage> {
     if frames.is_empty() {
         return None;
     }
-    let sprite_index = default_animations()
+    let sprite_index = model::animations()
         .get(model::TRACK_IDLE)
-        .map(Animation::first_sprite)
+        .map(|animation| animation.first_sprite())
         .unwrap_or(0)
         .min(frames.len().saturating_sub(1));
     frames.get(sprite_index)
@@ -208,7 +186,7 @@ mod tests {
 
     #[test]
     fn preview_idle_track_resolves_to_catalog_frame() {
-        let sprite_index = default_animations()
+        let sprite_index = model::animations()
             .get(model::TRACK_IDLE)
             .expect("idle preview track exists")
             .first_sprite();

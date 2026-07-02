@@ -546,7 +546,6 @@ fn serve(
         refresh_ms_override: refresh_ms,
         timezone: machine_config.time_zone(),
         notification_prefs: machine_config.notifications,
-        pet_glyphs: machine_config.theme.pets.glyphs,
         own_pane: rimz::mux::own_pane_id(mux),
     };
     if rimz::sidebar_pane::supervise::is_worker() {

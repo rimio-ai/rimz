@@ -27,7 +27,6 @@ fn serve_config(ws: &WorkspaceId) -> ServeConfig {
         refresh_ms_override: None,
         timezone: jiff::tz::TimeZone::UTC,
         notification_prefs: crate::config::NotificationsPrefs::default(),
-        pet_glyphs: crate::config::PetsGlyphMode::Auto,
         own_pane: None,
     }
 }

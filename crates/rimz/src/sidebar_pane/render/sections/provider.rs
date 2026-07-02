@@ -3,7 +3,7 @@
 
 use crate::agents::{ExtraCredits, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
-use crate::sidebar_pane::pets::PetView;
+use crate::sidebar_pane::pets::{PetBody, PetView};
 use crate::{SidebarProviderPanel, SpendTally, SpendWindow};
 use jiff::{SignedDuration, Timestamp};
 use ratatui::style::{Color, Modifier, Style};
@@ -610,14 +610,17 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
                 let pet_rows = pet_lines.len();
                 let rows = block_rows.max(pet_rows);
                 let pet_top = rows.saturating_sub(pet_rows);
-                let pet_pixel_rect =
-                    pet.and_then(|view| view.pixel.as_ref())
-                        .map(|pixel| PetPixelRect {
-                            line: 2 + pet_top,
-                            col: block_w + PET_COLUMN_GAP,
-                            width: pet_w as u16,
-                            height: pixel.size.rows,
-                        });
+                let pet_pixel_rect = pet
+                    .and_then(|view| match view.body.as_ref()? {
+                        PetBody::Pixel(pixel) => Some(pixel),
+                        PetBody::Cell(_) => None,
+                    })
+                    .map(|pixel| PetPixelRect {
+                        line: 2 + pet_top,
+                        col: block_w + PET_COLUMN_GAP,
+                        width: pet_w as u16,
+                        height: pixel.size.rows,
+                    });
                 let footer = folded_footer
                     .clone()
                     .map(|footer| folded_footer_line(theme, footer, block_w));
@@ -766,15 +769,9 @@ fn pet_column_width(theme: &Theme, pet: Option<&PetView>) -> Option<usize> {
     theme
         .pet_body_enabled()
         .then(|| {
-            pet.and_then(|view| {
-                view.pixel
-                    .as_ref()
-                    .map(|pixel| usize::from(pixel.size.cols))
-                    .or_else(|| {
-                        view.grid
-                            .as_ref()
-                            .and_then(|grid| grid.iter().map(Vec::len).max())
-                    })
+            pet.and_then(|view| match view.body.as_ref()? {
+                PetBody::Pixel(pixel) => Some(usize::from(pixel.size.cols)),
+                PetBody::Cell(grid) => grid.iter().map(Vec::len).max(),
             })
         })
         .flatten()

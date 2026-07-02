@@ -4,7 +4,6 @@ use std::io::{IsTerminal, Write};
 
 use anyhow::Result;
 use clap::Args;
-use rimz::config::PetsGlyphMode;
 use rimz::sidebar_pane::pets::{self, PetPixelPreview, PetPreview, PreviewCell};
 
 use super::{GlobalFlags, machine_config};
@@ -40,12 +39,12 @@ pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
     }
 
     let glyphs = machine_config().theme.pets.glyphs;
-    let (caps, wrap_pixels) = pets::detect_pet_render_env(glyphs);
+    let (caps, wrap_pixels) = pets::detect_pet_render_env();
     let width = rimz::mux::detect_terminal_size()
         .map(|(cols, _)| cols)
         .unwrap_or(80);
-    let branch = preview_branch(glyphs, caps);
-    let slot = preview_slot(branch);
+    let tier = pets::resolve_render_tier(glyphs, caps);
+    let slot = pets::dashboard_pet_size(tier);
     let per_row = usize::from(
         width
             .saturating_add(GAP)
@@ -53,11 +52,43 @@ pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
             .unwrap_or(1)
             .max(1),
     );
-    if branch == PreviewBranch::Pixel {
-        write_pixel_previews(&mut out, per_row, wrap_pixels)?;
+    if tier == pets::PetRenderTier::Pixel {
+        let mut next_image_id = 1_u32;
+        let previews = pets::load_pixel_previews().into_iter().map(move |preview| {
+            let image_id = next_image_id;
+            next_image_id = next_image_id.wrapping_add(1).max(1);
+            (image_id, preview)
+        });
+        write_preview_chunks(
+            &mut out,
+            previews,
+            per_row,
+            |(_image_id, preview)| preview.frame.is_err(),
+            |out, chunk| write_pixel_pet_row(out, chunk, wrap_pixels),
+        )?;
         return Ok(());
     }
-    let mut previews = pets::load_previews_with_caps(slot.cols, slot.rows, glyphs, caps);
+    let previews = pets::load_cell_previews(slot).into_iter();
+    write_preview_chunks(
+        &mut out,
+        previews,
+        per_row,
+        |preview| preview.grid.is_err(),
+        |out, chunk| write_pet_row(out, chunk, slot),
+    )?;
+    Ok(())
+}
+
+fn write_preview_chunks<W, T>(
+    out: &mut W,
+    mut previews: impl Iterator<Item = T>,
+    per_row: usize,
+    mut failed: impl FnMut(&T) -> bool,
+    mut write_row: impl FnMut(&mut W, &[T]) -> std::io::Result<()>,
+) -> std::io::Result<()>
+where
+    W: Write,
+{
     let mut any_failed = false;
     let mut first = true;
     loop {
@@ -69,70 +100,8 @@ pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
             writeln!(out)?;
         }
         first = false;
-        any_failed |= chunk.iter().any(|preview| preview.grid.is_err());
-        write_pet_row(&mut out, &chunk, slot)?;
-        out.flush()?;
-    }
-    if any_failed {
-        writeln!(
-            out,
-            "{}",
-            render::paint(
-                render::palette::FAINT,
-                "(some pets unavailable - check network, or RIMZ_PETS_OFFLINE serves cache only)"
-            )
-        )?;
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PreviewBranch {
-    Pixel,
-    Cell,
-}
-
-fn preview_branch(glyphs: PetsGlyphMode, caps: pets::PetRenderCaps) -> PreviewBranch {
-    if pets::previews_use_pixels(glyphs, caps) {
-        PreviewBranch::Pixel
-    } else {
-        PreviewBranch::Cell
-    }
-}
-
-fn preview_slot(branch: PreviewBranch) -> pets::PetGridSize {
-    match branch {
-        PreviewBranch::Pixel => pets::DASHBOARD_PIXEL_PET,
-        PreviewBranch::Cell => pets::DASHBOARD_CELL_PET,
-    }
-}
-
-fn write_pixel_previews(out: &mut impl Write, per_row: usize, wrap: bool) -> std::io::Result<()> {
-    let mut previews = pets::load_pixel_previews();
-    let mut any_failed = false;
-    let mut first = true;
-    let mut next_image_id = 1_u32;
-    loop {
-        let chunk = previews
-            .by_ref()
-            .take(per_row)
-            .map(|preview| {
-                let image_id = next_image_id;
-                next_image_id = next_image_id.wrapping_add(1).max(1);
-                (image_id, preview)
-            })
-            .collect::<Vec<_>>();
-        if chunk.is_empty() {
-            break;
-        }
-        if !first {
-            writeln!(out)?;
-        }
-        first = false;
-        any_failed |= chunk
-            .iter()
-            .any(|(_image_id, preview)| preview.frame.is_err());
-        write_pixel_pet_row(out, &chunk, wrap)?;
+        any_failed |= chunk.iter().any(&mut failed);
+        write_row(out, &chunk)?;
         out.flush()?;
     }
     if any_failed {
@@ -329,22 +298,6 @@ mod tests {
         assert_eq!(
             center("codex", usize::from(pets::DASHBOARD_CELL_PET.cols)),
             "      codex       "
-        );
-    }
-
-    #[test]
-    fn preview_branch_uses_pixels_only_when_mode_and_caps_allow() {
-        assert_eq!(
-            preview_branch(PetsGlyphMode::Auto, pets::PetRenderCaps { pixel: true }),
-            PreviewBranch::Pixel
-        );
-        assert_eq!(
-            preview_branch(PetsGlyphMode::Auto, pets::PetRenderCaps { pixel: false }),
-            PreviewBranch::Cell
-        );
-        assert_eq!(
-            preview_branch(PetsGlyphMode::Sextant, pets::PetRenderCaps { pixel: true }),
-            PreviewBranch::Cell
         );
     }
 
