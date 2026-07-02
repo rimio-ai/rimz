@@ -9,7 +9,6 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::feed::FeedItem;
-use crate::harness::run::RunRecord;
 use crate::pane::RuntimeOwnerKind;
 use crate::schema::event::{AgentLaunchPayload, EventEnvelope};
 use crate::workspace::ResolvedWorkspace;
@@ -39,8 +38,6 @@ pub(super) struct Txn<'a> {
     pub(super) paths: &'a StatePaths,
     events: Vec<EventEnvelope>,
     wake_items: Vec<FeedItem>,
-    wake_runs: Vec<RunRecord>,
-    wake_sidebars: bool,
     publish: PublishPolicy,
 }
 
@@ -160,8 +157,6 @@ impl Ledger {
                 paths: &self.inner.paths,
                 events: Vec::new(),
                 wake_items: Vec::new(),
-                wake_runs: Vec::new(),
-                wake_sidebars: false,
                 publish,
             };
             let out = f(&mut txn)?;
@@ -173,12 +168,6 @@ impl Ledger {
         }
         for item in &txn.wake_items {
             self.wake_per_request_best_effort(item);
-        }
-        for record in &txn.wake_runs {
-            self.wake_run_best_effort(record);
-        }
-        if txn.wake_sidebars && txn.events.is_empty() {
-            self.wake_sidebars_hint_best_effort();
         }
         match txn.publish {
             PublishPolicy::Debounced => self.publish_snapshot_best_effort(),

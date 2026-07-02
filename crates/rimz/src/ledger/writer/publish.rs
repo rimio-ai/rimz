@@ -186,12 +186,6 @@ impl Ledger {
         }
     }
 
-    pub(super) fn wake_sidebars_hint_best_effort(&self) {
-        if let Err(err) = wakeup::wake_sidebars(&self.inner.runtime) {
-            warn!(error = %err, "sidebar wakeup failed after ledger commit");
-        }
-    }
-
     pub(super) fn wake_sidebars_for_event_best_effort(&self, event: &EventEnvelope) {
         if let Err(err) = wakeup::wake_sidebars_for_event(&self.inner.runtime, event) {
             warn!(

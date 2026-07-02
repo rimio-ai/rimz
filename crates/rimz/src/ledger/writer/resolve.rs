@@ -171,7 +171,7 @@ impl Ledger {
         session_name: &str,
         reason: AbandonReason,
     ) -> Result<TimeoutOutcome> {
-        let outcome = self.commit(PublishPolicy::Debounced, |txn| {
+        let outcome = self.commit(PublishPolicy::Skip, |txn| {
             let mut item = feed_store::load(&txn.paths.feed_dir, request_id)?;
 
             if !item.surface.supports_resolve() {
@@ -358,7 +358,7 @@ impl Ledger {
         reason: Option<String>,
         session_name: &str,
     ) -> Result<()> {
-        self.commit(PublishPolicy::Debounced, |txn| {
+        self.commit(PublishPolicy::Skip, |txn| {
             let mut item = feed_store::load(&txn.paths.feed_dir, request_id)?;
             if !item.surface.supports_dismiss() {
                 return Err(feed_store::FeedStoreErr::SurfaceMismatch {
