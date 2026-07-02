@@ -4,7 +4,7 @@
 //! admin directory, not in the checkout. The checkout remains pristine, and
 //! cleanup only ever removes marked worktrees.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -341,24 +341,6 @@ pub fn cleanup_decision(
     } else {
         CleanupDecision::PromptDirty
     }
-}
-
-pub fn sweepable_worktrees(
-    rows: &[WorktreeRow],
-    marked: &BTreeSet<PathBuf>,
-    live_cwds: &[PathBuf],
-    statuses: &BTreeMap<PathBuf, WorktreeStatus>,
-) -> Vec<PathBuf> {
-    rows.iter()
-        .filter(|row| marked.contains(&row.path))
-        .filter(|row| !live_cwds.iter().any(|cwd| path_inside(cwd, &row.path)))
-        .filter(|row| {
-            statuses
-                .get(&row.path)
-                .is_some_and(|status| status.safe_to_remove())
-        })
-        .map(|row| row.path.clone())
-        .collect()
 }
 
 pub fn parse_worktree_list(raw: &str) -> Vec<WorktreeRow> {
@@ -1020,37 +1002,5 @@ branch refs/heads/swift-otter
 
         assert_eq!(marker.version, 2);
         assert_eq!(marker.base_branch, None);
-    }
-
-    #[test]
-    fn sweep_selection_requires_marker_clean_status_and_no_live_pane() {
-        let a = PathBuf::from("/repo-wt/a");
-        let b = PathBuf::from("/repo-wt/b");
-        let rows = vec![
-            WorktreeRow {
-                path: a.clone(),
-                branch: Some("a".to_owned()),
-            },
-            WorktreeRow {
-                path: b.clone(),
-                branch: Some("b".to_owned()),
-            },
-        ];
-        let marked = BTreeSet::from([a.clone(), b.clone()]);
-        let live = vec![b.join("subdir")];
-        let statuses = BTreeMap::from([
-            (a.clone(), WorktreeStatus::default()),
-            (
-                b,
-                WorktreeStatus {
-                    dirty: false,
-                    landed: LandedVerdict::Pending,
-                },
-            ),
-        ]);
-        assert_eq!(
-            sweepable_worktrees(&rows, &marked, &live, &statuses),
-            vec![a]
-        );
     }
 }

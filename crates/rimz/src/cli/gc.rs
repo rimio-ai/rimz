@@ -203,29 +203,39 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
             continue;
         };
         let bytes = rimz::storage::dir_size(&entry.path);
-        match rimz::worktree::remove_marked_worktree(
-            &workspace.project_root,
-            &entry.path,
+        match super::worktree::remove_and_archive(
             &marker,
-            false,
+            || {
+                rimz::worktree::remove_marked_worktree(
+                    &workspace.project_root,
+                    &entry.path,
+                    &marker,
+                    false,
+                )
+                .map_err(Into::into)
+            },
+            |branch, reason| {
+                if let Some(ledger) = ledger.as_ref() {
+                    ledger
+                        .archive_channel_messages(branch, reason, &workspace.session_name)
+                        .map(|_| ())
+                        .map_err(Into::into)
+                } else {
+                    Ok(())
+                }
+            },
         ) {
-            Ok(branch) => {
+            Ok(removed) => {
                 sweep.swept += 1;
                 sweep.bytes = sweep.bytes.saturating_add(bytes);
-                if let Some(ledger) = ledger.as_ref()
-                    && let Err(err) = ledger.archive_channel_messages(
-                        &marker.branch,
-                        "worktree removed",
-                        &workspace.session_name,
-                    )
-                {
+                if let Err(err) = removed.archive {
                     tracing::debug!(
                         branch = %marker.branch,
                         error = %err,
                         "worktree gc could not archive messages for removed worktree",
                     );
                 }
-                if branch == rimz::worktree::BranchDeletion::KeptUnmerged {
+                if removed.branch_deletion == rimz::worktree::BranchDeletion::KeptUnmerged {
                     tracing::debug!(
                         path = %entry.path.display(),
                         branch = %marker.branch,

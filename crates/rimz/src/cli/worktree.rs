@@ -17,6 +17,27 @@ use rimz::workspace::{RootClass, WorkspaceResolver};
 
 const CLEANUP_SIGNAL_ROSTER_GRACE: Duration = Duration::from_millis(300);
 const CLEANUP_ROSTER_RECENT: Duration = Duration::from_secs(10);
+const WORKTREE_REMOVED_ARCHIVE_REASON: &str = "worktree removed";
+
+pub(super) struct RemovedWorktree {
+    pub(super) branch_deletion: rimz::worktree::BranchDeletion,
+    /// Archive outcome, surfaced so `worktree remove` can hard-fail while
+    /// cleanup and gc downgrade to a debug log.
+    pub(super) archive: Result<()>,
+}
+
+pub(super) fn remove_and_archive(
+    marker: &rimz::worktree::WorktreeMarker,
+    remove: impl FnOnce() -> Result<rimz::worktree::BranchDeletion>,
+    archive_channel: impl FnOnce(&str, &str) -> Result<()>,
+) -> Result<RemovedWorktree> {
+    let branch_deletion = remove()?;
+    let archive = archive_channel(&marker.branch, WORKTREE_REMOVED_ARCHIVE_REASON);
+    Ok(RemovedWorktree {
+        branch_deletion,
+        archive,
+    })
+}
 
 #[derive(Debug, Args)]
 pub struct WorktreeArgs {
@@ -213,21 +234,32 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
         WorktreeSubcmd::Remove { name, force } => {
             let ledger = open_ledger(&workspace)?;
             let path = rimz::worktree::worktree_path(&workspace.project_root, &config, &name)?;
-            let marker = rimz::worktree::read_marker_for_worktree(&path)?;
-            let branch = rimz::worktree::remove(&workspace.project_root, &config, &name, force)?;
-            if let Some(marker) = marker {
-                ledger
-                    .archive_channel_messages(
-                        &marker.branch,
-                        "worktree removed",
-                        &workspace.session_name,
-                    )
-                    .context("archiving messages for removed worktree channel")?;
-            }
+            let marker = rimz::worktree::read_marker_for_worktree(&path)?.ok_or_else(|| {
+                rimz::worktree::WorktreeErr::Unmarked {
+                    name: name.clone(),
+                    path: path.clone(),
+                }
+            })?;
+            let removed = remove_and_archive(
+                &marker,
+                || {
+                    rimz::worktree::remove(&workspace.project_root, &config, &name, force)
+                        .map_err(Into::into)
+                },
+                |branch, reason| {
+                    ledger
+                        .archive_channel_messages(branch, reason, &workspace.session_name)
+                        .map(|_| ())
+                        .map_err(Into::into)
+                },
+            )?;
+            removed
+                .archive
+                .context("archiving messages for removed worktree channel")?;
             #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
             {
                 println!("removed {name}");
-                if branch == rimz::worktree::BranchDeletion::KeptUnmerged {
+                if removed.branch_deletion == rimz::worktree::BranchDeletion::KeptUnmerged {
                     println!("  branch kept: work not proven merged into its base");
                 }
             }
@@ -269,23 +301,47 @@ pub(super) fn cleanup_worktree(
     let roster_bound = roster_binds_worktree_from_ledger(path, &marker, globals);
     match rimz::worktree::cleanup_decision(status, true, other_pane_inside || roster_bound) {
         rimz::worktree::CleanupDecision::RemoveClean => {
-            let branch = remove_after_leaving_worktree(path, &marker, false)?;
-            archive_removed_worktree_messages(&marker, globals);
+            let removed = remove_and_archive(
+                &marker,
+                || remove_after_leaving_worktree(path, &marker, false),
+                |branch, reason| {
+                    archive_removed_worktree_messages(&marker, globals, branch, reason)
+                },
+            )?;
+            if let Err(err) = removed.archive {
+                tracing::debug!(
+                    branch = %marker.branch,
+                    error = %err,
+                    "could not archive messages for removed worktree",
+                );
+            }
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "rimz: removed clean worktree {}",
                 path.display()
             );
-            report_kept_branch(branch, &marker);
+            report_kept_branch(removed.branch_deletion, &marker);
         }
         rimz::worktree::CleanupDecision::PromptDirty => {
             if interactive {
                 match dirty_choice(path)? {
                     DirtyChoice::Keep => {}
                     DirtyChoice::Remove => {
-                        let branch = remove_after_leaving_worktree(path, &marker, true)?;
-                        archive_removed_worktree_messages(&marker, globals);
-                        report_kept_branch(branch, &marker);
+                        let removed = remove_and_archive(
+                            &marker,
+                            || remove_after_leaving_worktree(path, &marker, true),
+                            |branch, reason| {
+                                archive_removed_worktree_messages(&marker, globals, branch, reason)
+                            },
+                        )?;
+                        if let Err(err) = removed.archive {
+                            tracing::debug!(
+                                branch = %marker.branch,
+                                error = %err,
+                                "could not archive messages for removed worktree",
+                            );
+                        }
+                        report_kept_branch(removed.branch_deletion, &marker);
                     }
                     DirtyChoice::Shell => exec_shell(path)?,
                 }
@@ -381,24 +437,13 @@ fn remove_after_leaving_worktree(
 fn archive_removed_worktree_messages(
     marker: &rimz::worktree::WorktreeMarker,
     globals: &GlobalFlags,
-) {
-    let result = (|| -> Result<()> {
-        let workspace = WorkspaceResolver::resolve(&marker.repo_root, globals.root.clone())?;
-        let ledger = open_ledger(&workspace)?;
-        ledger.archive_channel_messages(
-            &marker.branch,
-            "worktree removed",
-            &workspace.session_name,
-        )?;
-        Ok(())
-    })();
-    if let Err(err) = result {
-        tracing::debug!(
-            branch = %marker.branch,
-            error = %err,
-            "could not archive messages for removed worktree",
-        );
-    }
+    branch: &str,
+    reason: &str,
+) -> Result<()> {
+    let workspace = WorkspaceResolver::resolve(&marker.repo_root, globals.root.clone())?;
+    let ledger = open_ledger(&workspace)?;
+    ledger.archive_channel_messages(branch, reason, &workspace.session_name)?;
+    Ok(())
 }
 
 fn report_kept_branch(
