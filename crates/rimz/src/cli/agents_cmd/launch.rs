@@ -7,32 +7,21 @@ pub(super) fn launch_layout(
     globals: &GlobalFlags,
     allow_in_place: bool,
 ) -> Result<()> {
-    let spec = args.spec.as_deref();
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let machine_config = machine_config();
-    let profiles = effective_launch_profiles(&machine_config, &workspace)?;
-    let teams = effective_launch_teams(&machine_config, &workspace)?;
-    let mut layout = resolve_launch_layout(spec, &profiles, &teams, &machine_config, &workspace)?;
-    let team_name = spec.and_then(|spec| rimz::harness::spec::spec_team(spec, &teams));
-    reject_prompt_that_looks_like_spec(
-        args.spec.as_deref(),
-        args.prompt.as_deref(),
-        &profiles,
-        &machine_config.agents.commands,
-        &teams,
-    )?;
-    ensure_profile_prompt_files(&layout)?;
-    if args.name.is_some() && layout.agent_kinds().count() != 1 {
-        bail!("--name requires a layout with exactly one agent cell");
-    }
-    apply_launch_mode_and_passthrough(
-        &mut layout,
+    let PreparedLaunch {
+        profiles: _profiles,
+        teams,
+        layout,
+        team_name,
+    } = prepare_launch_layout(
+        &args,
+        &workspace,
+        &machine_config,
         interactive_permission_mode_from_flags(args.ask, args.yolo)?,
-        &launch_override_preset(&args)?,
-        &args.passthrough,
+        args.name.as_deref(),
     )?;
-    apply_default_launch_models(&mut layout)?;
     for kind in layout.agent_kinds() {
         agent_launch_env(&workspace.project_root, kind)?;
     }
@@ -86,8 +75,9 @@ pub(super) fn launch_layout(
         &layout,
         args.name.as_deref(),
         generated_worktree_name(&launch),
-        team_name,
+        team_name.as_deref(),
         team_name
+            .as_deref()
             .and_then(|name| teams.0.get(name))
             .map(|team| team.roles.as_slice()),
         args.channel.as_deref(),
@@ -114,7 +104,7 @@ pub(super) fn launch_layout(
                 &layout,
                 &cwd,
                 worktree_name.as_deref(),
-                team_name,
+                team_name.as_deref(),
             )
         },
         |channel| format!("#{channel}"),
@@ -137,7 +127,7 @@ pub(super) fn launch_layout(
             prompt: args.prompt.as_deref(),
             cleanup_worktree: worktree_launch,
             in_place,
-            team: team_name,
+            team: team_name.as_deref(),
             channel: args.channel.as_deref(),
         },
         &launch_identities,
@@ -206,6 +196,53 @@ pub(super) fn launch_layout(
         return Err(err).context(what);
     }
     Ok(())
+}
+
+pub(super) struct PreparedLaunch {
+    pub(super) profiles: rimz::config::ProfilesConfig,
+    pub(super) teams: rimz::config::TeamsConfig,
+    pub(super) layout: LayoutSpec,
+    pub(super) team_name: Option<String>,
+}
+
+pub(super) fn prepare_launch_layout(
+    args: &AgentsArgs,
+    workspace: &rimz::ResolvedWorkspace,
+    machine_config: &rimz::config::MachineConfig,
+    mode: Option<PermissionMode>,
+    named_single_cell: Option<&str>,
+) -> Result<PreparedLaunch> {
+    let spec = args.spec.as_deref();
+    let profiles = effective_launch_profiles(machine_config, workspace)?;
+    let teams = effective_launch_teams(machine_config, workspace)?;
+    let mut layout = resolve_launch_layout(spec, &profiles, &teams, machine_config, workspace)?;
+    let team_name = spec
+        .and_then(|spec| rimz::harness::spec::spec_team(spec, &teams))
+        .map(str::to_owned);
+    reject_prompt_that_looks_like_spec(
+        args.spec.as_deref(),
+        args.prompt.as_deref(),
+        &profiles,
+        &machine_config.agents.commands,
+        &teams,
+    )?;
+    ensure_profile_prompt_files(&layout)?;
+    if named_single_cell.is_some() && layout.agent_kinds().count() != 1 {
+        bail!("--name requires a layout with exactly one agent cell");
+    }
+    apply_launch_mode_and_passthrough(
+        &mut layout,
+        mode,
+        &launch_override_preset(args)?,
+        &args.passthrough,
+    )?;
+    apply_default_launch_models(&mut layout)?;
+    Ok(PreparedLaunch {
+        profiles,
+        teams,
+        layout,
+        team_name,
+    })
 }
 
 /// Where a launch lands. The resolver derives it from the per-launch flags, the

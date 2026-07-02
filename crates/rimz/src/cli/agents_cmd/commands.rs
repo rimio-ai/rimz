@@ -412,31 +412,19 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
     let prompt = resolve_print_prompt(&args, input_format)?;
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
-    let profiles = effective_launch_profiles(&machine_config, &workspace)?;
-    let teams = effective_launch_teams(&machine_config, &workspace)?;
-    let mut layout = resolve_launch_layout(
-        args.spec.as_deref(),
-        &profiles,
-        &teams,
-        &machine_config,
-        &workspace,
-    )?;
-    reject_prompt_that_looks_like_spec(
-        args.spec.as_deref(),
-        args.prompt.as_deref(),
-        &profiles,
-        &machine_config.agents.commands,
-        &teams,
-    )?;
-    ensure_profile_prompt_files(&layout)?;
     let mode = supervised_permission_mode_from_flags(args.ask, args.yolo)?;
-    apply_launch_mode_and_passthrough(
-        &mut layout,
+    let PreparedLaunch {
+        profiles: _profiles,
+        teams: _teams,
+        mut layout,
+        team_name: _team_name,
+    } = prepare_launch_layout(
+        &args,
+        &workspace,
+        &machine_config,
         Some(mode),
-        &launch_override_preset(&args)?,
-        &args.passthrough,
+        None,
     )?;
-    apply_default_launch_models(&mut layout)?;
     if let Some(limit) = args.max_turns {
         apply_supervised_turn_limit(&mut layout, limit)?;
     }
