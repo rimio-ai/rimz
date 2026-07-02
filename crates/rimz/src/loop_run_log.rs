@@ -79,6 +79,7 @@ pub enum LoopRunResult {
     CheckSkipped,
     Expired,
     Errored,
+    Overlapped,
 }
 
 impl LoopRunResult {
@@ -94,6 +95,7 @@ impl LoopRunResult {
             Self::CheckSkipped => "skipped",
             Self::Expired => "expired",
             Self::Errored => "error",
+            Self::Overlapped => "overlapped",
         }
     }
 }

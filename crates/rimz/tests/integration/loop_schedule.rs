@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use fs4::FileExt;
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
@@ -992,6 +993,79 @@ fn loop_show_and_list_fold_legacy_records() {
 }
 
 #[test]
+fn loop_run_overlapped_records_skip_and_keeps_task_state() {
+    let env = Env::new();
+    let add = env
+        .rimz()
+        .args([
+            "loop", "add", "busy", "--check", "true", "--at", "07:00", "--once",
+        ])
+        .output()
+        .expect("loop add busy");
+    assert!(
+        add.status.success(),
+        "loop add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    assert!(
+        read_loop_instances(&env).0.contains_key("busy"),
+        "one-shot should persist as instance state"
+    );
+    let lock_path = loop_run_lock_path(&env, "busy");
+    std::fs::create_dir_all(lock_path.parent().expect("lock parent")).expect("mkdir runtime");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .expect("open lock");
+    FileExt::try_lock(&lock_file).expect("hold loop run lock");
+
+    let run = env
+        .rimz()
+        .args(["loop", "run", "busy"])
+        .output()
+        .expect("loop run busy");
+    assert!(
+        run.status.success(),
+        "loop run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("previous run still active; skipping"),
+        "overlap should print skip message: {stdout}"
+    );
+    assert!(
+        read_loop_instances(&env).0.contains_key("busy"),
+        "overlapped run should not remove task state"
+    );
+    let records = read_loop_run_records(&env);
+    assert_eq!(
+        records.last().map(|record| record.result),
+        Some(LoopRunResult::Overlapped)
+    );
+
+    let show = env
+        .rimz()
+        .args(["loop", "show", "busy"])
+        .output()
+        .expect("loop show busy");
+    assert!(
+        show.status.success(),
+        "loop show failed: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        stdout.contains("overlapped"),
+        "show should display overlapped record: {stdout}"
+    );
+    FileExt::unlock(&lock_file).expect("unlock loop run lock");
+}
+
+#[test]
 fn loop_run_bind_tilde_root_queues_prompt() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -1331,6 +1405,12 @@ fn write_loop_fire_state(env: &Env, stamps: BTreeMap<String, Timestamp>) {
     std::fs::create_dir_all(path.parent().expect("loop fire parent")).expect("mkdir runtime");
     std::fs::write(path, serde_json::to_vec_pretty(&stamps).expect("json"))
         .expect("write loop fire state");
+}
+
+fn loop_run_lock_path(env: &Env, name: &str) -> std::path::PathBuf {
+    env.runtime_paths()
+        .root
+        .join(format!("loop-run-{name}.lock"))
 }
 
 fn append_legacy_loop_record(env: &Env, task: &str, result: LoopRunResult) {

@@ -14,6 +14,7 @@
 //! failure, or error with capped forensics.
 
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -21,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
+use fs4::FileExt;
 use jiff::Timestamp;
 use toml_edit::{DocumentMut, Item, Table, value};
 
@@ -519,6 +521,7 @@ fn loop_result_cell(result: LoopRunResult) -> ui::Cell {
         LoopRunResult::Expired
         | LoopRunResult::Canceled
         | LoopRunResult::TargetGone
+        | LoopRunResult::Overlapped
         | LoopRunResult::SkippedWindow => ui::palette::WARN,
         LoopRunResult::CheckSkipped => ui::palette::MUTED,
     };
@@ -675,6 +678,33 @@ impl RunOutcome {
 fn run_one(name: &str, mode: LoopRunMode, globals: &GlobalFlags) -> Result<()> {
     let (entry, source) = load_entry(name)?;
     let started = Instant::now();
+    let _run_lock = match acquire_run_lock(name, &entry) {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            let duration_ms = elapsed_ms(started);
+            loop_run_log::append(&LoopRunRecord {
+                task: name.to_owned(),
+                at: Timestamp::now(),
+                result: LoopRunResult::Overlapped,
+                mode: Some(mode),
+                duration_ms: Some(duration_ms),
+                error: None,
+                check: None,
+                run_id: None,
+                last_message: None,
+                target: None,
+            });
+            writeln!(
+                ui::out(),
+                "loop `{name}`: previous run still active; skipping"
+            )?;
+            return Ok(());
+        }
+        Err(err) => {
+            append_error_record(name, mode, started, &err);
+            return Err(err);
+        }
+    };
     match execute_task(name, &entry, source, mode, globals) {
         Ok(outcome) => {
             let duration_ms = elapsed_ms(started);
@@ -687,23 +717,59 @@ fn run_one(name: &str, mode: LoopRunMode, globals: &GlobalFlags) -> Result<()> {
             Ok(())
         }
         Err(err) => {
-            let duration_ms = elapsed_ms(started);
-            let error = format!("{err:#}");
-            loop_run_log::append(&LoopRunRecord {
-                task: name.to_owned(),
-                at: Timestamp::now(),
-                result: LoopRunResult::Errored,
-                mode: Some(mode),
-                duration_ms: Some(duration_ms),
-                error: Some(error.clone()),
-                check: None,
-                run_id: None,
-                last_message: None,
-                target: None,
-            });
-            tracing::warn!(task = name, error = %error, "loop task run failed");
+            append_error_record(name, mode, started, &err);
             Err(err)
         }
+    }
+}
+
+fn append_error_record(name: &str, mode: LoopRunMode, started: Instant, err: &anyhow::Error) {
+    let duration_ms = elapsed_ms(started);
+    let error = format!("{err:#}");
+    loop_run_log::append(&LoopRunRecord {
+        task: name.to_owned(),
+        at: Timestamp::now(),
+        result: LoopRunResult::Errored,
+        mode: Some(mode),
+        duration_ms: Some(duration_ms),
+        error: Some(error.clone()),
+        check: None,
+        run_id: None,
+        last_message: None,
+        target: None,
+    });
+    tracing::warn!(task = name, error = %error, "loop task run failed");
+}
+
+struct RunLockGuard {
+    file: File,
+}
+
+impl Drop for RunLockGuard {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
+fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<Option<RunLockGuard>> {
+    let runtime =
+        RuntimePaths::for_workspace(WorkspaceId::from_project_root(&entry.resolved_root()))
+            .context("locating loop task runtime")?;
+    std::fs::create_dir_all(&runtime.root)
+        .with_context(|| format!("creating loop task runtime `{}`", runtime.root.display()))?;
+    let path = runtime.root.join(format!("loop-run-{name}.lock"));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("opening loop run lock `{}`", path.display()))?;
+    match FileExt::try_lock(&file) {
+        Ok(()) => Ok(Some(RunLockGuard { file })),
+        Err(fs4::TryLockError::WouldBlock) => Ok(None),
+        Err(err) => Err(std::io::Error::from(err))
+            .with_context(|| format!("locking loop run lock `{}`", path.display())),
     }
 }
 
