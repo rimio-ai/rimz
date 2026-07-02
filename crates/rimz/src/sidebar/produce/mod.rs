@@ -291,6 +291,7 @@ pub fn refresh_producer_caches(
     let config = crate::config::MachineConfig::load().unwrap_or_default();
     let _ = refresh_heavy_lanes(
         &base,
+        &base,
         &state.messages_dir,
         runtime,
         &config,
@@ -407,8 +408,13 @@ fn enrich_with_refresh(
         false,
     );
     let mut walker = crate::agents::spending::SpendingWalker::new();
+    // The intermediate fold applies the published daemon-reap cache. Probe from
+    // the unreaped rollup so one-shot CLI refresh keeps the pre-split semantics:
+    // a stale reap cache cannot hide the only daemon-mode Codex session that
+    // should trigger a fresh `thread/loaded/list` read.
     let refreshed = refresh_heavy_lanes(
         &folded,
+        &snapshot,
         opts.messages_dir,
         opts.runtime,
         &config,

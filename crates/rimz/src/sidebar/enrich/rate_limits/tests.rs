@@ -75,6 +75,35 @@ fn producer_persists_live_windows_for_idle_fallback() {
     );
 }
 
+#[test]
+fn producer_write_then_reader_merge_is_value_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let future = Timestamp::from_second(4_000_000_000).unwrap();
+
+    let mut writer = snapshot_with_panels(
+        workspace.clone(),
+        vec![provider_panel(
+            "claude",
+            vec![
+                rl_window_mins(60, Some(future), 300),
+                rl_window_mins(35, Some(future), 7 * 24 * 60),
+            ],
+        )],
+    );
+    let mut reader = writer.clone();
+
+    apply_rate_limit_cache(&mut writer, &runtime, true);
+    apply_rate_limit_cache(&mut reader, &runtime, false);
+
+    assert_eq!(
+        reader.providers[0].windows, writer.providers[0].windows,
+        "a reader merge after the producer write preserves the panel values"
+    );
+}
+
 /// An idle short window whose reset has passed projects to full while the
 /// longer cached window is still active, but the
 /// producer keeps persisting the real last reading — the synthesized full

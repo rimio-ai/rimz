@@ -98,12 +98,13 @@ pub(crate) fn refresh_codex_daemon_reap_cache(
 
 pub fn refresh_heavy_lanes(
     base: &SidebarSnapshot,
+    daemon_reap_probe: &SidebarSnapshot,
     state_messages_dir: &Path,
     runtime: &RuntimePaths,
     config: &MachineConfig,
     walker: &mut SpendingWalker,
 ) -> RefreshedLanes {
-    refresh_codex_daemon_reap_cache(base, runtime, unix_now_ms());
+    refresh_codex_daemon_reap_cache(daemon_reap_probe, runtime, unix_now_ms());
 
     let spending = spending::compute_fleet_spending_with_walker(
         walker,
@@ -141,4 +142,67 @@ pub fn refresh_heavy_lanes(
     git::refresh_diff_stats_for(base, runtime, config.sidebar.trunk.as_deref());
 
     lanes
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use jiff::Timestamp;
+
+    use super::*;
+    use crate::ids::WorkspaceId;
+    use crate::sidebar::test_support::root_agent;
+
+    #[test]
+    fn refresh_uses_pre_reap_daemon_probe_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let messages = dir.path().join("messages");
+        std::fs::create_dir_all(&messages).unwrap();
+
+        let mut agent = root_agent("codex", "live-thread", None);
+        agent.agent_pid = Some(77);
+        let pre_reap = SidebarSnapshot::build_with_agents(
+            workspace.clone(),
+            Vec::new(),
+            vec![agent],
+            Timestamp::now(),
+        );
+        write_codex_daemon_reap(
+            &runtime,
+            &CodexDaemonReap {
+                produced_at_ms: 1,
+                daemon_pids: BTreeSet::from([77]),
+                loaded: Some(BTreeSet::new()),
+            },
+        )
+        .unwrap();
+
+        let mut base = pre_reap.clone();
+        base.drop_dead_daemon_sessions(&BTreeSet::from([77]), Some(&BTreeSet::new()));
+        assert!(
+            base.agents.is_empty(),
+            "stale cache reaps the intermediate base"
+        );
+
+        let _ = refresh_heavy_lanes(
+            &base,
+            &pre_reap,
+            &messages,
+            &runtime,
+            &crate::config::MachineConfig::default(),
+            &mut SpendingWalker::new(),
+        );
+
+        assert_ne!(
+            read_codex_daemon_reap(&runtime)
+                .expect("codex reap cache")
+                .produced_at_ms,
+            1,
+            "the refresh probes from the unreaped CLI snapshot, not the reaped base"
+        );
+    }
 }
