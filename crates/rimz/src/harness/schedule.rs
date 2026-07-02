@@ -3,7 +3,7 @@
 //! The elected sidebar elder keeps time for loop tasks while a room is open and
 //! fires `rimz loop run <name>`, which drives one configured loop wake-up. A
 //! `<kind>-ping` virtual cell is the window-priming special case; the schedule
-//! machinery stays generic.
+//! machinery stays generic by evaluating an externally resolved reset instant.
 //!
 //! This module is the pure core. It normalizes a [`crate::config::TaskEntry`]
 //! into a [`Schedule`], validates user-facing syntax, describes tasks for the
@@ -29,8 +29,12 @@ pub enum ScheduleErr {
         "schedule `{name}` needs a firing time: set `at = \"HH:MM\"`, `every = \"30m\"`, or `cron = \"...\"`"
     )]
     NoTime { name: String },
-    #[error("schedule `{name}` sets more than one of `at`/`days`, `every`, and `cron`; use one")]
+    #[error(
+        "schedule `{name}` sets more than one of `at`/`days`, `every`, `cron`, and `at-reset`; use one"
+    )]
     TimeConflict { name: String },
+    #[error("schedule `{name}` sets `at-reset`, which only applies to a `<kind>-ping` spec task")]
+    ResetNeedsPing { name: String },
     #[error("schedule `{name}` has an invalid time `{value}`; use 24-hour `HH:MM`")]
     BadTime { name: String, value: String },
     #[error(
@@ -132,13 +136,19 @@ pub enum Schedule {
     Calendar(CalendarSpec),
     Interval(IntervalSpec),
     RawCron(String),
+    WindowReset,
 }
+
+/// Skew margin so a reset-priming ping lands in the new provider window, never
+/// the final seconds of the old one.
+pub const RESET_PING_MARGIN: SignedDuration = SignedDuration::from_secs(60);
 
 impl Schedule {
     /// A short human description for listings.
     pub fn describe(&self) -> String {
         match self {
             Schedule::RawCron(cron) => format!("cron `{cron}`"),
+            Schedule::WindowReset => "at window reset".to_owned(),
             Schedule::Calendar(spec) => {
                 let days = if spec.weekdays.is_empty() {
                     "every day".to_owned()
@@ -157,7 +167,7 @@ impl Schedule {
 
     /// Whether this schedule is due now, given the last time its task was
     /// armed or fired. First-sight arming is owned by the elder firing module.
-    pub fn due(&self, last_fire: Timestamp, now: &Zoned) -> bool {
+    pub fn due(&self, last_fire: Timestamp, now: &Zoned, window_reset: Option<Timestamp>) -> bool {
         match self {
             Schedule::Interval(spec) => {
                 now.timestamp().duration_since(last_fire).as_secs() >= i64::from(spec.minutes) * 60
@@ -166,19 +176,26 @@ impl Schedule {
             Schedule::RawCron(expr) => {
                 cron_matches(expr, now) && minute_bucket(last_fire) < minute_bucket(now.timestamp())
             }
+            Schedule::WindowReset => window_reset_due(last_fire, now.timestamp(), window_reset),
         }
     }
 
     /// First occurrence after `last_fire`, evaluated from `now` in the
     /// configured local zone. A returned timestamp may be at or before `now`,
     /// which means the elder should fire on its next tick.
-    pub fn next_after(&self, last_fire: Timestamp, now: &Zoned) -> Option<Timestamp> {
+    pub fn next_after(
+        &self,
+        last_fire: Timestamp,
+        now: &Zoned,
+        window_reset: Option<Timestamp>,
+    ) -> Option<Timestamp> {
         match self {
             Schedule::Interval(spec) => last_fire
                 .checked_add(SignedDuration::from_secs(i64::from(spec.minutes) * 60))
                 .ok(),
             Schedule::Calendar(spec) => calendar_next_after(spec, last_fire, now),
             Schedule::RawCron(expr) => cron_next_after(expr, last_fire, now),
+            Schedule::WindowReset => window_reset_next_after(last_fire, window_reset),
         }
     }
 }
@@ -245,14 +262,14 @@ pub fn parse_duration_units(raw: &str, allowed: &[(&str, u64)]) -> Result<Durati
     Ok(Duration::from_secs(n.saturating_mul(factor)))
 }
 
-/// Parse and validate an entry's firing time into a [`ParsedSchedule`]. Agent
-/// support is validated separately by the CLI, where the adapter registry is in
-/// scope.
+/// Parse and validate an entry's firing time into a [`ParsedSchedule`]. Full
+/// agent preflight is validated separately by the CLI.
 pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, ScheduleErr> {
     let has_calendar = entry.at.is_some() || entry.days.is_some();
     let set_count = usize::from(has_calendar)
         + usize::from(entry.every.is_some())
-        + usize::from(entry.cron.is_some());
+        + usize::from(entry.cron.is_some())
+        + usize::from(entry.at_reset);
     if set_count > 1 {
         return Err(ScheduleErr::TimeConflict {
             name: name.to_owned(),
@@ -263,15 +280,33 @@ pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, S
             name: name.to_owned(),
         });
     }
-    let schedule = match (entry.cron.as_deref(), entry.every.as_deref(), has_calendar) {
-        (Some(cron), None, false) => {
+    let schedule = match (
+        entry.cron.as_deref(),
+        entry.every.as_deref(),
+        has_calendar,
+        entry.at_reset,
+    ) {
+        (None, None, false, true) => {
+            if entry
+                .spec
+                .as_deref()
+                .is_some_and(crate::harness::spec::virtual_ping_shape)
+            {
+                Schedule::WindowReset
+            } else {
+                return Err(ScheduleErr::ResetNeedsPing {
+                    name: name.to_owned(),
+                });
+            }
+        }
+        (Some(cron), None, false, false) => {
             validate_cron_expr(name, cron)?;
             Schedule::RawCron(cron.trim().to_owned())
         }
-        (None, Some(every), false) => {
+        (None, Some(every), false, false) => {
             Schedule::Interval(IntervalSpec::new(parse_interval_minutes(name, every)?))
         }
-        (None, None, true) => {
+        (None, None, true, false) => {
             let at = entry.at.as_deref().ok_or_else(|| ScheduleErr::NoTime {
                 name: name.to_owned(),
             })?;
@@ -283,7 +318,7 @@ pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, S
                 weekdays,
             })
         }
-        (None, None, false) => {
+        (None, None, false, false) => {
             return Err(ScheduleErr::NoTime {
                 name: name.to_owned(),
             });
@@ -407,6 +442,22 @@ fn format_minutes(minutes: u32) -> String {
     } else {
         format!("{minutes}m")
     }
+}
+
+fn window_reset_occurrence(window_reset: Option<Timestamp>) -> Option<Timestamp> {
+    window_reset?.checked_add(RESET_PING_MARGIN).ok()
+}
+
+fn window_reset_due(last_fire: Timestamp, now: Timestamp, window_reset: Option<Timestamp>) -> bool {
+    window_reset_occurrence(window_reset)
+        .is_some_and(|occurrence| last_fire < occurrence && now >= occurrence)
+}
+
+fn window_reset_next_after(
+    last_fire: Timestamp,
+    window_reset: Option<Timestamp>,
+) -> Option<Timestamp> {
+    window_reset_occurrence(window_reset).filter(|occurrence| *occurrence > last_fire)
 }
 
 fn calendar_due(spec: &CalendarSpec, last_fire: Timestamp, now: &Zoned) -> bool {
@@ -587,6 +638,7 @@ mod tests {
             system_prompt_file: None,
             timeout: None,
             at: at.map(ToOwned::to_owned),
+            at_reset: false,
             days: days.map(ToOwned::to_owned),
             every: every.map(ToOwned::to_owned),
             cron: cron.map(ToOwned::to_owned),
@@ -764,12 +816,75 @@ mod tests {
         Timestamp::from_second(ts.as_second() - seconds).expect("shifted timestamp")
     }
 
+    fn at_reset_entry(spec: Option<&str>, once: bool) -> TaskEntry {
+        let mut entry = entry(None, None, None, None, once);
+        entry.spec = spec.map(ToOwned::to_owned);
+        entry.at_reset = true;
+        entry
+    }
+
+    #[test]
+    fn at_reset_parse_requires_ping_spec() {
+        let parsed = parse_schedule("w", &at_reset_entry(Some("claude-ping"), false))
+            .expect("at-reset ping");
+        assert_eq!(parsed.schedule, Schedule::WindowReset);
+        assert_eq!(parsed.describe(), "at window reset");
+
+        let once = parse_schedule("w", &at_reset_entry(Some("claude-ping"), true))
+            .expect("once at-reset ping");
+        assert_eq!(once.describe(), "once at window reset");
+
+        let mut conflict = at_reset_entry(Some("claude-ping"), false);
+        conflict.every = Some("5m".to_owned());
+        assert_eq!(
+            parse_schedule("w", &conflict),
+            Err(ScheduleErr::TimeConflict {
+                name: "w".to_owned()
+            })
+        );
+
+        assert_eq!(
+            parse_schedule("w", &at_reset_entry(Some("claude"), false)),
+            Err(ScheduleErr::ResetNeedsPing {
+                name: "w".to_owned()
+            })
+        );
+        assert_eq!(
+            parse_schedule("w", &at_reset_entry(None, false)),
+            Err(ScheduleErr::ResetNeedsPing {
+                name: "w".to_owned()
+            })
+        );
+
+        let mut check_only = at_reset_entry(None, false);
+        check_only.check = Some("true".to_owned());
+        assert_eq!(
+            parse_schedule("w", &check_only),
+            Err(ScheduleErr::ResetNeedsPing {
+                name: "w".to_owned()
+            })
+        );
+
+        let mut bind = at_reset_entry(None, false);
+        bind.bind = Some(crate::config::TaskTarget {
+            kind: "claude".to_owned(),
+            session: "sess".to_owned(),
+            handle: "@claude".to_owned(),
+        });
+        assert_eq!(
+            parse_schedule("w", &bind),
+            Err(ScheduleErr::ResetNeedsPing {
+                name: "w".to_owned()
+            })
+        );
+    }
+
     #[test]
     fn interval_due_at_exact_boundary_only() {
         let schedule = Schedule::Interval(IntervalSpec::new(15));
         let now = zdt(2026, 6, 24, 8, 15, 0);
-        assert!(!schedule.due(seconds_before(now.timestamp(), 899), &now));
-        assert!(schedule.due(seconds_before(now.timestamp(), 900), &now));
+        assert!(!schedule.due(seconds_before(now.timestamp(), 899), &now, None));
+        assert!(schedule.due(seconds_before(now.timestamp(), 900), &now, None));
     }
 
     #[test]
@@ -779,8 +894,22 @@ mod tests {
             .schedule;
         let now = zdt(2026, 6, 24, 7, 30, 0);
         let occurrence = now.timestamp();
-        assert!(schedule.due(seconds_before(occurrence, 60), &now));
-        assert!(!schedule.due(occurrence, &now));
+        assert!(schedule.due(seconds_before(occurrence, 60), &now, None));
+        assert!(!schedule.due(occurrence, &now, None));
+    }
+
+    #[test]
+    fn window_reset_due_uses_reset_plus_margin_once() {
+        let schedule = Schedule::WindowReset;
+        let reset = zdt(2026, 6, 24, 8, 0, 0).timestamp();
+        let before = zdt(2026, 6, 24, 8, 0, 59);
+        let at_margin = zdt(2026, 6, 24, 8, 1, 0);
+        let occurrence = at_margin.timestamp();
+
+        assert!(!schedule.due(seconds_before(reset, 60), &before, Some(reset)));
+        assert!(schedule.due(seconds_before(occurrence, 60), &at_margin, Some(reset)));
+        assert!(!schedule.due(occurrence, &at_margin, Some(reset)));
+        assert!(!schedule.due(seconds_before(occurrence, 60), &at_margin, None));
     }
 
     #[test]
@@ -790,7 +919,11 @@ mod tests {
                 .expect("parse")
                 .schedule;
         let wednesday = zdt(2026, 6, 24, 7, 30, 0);
-        assert!(!weekday_schedule.due(seconds_before(wednesday.timestamp(), 86_400), &wednesday));
+        assert!(!weekday_schedule.due(
+            seconds_before(wednesday.timestamp(), 86_400),
+            &wednesday,
+            None
+        ));
 
         let time_schedule = parse_schedule("m", &entry(Some("07:30"), None, None, None, false))
             .expect("parse")
@@ -798,7 +931,8 @@ mod tests {
         let before_time = zdt(2026, 6, 24, 7, 29, 59);
         assert!(!time_schedule.due(
             seconds_before(before_time.timestamp(), 86_400),
-            &before_time
+            &before_time,
+            None
         ));
     }
 
@@ -806,21 +940,25 @@ mod tests {
     fn cron_interval_matches_and_suppresses_same_minute() {
         let schedule = Schedule::RawCron("*/15 * * * *".to_owned());
         let now = zdt(2026, 6, 24, 8, 30, 12);
-        assert!(schedule.due(seconds_before(now.timestamp(), 60), &now));
-        assert!(!schedule.due(seconds_before(now.timestamp(), 1), &now));
+        assert!(schedule.due(seconds_before(now.timestamp(), 60), &now, None));
+        assert!(!schedule.due(seconds_before(now.timestamp(), 1), &now, None));
 
         let off_minute = zdt(2026, 6, 24, 8, 31, 0);
-        assert!(!schedule.due(seconds_before(off_minute.timestamp(), 60), &off_minute));
+        assert!(!schedule.due(
+            seconds_before(off_minute.timestamp(), 60),
+            &off_minute,
+            None
+        ));
     }
 
     #[test]
     fn cron_weekday_gates() {
         let schedule = Schedule::RawCron("0 7 * * 1-5".to_owned());
         let wednesday = zdt(2026, 6, 24, 7, 0, 0);
-        assert!(schedule.due(seconds_before(wednesday.timestamp(), 60), &wednesday));
+        assert!(schedule.due(seconds_before(wednesday.timestamp(), 60), &wednesday, None));
 
         let saturday = zdt(2026, 6, 27, 7, 0, 0);
-        assert!(!schedule.due(seconds_before(saturday.timestamp(), 60), &saturday));
+        assert!(!schedule.due(seconds_before(saturday.timestamp(), 60), &saturday, None));
     }
 
     #[test]
@@ -829,8 +967,28 @@ mod tests {
         let now = zdt(2026, 6, 24, 8, 10, 0);
         let last_fire = seconds_before(now.timestamp(), 60);
         assert_eq!(
-            schedule.next_after(last_fire, &now),
+            schedule.next_after(last_fire, &now, None),
             Some(Timestamp::from_second(last_fire.as_second() + 900).expect("timestamp"))
+        );
+    }
+
+    #[test]
+    fn window_reset_next_after_reports_unconsumed_occurrence() {
+        let schedule = Schedule::WindowReset;
+        let now = zdt(2026, 6, 24, 8, 0, 0);
+        let reset = now.timestamp();
+        let occurrence = reset
+            .checked_add(RESET_PING_MARGIN)
+            .expect("reset occurrence");
+
+        assert_eq!(
+            schedule.next_after(seconds_before(occurrence, 1), &now, Some(reset)),
+            Some(occurrence)
+        );
+        assert_eq!(schedule.next_after(occurrence, &now, Some(reset)), None);
+        assert_eq!(
+            schedule.next_after(seconds_before(occurrence, 1), &now, None),
+            None
         );
     }
 
@@ -842,7 +1000,7 @@ mod tests {
         let now = zdt(2026, 6, 24, 8, 0, 0);
         let last_fire = zdt(2026, 6, 22, 7, 30, 0).timestamp();
         assert_eq!(
-            schedule.next_after(last_fire, &now),
+            schedule.next_after(last_fire, &now, None),
             Some(zdt(2026, 6, 29, 7, 30, 0).timestamp())
         );
     }
@@ -855,7 +1013,7 @@ mod tests {
         let now = zdt(2026, 6, 24, 8, 0, 0);
         let last_fire = zdt(2026, 6, 23, 7, 30, 0).timestamp();
         assert_eq!(
-            schedule.next_after(last_fire, &now),
+            schedule.next_after(last_fire, &now, None),
             Some(zdt(2026, 6, 24, 7, 30, 0).timestamp())
         );
     }
@@ -865,7 +1023,7 @@ mod tests {
         let schedule = Schedule::RawCron("*/15 * * * *".to_owned());
         let now = zdt(2026, 6, 24, 8, 14, 12);
         assert_eq!(
-            schedule.next_after(seconds_before(now.timestamp(), 60), &now),
+            schedule.next_after(seconds_before(now.timestamp(), 60), &now, None),
             Some(zdt(2026, 6, 24, 8, 15, 0).timestamp())
         );
     }
@@ -875,7 +1033,7 @@ mod tests {
         let schedule = Schedule::RawCron("*/15 * * * *".to_owned());
         let now = zdt(2026, 6, 24, 8, 30, 12);
         assert_eq!(
-            schedule.next_after(seconds_before(now.timestamp(), 60), &now),
+            schedule.next_after(seconds_before(now.timestamp(), 60), &now, None),
             Some(now.timestamp())
         );
     }
@@ -885,7 +1043,7 @@ mod tests {
         let schedule = Schedule::RawCron("0 0 1 1 *".to_owned());
         let now = zdt(2026, 1, 2, 0, 0, 0);
         assert_eq!(
-            schedule.next_after(seconds_before(now.timestamp(), 60), &now),
+            schedule.next_after(seconds_before(now.timestamp(), 60), &now, None),
             None
         );
     }

@@ -706,6 +706,51 @@ fn loop_list_next_uses_room_arm_stamp() {
 }
 
 #[test]
+fn loop_add_at_reset_is_ping_only_and_renders_without_cold_cache() {
+    let env = Env::new();
+
+    let (_stdout, stderr) = loop_fail(
+        &env,
+        &["loop", "add", "bad", "--spec", "claude", "--at-reset"],
+    );
+    assert!(
+        stderr.contains("<kind>-ping"),
+        "at-reset should name the ping requirement: {stderr}"
+    );
+
+    env.install_agent_hooks("claude");
+    loop_ok(
+        &env,
+        &["loop", "add", "w7", "--spec", "claude-ping", "--at-reset"],
+    );
+    let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
+    assert!(
+        config.contains("at-reset = true"),
+        "at-reset should persist in loop.toml: {config}"
+    );
+
+    write_loop_fire_state(
+        &env,
+        BTreeMap::from([(
+            "w7".to_owned(),
+            Timestamp::now() - SignedDuration::from_secs(60),
+        )]),
+    );
+    let stdout = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        stdout.lines().any(|line| line.starts_with("w7")
+            && line.contains("at window reset")
+            && line.split_whitespace().any(|cell| cell == "-")),
+        "cold cache should render at-reset with dash next: {stdout}"
+    );
+    let stdout = loop_ok(&env, &["loop", "show", "w7"]);
+    assert!(
+        stdout.contains("schedule: at window reset") && stdout.contains("next:     -"),
+        "show should render at-reset with dash next: {stdout}"
+    );
+}
+
+#[test]
 fn loop_show_and_list_fold_legacy_records() {
     let env = Env::new();
     write_loop_config(

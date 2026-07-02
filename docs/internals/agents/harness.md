@@ -120,6 +120,7 @@ A `spec` task names exactly one agent cell: a built-in kind, a profile, or an ad
 - **Calendar** — `at = "07:00"` with an optional `days` mask (`daily`, `weekdays`, `weekends`, a range like `mon-fri`, or a list `mon,wed,fri`). Wall-clock evaluation uses the configured `timezone`, falling back to the system zone when unset.
 - **Interval** — `every = "15m"`, `2h`, or `1d`. The elder fires at the exact interval measured from the last arm or fire.
 - **Raw cron** — `cron = "*/15 * * * *"`, matched by an in-process five-field matcher over minute, hour, day-of-month, month, and day-of-week in the configured `timezone`.
+- **Window-reset** — `at-reset = true` on a `<kind>-ping` spec task. The elder fires from the provider's longest cached budget-window reset stamp plus one minute.
 - **One-shot** — `once = true` on a calendar or cron schedule. `rimz loop add --in 30m` resolves to an `at` time in the configured `timezone` and implies `once`.
 - **Poll-until** — `every = "2m"` with `check`, `on`, an agent action, and `deadline`. `rimz loop add --until 30m` stores the resolved absolute deadline in instance state.
 
@@ -160,6 +161,8 @@ On fire, the runner resolves the recorded `root`, confirms the pinned root sessi
 ### Window-priming pings
 
 A task whose `spec` is a `<kind>-ping` virtual cell starts a provider's budget window at a time you choose. It defaults `prompt = "ping"` and lowest effort unless configured otherwise, and the virtual cell supplies the adapter's ping arguments. The window is account-scoped, shared by every session of a provider kind ([provider.md → Window fusion](./provider.md#window-fusion)), so one ping per provider primes the whole account. Before spawning the turn, the runner reads the shared rate-limit cache and skips when the shortest window is already counting down. The read is best-effort: an unknown or cold cache falls through to the ping, since missing a window-start defeats the feature while an occasional extra token is cheap.
+
+`at-reset = true` lets a ping follow the provider's longest observed budget window. The occurrence is the raw cached `resets_at` for the longest dated window plus one minute, so a passed reset remains the edge until a real provider reading refreshes the cache. The runner gate checks the longest window for this shape; if that window is already counting down, the ping records `skipped window`. The ping turn's own status or account reading stamps the next reset occurrence. A never-started or cold-cache window schedules nothing until organic use or a manual fire creates a cached reset, while a room reopened after the reset catches up from the stale raw stamp.
 
 ### State and code
 

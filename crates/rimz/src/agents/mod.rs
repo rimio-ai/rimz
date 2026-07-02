@@ -85,8 +85,9 @@ pub use state::{
 };
 pub(crate) use state::{
     AccountBudget, ResumeArm, account_budgets_from_caches, display_turn_error,
-    effective_turn_error_class, rate_limit_window_kinds, read_rate_limits_cache,
-    resume_gate_recovered, resume_park, shortest_window_running,
+    effective_turn_error_class, longest_window_reset_at, longest_window_running,
+    rate_limit_window_kinds, read_rate_limits_cache, resume_gate_recovered, resume_park,
+    shortest_window_running,
 };
 pub use state::{PendingRefill, RateLimitsCache};
 pub use transcript::{

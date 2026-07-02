@@ -73,6 +73,9 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
         }
         (None, None) => AddTaskAction::CheckOnly,
     };
+    if args.at_reset && !matches!(action, AddTaskAction::Spawn { is_ping: true, .. }) {
+        bail!("--at-reset only applies to a `<kind>-ping` spec task");
+    }
     let mode = match &action {
         AddTaskAction::Spawn { .. } => args.mode.as_deref().map(parse_mode).transpose()?,
         AddTaskAction::Deliver { .. } => {
@@ -124,6 +127,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
                 system_prompt_file: args.system_prompt_file,
                 timeout: args.timeout,
                 at: timing.at,
+                at_reset: args.at_reset,
                 days: timing.days,
                 every: args.every,
                 cron: args.cron,
@@ -147,6 +151,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
                 system_prompt_file: None,
                 timeout: uses_check_timeout.then_some(args.timeout).flatten(),
                 at: timing.at,
+                at_reset: false,
                 days: timing.days,
                 every: args.every,
                 cron: args.cron,
@@ -168,6 +173,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
             system_prompt_file: None,
             timeout: uses_check_timeout.then_some(args.timeout).flatten(),
             at: timing.at,
+            at_reset: false,
             days: timing.days,
             every: args.every,
             cron: args.cron,

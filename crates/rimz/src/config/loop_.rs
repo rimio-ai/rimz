@@ -55,6 +55,8 @@ pub struct TaskEntry {
     pub timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
+    #[serde(rename = "at-reset", default, skip_serializing_if = "Not::not")]
+    pub at_reset: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub days: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,6 +158,7 @@ mod tests {
             check: Some("cargo test".to_owned()),
             on: Some(CheckOn::Success),
             root: PathBuf::from("/repo"),
+            at_reset: true,
             every: Some("2m".to_owned()),
             deadline: Some(deadline),
             ..TaskEntry::default()
@@ -184,6 +187,14 @@ mod tests {
                 .get("ci")
                 .and_then(|entry| entry.deadline),
             Some(deadline)
+        );
+        assert_eq!(
+            toml_round.tasks.0.get("ci").map(|entry| entry.at_reset),
+            Some(true)
+        );
+        assert!(
+            toml.contains("at-reset = true"),
+            "at-reset should round-trip through TOML: {toml}"
         );
 
         let json = serde_json::to_string(&loop_config.tasks).expect("json");

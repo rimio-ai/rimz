@@ -420,7 +420,33 @@ fn shortest_window_running_in(cache: &RateLimitsCache, kind: &str, now: Timestam
         .windows
         .iter()
         .min_by_key(|window| window.duration_mins.unwrap_or(u32::MAX))?;
-    let projected = shortest.clone().projected_at(now);
+    window_running_verdict(shortest, now)
+}
+
+/// Whether `kind`'s longest account-scoped budget window is currently running
+/// its clock. Reset-priming callers use this to skip a ping when the long
+/// window has already started.
+pub(crate) fn longest_window_running(
+    runtime: &RuntimePaths,
+    kind: &str,
+    now: Timestamp,
+) -> Option<bool> {
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    longest_window_running_in(&cache, kind, now)
+}
+
+fn longest_window_running_in(cache: &RateLimitsCache, kind: &str, now: Timestamp) -> Option<bool> {
+    let longest = cache
+        .windows
+        .get(kind)?
+        .windows
+        .iter()
+        .max_by_key(|window| window.duration_mins.unwrap_or(0))?;
+    window_running_verdict(longest, now)
+}
+
+fn window_running_verdict(window: &RateLimitWindow, now: Timestamp) -> Option<bool> {
+    let projected = window.clone().projected_at(now);
     projected.used_percentage?;
     if projected.not_started(now) {
         return Some(false);
@@ -429,6 +455,21 @@ fn shortest_window_running_in(cache: &RateLimitsCache, kind: &str, now: Timestam
         Some(reset) if reset > now => Some(true),
         _ => None,
     }
+}
+
+/// Raw reset stamp for `kind`'s longest dated account-scoped window. Callers use
+/// this as an occurrence edge, so this intentionally does not project a passed
+/// reset forward.
+pub(crate) fn longest_window_reset_at(runtime: &RuntimePaths, kind: &str) -> Option<Timestamp> {
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    cache
+        .windows
+        .get(kind)?
+        .windows
+        .iter()
+        .filter(|window| window.duration_mins.is_some())
+        .max_by_key(|window| window.duration_mins)
+        .and_then(|window| window.resets_at)
 }
 
 /// Each agent kind's rate-limit window standing, summarized from the fused

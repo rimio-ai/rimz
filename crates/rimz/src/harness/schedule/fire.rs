@@ -13,8 +13,10 @@ use jiff::{Timestamp, Zoned};
 
 use super::instances;
 use crate::RuntimePaths;
+use crate::agents::longest_window_reset_at;
 use crate::config::TaskEntry;
 use crate::harness::schedule;
+use crate::harness::spec;
 use crate::ids::WorkspaceId;
 use crate::ledger::atomic::write_temp_then_rename_cache;
 
@@ -34,7 +36,8 @@ pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
     );
     let path = state_path(runtime);
     let state = read_state(&path);
-    let (actions, next_state) = plan(&tasks, &state, now);
+    let resets = reset_occurrences(runtime, &tasks);
+    let (actions, next_state) = plan(&tasks, &state, now, &resets);
     if next_state != state
         && let Err(err) = write_temp_then_rename_cache(&path, &next_state)
     {
@@ -57,6 +60,7 @@ fn plan(
     tasks: &BTreeMap<String, TaskEntry>,
     state: &BTreeMap<String, Timestamp>,
     now: &Zoned,
+    resets: &BTreeMap<String, Timestamp>,
 ) -> (Vec<(String, Action)>, BTreeMap<String, Timestamp>) {
     let mut actions = Vec::new();
     let mut next_state = BTreeMap::new();
@@ -77,7 +81,11 @@ fn plan(
                 actions.push((name.clone(), Action::Arm));
                 next_state.insert(name.clone(), now.timestamp());
             }
-            Some(last_fire) if parsed.schedule.due(last_fire, now) => {
+            Some(last_fire)
+                if parsed
+                    .schedule
+                    .due(last_fire, now, resets.get(name).copied()) =>
+            {
                 actions.push((name.clone(), Action::Fire));
                 next_state.insert(name.clone(), now.timestamp());
             }
@@ -87,6 +95,20 @@ fn plan(
         }
     }
     (actions, next_state)
+}
+
+fn reset_occurrences(
+    runtime: &RuntimePaths,
+    tasks: &BTreeMap<String, TaskEntry>,
+) -> BTreeMap<String, Timestamp> {
+    tasks
+        .iter()
+        .filter(|(_, entry)| entry.at_reset)
+        .filter_map(|(name, entry)| {
+            let kind = entry.spec.as_deref().and_then(spec::ping_kind)?;
+            longest_window_reset_at(runtime, kind).map(|reset| (name.clone(), reset))
+        })
+        .collect()
 }
 
 fn workspace_tasks(
@@ -179,11 +201,21 @@ mod tests {
         }
     }
 
+    fn reset_task(root: &str) -> TaskEntry {
+        TaskEntry {
+            spec: Some("claude-ping".to_owned()),
+            prompt: Some("ping".to_owned()),
+            root: PathBuf::from(root),
+            at_reset: true,
+            ..TaskEntry::default()
+        }
+    }
+
     #[test]
     fn first_seen_task_arms_without_firing() {
         let now = zdt(2026, 6, 24, 8, 0, 0);
         let tasks = BTreeMap::from([("daily".to_owned(), task("/repo", "5m"))]);
-        let (actions, next) = plan(&tasks, &BTreeMap::new(), &now);
+        let (actions, next) = plan(&tasks, &BTreeMap::new(), &now, &BTreeMap::new());
         assert_eq!(actions, vec![("daily".to_owned(), Action::Arm)]);
         assert_eq!(next.get("daily"), Some(&now.timestamp()));
     }
@@ -193,7 +225,7 @@ mod tests {
         let now = zdt(2026, 6, 24, 8, 5, 0);
         let tasks = BTreeMap::from([("daily".to_owned(), task("/repo", "5m"))]);
         let state = BTreeMap::from([("daily".to_owned(), seconds_before(now.timestamp(), 300))]);
-        let (actions, next) = plan(&tasks, &state, &now);
+        let (actions, next) = plan(&tasks, &state, &now, &BTreeMap::new());
         assert_eq!(actions, vec![("daily".to_owned(), Action::Fire)]);
         assert_eq!(next.get("daily"), Some(&now.timestamp()));
     }
@@ -204,7 +236,7 @@ mod tests {
         let prior = seconds_before(now.timestamp(), 240);
         let tasks = BTreeMap::from([("daily".to_owned(), task("/repo", "5m"))]);
         let state = BTreeMap::from([("daily".to_owned(), prior)]);
-        let (actions, next) = plan(&tasks, &state, &now);
+        let (actions, next) = plan(&tasks, &state, &now, &BTreeMap::new());
         assert!(actions.is_empty());
         assert_eq!(next.get("daily"), Some(&prior));
     }
@@ -213,9 +245,46 @@ mod tests {
     fn stale_state_entry_is_pruned() {
         let now = zdt(2026, 6, 24, 8, 0, 0);
         let state = BTreeMap::from([("gone".to_owned(), seconds_before(now.timestamp(), 300))]);
-        let (actions, next) = plan(&BTreeMap::new(), &state, &now);
+        let (actions, next) = plan(&BTreeMap::new(), &state, &now, &BTreeMap::new());
         assert!(actions.is_empty());
         assert!(next.is_empty());
+    }
+
+    #[test]
+    fn at_reset_task_arms_then_fires_once_per_observed_reset() {
+        let reset = zdt(2026, 6, 24, 8, 0, 0).timestamp();
+        let occurrence = reset
+            .checked_add(schedule::RESET_PING_MARGIN)
+            .expect("reset occurrence");
+        let now = occurrence.to_zoned(jiff::tz::TimeZone::UTC);
+        let tasks = BTreeMap::from([("w7".to_owned(), reset_task("/repo"))]);
+        let resets = BTreeMap::from([("w7".to_owned(), reset)]);
+
+        let (actions, next) = plan(&tasks, &BTreeMap::new(), &now, &resets);
+        assert_eq!(actions, vec![("w7".to_owned(), Action::Arm)]);
+        assert_eq!(next.get("w7"), Some(&occurrence));
+
+        let state = BTreeMap::from([("w7".to_owned(), seconds_before(occurrence, 1))]);
+        let (actions, next) = plan(&tasks, &state, &now, &resets);
+        assert_eq!(actions, vec![("w7".to_owned(), Action::Fire)]);
+        assert_eq!(next.get("w7"), Some(&occurrence));
+
+        let state = BTreeMap::from([("w7".to_owned(), occurrence)]);
+        let (actions, next) = plan(&tasks, &state, &now, &resets);
+        assert!(actions.is_empty());
+        assert_eq!(next.get("w7"), Some(&occurrence));
+    }
+
+    #[test]
+    fn at_reset_task_without_cached_reset_never_fires() {
+        let now = zdt(2026, 6, 24, 8, 1, 0);
+        let tasks = BTreeMap::from([("w7".to_owned(), reset_task("/repo"))]);
+        let state = BTreeMap::from([("w7".to_owned(), seconds_before(now.timestamp(), 120))]);
+
+        let (actions, next) = plan(&tasks, &state, &now, &BTreeMap::new());
+
+        assert!(actions.is_empty());
+        assert_eq!(next.get("w7"), state.get("w7"));
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 
-use crate::agents::shortest_window_running;
+use crate::agents::{longest_window_reset_at, longest_window_running, shortest_window_running};
 use crate::config::{CheckOn, TaskEntry};
 use crate::harness::schedule::run_log::{CheckRecord, LoopRunResult};
 use crate::ids::WorkspaceId;
@@ -174,12 +174,28 @@ pub fn tail_output(bytes: &[u8], cap: usize) -> String {
 /// from the shared account-scoped cache. The window state is account-scoped, so
 /// the entry's workspace is resolved only to reach this user's runtime root.
 pub fn window_already_running(entry: &TaskEntry, kind: &str) -> Result<bool> {
+    let runtime = entry_runtime(entry)?;
+    Ok(shortest_window_running(&runtime, kind, Timestamp::now()) == Some(true))
+}
+
+/// Whether `entry`'s provider already has its longest budget window counting
+/// down, read from the shared account-scoped cache.
+pub fn reset_window_already_running(entry: &TaskEntry, kind: &str) -> Result<bool> {
+    let runtime = entry_runtime(entry)?;
+    Ok(longest_window_running(&runtime, kind, Timestamp::now()) == Some(true))
+}
+
+/// Raw reset stamp for `entry`'s provider longest budget window.
+pub fn window_reset_at(entry: &TaskEntry, kind: &str) -> Result<Option<Timestamp>> {
+    let runtime = entry_runtime(entry)?;
+    Ok(longest_window_reset_at(&runtime, kind))
+}
+
+fn entry_runtime(entry: &TaskEntry) -> Result<RuntimePaths> {
     let root = entry.resolved_root();
     let workspace = WorkspaceResolver::resolve(&root, None)
         .with_context(|| format!("resolving project root at {}", root.display()))?;
-    let runtime =
-        RuntimePaths::under(workspace.workspace_id, &runtime_home()).context("locating runtime")?;
-    Ok(shortest_window_running(&runtime, kind, Timestamp::now()) == Some(true))
+    RuntimePaths::under(workspace.workspace_id, &runtime_home()).context("locating runtime")
 }
 
 #[cfg(test)]

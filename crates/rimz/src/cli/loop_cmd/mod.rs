@@ -35,8 +35,8 @@ use rimz::harness::schedule::run_log::{
 };
 use rimz::harness::schedule::runner::{
     CHECK_DEFAULT_TIMEOUT, acquire_run_lock, augment_prompt, check_only_result, check_record,
-    check_timeout, deadline_expired, polarity_fires, run_check, tail_output,
-    window_already_running,
+    check_timeout, deadline_expired, polarity_fires, reset_window_already_running, run_check,
+    tail_output, window_already_running, window_reset_at,
 };
 use rimz::harness::schedule::{
     self,
@@ -113,6 +113,9 @@ struct AddArgs {
     /// Daily firing time, 24-hour `HH:MM` in the configured timezone.
     #[arg(long, conflicts_with_all = ["every", "cron", "in_after"])]
     at: Option<String>,
+    /// Fire the ping 1 minute after the provider's longest budget window resets.
+    #[arg(long = "at-reset", conflicts_with_all = ["at", "days", "every", "cron", "in_after"])]
+    at_reset: bool,
     /// Day mask: `daily`, `weekdays`, `weekends`, a range `mon-fri`, or a list `mon,wed,fri`.
     #[arg(long, conflicts_with_all = ["every", "cron", "in_after"])]
     days: Option<String>,
@@ -482,6 +485,9 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
     }
     if let Some(at) = &entry.at {
         table["at"] = value(at);
+    }
+    if entry.at_reset {
+        table["at-reset"] = value(true);
     }
     if let Some(days) = &entry.days {
         table["days"] = value(days);

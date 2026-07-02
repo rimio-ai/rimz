@@ -38,9 +38,19 @@ pub(super) fn list() -> Result<()> {
             .as_ref()
             .map(rimz::harness::schedule::last_stamps)
             .unwrap_or_default();
+        let window_reset = window_reset_for(entry);
         let next = parsed
             .ok()
-            .and_then(|parsed| next_fire_text(name, &parsed.schedule, &stamps, &now_zoned, now))
+            .and_then(|parsed| {
+                next_fire_text(
+                    name,
+                    &parsed.schedule,
+                    &stamps,
+                    &now_zoned,
+                    now,
+                    window_reset,
+                )
+            })
             .map(ui::cell)
             .unwrap_or_else(|| ui::cell("-").dash());
         let task_stats = stats.get(name);
@@ -93,9 +103,21 @@ fn next_fire_text(
     stamps: &BTreeMap<String, Timestamp>,
     now_zoned: &jiff::Zoned,
     now: Timestamp,
+    window_reset: Option<Timestamp>,
 ) -> Option<String> {
-    let next = schedule.next_after(*stamps.get(name)?, now_zoned)?;
+    let next = schedule.next_after(*stamps.get(name)?, now_zoned, window_reset)?;
     Some(ui::rel_until(next, now))
+}
+
+fn window_reset_for(entry: &TaskEntry) -> Option<Timestamp> {
+    if !entry.at_reset {
+        return None;
+    }
+    let kind = entry
+        .spec
+        .as_deref()
+        .and_then(rimz::harness::spec::ping_kind)?;
+    window_reset_at(entry, kind).ok().flatten()
 }
 
 pub(super) fn show(args: ShowArgs) -> Result<()> {
@@ -120,10 +142,20 @@ pub(super) fn show(args: ShowArgs) -> Result<()> {
     };
     let now = Timestamp::now();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
+    let window_reset = window_reset_for(&entry);
     let next = parsed
         .as_ref()
         .ok()
-        .and_then(|parsed| next_fire_text(&args.name, &parsed.schedule, &stamps, &now_zoned, now))
+        .and_then(|parsed| {
+            next_fire_text(
+                &args.name,
+                &parsed.schedule,
+                &stamps,
+                &now_zoned,
+                now,
+                window_reset,
+            )
+        })
         .unwrap_or_else(|| "-".to_owned());
 
     let mut out = ui::out();

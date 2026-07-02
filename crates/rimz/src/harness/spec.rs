@@ -900,9 +900,15 @@ fn virtual_agent_shape(raw: &str) -> bool {
 }
 
 pub fn virtual_ping_shape(raw: &str) -> bool {
-    raw.strip_suffix("-ping")
-        .and_then(crate::agents::find_adapter)
-        .is_some_and(|adapter| adapter.ping_args().is_some())
+    ping_kind(raw).is_some()
+}
+
+pub fn ping_kind(raw: &str) -> Option<&str> {
+    let kind = raw.strip_suffix("-ping")?;
+    crate::agents::find_adapter(kind)?
+        .ping_args()
+        .is_some()
+        .then_some(kind)
 }
 
 fn supported_virtual_agent_args(kind: &str, mode: PermissionMode) -> Option<Vec<String>> {

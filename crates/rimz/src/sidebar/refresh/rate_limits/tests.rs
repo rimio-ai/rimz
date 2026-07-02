@@ -732,11 +732,11 @@ fn fuse_mid_range_best_effort_drop_holds_most_drained() {
 
 // ── shortest_window_running: the window-priming ping guard ───────────────────
 
-use crate::agents::shortest_window_running;
+use crate::agents::{longest_window_reset_at, longest_window_running, shortest_window_running};
 
 /// Seed `claude`'s windows into a fresh shared cache and report the ping guard's
 /// verdict for `now`.
-fn running_verdict(windows: Vec<RateLimitWindow>, now: Timestamp) -> Option<bool> {
+fn runtime_with_windows(windows: Vec<RateLimitWindow>) -> (tempfile::TempDir, RuntimePaths) {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
@@ -749,7 +749,17 @@ fn running_verdict(windows: Vec<RateLimitWindow>, now: Timestamp) -> Option<bool
             pending: BTreeMap::new(),
         },
     );
+    (dir, runtime)
+}
+
+fn running_verdict(windows: Vec<RateLimitWindow>, now: Timestamp) -> Option<bool> {
+    let (_dir, runtime) = runtime_with_windows(windows);
     shortest_window_running(&runtime, "claude", now)
+}
+
+fn longest_verdict(windows: Vec<RateLimitWindow>, now: Timestamp) -> Option<bool> {
+    let (_dir, runtime) = runtime_with_windows(windows);
+    longest_window_running(&runtime, "claude", now)
 }
 
 #[test]
@@ -813,5 +823,89 @@ fn ping_guard_is_unknown_without_a_usable_reading() {
         running_verdict(vec![unknown], now),
         None,
         "an unknown bar yields no verdict"
+    );
+}
+
+#[test]
+fn longest_ping_guard_uses_the_longest_window() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let five_hour_full = now
+        .checked_add(SignedDuration::from_secs(300 * 60))
+        .unwrap();
+    let seven_day_full = now
+        .checked_add(SignedDuration::from_secs(7 * 24 * 60 * 60))
+        .unwrap();
+    let mid = now.checked_add(SignedDuration::from_secs(3600)).unwrap();
+    let passed = Timestamp::from_second(1_000_000_000).unwrap();
+
+    assert_eq!(
+        longest_verdict(
+            vec![
+                rl_window_mins(90, Some(passed), 300),
+                rl_window_mins(50, Some(mid), 7 * 24 * 60),
+            ],
+            now,
+        ),
+        Some(true),
+        "a running longest window skips even when the short window expired"
+    );
+    assert_eq!(
+        longest_verdict(
+            vec![
+                rl_window_mins(50, Some(five_hour_full), 300),
+                rl_window_mins(1, Some(seven_day_full), 7 * 24 * 60),
+            ],
+            now,
+        ),
+        Some(false),
+        "a not-started longest window primes even when the short window runs"
+    );
+
+    let unknown = RateLimitWindow {
+        used_percentage: None,
+        resets_at: Some(mid),
+        duration_mins: Some(7 * 24 * 60),
+        ..Default::default()
+    };
+    assert_eq!(
+        longest_verdict(vec![unknown], now),
+        None,
+        "an unknown longest bar yields no verdict"
+    );
+}
+
+#[test]
+fn longest_window_reset_at_reads_the_raw_longest_stamp() {
+    let passed = Timestamp::from_second(1_000_000_000).unwrap();
+    let future = Timestamp::from_second(4_000_000_000).unwrap();
+    let (_dir, runtime) = runtime_with_windows(vec![
+        rl_window_mins(40, Some(future), 300),
+        rl_window_mins(80, Some(passed), 7 * 24 * 60),
+    ]);
+
+    assert_eq!(
+        longest_window_reset_at(&runtime, "claude"),
+        Some(passed),
+        "the reset occurrence uses the raw cache stamp, not projection"
+    );
+
+    let (_dir, runtime) = runtime_with_windows(vec![
+        rl_window_mins(40, Some(future), 300),
+        rl_window_mins(80, None, 7 * 24 * 60),
+    ]);
+    assert_eq!(
+        longest_window_reset_at(&runtime, "claude"),
+        None,
+        "an undated longest window has no reset occurrence"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    assert_eq!(
+        longest_window_reset_at(&runtime, "claude"),
+        None,
+        "a cold cache has no reset occurrence"
     );
 }

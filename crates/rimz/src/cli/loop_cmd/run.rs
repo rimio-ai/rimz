@@ -170,15 +170,22 @@ fn execute_task(
     // The ping exists only to *start* a sliding budget window, so a token spent on
     // one already counting down buys nothing — skip it. Best-effort: an unknown or
     // cold reading falls through to the ping.
-    if is_ping && window_already_running(entry, &resolved.kind)? {
-        writeln!(
-            ui::out(),
-            "loop `{name}`: {} budget window already active; skipping ping",
-            resolved.kind
-        )?;
-        let mut run = RunOutcome::new(LoopRunResult::SkippedWindow);
-        run.check = check_detail;
-        return Ok(run);
+    if is_ping {
+        let window_running = if entry.at_reset {
+            reset_window_already_running(entry, &resolved.kind)?
+        } else {
+            window_already_running(entry, &resolved.kind)?
+        };
+        if window_running {
+            writeln!(
+                ui::out(),
+                "loop `{name}`: {} budget window already active; skipping ping",
+                resolved.kind
+            )?;
+            let mut run = RunOutcome::new(LoopRunResult::SkippedWindow);
+            run.check = check_detail;
+            return Ok(run);
+        }
     }
     let prompt = match prompt_override {
         Some(prompt) => prompt,
