@@ -1,5 +1,6 @@
 //! `rimz doctor` — workspace health report: trust state, protocol versions,
-//! resolver freshness, socket-path budget, hook wiring, and the agent rollup.
+//! resolver freshness, socket-path budget, hook wiring, agent problems, and
+//! message-delivery failures.
 //!
 //! The report is collected once into a [`model::DoctorReport`], then either
 //! rendered as the human report ([`render`]) or serialized as JSON — to stdout
@@ -17,6 +18,7 @@ use crate::cli::render as ui;
 use rimz::workspace::WorkspaceResolver;
 
 mod agents;
+mod messages;
 mod model;
 mod protocol;
 mod render;
@@ -26,7 +28,7 @@ use model::DoctorReport;
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Widen the agent rollup to every observed session, not just the live ones.
+    /// Widen the agent section to every observed session, not just live problem rows.
     #[arg(long)]
     audit: bool,
     /// Emit machine-readable JSON instead of the human report.
@@ -55,17 +57,16 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
             },
         },
         mux: runtime::collect_mux(globals.mux, ws),
-        sidebar_renderer: "built into rimz",
         terminal: runtime::collect_terminal(),
         hooks: agents::collect_hooks(),
         loop_tasks: collect_loop(),
         remote_control: runtime::collect_remote_control(),
-        rooms: runtime::collect_rooms(ws),
         storage: runtime::collect_storage(),
         protocols: ws.map(protocol::collect_protocols),
         trust: ws.map(agents::collect_trust),
         resolver_heartbeats: ws.map(agents::collect_unauthorized_resolvers),
         agents: ws.map(|ws| agents::collect_agent_rollup(ws, audit)),
+        messages: ws.map(messages::collect_messages),
         diagnostics: ws.map(runtime::collect_diagnostics),
     }
 }

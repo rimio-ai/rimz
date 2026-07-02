@@ -76,7 +76,6 @@ use start_notice::report_start_notices;
 
 pub(crate) use attach_exec::{attach_action, exec_attach_command};
 pub(crate) use room_recovery::{print_reset_report, rebirth_room};
-pub(crate) use start_notice::live_session_names;
 /// Entry point used by `main.rs`.
 pub fn dispatch() -> Result<()> {
     reject_removed_top_level_tokens()?;

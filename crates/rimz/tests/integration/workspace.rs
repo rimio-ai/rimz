@@ -479,7 +479,7 @@ fn codex_hook_recovers_pin_from_sibling_process_when_env_pin_absent() {
 }
 
 #[test]
-fn doctor_reports_the_room_tree_with_root_classes() {
+fn doctor_reports_workspace_root_class_without_room_inventory() {
     let env = Env::new();
     let nested = env.project_root.join("inner");
     env.record(&env.project_root.clone());
@@ -493,24 +493,9 @@ fn doctor_reports_the_room_tree_with_root_classes() {
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("doctor --json emits valid json");
 
-    let rooms = &report["rooms"]["ready"];
-    assert_eq!(rooms["recorded"], 2, "doctor counts both rooms: {report}");
-    let entries = rooms["rooms"].as_array().expect("rooms array");
     assert!(
-        entries.iter().all(|room| room["root_class"] == "directory"),
-        "both bare dirs are directory rooms: {rooms}",
-    );
-    let roots: Vec<&str> = entries
-        .iter()
-        .map(|room| room["project_root"].as_str().expect("project_root"))
-        .collect();
-    assert!(
-        roots.contains(&env.project_root.display().to_string().as_str()),
-        "the harness root is a recorded room: {roots:?}",
-    );
-    assert!(
-        roots.contains(&nested.display().to_string().as_str()),
-        "the nested dir is a recorded room: {roots:?}",
+        report.get("rooms").is_none(),
+        "doctor omits room inventory: {report}"
     );
     assert_eq!(
         report["workspace"]["ready"]["root_class"], "directory",

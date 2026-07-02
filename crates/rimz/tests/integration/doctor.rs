@@ -5,7 +5,8 @@
 use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::ids::{MuxName, ResolverId, SidebarInstanceId};
-use rimz::schema::event::EventEnvelope;
+use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
+use rimz::schema::event::{EventEnvelope, MessageEventMethod};
 use rimz::schema::heartbeat::{ResolverHeartbeat, SidebarHeartbeat};
 use serde_json::Value;
 
@@ -105,34 +106,42 @@ fn doctor_json_folds_one_row_per_agent() {
 
     let output = env
         .rimz()
-        .args(["doctor", "--audit", "--json"])
+        .args(["doctor", "--json"])
         .output()
         .expect("spawn doctor");
     let report = doctor_json(&output);
 
     let agents = &report["agents"];
     assert_eq!(agents["state"], "observed");
-    let groups = agents["groups"].as_array().expect("groups array");
-
-    let claude = groups
-        .iter()
-        .find(|group| group["kind"] == "claude")
-        .expect("claude group");
-    let claude_rows = claude["agents"].as_array().expect("claude rows");
+    assert_eq!(agents["counts"]["running"], 1);
+    assert_eq!(agents["counts"]["failed"], 1);
+    let rows = agents["rows"].as_array().expect("rows array");
     assert_eq!(
-        claude_rows.len(),
+        rows.len(),
         1,
-        "the rollup folds both claude events into one row: {claude_rows:?}"
+        "default doctor shows only problem rows: {rows:?}"
     );
-    assert_eq!(claude_rows[0]["agent_id"], "claude-session-abc");
-    assert_eq!(claude_rows[0]["branch"], "main");
-    assert_eq!(claude_rows[0]["status"], "failed");
+    assert_eq!(rows[0]["kind"], "claude");
+    assert_eq!(rows[0]["agent_id"], "claude-session-abc");
+    assert_eq!(rows[0]["branch"], "main");
+    assert_eq!(rows[0]["status"], "failed");
 
-    let codex = groups
+    let audit = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--audit", "--json"])
+            .output()
+            .expect("spawn audit doctor"),
+    );
+    let rows = audit["agents"]["rows"].as_array().expect("audit rows");
+    assert_eq!(
+        rows.len(),
+        2,
+        "audit widens to every observed session: {rows:?}"
+    );
+    let codex_row = rows
         .iter()
-        .find(|group| group["kind"] == "codex")
-        .expect("codex group");
-    let codex_row = &codex["agents"].as_array().expect("codex rows")[0];
+        .find(|row| row["kind"] == "codex")
+        .expect("codex row");
     assert_eq!(codex_row["agent_id"], "codex-session-xyz");
     assert_eq!(codex_row["branch"], "feature-migration");
     assert_eq!(codex_row["status"], "running");
@@ -222,9 +231,24 @@ fn doctor_human_report_renders_titled_sections() {
     );
     let stdout = String::from_utf8(output.stdout).expect("utf8");
 
-    for title in ["WORKSPACE", "HOOKS", "STORAGE", "PROTOCOLS"] {
+    for title in [
+        "WORKSPACE",
+        "HOOKS",
+        "STORAGE",
+        "PROTOCOLS",
+        "AGENTS",
+        "MESSAGES",
+    ] {
         assert!(stdout.contains(title), "missing section {title}:\n{stdout}");
     }
+    assert!(
+        !stdout.contains("ROOMS"),
+        "rooms inventory moved out:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("renderer:"),
+        "static sidebar renderer line is gone:\n{stdout}"
+    );
     assert!(
         !stdout.contains("AGENT COVERAGE") && !stdout.contains("HOOKS MATRIX"),
         "static adapter matrices moved to `rimz coverage`:\n{stdout}"
@@ -232,6 +256,121 @@ fn doctor_human_report_renders_titled_sections() {
     assert!(
         stdout.contains("rimz hooks install claude"),
         "the hooks table carries the wiring command:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("problems")
+            || stdout.contains("warnings")
+            || stdout.contains("no problems found"),
+        "the report ends with a verdict line:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_json_surfaces_stuck_and_failed_messages() {
+    let env = Env::new();
+    inject_lifecycle(
+        &env,
+        "codex",
+        "sess-doctor-message",
+        LifecycleSignal::Registered,
+        Some("messages"),
+    );
+    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-doctor-message")
+        .expect("message agent");
+
+    let mut stuck = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "stuck".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    stuck.agent_name = Some("coder".to_owned());
+    stuck.attempts = 3;
+    stuck.last_error = Some("pane rejected".to_owned());
+    let stuck_id = stuck.message_id.to_string();
+    env.ledger()
+        .queue_message(&stuck, "test-session")
+        .expect("queue stuck message");
+
+    let mut failed = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "failed".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    failed.status = MessageStatus::Errored;
+    let failed_id = failed.message_id.to_string();
+    env.ledger()
+        .append_event(&EventEnvelope::message_event(
+            &failed,
+            "test-session",
+            MessageEventMethod::Errored,
+            Some("pane rejected input"),
+        ))
+        .expect("append failed message event");
+
+    let mut delivered = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "delivered".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    delivered.status = MessageStatus::Delivered;
+    let delivered_id = delivered.message_id.to_string();
+    env.ledger()
+        .append_event(&EventEnvelope::message_event(
+            &delivered,
+            "test-session",
+            MessageEventMethod::Delivered,
+            None,
+        ))
+        .expect("append delivered message event");
+
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn"),
+    );
+    let messages = &report["messages"]["ready"];
+    assert_eq!(messages["open"]["queued"], 1);
+    let stuck_rows = messages["stuck"].as_array().expect("stuck rows");
+    assert_eq!(stuck_rows.len(), 1, "{stuck_rows:?}");
+    assert_eq!(stuck_rows[0]["message_id"], stuck_id);
+    assert_eq!(stuck_rows[0]["status"], "queued");
+    assert_eq!(stuck_rows[0]["target"], "@coder");
+    assert!(
+        stuck_rows[0]["problem"]
+            .as_str()
+            .expect("problem")
+            .contains("attempts 3"),
+        "{stuck_rows:?}"
+    );
+    assert!(
+        stuck_rows[0]["problem"]
+            .as_str()
+            .expect("problem")
+            .contains("pane rejected"),
+        "{stuck_rows:?}"
+    );
+
+    let failures = messages["recent_failures"]
+        .as_array()
+        .expect("failure rows");
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(failures[0]["message_id"], failed_id);
+    assert_eq!(failures[0]["status"], "errored");
+    assert_eq!(failures[0]["problem"], "pane rejected input");
+    assert!(
+        !failures.iter().any(|row| row["message_id"] == delivered_id),
+        "delivered terminal events stay out of doctor health rows: {failures:?}"
     );
 }
 

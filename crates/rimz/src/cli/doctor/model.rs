@@ -31,12 +31,10 @@ pub(super) struct DoctorReport {
     pub(super) host: Host,
     pub(super) workspace: Probe<Workspace>,
     pub(super) mux: Probe<Mux>,
-    pub(super) sidebar_renderer: &'static str,
     pub(super) terminal: Terminal,
     pub(super) hooks: Vec<HookRow>,
     pub(super) loop_tasks: LoopTasks,
     pub(super) remote_control: RemoteControl,
-    pub(super) rooms: Probe<Rooms>,
     pub(super) storage: Storage,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) protocols: Option<Protocols>,
@@ -46,6 +44,8 @@ pub(super) struct DoctorReport {
     pub(super) resolver_heartbeats: Option<Probe<Vec<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) agents: Option<AgentRollup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) messages: Option<Probe<Messages>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) diagnostics: Option<Diagnostics>,
 }
@@ -251,29 +251,6 @@ pub(super) struct RemoteAgent {
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct Rooms {
-    pub(super) recorded: usize,
-    pub(super) live: usize,
-    pub(super) rooms: Vec<Room>,
-    pub(super) overlaps: Vec<RoomOverlap>,
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct Room {
-    pub(super) session_name: String,
-    pub(super) project_root: String,
-    pub(super) root_class: RootClass,
-    pub(super) live: bool,
-    pub(super) is_current: bool,
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct RoomOverlap {
-    pub(super) a: String,
-    pub(super) b: String,
-}
-
-#[derive(Debug, Serialize)]
 pub(super) struct Storage {
     pub(super) total_bytes: u64,
     pub(super) roots: Vec<StorageRootView>,
@@ -305,24 +282,80 @@ pub(super) struct Trust {
 #[derive(Debug, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub(super) enum AgentRollup {
-    Unavailable { error: String },
+    Unavailable {
+        error: String,
+    },
     None,
-    Observed { groups: Vec<AgentKindGroup> },
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct AgentKindGroup {
-    pub(super) kind: String,
-    pub(super) agents: Vec<AgentRow>,
+    Observed {
+        counts: AgentCounts,
+        rows: Vec<AgentRow>,
+    },
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct AgentRow {
+    pub(super) kind: String,
     pub(super) agent_id: String,
     pub(super) branch: Option<String>,
     pub(super) status: AgentStatus,
     pub(super) phase: rimz::agents::TurnPhase,
     pub(super) last_seen: Timestamp,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub(super) struct AgentCounts {
+    pub(super) running: usize,
+    pub(super) waiting: usize,
+    pub(super) idle: usize,
+    pub(super) success: usize,
+    pub(super) failed: usize,
+    pub(super) paused: usize,
+}
+
+impl AgentCounts {
+    pub(super) fn add(&mut self, status: AgentStatus) {
+        match status {
+            AgentStatus::Running => self.running += 1,
+            AgentStatus::Waiting => self.waiting += 1,
+            AgentStatus::Idle => self.idle += 1,
+            AgentStatus::Success => self.success += 1,
+            AgentStatus::Failed => self.failed += 1,
+            AgentStatus::Paused => self.paused += 1,
+        }
+    }
+
+    pub(super) fn total(&self) -> usize {
+        self.running + self.waiting + self.idle + self.success + self.failed + self.paused
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct Messages {
+    pub(super) open: OpenCounts,
+    pub(super) stuck: Vec<MessageProblemRow>,
+    pub(super) recent_failures: Vec<MessageProblemRow>,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub(super) struct OpenCounts {
+    pub(super) queued: usize,
+    pub(super) claimed: usize,
+    pub(super) sent: usize,
+}
+
+impl OpenCounts {
+    pub(super) fn total(&self) -> usize {
+        self.queued + self.claimed + self.sent
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct MessageProblemRow {
+    pub(super) message_id: String,
+    pub(super) status: String,
+    pub(super) target: String,
+    pub(super) at: Timestamp,
+    pub(super) problem: String,
 }
 
 #[derive(Debug, Serialize)]

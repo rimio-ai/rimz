@@ -441,61 +441,6 @@ pub(super) fn collect_socket_headroom(
     })
 }
 
-/// The machine's room tree: every recorded workspace with its root, class, and
-/// liveness. Live rooms whose roots nest earn an overlap entry — legal by design
-/// (an agent belongs to the room its pane lives in), surfaced so it stays seen.
-pub(super) fn collect_rooms(
-    current: Option<&rimz::ResolvedWorkspace>,
-) -> model::Probe<model::Rooms> {
-    let known = match rimz::workspace::known_workspaces() {
-        Ok(known) => known,
-        Err(err) => {
-            return model::Probe::Unavailable {
-                error: err.to_string(),
-            };
-        }
-    };
-    let live = super::super::live_session_names();
-    let live_count = known
-        .iter()
-        .filter(|ws| live.contains(&ws.session_name))
-        .count();
-    let mut sorted: Vec<_> = known.iter().collect();
-    sorted.sort_by(|a, b| a.project_root.cmp(&b.project_root));
-    let rooms = sorted
-        .iter()
-        .map(|ws| model::Room {
-            session_name: ws.session_name.clone(),
-            project_root: ws.project_root.display().to_string(),
-            root_class: ws.root_class,
-            live: live.contains(&ws.session_name),
-            is_current: current.is_some_and(|cur| cur.workspace_id == ws.workspace_id),
-        })
-        .collect();
-    let mut overlaps = Vec::new();
-    for (i, a) in sorted.iter().enumerate() {
-        for b in sorted.iter().skip(i + 1) {
-            if !(live.contains(&a.session_name) && live.contains(&b.session_name)) {
-                continue;
-            }
-            if rimz::workspace::root_contains(&a.project_root, &b.project_root)
-                || rimz::workspace::root_contains(&b.project_root, &a.project_root)
-            {
-                overlaps.push(model::RoomOverlap {
-                    a: a.session_name.clone(),
-                    b: b.session_name.clone(),
-                });
-            }
-        }
-    }
-    model::Probe::Ready(model::Rooms {
-        recorded: known.len(),
-        live: live_count,
-        rooms,
-        overlaps,
-    })
-}
-
 pub(super) fn collect_diagnostics(ws: &rimz::ResolvedWorkspace) -> model::Diagnostics {
     const RECENT_DIAG_ROWS: usize = 12;
     let Some((path, records)) = rimz::diag::recent_records(ws.workspace_id.clone(), usize::MAX)

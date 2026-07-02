@@ -1,15 +1,17 @@
 use std::fs;
 
 use rimz::RuntimePaths;
+use rimz::agents::AgentStatus;
 use rimz::ids::ResolverId;
 use rimz::resolver::Allowlist;
 use rimz::trust::{self};
 
 use super::super::open_ledger;
-use super::model::{AgentKindGroup, AgentRollup, AgentRow, HookRow, HookStatus, Probe, Trust};
+use super::model::{AgentCounts, AgentRollup, AgentRow, HookRow, HookStatus, Probe, Trust};
 
-/// Walk the snapshot's agent rollup into one row per `(kind, agent_id)` observed
-/// by `agent.lifecycle` events, grouped by kind.
+/// Walk the snapshot's agent rollup into health counts and problem rows. The
+/// default scope is live runtime state; audit widens to durable history and
+/// emits every observed row.
 pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) -> AgentRollup {
     let ledger = match open_ledger(ws) {
         Ok(ledger) => ledger,
@@ -35,31 +37,30 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
     if projection.agents.is_empty() {
         return AgentRollup::None;
     }
-    let mut by_kind: std::collections::BTreeMap<&str, Vec<&rimz::agents::AgentState>> =
-        std::collections::BTreeMap::new();
+    let mut counts = AgentCounts::default();
     for agent in &projection.agents {
-        by_kind.entry(agent.kind.as_str()).or_default().push(agent);
+        counts.add(agent.status);
     }
-    let groups = by_kind
+    let mut agents: Vec<_> = projection.agents.iter().collect();
+    agents.sort_by(|left, right| {
+        left.kind
+            .as_str()
+            .cmp(right.kind.as_str())
+            .then_with(|| left.agent_id.as_str().cmp(right.agent_id.as_str()))
+    });
+    let rows = agents
         .into_iter()
-        .map(|(kind, mut agents)| {
-            agents.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
-            AgentKindGroup {
-                kind: kind.to_owned(),
-                agents: agents
-                    .into_iter()
-                    .map(|agent| AgentRow {
-                        agent_id: agent.agent_id.as_str().to_owned(),
-                        branch: agent.worktree_branch.clone(),
-                        status: agent.status,
-                        phase: agent.phase,
-                        last_seen: agent.last_seen,
-                    })
-                    .collect(),
-            }
+        .filter(|agent| audit || matches!(agent.status, AgentStatus::Failed | AgentStatus::Paused))
+        .map(|agent| AgentRow {
+            kind: agent.kind.as_str().to_owned(),
+            agent_id: agent.agent_id.as_str().to_owned(),
+            branch: agent.worktree_branch.clone(),
+            status: agent.status,
+            phase: agent.phase,
+            last_seen: agent.last_seen,
         })
         .collect();
-    AgentRollup::Observed { groups }
+    AgentRollup::Observed { counts, rows }
 }
 
 /// Each adapter's Rimz-hook wiring state. A run in a Rimz room registers nothing
