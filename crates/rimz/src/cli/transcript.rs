@@ -444,7 +444,20 @@ fn parse_transcript_target(raw: &str) -> Result<(String, Option<String>)> {
     if matches!(raw.split_once('#'), Some((_, ""))) {
         bail!("channel suffix in target `{raw}` must name a channel");
     }
-    rimz::harness::target::parse_selector(raw).map_err(Into::into)
+    match rimz::harness::target::parse_selector(raw) {
+        Ok(parsed) => Ok(parsed),
+        Err(rimz::TargetErr::NoMatch { .. } | rimz::TargetErr::InvalidPaneId(_)) => {
+            Ok(split_transcript_target(raw))
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn split_transcript_target(raw: &str) -> (String, Option<String>) {
+    raw.split_once('#').map_or_else(
+        || (raw.to_owned(), None),
+        |(selector, channel)| (selector.to_owned(), Some(channel.to_owned())),
+    )
 }
 
 fn reconcile_transcript_channel(

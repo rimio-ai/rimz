@@ -412,6 +412,16 @@ fn derived_set_keys_keep_legacy_surface() {
         err.starts_with("config key `notifications.handler` is an array of tables; edit "),
         "unexpected error: {err}",
     );
+    let parsed = parse_key("theme.display.context_meter.green.percent").expect("key");
+    let err = validate_set_key(&parsed)
+        .expect_err("context meter sub-field should stay rejected")
+        .to_string();
+    assert_eq!(
+        err,
+        "unknown config key `theme.display.context_meter.green.percent`"
+    );
+    assert!(exact_set_keys().contains("theme.display.context_meter.green"));
+    assert!(!exact_set_keys().contains("theme.display.context_meter.green.percent"));
 }
 
 #[test]

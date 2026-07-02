@@ -831,6 +831,10 @@ fn exact_set_keys() -> &'static BTreeSet<String> {
 }
 
 fn collect_leaf_paths(prefix: &str, value: &toml::Value, out: &mut BTreeSet<String>) {
+    if is_atomic_schema_key(prefix) {
+        out.insert(prefix.to_owned());
+        return;
+    }
     match value {
         toml::Value::Table(table) => {
             for (key, value) in table {
@@ -846,6 +850,13 @@ fn collect_leaf_paths(prefix: &str, value: &toml::Value, out: &mut BTreeSet<Stri
             out.insert(prefix.to_owned());
         }
     }
+}
+
+fn is_atomic_schema_key(prefix: &str) -> bool {
+    let Some(band) = prefix.strip_prefix("theme.display.context_meter.") else {
+        return false;
+    };
+    !band.contains('.') && CONTEXT_METER_BANDS.contains(&band)
 }
 
 fn schema_config() -> MachineConfig {

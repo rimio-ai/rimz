@@ -173,3 +173,18 @@ fn channel_and_all_targets_keep_channel_scope() {
     assert_eq!(all.channel_filter.as_deref(), Some("docs"));
     assert!(all.focus_keys.is_none());
 }
+
+#[test]
+fn degenerate_agent_targets_use_transcript_no_match_error() {
+    let identities = HashMap::new();
+
+    for raw in ["@", "foo:bar"] {
+        let err = resolve_scope(Some(raw), None, Some("main"), &identities, &BTreeSet::new())
+            .expect_err("degenerate target should not parse as resolver target")
+            .to_string();
+        assert_eq!(
+            err,
+            format!("no agent matches target `{raw}` in the transcript log")
+        );
+    }
+}
