@@ -90,9 +90,9 @@ fn resume_argv(kind: &str, id: &str, name: &str) -> Vec<String> {
         kind.to_owned(),
         "--resume".to_owned(),
         id.to_owned(),
-        "--close-pane-on-exit".to_owned(),
         "--agent-name".to_owned(),
         name.to_owned(),
+        "--close-pane-on-exit".to_owned(),
     ]
 }
 
@@ -163,7 +163,6 @@ fn resume_replays_role_and_team() {
                 "claude",
                 "--resume",
                 "sess-claude",
-                "--close-pane-on-exit",
                 "--agent-name",
                 "warm-drift",
                 "--agent-profile",
@@ -172,6 +171,7 @@ fn resume_replays_role_and_team() {
                 "planner",
                 "--agent-team",
                 "pcr",
+                "--close-pane-on-exit",
             ]
             .into_iter()
             .map(String::from)
