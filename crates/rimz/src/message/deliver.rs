@@ -305,4 +305,15 @@ mod tests {
         assert!(is_mux_timeout(&err));
         assert!(!is_mux_timeout(&std::io::Error::other("ordinary failure")));
     }
+
+    #[test]
+    fn mux_timeout_detection_sees_send_error_mux_source() {
+        let err = send::SendErr::from(MuxErr::Timeout {
+            program: "tmux".to_owned(),
+            args: "send-keys %1".to_owned(),
+            seconds: 30,
+        });
+
+        assert!(is_mux_timeout(&err));
+    }
 }

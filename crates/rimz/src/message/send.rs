@@ -11,7 +11,7 @@ use crate::ledger::event_log;
 use crate::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
 };
-use crate::mux::NamedKey;
+use crate::mux::{NamedKey, paste_into_pane, press_pane_key, type_into_pane};
 use crate::schema::event::EventKind;
 use crate::workspace::ResolvedWorkspace;
 use crate::{Ledger, PaneAgent, SidebarSnapshot};
@@ -24,7 +24,7 @@ pub enum SendErr {
     Ledger(#[from] crate::ledger::LedgerErr),
     #[error(transparent)]
     EventLog(#[from] crate::ledger::event_log::EventLogErr),
-    #[error(transparent)]
+    #[error("{0}")]
     Mux(#[from] crate::mux::MuxErr),
     #[error("io error on {path}: {source}")]
     Io {
@@ -210,10 +210,9 @@ pub fn send_to_live_pane(
         });
     }
     let pane_id = &target.pane_id;
-    let backend = crate::mux::backend_for(pane_id.mux());
     send.pacer.tick();
     match message.body {
-        MessageBody::Command => backend.send_keys(pane_id, &message.text)?,
+        MessageBody::Command => type_into_pane(pane_id, &message.text)?,
         MessageBody::Prompt => {
             let peers: Vec<&AgentState> = snapshot.root_agents().collect();
             let payload = match crate::target::sender_prefix(
@@ -224,14 +223,14 @@ pub fn send_to_live_pane(
                 Some(prefix) => format!("{prefix}{}", message.text),
                 None => message.text.clone(),
             };
-            backend.paste_text(pane_id, &payload)?;
+            paste_into_pane(pane_id, &payload)?;
         }
     }
     // Record the send once the text lands and before the submit keystroke, so a
     // submitted message is always preceded by its durable record and audit event.
     ledger.record_sent_message(message, &workspace.session_name)?;
     if message.enter {
-        backend.send_key(pane_id, NamedKey::Enter)?;
+        press_pane_key(pane_id, NamedKey::Enter)?;
     }
     Ok(Outcome::Sent {
         label,

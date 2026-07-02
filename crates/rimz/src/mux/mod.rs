@@ -635,6 +635,21 @@ pub fn backend_for(mux: MuxName) -> Box<dyn MuxBackend> {
     }
 }
 
+/// Type raw text into one pane using its owning backend.
+pub fn type_into_pane(pane: &PaneId, text: &str) -> Result<()> {
+    backend_for(pane.mux()).send_keys(pane, text)
+}
+
+/// Paste bracketed text into one pane using its owning backend.
+pub fn paste_into_pane(pane: &PaneId, text: &str) -> Result<()> {
+    backend_for(pane.mux()).paste_text(pane, text)
+}
+
+/// Press one named key in a pane using its owning backend.
+pub fn press_pane_key(pane: &PaneId, key: NamedKey) -> Result<()> {
+    backend_for(pane.mux()).send_key(pane, key)
+}
+
 /// Run `spec` once for its version string and memoize it in `cache`.
 /// Backend version probes are trivial and want raw stdout even on a nonzero
 /// status, so they use `output()` directly rather than the bounded mux runner.
