@@ -139,12 +139,14 @@ fn is_recent(last_activity: Option<SystemTime>, now: SystemTime) -> bool {
     }
 }
 
-/// Query a backend's `list_sessions`, treating "not installed" and any other
-/// transient failure as an empty session list. The list view is best-effort
-/// reporting; an offline mux must not fail the command.
+/// Query a backend's `list_sessions` for the best-effort list view. A mux that
+/// isn't installed contributes an empty list silently; any other failure on an
+/// installed mux is warned and treated as empty. An offline mux never fails the
+/// command.
 fn backend_sessions(mux: MuxName) -> Vec<String> {
     match rimz::mux::backend_for(mux).list_sessions() {
         Ok(sessions) => sessions,
+        Err(rimz::mux::MuxErr::NotInstalled { .. }) => Vec::new(),
         Err(err) => {
             warn!(mux = %mux, error = %err, "list_sessions failed; treating as empty");
             Vec::new()
