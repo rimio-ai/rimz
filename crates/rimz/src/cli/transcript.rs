@@ -381,19 +381,12 @@ fn resolve_scope(
             if channel.is_empty() {
                 bail!("channel target must be `#<name>`");
             }
-            if let Some(flag) = worktree
-                && flag != channel
-            {
-                bail!("target `{raw}` names channel `#{channel}` but --worktree names `{flag}`");
-            }
+            reconcile_transcript_channel(raw, Some(channel), worktree, None)?;
             Ok(single_channel_scope(channel.to_owned()))
         }
         Some(raw) if raw == "@all" || raw.starts_with("@all#") => {
-            let inline = raw.split_once('#').map(|(_, channel)| channel);
-            if inline == Some("") {
-                bail!("channel suffix in target `{raw}` must name a channel");
-            }
-            let channel = reconcile_channel(raw, inline, worktree, None)?;
+            let (_, inline) = parse_transcript_target(raw)?;
+            let channel = reconcile_transcript_channel(raw, inline.as_deref(), worktree, None)?;
             let include_channel = channel.is_none();
             Ok(Scope {
                 channel: channel.clone(),
@@ -404,13 +397,14 @@ fn resolve_scope(
             })
         }
         Some(raw) => {
-            let (selector, inline) = split_agent_target(raw)?;
-            let exact_session = exact_session_selector(selector, identities);
-            let requested_channel = reconcile_channel(raw, inline, worktree, current)?;
+            let (selector, inline) = parse_transcript_target(raw)?;
+            let exact_session = exact_session_selector(&selector, identities);
+            let requested_channel =
+                reconcile_transcript_channel(raw, inline.as_deref(), worktree, current)?;
             let resolution_channel = (!exact_session)
                 .then_some(requested_channel.as_deref())
                 .flatten();
-            let matches = matching_identities(selector, resolution_channel, identities);
+            let matches = matching_identities(&selector, resolution_channel, identities);
             let Some((key, identity)) = select_identity_match(&matches, live_root_keys) else {
                 bail!("no agent matches target `{raw}` in the transcript log");
             };
@@ -446,29 +440,27 @@ fn single_channel_scope(channel: String) -> Scope {
     }
 }
 
-fn split_agent_target(raw: &str) -> Result<(&str, Option<&str>)> {
-    match raw.split_once('#') {
-        Some((selector, channel)) if !selector.is_empty() && !channel.is_empty() => {
-            Ok((selector, Some(channel)))
-        }
-        Some((_, "")) => bail!("channel suffix in target `{raw}` must name a channel"),
-        _ => Ok((raw, None)),
+fn parse_transcript_target(raw: &str) -> Result<(String, Option<String>)> {
+    if matches!(raw.split_once('#'), Some((_, ""))) {
+        bail!("channel suffix in target `{raw}` must name a channel");
     }
+    rimz::harness::target::parse_selector(raw).map_err(Into::into)
 }
 
-fn reconcile_channel(
+fn reconcile_transcript_channel(
     raw: &str,
     inline: Option<&str>,
     flag: Option<&str>,
     fallback: Option<&str>,
 ) -> Result<Option<String>> {
-    match (inline, flag) {
-        (Some(channel), Some(flag)) if channel != flag => {
-            bail!("target `{raw}` names channel `#{channel}` but --worktree names `{flag}`")
-        }
-        (Some(channel), _) => Ok(Some(channel.to_owned())),
-        (None, Some(flag)) => Ok(Some(flag.to_owned())),
-        (None, None) => Ok(fallback.map(ToOwned::to_owned)),
+    match rimz::harness::target::reconcile_channel(raw, inline, flag, fallback) {
+        Ok(channel) => Ok(channel),
+        Err(rimz::TargetErr::ChannelMismatch {
+            target,
+            channel,
+            flag,
+        }) => bail!("target `{target}` names channel `#{channel}` but --worktree names `{flag}`"),
+        Err(err) => Err(err.into()),
     }
 }
 

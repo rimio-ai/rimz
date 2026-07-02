@@ -366,6 +366,28 @@ pub fn create_mention(
     }
 }
 
+/// Parse the target grammar into the bare selector and any inline `#channel`.
+/// Callers that keep their own match policy use this without opting into the
+/// resolver's candidate selection.
+pub fn parse_selector(raw: &str) -> Result<(String, Option<String>), TargetErr> {
+    match parse_target(raw)? {
+        Target::Pane(_) => Ok((raw.to_owned(), None)),
+        Target::Mention { selector, channel } => Ok((selector_text(&selector), channel)),
+    }
+}
+
+/// Reconcile an inline target channel with the caller's channel flag and
+/// fallback channel. This exposes the resolver's channel grammar without its
+/// candidate selection tiers.
+pub fn reconcile_channel(
+    raw: &str,
+    inline: Option<&str>,
+    flag: Option<&str>,
+    current: Option<&str>,
+) -> Result<Option<String>, TargetErr> {
+    effective_channel(raw, inline, flag, current)
+}
+
 fn parse_target(raw: &str) -> Result<Target, TargetErr> {
     if raw.contains(':') {
         let pane = PaneId::parse(raw).map_err(|err| TargetErr::InvalidPaneId(err.to_string()))?;
@@ -388,6 +410,14 @@ fn parse_target(raw: &str) -> Result<Target, TargetErr> {
         selector: classify_selector(selector),
         channel,
     })
+}
+
+fn selector_text(selector: &AgentSelector) -> String {
+    match selector {
+        AgentSelector::All => "all".to_owned(),
+        AgentSelector::Kind(kind) | AgentSelector::NameOrSession(kind) => kind.clone(),
+        AgentSelector::KindOrdinal(kind, ordinal) => format!("{kind}-{ordinal}"),
+    }
 }
 
 fn classify_selector(selector: &str) -> AgentSelector {
