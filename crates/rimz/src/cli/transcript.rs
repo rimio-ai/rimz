@@ -8,6 +8,7 @@ use clap::Args;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use serde::Serialize;
+use unicode_width::UnicodeWidthStr;
 
 use super::{GlobalFlags, current_channel};
 use crate::cli::render;
@@ -525,6 +526,8 @@ const AGENT_TONES: [anstyle::Style; 3] = [
 ];
 const BODY_INDENT: &str = "  ";
 const GROUP_WINDOW_SECS: i64 = 5 * 60;
+const MAX_CARD_WIDTH: usize = 100;
+const MIN_CARD_CONTENT_WIDTH: usize = 24;
 
 #[derive(Default)]
 struct AgentTones {
@@ -766,6 +769,10 @@ fn write_body_lines(out: &mut impl Write, text: &str) -> Result<()> {
 }
 
 fn paint_mentions(line: &str) -> String {
+    paint_mentions_with(line, None)
+}
+
+fn paint_mentions_with(line: &str, base_style: Option<anstyle::Style>) -> String {
     let mut rendered = String::new();
     let mut index = 0;
     while index < line.len() {
@@ -799,18 +806,31 @@ fn paint_mentions(line: &str) -> String {
                 let style = if ch == '@' {
                     render::palette::COOL.bold()
                 } else {
-                    render::palette::ACCENT
+                    render::palette::ACCENT.bold()
                 };
+                push_painted(&mut rendered, base_style, &line[..index]);
                 rendered.push_str(&render::paint(style, &line[index..paint_end]));
-                rendered.push_str(&line[paint_end..token_end]);
-                index = token_end;
-                continue;
+                push_painted(&mut rendered, base_style, &line[paint_end..token_end]);
+                let rest = &line[token_end..];
+                rendered.push_str(&paint_mentions_with(rest, base_style));
+                return rendered;
             }
         }
-        rendered.push(ch);
         index += ch.len_utf8();
     }
+    push_painted(&mut rendered, base_style, line);
     rendered
+}
+
+fn push_painted(rendered: &mut String, style: Option<anstyle::Style>, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if let Some(style) = style {
+        rendered.push_str(&render::paint(style, text));
+    } else {
+        rendered.push_str(text);
+    }
 }
 
 fn mention_boundary(line: &str, index: usize) -> bool {
@@ -827,13 +847,287 @@ fn is_mention_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/' | '-')
 }
 
+#[derive(Clone)]
+struct StyledFragment {
+    text: String,
+    style: Option<anstyle::Style>,
+    mentions: bool,
+}
+
+impl StyledFragment {
+    fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            style: None,
+            mentions: false,
+        }
+    }
+
+    fn styled(text: impl Into<String>, style: anstyle::Style) -> Self {
+        Self {
+            text: text.into(),
+            style: Some(style),
+            mentions: false,
+        }
+    }
+
+    fn prose(text: impl Into<String>, style: Option<anstyle::Style>) -> Self {
+        Self {
+            text: text.into(),
+            style,
+            mentions: true,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct WrapToken {
+    text: String,
+    style: Option<anstyle::Style>,
+    mentions: bool,
+}
+
+fn card_content_width() -> usize {
+    let terminal = terminal_size::terminal_size()
+        .map(|(terminal_size::Width(width), _)| usize::from(width))
+        .unwrap_or(MAX_CARD_WIDTH)
+        .min(MAX_CARD_WIDTH);
+    let prefix_width = UnicodeWidthStr::width(format!("{BODY_INDENT}▌ ").as_str());
+    terminal
+        .saturating_sub(prefix_width)
+        .max(MIN_CARD_CONTENT_WIDTH)
+}
+
+fn write_wrapped_spine_fragments(
+    out: &mut impl Write,
+    answered: bool,
+    fragments: Vec<StyledFragment>,
+    hang_indent: &str,
+) -> Result<()> {
+    for line in wrap_fragments(fragments, card_content_width(), hang_indent) {
+        write_spine_fragments(out, answered, &line)?;
+    }
+    Ok(())
+}
+
+fn wrap_fragments(
+    fragments: Vec<StyledFragment>,
+    width: usize,
+    hang_indent: &str,
+) -> Vec<Vec<StyledFragment>> {
+    let tokens = fragment_tokens(fragments);
+    if tokens.is_empty() {
+        return vec![Vec::new()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current = Vec::new();
+    let mut current_width = 0;
+    let mut has_word = false;
+    let hang_width = UnicodeWidthStr::width(hang_indent);
+
+    for token in tokens {
+        let token_width = UnicodeWidthStr::width(token.text.as_str());
+        let separator_width = usize::from(has_word);
+        if has_word && current_width + separator_width + token_width > width {
+            lines.push(current);
+            current = Vec::new();
+            current_width = 0;
+            has_word = false;
+            if !hang_indent.is_empty() {
+                current.push(StyledFragment::plain(hang_indent));
+                current_width = hang_width;
+            }
+        }
+        if has_word {
+            current.push(StyledFragment::plain(" "));
+            current_width += 1;
+        }
+        current.push(StyledFragment {
+            text: token.text,
+            style: token.style,
+            mentions: token.mentions,
+        });
+        current_width += token_width;
+        has_word = true;
+    }
+    lines.push(current);
+    lines
+}
+
+fn fragment_tokens(fragments: Vec<StyledFragment>) -> Vec<WrapToken> {
+    fragments
+        .into_iter()
+        .flat_map(|fragment| {
+            fragment
+                .text
+                .split_whitespace()
+                .map(|word| WrapToken {
+                    text: word.to_owned(),
+                    style: fragment.style,
+                    mentions: fragment.mentions,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn write_spine_fragments(
+    out: &mut impl Write,
+    answered: bool,
+    fragments: &[StyledFragment],
+) -> Result<()> {
+    let style = if answered {
+        render::palette::FAINT
+    } else {
+        render::palette::WARN
+    };
+    write!(out, "{BODY_INDENT}{}", render::paint(style, "▌ "))?;
+    for fragment in fragments {
+        if fragment.mentions {
+            write!(
+                out,
+                "{}",
+                paint_mentions_with(&fragment.text, fragment.style)
+            )?;
+        } else if let Some(style) = fragment.style {
+            write!(out, "{}", render::paint(style, &fragment.text))?;
+        } else {
+            write!(out, "{}", fragment.text)?;
+        }
+    }
+    writeln!(out)?;
+    Ok(())
+}
+
+struct ParsedLegacyAsk {
+    lead_in: String,
+    questions: Vec<rimz::agents::AskQuestion>,
+}
+
+fn parse_legacy_flattened_ask(text: &str) -> Option<ParsedLegacyAsk> {
+    let lines = text.lines().collect::<Vec<_>>();
+    let mut end = lines.len();
+    while end > 0 && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 && !lines[start - 1].trim().is_empty() {
+        start -= 1;
+    }
+    if start == end {
+        return None;
+    }
+    let questions = lines[start..end]
+        .iter()
+        .map(|line| parse_legacy_question_line(line.trim()))
+        .collect::<Option<Vec<_>>>()?;
+    let mut lead = lines[..start].to_vec();
+    while lead.last().is_some_and(|line| line.trim().is_empty()) {
+        lead.pop();
+    }
+    Some(ParsedLegacyAsk {
+        lead_in: lead.join("\n"),
+        questions,
+    })
+}
+
+fn parse_legacy_question_line(line: &str) -> Option<rimz::agents::AskQuestion> {
+    let inner = line.strip_suffix(']')?;
+    let (question, options) = inner.rsplit_once(" [")?;
+    let question = non_empty(question)?.to_owned();
+    let options = options
+        .split(", ")
+        .map(str::trim)
+        .filter(|option| !option.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    (!options.is_empty()).then_some(rimz::agents::AskQuestion { question, options })
+}
+
+fn folded_answers_for_legacy<'a>(
+    answer: Option<&'a RenderEntry>,
+    questions: &[rimz::agents::AskQuestion],
+) -> Option<(Vec<rimz::agents::AskAnswer>, Option<&'a str>)> {
+    let Some(answer) = answer else {
+        return Some((Vec::new(), None));
+    };
+    if !answer.chat.answers.is_empty() {
+        return Some((answer.chat.answers.clone(), Some(answer.chat.from.as_str())));
+    }
+    let answers = parse_legacy_answer_text(&answer.chat.text, questions)?;
+    Some((answers, Some(answer.chat.from.as_str())))
+}
+
+fn parse_legacy_answer_text(
+    text: &str,
+    questions: &[rimz::agents::AskQuestion],
+) -> Option<Vec<rimz::agents::AskAnswer>> {
+    let lines = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.len() > questions.len() {
+        return None;
+    }
+    let mut answers = Vec::new();
+    for (line, question) in lines.into_iter().zip(questions) {
+        let (line, note) = strip_legacy_note(line);
+        let chosen = if question.options.iter().any(|option| option == &line) {
+            vec![line]
+        } else {
+            let parts = line
+                .split(", ")
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>();
+            if parts.len() > 1
+                && parts
+                    .iter()
+                    .all(|part| question.options.iter().any(|option| option == part))
+            {
+                parts.into_iter().map(ToOwned::to_owned).collect()
+            } else {
+                vec![line]
+            }
+        };
+        answers.push(rimz::agents::AskAnswer {
+            question: Some(question.question.clone()),
+            chosen,
+            note,
+        });
+    }
+    Some(answers)
+}
+
+fn strip_legacy_note(line: &str) -> (String, Option<String>) {
+    if let Some(inner) = line.strip_suffix(')')
+        && let Some((answer, note)) = inner.rsplit_once(" (note: ")
+        && let Some(answer) = non_empty(answer)
+        && let Some(note) = non_empty(note)
+    {
+        return (answer.to_owned(), Some(note.to_owned()));
+    }
+    (line.to_owned(), None)
+}
+
 fn write_ask_card(
     out: &mut impl Write,
     ask: &RenderEntry,
     answer: Option<&RenderEntry>,
 ) -> Result<()> {
     if ask.chat.questions.is_empty() {
-        write_legacy_ask_card(out, ask, answer)
+        if let Some(parsed) = parse_legacy_flattened_ask(&ask.chat.text)
+            && let Some((answers, source)) = folded_answers_for_legacy(answer, &parsed.questions)
+        {
+            if !parsed.lead_in.is_empty() {
+                write_body_lines(out, &parsed.lead_in)?;
+            }
+            write_structured_ask_card_with_answers(out, &parsed.questions, &answers, source)
+        } else {
+            write_legacy_text_card(out, ask, answer)
+        }
     } else {
         if !ask.chat.text.is_empty() {
             write_body_lines(out, &ask.chat.text)?;
@@ -848,7 +1142,16 @@ fn write_structured_ask_card(
     answer: Option<&RenderEntry>,
 ) -> Result<()> {
     let (answers, source) = folded_answers(answer);
-    let matched = match_question_answers(questions, &answers);
+    write_structured_ask_card_with_answers(out, questions, &answers, source)
+}
+
+fn write_structured_ask_card_with_answers(
+    out: &mut impl Write,
+    questions: &[rimz::agents::AskQuestion],
+    answers: &[rimz::agents::AskAnswer],
+    source: Option<&str>,
+) -> Result<()> {
+    let matched = match_question_answers(questions, answers);
     for (index, question) in questions.iter().enumerate() {
         if index > 0 {
             write_spine_blank(out, matched[index - 1].is_some())?;
@@ -920,7 +1223,15 @@ fn write_question_block(
         Some(answer) => write_option_answers(out, &question.options, answer, source),
         None => {
             for option in &question.options {
-                write_spine_line(out, false, &format!("○ {option}"))?;
+                write_wrapped_spine_fragments(
+                    out,
+                    false,
+                    vec![StyledFragment::styled(
+                        format!("○ {option}"),
+                        render::palette::FAINT,
+                    )],
+                    "  ",
+                )?;
             }
             write_unanswered(out)
         }
@@ -929,12 +1240,12 @@ fn write_question_block(
 
 fn write_question_text(out: &mut impl Write, answered: bool, question: &str) -> Result<()> {
     for (index, line) in question.lines().enumerate() {
-        let line = if index == 0 {
-            render::paint(anstyle::Style::new().bold(), line)
+        let style = if index == 0 {
+            Some(anstyle::Style::new().bold())
         } else {
-            line.to_owned()
+            None
         };
-        write_spine_line(out, answered, &line)?;
+        write_wrapped_spine_fragments(out, answered, vec![StyledFragment::prose(line, style)], "")?;
     }
     Ok(())
 }
@@ -946,14 +1257,16 @@ fn write_free_answer(
 ) -> Result<()> {
     let mut suffix_written = false;
     for choice in answer.chosen.iter().filter_map(|choice| non_empty(choice)) {
-        let suffix = answer_suffix(source, answer.note.as_deref(), &mut suffix_written);
-        let content = format!(
-            "{} {}{}",
-            render::paint(render::palette::GOOD, "●"),
-            paint_mentions(choice),
-            suffix
-        );
-        write_spine_line(out, true, &content)?;
+        let mut fragments = vec![
+            StyledFragment::styled("●", render::palette::GOOD.bold()),
+            StyledFragment::prose(choice, Some(render::palette::GOOD.bold())),
+        ];
+        if let Some(suffix) =
+            answer_suffix_text(source, answer.note.as_deref(), &mut suffix_written)
+        {
+            fragments.push(StyledFragment::styled(suffix, render::palette::MUTED));
+        }
+        write_wrapped_spine_fragments(out, true, fragments, "  ")?;
     }
     Ok(())
 }
@@ -972,17 +1285,26 @@ fn write_option_answers(
     let mut suffix_written = false;
     for option in options {
         if chosen.iter().any(|choice| *choice == option) {
-            let suffix = answer_suffix(source, answer.note.as_deref(), &mut suffix_written);
-            let content = format!(
-                "{} {}{}",
-                render::paint(render::palette::GOOD, "●"),
-                option,
-                suffix
-            );
-            write_spine_line(out, true, &content)?;
+            let mut fragments = vec![
+                StyledFragment::styled("●", render::palette::GOOD.bold()),
+                StyledFragment::styled(option, render::palette::GOOD.bold()),
+            ];
+            if let Some(suffix) =
+                answer_suffix_text(source, answer.note.as_deref(), &mut suffix_written)
+            {
+                fragments.push(StyledFragment::styled(suffix, render::palette::MUTED));
+            }
+            write_wrapped_spine_fragments(out, true, fragments, "  ")?;
         } else {
-            let content = render::paint(render::palette::FAINT, &format!("○ {option}"));
-            write_spine_line(out, true, &content)?;
+            write_wrapped_spine_fragments(
+                out,
+                true,
+                vec![StyledFragment::styled(
+                    format!("○ {option}"),
+                    render::palette::FAINT,
+                )],
+                "  ",
+            )?;
         }
     }
     let other = chosen
@@ -990,27 +1312,29 @@ fn write_option_answers(
         .filter(|choice| !options.iter().any(|option| option == choice))
         .collect::<Vec<_>>();
     if !other.is_empty() {
-        let suffix = answer_suffix(source, answer.note.as_deref(), &mut suffix_written);
-        let content = format!(
-            "{} {} {}{}",
-            render::paint(render::palette::GOOD, "●"),
-            render::paint(render::palette::MUTED, "other:"),
-            paint_mentions(&other.join(", ")),
-            suffix
-        );
-        write_spine_line(out, true, &content)?;
+        let mut fragments = vec![
+            StyledFragment::styled("●", render::palette::GOOD.bold()),
+            StyledFragment::styled("other:", render::palette::MUTED),
+            StyledFragment::prose(other.join(", "), Some(render::palette::GOOD.bold())),
+        ];
+        if let Some(suffix) =
+            answer_suffix_text(source, answer.note.as_deref(), &mut suffix_written)
+        {
+            fragments.push(StyledFragment::styled(suffix, render::palette::MUTED));
+        }
+        write_wrapped_spine_fragments(out, true, fragments, "  ")?;
     }
     Ok(())
 }
 
-fn write_legacy_ask_card(
+fn write_legacy_text_card(
     out: &mut impl Write,
     ask: &RenderEntry,
     answer: Option<&RenderEntry>,
 ) -> Result<()> {
     let answered = answer.is_some();
     for line in ask.chat.text.lines() {
-        write_spine_line(out, answered, &paint_mentions(line))?;
+        write_wrapped_spine_fragments(out, answered, vec![StyledFragment::prose(line, None)], "")?;
     }
     let Some(answer) = answer else {
         return write_unanswered(out);
@@ -1025,55 +1349,53 @@ fn write_legacy_ask_card(
     }
     let mut suffix_written = false;
     for line in text.lines() {
-        let content = format!(
-            "{} {}{}",
-            render::paint(render::palette::GOOD, "●"),
-            paint_mentions(line),
-            answer_suffix(Some(&answer.chat.from), None, &mut suffix_written)
-        );
-        write_spine_line(out, true, &content)?;
+        let mut fragments = vec![
+            StyledFragment::styled("●", render::palette::GOOD.bold()),
+            StyledFragment::prose(line, Some(render::palette::GOOD.bold())),
+        ];
+        if let Some(suffix) = answer_suffix_text(Some(&answer.chat.from), None, &mut suffix_written)
+        {
+            fragments.push(StyledFragment::styled(suffix, render::palette::MUTED));
+        }
+        write_wrapped_spine_fragments(out, true, fragments, "  ")?;
     }
     Ok(())
 }
 
 fn write_unanswered(out: &mut impl Write) -> Result<()> {
-    write_spine_line(
+    write_wrapped_spine_fragments(
         out,
         false,
-        &render::paint(render::palette::WARN, "◌ unanswered"),
+        vec![StyledFragment::styled(
+            "◌ unanswered",
+            render::palette::WARN,
+        )],
+        "",
     )
 }
 
-fn answer_suffix(source: Option<&str>, note: Option<&str>, written: &mut bool) -> String {
+fn answer_suffix_text(
+    source: Option<&str>,
+    note: Option<&str>,
+    written: &mut bool,
+) -> Option<String> {
     if *written {
-        return String::new();
+        return None;
     }
     *written = true;
-    let Some(source) = source.and_then(non_empty) else {
-        return String::new();
-    };
+    let source = source.and_then(non_empty)?;
     let mut suffix = format!(" — {source}");
     if let Some(note) = note.and_then(non_empty) {
         suffix.push_str(" · “");
         suffix.push_str(note);
         suffix.push('”');
     }
-    render::paint(render::palette::MUTED, &suffix)
+    Some(suffix)
 }
 
 fn non_empty(text: &str) -> Option<&str> {
     let text = text.trim();
     (!text.is_empty()).then_some(text)
-}
-
-fn write_spine_line(out: &mut impl Write, answered: bool, content: &str) -> Result<()> {
-    let style = if answered {
-        render::palette::FAINT
-    } else {
-        render::palette::WARN
-    };
-    writeln!(out, "{}{}", render::paint(style, "▌ "), content)?;
-    Ok(())
 }
 
 fn write_spine_blank(out: &mut impl Write, answered: bool) -> Result<()> {
@@ -1082,7 +1404,7 @@ fn write_spine_blank(out: &mut impl Write, answered: bool) -> Result<()> {
     } else {
         render::palette::WARN
     };
-    writeln!(out, "{}", render::paint(style, "▌"))?;
+    writeln!(out, "{BODY_INDENT}{}", render::paint(style, "▌"))?;
     Ok(())
 }
 
@@ -1166,6 +1488,13 @@ mod tests {
         let mut out = anstream::StripStream::new(Vec::new());
         render_chat_to(&mut out, None, entries, &tz, today).expect("render");
         String::from_utf8(out.into_inner()).expect("utf8")
+    }
+
+    fn render_raw(entries: &[RenderEntry], today: Date) -> String {
+        let tz = TimeZone::get("America/New_York").expect("timezone");
+        let mut out = Vec::new();
+        render_chat_to(&mut out, None, entries, &tz, today).expect("render");
+        String::from_utf8(out).expect("utf8")
     }
 
     fn log_entry(
@@ -1323,7 +1652,7 @@ mod tests {
         );
 
         assert_eq!(out.matches("user →").count(), 3, "{out}");
-        assert!(out.contains("▌ Approve tool?\n▌ ◌ unanswered"), "{out}");
+        assert!(out.contains("  ▌ Approve tool?\n  ▌ ◌ unanswered"), "{out}");
     }
 
     #[test]
@@ -1333,6 +1662,7 @@ mod tests {
         assert!(raw.contains("\u{1b}["), "{raw:?}");
         assert!(raw.contains("@codex"), "{raw}");
         assert!(raw.contains("#feat-auth"), "{raw}");
+        assert!(raw.contains(&render::paint(render::palette::ACCENT.bold(), "#feat-auth")));
         assert!(raw.contains("email@host"), "{raw}");
     }
 
@@ -1359,10 +1689,27 @@ mod tests {
             out.contains("@claude  14:00\n  I checked both paths."),
             "{out}"
         );
-        assert!(out.contains("▌ Choose deployment path?"), "{out}");
-        assert!(out.contains("▌ ● safe — you · “use prod window”"), "{out}");
-        assert!(out.contains("▌ ○ fast"), "{out}");
+        assert!(out.contains("  ▌ Choose deployment path?"), "{out}");
+        assert!(
+            out.contains("  ▌ ● safe — you · “use prod window”"),
+            "{out}"
+        );
+        assert!(out.contains("  ▌ ○ fast"), "{out}");
         assert!(!out.contains("you → @claude"), "{out}");
+
+        let mut raw_ask = ask_entry("2026-06-28T18:00:00Z", "");
+        raw_ask.chat.questions = vec![rimz::agents::AskQuestion {
+            question: "Choose deployment path?".to_owned(),
+            options: vec!["safe".to_owned(), "fast".to_owned()],
+        }];
+        let mut raw_answer = answer_entry("2026-06-28T18:01:00Z", "safe");
+        raw_answer.chat.answers = vec![rimz::agents::AskAnswer {
+            question: Some("Choose deployment path?".to_owned()),
+            chosen: vec!["safe".to_owned()],
+            note: None,
+        }];
+        let raw = render_raw(&[raw_ask, raw_answer], jiff::civil::date(2026, 6, 28));
+        assert!(raw.contains(&render::paint(render::palette::GOOD.bold(), "safe")));
     }
 
     #[test]
@@ -1394,9 +1741,9 @@ mod tests {
 
         let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
 
-        assert!(out.contains("▌ ● other: live repro first — you"), "{out}");
-        assert!(out.contains("▌\n▌ Notify team?"), "{out}");
-        assert!(out.contains("▌ ● yes — you"), "{out}");
+        assert!(out.contains("  ▌ ● other: live repro first — you"), "{out}");
+        assert!(out.contains("  ▌\n  ▌ Notify team?"), "{out}");
+        assert!(out.contains("  ▌ ● yes — you"), "{out}");
     }
 
     #[test]
@@ -1410,12 +1757,87 @@ mod tests {
         let unanswered = render(&[ask], jiff::civil::date(2026, 6, 28));
 
         assert!(
-            answered.contains("▌ Choose path? [safe, fast]\n▌ ● safe — you"),
+            answered.contains("  ▌ Choose path?\n  ▌ ● safe — you"),
             "{answered}"
         );
+        assert!(answered.contains("  ▌ ○ fast"), "{answered}");
         assert!(
-            unanswered.contains("▌ Choose path? [safe, fast]\n▌ ◌ unanswered"),
+            unanswered.contains("  ▌ Choose path?\n  ▌ ○ safe\n  ▌ ○ fast\n  ▌ ◌ unanswered"),
             "{unanswered}"
+        );
+    }
+
+    #[test]
+    fn legacy_ask_card_parses_lead_in_notes_and_multiselect_answers() {
+        let ask = ask_entry(
+            "2026-06-28T18:00:00Z",
+            "Here is my read.\n\nChoose scopes? [a, b, c]\nNotify #cli-docs? [yes, no]",
+        );
+        let mut answer = answer_entry("2026-06-28T18:01:00Z", "a, b (note: least risky)\nyes");
+        answer.request_id = ask.request_id.clone();
+
+        let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
+
+        assert!(
+            out.contains("  Here is my read.\n  ▌ Choose scopes?"),
+            "{out}"
+        );
+        assert!(out.contains("  ▌ ● a — you · “least risky”"), "{out}");
+        assert!(out.contains("  ▌ ● b"), "{out}");
+        assert!(out.contains("  ▌ ○ c"), "{out}");
+        assert!(out.contains("  ▌ Notify #cli-docs?"), "{out}");
+        assert!(out.contains("  ▌ ● yes — you"), "{out}");
+    }
+
+    #[test]
+    fn legacy_exit_plan_text_falls_back_to_text_card() {
+        let out = render(
+            &[ask_entry(
+                "2026-06-28T18:00:00Z",
+                "Requesting plan approval:\n\n1. Edit parser\n2. Run tests",
+            )],
+            jiff::civil::date(2026, 6, 28),
+        );
+
+        assert!(out.contains("  ▌ Requesting plan approval:"), "{out}");
+        assert!(out.contains("  ▌ 1. Edit parser"), "{out}");
+        assert!(out.contains("  ▌ ◌ unanswered"), "{out}");
+    }
+
+    #[test]
+    fn question_lines_paint_mentions() {
+        let mut ask = ask_entry("2026-06-28T18:00:00Z", "");
+        ask.chat.questions = vec![rimz::agents::AskQuestion {
+            question: "Ask @codex about #cli-docs?".to_owned(),
+            options: vec!["yes".to_owned(), "no".to_owned()],
+        }];
+
+        let raw = render_raw(&[ask], jiff::civil::date(2026, 6, 28));
+
+        assert!(raw.contains(&render::paint(render::palette::COOL.bold(), "@codex")));
+        assert!(raw.contains(&render::paint(render::palette::ACCENT.bold(), "#cli-docs")));
+    }
+
+    #[test]
+    fn card_lines_wrap_with_spine_and_option_hanging_indent() {
+        let mut ask = ask_entry("2026-06-28T18:00:00Z", "");
+        ask.chat.questions = vec![rimz::agents::AskQuestion {
+            question: "Which deployment plan should the release captain choose when the fallback window is narrow and every reviewer needs one clear sentence of context?".to_owned(),
+            options: vec![
+                "safe path with a carefully staged rollout and a rollback checkpoint before traffic moves while the on-call lead watches dashboards and keeps incident notes open".to_owned(),
+                "fast path".to_owned(),
+            ],
+        }];
+
+        let out = render(&[ask], jiff::civil::date(2026, 6, 28));
+
+        assert!(
+            out.contains("\n  ▌ every reviewer needs one clear sentence"),
+            "{out}"
+        );
+        assert!(
+            out.contains("\n  ▌   the on-call lead watches dashboards"),
+            "{out}"
         );
     }
 
@@ -1428,7 +1850,10 @@ mod tests {
 
         let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
 
-        assert!(out.contains("▌ Native question?\n▌ ◌ unanswered"), "{out}");
+        assert!(
+            out.contains("  ▌ Native question?\n  ▌ ◌ unanswered"),
+            "{out}"
+        );
         assert!(out.contains("you → @claude"), "{out}");
         assert!(out.contains("  allow"), "{out}");
     }
