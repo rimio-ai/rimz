@@ -678,6 +678,30 @@ pub fn parse_sender_prefix(text: &str) -> Option<(String, String)> {
     Some((format!("@{handle}"), body.to_owned()))
 }
 
+/// Split a batched pane paste into prompt sections. A blank-line boundary starts
+/// a new section only when the following first line carries a sender prefix.
+pub fn split_batched_prompt(text: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let mut cursor = 0;
+    while let Some(relative) = text[cursor..].find("\n\n") {
+        let boundary = cursor + relative;
+        let next_start = boundary + 2;
+        let first_line = text[next_start..].lines().next().unwrap_or_default();
+        if parse_sender_prefix(first_line).is_some() {
+            segments.push(&text[start..boundary]);
+            start = next_start;
+        }
+        cursor = next_start;
+    }
+    if segments.is_empty() {
+        vec![text]
+    } else {
+        segments.push(&text[start..]);
+        segments
+    }
+}
+
 /// The optional `from @sender: ` prefix for a peer-authored message. Human-authored
 /// text stays verbatim; agent-authored text uses the shortest live handle when the
 /// sender is visible in the snapshot and falls back to the launch env identity.

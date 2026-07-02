@@ -317,6 +317,10 @@ pub struct MessageRecord {
     /// reading re-enables compaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacted_context_tokens: Option<u64>,
+    /// Shared stamp for records sent in one batched paste; the head's message id.
+    /// Set at send time, cleared when the reconciler requeues an unconfirmed send.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<MessageId>,
 }
 
 impl MessageRecord {
@@ -354,6 +358,7 @@ impl MessageRecord {
             retry_after: None,
             auto_compact: None,
             compacted_context_tokens: None,
+            batch_id: None,
         }
     }
 
@@ -454,6 +459,17 @@ impl MessageRecord {
             _ => None,
         }
     }
+
+    pub fn batch_key(&self) -> Option<&str> {
+        match &self.sender {
+            MessageSender::Agent { channel, .. } => channel.as_deref(),
+            MessageSender::Human => self.channel.as_deref(),
+        }
+    }
+
+    pub fn batchable(&self) -> bool {
+        self.body == MessageBody::Prompt && self.enter && !self.text.trim_start().starts_with('/')
+    }
 }
 
 pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
@@ -511,6 +527,42 @@ pub fn queue_head_for_message<'a>(
                 && same_delivery_lane(candidate.gate, message.gate)
         })
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+}
+
+/// Contiguous batchable followers behind `head`, oldest first: the ready FIFO
+/// prefix of the head's card and lane whose members share the head's batch key
+/// and force flag and whose own gate is open. Stops at the first non-matching
+/// record so delivery never reorders the queue.
+pub fn queue_batch_tail<'a>(
+    pending: impl IntoIterator<Item = &'a MessageRecord>,
+    head: &MessageRecord,
+    status: AgentStatus,
+    now: Timestamp,
+) -> Vec<&'a MessageRecord> {
+    if head.gate == DeliveryGate::Resume || !head.batchable() {
+        return Vec::new();
+    }
+    let head_key = head.batch_key();
+    let mut candidates: Vec<&MessageRecord> = pending
+        .into_iter()
+        .filter(|message| {
+            message.status == MessageStatus::Queued
+                && message.gate != DeliveryGate::Resume
+                && message.same_card(&head.kind, &head.agent_id, head.agent_name.as_deref())
+                && message.is_ready(now)
+                && message.message_id.as_str() > head.message_id.as_str()
+        })
+        .collect();
+    candidates.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
+    candidates
+        .into_iter()
+        .take_while(|message| {
+            message.batchable()
+                && message.batch_key() == head_key
+                && message.force == head.force
+                && gate_open(message.gate, status)
+        })
+        .collect()
 }
 
 fn same_delivery_lane(candidate: DeliveryGate, queued: DeliveryGate) -> bool {

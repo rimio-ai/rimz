@@ -298,6 +298,30 @@ fn record_sent_then_turn_start_confirms_delivery() {
 }
 
 #[test]
+fn record_sent_copies_send_time_batch_id_onto_loaded_record() {
+    let (_dir, ledger, workspace_id) = ledger();
+    let message = message(&workspace_id);
+    let batch_id = message.message_id.clone();
+    ledger.queue_message(&message, "session").unwrap();
+    let mut claimed = ledger
+        .claim_message_for_delivery(&message.message_id, Timestamp::now())
+        .unwrap()
+        .expect("claimed");
+    claimed.batch_id = Some(batch_id.clone());
+
+    let sent = ledger
+        .record_sent_message(&claimed, "session")
+        .unwrap()
+        .expect("sent");
+
+    assert_eq!(sent.batch_id, Some(batch_id));
+    assert_eq!(
+        ledger.list_messages().unwrap()[0].batch_id,
+        Some(message.message_id)
+    );
+}
+
+#[test]
 fn confirmation_matches_message_body() {
     let (_dir, ledger, workspace_id) = ledger();
     let prompt = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
@@ -328,9 +352,78 @@ fn confirmation_matches_message_body() {
 }
 
 #[test]
+fn confirmation_delivers_all_members_with_shared_batch_id() {
+    let (_dir, ledger, workspace_id) = ledger();
+    let mut first = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+    let mut second = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+    let mut unrelated =
+        message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+    first.message_id = message_id(1);
+    second.message_id = message_id(2);
+    unrelated.message_id = message_id(3);
+    first.batch_id = Some(first.message_id.clone());
+    second.batch_id = Some(first.message_id.clone());
+    unrelated.batch_id = Some(message_id(99));
+    ledger.record_sent_message(&first, "session").unwrap();
+    ledger.record_sent_message(&second, "session").unwrap();
+    ledger.record_sent_message(&unrelated, "session").unwrap();
+
+    let delivered = ledger
+        .confirm_delivered_for_card(
+            &first.kind,
+            &first.agent_id,
+            None,
+            MessageBody::Prompt,
+            "session",
+        )
+        .unwrap()
+        .expect("delivered");
+
+    assert_eq!(delivered.message_id, first.message_id);
+    let messages = ledger.list_messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].message_id, unrelated.message_id);
+    assert_eq!(messages[0].status, MessageStatus::Sent);
+    let delivered_count = event_log::read_all(&ledger.inner.paths.events_log)
+        .unwrap()
+        .iter()
+        .filter(|event| event.method == "message.delivered")
+        .count();
+    assert_eq!(delivered_count, 2);
+}
+
+#[test]
+fn confirmation_without_batch_id_delivers_only_oldest() {
+    let (_dir, ledger, workspace_id) = ledger();
+    let mut first = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+    let mut second = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+    first.message_id = message_id(1);
+    second.message_id = message_id(2);
+    ledger.record_sent_message(&first, "session").unwrap();
+    ledger.record_sent_message(&second, "session").unwrap();
+
+    ledger
+        .confirm_delivered_for_card(
+            &first.kind,
+            &first.agent_id,
+            None,
+            MessageBody::Prompt,
+            "session",
+        )
+        .unwrap()
+        .expect("delivered");
+
+    let messages = ledger.list_messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].message_id, second.message_id);
+    assert_eq!(messages[0].status, MessageStatus::Sent);
+}
+
+#[test]
 fn stale_sent_message_requeues_before_attempt_cap() {
     let (_dir, ledger, workspace_id) = ledger();
-    let message = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+    let mut message = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+    message.batch_id = Some(message.message_id.clone());
     ledger.record_sent_message(&message, "session").unwrap();
 
     let report = ledger
@@ -342,6 +435,7 @@ fn stale_sent_message_requeues_before_attempt_cap() {
     let messages = ledger.list_messages().unwrap();
     assert_eq!(messages[0].status, MessageStatus::Queued);
     assert_eq!(messages[0].pane_id, None);
+    assert_eq!(messages[0].batch_id, None);
     assert_eq!(messages[0].attempts, 0);
     assert_eq!(messages[0].unconfirmed_sends, 1);
     assert_eq!(messages[0].last_attempt_at, None);
@@ -472,6 +566,10 @@ fn message(workspace_id: &WorkspaceId) -> MessageRecord {
         true,
         DeliveryGate::Done,
     )
+}
+
+fn message_id(value: u64) -> MessageId {
+    MessageId::parse(&format!("msg_{value:016}")).unwrap()
 }
 
 fn agent() -> AgentState {

@@ -74,6 +74,7 @@ A record stores:
 | `retry_after` | wake-only retry floor set by the elder sweep; it never gates FIFO readiness |
 | `auto_compact` | context-fill threshold that triggers a `/compact` before delivery |
 | `compacted_context_tokens` | baseline reading that suppresses duplicate compaction |
+| `batch_id` | records sent in one batched paste share the head's id; one turn start confirms them all |
 
 The full record is the field catalog; the [lifecycle](#message-lifecycle) below is the contract. Domain model: [`message.rs`](../../../crates/rimz/src/message.rs); live sends, park-vs-live dispatch, and queued delivery live in [`message/send.rs`](../../../crates/rimz/src/message/send.rs), [`message/dispatch.rs`](../../../crates/rimz/src/message/dispatch.rs), and [`message/deliver.rs`](../../../crates/rimz/src/message/deliver.rs).
 
@@ -131,6 +132,12 @@ The helper follows a strict sequence:
 4. **Send**: write text to the live pane through the same bracketed-paste path as `--steer`. Smart compaction prepends a fresh `Command` record at delivery time before the claimed prompt.
 5. **Record send**: a successful pane write moves the record to `Sent`, still live until the agent confirms it or the reconciler times it out.
 
+### Batched delivery
+
+When a queued prompt head delivers, the helper extends the claim through the contiguous ready FIFO prefix of that head's lane. Batch members must be prompt bodies that submit with Enter, avoid leading `/`, have their own gate open, match the head's `force` flag, and share one batch key: an agent sender's channel, while a human message counts as the receiver channel as if typed in the pane. `Command` bodies, slash text, no-enter drafts, force mismatches, closed gates, and cross-channel senders stop the batch. Resume control messages live in their own lane and stay outside ordinary batching.
+
+The batch lands as one bracketed paste and one submit. Each member keeps its own `from @sender:` prefix and the sections are separated by one blank line. The first member whose `auto_compact` threshold fires may type one `/compact` command ahead of the whole batch; later members ride the same fresh window.
+
 ### Delivery confirmation
 
 The agent's next body-matching lifecycle hook confirms the oldest `Sent` record for that card:
@@ -138,12 +145,12 @@ The agent's next body-matching lifecycle hook confirms the oldest `Sent` record 
 - `TurnStarted` confirms a `Prompt` body to `Delivered`.
 - `Compacting` confirms a `Command` body to `Delivered`.
 
-One cannot confirm the other. A smart-compact send owns two records: the `/compact` command confirms on `Compacting`, and the prompt confirms on `TurnStarted`. A `Sent` record that remains unconfirmed for `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` returns to `Queued` through the sweep reconciler while incrementing `unconfirmed_sends` up to `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` (3 by default), then becomes `TimedOut`. The pre-send `attempts` counter stays separate.
+One cannot confirm the other. Batched prompt records carry a shared `batch_id`, so the first matching `TurnStarted` confirms every `Sent` prompt record with that stamp on the same card. A smart-compact send owns two records: the `/compact` command confirms on `Compacting`, and the prompt confirms on `TurnStarted`. A `Sent` record that remains unconfirmed for `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` returns to `Queued` through the sweep reconciler while incrementing `unconfirmed_sends` up to `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` (3 by default), then becomes `TimedOut`. The pre-send `attempts` counter stays separate.
 
 ### Retry and failure
 
 - **Pre-send failure** (pane gone, gate closed, pending ask blocks): a claim increments `attempts`, then the failure reverts the record to `Queued` with `last_error` and the claim timestamp as throttle. The next qualifying turn boundary retries.
-- **Unconfirmed send** (bytes were written but no matching lifecycle confirmation arrives): the sweep reconciler clears the pane id, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. After the unconfirmed-send cap, the record becomes `TimedOut`.
+- **Unconfirmed send** (bytes were written but no matching lifecycle confirmation arrives): the sweep reconciler clears the pane id and batch id, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. A requeued batch member reforms with whatever same-lane prefix is ready at the next boundary. After the unconfirmed-send cap, the record becomes `TimedOut`.
 - **Independent caps**: `unconfirmed_sends` gates the unconfirmed-send cap (`RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS`, 3 by default); `attempts` gates the pre-send cap (`MAX_DELIVERY_ATTEMPTS`, 5). A claim increments `attempts` only, and a stale-`Sent` requeue increments `unconfirmed_sends` only.
 - **Claim TTL**: a `Claimed` record older than 15 s (`CLAIM_TTL`) is treated as expired, so a crash after claim leaves a redeliverable record. `message list --all` surfaces it.
 - A state miss, where the message is queued but the agent has not reached a qualifying boundary, leaves the message queued for a later transition.
@@ -272,7 +279,7 @@ Hook and resolver paths append entries to `transcript/<bucket-start>.jsonl`, app
 | `Answer` | the effective answer, carrying `answers` choices | `you` or the resolver to the agent |
 | `Error` | a hook-path provider error marker newly merged into `AgentContext.turn_error` | `@receiver: error text` with error styling |
 
-A delivery becomes a `Message` entry when the receiver's turn-start hook parses the `from @sender` prefix ([Sender prefix](#sender-prefix)); the delivery queue record stays bookkeeping, never a transcript source. A peer-opened turn also records the receiver's reply, because that reply is its own `Assistant` entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh). Statusline-only detections stay card/sidebar enrichment, because that path is lock-free and does not write the transcript log.
+A delivery becomes a `Message` entry when the receiver's turn-start hook parses the `from @sender` prefix ([Sender prefix](#sender-prefix)); the delivery queue record stays bookkeeping, never a transcript source. A batched delivery splits on the blank-line boundaries that introduce another sender prefix, so each section becomes its own transcript entry. A peer-opened turn also records the receiver's reply, because that reply is its own `Assistant` entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh). Statusline-only detections stay card/sidebar enrichment, because that path is lock-free and does not write the transcript log.
 
 `rimz transcript` projects these entries into one timestamp-ordered chat log. A channel target (`#channel`, `@all#channel`, or a bare invocation in a worktree) shows every agent in the lane; a single-agent target filters to that agent's sent and received lines. Exact session ids resolve across channels; handle targets prefer live sessions in the current room, then the most recent transcript activity. The command surface, flags, and rendered appearance are [cli/agents.md → Inspect transcripts](../../reference/cli/agents.md#inspect-transcripts).
 

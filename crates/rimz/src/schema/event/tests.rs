@@ -323,6 +323,7 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
         retry_after: None,
         auto_compact: None,
         compacted_context_tokens: None,
+        batch_id: None,
     };
     let typed = EventEnvelope::message_event(&message, "session", MessageEventMethod::Queued, None);
     let mut legacy = EventEnvelope::new(

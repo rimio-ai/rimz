@@ -9,8 +9,8 @@ use rimz::agents::{
     TurnErrorClass,
 };
 use rimz::feed::{FeedItem, FeedKind, Surface};
-use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
-use rimz::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
+use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
+use rimz::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus};
 use rimz::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 
 use crate::common::Env;
@@ -1448,6 +1448,152 @@ fn queue_send_now_prefixes_sender_and_no_from_suppresses_it() {
 }
 
 #[test]
+fn queued_delivery_batches_same_sender_channel_prompt_prefix() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-batch", "feature-batch", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-batch",
+            "worktree_branch": "feature-batch",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-batch")
+        .expect("agent");
+    let sender = |role: &str, channel: &str| MessageSender::Agent {
+        kind: AgentKind::new_unchecked("codex"),
+        name: None,
+        profile: None,
+        role: Some(role.to_owned()),
+        channel: Some(channel.to_owned()),
+    };
+    let mut first = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "first".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_channel(Some("feature-batch".to_owned()))
+    .with_sender(sender("planner", "feature-batch"));
+    let mut second = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "second".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_channel(Some("feature-batch".to_owned()))
+    .with_sender(sender("coder", "feature-batch"));
+    let mut third = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "third".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_channel(Some("feature-batch".to_owned()))
+    .with_sender(sender("reviewer", "docs"));
+    first.message_id = fixed_message_id(1);
+    second.message_id = fixed_message_id(2);
+    third.message_id = fixed_message_id(3);
+    let first_id = first.message_id.clone();
+    let second_id = second.message_id.clone();
+    let third_id = third.message_id.clone();
+    env.ledger()
+        .queue_message(&first, "rimz-test")
+        .expect("queue first");
+    env.ledger()
+        .queue_message(&second, "rimz-test")
+        .expect("queue second");
+    env.ledger()
+        .queue_message(&third, "rimz-test")
+        .expect("queue third");
+
+    let trace_log = env.project_root.join("zellij-batch-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+        .args(["message", "deliver", "--message-id", first_id.as_str()])
+        .output()
+        .expect("message deliver");
+    assert!(
+        out.status.success(),
+        "message deliver failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let payload = "from @planner: first\n\nfrom @coder: second";
+    assert_text_then_enter(&trace_log, payload);
+    let lines = trace_lines(&trace_log);
+    assert_eq!(
+        lines.iter().filter(|line| is_paste(line, payload)).count(),
+        1
+    );
+    assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+
+    let messages = env.ledger().list_messages().expect("messages");
+    let sent_first = messages
+        .iter()
+        .find(|message| message.message_id == first_id)
+        .expect("first sent");
+    let sent_second = messages
+        .iter()
+        .find(|message| message.message_id == second_id)
+        .expect("second sent");
+    let queued_third = messages
+        .iter()
+        .find(|message| message.message_id == third_id)
+        .expect("third queued");
+    assert_eq!(sent_first.status, MessageStatus::Sent);
+    assert_eq!(sent_second.status, MessageStatus::Sent);
+    assert_eq!(sent_first.batch_id, Some(first_id.clone()));
+    assert_eq!(sent_second.batch_id, Some(first_id.clone()));
+    assert_eq!(queued_third.status, MessageStatus::Queued);
+    assert_eq!(queued_third.batch_id, None);
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-batch",
+            "prompt": payload,
+            "worktree_branch": "feature-batch",
+        }),
+        pane_env,
+    );
+    let messages = env.ledger().list_messages().expect("messages");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].message_id, third_id);
+    assert_eq!(messages[0].status, MessageStatus::Queued);
+    let delivered: Vec<String> = env
+        .read_events()
+        .into_iter()
+        .filter(|event| event.method == "message.delivered")
+        .map(|event| {
+            event.params_value()["message_id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert!(delivered.contains(&first_id.to_string()));
+    assert!(delivered.contains(&second_id.to_string()));
+}
+
+#[test]
 fn queue_parked_message_lists_sender() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -2616,6 +2762,10 @@ fn sent_id_from_stdout(stdout: &[u8]) -> String {
         .and_then(|(_, id)| id.strip_suffix(')'))
         .map(str::to_owned)
         .unwrap_or_else(|| panic!("expected `sent to @target (msg_...)`, got `{trimmed}`"))
+}
+
+fn fixed_message_id(value: u64) -> MessageId {
+    MessageId::parse(&format!("msg_{value:016}")).unwrap()
 }
 
 fn assert_single_sigil_sent(stdout: &[u8]) {

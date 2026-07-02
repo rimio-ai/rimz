@@ -160,6 +160,28 @@ fn auto_compact_round_trips_through_a_message_record() {
 }
 
 #[test]
+fn batch_id_defaults_absent_and_round_trips_when_set() {
+    let mut message = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        &agent("s1", None),
+        "next".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    assert_eq!(message.batch_id, None);
+
+    message.batch_id = Some(message_id(1));
+    let json = serde_json::to_string(&message).unwrap();
+    let back: MessageRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.batch_id, Some(message_id(1)));
+
+    let mut legacy = serde_json::to_value(&back).unwrap();
+    legacy.as_object_mut().unwrap().remove("batch_id");
+    let back: MessageRecord = serde_json::from_value(legacy).unwrap();
+    assert_eq!(back.batch_id, None);
+}
+
+#[test]
 fn not_before_defaults_ready_and_round_trips_when_set() {
     let base = MessageRecord::new(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
@@ -585,6 +607,183 @@ fn queue_head_does_not_treat_retry_after_as_readiness() {
 }
 
 #[test]
+fn queue_batch_tail_collects_same_sender_channel_until_cross_channel() {
+    let agent = agent("real-session", Some("lucid-atlas"));
+    let head = batch_message(&agent, 1, "first")
+        .with_channel(Some("main".to_owned()))
+        .with_sender(agent_sender("planner", Some("main")));
+    let same = batch_message(&agent, 2, "second")
+        .with_channel(Some("main".to_owned()))
+        .with_sender(agent_sender("coder", Some("main")));
+    let cross = batch_message(&agent, 3, "third")
+        .with_channel(Some("main".to_owned()))
+        .with_sender(agent_sender("reviewer", Some("docs")));
+    let later_same = batch_message(&agent, 4, "fourth")
+        .with_channel(Some("main".to_owned()))
+        .with_sender(agent_sender("designer", Some("main")));
+    let pending = [later_same, cross, same];
+
+    let tail = queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, Timestamp::now());
+    let ids: Vec<MessageId> = tail
+        .iter()
+        .map(|message| message.message_id.clone())
+        .collect();
+
+    assert_eq!(ids, vec![message_id(2)]);
+}
+
+#[test]
+fn queue_batch_tail_uses_receiver_channel_for_human_messages() {
+    let agent = agent("real-session", Some("lucid-atlas"));
+    let head = batch_message(&agent, 1, "human").with_channel(Some("main".to_owned()));
+    let agent_authored = batch_message(&agent, 2, "agent")
+        .with_channel(Some("main".to_owned()))
+        .with_sender(agent_sender("coder", Some("main")));
+    let pending = [agent_authored];
+
+    let tail = queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, Timestamp::now());
+
+    assert_eq!(tail.len(), 1);
+    assert_eq!(tail[0].message_id, message_id(2));
+}
+
+#[test]
+fn queue_batch_tail_stops_on_non_batchable_followers() {
+    let agent = agent("real-session", Some("lucid-atlas"));
+    let cases = [
+        MessageRecord {
+            text: "/compact".to_owned(),
+            ..batch_message(&agent, 2, "slash")
+        },
+        batch_message(&agent, 2, "command").with_body(MessageBody::Command),
+        MessageRecord {
+            enter: false,
+            ..batch_message(&agent, 2, "draft")
+        },
+    ];
+    for blocker in cases {
+        let head = batch_message(&agent, 1, "first");
+        let later = batch_message(&agent, 3, "later");
+        let pending = [blocker, later];
+
+        assert!(
+            queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, Timestamp::now()).is_empty()
+        );
+    }
+
+    let slash_head = MessageRecord {
+        text: "/compact".to_owned(),
+        ..batch_message(&agent, 1, "slash")
+    };
+    let command_head = batch_message(&agent, 1, "command").with_body(MessageBody::Command);
+    let pending = [batch_message(&agent, 2, "later")];
+    assert!(
+        queue_batch_tail(
+            pending.iter(),
+            &slash_head,
+            AgentStatus::Idle,
+            Timestamp::now()
+        )
+        .is_empty()
+    );
+    assert!(
+        queue_batch_tail(
+            pending.iter(),
+            &command_head,
+            AgentStatus::Idle,
+            Timestamp::now()
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn queue_batch_tail_keeps_resume_control_lane_invisible() {
+    let agent = agent("real-session", Some("lucid-atlas"));
+    let head = batch_message(&agent, 1, "first");
+    let resume = MessageRecord {
+        gate: DeliveryGate::Resume,
+        ..batch_message(&agent, 2, "continue")
+    };
+    let later = batch_message(&agent, 3, "later");
+    let pending = [resume, later];
+
+    let tail = queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, Timestamp::now());
+
+    assert_eq!(tail.len(), 1);
+    assert_eq!(tail[0].message_id, message_id(3));
+
+    let resume_head = MessageRecord {
+        gate: DeliveryGate::Resume,
+        ..batch_message(&agent, 1, "continue")
+    };
+    let pending = [batch_message(&agent, 2, "ordinary")];
+    assert!(
+        queue_batch_tail(
+            pending.iter(),
+            &resume_head,
+            AgentStatus::Paused,
+            Timestamp::now()
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn queue_batch_tail_honors_contiguity_gate_and_force() {
+    let agent = agent("real-session", Some("lucid-atlas"));
+    let head = batch_message(&agent, 1, "first");
+    let middle =
+        batch_message(&agent, 2, "middle").with_sender(agent_sender("coder", Some("docs")));
+    let later = batch_message(&agent, 3, "later");
+    let pending = [middle, later];
+    assert!(
+        queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, Timestamp::now()).is_empty()
+    );
+
+    let head = batch_message(&agent, 1, "first").with_force(true);
+    let middle = batch_message(&agent, 2, "middle");
+    let later = batch_message(&agent, 3, "later").with_force(true);
+    let pending = [middle, later];
+    assert!(
+        queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, Timestamp::now()).is_empty()
+    );
+
+    let head = MessageRecord {
+        gate: DeliveryGate::Any,
+        ..batch_message(&agent, 1, "first")
+    };
+    let middle = MessageRecord {
+        gate: DeliveryGate::Done,
+        ..batch_message(&agent, 2, "middle")
+    };
+    let later = MessageRecord {
+        gate: DeliveryGate::Any,
+        ..batch_message(&agent, 3, "later")
+    };
+    let pending = [middle, later];
+    assert!(
+        queue_batch_tail(pending.iter(), &head, AgentStatus::Failed, Timestamp::now()).is_empty()
+    );
+}
+
+#[test]
+fn queue_batch_tail_skips_future_scheduled_followers() {
+    let agent = agent("real-session", Some("lucid-atlas"));
+    let now = Timestamp::now();
+    let head = batch_message(&agent, 1, "first");
+    let future = batch_message(&agent, 2, "future")
+        .with_not_before(Some(now + jiff::SignedDuration::from_secs(60)));
+    let ready = batch_message(&agent, 3, "ready");
+    let pending = [future, ready];
+
+    let tail = queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, now);
+
+    assert_eq!(tail.len(), 1);
+    assert_eq!(tail[0].message_id, message_id(3));
+}
+
+#[test]
 fn parse_schedule_at_accepts_duration_and_next_wall_clock_time() {
     let now = jiff::civil::date(2026, 6, 24)
         .at(8, 0, 0, 0)
@@ -613,6 +812,33 @@ fn parse_schedule_at_accepts_duration_and_next_wall_clock_time() {
     assert!(parse_schedule_at("0s", &now).is_err());
     assert!(parse_schedule_at("tomorrow", &now).is_err());
     assert!(parse_schedule_at("25:00", &now).is_err());
+}
+
+fn message_id(value: u64) -> MessageId {
+    MessageId::parse(&format!("msg_{value:016}")).unwrap()
+}
+
+fn batch_message(agent: &AgentState, id: u64, text: &str) -> MessageRecord {
+    let mut message = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        agent,
+        text.to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_channel(Some("main".to_owned()));
+    message.message_id = message_id(id);
+    message
+}
+
+fn agent_sender(role: &str, channel: Option<&str>) -> MessageSender {
+    MessageSender::Agent {
+        kind: AgentKind::new_unchecked("codex"),
+        name: None,
+        profile: None,
+        role: Some(role.to_owned()),
+        channel: channel.map(ToOwned::to_owned),
+    }
 }
 
 fn agent(id: &str, name: Option<&str>) -> AgentState {

@@ -129,6 +129,7 @@ impl Ledger {
                     {
                         let mut existing = existing;
                         existing.pane_id = message.pane_id.clone();
+                        existing.batch_id = message.batch_id.clone();
                         existing
                     }
                     Ok(_) => return Ok(None),
@@ -243,30 +244,64 @@ impl Ledger {
     ) -> Result<Option<MessageRecord>> {
         let outcome = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            let Some(message) = message_store::list(&self.inner.paths.messages_dir)?
-                .into_iter()
+            let mut messages = message_store::list(&self.inner.paths.messages_dir)?;
+            let Some(oldest) = messages
+                .iter()
                 .filter(|message| {
                     message.status == MessageStatus::Sent
                         && message.body == body
                         && message.same_card(kind, agent_id, agent_name)
                 })
                 .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+                .cloned()
             else {
                 return Ok(None);
             };
             let now = Timestamp::now();
-            Some(self.finalize_message_locked(
-                message,
-                MessageStatus::Delivered,
-                session_name,
-                None,
-                now,
-            )?)
+            let mut removed_ids = std::collections::BTreeSet::new();
+            let mut delivered = Vec::new();
+            let mut events = Vec::new();
+            for message in &mut messages {
+                let selected = if message.message_id == oldest.message_id {
+                    true
+                } else {
+                    oldest.batch_id.is_some()
+                        && message.status == MessageStatus::Sent
+                        && message.body == body
+                        && message.same_card(kind, agent_id, agent_name)
+                        && message.batch_id == oldest.batch_id
+                };
+                if !selected {
+                    continue;
+                }
+                message.status = MessageStatus::Delivered;
+                message.updated_at = now;
+                message.delivered_at = Some(now);
+                removed_ids.insert(message.message_id.to_string());
+                delivered.push(message.clone());
+                events.push(EventEnvelope::message_event(
+                    message,
+                    session_name,
+                    MessageEventMethod::Delivered,
+                    None,
+                ));
+            }
+            messages.retain(|message| !removed_ids.contains(message.message_id.as_str()));
+            message_store::replace_all(&self.inner.paths.messages_dir, &messages)?;
+            for event in &events {
+                event_log::append(&self.inner.paths.events_log, event)?;
+            }
+            delivered
+                .into_iter()
+                .find(|message| message.message_id == oldest.message_id)
+                .map(|message| (message, events))
         };
-        let Some((message, event)) = outcome else {
+        let Some((message, events)) = outcome else {
             return Ok(None);
         };
-        self.wake_sidebars_for_event_best_effort(&event);
+        for event in &events {
+            self.wake_sidebars_for_event_best_effort(event);
+        }
         self.publish_snapshot_best_effort();
         Ok(Some(message))
     }
@@ -330,6 +365,7 @@ impl Ledger {
                 let (method, reason) = if message.unconfirmed_sends < max_attempts {
                     message.status = MessageStatus::Queued;
                     message.pane_id = None;
+                    message.batch_id = None;
                     message.unconfirmed_sends = message.unconfirmed_sends.saturating_add(1);
                     message.last_attempt_at = None;
                     message.retry_after = None;

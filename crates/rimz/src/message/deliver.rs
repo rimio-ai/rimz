@@ -10,7 +10,8 @@ use crate::feed::pending_ask_in_snapshot;
 use crate::ids::{MessageId, MuxName};
 use crate::message::{
     DeliveryGate, MessageRecord, MessageStatus, delivery_window_from_env, gate_open,
-    max_delivery_attempts_from_env, message_interval_from_env, queue_head, queue_head_for_message,
+    max_delivery_attempts_from_env, message_interval_from_env, queue_batch_tail, queue_head,
+    queue_head_for_message,
 };
 use crate::mux::MuxErr;
 use crate::workspace::ResolvedWorkspace;
@@ -59,22 +60,37 @@ pub fn deliver_one(
     };
     debug_assert!(message.same_agent(&candidate.message.kind, &candidate.message.agent_id));
     debug_assert_eq!(message.message_id, candidate.message.message_id);
+    let mut claimed = vec![message];
+    for tail in &candidate.batch_tail {
+        match ledger.claim_message_for_delivery(&tail.message_id, jiff::Timestamp::now())? {
+            Some(message) => claimed.push(message),
+            None => break,
+        }
+    }
+    if claimed.len() > 1 {
+        let batch_id = claimed[0].message_id.clone();
+        for message in &mut claimed {
+            message.batch_id = Some(batch_id.clone());
+        }
+    }
     // Hook delivery handles one claimed message; settle above owns any
     // pre-delivery spacing, so this pacer's first tick stays a no-op.
     let mut live_send = send::LiveSend {
-        force: message.force,
+        force: claimed[0].force,
         pacer: send::Pacer::new(message_interval_from_env()),
     };
-    let send_message = message
-        .clone()
-        .with_pane_id(candidate.target.pane_id.clone());
-    let sent = send::send_prompt_to_live_pane(
+    let send_messages: Vec<MessageRecord> = claimed
+        .iter()
+        .cloned()
+        .map(|message| message.with_pane_id(candidate.target.pane_id.clone()))
+        .collect();
+    let sent = send::send_prompt_batch_to_live_pane(
         workspace,
         ledger,
         &candidate.snapshot,
         &candidate.target,
         send::bound_agent(&candidate.snapshot, &candidate.target),
-        &send_message,
+        &send_messages,
         &mut live_send,
     );
     match sent {
@@ -89,28 +105,33 @@ pub fn deliver_one(
             outcome: send::Outcome::SkippedPending { request_id, .. },
             ..
         }) => {
-            ledger.record_message_delivery_failure(
-                &message.message_id,
-                &format!("pending ask {request_id} reserves input"),
-                &workspace.session_name,
-            )?;
+            for message in &claimed {
+                ledger.record_message_delivery_failure(
+                    &message.message_id,
+                    &format!("pending ask {request_id} reserves input"),
+                    &workspace.session_name,
+                )?;
+            }
             Ok(false)
         }
         Err(err) => {
-            if message_recorded_as_sent(ledger, &message.message_id)? {
-                register_message_wake(workspace, ledger)?;
-                return Ok(false);
-            }
-            if ledger
-                .record_message_delivery_failure(
+            let mut head_failure_recorded = true;
+            for message in &claimed {
+                if message_recorded_as_sent(ledger, &message.message_id)? {
+                    continue;
+                }
+                let recorded = ledger.record_message_delivery_failure(
                     &message.message_id,
                     &err.to_string(),
                     &workspace.session_name,
-                )?
-                .is_none()
-            {
+                )?;
+                if message.message_id == claimed[0].message_id {
+                    head_failure_recorded = recorded.is_some();
+                }
+            }
+            if !head_failure_recorded {
                 ledger.record_send_error(
-                    &send_message,
+                    &send_messages[0],
                     &err.to_string(),
                     &workspace.session_name,
                 )?;
@@ -155,6 +176,7 @@ pub fn sweep(workspace: &ResolvedWorkspace, ledger: &Ledger, mux: Option<MuxName
 
 struct DeliveryCandidate {
     message: MessageRecord,
+    batch_tail: Vec<MessageRecord>,
     snapshot: SidebarSnapshot,
     target: PaneAgent,
 }
@@ -213,6 +235,10 @@ fn delivery_candidate(
     if !message.force && pending_ask_in_snapshot(agent, &snapshot).is_some() {
         return Ok(None);
     }
+    let batch_tail = queue_batch_tail(pending.iter(), &message, status, now)
+        .into_iter()
+        .cloned()
+        .collect();
     let Some(target) = snapshot
         .agent_panes
         .iter()
@@ -229,6 +255,7 @@ fn delivery_candidate(
     };
     Ok(Some(DeliveryCandidate {
         message,
+        batch_tail,
         snapshot,
         target,
     }))
