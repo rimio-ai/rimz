@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 
 use jiff::{SignedDuration, Timestamp};
+use rimz::agents::RateLimitsCache;
 use rimz::agents::context::WindowSource;
 use rimz::agents::{AgentAccount, AgentRateLimits, RateLimitWindow};
 use rimz::ids::MuxName;
-use rimz::sidebar::cache::{AccountsCache, unix_now_ms};
-use rimz::sidebar::enrich::RateLimitsCache;
+use rimz::sidebar::enrich::AccountsCache;
+use rimz::sidebar::timing::unix_now_ms;
 use serde_json::json;
 
 use super::{RoomHarness, SETTLE, running_row, session_start_at, user_prompt_submit};

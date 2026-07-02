@@ -39,14 +39,13 @@ use crate::agents::{
     AccountBudget, AgentState, ResumeArm, TurnErrorClass, display_turn_error,
     effective_turn_error_class, resume_park,
 };
+#[cfg(not(test))]
+use crate::child_process::detached_rimz_command;
 use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use crate::ledger::atomic::write_temp_then_rename_cache;
 use crate::ledger::snapshot::{PaneAgent, ResumeOutcome};
 use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus, card_matches};
-use crate::sidebar::enrich::account_budgets_from_caches;
-#[cfg(not(test))]
-use crate::sidebar::enrich::detached_rimz_command;
 
 /// Minimum gap between auto-continue nudges to one rate-limit-parked agent. One
 /// nudge resumes the turn within a frame, so this mostly bounds the brief window
@@ -110,7 +109,7 @@ pub(crate) fn resume_parked(
     }
     let text = config.auto_continue_text.trim();
     let now = snapshot.now;
-    let account_budgets = account_budgets_from_caches(runtime, now);
+    let account_budgets = crate::agents::account_budgets_from_caches(runtime, now);
     for agent in &snapshot.agents {
         if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
             continue;

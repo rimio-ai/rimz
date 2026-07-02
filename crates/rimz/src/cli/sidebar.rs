@@ -2,10 +2,10 @@
 //!
 //! The snapshot arm is a thin delegate over the library produce pipeline
 //! ([`rimz::sidebar::produce`]): it resolves workspace/session/mux, calls
-//! `produce_snapshot` (or the in-process consumer read for `--no-produce`),
-//! and emits — the CLI owns argv, fallback intent, and stdout alone. The
-//! elder renderer produces in process on its fetch worker, so this arm serves
-//! inspection and scripting.
+//! `produce_snapshot_with_refresh` (or the in-process consumer read for
+//! `--no-produce`), and emits — the CLI owns argv, fallback intent, and stdout
+//! alone. The elder renderer produces in process on its fetch worker, so this
+//! arm serves inspection and scripting.
 
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -22,7 +22,8 @@ use rimz::schema::sidebar_event::SidebarEvent;
 use rimz::sidebar::consumer::read_published_snapshot;
 use rimz::sidebar::notify::{Notification, NotificationAgent, NotificationKind};
 use rimz::sidebar::produce::{
-    ProduceOptions, pane_fixture_active, produce_rollup_snapshot, produce_snapshot,
+    ProduceOptions, pane_fixture_active, produce_rollup_snapshot_with_refresh,
+    produce_snapshot_with_refresh,
 };
 use rimz::sidebar::{cache::write_presence_stamp, consumer::RollupCursor};
 use rimz::workspace::WorkspaceResolver;
@@ -446,9 +447,8 @@ fn emit_producer_snapshot(
         exclude: context.exclude.clone(),
         min_pane_cache_ms: context.min_pane_cache_ms,
         diag: None,
-        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
     };
-    match produce_snapshot(
+    match produce_snapshot_with_refresh(
         &mut RollupCursor::new(),
         &context.state,
         &context.runtime,
@@ -467,7 +467,7 @@ fn emit_rollup_snapshot(
     if let Some(error) = reason {
         tracing::warn!(%error, "sidebar snapshot pane discovery failed; emitting frameless rollup metadata");
     }
-    let snapshot = produce_rollup_snapshot(
+    let snapshot = produce_rollup_snapshot_with_refresh(
         &mut RollupCursor::new(),
         &context.state,
         &context.runtime,
@@ -781,7 +781,7 @@ fn write_plugin_presence_sample(workspace_id: &WorkspaceId, command: &WakeComman
     rimz::diag::plugin_presence::append(
         &state.root,
         &rimz::diag::plugin_presence::PluginPresenceSample::new(
-            rimz::sidebar::cache::unix_now_ms(),
+            rimz::sidebar::timing::unix_now_ms(),
             command.session_name.clone(),
             pages,
             command.plugin_uptime_ms.unwrap_or_default(),
@@ -1131,7 +1131,7 @@ fn wake_sidebars(runtime: &RuntimePaths) {
 }
 
 fn unix_now_ms_i64() -> i64 {
-    i64::try_from(rimz::sidebar::cache::unix_now_ms()).unwrap_or(i64::MAX)
+    i64::try_from(rimz::sidebar::timing::unix_now_ms()).unwrap_or(i64::MAX)
 }
 
 fn emit_hidden_count(label: &str, count: usize) -> Result<()> {

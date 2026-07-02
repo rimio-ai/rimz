@@ -5,21 +5,22 @@
 //! An unborn HEAD makes the folded `rev-parse` fail, so head/branch/merge facts
 //! publish as absent until the first commit.
 
-use std::collections::BTreeSet;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use jiff::SignedDuration;
+use serde::{Deserialize, Serialize};
+
+use crate::agents::AgentStatus;
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
-use crate::sidebar::cache::{
+use crate::sidebar::timing::{
     DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_IDLE_TTL,
-    DIFF_STATS_TTL, DiffStats, DiffStatsCache, DiffStatsCacheEntry, read_diff_stats_cache,
-    unix_now_ms,
-};
-use crate::sidebar::enrich::{
-    focused_worktree_paths, hot_worktree_paths, needed_worktree_paths, project_diff_stats,
+    DIFF_STATS_TTL, WORKTREE_ROOTS_TTL, unix_now_ms,
 };
 use crate::worktree::{self, LandedVerdict};
+use crate::{PaneId, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
 
 /// How a non-producing sidebar waits for the elected producer's diff-stats
 /// write before refreshing locally. ~1.5s total (75 × 20ms) — wide enough for
@@ -35,29 +36,133 @@ pub(super) use roots::project_group_roots;
 #[cfg(test)]
 use roots::{list_group_roots, list_worktree_roots};
 
-/// Refresh the producer's per-worktree git facts, then project them onto the
-/// snapshot's worktree groups. The git forks are the producer's job — a
-/// consumer reads the published frame in process via
-/// [`crate::sidebar::consumer::read_published_snapshot`] and never reaches here.
-/// `configured_trunk` is the per-machine `[sidebar] trunk` preference the trunk
-/// ladder tries first.
-pub(super) fn enrich_worktree_groups(
-    snapshot: &mut crate::SidebarSnapshot,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffStats {
+    pub added: u32,
+    pub removed: u32,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DiffStatsCache {
+    pub entries: BTreeMap<String, DiffStatsCacheEntry>,
+    /// The repo's worktree checkout roots, cached under [`WORKTREE_ROOTS_TTL`]
+    /// (with a session-boundary refresh floor). The set changes only on
+    /// `git worktree add/remove`, so grouping reuses it across ticks instead
+    /// of forking `git worktree list` every snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktrees: Option<WorktreeRootsCache>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorktreeRootsCache {
+    pub refreshed_at_ms: u64,
+    pub roots: Vec<PathBuf>,
+}
+
+impl WorktreeRootsCache {
+    /// Saturating, so a clock that ran backwards reads fresh rather than
+    /// re-enumerating every tick.
+    pub fn is_fresh(&self, now_ms: u64) -> bool {
+        now_ms.saturating_sub(self.refreshed_at_ms) <= WORKTREE_ROOTS_TTL.as_millis() as u64
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DiffStatsCacheEntry {
+    /// Local/edit-sensitive facts stamp: churn, dirty/untracked state, and live
+    /// branch label.
+    pub refreshed_at_ms: u64,
+    /// Commit/PR-shaped facts stamp: ahead/behind counts and landed markers.
+    /// `None` means stale for entries written before the split.
+    #[serde(default)]
+    pub commit_refreshed_at_ms: Option<u64>,
+    pub added: Option<u32>,
+    pub removed: Option<u32>,
+    /// Commits the worktree carries ahead of the trunk (`rev-list --count
+    /// <merge-base>..HEAD`), refreshed on the same git tick as the diff.
+    #[serde(default)]
+    pub commits: Option<u32>,
+    /// Commits the trunk has advanced past the fork point (`rev-list --count
+    /// <merge-base>..<trunk>`), refreshed on the same git tick.
+    #[serde(default)]
+    pub behind: Option<u32>,
+    /// The trunk ref the stats compared against, as the ladder resolved it
+    /// (configured `[sidebar] trunk`, else `main`/`master`/remote default).
+    /// Names the header's `≡` equal and `✓` clear markers.
+    #[serde(default)]
+    pub trunk: Option<String>,
+    /// Live branch resolved from the worktree path, cached under the same TTL
+    /// as the diff stats so the group header tracks `git checkout` without a
+    /// git call every tick.
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// Whether the working tree is clean — `git status --porcelain` emptiness,
+    /// untracked files included — the safe-to-remove verdict both content-landed
+    /// markers (`≡` at the trunk tip, `✓` behind it) require. `None` on an old
+    /// cache entry or a failed status read, which the renderer treats as not
+    /// proven clean.
+    #[serde(default)]
+    pub clean: Option<bool>,
+    /// Whether committed content is proven landed on the resolved trunk.
+    /// `None` means unknown or an old cache entry.
+    #[serde(default)]
+    pub landed: Option<bool>,
+    /// Whether the worktree carries work of its own: HEAD moved past the Rimz
+    /// worktree marker's `base_ref` on a lineage outside the trunk's
+    /// first-parent chain. `None` means the checkout is unmarked or unreadable.
+    #[serde(default)]
+    pub did_work: Option<bool>,
+    /// Whether git reports an in-progress rebase, merge, or cherry-pick in the
+    /// worktree. `None` means the probe could not inspect git paths.
+    #[serde(default)]
+    pub merge_in_progress: Option<bool>,
+}
+
+impl DiffStatsCacheEntry {
+    /// Local-fact freshness under the caller's tier. Saturating, so a clock
+    /// that ran backwards reads fresh rather than re-forking every tick.
+    pub fn local_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
+        now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
+    }
+
+    /// Commit-fact freshness under the caller's tier. Old entries with no
+    /// split stamp are commit-stale and get re-probed once.
+    pub fn commit_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
+        self.commit_refreshed_at_ms
+            .is_some_and(|stamp| now_ms.saturating_sub(stamp) <= ttl.as_millis() as u64)
+    }
+
+    pub fn stats(&self) -> Option<DiffStats> {
+        self.added
+            .zip(self.removed)
+            .map(|(added, removed)| DiffStats { added, removed })
+    }
+}
+
+pub fn read_diff_stats_cache(path: &Path) -> DiffStatsCache {
+    let Ok(bytes) = std::fs::read(path) else {
+        return DiffStatsCache::default();
+    };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+/// Refresh the producer's per-worktree git facts. The git forks are the
+/// producer's job — consumers and the fetch worker project the published cache
+/// without reaching here. `configured_trunk` is the per-machine `[sidebar] trunk`
+/// preference the trunk ladder tries first.
+pub(crate) fn refresh_diff_stats_for(
+    snapshot: &SidebarSnapshot,
     runtime: &crate::RuntimePaths,
     configured_trunk: Option<&str>,
 ) {
-    let cache_path = runtime.root.join("diff-stats.json");
+    let cache_path = runtime.diff_stats_path();
     let now_ms = unix_now_ms();
-    // The producer refreshes the live worktrees' diff stats (single-flighted,
-    // git forks parallel across worktrees), then the shared projection folds the
-    // resulting cache onto the groups — the same projection a consumer applies.
-    // Focus tiers the edit-sensitive facts first; activity still keeps
-    // recently-worked background worktrees on the hot TTL while the rest decay
-    // to the idle TTL.
+    // Focus tiers edit-sensitive facts first; activity still keeps recently
+    // worked background worktrees on the hot TTL while the rest decay to idle.
     let needed = needed_worktree_paths(snapshot);
     let focused = focused_worktree_paths(snapshot);
     let hot = hot_worktree_paths(snapshot);
-    let cache = refresh_diff_stats(
+    let _ = refresh_diff_stats(
         &cache_path,
         runtime,
         &needed,
@@ -66,7 +171,99 @@ pub(super) fn enrich_worktree_groups(
         now_ms,
         configured_trunk,
     );
-    project_diff_stats(snapshot, &cache);
+}
+
+/// The checkout path a group's git reads run against. A path-keyed group —
+/// per-path or root-keyed — carries it as the key's first line (the key may
+/// carry a `\n<branch>` suffix when one path holds two branches), which is
+/// stabler than any one row's cwd: a root-keyed pod's rows can sit in
+/// different subdirs of one checkout. A non-path key (`branch:…`, the
+/// `external` catch-all) falls back to the rows' shared path.
+pub(crate) fn worktree_group_path(group: &SidebarWorktreeGroup) -> Option<&str> {
+    group
+        .key
+        .split('\n')
+        .next()
+        .filter(|key| Path::new(key).is_absolute())
+        .or_else(|| {
+            group
+                .rows
+                .iter()
+                .find_map(|row| row.worktree_path.as_deref())
+                .filter(|path| !path.is_empty())
+        })
+}
+
+/// The live worktree paths this snapshot needs git facts for: a `Worktree`-kind
+/// group whose recovered path is a live directory, de-duplicated so two
+/// branch-split groups for one dir share a single git read.
+pub(crate) fn needed_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
+    let mut needed: Vec<String> = Vec::new();
+    for group in &snapshot.worktree_groups {
+        if group.kind != SidebarWorktreeKind::Worktree {
+            continue;
+        }
+        let Some(path) = worktree_group_path(group) else {
+            continue;
+        };
+        if Path::new(path).is_dir() && !needed.iter().any(|known| known == path) {
+            needed.push(path.to_owned());
+        }
+    }
+    needed
+}
+
+/// The worktree paths whose git facts refresh on the fast [`DIFF_STATS_TTL`].
+pub(crate) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
+    let window = SignedDuration::try_from(crate::sidebar::timing::GIT_ACTIVITY_WINDOW)
+        .unwrap_or(SignedDuration::MAX);
+    let mut hot = BTreeSet::new();
+    for group in &snapshot.worktree_groups {
+        if group.kind != SidebarWorktreeKind::Worktree {
+            continue;
+        }
+        let Some(path) = worktree_group_path(group) else {
+            continue;
+        };
+        if !Path::new(path).is_dir() {
+            continue;
+        }
+        let any_hot = group.rows.iter().any(|row| {
+            row.is_agent()
+                && (row.status() == Some(AgentStatus::Running)
+                    || snapshot.now.duration_since(row.last_activity) <= window)
+        });
+        if any_hot {
+            hot.insert(path.to_owned());
+        }
+    }
+    hot
+}
+
+/// The worktree paths whose edit-sensitive git facts refresh on the focused
+/// tier.
+pub(crate) fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
+    let viewed: HashSet<&PaneId> = snapshot.viewed_panes.iter().collect();
+    let mut focused = BTreeSet::new();
+    for group in &snapshot.worktree_groups {
+        if group.kind != SidebarWorktreeKind::Worktree {
+            continue;
+        }
+        let Some(path) = worktree_group_path(group) else {
+            continue;
+        };
+        if !Path::new(path).is_dir() {
+            continue;
+        }
+        if group.rows.iter().any(|row| {
+            row.pane
+                .as_ref()
+                .is_some_and(|pane| viewed.contains(&pane.pane_id))
+        }) {
+            focused.insert(path.to_owned());
+        }
+    }
+    focused
 }
 
 /// Refresh the diff stats for `needed` worktree paths and return the cache map

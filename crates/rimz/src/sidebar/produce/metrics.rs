@@ -8,8 +8,8 @@ use std::path::Path;
 use crate::ProcessState;
 use crate::ids::PaneId;
 use crate::ledger::atomic;
-use crate::sidebar::cache::unix_now_ms;
 use crate::sidebar::frame::{PaneFrame, PaneMetrics, PaneState};
+use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMPLE_TTL};
 
 mod zellij;

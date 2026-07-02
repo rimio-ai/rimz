@@ -240,7 +240,7 @@ impl LoopState {
             let fresh_pane_frame = outcome.fresh_pane_frame;
             if let Ok(pulled) = outcome.snapshot {
                 self.last_pulled = pulled;
-                let now_ms = crate::sidebar::cache::unix_now_ms();
+                let now_ms = crate::sidebar::timing::unix_now_ms();
                 self.event_store.prune(now_ms);
                 outcome.snapshot = Ok(fuse(&self.last_pulled, &self.event_store, now_ms));
             }
@@ -330,13 +330,13 @@ impl LoopState {
                     },
                     diag,
                 ) {
-                    Ok(true) => self.remind.note_ring(crate::sidebar::cache::unix_now_ms()),
+                    Ok(true) => self.remind.note_ring(crate::sidebar::timing::unix_now_ms()),
                     Ok(false) => {}
                     Err(err) => debug!(error = %err, "terminal notification emit failed"),
                 }
             }
             SidebarEvent::FocusStranded { pane_id } => {
-                let now_ms = crate::sidebar::cache::unix_now_ms();
+                let now_ms = crate::sidebar::timing::unix_now_ms();
                 let own_pane = crate::mux::own_pane_id(config.mux);
                 if let Some(target) = focus_stranded_target(
                     &self.current,
@@ -361,7 +361,7 @@ impl LoopState {
                     if own.is_some_and(|pane| focused.contains(pane)));
                 let own_unfocused = matches!(&event, SidebarEvent::FocusChanged { unfocused, .. }
                     if own.is_some_and(|pane| unfocused.contains(pane)));
-                let now_ms = crate::sidebar::cache::unix_now_ms();
+                let now_ms = crate::sidebar::timing::unix_now_ms();
                 self.event_store.append(event, sent_at_ms, now_ms);
                 let fused = fuse(&self.last_pulled, &self.event_store, now_ms);
                 self.fold_outcome(
@@ -431,7 +431,7 @@ impl LoopState {
         if grew && self.self_close.seen_sibling {
             self.dirty = true;
             self.paint_hold
-                .engage(Instant::now(), crate::sidebar::cache::unix_now_ms());
+                .engage(Instant::now(), crate::sidebar::timing::unix_now_ms());
             self.clear_pixel(terminal);
         } else {
             if grew {
@@ -788,7 +788,7 @@ impl LoopState {
             && resize_grew(self.prev_width, width)
         {
             self.paint_hold
-                .engage(now, crate::sidebar::cache::unix_now_ms());
+                .engage(now, crate::sidebar::timing::unix_now_ms());
             return true;
         }
         false
@@ -826,7 +826,7 @@ impl LoopState {
         let anchor = crate::sidebar::focus_anchor::FocusAnchor {
             pane_id: pane.clone(),
             offset: self.ui.scroll_offset,
-            stamp_ms: crate::sidebar::cache::unix_now_ms(),
+            stamp_ms: crate::sidebar::timing::unix_now_ms(),
         };
         if let Err(err) = crate::sidebar::focus_anchor::store(self.read_marks.runtime(), &anchor) {
             debug!(error = %err, "focus anchor write failed");
@@ -840,7 +840,7 @@ impl LoopState {
         let Some(anchor) = crate::sidebar::focus_anchor::load(self.read_marks.runtime()) else {
             return;
         };
-        let now_ms = crate::sidebar::cache::unix_now_ms();
+        let now_ms = crate::sidebar::timing::unix_now_ms();
         if anchor.stamp_ms > self.ui.last_focus_anchor_ms
             && anchor.pane_id == selected
             && crate::sidebar::focus_anchor::is_fresh(anchor.stamp_ms, now_ms)
@@ -861,7 +861,7 @@ impl LoopState {
         anim_start: Instant,
         diag: Option<&crate::diag::DiagSink>,
     ) -> Result<()> {
-        let now_ms = crate::sidebar::cache::unix_now_ms();
+        let now_ms = crate::sidebar::timing::unix_now_ms();
         let event = SidebarEvent::FocusChanged {
             focused: vec![pane.clone()],
             unfocused: Vec::new(),
@@ -892,7 +892,7 @@ impl LoopState {
     }
 
     fn observe_commit(&mut self) {
-        let now_ms = crate::sidebar::cache::unix_now_ms();
+        let now_ms = crate::sidebar::timing::unix_now_ms();
         let sig = observe::extract_sig(
             &self.current,
             &self.last_pulled,

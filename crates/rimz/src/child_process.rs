@@ -3,10 +3,13 @@
 //! `wait()`ed and cannot linger as zombies under the Rimz parent.
 
 use std::io;
-use std::process::{Child, Command};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+
+use crate::RuntimePaths;
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -18,6 +21,17 @@ static REAPER_INIT: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
 static REAPER_STARTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Build a detached `rimz` helper command, anchored to Rimz-owned shared
+/// storage so a deleted launch CWD cannot ENOENT the spawn.
+pub(crate) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {
+    let mut cmd = Command::new(exe);
+    cmd.current_dir(&runtime.shared_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd
+}
 
 /// Spawn `cmd` detached and hand its `Child` to the global reaper thread so the
 /// exited helper is `wait()`ed and never lingers as a zombie under a long-lived
@@ -164,6 +178,16 @@ mod tests {
 
         assert!(pid > 0);
         wait_until_reaped(pid);
+    }
+
+    #[test]
+    fn detached_rimz_command_anchors_cwd_to_shared_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        let cmd = detached_rimz_command(std::path::PathBuf::from("/nonexistent/rimz"), &runtime);
+
+        assert_eq!(cmd.get_current_dir(), Some(runtime.shared_root.as_path()));
     }
 
     #[test]

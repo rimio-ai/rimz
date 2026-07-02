@@ -703,7 +703,7 @@ fn fuse_mid_range_best_effort_drop_holds_most_drained() {
 
 // ── shortest_window_running: the window-priming ping guard ───────────────────
 
-use crate::sidebar::enrich::shortest_window_running;
+use crate::agents::shortest_window_running;
 
 /// Seed `claude`'s windows into a fresh shared cache and report the ping guard's
 /// verdict for `now`.

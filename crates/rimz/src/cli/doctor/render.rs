@@ -803,7 +803,7 @@ fn render_diagnostics(
                     &format!("{} recent records ({path})", records.len())
                 )
             )?;
-            let now_ms = rimz::sidebar::cache::unix_now_ms();
+            let now_ms = rimz::sidebar::timing::unix_now_ms();
             let mut table = Table::new(["", "SEVERITY", "KIND", "SEEN", "SUMMARY"]).right(&[3]);
             for record in records {
                 let health = severity_health(record.severity);

@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::agents::OauthUsageProbe;
-use crate::sidebar::cache::unix_now_ms;
 use crate::sidebar::timing::CREDITS_TTL;
+use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, SidebarProviderPanel};
 
 use super::credits::{ProviderCreditsEntry, merge_provider_credits_entry_if_due};
@@ -30,7 +30,7 @@ use super::{SidebarSnapshot, merge_account_rate_limits};
 /// One uniform loop: gate on the offline override, skip a kind whose credits cache
 /// is still fresh or whose throttle marker has not aged out, then spawn the
 /// detached helper. Producer-only; the network read runs in the child.
-pub(super) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
+pub(crate) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
     if crate::agents::credits::oauth_usage_offline() {
         return;
     }
@@ -165,7 +165,7 @@ fn spawn_usage_refresh(runtime: &RuntimePaths, kind: &str, merge_windows: bool) 
             return;
         }
     };
-    let mut cmd = super::detached_rimz_command(exe, runtime);
+    let mut cmd = crate::child_process::detached_rimz_command(exe, runtime);
     cmd.args([
         "agents",
         "refresh-usage",

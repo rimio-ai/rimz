@@ -12,8 +12,9 @@ use crate::diag::DiagSink;
 use crate::ids::SidebarInstanceId;
 use crate::ledger::paths::RuntimePaths;
 use crate::schema::diag::DiagEvent;
-use crate::sidebar::cache::{read_snapshot_cache, unix_now_ms};
+use crate::sidebar::cache::read_snapshot_cache;
 use crate::sidebar::frame::PaneFrame;
+use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{
     OBSERVE_COOLDOWN, OBSERVE_CROSSCHECK_TTL, OBSERVE_DEADPID_CONFIRMATIONS,
 };
@@ -101,10 +102,9 @@ impl Writer {
         let Some(roster) = self.latest_roster.clone() else {
             return;
         };
-        if let Some(frame) = read_snapshot_cache(
-            &self.runtime.root.join("snapshot.json"),
-            self.sink.session_name(),
-        ) {
+        if let Some(frame) =
+            read_snapshot_cache(&self.runtime.pane_frame_path(), self.sink.session_name())
+        {
             for kind in compare_roster_to_frame(&roster, &frame) {
                 self.emit_anomaly(AnomalyDraft::from_roster(unix_now_ms(), &roster, kind));
             }

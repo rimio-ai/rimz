@@ -152,7 +152,7 @@ fn run_fetch_cycle(
     let is_producer = election.is_producer();
     emit_producer_transition(diag, last_election, election);
     let exclude = config.own_pane.clone();
-    let now_ms = crate::sidebar::cache::unix_now_ms();
+    let now_ms = crate::sidebar::timing::unix_now_ms();
     let published_frame_produced_at_ms =
         crate::sidebar::cache::published_frame_produced_at_ms(runtime, &config.session_name);
     let published_frame_observed_at_ms =
@@ -230,7 +230,6 @@ fn run_fetch_cycle(
             exclude,
             min_pane_cache_ms: request.min_pane_cache_ms,
             diag: diag.cloned(),
-            heavy_lanes: crate::sidebar::produce::HeavyLaneMode::Project,
         };
         let produced = run_produce_guarded(cursor, |cursor| {
             crate::sidebar::produce::produce_snapshot(cursor, state, runtime, &opts)
@@ -297,7 +296,7 @@ fn evaluate_notifications(
     diag: Option<&crate::diag::DiagSink>,
     snapshot: &mut SidebarSnapshot,
 ) -> Vec<NotificationDelivery> {
-    let now_ms = crate::sidebar::cache::unix_now_ms();
+    let now_ms = crate::sidebar::timing::unix_now_ms();
     let mut episodes = UnreadEpisodes::load(runtime);
     let silent_opens = episodes.was_absent_on_load();
     let marks = ReadMarks::load_merged(runtime);
@@ -513,7 +512,7 @@ impl FetchRequest {
     pub(super) fn producer_fresh_panes() -> Self {
         Self {
             mode: FetchMode::ProducerFreshPanes,
-            min_pane_cache_ms: Some(crate::sidebar::cache::unix_now_ms()),
+            min_pane_cache_ms: Some(crate::sidebar::timing::unix_now_ms()),
             published_frame_hint: false,
         }
     }
@@ -521,7 +520,7 @@ impl FetchRequest {
     pub(super) fn hard_refresh() -> Self {
         Self {
             mode: FetchMode::HardRefresh,
-            min_pane_cache_ms: Some(crate::sidebar::cache::unix_now_ms()),
+            min_pane_cache_ms: Some(crate::sidebar::timing::unix_now_ms()),
             published_frame_hint: false,
         }
     }
@@ -620,7 +619,7 @@ pub(super) fn spawn_fetch_worker(
                         &mut cursor,
                         &mut post,
                     );
-                    if let Some(event) = meter.finish(tick, crate::sidebar::cache::unix_now_ms()) {
+                    if let Some(event) = meter.finish(tick, crate::sidebar::timing::unix_now_ms()) {
                         crate::sidebar::meter::report(diag.as_ref(), event);
                     }
                 }

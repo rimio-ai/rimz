@@ -7,7 +7,7 @@ use crate::ids::PaneId;
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
 use super::cache::read_snapshot_cache;
-use super::enrich::{EnrichMode, enrich};
+use super::enrich::{FoldOpts, enrich};
 
 #[cfg(test)]
 mod tests;
@@ -70,14 +70,19 @@ pub fn read_published_snapshot(
     exclude: Option<&PaneId>,
 ) -> crate::ledger::snapshot::Result<SidebarSnapshot> {
     let base = rollup_snapshot(state, cursor)?;
-    let cache = read_snapshot_cache(&runtime.root.join("snapshot.json"), session);
+    let cache = read_snapshot_cache(&runtime.pane_frame_path(), session);
     Ok(enrich(
         base,
         cache,
         runtime,
         Some(&state.messages_dir),
         exclude,
-        EnrichMode::Cached,
+        FoldOpts {
+            producing: false,
+            fresh_roots: None,
+            config: None,
+            lanes: None,
+        },
         None,
     ))
 }

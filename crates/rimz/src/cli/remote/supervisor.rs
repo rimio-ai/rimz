@@ -554,7 +554,7 @@ fn run_probe_stream(
             acked = true;
         }
         if drained.reported_rtt_changed {
-            let sent_at_ms = rimz::sidebar::cache::unix_now_ms();
+            let sent_at_ms = rimz::sidebar::timing::unix_now_ms();
             let probe = LinkProbe::new(*seq, sent_at_ms, window.stats());
             // Stats refreshes update the remote cache immediately after a
             // displayed RTT change. They are not measurement samples, so the
@@ -572,7 +572,7 @@ fn run_probe_stream(
         maybe_send_probe_blackout(events, window, blackout_latched, *seen_ack);
 
         if Instant::now() >= next_tick {
-            let sent_at_ms = rimz::sidebar::cache::unix_now_ms();
+            let sent_at_ms = rimz::sidebar::timing::unix_now_ms();
             let probe = LinkProbe::new(*seq, sent_at_ms, window.stats());
             window.record_sent(*seq, sent_at_ms);
             *seq = (*seq).saturating_add(1);
@@ -613,7 +613,7 @@ fn maybe_send_probe_blackout(
     blackout_latched: &mut bool,
     seen_ack: bool,
 ) {
-    let now_ms = rimz::sidebar::cache::unix_now_ms();
+    let now_ms = rimz::sidebar::timing::unix_now_ms();
     maybe_send_probe_blackout_at(events, window, blackout_latched, seen_ack, now_ms);
 }
 
@@ -650,7 +650,7 @@ fn drain_probe_acks(
 ) -> ProbeAckDrain {
     let mut drained = ProbeAckDrain::default();
     while let Ok(seq) = ack_rx.try_recv() {
-        let now_ms = rimz::sidebar::cache::unix_now_ms();
+        let now_ms = rimz::sidebar::timing::unix_now_ms();
         let before_rtt = window.reported_rtt_ms();
         if !window.record_ack(seq, now_ms) {
             continue;

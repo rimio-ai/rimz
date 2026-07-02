@@ -23,6 +23,7 @@ pub mod notify;
 pub mod observe;
 pub mod produce;
 pub mod read_marks;
+pub mod refresh;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod timing;

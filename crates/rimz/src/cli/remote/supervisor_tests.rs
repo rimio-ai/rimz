@@ -40,7 +40,7 @@ fn finish_probe_stream_drains_tail_ack() {
     let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
     let mut blackout_latched = false;
     let mut seen_ack = false;
-    let sent_at_ms = rimz::sidebar::cache::unix_now_ms().saturating_sub(20);
+    let sent_at_ms = rimz::sidebar::timing::unix_now_ms().saturating_sub(20);
 
     window.record_sent(7, sent_at_ms);
     window.record_sent(8, sent_at_ms + 10);
@@ -79,7 +79,7 @@ fn ack_drain_reports_when_rtt_becomes_publishable() {
     let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
     let mut blackout_latched = false;
     let mut seen_ack = false;
-    let now_ms = rimz::sidebar::cache::unix_now_ms();
+    let now_ms = rimz::sidebar::timing::unix_now_ms();
 
     window.record_sent(1, now_ms.saturating_sub(50));
     ack_tx.send(1).expect("send first ack");

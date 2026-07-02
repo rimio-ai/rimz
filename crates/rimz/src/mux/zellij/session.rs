@@ -11,7 +11,8 @@ use super::raw_pane::{
 use super::{HEALTH_PROBE_TIMEOUT, LIST_PANES_ATTEMPTS, LIST_PANES_RETRY_DELAY, ZellijBackend};
 use crate::ids::WorkspaceId;
 use crate::mux::{MuxErr, Result};
-use crate::sidebar::cache::{pane_topology_cache_is_fresh, unix_now_ms};
+use crate::sidebar::cache::pane_topology_cache_is_fresh;
+use crate::sidebar::timing::unix_now_ms;
 
 impl ZellijBackend {
     pub(super) fn list_panes_with_session(&self, session: Option<&str>) -> Result<Vec<RawPane>> {

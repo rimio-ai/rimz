@@ -97,9 +97,19 @@ mod tests {
     use crate::agents::AgentStatus;
     use crate::ids::WorkspaceId;
     use crate::ledger::atomic;
-    use crate::sidebar::cache::{AccountsCache, unix_now_ms};
-    use crate::sidebar::enrich::{EnrichMode, HeavyLanes, enrich};
+    use crate::sidebar::enrich::AccountsCache;
+    use crate::sidebar::enrich::{FoldOpts, enrich};
     use crate::sidebar::test_support::{activity_row, worktree_group};
+    use crate::sidebar::timing::unix_now_ms;
+
+    fn cached_opts() -> FoldOpts<'static> {
+        FoldOpts {
+            producing: false,
+            fresh_roots: None,
+            config: None,
+            lanes: None,
+        }
+    }
 
     /// A cost-bearing agent row for the overlay glue: `id`, the statusline
     /// `total_cost_usd`, and the registration stamp are the three fields
@@ -200,7 +210,7 @@ mod tests {
             &runtime,
             None,
             None,
-            EnrichMode::Cached,
+            cached_opts(),
             None,
         );
         assert!(
@@ -219,7 +229,7 @@ mod tests {
             &runtime,
             None,
             None,
-            EnrichMode::Cached,
+            cached_opts(),
             None,
         );
         assert_eq!(
@@ -228,27 +238,28 @@ mod tests {
             "consumer folds do not advance an existing baseline sidecar"
         );
 
-        let compute_spending = |_: &SidebarSnapshot| crate::agents::spending::SpendingCaches {
-            workspace: crate::agents::spending::WorkspaceSpendingCache {
-                refreshed_at_ms: walk_ms,
+        let lanes = crate::sidebar::refresh::RefreshedLanes {
+            spending: crate::agents::spending::SpendingCaches {
+                workspace: crate::agents::spending::WorkspaceSpendingCache {
+                    refreshed_at_ms: walk_ms,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
-            ..Default::default()
+            accounts: BTreeMap::new(),
+            pr_states: BTreeMap::new(),
         };
-        let refresh_git = |_: &mut SidebarSnapshot| {};
         let _ = enrich(
             build_snapshot(),
             None,
             &runtime,
             None,
             None,
-            EnrichMode::Producing {
-                roots: None,
-                heavy: HeavyLanes::Refresh {
-                    compute_spending: &compute_spending,
-                    refresh_git: &refresh_git,
-                },
-                config: Box::new(crate::config::MachineConfig::default()),
+            FoldOpts {
+                producing: true,
+                fresh_roots: None,
+                config: Some(Box::new(crate::config::MachineConfig::default())),
+                lanes: Some(&lanes),
             },
             None,
         );

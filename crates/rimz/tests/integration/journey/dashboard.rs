@@ -4,7 +4,8 @@ use jiff::{SignedDuration, Timestamp};
 use rimz::agents::AgentAccount;
 use rimz::agents::spending::{SpendTally, SpendWindow, Spending};
 use rimz::ids::MuxName;
-use rimz::sidebar::cache::{AccountsCache, unix_now_ms};
+use rimz::sidebar::enrich::AccountsCache;
+use rimz::sidebar::timing::unix_now_ms;
 use serde_json::json;
 
 use super::{KEY_RIGHT, RoomHarness, SETTLE, session_start_at, user_prompt_submit};

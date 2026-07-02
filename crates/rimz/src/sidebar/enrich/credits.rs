@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::ExtraCredits;
 use crate::config::AccountsConfig;
-use crate::sidebar::cache::unix_now_ms;
+use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{CREDITS_DISPLAY_MAX_AGE, CREDITS_RETRY_TTL, CREDITS_TTL};
 use crate::{RuntimePaths, SidebarSnapshot};
 

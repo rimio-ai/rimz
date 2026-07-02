@@ -2301,7 +2301,7 @@ fn seed_rate_limit_budget(env: &Env, used_percentage: u8) {
         duration_mins: Some(300),
         ..Default::default()
     };
-    let cache = rimz::sidebar::enrich::RateLimitsCache {
+    let cache = rimz::agents::RateLimitsCache {
         refreshed_at_ms: 0,
         windows: [(
             "claude".to_owned(),

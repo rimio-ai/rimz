@@ -52,10 +52,10 @@ impl Harness {
     /// retry-fresh unavailable accounts stamp. Re-call right before each
     /// produce under test — the pane frame rides the short poll-mode TTL.
     pub fn publish_fresh_produce_inputs(&self, session: &str, panes: Vec<rimz::pane::PaneRef>) {
-        let now_ms = rimz::sidebar::cache::unix_now_ms();
+        let now_ms = rimz::sidebar::timing::unix_now_ms();
         let frame = rimz::sidebar::frame::assemble_frame(panes, now_ms, session);
         std::fs::write(
-            self.runtime_paths.root.join("snapshot.json"),
+            self.runtime_paths.pane_frame_path(),
             serde_json::to_vec(&frame).expect("serialize pane frame"),
         )
         .expect("publish pane frame");
@@ -64,7 +64,7 @@ impl Harness {
             now_ms,
             &rimz::agents::spending::Spending::default(),
         );
-        let accounts = rimz::sidebar::cache::AccountsCache {
+        let accounts = rimz::sidebar::enrich::AccountsCache {
             refreshed_at_ms: now_ms,
             accounts: Default::default(),
             ok: false,

@@ -1,8 +1,15 @@
 use super::*;
 use crate::ids::WorkspaceId;
 use crate::ledger::atomic;
+use crate::sidebar::enrich::PrStateCache;
 use crate::sidebar::frame::assemble_frame;
+use crate::sidebar::produce::git::{DiffStats, DiffStatsCacheEntry, WorktreeRootsCache};
 use crate::sidebar::test_support::pane;
+use crate::sidebar::timing::{
+    DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL, PR_STATE_RETRY_TTL, PR_STATE_TTL,
+    PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, WORKTREE_ROOTS_TTL, unix_now_ms,
+};
+use std::collections::BTreeMap;
 
 #[test]
 fn pane_topology_cache_freshness_honors_requested_floor() {
@@ -142,7 +149,7 @@ fn published_frame_age_is_session_scoped_and_saturating() {
 
     let produced_at_ms = 1_700_000_000_000;
     let cache = assemble_frame(Vec::new(), produced_at_ms, "rimz-test");
-    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &cache).unwrap();
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &cache).unwrap();
 
     assert_eq!(
         published_frame_age_ms(&runtime, "rimz-test", produced_at_ms + 1_500),
@@ -182,12 +189,12 @@ fn published_frame_unwatched_is_session_scoped() {
     assert!(!published_frame_unwatched(&runtime, "rimz-test"));
 
     let mut cache = assemble_frame(Vec::new(), 1_700_000_000_000, "rimz-test");
-    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &cache).unwrap();
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &cache).unwrap();
     assert!(published_frame_unwatched(&runtime, "rimz-test"));
     assert!(!published_frame_unwatched(&runtime, "other-session"));
 
     cache.viewed_panes = vec![pane("terminal_9", "zsh", "/tmp").pane_id];
-    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &cache).unwrap();
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &cache).unwrap();
     assert!(!published_frame_unwatched(&runtime, "rimz-test"));
 }
 

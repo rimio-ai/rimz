@@ -83,9 +83,11 @@ pub use state::{
     is_turn_complete, is_turn_dead,
 };
 pub(crate) use state::{
-    AccountBudget, ResumeArm, display_turn_error, effective_turn_error_class,
-    rate_limit_window_kinds, resume_park,
+    AccountBudget, ResumeArm, account_budgets_from_caches, display_turn_error,
+    effective_turn_error_class, rate_limit_window_kinds, read_rate_limits_cache,
+    resume_gate_recovered, resume_park, shortest_window_running,
 };
+pub use state::{PendingRefill, RateLimitsCache};
 pub use transcript::{
     AskAnswer, AskOption, AskQuestion, ChatEntry, TranscriptMessage, TranscriptRole, answers_text,
 };

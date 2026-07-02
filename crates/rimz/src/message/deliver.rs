@@ -224,9 +224,9 @@ fn delivery_candidate(
         return Ok(None);
     }
     if message.gate == DeliveryGate::Resume
-        && !runtime.as_ref().is_some_and(|runtime| {
-            crate::sidebar::enrich::resume_gate_recovered(runtime, agent, now)
-        })
+        && !runtime
+            .as_ref()
+            .is_some_and(|runtime| crate::agents::resume_gate_recovered(runtime, agent, now))
     {
         return Ok(None);
     }

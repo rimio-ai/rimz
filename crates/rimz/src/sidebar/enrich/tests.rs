@@ -3,11 +3,16 @@ use crate::agents::SessionOrigin;
 use crate::agents::{AgentState, AgentStatus, TurnPhase};
 use crate::ledger::atomic;
 use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
-use crate::sidebar::cache::{
-    AccountsCache, CodexDaemonReap, DiffStatsCacheEntry, read_codex_daemon_reap, unix_now_ms,
-    write_codex_daemon_reap,
+use crate::sidebar::enrich::AccountsCache;
+use crate::sidebar::produce::git::{
+    DiffStatsCacheEntry, focused_worktree_paths, hot_worktree_paths, needed_worktree_paths,
+};
+use crate::sidebar::refresh::{
+    CodexDaemonReap, daemon_reap_due, read_codex_daemon_reap, write_codex_daemon_reap,
 };
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
+use crate::sidebar::timing::unix_now_ms;
+use crate::sidebar::timing::{CODEX_DAEMON_REAP_TTL, GIT_ACTIVITY_WINDOW};
 use jiff::SignedDuration;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -21,12 +26,22 @@ fn runtime() -> (tempfile::TempDir, RuntimePaths, SidebarSnapshot) {
     (dir, runtime, snapshot)
 }
 
-#[test]
-fn detached_rimz_command_anchors_cwd_to_shared_root() {
-    let (_dir, runtime, _snapshot) = runtime();
-    let cmd = detached_rimz_command(std::path::PathBuf::from("/nonexistent/rimz"), &runtime);
+fn cached_opts() -> FoldOpts<'static> {
+    FoldOpts {
+        producing: false,
+        fresh_roots: None,
+        config: None,
+        lanes: None,
+    }
+}
 
-    assert_eq!(cmd.get_current_dir(), Some(runtime.shared_root.as_path()));
+fn producing_opts() -> FoldOpts<'static> {
+    FoldOpts {
+        producing: true,
+        fresh_roots: None,
+        config: Some(Box::new(crate::config::MachineConfig::default())),
+        lanes: None,
+    }
 }
 
 fn diff_entry(
@@ -488,7 +503,7 @@ fn cached_enrich_reaps_codex_clear_session_before_pane_binding() {
         &runtime,
         None,
         None,
-        EnrichMode::Cached,
+        cached_opts(),
         None,
     );
 
@@ -531,7 +546,7 @@ fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
         &runtime_paths,
         None,
         None,
-        EnrichMode::Cached,
+        cached_opts(),
         None,
     );
 
@@ -559,7 +574,7 @@ fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
         &empty_runtime,
         None,
         None,
-        EnrichMode::Cached,
+        cached_opts(),
         None,
     );
     assert_eq!(snapshot.agents.len(), 1, "absent cache reaps nothing");
@@ -614,11 +629,7 @@ fn project_lane_enrich_reads_stale_codex_daemon_reap_without_rewriting() {
         &runtime_paths,
         None,
         None,
-        EnrichMode::Producing {
-            roots: None,
-            heavy: HeavyLanes::Project,
-            config: Box::new(crate::config::MachineConfig::default()),
-        },
+        producing_opts(),
         None,
     );
 
@@ -651,7 +662,7 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
         &runtime,
         None,
         None,
-        EnrichMode::Cached,
+        cached_opts(),
         None,
     );
 
@@ -681,7 +692,7 @@ fn frame_fold_carries_presence_onto_snapshot() {
         &runtime,
         None,
         None,
-        EnrichMode::Cached,
+        cached_opts(),
         None,
     );
 
@@ -709,11 +720,7 @@ fn enrich_presence_with_default_config(
         runtime,
         None,
         None,
-        EnrichMode::Producing {
-            roots: None,
-            heavy: HeavyLanes::Project,
-            config: Box::new(crate::config::MachineConfig::default()),
-        },
+        producing_opts(),
         None,
     )
 }
@@ -935,15 +942,7 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
         &scoped,
     );
 
-    snapshot = enrich(
-        snapshot,
-        None,
-        &runtime,
-        None,
-        None,
-        EnrichMode::Cached,
-        None,
-    );
+    snapshot = enrich(snapshot, None, &runtime, None, None, cached_opts(), None);
 
     assert_eq!(
         snapshot
@@ -982,15 +981,7 @@ fn cached_enrich_ignores_old_provider_spending_version() {
     };
     atomic::write_temp_then_rename_cache(&runtime.shared_provider_spending_path(), &old).unwrap();
 
-    let snapshot = enrich(
-        snapshot,
-        None,
-        &runtime,
-        None,
-        None,
-        EnrichMode::Cached,
-        None,
-    );
+    let snapshot = enrich(snapshot, None, &runtime, None, None, cached_opts(), None);
 
     assert_eq!(
         snapshot.value_tally, None,
@@ -1076,15 +1067,7 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
             &project,
         )],
     )];
-    let snapshot = enrich(
-        snapshot,
-        None,
-        &runtime,
-        None,
-        None,
-        EnrichMode::Cached,
-        None,
-    );
+    let snapshot = enrich(snapshot, None, &runtime, None, None, cached_opts(), None);
 
     assert_eq!(
         snapshot.workspace_value_tally.as_ref().map(|tally| (

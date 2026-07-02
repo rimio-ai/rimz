@@ -1,13 +1,12 @@
 //! Shared sidebar enrichment fold over a ledger rollup and an optional pane frame.
 //!
-//! One ordered spine serves both producer and consumer reads. Producer-only work
-//! arrives through [`EnrichMode::Producing`]; consumer reads project published
-//! runtime caches and sidecars only.
+//! One ordered spine serves both producer and consumer reads. Heavy producer
+//! work runs in `sidebar::refresh`; this fold projects either supplied lane
+//! values or the producer's published runtime caches.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
@@ -16,26 +15,21 @@ use crate::agents::spending::{
     compute_scoped_tally, discover_spending_files, read_provider_spending_cache,
     read_spending_cache, read_workspace_spending_cache, unix_secs_now,
 };
-use crate::agents::{AccountBudget, AgentStatus};
 use crate::harness::auto_continue::{self, ResumeMessage};
-use crate::ids::AgentKind;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::ledger::snapshot::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, ResumeOutcome, SidebarPresence,
 };
 use crate::{
     RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarSnapshot,
-    SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState, WorktreeTrunkSync,
+    SidebarWorktreeKind, WorktreePrState, WorktreeTrunkSync,
 };
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use serde::Serialize;
 
-use super::cache::{
-    CodexDaemonReap, DiffStatsCache, GIT_ACTIVITY_WINDOW, PrStateCache, read_codex_daemon_reap,
-    read_diff_stats_cache, unix_now_ms, write_codex_daemon_reap,
-};
 use super::frame::{PaneFrame, PaneMetrics};
-use super::timing::{CODEX_DAEMON_REAP_TTL, LINK_STATS_EXPIRE, LINK_STATS_STALE};
+use super::refresh::read_codex_daemon_reap;
+use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 
 mod accounts;
 mod codex_refresh;
@@ -55,135 +49,25 @@ pub use credits::{
 };
 pub use live_spend::{apply_live_today_spend, live_row_costs};
 pub(crate) use rate_limits::apply_rate_limit_cache;
-pub use rate_limits::{RateLimitsCache, merge_account_rate_limits, shortest_window_running};
+pub use rate_limits::merge_account_rate_limits;
 pub use usage_refresh::merge_oauth_usage_if_due;
 
-use accounts::{cached_accounts_for_snapshot, produce_accounts, read_accounts_cache};
-use codex_refresh::refresh_codex_sessions;
-use forge::{produce_pr_states, read_pr_state_cache};
+use crate::sidebar::produce::git::worktree_group_path;
+use crate::sidebar::produce::git::{DiffStatsCache, DiffStatsCacheEntry, read_diff_stats_cache};
+pub use accounts::AccountsCache;
+pub(crate) use accounts::{cached_accounts_for_snapshot, produce_accounts, read_accounts_cache};
+pub(crate) use codex_refresh::refresh_codex_sessions;
+pub use forge::PrStateCache;
+pub(crate) use forge::{produce_pr_states, read_pr_state_cache};
 use live_spend::refresh_live_spend_baselines;
-use usage_refresh::refresh_account_usage;
-
-pub(crate) fn account_budgets_from_caches(
-    runtime: &RuntimePaths,
-    now: Timestamp,
-) -> BTreeMap<AgentKind, AccountBudget> {
-    let rate_limits = rate_limits::read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    rate_limits
-        .windows
-        .into_iter()
-        .map(|(kind, limits)| {
-            (
-                AgentKind::new_unchecked(kind),
-                AccountBudget {
-                    windows: limits
-                        .windows
-                        .into_iter()
-                        .map(|window| window.projected_at(now))
-                        .collect(),
-                },
-            )
-        })
-        .collect()
-}
-
-fn daemon_reap_due(cache: &Option<CodexDaemonReap>, now_ms: u64) -> bool {
-    cache.as_ref().is_none_or(|cache| {
-        now_ms.saturating_sub(cache.produced_at_ms) > CODEX_DAEMON_REAP_TTL.as_millis() as u64
-    })
-}
-
-fn should_probe_codex_daemon_reap(snapshot: &SidebarSnapshot) -> bool {
-    snapshot.agents.iter().any(|agent| {
-        agent.kind == "codex" && agent.pane.is_none() && agent.parent_agent_id.is_none()
-    })
-}
-
-fn refresh_codex_daemon_reap_cache(
-    snapshot: &SidebarSnapshot,
-    runtime: &RuntimePaths,
-    now_ms: u64,
-) -> CodexDaemonReap {
-    let current = read_codex_daemon_reap(runtime);
-    if !should_probe_codex_daemon_reap(snapshot) || !daemon_reap_due(&current, now_ms) {
-        return current.unwrap_or_default();
-    }
-    let daemon_pids = crate::remote_control::codex_daemon_pids();
-    let loaded = if daemon_pids.is_empty() {
-        None
-    } else {
-        crate::agents::codex::loaded_daemon_threads()
-    };
-    let inputs = CodexDaemonReap {
-        produced_at_ms: now_ms,
-        daemon_pids,
-        loaded,
-    };
-    if let Err(err) = write_codex_daemon_reap(runtime, &inputs) {
-        tracing::debug!(
-            error = %err,
-            "codex daemon reap cache write failed"
-        );
-    }
-    inputs
-}
-
-/// Whether a hidden resume-gated message may enter a paused agent now. The
-/// check stays beside the account-budget cache reader so CLI delivery can use
-/// the same fused budget projection as the sidebar producer without exposing
-/// the cache shape.
-pub fn resume_gate_recovered(
-    runtime: &RuntimePaths,
-    agent: &crate::agents::AgentState,
-    now: Timestamp,
-) -> bool {
-    use crate::agents::{ResumeArm, TurnErrorClass, effective_turn_error_class, resume_park};
-
-    if agent.effective_status() != AgentStatus::Paused {
-        return false;
-    }
-    let account_budgets = account_budgets_from_caches(runtime, now);
-    let budget = account_budgets.get(&agent.kind);
-    match resume_park(agent, budget, now) {
-        Some(ResumeArm::Overloaded { .. }) => true,
-        Some(ResumeArm::RateLimit { .. }) => {
-            // A still-spent window is not recovered; the recovered-budget path
-            // is the `None` arm below.
-            false
-        }
-        None => crate::agents::display_turn_error(
-            agent.status,
-            agent.context.as_ref(),
-            agent.last_activity,
-            agent.turn_started_at,
-        )
-        .map(effective_turn_error_class)
-        .is_some_and(|class| {
-            matches!(
-                class,
-                TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
-            ) && budget.is_some_and(|budget| budget.subscription_budget_available(now))
-        }),
-    }
-}
-
-/// Build a detached `rimz` helper command for the sidebar producer, anchored to
-/// Rimz-owned shared storage so a deleted launch CWD cannot ENOENT the spawn.
-pub(crate) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {
-    let mut cmd = Command::new(exe);
-    cmd.current_dir(&runtime.shared_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    cmd
-}
+pub(crate) use usage_refresh::refresh_account_usage;
 
 /// The repo's worktree checkout roots the producer last published, read-only
 /// (no `git worktree list` fork). A consumer reuses whatever the elder cached,
 /// even stale; an empty set leaves the reducer's project-root prefix test to
 /// stand alone.
 pub fn cached_worktree_roots(runtime: &RuntimePaths) -> Vec<PathBuf> {
-    read_diff_stats_cache(&runtime.root.join("diff-stats.json"))
+    read_diff_stats_cache(&runtime.diff_stats_path())
         .worktrees
         .map(|cache| cache.roots)
         .unwrap_or_default()
@@ -199,113 +83,6 @@ pub(crate) fn read_auto_continue_resume_messages(
     } else {
         Vec::new()
     }
-}
-
-/// The checkout path a group's git reads run against. A path-keyed group —
-/// per-path or root-keyed — carries it as the key's first line (the key may
-/// carry a `\n<branch>` suffix when one path holds two branches), which is
-/// stabler than any one row's cwd: a root-keyed pod's rows can sit in
-/// different subdirs of one checkout. A non-path key (`branch:…`, the
-/// `external` catch-all) falls back to the rows' shared path.
-fn worktree_group_path(group: &SidebarWorktreeGroup) -> Option<&str> {
-    group
-        .key
-        .split('\n')
-        .next()
-        .filter(|key| Path::new(key).is_absolute())
-        .or_else(|| {
-            group
-                .rows
-                .iter()
-                .find_map(|row| row.worktree_path.as_deref())
-                .filter(|path| !path.is_empty())
-        })
-}
-
-/// The live worktree paths this snapshot needs git facts for: a `Worktree`-kind
-/// group whose recovered path is a live directory, de-duplicated so two
-/// branch-split groups for one dir share a single git read. The producer feeds
-/// this to its git refresh; projection ([`project_diff_stats`]) re-derives the
-/// same live-dir set so a stale entry for a now-missing worktree never resurfaces.
-pub fn needed_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
-    let mut needed: Vec<String> = Vec::new();
-    for group in &snapshot.worktree_groups {
-        if group.kind != SidebarWorktreeKind::Worktree {
-            continue;
-        }
-        let Some(path) = worktree_group_path(group) else {
-            continue;
-        };
-        if Path::new(path).is_dir() && !needed.iter().any(|known| known == path) {
-            needed.push(path.to_owned());
-        }
-    }
-    needed
-}
-
-/// The worktree paths whose git facts refresh on the fast [`DIFF_STATS_TTL`]:
-/// a `Worktree`-kind group is hot when any of its agent rows is `Running` or
-/// was active within [`GIT_ACTIVITY_WINDOW`] of `snapshot.now`. Derived from
-/// the group's own rows with the same path recovery and live-dir gate as
-/// [`needed_worktree_paths`], so the hot set is a subset of the needed set by
-/// construction — no equality-vs-containment mismatch is possible, whatever
-/// raw path an agent's payload carried. A group with only process rows is
-/// cold; subagents fold under their parent's row, whose activity covers them.
-/// Pure over the view-model and its one `now`.
-pub fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
-    let window = SignedDuration::try_from(GIT_ACTIVITY_WINDOW).unwrap_or(SignedDuration::MAX);
-    let mut hot = BTreeSet::new();
-    for group in &snapshot.worktree_groups {
-        if group.kind != SidebarWorktreeKind::Worktree {
-            continue;
-        }
-        let Some(path) = worktree_group_path(group) else {
-            continue;
-        };
-        if !Path::new(path).is_dir() {
-            continue;
-        }
-        // A future-stamped row reads as a negative age — within the window,
-        // the safe (hot) direction, matching the saturating TTL convention.
-        let any_hot = group.rows.iter().any(|row| {
-            row.is_agent()
-                && (row.status() == Some(AgentStatus::Running)
-                    || snapshot.now.duration_since(row.last_activity) <= window)
-        });
-        if any_hot {
-            hot.insert(path.to_owned());
-        }
-    }
-    hot
-}
-
-/// The worktree paths whose edit-sensitive git facts refresh on the focused
-/// tier: a `Worktree`-kind group is focused when any rendered row is bound to a
-/// pane attached clients are currently viewing. Derived with the same path
-/// recovery and live-dir gate as [`needed_worktree_paths`], so focused is a
-/// subset of needed by construction.
-pub fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
-    let viewed: HashSet<&PaneId> = snapshot.viewed_panes.iter().collect();
-    let mut focused = BTreeSet::new();
-    for group in &snapshot.worktree_groups {
-        if group.kind != SidebarWorktreeKind::Worktree {
-            continue;
-        }
-        let Some(path) = worktree_group_path(group) else {
-            continue;
-        };
-        if !Path::new(path).is_dir() {
-            continue;
-        }
-        if group.rows.iter().any(|row| {
-            row.pane
-                .as_ref()
-                .is_some_and(|pane| viewed.contains(&pane.pane_id))
-        }) {
-            focused.insert(path.to_owned());
-        }
-    }
-    focused
 }
 
 /// Fold the remote-link stats sidecar onto the snapshot. Local rooms never have
@@ -422,12 +199,12 @@ pub fn project_pr_states(snapshot: &mut SidebarSnapshot, cache: &PrStateCache) {
 }
 
 pub(crate) fn project_cached_pr_states(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths) {
-    let cache = read_pr_state_cache(&runtime.root.join("pr-state.json"));
+    let cache = read_pr_state_cache(&runtime.pr_state_path());
     project_pr_states(snapshot, &cache);
 }
 
 pub(crate) fn classify_trunk_sync(
-    entry: &super::cache::DiffStatsCacheEntry,
+    entry: &DiffStatsCacheEntry,
     label: &str,
     trunk_display: &str,
 ) -> Option<WorktreeTrunkSync> {
@@ -483,41 +260,14 @@ pub fn wired_lazy_default_models() -> BTreeMap<String, String> {
         .collect()
 }
 
-/// How one [`enrich`] call resolves its producer-vs-consumer differences. The
-/// fold order is one spine; the mode names each insertion point.
-pub enum EnrichMode<'a> {
-    /// A consumer tab's read-only fold: every input is a published runtime
-    /// cache or sidecar — the cached worktree roots, the published accounts
-    /// and spending caches, the cached diff-stats projection. No `list-panes`,
-    /// no git, no subprocess, no ledger lock.
-    Cached,
-    /// The elected producer's fold. The caller supplies the producer-only
-    /// inputs and callbacks, and the spine sequences them into the shared
-    /// order.
-    Producing {
-        /// The room's freshly enumerated group roots; `None` when the
-        /// snapshot carries no project root.
-        roots: Option<Vec<PathBuf>>,
-        /// How the heavyweight producer caches enter this fold.
-        heavy: HeavyLanes<'a>,
-        /// The per-machine config, loaded once by the caller. Boxed to keep
-        /// the enum the size of its `Cached` common case.
-        config: Box<crate::config::MachineConfig>,
-    },
-}
-
-pub enum HeavyLanes<'a> {
-    /// Fork + publish the heavy caches inline.
-    Refresh {
-        /// The fleet spending walk. The shared publish is account-global;
-        /// per-workspace live-cost baselines are refreshed by the fold after
-        /// the walk cache is available and rows hold their latest context.
-        compute_spending: &'a dyn Fn(&SidebarSnapshot) -> SpendingCaches,
-        /// The per-worktree git refresh over the snapshot's groups.
-        refresh_git: &'a dyn Fn(&mut SidebarSnapshot),
-    },
-    /// Project the last cache refresh without producing stale lanes inline.
-    Project,
+/// Producer-vs-consumer inputs for one fold. The spine stays single: producer
+/// flags only gate producer-owned side effects, and heavy lanes are plain data
+/// supplied by `sidebar::refresh` or read from published caches.
+pub struct FoldOpts<'a> {
+    pub producing: bool,
+    pub fresh_roots: Option<Vec<PathBuf>>,
+    pub config: Option<Box<crate::config::MachineConfig>>,
+    pub lanes: Option<&'a crate::sidebar::refresh::RefreshedLanes>,
 }
 
 #[derive(Debug, Serialize)]
@@ -537,47 +287,43 @@ struct ProducerBindingFallbackLog<'a> {
 /// (no publish yet) or a producer call with no live session — and leaves
 /// `worktree_groups` empty while the rollup metadata remains available.
 ///
-/// [`EnrichMode::Cached`] reads only runtime caches and sidecars;
-/// [`EnrichMode::Producing`] carries the producer inputs in the mode and
-/// inserts the daemon reap, pane/root producer work, and either heavy-lane
-/// refresh or heavy-lane projection at their named points.
+/// The fold reads only runtime caches and sidecars unless `opts.lanes` supplies
+/// freshly refreshed account, spending, and PR values for projection.
 pub fn enrich(
     mut snapshot: SidebarSnapshot,
     frame: Option<PaneFrame>,
     runtime: &RuntimePaths,
     messages_dir: Option<&Path>,
     exclude: Option<&PaneId>,
-    mut mode: EnrichMode<'_>,
+    mut opts: FoldOpts<'_>,
     diag: Option<&crate::diag::DiagSink>,
 ) -> SidebarSnapshot {
-    let producing = matches!(mode, EnrichMode::Producing { .. });
-    let machine_config = match &mode {
-        EnrichMode::Cached => crate::config::MachineConfig::load().unwrap_or_default(),
-        EnrichMode::Producing { config, .. } => (**config).clone(),
-    };
+    let producing = opts.producing;
+    let machine_config = opts
+        .config
+        .as_deref()
+        .cloned()
+        .unwrap_or_else(|| crate::config::MachineConfig::load().unwrap_or_default());
     // Attention timing is needed during pane projection, before the full config
     // fold builds provider panels and stamps context severity.
     snapshot.sidebar = machine_config.sidebar.clone();
     snapshot.theme = machine_config.theme.clone();
     snapshot.attention = machine_config.agents.attention;
-    fold_link_stats(&mut snapshot, runtime, crate::sidebar::cache::unix_now_ms());
+    fold_link_stats(
+        &mut snapshot,
+        runtime,
+        crate::sidebar::timing::unix_now_ms(),
+    );
 
     // The room's enumerated group roots — a repo room's worktree checkouts, so
     // one parked outside the project root still earns its own pod instead of
     // folding into `external`. Directory rooms get git roots from each
     // git-backed row's resolved worktree during the row fold. The producer
     // passes its fresh enumeration in; a consumer reads the cached one back.
-    match &mut mode {
-        EnrichMode::Cached => {
-            if snapshot.project_root.is_some() {
-                snapshot = snapshot.with_worktree_roots(cached_worktree_roots(runtime));
-            }
-        }
-        EnrichMode::Producing { roots, .. } => {
-            if let Some(roots) = roots.take() {
-                snapshot = snapshot.with_worktree_roots(roots);
-            }
-        }
+    if let Some(roots) = opts.fresh_roots.take() {
+        snapshot = snapshot.with_worktree_roots(roots);
+    } else if snapshot.project_root.is_some() {
+        snapshot = snapshot.with_worktree_roots(cached_worktree_roots(runtime));
     }
     // The repo's durable worktree home, resolved purely from the project root
     // plus the `[agents.worktree] dir` template — independent of `git worktree list`,
@@ -626,17 +372,7 @@ pub fn enrich(
     // root `codex` session, so the common room pays no proc scan. Best-effort
     // and fail-safe: no daemon process, absent cache, or an untrusted loaded
     // list keeps every session.
-    let daemon_inputs = match &mode {
-        EnrichMode::Producing {
-            heavy: HeavyLanes::Refresh { .. },
-            ..
-        } => refresh_codex_daemon_reap_cache(&snapshot, runtime, unix_now_ms()),
-        EnrichMode::Cached
-        | EnrichMode::Producing {
-            heavy: HeavyLanes::Project,
-            ..
-        } => read_codex_daemon_reap(runtime).unwrap_or_default(),
-    };
+    let daemon_inputs = read_codex_daemon_reap(runtime).unwrap_or_default();
     snapshot.drop_dead_daemon_sessions(&daemon_inputs.daemon_pids, daemon_inputs.loaded.as_ref());
 
     // Codex `/clear` / `/new` starts a fresh session id in the same pane and
@@ -649,7 +385,7 @@ pub fn enrich(
         snapshot.drop_cleared_codex_sessions(&admitted_panes);
     }
 
-    let account_budgets = account_budgets_from_caches(runtime, snapshot.now);
+    let account_budgets = crate::agents::account_budgets_from_caches(runtime, snapshot.now);
     let resume_messages = read_auto_continue_resume_messages(
         messages_dir,
         &machine_config.resume,
@@ -724,50 +460,17 @@ pub fn enrich(
     // per-tick fork or a ledger lock. Git rides the same split: the heavy-lane
     // refresher refreshes the per-worktree facts (single-flighted), while
     // consumers and the live fetch worker project the cached ones.
-    let is_producer = matches!(&mode, EnrichMode::Producing { .. });
-    let project_heavy_caches = |snapshot: SidebarSnapshot, config: crate::config::MachineConfig| {
-        let (mut snapshot, caches) = fold_machine_config_cached(snapshot, runtime, config);
-        let diff_cache = read_diff_stats_cache(&runtime.root.join("diff-stats.json"));
-        project_diff_stats(&mut snapshot, &diff_cache);
-        project_cached_pr_states(&mut snapshot, runtime);
-        (snapshot, caches)
-    };
-    let spending_caches = match mode {
-        EnrichMode::Cached => {
-            let caches;
-            (snapshot, caches) = project_heavy_caches(snapshot, machine_config);
-            caches
-        }
-        EnrichMode::Producing {
-            config,
-            heavy:
-                HeavyLanes::Refresh {
-                    compute_spending,
-                    refresh_git,
-                },
-            ..
-        } => {
-            let spending = compute_spending(&snapshot);
-            snapshot = fold_machine_config_producing(
-                snapshot,
-                runtime,
-                &spending.provider.spending.by_provider,
-                *config,
-                &resume_messages,
-            );
-            refresh_git(&mut snapshot);
-            spending
-        }
-        EnrichMode::Producing {
-            config,
-            heavy: HeavyLanes::Project,
-            ..
-        } => {
-            let caches;
-            (snapshot, caches) = project_heavy_caches(snapshot, *config);
-            caches
-        }
-    };
+    let lanes = opts.lanes;
+    let (mut folded, spending_caches) =
+        fold_machine_config(snapshot, runtime, machine_config, lanes);
+    let diff_cache = read_diff_stats_cache(&runtime.diff_stats_path());
+    project_diff_stats(&mut folded, &diff_cache);
+    if let Some(lanes) = lanes {
+        project_pr_state_map(&mut folded, &lanes.pr_states);
+    } else {
+        project_cached_pr_states(&mut folded, runtime);
+    }
+    snapshot = folded;
     // The fleet `value_tally` — the JSONL headline / month / trailing-year pile
     // read by the cockpit's headline figure and the bottom value corner — attaches
     // once, after every fold; `None` when nothing has ever been recorded.
@@ -783,7 +486,7 @@ pub fn enrich(
         runtime,
         &snapshot,
         spending_caches.workspace.refreshed_at_ms,
-        is_producer,
+        producing,
     );
     apply_live_today_spend(
         &mut snapshot,
@@ -855,88 +558,53 @@ fn apply_pane_metrics(snapshot: &mut SidebarSnapshot, metrics: Vec<(PaneId, Pane
     }
 }
 
-/// Fold the per-machine config and the per-provider dashboard onto a *producer*
-/// snapshot: the `⇅ rc` flags and the account-scoped budget blocks.
-/// The account facts come from a live out-of-band probe (`claude auth status`, a
-/// `codex` auth-file read) — a subprocess — so this is the producer's job. The
-/// probed map is published to the shared `accounts.json` cache for consumers to
-/// read, mirroring the diff-stats single-flight: one fork on the elder, a cache
-/// read on every other tab. The caller loads the per-machine config once
-/// (best-effort, defaults on a read failure) and threads it here and to the git
-/// probe's trunk ladder; the probe is memoized so it stays off the hot path.
-pub(crate) fn fold_machine_config_producing(
-    snapshot: SidebarSnapshot,
-    runtime: &RuntimePaths,
-    provider_spending: &BTreeMap<String, crate::agents::SpendTally>,
-    config: crate::config::MachineConfig,
-    resume_messages: &[ResumeMessage],
-) -> SidebarSnapshot {
-    let accounts_config = config.accounts.clone();
-    let resume_config = config.resume.clone();
-    let _ = refresh_codex_daemon_reap_cache(&snapshot, runtime, unix_now_ms());
-    let accounts = produce_accounts(&snapshot, runtime);
-    let pr_states = produce_pr_states(&snapshot, runtime);
-    let mut snapshot = fold_machine_config_with(snapshot, config, accounts, provider_spending);
-    project_pr_state_map(&mut snapshot, &pr_states);
-    // The producer owns the account-scoped window cache: it writes live readings
-    // back so the budgets survive a session ending or going idle.
-    apply_rate_limit_cache(&mut snapshot, runtime, true);
-    apply_credits_cache(&mut snapshot, runtime, &accounts_config);
-    // Codex's live sessions refresh their app-server-owned budget/context
-    // sidecars on a coarse cadence so a long-running task does not wait for the
-    // next turn boundary to repaint. The uniform driver then refreshes every
-    // metered provider's idle account usage (codex included, while idle).
-    refresh_codex_sessions(&snapshot, runtime);
-    refresh_account_usage(&snapshot, runtime);
-    // Opt-in: nudge a parked agent when its resume condition is due, so a turn
-    // that stopped on a budget limit or overload picks itself back up while you
-    // are away.
-    auto_continue::resume_parked(&snapshot, runtime, &resume_config, resume_messages);
-    snapshot
-}
-
-/// Fold the per-machine config and dashboard onto a *consumer* snapshot, reading
-/// the producer's published `accounts.json` instead of probing, with live
-/// context versions merged into the current frame without writing the cache. A
-/// consumer forks zero subprocesses (the single-flight contract); a cold cache
-/// (no producer publish yet) carries no blocks until the elder's first publish.
-/// The cheap config read stays local so each tab honours its own display
-/// preferences.
-/// Returns the published spending cache whole — tally and stamp — so the caller
-/// folds the value tally and the live headline-spend overlay from one read.
-fn fold_machine_config_cached(
+/// Fold the per-machine config and dashboard onto a snapshot. Without supplied
+/// lanes, it reads the producer's published `accounts.json` and spending
+/// caches. With supplied lanes, it projects the freshly refreshed values for
+/// the final producer snapshot without re-reading those cache files.
+fn fold_machine_config(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
     config: crate::config::MachineConfig,
+    lanes: Option<&crate::sidebar::refresh::RefreshedLanes>,
 ) -> (SidebarSnapshot, SpendingCaches) {
     let accounts_config = config.accounts.clone();
-    let accounts = cached_accounts_for_snapshot(
-        read_accounts_cache(&runtime.shared_accounts_path()),
-        &snapshot,
+    let (accounts, spending) = if let Some(lanes) = lanes {
+        (lanes.accounts.clone(), lanes.spending.clone())
+    } else {
+        let accounts = cached_accounts_for_snapshot(
+            read_accounts_cache(&runtime.shared_accounts_path()),
+            &snapshot,
+        );
+        // Fold the producer's published spending cache rather than re-walking
+        // JSONL transcript history here.
+        let cache = current_provider_spending_cache(runtime);
+        let scope = SpendScope::for_workspace(
+            snapshot.project_root.as_deref(),
+            &snapshot.worktree_roots,
+            snapshot.worktree_home.as_deref(),
+        );
+        let spec = config.headline_spec();
+        let workspace = cached_workspace_spending(runtime, &scope, cache.refreshed_at_ms, &spec);
+        (
+            accounts,
+            SpendingCaches {
+                provider: cache,
+                workspace,
+            },
+        )
+    };
+    let mut snapshot = fold_machine_config_with(
+        snapshot,
+        config,
+        accounts,
+        &spending.provider.spending.by_provider,
     );
-    // Consumers read the producer's published spending cache rather than
-    // re-walking the JSONL transcript history themselves.
-    let cache = current_provider_spending_cache(runtime);
-    let scope = SpendScope::for_workspace(
-        snapshot.project_root.as_deref(),
-        &snapshot.worktree_roots,
-        snapshot.worktree_home.as_deref(),
-    );
-    let spec = config.headline_spec();
-    let workspace = cached_workspace_spending(runtime, &scope, cache.refreshed_at_ms, &spec);
-    let mut snapshot =
-        fold_machine_config_with(snapshot, config, accounts, &cache.spending.by_provider);
-    // A consumer reads the producer's published windows to fill idle gaps, but
-    // never writes — the single-flight contract keeps the cache the producer's.
+    // Every fold merges the producer-published account windows read-only. The
+    // refresh lane owns writes.
     apply_rate_limit_cache(&mut snapshot, runtime, false);
     apply_credits_cache(&mut snapshot, runtime, &accounts_config);
-    (
-        snapshot,
-        SpendingCaches {
-            provider: cache,
-            workspace,
-        },
-    )
+    (snapshot, spending)
 }
 
 fn current_provider_spending_cache(runtime: &RuntimePaths) -> ProviderSpendingCache {
@@ -1075,7 +743,7 @@ fn discovered_files_signature(
 /// Apply the resolved config and already-resolved accounts onto the snapshot:
 /// the per-provider `⇅ rc` flags, the dashboard aggregates, and each agent
 /// row's context-severity verdict.
-fn fold_machine_config_with(
+pub(crate) fn fold_machine_config_with(
     mut snapshot: SidebarSnapshot,
     config: crate::config::MachineConfig,
     accounts: BTreeMap<String, crate::agents::AgentAccount>,

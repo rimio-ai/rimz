@@ -18,7 +18,7 @@ use super::SidebarSnapshot;
 /// app-server-owned fields on the coarse per-session cadence so a long-running
 /// turn does not wait for the next turn boundary to repaint. The idle,
 /// account-scoped read lives in the uniform `usage_refresh` driver.
-pub(super) fn refresh_codex_sessions(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
+pub(crate) fn refresh_codex_sessions(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
     for refresh in codex_session_refreshes(snapshot) {
         refresh_codex_transcript_context(
             runtime,
@@ -176,7 +176,7 @@ fn spawn_codex_context_refresh(runtime: &RuntimePaths, session_id: &str, model_h
             return;
         }
     };
-    let mut cmd = super::detached_rimz_command(exe, runtime);
+    let mut cmd = crate::child_process::detached_rimz_command(exe, runtime);
     cmd.args([
         "codex",
         "refresh-context",

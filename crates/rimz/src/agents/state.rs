@@ -5,15 +5,17 @@
 //! rollup itself lives with the agent integration layer.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{PaneRef, RuntimeOwner};
 
 use super::context::{
-    AgentContext, AgentTokenUsage, AgentTurnError, RateLimitWindow, TurnErrorClass,
+    AgentContext, AgentRateLimits, AgentTokenUsage, AgentTurnError, RateLimitWindow, TurnErrorClass,
 };
 use super::lifecycle::{LifecycleState, TurnPhase};
 
@@ -311,6 +313,121 @@ impl AccountBudget {
             has_known_available |= window.used_percentage.is_some() && !window.is_spent();
         }
         has_known_available
+    }
+}
+
+/// The producer's published per-provider rate-limit windows, account-scoped so
+/// the budgets outlive a session ending or going idle.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct RateLimitsCache {
+    /// When the producer last refreshed this map. Observability only: reset
+    /// projection ages windows on each `resets_at`, not this stamp.
+    pub refreshed_at_ms: u64,
+    /// Last-known windows by agent kind.
+    pub windows: BTreeMap<String, AgentRateLimits>,
+    /// In-flight best-effort refill candidates by kind, one per window duration.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pending: BTreeMap<String, Vec<PendingRefill>>,
+}
+
+/// A best-effort drop awaiting confirmation by the sidebar rate-limit fusion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingRefill {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_mins: Option<u32>,
+    pub used_percentage: u8,
+    pub first_seen_at: Timestamp,
+}
+
+/// Read the producer's published rate-limit window cache, or an empty cache on
+/// a cold or corrupt file.
+pub(crate) fn read_rate_limits_cache(path: &Path) -> RateLimitsCache {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+pub(crate) fn account_budgets_from_caches(
+    runtime: &RuntimePaths,
+    now: Timestamp,
+) -> BTreeMap<AgentKind, AccountBudget> {
+    let rate_limits = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    rate_limits
+        .windows
+        .into_iter()
+        .map(|(kind, limits)| {
+            (
+                AgentKind::new_unchecked(kind),
+                AccountBudget {
+                    windows: limits
+                        .windows
+                        .into_iter()
+                        .map(|window| window.projected_at(now))
+                        .collect(),
+                },
+            )
+        })
+        .collect()
+}
+
+/// Whether a hidden resume-gated message may enter a paused agent now.
+pub(crate) fn resume_gate_recovered(
+    runtime: &RuntimePaths,
+    agent: &AgentState,
+    now: Timestamp,
+) -> bool {
+    if agent.effective_status() != AgentStatus::Paused {
+        return false;
+    }
+    let account_budgets = account_budgets_from_caches(runtime, now);
+    let budget = account_budgets.get(&agent.kind);
+    match resume_park(agent, budget, now) {
+        Some(ResumeArm::Overloaded { .. }) => true,
+        Some(ResumeArm::RateLimit { .. }) => false,
+        None => display_turn_error(
+            agent.status,
+            agent.context.as_ref(),
+            agent.last_activity,
+            agent.turn_started_at,
+        )
+        .map(effective_turn_error_class)
+        .is_some_and(|class| {
+            matches!(
+                class,
+                TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
+            ) && budget.is_some_and(|budget| budget.subscription_budget_available(now))
+        }),
+    }
+}
+
+/// Whether `kind`'s shortest account-scoped budget window is currently running
+/// its clock. Window-priming callers use this to skip a ping when the window
+/// has already started.
+pub(crate) fn shortest_window_running(
+    runtime: &RuntimePaths,
+    kind: &str,
+    now: Timestamp,
+) -> Option<bool> {
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    shortest_window_running_in(&cache, kind, now)
+}
+
+fn shortest_window_running_in(cache: &RateLimitsCache, kind: &str, now: Timestamp) -> Option<bool> {
+    let shortest = cache
+        .windows
+        .get(kind)?
+        .windows
+        .iter()
+        .min_by_key(|window| window.duration_mins.unwrap_or(u32::MAX))?;
+    let projected = shortest.clone().projected_at(now);
+    projected.used_percentage?;
+    if projected.not_started(now) {
+        return Some(false);
+    }
+    match projected.resets_at {
+        Some(reset) if reset > now => Some(true),
+        _ => None,
     }
 }
 

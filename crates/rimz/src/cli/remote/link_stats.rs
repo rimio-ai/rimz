@@ -40,7 +40,7 @@ pub(super) fn ingest(args: LinkStatsIngestArgs) -> Result<()> {
             std::process::exit(LINK_SCHEMA_MISMATCH_EXIT);
         }
         let file = LinkStatsFile::new(
-            rimz::sidebar::cache::unix_now_ms(),
+            rimz::sidebar::timing::unix_now_ms(),
             client.clone(),
             probe.stats.clone(),
         );

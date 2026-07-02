@@ -98,7 +98,7 @@ impl DiagSink {
     }
 
     pub fn emit(&self, event: DiagEvent) {
-        self.emit_at_ms(event, crate::sidebar::cache::unix_now_ms());
+        self.emit_at_ms(event, crate::sidebar::timing::unix_now_ms());
     }
 
     pub fn emit_at_ms(&self, event: DiagEvent, at_ms: u64) {
@@ -109,7 +109,7 @@ impl DiagSink {
     }
 
     pub fn emit_unlimited(&self, event: DiagEvent) {
-        self.append(event, crate::sidebar::cache::unix_now_ms(), 0);
+        self.append(event, crate::sidebar::timing::unix_now_ms(), 0);
     }
 
     /// Append a notification trace record to the sibling `notify.log.jsonl`.
@@ -117,7 +117,7 @@ impl DiagSink {
     /// never rate-limited, so every notification, bell decision, and unread
     /// transition lands.
     pub fn trace_notify(&self, event: NotifyTraceEvent) {
-        self.trace_notify_at_ms(event, crate::sidebar::cache::unix_now_ms());
+        self.trace_notify_at_ms(event, crate::sidebar::timing::unix_now_ms());
     }
 
     pub fn trace_notify_at_ms(&self, event: NotifyTraceEvent, at_ms: u64) {

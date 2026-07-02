@@ -7,12 +7,22 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::agents::spending::discover_spending_files;
-use crate::sidebar::cache::unix_now_ms;
 use crate::sidebar::timing::SPENDING_STALE_GRACE;
+use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, SidebarSnapshot};
 
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
 const SPENDING_WAIT_STEPS: u32 = 15;
+
+#[cfg(test)]
+pub(super) fn compute_fleet_spending(
+    runtime: &RuntimePaths,
+    snapshot: &SidebarSnapshot,
+    spec: &crate::agents::spending::HeadlineSpec,
+) -> crate::agents::spending::SpendingCaches {
+    let mut walker = crate::agents::spending::SpendingWalker::new();
+    compute_fleet_spending_with_walker(&mut walker, runtime, snapshot, spec)
+}
 
 /// Walk every provider's transcript history into a fleet-wide and per-provider
 /// [`Spending`](crate::agents::spending::Spending), publishing the stamped
@@ -37,16 +47,7 @@ const SPENDING_WAIT_STEPS: u32 = 15;
 /// ([`transcript_files`](crate::agents::AgentAdapter::transcript_files)) so each
 /// counts on the same footing, and the dashboard panel and fleet ledger read
 /// one provider's spend the same way regardless of which project it ran in.
-pub(super) fn compute_fleet_spending(
-    runtime: &RuntimePaths,
-    snapshot: &SidebarSnapshot,
-    spec: &crate::agents::spending::HeadlineSpec,
-) -> crate::agents::spending::SpendingCaches {
-    let mut walker = crate::agents::spending::SpendingWalker::new();
-    compute_fleet_spending_with_walker(&mut walker, runtime, snapshot, spec)
-}
-
-pub(super) fn compute_fleet_spending_with_walker(
+pub(crate) fn compute_fleet_spending_with_walker(
     walker: &mut crate::agents::spending::SpendingWalker,
     runtime: &RuntimePaths,
     snapshot: &SidebarSnapshot,

@@ -10,11 +10,11 @@ use anyhow::{Context, Result};
 use fs4::FileExt;
 use jiff::Timestamp;
 
+use crate::agents::shortest_window_running;
 use crate::config::{CheckOn, TaskEntry};
 use crate::harness::schedule::run_log::{CheckRecord, LoopRunResult};
 use crate::ids::WorkspaceId;
 use crate::ledger::paths::{RuntimePaths, runtime_home};
-use crate::sidebar::enrich::shortest_window_running;
 use crate::workspace::WorkspaceResolver;
 
 pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);

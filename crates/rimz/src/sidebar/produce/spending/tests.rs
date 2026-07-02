@@ -12,7 +12,7 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::AgentKind;
 use crate::ids::WorkspaceId;
 use crate::ledger::single_flight::{Coalesced, coalesce};
-use crate::sidebar::cache::unix_now_ms;
+use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{SPENDING_STALE_GRACE, SPENDING_TTL};
 
 use jiff::Timestamp;

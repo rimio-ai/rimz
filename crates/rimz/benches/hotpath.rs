@@ -114,7 +114,7 @@ fn fuse_fixture() -> FuseFixture {
     let pane_id = rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_0");
     let now_ms = snapshot
         .panes_produced_at_ms
-        .unwrap_or_else(rimz::sidebar::cache::unix_now_ms)
+        .unwrap_or_else(rimz::sidebar::timing::unix_now_ms)
         .saturating_add(1);
     events.append(
         rimz::schema::sidebar_event::SidebarEvent::CommandChanged {
@@ -141,7 +141,7 @@ fn enrich_fixture() -> EnrichFixture {
         rimz::sidebar::consumer::rollup_snapshot(&workspace.paths, &mut cursor).expect("rollup");
     let frame = rimz::sidebar::frame::assemble_frame(
         rimz::testkit::fleet::synthetic_panes(FLEET),
-        rimz::sidebar::cache::unix_now_ms(),
+        rimz::sidebar::timing::unix_now_ms(),
         rimz::testkit::fleet::SESSION_NAME,
     );
     EnrichFixture {
@@ -314,7 +314,12 @@ fn enrich_cached(bencher: Bencher) {
                 &fixture.runtime,
                 None,
                 None,
-                rimz::sidebar::enrich::EnrichMode::Cached,
+                rimz::sidebar::enrich::FoldOpts {
+                    producing: false,
+                    fresh_roots: None,
+                    config: None,
+                    lanes: None,
+                },
                 None,
             ));
         });

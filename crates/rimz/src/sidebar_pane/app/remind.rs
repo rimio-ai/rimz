@@ -48,7 +48,7 @@ impl RemindState {
             self.clear();
             return;
         }
-        let now_ms = crate::sidebar::cache::unix_now_ms();
+        let now_ms = crate::sidebar::timing::unix_now_ms();
         self.note_scope_visible(now_ms);
         if !self.due(now_ms, scope.count, config.notification_prefs.remind_secs) {
             return;

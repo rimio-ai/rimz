@@ -1,13 +1,11 @@
-//! Runtime cache types, TTLs, and cheap cache reads for the sidebar data plane.
+//! Pane-frame runtime cache and presence/topology hints for the sidebar data plane.
 //!
-//! These files live under the workspace runtime directory and are cache-class:
-//! producers publish them with temp-file-plus-rename, consumers read them
-//! opportunistically, and every value can be rebuilt from ledger truth plus live
-//! mux/provider state.
+//! These files live under the workspace runtime directory and are cache-class.
+//! Producers publish them with temp-file-plus-rename, consumers read them
+//! opportunistically, and every value can be rebuilt from live mux state.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -15,78 +13,9 @@ use crate::RuntimePaths;
 use crate::ledger::parse_cache::ParseCache;
 use crate::schema::pane_topology::PaneTopologyCache;
 use crate::sidebar::frame::PaneFrame;
-pub use crate::sidebar::timing::{
-    ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL, DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL,
-    DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL, GIT_ACTIVITY_WINDOW,
-    METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMPLE_TTL, PR_STATE_RETRY_TTL, PR_STATE_TTL,
-    PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, WORKTREE_ROOTS_TTL,
+use crate::sidebar::timing::{
+    EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, unix_now_ms,
 };
-
-/// The producer's published provider-account map: the out-of-band login facts
-/// (`claude auth status`, the `codex` auth file) the dashboard folds onto its
-/// blocks. Single-flighted like the diff stats — the elder probes and publishes,
-/// every other tab reads it back — so a consumer renderer forks zero subprocesses.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct AccountsCache {
-    /// When the producer last probed and published this map, for the TTL gate.
-    pub refreshed_at_ms: u64,
-    /// Probed accounts by agent kind; a logged-out provider is simply absent.
-    pub accounts: BTreeMap<String, crate::agents::AgentAccount>,
-    /// Whether the probe that produced this map completed without an
-    /// infrastructure failure. A failed probe rides the short `ACCOUNTS_RETRY_TTL`
-    /// so the producer re-forks within seconds; a successful one — including a
-    /// confident logged-out — rides the long `ACCOUNTS_TTL`. Defaults to `true`
-    /// so a cache written by an older build is trusted for the success window.
-    #[serde(default = "accounts_probe_ok_default")]
-    pub ok: bool,
-}
-
-/// The `AccountsCache::ok` default for caches written before the field existed:
-/// trust them for the success window rather than forcing an immediate re-probe.
-fn accounts_probe_ok_default() -> bool {
-    true
-}
-
-impl AccountsCache {
-    /// Whether the published map is young enough that the producer skips the
-    /// re-probe this tick. A failed probe expires on the short retry TTL, a
-    /// success on the long one. Saturating, so a clock that ran backwards reads
-    /// fresh rather than re-probing every tick.
-    pub(crate) fn is_fresh(&self, now_ms: u64) -> bool {
-        let ttl = if self.ok {
-            ACCOUNTS_TTL
-        } else {
-            ACCOUNTS_RETRY_TTL
-        };
-        now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
-    }
-}
-
-/// Producer-published inputs for the Codex daemon ghost reaper. Consumers read
-/// this cache so the fast lane can apply the same reap without proc scans or
-/// app-server probes.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct CodexDaemonReap {
-    pub produced_at_ms: u64,
-    pub daemon_pids: BTreeSet<u32>,
-    pub loaded: Option<BTreeSet<String>>,
-}
-
-fn codex_daemon_reap_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("codex-daemon-reap.json")
-}
-
-pub fn write_codex_daemon_reap(
-    runtime: &RuntimePaths,
-    cache: &CodexDaemonReap,
-) -> crate::ledger::atomic::Result<()> {
-    crate::ledger::atomic::write_temp_then_rename_cache(&codex_daemon_reap_path(runtime), cache)
-}
-
-pub fn read_codex_daemon_reap(runtime: &RuntimePaths) -> Option<CodexDaemonReap> {
-    let bytes = std::fs::read(codex_daemon_reap_path(runtime)).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
 
 // The shared pane frame cache is keyed to one `(workspace, session)`: the
 // per-workspace runtime root scopes the workspace, and `session_name` prevents
@@ -160,14 +89,14 @@ pub fn published_frame_age_ms(runtime: &RuntimePaths, session: &str, now_ms: u64
 /// The producer timestamp of the published same-session pane frame. `None`
 /// when no usable same-session frame exists.
 pub fn published_frame_produced_at_ms(runtime: &RuntimePaths, session: &str) -> Option<u64> {
-    let cache_path = runtime.root.join("snapshot.json");
+    let cache_path = runtime.pane_frame_path();
     read_snapshot_cache(&cache_path, session).map(|cache| cache.produced_at_ms)
 }
 
 /// The observation timestamp of the published same-session pane frame. `None`
 /// when no usable same-session frame exists.
 pub fn published_frame_observed_at_ms(runtime: &RuntimePaths, session: &str) -> Option<u64> {
-    let cache_path = runtime.root.join("snapshot.json");
+    let cache_path = runtime.pane_frame_path();
     read_snapshot_cache(&cache_path, session).map(|cache| cache.observed_or_produced_at_ms())
 }
 
@@ -175,7 +104,7 @@ pub fn published_frame_observed_at_ms(runtime: &RuntimePaths, session: &str) -> 
 /// pane. An absent frame reads as watched so cold starts keep the responsive
 /// poll-mode cadence until a producer publishes real focus state.
 pub fn published_frame_unwatched(runtime: &RuntimePaths, session: &str) -> bool {
-    let cache_path = runtime.root.join("snapshot.json");
+    let cache_path = runtime.pane_frame_path();
     read_snapshot_cache(&cache_path, session).is_some_and(|cache| cache.viewed_panes.is_empty())
 }
 
@@ -283,151 +212,6 @@ pub fn pane_topology_cache_is_fresh(
         now_ms.saturating_sub(cache.produced_at_ms) <= PRESENCE_STAMP_FRESH.as_millis() as u64;
     let new_enough = min_produced_at_ms.is_none_or(|min| cache.produced_at_ms >= min);
     fresh && new_enough
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DiffStats {
-    pub added: u32,
-    pub removed: u32,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct DiffStatsCache {
-    pub entries: BTreeMap<String, DiffStatsCacheEntry>,
-    /// The repo's worktree checkout roots, cached under [`WORKTREE_ROOTS_TTL`]
-    /// (with a session-boundary refresh floor). The set changes only on
-    /// `git worktree add/remove`, so grouping reuses it across ticks instead
-    /// of forking `git worktree list` every snapshot.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktrees: Option<WorktreeRootsCache>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorktreeRootsCache {
-    pub refreshed_at_ms: u64,
-    pub roots: Vec<PathBuf>,
-}
-
-impl WorktreeRootsCache {
-    /// Saturating, so a clock that ran backwards reads fresh rather than
-    /// re-enumerating every tick.
-    pub fn is_fresh(&self, now_ms: u64) -> bool {
-        now_ms.saturating_sub(self.refreshed_at_ms) <= WORKTREE_ROOTS_TTL.as_millis() as u64
-    }
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct DiffStatsCacheEntry {
-    /// Local/edit-sensitive facts stamp: churn, dirty/untracked state, and live
-    /// branch label.
-    pub refreshed_at_ms: u64,
-    /// Commit/PR-shaped facts stamp: ahead/behind counts and landed markers.
-    /// `None` means stale for entries written before the split.
-    #[serde(default)]
-    pub commit_refreshed_at_ms: Option<u64>,
-    pub added: Option<u32>,
-    pub removed: Option<u32>,
-    /// Commits the worktree carries ahead of the trunk (`rev-list --count
-    /// <merge-base>..HEAD`), refreshed on the same git tick as the diff.
-    #[serde(default)]
-    pub commits: Option<u32>,
-    /// Commits the trunk has advanced past the fork point (`rev-list --count
-    /// <merge-base>..<trunk>`), refreshed on the same git tick.
-    #[serde(default)]
-    pub behind: Option<u32>,
-    /// The trunk ref the stats compared against, as the ladder resolved it
-    /// (configured `[sidebar] trunk`, else `main`/`master`/remote default).
-    /// Names the header's `≡` equal and `✓` clear markers.
-    #[serde(default)]
-    pub trunk: Option<String>,
-    /// Live branch resolved from the worktree path, cached under the same TTL
-    /// as the diff stats so the group header tracks `git checkout` without a
-    /// git call every tick.
-    #[serde(default)]
-    pub branch: Option<String>,
-    /// Whether the working tree is clean — `git status --porcelain` emptiness,
-    /// untracked files included — the safe-to-remove verdict both content-landed
-    /// markers (`≡` at the trunk tip, `✓` behind it) require. `None` on an old
-    /// cache entry or a failed status read, which the renderer treats as not
-    /// proven clean.
-    #[serde(default)]
-    pub clean: Option<bool>,
-    /// Whether committed content is proven landed on the resolved trunk.
-    /// `None` means unknown or an old cache entry.
-    #[serde(default)]
-    pub landed: Option<bool>,
-    /// Whether the worktree carries work of its own: HEAD moved past the Rimz
-    /// worktree marker's `base_ref` on a lineage outside the trunk's
-    /// first-parent chain. `None` means the checkout is unmarked or unreadable.
-    #[serde(default)]
-    pub did_work: Option<bool>,
-    /// Whether git reports an in-progress rebase, merge, or cherry-pick in the
-    /// worktree. `None` means the probe could not inspect git paths.
-    #[serde(default)]
-    pub merge_in_progress: Option<bool>,
-}
-
-impl DiffStatsCacheEntry {
-    /// Local-fact freshness under the caller's tier. Saturating, so a clock
-    /// that ran backwards reads fresh rather than re-forking every tick.
-    pub fn local_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
-        now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
-    }
-
-    /// Commit-fact freshness under the caller's tier. Old entries with no
-    /// split stamp are commit-stale and get re-probed once.
-    pub fn commit_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
-        self.commit_refreshed_at_ms
-            .is_some_and(|stamp| now_ms.saturating_sub(stamp) <= ttl.as_millis() as u64)
-    }
-
-    pub fn stats(&self) -> Option<DiffStats> {
-        self.added
-            .zip(self.removed)
-            .map(|(added, removed)| DiffStats { added, removed })
-    }
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct PrStateCache {
-    pub refreshed_at_ms: u64,
-    /// Whether the last PR-state probe completed without an infrastructure
-    /// failure. A logged-in repo with no PR is a success and keeps an empty map.
-    #[serde(default = "pr_state_probe_ok_default")]
-    pub ok: bool,
-    /// PR state by absolute worktree path.
-    #[serde(default)]
-    pub states: BTreeMap<String, crate::WorktreePrState>,
-}
-
-fn pr_state_probe_ok_default() -> bool {
-    true
-}
-
-impl PrStateCache {
-    pub(crate) fn is_fresh(&self, now_ms: u64) -> bool {
-        let ttl = if self.ok {
-            PR_STATE_TTL
-        } else {
-            PR_STATE_RETRY_TTL
-        };
-        now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
-    }
-}
-
-pub fn read_diff_stats_cache(path: &Path) -> DiffStatsCache {
-    let Ok(bytes) = std::fs::read(path) else {
-        return DiffStatsCache::default();
-    };
-    serde_json::from_slice(&bytes).unwrap_or_default()
-}
-
-pub fn unix_now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(u128::from(u64::MAX)) as u64
 }
 
 #[cfg(test)]

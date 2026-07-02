@@ -166,7 +166,7 @@ fn rejected_frame_holds_only_a_publishable_prior() {
     ));
     let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let cache_path = runtime.root.join("snapshot.json");
+    let cache_path = runtime.pane_frame_path();
 
     let valid_prior = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
@@ -217,7 +217,7 @@ fn missing_own_rejection_captures_prior_and_offending_frames() {
     ));
     let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let cache_path = runtime.root.join("snapshot.json");
+    let cache_path = runtime.pane_frame_path();
     let sink = crate::diag::DiagSink::under(dir.path().join("state"), workspace_id, "s", None);
     let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
     let now = unix_now_ms();
@@ -267,7 +267,7 @@ fn missing_own_pane_without_prior_publishes() {
     ));
     let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let cache_path = runtime.root.join("snapshot.json");
+    let cache_path = runtime.pane_frame_path();
     let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
     let fresh = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_2", Some("zsh"), Some("/repo"))],
@@ -291,7 +291,7 @@ fn verified_shrink_repull_result_is_published() {
         crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/verified-shrink"));
     let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let cache_path = runtime.root.join("snapshot.json");
+    let cache_path = runtime.pane_frame_path();
     let prior = frame(vec![
         pane("terminal_1", Some("zsh"), Some("/repo")),
         pane("terminal_2", Some("zsh"), Some("/repo")),
@@ -347,7 +347,7 @@ fn ambiguous_loss_repull_result_is_published() {
         crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/ambiguous-loss"));
     let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let cache_path = runtime.root.join("snapshot.json");
+    let cache_path = runtime.pane_frame_path();
     let prior = frame(vec![
         pane("terminal_1", Some("zsh"), Some("/repo")),
         pane("terminal_2", Some("zsh"), Some("/repo")),
@@ -649,7 +649,7 @@ fn prior_frame_from_another_build_records_mixed_writers() {
         crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/mixed-builds"));
     let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let cache_path = runtime.root.join("snapshot.json");
+    let cache_path = runtime.pane_frame_path();
     let sink = crate::diag::DiagSink::under(dir.path().join("state"), workspace_id, "s", None);
     let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
     let now = unix_now_ms();
@@ -734,7 +734,7 @@ fn metrics_only_refresh_preserves_the_pane_frame_timestamp() {
     pidded.pane_pid = Some(std::process::id());
     let produced_at_ms = unix_now_ms();
     let frame = crate::sidebar::frame::assemble_frame(vec![pidded], produced_at_ms, "s");
-    let cache_path = runtime.root.join("snapshot.json");
+    let cache_path = runtime.pane_frame_path();
     atomic::write_temp_then_rename_cache(&cache_path, &frame).unwrap();
 
     let refreshed = refresh_cached_metrics(

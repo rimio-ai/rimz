@@ -166,10 +166,10 @@ fn publish_pane_frame(env: &Env, panes: &[rimz::pane::PaneRef]) {
         rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
     let frame = rimz::sidebar::frame::assemble_frame(
         panes.to_vec(),
-        rimz::sidebar::cache::unix_now_ms(),
+        rimz::sidebar::timing::unix_now_ms(),
         workspace.session_name,
     );
-    rimz::ledger::atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &frame)
+    rimz::ledger::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
         .expect("publish pane frame");
 }
 

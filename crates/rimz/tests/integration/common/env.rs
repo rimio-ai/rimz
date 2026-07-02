@@ -585,12 +585,12 @@ impl Env {
     pub fn publish_provider_spending(&self, spending: &rimz::agents::spending::Spending) {
         rimz::agents::spending::write_provider_spending_cache(
             &self.runtime_paths().shared_provider_spending_path(),
-            rimz::sidebar::cache::unix_now_ms(),
+            rimz::sidebar::timing::unix_now_ms(),
             spending,
         );
     }
 
-    pub fn publish_accounts(&self, accounts: &rimz::sidebar::cache::AccountsCache) {
+    pub fn publish_accounts(&self, accounts: &rimz::sidebar::enrich::AccountsCache) {
         rimz::ledger::atomic::write_temp_then_rename_cache(
             &self.runtime_paths().shared_accounts_path(),
             accounts,
@@ -598,7 +598,7 @@ impl Env {
         .expect("publish accounts cache");
     }
 
-    pub fn publish_rate_limits(&self, cache: &rimz::sidebar::enrich::RateLimitsCache) {
+    pub fn publish_rate_limits(&self, cache: &rimz::agents::RateLimitsCache) {
         rimz::ledger::atomic::write_temp_then_rename_cache(
             &self.runtime_paths().shared_rate_limits_path(),
             cache,

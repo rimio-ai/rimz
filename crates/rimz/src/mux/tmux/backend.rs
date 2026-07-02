@@ -154,7 +154,7 @@ impl MuxBackend for TmuxBackend {
         let timeout = opts
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
-        let observed_at_ms = crate::sidebar::cache::unix_now_ms();
+        let observed_at_ms = crate::sidebar::timing::unix_now_ms();
         let spec = self.list_panes_command(opts.session_name.as_deref());
         let output = spec.run_with_timeout(timeout)?;
         let panes = String::from_utf8_lossy(&output.stdout)

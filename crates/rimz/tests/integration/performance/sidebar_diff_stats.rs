@@ -142,11 +142,11 @@ impl Fixture {
         runtime.ensure_dirs().expect("runtime dirs");
         let frame = rimz::sidebar::frame::assemble_frame(
             panes,
-            rimz::sidebar::cache::unix_now_ms(),
+            rimz::sidebar::timing::unix_now_ms(),
             session.clone(),
         );
         std::fs::write(
-            runtime.root.join("snapshot.json"),
+            runtime.pane_frame_path(),
             serde_json::to_vec(&frame).expect("serialize pane frame"),
         )
         .expect("publish pane frame");

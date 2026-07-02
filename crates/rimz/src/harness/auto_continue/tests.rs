@@ -1,10 +1,10 @@
 use super::*;
+use crate::agents::RateLimitsCache;
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{
     AgentContext, AgentRateLimits, AgentStatus, AgentTurnError, RateLimitWindow, TurnErrorClass,
 };
 use crate::ids::{AgentSessionId, MuxName, WorkspaceId};
-use crate::sidebar::enrich::RateLimitsCache;
 
 fn ts(secs: i64) -> Timestamp {
     Timestamp::from_second(secs).expect("valid test timestamp")

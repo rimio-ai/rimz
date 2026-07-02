@@ -2,13 +2,24 @@ use super::*;
 use crate::feed::{FeedItem, FeedKind, Surface};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::ledger::atomic;
-use crate::sidebar::cache::{DiffStatsCache, DiffStatsCacheEntry, PrStateCache, unix_now_ms};
-use crate::sidebar::enrich::{EnrichMode, enrich};
+use crate::sidebar::enrich::PrStateCache;
+use crate::sidebar::enrich::{FoldOpts, enrich};
 use crate::sidebar::frame::{CarriedPane, assemble_frame};
+use crate::sidebar::produce::git::{DiffStatsCache, DiffStatsCacheEntry};
 use crate::sidebar::test_support::{child_agent, pane, pane_in_tab, root_agent};
+use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, SidebarSnapshot, SidebarWorktreeKind, StatePaths};
 use jiff::Timestamp;
 use std::collections::BTreeMap;
+
+fn cached_opts() -> FoldOpts<'static> {
+    FoldOpts {
+        producing: false,
+        fresh_roots: None,
+        config: None,
+        lanes: None,
+    }
+}
 
 #[test]
 fn read_published_snapshot_folds_caches_without_forking() {
@@ -35,7 +46,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
         pane("terminal_own", "rimz-sidebar", &wt),
     ];
     let base = assemble_frame(panes, unix_now_ms(), "rimz-test");
-    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &base).unwrap();
 
     // Publish diff stats for the worktree path: +7 / -2, 3 commits ahead and
     // 1 behind a remote-default trunk, on branch `feat`.
@@ -57,14 +68,14 @@ fn read_published_snapshot_folds_caches_without_forking() {
             merge_in_progress: Some(false),
         },
     );
-    atomic::write_temp_then_rename_cache(&runtime.root.join("diff-stats.json"), &diff).unwrap();
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &diff).unwrap();
     let mut pr = PrStateCache {
         refreshed_at_ms: unix_now_ms(),
         ok: true,
         states: BTreeMap::new(),
     };
     pr.states.insert(wt.clone(), crate::WorktreePrState::Open);
-    atomic::write_temp_then_rename_cache(&runtime.root.join("pr-state.json"), &pr).unwrap();
+    atomic::write_temp_then_rename_cache(&runtime.pr_state_path(), &pr).unwrap();
 
     let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
     let snapshot = read_published_snapshot(
@@ -154,7 +165,7 @@ fn read_published_snapshot_folds_subagent_context() {
     atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
 
     let base = assemble_frame(vec![live_pane], unix_now_ms(), "rimz-test");
-    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &base).unwrap();
     let now = Timestamp::now();
     crate::ledger::subagent_context::write(
         &runtime,
@@ -214,7 +225,7 @@ fn consumer_own_view_counts_siblings_in_its_own_tab() {
         unix_now_ms(),
         "rimz-test",
     );
-    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &base).unwrap();
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &base).unwrap();
     // The rollup the consumer folds the panes over: an empty room, published
     // to `latest.json` where the consumer reads it fresh.
     let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -321,7 +332,7 @@ fn no_frame_enrich_preserves_rollup_metadata_but_emits_no_groups() {
         &runtime,
         None,
         None,
-        EnrichMode::Cached,
+        cached_opts(),
         None,
     );
 
@@ -356,7 +367,7 @@ fn enrich_maps_carried_frame_to_truth_notice() {
         &runtime,
         None,
         None,
-        EnrichMode::Cached,
+        cached_opts(),
         None,
     );
 
@@ -385,7 +396,7 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
 
     // A published (and never re-published) pane cache.
     let panes = assemble_frame(Vec::new(), unix_now_ms(), "rimz-test");
-    atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &panes).unwrap();
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &panes).unwrap();
 
     // A served publish carries the extent stamp; the workspace has no
     // events, so the matching extent is the empty log's.

@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::ledger::atomic;
-use crate::sidebar::cache::{WorktreeRootsCache, read_diff_stats_cache, unix_now_ms};
+use crate::sidebar::produce::git::{WorktreeRootsCache, read_diff_stats_cache};
+use crate::sidebar::timing::unix_now_ms;
 use crate::workspace::RootClass;
 
 /// The room's enumerated group roots, so a repo checkout parked outside the
@@ -22,7 +23,7 @@ pub(in crate::sidebar::produce) fn project_group_roots(
     runtime: &crate::RuntimePaths,
     min_refreshed_at_ms: Option<u64>,
 ) -> Vec<PathBuf> {
-    let cache_path = runtime.root.join("diff-stats.json");
+    let cache_path = runtime.diff_stats_path();
     let mut cache = read_diff_stats_cache(&cache_path);
     let now_ms = unix_now_ms();
     // The freshness floor mirrors the pane cache's: a session boundary sends

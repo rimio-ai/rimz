@@ -14,10 +14,11 @@ use crate::ledger::snapshot::PresenceSample;
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing};
 use crate::schema::diag::{DiagEvent, FrameRejectReason};
 use crate::sidebar::cache::{
-    SNAPSHOT_CACHE_TTL, effective_pane_ttl, presence_stamp_age_ms, published_frame_unwatched,
-    read_snapshot_cache, snapshot_cache_is_fresh, unix_now_ms,
+    effective_pane_ttl, presence_stamp_age_ms, published_frame_unwatched, read_snapshot_cache,
+    snapshot_cache_is_fresh,
 };
 use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics};
+use crate::sidebar::timing::{SNAPSHOT_CACHE_TTL, unix_now_ms};
 
 mod carry;
 mod starts;
@@ -224,7 +225,7 @@ pub fn repaired_pane_frame_for_binding(
     session: &str,
     command_timeout: Duration,
 ) -> Result<PaneFrame> {
-    let cache_path = runtime.root.join("snapshot.json");
+    let cache_path = runtime.pane_frame_path();
     let listing = match super::pane_list_fixture()? {
         Some(fixture) => PaneListing {
             panes: fixture,
@@ -481,7 +482,7 @@ pub(super) fn cached_panes_or_produce(
     own_pane: Option<&PaneId>,
     diag: Option<&crate::diag::DiagSink>,
 ) -> Result<PaneFrame> {
-    let cache_path = runtime.root.join("snapshot.json");
+    let cache_path = runtime.pane_frame_path();
 
     // Select the pane TTL once per call: event mode (EVENT_PANE_TTL) while a
     // presence push channel is alive or the published frame is unwatched, else

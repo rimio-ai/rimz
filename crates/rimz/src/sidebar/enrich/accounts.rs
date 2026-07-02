@@ -2,9 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::RuntimePaths;
 use crate::agents::AgentAccount;
-use crate::sidebar::cache::{ACCOUNTS_RETRY_TTL, AccountsCache, unix_now_ms};
+use crate::sidebar::timing::{ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL, unix_now_ms};
 
 use super::SidebarSnapshot;
 
@@ -15,6 +17,46 @@ use super::SidebarSnapshot;
 const ACCOUNTS_WAIT_STEP: Duration = Duration::from_millis(20);
 const ACCOUNTS_WAIT_STEPS: u32 = 15;
 
+/// The producer's published provider-account map: the out-of-band login facts
+/// (`claude auth status`, the `codex` auth file) the dashboard folds onto its
+/// blocks. Single-flighted like the diff stats — the elder probes and publishes,
+/// every other tab reads it back — so a consumer renderer forks zero subprocesses.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct AccountsCache {
+    /// When the producer last probed and published this map, for the TTL gate.
+    pub refreshed_at_ms: u64,
+    /// Probed accounts by agent kind; a logged-out provider is simply absent.
+    pub accounts: BTreeMap<String, crate::agents::AgentAccount>,
+    /// Whether the probe that produced this map completed without an
+    /// infrastructure failure. A failed probe rides the short `ACCOUNTS_RETRY_TTL`
+    /// so the producer re-forks within seconds; a successful one — including a
+    /// confident logged-out — rides the long `ACCOUNTS_TTL`. Defaults to `true`
+    /// so a cache written by an older build is trusted for the success window.
+    #[serde(default = "accounts_probe_ok_default")]
+    pub ok: bool,
+}
+
+/// The `AccountsCache::ok` default for caches written before the field existed:
+/// trust them for the success window rather than forcing an immediate re-probe.
+fn accounts_probe_ok_default() -> bool {
+    true
+}
+
+impl AccountsCache {
+    /// Whether the published map is young enough that the producer skips the
+    /// re-probe this tick. A failed probe expires on the short retry TTL, a
+    /// success on the long one. Saturating, so a clock that ran backwards reads
+    /// fresh rather than re-probing every tick.
+    pub(crate) fn is_fresh(&self, now_ms: u64) -> bool {
+        let ttl = if self.ok {
+            ACCOUNTS_TTL
+        } else {
+            ACCOUNTS_RETRY_TTL
+        };
+        now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
+    }
+}
+
 /// Resolve the provider-account map for the producer, single-flighted behind
 /// `accounts.lock` so a cold-start fleet — or several `ProduceLocal` losers when
 /// the elder wedges — forks `claude auth status` once per refresh, not once per
@@ -22,7 +64,7 @@ const ACCOUNTS_WAIT_STEPS: u32 = 15;
 /// rides through with no lock and no fork. Slow path: elect one prober; losers
 /// poll briefly for its publish, then fall back to an uncached local probe
 /// rather than block on a wedged elder.
-pub(super) fn produce_accounts(
+pub(crate) fn produce_accounts(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
 ) -> BTreeMap<String, crate::agents::AgentAccount> {
@@ -84,7 +126,7 @@ pub(super) fn produce_accounts(
     }
 }
 
-pub(super) fn cached_accounts_for_snapshot(
+pub(crate) fn cached_accounts_for_snapshot(
     cache: AccountsCache,
     snapshot: &SidebarSnapshot,
 ) -> BTreeMap<String, AgentAccount> {
@@ -273,7 +315,7 @@ fn active_version_probe_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
 
 /// Read the producer's published account cache, or an empty cache on a cold or
 /// corrupt file. Read-only and fork-free — the consumer's view of the dashboard.
-pub(super) fn read_accounts_cache(path: &Path) -> AccountsCache {
+pub(crate) fn read_accounts_cache(path: &Path) -> AccountsCache {
     std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())

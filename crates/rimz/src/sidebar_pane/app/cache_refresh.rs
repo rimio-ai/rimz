@@ -56,7 +56,7 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: Option<crate::
                 config.own_pane.as_ref(),
             )
         });
-        if let Some(event) = meter.finish(tick, crate::sidebar::cache::unix_now_ms()) {
+        if let Some(event) = meter.finish(tick, crate::sidebar::timing::unix_now_ms()) {
             crate::sidebar::meter::report(diag.as_ref(), event);
         }
         if let Err(err) = result {

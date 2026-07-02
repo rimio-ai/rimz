@@ -13,8 +13,8 @@
 
 #![allow(clippy::print_stderr)] // self-skip notices, like the sibling fixture
 
-use rimz::sidebar::cache::unix_now_ms;
 use rimz::sidebar::consumer::RollupCursor;
+use rimz::sidebar::timing::unix_now_ms;
 
 use super::sidebar_diff_stats::Fixture;
 
@@ -116,7 +116,7 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     let session = fixture.publish_pane_frame();
     let state = fixture.env.state_path_for(&fixture.env.project_root);
     let runtime = fixture.env.runtime_paths();
-    let accounts = rimz::sidebar::cache::AccountsCache {
+    let accounts = rimz::sidebar::enrich::AccountsCache {
         refreshed_at_ms: unix_now_ms(),
         accounts: Default::default(),
         ok: true,
@@ -146,8 +146,8 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
 
     let provider_path = runtime.shared_provider_spending_path();
     let accounts_path = runtime.shared_accounts_path();
-    let diff_stats_path = runtime.root.join("diff-stats.json");
-    let diff_stats = rimz::sidebar::cache::read_diff_stats_cache(&diff_stats_path);
+    let diff_stats_path = runtime.diff_stats_path();
+    let diff_stats = rimz::sidebar::produce::read_diff_stats_cache(&diff_stats_path);
     assert!(
         !diff_stats.entries.is_empty(),
         "refresher publishes diff stats for the live worktree"
@@ -197,11 +197,6 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         exclude: None,
         min_pane_cache_ms: None,
         diag: None,
-        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Project,
-    };
-    let refresh_opts = rimz::sidebar::produce::ProduceOptions {
-        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
-        ..project_opts.clone()
     };
     let project = rimz::sidebar::produce::produce_snapshot(
         &mut RollupCursor::new(),
@@ -210,11 +205,11 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         &project_opts,
     )
     .expect("project produce");
-    let refresh = rimz::sidebar::produce::produce_snapshot(
+    let refresh = rimz::sidebar::produce::produce_snapshot_with_refresh(
         &mut RollupCursor::new(),
         &state,
         &runtime,
-        &refresh_opts,
+        &project_opts,
     )
     .expect("refresh produce");
 
@@ -295,7 +290,7 @@ fn idle_room_produce_runs_no_enrichment_io() {
     // Backdate the per-worktree git stamps into the tier gap: stale under
     // DIFF_STATS_TTL (5s), fresh under DIFF_STATS_IDLE_TTL (60s).
     let diff_stats_path = runtime_root.join("diff-stats.json");
-    let mut diff_stats = rimz::sidebar::cache::read_diff_stats_cache(&diff_stats_path);
+    let mut diff_stats = rimz::sidebar::produce::read_diff_stats_cache(&diff_stats_path);
     assert!(
         !diff_stats.entries.is_empty(),
         "the cold produce cached the worktree's git facts:\n{}",
@@ -364,9 +359,8 @@ fn cadence_debug(fixture: &Fixture, stdout: &[u8]) -> String {
                 .join("\n")
         })
         .unwrap_or_else(|err| format!("<read_dir failed: {err}>"));
-    let diff_stats =
-        std::fs::read_to_string(fixture.env.runtime_paths().root.join("diff-stats.json"))
-            .unwrap_or_else(|err| format!("<diff-stats unavailable: {err}>"));
+    let diff_stats = std::fs::read_to_string(fixture.env.runtime_paths().diff_stats_path())
+        .unwrap_or_else(|err| format!("<diff-stats unavailable: {err}>"));
     format!(
         "project_root: {}\nworktree: {} exists={} dir={}\nworktree_git: {} exists={} dir={}\nproject entries:\n{}\nworktree_groups:\n{}\ndiff-stats.json:\n{}\ngit trace:\n{}",
         fixture.env.project_root.display(),

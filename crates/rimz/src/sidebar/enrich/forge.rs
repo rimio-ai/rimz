@@ -8,22 +8,50 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::RuntimePaths;
 use crate::forge::{self, ForgeCli};
-use crate::sidebar::cache::{PrStateCache, unix_now_ms};
+use crate::sidebar::produce::git::{needed_worktree_paths, worktree_group_path};
+use crate::sidebar::timing::{PR_STATE_RETRY_TTL, PR_STATE_TTL, unix_now_ms};
 use crate::{SidebarSnapshot, SidebarWorktreeKind, WorktreePrState};
-
-use super::{needed_worktree_paths, worktree_group_path};
 
 const PR_STATE_WAIT_STEP: Duration = Duration::from_millis(20);
 const PR_STATE_WAIT_STEPS: u32 = 15;
 const MAX_PARALLEL_PR_PROBES: usize = 8;
 
-pub(super) fn produce_pr_states(
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct PrStateCache {
+    pub refreshed_at_ms: u64,
+    /// Whether the last PR-state probe completed without an infrastructure
+    /// failure. A logged-in repo with no PR is a success and keeps an empty map.
+    #[serde(default = "pr_state_probe_ok_default")]
+    pub ok: bool,
+    /// PR state by absolute worktree path.
+    #[serde(default)]
+    pub states: BTreeMap<String, crate::WorktreePrState>,
+}
+
+fn pr_state_probe_ok_default() -> bool {
+    true
+}
+
+impl PrStateCache {
+    pub(crate) fn is_fresh(&self, now_ms: u64) -> bool {
+        let ttl = if self.ok {
+            PR_STATE_TTL
+        } else {
+            PR_STATE_RETRY_TTL
+        };
+        now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
+    }
+}
+
+pub(crate) fn produce_pr_states(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
 ) -> BTreeMap<String, WorktreePrState> {
-    let path = runtime.root.join("pr-state.json");
+    let path = runtime.pr_state_path();
     let cache = read_pr_state_cache(&path);
     let now_ms = unix_now_ms();
     if cache.is_fresh(now_ms) {
@@ -250,7 +278,7 @@ fn command_stdout(worktree: &Path, program: &str, args: &[&str]) -> Option<Strin
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-pub(super) fn read_pr_state_cache(path: &Path) -> PrStateCache {
+pub(crate) fn read_pr_state_cache(path: &Path) -> PrStateCache {
     std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())

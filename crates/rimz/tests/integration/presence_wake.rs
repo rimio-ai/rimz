@@ -30,9 +30,10 @@ use rimz::pane::PaneRef;
 use rimz::schema::heartbeat::SidebarHeartbeat;
 use rimz::schema::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 use rimz::sidebar::cache::{
-    PresenceStamp, presence_stamp_path, read_pane_topology_cache, read_snapshot_cache, unix_now_ms,
+    PresenceStamp, presence_stamp_path, read_pane_topology_cache, read_snapshot_cache,
 };
 use rimz::sidebar::frame::assemble_frame;
+use rimz::sidebar::timing::unix_now_ms;
 use tempfile::TempDir;
 
 use crate::common::ScrubSessionEnvExt;
@@ -190,7 +191,7 @@ impl WakeEnv {
         );
         cache.viewed_panes = vec![pane];
         std::fs::write(
-            self.runtime.root.join("snapshot.json"),
+            self.runtime.pane_frame_path(),
             serde_json::to_vec(&cache).expect("serialize pane cache"),
         )
         .expect("seed pane cache");
@@ -565,7 +566,7 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
             .any(|line| line.contains("list-clients")),
         "topology-served producer must still refresh client focus",
     );
-    let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
+    let cached = read_snapshot_cache(&env.runtime.pane_frame_path(), SESSION_NAME)
         .expect("snapshot cache published from topology");
     assert_eq!(
         cached.viewed_panes,
@@ -618,7 +619,7 @@ fn pane_closed_pruned_topology_publishes_without_a_list_panes_fork() {
         "snapshot failed: stderr={}",
         String::from_utf8_lossy(&output.stderr),
     );
-    let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
+    let cached = read_snapshot_cache(&env.runtime.pane_frame_path(), SESSION_NAME)
         .expect("snapshot cache published from full topology");
     let panes = cached.to_pane_refs();
     assert!(panes.iter().any(|pane| pane.pane_id.raw() == "terminal_7"));
@@ -640,7 +641,7 @@ fn pane_closed_pruned_topology_publishes_without_a_list_panes_fork() {
         wake.status.success(),
         "PaneClosed-pruned topology wake must succeed"
     );
-    std::fs::remove_file(env.runtime.root.join("snapshot.json")).expect("drop old pane frame");
+    std::fs::remove_file(env.runtime.pane_frame_path()).expect("drop old pane frame");
 
     let output = env.snapshot();
     assert!(
@@ -649,7 +650,7 @@ fn pane_closed_pruned_topology_publishes_without_a_list_panes_fork() {
         String::from_utf8_lossy(&output.stderr),
     );
     env.assert_no_list_panes_fork("fresh PaneClosed-pruned topology");
-    let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
+    let cached = read_snapshot_cache(&env.runtime.pane_frame_path(), SESSION_NAME)
         .expect("snapshot cache published from pruned topology");
     let panes = cached.to_pane_refs();
     assert!(panes.iter().any(|pane| pane.pane_id.raw() == "terminal_7"));
@@ -698,7 +699,7 @@ fn wake_command_changed_broadcasts_event_without_patching_pane_frame() {
         assert_eq!(event["event"]["pane_id"], "zellij:terminal_7");
         assert_eq!(event["event"]["command"], "codex");
     }
-    let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
+    let cached = read_snapshot_cache(&env.runtime.pane_frame_path(), SESSION_NAME)
         .expect("pane cache remains readable");
     assert_eq!(
         cached.produced_at_ms, produced_at_ms,

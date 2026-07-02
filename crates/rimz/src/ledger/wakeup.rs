@@ -179,7 +179,7 @@ pub fn broadcast_sidebar_event(
     let payload = serde_json::to_vec(&SidebarEventEnvelope::new(
         rt.workspace_id.clone(),
         session_name.map(str::to_owned),
-        crate::sidebar::cache::unix_now_ms(),
+        crate::sidebar::timing::unix_now_ms(),
         event,
     ))?;
     send_datagrams_with(

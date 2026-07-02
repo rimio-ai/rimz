@@ -1,6 +1,6 @@
 use rimz::ids::MuxName;
 use rimz::remote::link::{LinkStats, LinkStatsFile};
-use rimz::sidebar::cache::unix_now_ms;
+use rimz::sidebar::timing::unix_now_ms;
 
 use super::{RoomHarness, SETTLE, session_start_at};
 use crate::common::Env;

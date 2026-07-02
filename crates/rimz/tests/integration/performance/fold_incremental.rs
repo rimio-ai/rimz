@@ -130,7 +130,6 @@ fn warm_produce_folds_o_new_bytes() {
         exclude: None,
         min_pane_cache_ms: None,
         diag: None,
-        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
     };
     let mut cursor = RollupCursor::new();
 
@@ -239,10 +238,11 @@ fn auto_continue_tick(
         runtime,
         Some(&state.messages_dir),
         None,
-        rimz::sidebar::enrich::EnrichMode::Producing {
-            roots: None,
-            heavy: rimz::sidebar::enrich::HeavyLanes::Project,
-            config: Box::new(config),
+        rimz::sidebar::enrich::FoldOpts {
+            producing: true,
+            fresh_roots: None,
+            config: Some(Box::new(config)),
+            lanes: None,
         },
         None,
     )

@@ -36,7 +36,6 @@ fn warm_produce_stays_inside_the_data_tick_at_fleet_scale() {
         exclude: None,
         min_pane_cache_ms: None,
         diag: None,
-        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Refresh,
     };
     let mut cursor = RollupCursor::new();
 
@@ -84,7 +83,7 @@ fn project_produce_over_stale_heavy_caches_forks_zero_subprocesses() {
     h.publish_fresh_produce_inputs(SESSION_NAME, synthetic_panes(FLEET));
     let _ = std::fs::remove_file(h.runtime_paths.shared_provider_spending_path());
     let _ = std::fs::remove_file(h.runtime_paths.shared_accounts_path());
-    let _ = std::fs::remove_file(h.runtime_paths.root.join("diff-stats.json"));
+    let _ = std::fs::remove_file(h.runtime_paths.diff_stats_path());
 
     let opts = rimz::sidebar::produce::ProduceOptions {
         mux: rimz::MuxName::Zellij,
@@ -92,7 +91,6 @@ fn project_produce_over_stale_heavy_caches_forks_zero_subprocesses() {
         exclude: None,
         min_pane_cache_ms: None,
         diag: None,
-        heavy_lanes: rimz::sidebar::produce::HeavyLaneMode::Project,
     };
     let mut cursor = RollupCursor::new();
 
@@ -104,6 +102,6 @@ fn project_produce_over_stale_heavy_caches_forks_zero_subprocesses() {
     assert_eq!(
         spawn_count() - spawns_before,
         0,
-        "Project mode projects missing/stale heavy caches and never refreshes them inline"
+        "produce projects missing/stale heavy caches and never refreshes them inline"
     );
 }

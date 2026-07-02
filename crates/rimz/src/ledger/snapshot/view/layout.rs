@@ -104,9 +104,9 @@ pub(super) fn worktree_group_key(
                 .unwrap_or_else(|| path_basename(cwd));
             // Disambiguate the key by branch only for a path that holds more
             // than one — a newline can appear in neither a path nor a branch, so
-            // it is an unambiguous separator. `enrich_worktree_groups` recovers
-            // the bare path from the key's first line, so the split never
-            // breaks git reads.
+            // it is an unambiguous separator. The git projection recovers the
+            // bare path from the key's first line, so the split never breaks
+            // git reads.
             let key = match branch.filter(|_| split_by_branch) {
                 Some(branch) => format!("{path}\n{branch}"),
                 None => path.to_owned(),

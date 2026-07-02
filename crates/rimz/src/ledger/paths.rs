@@ -270,6 +270,18 @@ impl RuntimePaths {
         self.root.join("unread.json")
     }
 
+    pub fn pane_frame_path(&self) -> PathBuf {
+        self.root.join("snapshot.json")
+    }
+
+    pub fn diff_stats_path(&self) -> PathBuf {
+        self.root.join("diff-stats.json")
+    }
+
+    pub fn pr_state_path(&self) -> PathBuf {
+        self.root.join("pr-state.json")
+    }
+
     /// The workspace's last jump scroll anchor: the pane a jump focused plus the
     /// viewport offset that keeps its card where the user clicked. Renderers read
     /// it on the fold that adopts the focus, so a cross-tab jump lands the card at

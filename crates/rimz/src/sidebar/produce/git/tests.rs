@@ -289,7 +289,7 @@ fn focused_diff_stats_refreshes_local_facts_before_commit_facts() {
     repo.write("base.txt", "base\nedit\n");
 
     let (_runtime_dir, runtime) = runtime_for(repo.path());
-    let cache_path = runtime.root.join("diff-stats.json");
+    let cache_path = runtime.diff_stats_path();
     let path = repo.path_str().to_owned();
     let mut cache = DiffStatsCache::default();
     cache.entries.insert(
@@ -352,7 +352,7 @@ fn non_focused_diff_stats_refreshes_local_and_commit_facts_together() {
     repo.write("base.txt", "base\nedit\n");
 
     let (_runtime_dir, runtime) = runtime_for(repo.path());
-    let cache_path = runtime.root.join("diff-stats.json");
+    let cache_path = runtime.diff_stats_path();
     let path = repo.path_str().to_owned();
     let now_ms = 1_000 + DIFF_STATS_TTL.as_millis() as u64 + 1;
     let mut cache = DiffStatsCache::default();

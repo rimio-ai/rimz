@@ -308,7 +308,7 @@ fn frame_timing_resumes_on_own_pane_focus() {
                 SidebarEventEnvelope::new(
                     ws.clone(),
                     Some("rimz-test".to_owned()),
-                    crate::sidebar::cache::unix_now_ms(),
+                    crate::sidebar::timing::unix_now_ms(),
                     SidebarEvent::FocusChanged {
                         focused: vec![focused],
                         unfocused: Vec::new(),
@@ -433,7 +433,7 @@ fn focus_anchor_write_carries_current_scroll_offset() {
     assert_eq!(anchor.offset, 11);
     assert!(crate::sidebar::focus_anchor::is_fresh(
         anchor.stamp_ms,
-        crate::sidebar::cache::unix_now_ms(),
+        crate::sidebar::timing::unix_now_ms(),
     ));
 }
 
@@ -444,7 +444,7 @@ fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
     let (dir, mut state) = loop_state(&ws);
     let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
     let target = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
-    let stamp_ms = crate::sidebar::cache::unix_now_ms();
+    let stamp_ms = crate::sidebar::timing::unix_now_ms();
     crate::sidebar::focus_anchor::store(
         &runtime,
         &crate::sidebar::focus_anchor::FocusAnchor {
@@ -527,7 +527,7 @@ fn focus_anchor_for_other_pane_leaves_scroll_untouched() {
         &crate::sidebar::focus_anchor::FocusAnchor {
             pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_1"),
             offset: 7,
-            stamp_ms: crate::sidebar::cache::unix_now_ms(),
+            stamp_ms: crate::sidebar::timing::unix_now_ms(),
         },
     )
     .expect("store anchor");
@@ -554,7 +554,7 @@ fn focus_anchor_stamp_applies_once() {
     let (dir, mut state) = loop_state(&ws);
     let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
     let target = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
-    let stamp_ms = crate::sidebar::cache::unix_now_ms();
+    let stamp_ms = crate::sidebar::timing::unix_now_ms();
     crate::sidebar::focus_anchor::store(
         &runtime,
         &crate::sidebar::focus_anchor::FocusAnchor {
@@ -599,7 +599,7 @@ fn stale_focus_anchor_is_ignored() {
     let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
     let target = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
     let ttl_ms = crate::sidebar::timing::FOCUS_ANCHOR_FRESH.as_millis() as u64;
-    let stale_stamp = crate::sidebar::cache::unix_now_ms().saturating_sub(ttl_ms + 1);
+    let stale_stamp = crate::sidebar::timing::unix_now_ms().saturating_sub(ttl_ms + 1);
     crate::sidebar::focus_anchor::store(
         &runtime,
         &crate::sidebar::focus_anchor::FocusAnchor {
