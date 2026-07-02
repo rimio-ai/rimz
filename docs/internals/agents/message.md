@@ -1,6 +1,6 @@
 # The message system
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent model (rollup, state machine, turn phase, liveness) is [agent.md](./agent.md); the address grammar and the exec wrapper are [harness.md](./harness.md); the Git worktree backing is [worktree.md](./worktree.md); the user-facing commands are [cli/agents.md](../../reference/cli/agents.md) and [cli/channel.md](../../reference/cli/channel.md). This doc owns how Rimz routes text to a running agent: the send modes, the durable message record, delivery gates and FIFO ordering, the hook-triggered delivery pipeline, scheduling, smart compaction, wait confirmation, retries, the channel lanes that scope addressing, and the audit trail.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent model (rollup, state machine, turn phase, liveness) is [agent.md](./agent.md); the address grammar and the exec wrapper are [harness.md](./harness.md); the Git worktree backing is [worktree.md](./worktree.md); the user-facing commands are [cli/agents.md](../../reference/cli/agents.md) and [cli/channel.md](../../reference/cli/channel.md). This doc owns how Rimz routes text to a running agent: the send modes, the durable message record, delivery gates and FIFO ordering, the hook-triggered delivery pipeline, scheduling, smart compaction, wait confirmation, retries, the channel lanes that scope addressing, the transcript read-back, and the audit trail.
 
 `rimz message` routes text to a running agent. A human, a script, a CI hook, or another agent names a target, and Rimz types the text into that agent's pane through the same bracketed-paste primitive the public `pane send` command and resolvers use.
 
@@ -256,6 +256,28 @@ events.log.jsonl          terminal message.* audit events
 `messages/messages.jsonl` holds only live records. A terminal transition removes the record from the queue file, then appends the terminal `message.*` event; a crash in between cannot redeliver the message, and the cost is at most a missing terminal audit row. All writes use temp-file-plus-rename through the ledger atomic helpers and hold the workspace lock.
 
 The store exposes `list()` (live records) and `list_pending()` (`Queued` records only). On first access, a legacy `messages/<msg_id>.json` plus `messages/terminal/` layout migrates live `Queued`, `Claimed`, and `Sent` records into the JSONL file and discards terminal files already represented by the event log. Store implementation: [`ledger/message_store.rs`](../../../crates/rimz/src/ledger/message_store.rs); ledger mutations: [`ledger/writer/queue.rs`](../../../crates/rimz/src/ledger/writer/queue.rs).
+
+## Transcript
+
+Routing text to an agent is the write side; the transcript log is the durable record of the resulting conversation, and `rimz transcript` reads it back as a chat timeline. The log is Rimz-owned, distinct from a provider's native session files, so ended agents, past channels, and their asks and answers stay visible after those native files rotate away or leave the live snapshot.
+
+Hook and resolver paths append entries to `transcript/<bucket-start>.jsonl`, append-only and under the workspace lock. `[transcript] file_days` sets the bucket width for file-size control ([configuration.md](../../reference/configuration.md)); buckets are never pruned, and reads sort by recorded timestamp, so a bucket boundary carries no ordering meaning. Each entry stores a kind, the receiving agent's identity and channel, a timestamp, the text, and the structured `from`, `questions`, or `answers` its kind needs. Five kinds cover the conversation surface:
+
+| Kind | Records | Reads back as |
+| --- | --- | --- |
+| `Prompt` | a human prompt to an agent | `user: @receiver, text` |
+| `Message` | an inter-agent delivery, tagged with structured `from` | `@sender: @receiver, text` |
+| `Assistant` | a root turn's final assistant message | `@receiver: text` |
+| `Ask` | a native question ask; its `questions` carry option labels and descriptions | the agent's question |
+| `Answer` | the effective answer, carrying `answers` choices | `you` or the resolver to the agent |
+
+A delivery becomes a `Message` entry when the receiver's turn-start hook parses the `from @sender` prefix ([Sender prefix](#sender-prefix)); the delivery queue record stays bookkeeping, never a transcript source. A peer-opened turn also records the receiver's reply, because that reply is its own `Assistant` entry.
+
+`rimz transcript` projects these entries into one timestamp-ordered chat log. A channel target (`#channel`, `@all#channel`, or a bare invocation in a worktree) shows every agent in the lane; a single-agent target filters to that agent's sent and received lines. The command surface, flags, and rendered appearance are [cli/agents.md → Inspect transcripts](../../reference/cli/agents.md#inspect-transcripts).
+
+Two nearby reads are not this log. Supervised-run streaming (`agents wait --stream`, `--output-format stream-json`) tails the provider-native transcript through each adapter's `parse_transcript_messages` ([harness.md → Supervised runs](./harness.md#supervised-runs)), and the context-fill and spend gauges read those same native files ([agent.md → Enrichment](./agent.md#enrichment)). The audit trail below is a third log: operational `message.*` events that carry no message content.
+
+Domain types: [`ledger/transcript_log.rs`](../../../crates/rimz/src/ledger/transcript_log.rs) for the durable log, [`agents/transcript.rs`](../../../crates/rimz/src/agents/transcript.rs) for the chat projection.
 
 ## Audit trail
 

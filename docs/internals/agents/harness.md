@@ -32,10 +32,6 @@ reach a member by @handle#channel, then:
   message --schedule 1h    →  leave a task no earlier than one hour from now
 ```
 
-## Read the room
-
-`rimz transcript` is the catch-up surface, and the only part worth noting here is the chat-log build. A channel target (`#channel`, `@all#channel`, or a bare invocation in a worktree) reads Rimz's transcript log directly and projects each entry into timestamp order: human prompts render as `user: @receiver, text`, delivered peer messages render as `@sender: @receiver, text` from the entry's structured `from`, assistant replies render as `@receiver: text`, blocking asks render from the agent, and effective answers render from `you` or the resolver to the agent. A single-agent target filters that same channel log to the focal agent's sent and received lines. Peer-opened turns include the receiving agent's assistant reply because the reply is its own transcript entry. Supervised streaming still reads provider-native transcripts through each adapter's `parse_transcript_messages`; the assistant-only `wait --stream` path filters that parse.
-
 ## Spawn the fleet
 
 ### The layout IR

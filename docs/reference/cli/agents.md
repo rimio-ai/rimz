@@ -162,7 +162,7 @@ Parked delivery needs installed and trusted hooks, because turn-end hooks trigge
 
 ## Inspect transcripts
 
-`rimz transcript` reads Rimz's durable transcript log and renders the channel as a timestamped chat log, including ended agents whose native transcript files have rotated away.
+`rimz transcript` reads Rimz's durable transcript log and renders the channel as a timestamped chat log, including ended agents whose native transcript files have rotated away. The log model (entry kinds, JSONL buckets, retention) is [message.md → Transcript](../../internals/agents/message.md#transcript).
 
 ```sh
 rimz transcript @swift-otter            # one agent's channel messages

@@ -304,7 +304,7 @@ rtk = "auto"
 file_days = 7
 ```
 
-`file_days` controls how many days of conversation entries land in one `transcript/<date>.jsonl` bucket. It controls file size only: transcript buckets are append-only and are not deleted by this setting. `rimz transcript` reads every bucket and sorts entries by their recorded timestamp, so changing the value affects future file boundaries rather than transcript order.
+`file_days` controls how many days of conversation entries land in one `transcript/<date>.jsonl` bucket. It controls file size only: transcript buckets are append-only and are not deleted by this setting. `rimz transcript` reads every bucket and sorts entries by their recorded timestamp, so changing the value affects future file boundaries rather than transcript order. The transcript log model and read-back are in [message.md → Transcript](../internals/agents/message.md#transcript).
 
 ### Off-box error reporting
 
