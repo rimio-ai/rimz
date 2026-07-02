@@ -203,6 +203,7 @@ pub struct SpendingCaches {
 pub struct SpendingWalkResult {
     pub spending: Spending,
     pub workspace_tally: SpendTally,
+    pub workspace_headline_cutoff_secs: u64,
     pub days: BTreeMap<i64, DaySpend>,
     pub models: BTreeMap<String, SpendTally>,
     pub stats: WalkStats,
@@ -346,7 +347,9 @@ pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 9;
 /// can force a cheap re-aggregate without re-reading transcripts.
 /// v2: the default headline window changed from trailing 24 hours to session.
 /// v3: scoped tallies read per-file origin instead of per-entry origin.
-pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 3;
+/// v4: live headline carry and baselines publish atomically with the scoped
+/// walk.
+pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 4;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///
@@ -968,6 +971,7 @@ fn aggregate_walk_publish_from_counted<C: CountedPayload>(
     SpendingWalkResult {
         spending: aggregate.spending,
         workspace_tally: aggregate.workspace_tally,
+        workspace_headline_cutoff_secs: aggregate.workspace_headline_cutoff_secs,
         days: aggregate.days,
         models: aggregate.models,
         stats,
@@ -1195,6 +1199,7 @@ fn fold_spending_parse_job(
 struct CountedRollups {
     spending: Spending,
     workspace_tally: SpendTally,
+    workspace_headline_cutoff_secs: u64,
     days: BTreeMap<i64, DaySpend>,
     models: BTreeMap<String, SpendTally>,
 }
@@ -1265,6 +1270,7 @@ fn aggregate_counted_rollups(
     CountedRollups {
         spending,
         workspace_tally,
+        workspace_headline_cutoff_secs: scope.map(|_| cutoffs.scoped()).unwrap_or_default(),
         days,
         models: if include_history_rollups {
             models
@@ -1506,13 +1512,35 @@ pub fn compute_scoped_tally(
     now_secs: u64,
     spec: &HeadlineSpec,
 ) -> SpendTally {
+    compute_scoped_spending(files, cache, scope, now_secs, spec).tally
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ScopedSpending {
+    pub tally: SpendTally,
+    pub headline_cutoff_secs: u64,
+}
+
+/// Compute the cockpit's workspace-scoped tally plus the headline epoch cutoff
+/// that makes live carry reset at window boundaries.
+pub fn compute_scoped_spending(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    scope: &SpendScope,
+    now_secs: u64,
+    spec: &HeadlineSpec,
+) -> ScopedSpending {
     if scope.is_empty() {
-        return SpendTally::default();
+        return ScopedSpending::default();
     }
     let deduped = dedup_cached_entries(files, cache);
     let counted = deduped.into_counted();
-    aggregate_counted_rollups(files, cache, &counted, Some(scope), now_secs, spec, false)
-        .workspace_tally
+    let aggregate =
+        aggregate_counted_rollups(files, cache, &counted, Some(scope), now_secs, spec, false);
+    ScopedSpending {
+        tally: aggregate.workspace_tally,
+        headline_cutoff_secs: aggregate.workspace_headline_cutoff_secs,
+    }
 }
 
 fn stamp_file_origin(entry: &mut FileCacheEntry, origin: &Path) -> bool {
@@ -2337,6 +2365,12 @@ pub struct WorkspaceSpendingCache {
     pub scope_hash: String,
     #[serde(default)]
     pub tally: SpendTally,
+    #[serde(default)]
+    pub headline_cutoff_secs: u64,
+    #[serde(default)]
+    pub carry_usd: f64,
+    #[serde(default)]
+    pub live_baselines: BTreeMap<String, f64>,
 }
 
 impl WorkspaceSpendingCache {
@@ -2347,17 +2381,10 @@ impl WorkspaceSpendingCache {
     }
 }
 
-pub fn write_workspace_spending_cache(
-    path: &Path,
-    refreshed_at_ms: u64,
-    scope_hash: &str,
-    tally: &SpendTally,
-) {
+pub fn write_workspace_spending_cache(path: &Path, cache: &WorkspaceSpendingCache) {
     let cache = WorkspaceSpendingCache {
         version: WORKSPACE_SPENDING_VERSION,
-        refreshed_at_ms,
-        scope_hash: scope_hash.to_owned(),
-        tally: tally.clone(),
+        ..cache.clone()
     };
     if let Some(on_disk) = peek_cache_version(path)
         && on_disk > cache.version
@@ -2380,33 +2407,11 @@ pub fn read_workspace_spending_cache(path: &Path) -> WorkspaceSpendingCache {
         .unwrap_or_default()
 }
 
-/// Per-workspace live-cost baselines for the cockpit's between-walk count-up.
-/// The shared provider-spending cache is account-global; these baselines are
-/// room-local because row ids and live statusline costs belong to one rendered
-/// workspace.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct LiveSpendBaselines {
-    #[serde(default)]
-    pub observed_walk_ms: u64,
-    #[serde(default)]
-    pub baselines: BTreeMap<String, f64>,
-}
-
-pub fn read_live_spend_baselines(path: &Path) -> LiveSpendBaselines {
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<LiveSpendBaselines>(&bytes).ok())
-        .unwrap_or_default()
-}
-
-pub fn write_live_spend_baselines(path: &Path, baselines: &LiveSpendBaselines) {
-    let _ = crate::ledger::atomic::write_temp_then_rename_cache(path, baselines);
-}
-
 /// Headline spend as the cockpit paints it: the walked tally's exact figure plus
-/// each live session's overshoot over the baseline captured when the walk
-/// published — so the headline climbs the instant a session's statusline cost
-/// moves, while the walk stays the truth it reconciles to on the next publish.
+/// monotone carry plus each live session's overshoot over the baseline captured
+/// when the walk published — so the headline climbs the instant a session's
+/// statusline cost moves, while each publish reconciles upward within the same
+/// window epoch.
 /// Pure presentation over `(session id, cost now, registered-at ms)` triples: a
 /// baselined session adds `max(0, cost_now − baseline)` (a resumed or reset
 /// session clamps to zero rather than rolling the headline backwards); a session
@@ -2427,6 +2432,36 @@ pub fn today_spend_live_usd<'a>(
         })
         .sum();
     walked_headline_usd + overshoot
+}
+
+pub fn reconcile_workspace_carry(
+    prev: &WorkspaceSpendingCache,
+    scope_hash: &str,
+    new_headline_usd: f64,
+    new_cutoff_secs: u64,
+    live_costs: &[(String, f64, Option<u64>)],
+) -> (f64, BTreeMap<String, f64>) {
+    let baselines = live_costs
+        .iter()
+        .map(|(id, usd, _)| (id.clone(), *usd))
+        .collect();
+    let carry = if prev.version == WORKSPACE_SPENDING_VERSION
+        && prev.scope_hash == scope_hash
+        && prev.headline_cutoff_secs == new_cutoff_secs
+    {
+        let display_before = today_spend_live_usd(
+            prev.tally.headline.usd + prev.carry_usd,
+            live_costs
+                .iter()
+                .map(|(id, usd, registered_at)| (id.as_str(), *usd, *registered_at)),
+            &prev.live_baselines,
+            prev.refreshed_at_ms,
+        );
+        (display_before - new_headline_usd).max(0.0)
+    } else {
+        0.0
+    };
+    (carry, baselines)
 }
 
 // ── Date utilities ────────────────────────────────────────────────────────────

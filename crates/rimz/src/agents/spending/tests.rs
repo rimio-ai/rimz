@@ -1812,13 +1812,28 @@ fn workspace_spending_cache_is_scope_keyed_and_ttl_gated() {
     tally.headline.usd = 3.21;
     tally.headline.tokens = 1234;
 
-    write_workspace_spending_cache(&path, 10_000, "scope-a", &tally);
+    let written = WorkspaceSpendingCache {
+        refreshed_at_ms: 10_000,
+        scope_hash: "scope-a".to_owned(),
+        tally: tally.clone(),
+        headline_cutoff_secs: 123,
+        carry_usd: 0.45,
+        live_baselines: BTreeMap::from([("claude-1".to_owned(), 1.05)]),
+        ..Default::default()
+    };
+    write_workspace_spending_cache(&path, &written);
     let cache = read_workspace_spending_cache(&path);
 
     assert_eq!(cache.version, WORKSPACE_SPENDING_VERSION);
     assert_eq!(cache.refreshed_at_ms, 10_000);
     assert_eq!(cache.scope_hash, "scope-a");
     assert_eq!(cache.tally, tally);
+    assert_eq!(cache.headline_cutoff_secs, 123);
+    assert_eq!(cache.carry_usd, 0.45);
+    assert_eq!(
+        cache.live_baselines,
+        BTreeMap::from([("claude-1".to_owned(), 1.05)])
+    );
     assert!(cache.is_fresh(10_000, "scope-a"));
     assert!(!cache.is_fresh(10_000, "scope-b"));
     assert!(!cache.is_fresh(10_001 + SPENDING_TTL.as_millis() as u64, "scope-a"));
@@ -1845,7 +1860,14 @@ fn cache_version_prefix_gates_reads_and_writes() {
     }
 
     fn write_workspace(path: &Path) {
-        write_workspace_spending_cache(path, 12_345, "scope", &SpendTally::default());
+        write_workspace_spending_cache(
+            path,
+            &WorkspaceSpendingCache {
+                refreshed_at_ms: 12_345,
+                scope_hash: "scope".to_owned(),
+                ..Default::default()
+            },
+        );
     }
 
     let dir = TempDir::new().unwrap();
@@ -1979,16 +2001,7 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
 }
 
 #[test]
-fn live_baselines_and_overlay_cases_stay_bounded() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("live-spend-baselines.json");
-    let baselines = LiveSpendBaselines {
-        observed_walk_ms: 12_345,
-        baselines: BTreeMap::from([("claude-1".to_owned(), 1.05)]),
-    };
-    write_live_spend_baselines(&path, &baselines);
-    assert_eq!(read_live_spend_baselines(&path), baselines);
-
+fn live_overlay_cases_stay_bounded() {
     for (name, walked, live, baselines, published_at, expected) in [
         (
             "overshoot",
@@ -2026,6 +2039,159 @@ fn live_baselines_and_overlay_cases_stay_bounded() {
         let blended = today_spend_live_usd(walked, live.into_iter(), &baselines, published_at);
         assert!((blended - expected).abs() < 1e-9, "{name}");
     }
+}
+
+fn tally_with_headline_usd(usd: f64) -> SpendTally {
+    let mut tally = SpendTally::default();
+    tally.headline.usd = usd;
+    tally
+}
+
+fn workspace_cache_for_carry(
+    scope_hash: &str,
+    walked: f64,
+    cutoff: u64,
+    carry: f64,
+    refreshed_at_ms: u64,
+    live_baselines: BTreeMap<String, f64>,
+) -> WorkspaceSpendingCache {
+    WorkspaceSpendingCache {
+        version: WORKSPACE_SPENDING_VERSION,
+        refreshed_at_ms,
+        scope_hash: scope_hash.to_owned(),
+        tally: tally_with_headline_usd(walked),
+        headline_cutoff_secs: cutoff,
+        carry_usd: carry,
+        live_baselines,
+    }
+}
+
+fn displayed_workspace_usd(
+    cache: &WorkspaceSpendingCache,
+    live_costs: &[(String, f64, Option<u64>)],
+) -> f64 {
+    today_spend_live_usd(
+        cache.tally.headline.usd + cache.carry_usd,
+        live_costs
+            .iter()
+            .map(|(id, usd, registered_at)| (id.as_str(), *usd, *registered_at)),
+        &cache.live_baselines,
+        cache.refreshed_at_ms,
+    )
+}
+
+fn publish_workspace_for_carry(
+    prev: &WorkspaceSpendingCache,
+    scope_hash: &str,
+    walked: f64,
+    cutoff: u64,
+    refreshed_at_ms: u64,
+    live_costs: &[(String, f64, Option<u64>)],
+) -> WorkspaceSpendingCache {
+    let (carry_usd, live_baselines) =
+        reconcile_workspace_carry(prev, scope_hash, walked, cutoff, live_costs);
+    workspace_cache_for_carry(
+        scope_hash,
+        walked,
+        cutoff,
+        carry_usd,
+        refreshed_at_ms,
+        live_baselines,
+    )
+}
+
+#[test]
+fn workspace_carry_absorbs_publish_dip_and_recaptures_baselines() {
+    let prev = workspace_cache_for_carry(
+        "scope",
+        100.0,
+        123,
+        0.0,
+        10_000,
+        BTreeMap::from([("a".to_owned(), 5.0)]),
+    );
+    let live_costs = vec![("a".to_owned(), 7.0, Some(1_000))];
+
+    let (carry, baselines) = reconcile_workspace_carry(&prev, "scope", 101.0, 123, &live_costs);
+
+    assert!((carry - 1.0).abs() < 1e-9);
+    assert_eq!(baselines, BTreeMap::from([("a".to_owned(), 7.0)]));
+}
+
+#[test]
+fn workspace_carry_shrinks_as_walked_spend_catches_up() {
+    let prev = workspace_cache_for_carry(
+        "scope",
+        101.0,
+        123,
+        1.0,
+        20_000,
+        BTreeMap::from([("a".to_owned(), 7.0)]),
+    );
+    let live_costs = vec![("a".to_owned(), 7.0, Some(1_000))];
+
+    let (carry, _) = reconcile_workspace_carry(&prev, "scope", 101.75, 123, &live_costs);
+
+    assert!((carry - 0.25).abs() < 1e-9);
+}
+
+#[test]
+fn workspace_carry_resets_on_epoch_scope_or_version_mismatch() {
+    let prev = workspace_cache_for_carry(
+        "scope",
+        100.0,
+        123,
+        2.0,
+        10_000,
+        BTreeMap::from([("a".to_owned(), 5.0)]),
+    );
+    let live_costs = vec![("a".to_owned(), 8.0, Some(1_000))];
+
+    let (epoch_carry, epoch_baselines) =
+        reconcile_workspace_carry(&prev, "scope", 100.0, 456, &live_costs);
+    assert_eq!(epoch_carry, 0.0);
+    assert_eq!(epoch_baselines, BTreeMap::from([("a".to_owned(), 8.0)]));
+
+    let (scope_carry, _) = reconcile_workspace_carry(&prev, "other", 100.0, 123, &live_costs);
+    assert_eq!(scope_carry, 0.0);
+
+    let old_version = WorkspaceSpendingCache {
+        version: WORKSPACE_SPENDING_VERSION - 1,
+        ..prev
+    };
+    let (version_carry, _) =
+        reconcile_workspace_carry(&old_version, "scope", 100.0, 123, &live_costs);
+    assert_eq!(version_carry, 0.0);
+}
+
+#[test]
+fn workspace_carry_keeps_display_monotone_across_leading_statusline_publishes() {
+    let scope = "scope";
+    let cutoff = 123;
+    let mut cache = workspace_cache_for_carry(
+        scope,
+        100.0,
+        cutoff,
+        0.0,
+        10_000,
+        BTreeMap::from([("a".to_owned(), 10.0)]),
+    );
+    let mut displays = Vec::new();
+
+    let live_a = vec![("a".to_owned(), 12.0, Some(1_000))];
+    displays.push(displayed_workspace_usd(&cache, &live_a));
+    cache = publish_workspace_for_carry(&cache, scope, 101.0, cutoff, 20_000, &live_a);
+    displays.push(displayed_workspace_usd(&cache, &live_a));
+
+    let live_b = vec![("a".to_owned(), 13.0, Some(1_000))];
+    displays.push(displayed_workspace_usd(&cache, &live_b));
+    cache = publish_workspace_for_carry(&cache, scope, 102.0, cutoff, 30_000, &live_b);
+    displays.push(displayed_workspace_usd(&cache, &live_b));
+
+    cache = publish_workspace_for_carry(&cache, scope, 103.0, cutoff, 40_000, &live_b);
+    displays.push(displayed_workspace_usd(&cache, &live_b));
+
+    assert_eq!(displays, vec![102.0, 102.0, 103.0, 103.0, 103.0]);
 }
 
 #[test]

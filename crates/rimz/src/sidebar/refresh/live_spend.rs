@@ -1,53 +1,21 @@
-use std::collections::BTreeMap;
-
+use crate::SidebarSnapshot;
 use crate::agents::spending::{
-    LiveSpendBaselines, SpendScope, origin_path, read_live_spend_baselines, today_spend_live_usd,
-    write_live_spend_baselines,
+    SpendScope, WorkspaceSpendingCache, origin_path, today_spend_live_usd,
 };
-use crate::{RuntimePaths, SidebarSnapshot};
 
-/// Stamp the cockpit's live headline spend onto the snapshot: the published
-/// walk's exact figure plus each live row's overshoot over its publish-time
-/// baseline ([`today_spend_live_usd`]), so the headline tracks every
-/// context sidecar push instead of waiting out the walk's TTL. Shared by the
-/// producing CLI and the consumer fold, so every tab in a room paints the same
-/// figure; zero — an empty room in an unspent window — stays `None` and the
-/// cockpit keeps its bare `¤` line.
-pub fn apply_live_today_spend(
-    snapshot: &mut SidebarSnapshot,
-    walked_headline_usd: f64,
-    published_at_ms: u64,
-    baselines: &BTreeMap<String, f64>,
-) {
+/// Stamp the cockpit's live headline spend onto the snapshot from the single
+/// workspace cache: walked tally, monotone carry, and live baselines are one
+/// atomic publish. Shared by the producing CLI and consumer folds, so every tab
+/// in a room paints the same figure; zero — an empty room in an unspent window —
+/// stays `None` and the cockpit keeps its bare `¤` line.
+pub fn apply_live_today_spend(snapshot: &mut SidebarSnapshot, workspace: &WorkspaceSpendingCache) {
     let live = today_spend_live_usd(
-        walked_headline_usd,
+        workspace.tally.headline.usd + workspace.carry_usd,
         live_row_costs(snapshot),
-        baselines,
-        published_at_ms,
+        &workspace.live_baselines,
+        workspace.refreshed_at_ms,
     );
     snapshot.today_spend_live_usd = (live > 0.0).then_some(live);
-}
-
-pub(crate) fn refresh_live_spend_baselines(
-    runtime: &RuntimePaths,
-    snapshot: &SidebarSnapshot,
-    observed_walk_ms: u64,
-    persist: bool,
-) -> LiveSpendBaselines {
-    let path = runtime.live_spend_baselines_path();
-    let mut baselines = read_live_spend_baselines(&path);
-    // Producer-only: the elected elder captures the per-room baselines at each
-    // new walk; consumer tabs read what it wrote.
-    if persist && observed_walk_ms > 0 && observed_walk_ms > baselines.observed_walk_ms {
-        baselines = LiveSpendBaselines {
-            observed_walk_ms,
-            baselines: live_row_costs(snapshot)
-                .map(|(id, usd, _)| (id.to_owned(), usd))
-                .collect(),
-        };
-        write_live_spend_baselines(&path, &baselines);
-    }
-    baselines
 }
 
 /// Every in-scope agent row's live statusline cost: `(row id,
@@ -94,6 +62,7 @@ mod tests {
     use jiff::{SignedDuration, Timestamp};
 
     use super::*;
+    use crate::RuntimePaths;
     use crate::agents::AgentStatus;
     use crate::ids::WorkspaceId;
     use crate::ledger::atomic;
@@ -161,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn live_spend_baselines_are_written_only_by_producer_enrich() {
+    fn consumer_enrich_reads_live_carry_from_workspace_cache_without_writing() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -182,7 +151,7 @@ mod tests {
         let before = published - SignedDuration::from_secs(60);
         let wt = dir.path().join("wt");
         let external = Path::new("/tmp/rimz-other-project");
-        let build_snapshot = || {
+        let build_snapshot = || -> SidebarSnapshot {
             let mut snapshot =
                 SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new(), published)
                     .with_project_root(Some(dir.path().to_path_buf()));
@@ -195,6 +164,11 @@ mod tests {
             )];
             snapshot
         };
+        let config = crate::config::MachineConfig::load().unwrap_or_default();
+        let worktree_home =
+            crate::worktree::worktree_parent(dir.path(), &config.agents.worktree).ok();
+        let scope = SpendScope::for_workspace(Some(dir.path()), &[], worktree_home.as_deref());
+        let scope_hash = scope.hash();
 
         let spending = crate::agents::spending::Spending::default();
         crate::agents::spending::write_provider_spending_cache(
@@ -202,28 +176,21 @@ mod tests {
             walk_ms,
             &spending,
         );
-        let baseline_path = runtime.live_spend_baselines_path();
-
-        let _ = enrich(
-            build_snapshot(),
-            None,
-            &runtime,
-            None,
-            None,
-            cached_opts(),
-            &crate::diag::DiagSink::disabled(),
-        );
-        assert!(
-            !baseline_path.exists(),
-            "consumer folds read baselines but never create the sidecar"
-        );
-
-        let stale = crate::agents::spending::LiveSpendBaselines {
-            observed_walk_ms: 10,
-            baselines: BTreeMap::from([("old".to_owned(), 0.50)]),
+        let mut tally = crate::agents::spending::SpendTally::default();
+        tally.headline.usd = 10.0;
+        let workspace_cache = crate::agents::spending::WorkspaceSpendingCache {
+            refreshed_at_ms: walk_ms,
+            scope_hash: scope_hash.clone(),
+            tally,
+            carry_usd: 1.0,
+            live_baselines: BTreeMap::from([("baselined".to_owned(), 1.50)]),
+            ..Default::default()
         };
-        crate::agents::spending::write_live_spend_baselines(&baseline_path, &stale);
-        let _ = enrich(
+        let workspace_path = runtime.workspace_spending_path(&scope_hash);
+        crate::agents::spending::write_workspace_spending_cache(&workspace_path, &workspace_cache);
+        let before_bytes = std::fs::read(&workspace_path).unwrap();
+
+        let enriched = enrich(
             build_snapshot(),
             None,
             &runtime,
@@ -232,56 +199,20 @@ mod tests {
             cached_opts(),
             &crate::diag::DiagSink::disabled(),
         );
+        assert_eq!(std::fs::read(&workspace_path).unwrap(), before_bytes);
         assert_eq!(
-            crate::agents::spending::read_live_spend_baselines(&baseline_path),
-            stale,
-            "consumer folds do not advance an existing baseline sidecar"
-        );
-
-        let lanes = crate::sidebar::refresh::RefreshedLanes {
-            spending: crate::agents::spending::SpendingCaches {
-                workspace: crate::agents::spending::WorkspaceSpendingCache {
-                    refreshed_at_ms: walk_ms,
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            accounts: BTreeMap::new(),
-            pr_states: BTreeMap::new(),
-        };
-        let _ = enrich(
-            build_snapshot(),
-            None,
-            &runtime,
-            None,
-            None,
-            FoldOpts {
-                producing: true,
-                fresh_roots: None,
-                config: Some(Box::new(crate::config::MachineConfig::default())),
-                lanes: Some(&lanes),
-            },
-            &crate::diag::DiagSink::disabled(),
-        );
-        let advanced = crate::agents::spending::read_live_spend_baselines(&baseline_path);
-        assert_eq!(advanced.observed_walk_ms, walk_ms);
-        assert_eq!(advanced.baselines.get("baselined"), Some(&2.00));
-        assert!(
-            !advanced.baselines.contains_key("external"),
-            "producer baselines are captured from the workspace-scoped live rows"
-        );
-        assert!(
-            !advanced.baselines.contains_key("old"),
-            "a producer walk replaces the prior baseline set for the new stamp"
+            enriched.today_spend_live_usd,
+            Some(11.5),
+            "walked 10.00 + carry 1.00 + live overshoot 0.50"
         );
     }
 
     /// The consumer overlay glue end-to-end over a built snapshot:
     /// [`live_row_costs`] projects each agent row's `(id, statusline cost,
-    /// registered-at)` triple and [`apply_live_today_spend`] stamps the walked
-    /// floor plus per-session overshoot — exercising the row-id ↔ baseline join
-    /// the producer and every consumer tab rely on, the new-session rule against
-    /// the cache's publish stamp, and the zero gate.
+    /// registered-at)` triple and [`apply_live_today_spend`] stamps the cached
+    /// walked floor, carry, and per-session overshoot — exercising the row-id ↔
+    /// baseline join, the new-session rule against the cache's publish stamp,
+    /// and the zero gate.
     #[test]
     fn apply_live_today_spend_stamps_overshoot_over_the_walked_floor() {
         let published = Timestamp::from_second(1_750_000_000).unwrap();
@@ -324,9 +255,16 @@ mod tests {
             ),
         ];
 
-        let baselines = BTreeMap::from([("baselined".to_owned(), 5.00)]);
+        let mut tally = crate::agents::spending::SpendTally::default();
+        tally.headline.usd = 10.0;
+        let workspace = WorkspaceSpendingCache {
+            refreshed_at_ms: published_ms,
+            tally,
+            live_baselines: BTreeMap::from([("baselined".to_owned(), 5.00)]),
+            ..Default::default()
+        };
 
-        apply_live_today_spend(&mut snapshot, 10.0, published_ms, &baselines);
+        apply_live_today_spend(&mut snapshot, &workspace);
         let live = snapshot.today_spend_live_usd.expect("a spent day stamps");
         assert!(
             (live - 11.00).abs() < 1e-9,
@@ -342,7 +280,7 @@ mod tests {
             published,
         )
         .with_project_root(Some(Path::new("/repo").to_path_buf()));
-        apply_live_today_spend(&mut empty, 0.0, 0, &BTreeMap::new());
+        apply_live_today_spend(&mut empty, &WorkspaceSpendingCache::default());
         assert_eq!(empty.today_spend_live_usd, None);
     }
 
@@ -370,9 +308,16 @@ mod tests {
             ],
         )];
 
-        let baselines = BTreeMap::from([("external-baselined".to_owned(), 5.00)]);
+        let mut tally = crate::agents::spending::SpendTally::default();
+        tally.headline.usd = 0.0;
+        let workspace = WorkspaceSpendingCache {
+            refreshed_at_ms: published_ms,
+            tally,
+            live_baselines: BTreeMap::from([("external-baselined".to_owned(), 5.00)]),
+            ..Default::default()
+        };
 
-        apply_live_today_spend(&mut snapshot, 0.0, published_ms, &baselines);
+        apply_live_today_spend(&mut snapshot, &workspace);
         assert_eq!(
             snapshot.today_spend_live_usd, None,
             "out-of-scope live rows do not add newborn cost or baseline deltas"

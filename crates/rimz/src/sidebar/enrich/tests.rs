@@ -911,9 +911,12 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
     // of flapping to zero.
     crate::agents::spending::write_workspace_spending_cache(
         &runtime.workspace_spending_path(&hash),
-        1,
-        &hash,
-        &scoped,
+        &crate::agents::spending::WorkspaceSpendingCache {
+            refreshed_at_ms: 1,
+            scope_hash: hash.clone(),
+            tally: scoped,
+            ..Default::default()
+        },
     );
 
     snapshot = enrich(

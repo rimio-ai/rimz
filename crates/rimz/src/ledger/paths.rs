@@ -338,10 +338,6 @@ impl RuntimePaths {
         self.persistent_shared_root.join("pricing-cache.json")
     }
 
-    pub fn live_spend_baselines_path(&self) -> PathBuf {
-        self.root.join("live-spend-baselines.json")
-    }
-
     pub fn workspace_spending_path(&self, scope_hash: &str) -> PathBuf {
         let prefix = scope_hash.get(..32).unwrap_or(scope_hash);
         self.root.join(format!("workspace-spending.{prefix}.json"))
@@ -584,10 +580,6 @@ mod tests {
         let second_paths = RuntimePaths::under(second, root).unwrap();
 
         assert_ne!(first_paths.root, second_paths.root);
-        assert_ne!(
-            first_paths.live_spend_baselines_path(),
-            second_paths.live_spend_baselines_path()
-        );
         assert_eq!(first_paths.shared_root, second_paths.shared_root);
         assert_eq!(
             first_paths.shared_accounts_path(),

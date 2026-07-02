@@ -50,8 +50,7 @@ Producer **enrichment lanes** fold onto the admitted cards. The fetch worker han
 | `diff-stats.json` | room | per-worktree git facts split into edit-sensitive stats (`added`/`removed`, dirty/untracked state, branch, merge/rebase state) and commit/PR-shaped stats (ahead/behind counts, landed markers, did-work marker), each with its own stamp, plus the group-root set |
 | `pr-state.json` | room | producer-only `gh`/`tea` pull-request state by worktree path, absent when no PR or unsupported forge |
 | `metrics-sample.json` | room (producer-only) | per-pane resource samples and pane→root-pid bindings; figures publish on the pane frame |
-| `workspace-spending.<hash>.json` | room | the room's cockpit spend tally |
-| `live-spend-baselines.json` | room | per-row cost baselines for the room-local live count-up |
+| `workspace-spending.<hash>.json` | room | the room's cockpit spend tally, live carry, and per-row cost baselines |
 | `link-stats.json` | room | the latest remote-SSH probe stats for the footer link badge ([remote.md](../reach/remote.md)) |
 | `provider-spending.json` | account-global | user-global fleet/provider spend totals and the walk stamp |
 | `spending.json` | account-global | the incremental transcript parse cache behind the spend walk |

@@ -52,6 +52,7 @@ pub(crate) fn compute_fleet_spending_with_walker(
         snapshot.worktree_home.as_deref(),
     );
     let scope_hash = (!scope.is_empty()).then(|| scope.hash());
+    let live_costs = live_costs_from_snapshot(snapshot);
     let provider_path = runtime.shared_provider_spending_path();
     // Fresh stamp: the published walk is young enough — serve it back with the
     // same single small read a consumer tab pays.
@@ -71,7 +72,7 @@ pub(crate) fn compute_fleet_spending_with_walker(
             scope_hash.as_deref(),
             &files,
             spec,
-            true,
+            &live_costs,
         ) {
             return crate::agents::spending::SpendingCaches {
                 provider: published,
@@ -100,7 +101,7 @@ pub(crate) fn compute_fleet_spending_with_walker(
             scope_hash.as_deref(),
             &files,
             spec,
-            true,
+            &live_costs,
         )
         .map(|workspace| crate::agents::spending::SpendingCaches {
             provider,
@@ -146,6 +147,7 @@ fn walk_fleet_spending(
         snapshot.worktree_home.as_deref(),
     );
     let scope_hash = (!scope.is_empty()).then(|| scope.hash());
+    let live_costs = live_costs_from_snapshot(snapshot);
     // Tag each file with its adapter at discovery — the source knows the kind,
     // so pricing/bucketing never has to guess it from the path.
     let files = discover_spending_files();
@@ -167,6 +169,12 @@ fn walk_fleet_spending(
             refreshed_at_ms,
             scope_hash: scope_hash.clone().unwrap_or_default(),
             tally: Default::default(),
+            headline_cutoff_secs: 0,
+            carry_usd: 0.0,
+            live_baselines: live_costs
+                .iter()
+                .map(|(id, usd, _)| (id.clone(), *usd))
+                .collect(),
         };
         if publish {
             // Stamp the empty result too: an agentless machine must not re-run
@@ -175,9 +183,7 @@ fn walk_fleet_spending(
             if let Some(scope_hash) = scope_hash.as_deref() {
                 write_workspace_spending_cache(
                     &runtime.workspace_spending_path(scope_hash),
-                    refreshed_at_ms,
-                    scope_hash,
-                    &workspace.tally,
+                    &workspace,
                 );
                 prune_workspace_spending_siblings(runtime, scope_hash);
             }
@@ -216,6 +222,7 @@ fn walk_fleet_spending(
             scope: Some(&scope),
             scope_hash: scope_hash.clone(),
             spec,
+            live_costs: &live_costs,
         };
         walker.walk(
             &cache_path,
@@ -241,6 +248,22 @@ fn walk_fleet_spending(
         )
     };
     let refreshed_at_ms = unix_now_ms();
+    let workspace = if let Some(scope_hash) = scope_hash.as_deref() {
+        reconciled_workspace_cache(
+            runtime,
+            scope_hash,
+            refreshed_at_ms,
+            result.workspace_tally.clone(),
+            result.workspace_headline_cutoff_secs,
+            &live_costs,
+        )
+    } else {
+        WorkspaceSpendingCache {
+            version: WORKSPACE_SPENDING_VERSION,
+            refreshed_at_ms,
+            ..Default::default()
+        }
+    };
     if publish {
         write_provider_spending_cache_with_rollups(
             &provider_path,
@@ -252,9 +275,7 @@ fn walk_fleet_spending(
         if let Some(scope_hash) = scope_hash.as_deref() {
             write_workspace_spending_cache(
                 &runtime.workspace_spending_path(scope_hash),
-                refreshed_at_ms,
-                scope_hash,
-                &result.workspace_tally,
+                &workspace,
             );
             prune_workspace_spending_siblings(runtime, scope_hash);
         }
@@ -267,12 +288,7 @@ fn walk_fleet_spending(
             models: result.models,
             spending: result.spending,
         },
-        workspace: WorkspaceSpendingCache {
-            version: WORKSPACE_SPENDING_VERSION,
-            refreshed_at_ms,
-            scope_hash: scope_hash.unwrap_or_default(),
-            tally: result.workspace_tally,
-        },
+        workspace,
     }
 }
 
@@ -284,6 +300,7 @@ struct PublishingWalkObserver<'a> {
     scope: Option<&'a crate::agents::spending::SpendScope>,
     scope_hash: Option<String>,
     spec: &'a crate::agents::spending::HeadlineSpec,
+    live_costs: &'a [(String, f64, Option<u64>)],
 }
 
 impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
@@ -304,14 +321,57 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
             &result.models,
         );
         if let Some(scope_hash) = self.scope_hash.as_deref() {
+            let workspace = reconciled_workspace_cache(
+                self.runtime,
+                scope_hash,
+                refreshed_at_ms,
+                result.workspace_tally,
+                result.workspace_headline_cutoff_secs,
+                self.live_costs,
+            );
             crate::agents::spending::write_workspace_spending_cache(
                 &self.runtime.workspace_spending_path(scope_hash),
-                refreshed_at_ms,
-                scope_hash,
-                &result.workspace_tally,
+                &workspace,
             );
             prune_workspace_spending_siblings(self.runtime, scope_hash);
         }
+    }
+}
+
+fn live_costs_from_snapshot(snapshot: &SidebarSnapshot) -> Vec<(String, f64, Option<u64>)> {
+    crate::sidebar::refresh::live_spend::live_row_costs(snapshot)
+        .map(|(id, usd, registered_at)| (id.to_owned(), usd, registered_at))
+        .collect()
+}
+
+fn reconciled_workspace_cache(
+    runtime: &RuntimePaths,
+    scope_hash: &str,
+    refreshed_at_ms: u64,
+    tally: crate::agents::spending::SpendTally,
+    headline_cutoff_secs: u64,
+    live_costs: &[(String, f64, Option<u64>)],
+) -> crate::agents::spending::WorkspaceSpendingCache {
+    use crate::agents::spending::{
+        WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache, reconcile_workspace_carry,
+    };
+
+    let prev = matching_workspace_cache(runtime, Some(scope_hash));
+    let (carry_usd, live_baselines) = reconcile_workspace_carry(
+        &prev,
+        scope_hash,
+        tally.headline.usd,
+        headline_cutoff_secs,
+        live_costs,
+    );
+    WorkspaceSpendingCache {
+        version: WORKSPACE_SPENDING_VERSION,
+        refreshed_at_ms,
+        scope_hash: scope_hash.to_owned(),
+        tally,
+        headline_cutoff_secs,
+        carry_usd,
+        live_baselines,
     }
 }
 
@@ -322,11 +382,10 @@ fn workspace_cache_from_shared_entries(
     scope_hash: Option<&str>,
     files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
     spec: &crate::agents::spending::HeadlineSpec,
-    publish: bool,
+    live_costs: &[(String, f64, Option<u64>)],
 ) -> Option<crate::agents::spending::WorkspaceSpendingCache> {
     use crate::agents::spending::{
-        WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache, compute_scoped_tally,
-        read_spending_cache, unix_secs_now, write_workspace_spending_cache,
+        compute_scoped_spending, read_spending_cache, unix_secs_now, write_workspace_spending_cache,
     };
     let Some(scope_hash) = scope_hash else {
         return Some(Default::default());
@@ -340,22 +399,17 @@ fn workspace_cache_from_shared_entries(
     if !provider.spending.total.is_zero() && !has_discovered_cache {
         return None;
     }
-    let tally = compute_scoped_tally(files, &cache, scope, unix_secs_now(), spec);
-    let workspace = WorkspaceSpendingCache {
-        version: WORKSPACE_SPENDING_VERSION,
-        refreshed_at_ms: provider.refreshed_at_ms,
-        scope_hash: scope_hash.to_owned(),
-        tally,
-    };
-    if publish {
-        write_workspace_spending_cache(
-            &runtime.workspace_spending_path(scope_hash),
-            workspace.refreshed_at_ms,
-            scope_hash,
-            &workspace.tally,
-        );
-        prune_workspace_spending_siblings(runtime, scope_hash);
-    }
+    let scoped = compute_scoped_spending(files, &cache, scope, unix_secs_now(), spec);
+    let workspace = reconciled_workspace_cache(
+        runtime,
+        scope_hash,
+        provider.refreshed_at_ms,
+        scoped.tally,
+        scoped.headline_cutoff_secs,
+        live_costs,
+    );
+    write_workspace_spending_cache(&runtime.workspace_spending_path(scope_hash), &workspace);
+    prune_workspace_spending_siblings(runtime, scope_hash);
     Some(workspace)
 }
 

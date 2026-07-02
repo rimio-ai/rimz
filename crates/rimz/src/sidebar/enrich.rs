@@ -1,8 +1,7 @@
 //! Shared sidebar projection fold over a ledger rollup and optional pane frame.
 //!
 //! One ordered spine serves both producer and consumer reads. It projects lane
-//! caches and sidecars; it forks no subprocess and writes nothing except the
-//! producing-gated live-spend baseline sidecar.
+//! caches and sidecars; it forks no subprocess and writes no cache files.
 
 use std::collections::{BTreeMap, HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
@@ -12,7 +11,7 @@ use std::time::UNIX_EPOCH;
 
 use crate::agents::spending::{
     HeadlineSpec, ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
-    compute_scoped_tally, discover_spending_files, read_provider_spending_cache,
+    compute_scoped_spending, discover_spending_files, read_provider_spending_cache,
     read_spending_cache, read_workspace_spending_cache, unix_secs_now,
 };
 use crate::harness::auto_continue::{self, ResumeMessage};
@@ -34,7 +33,7 @@ use super::refresh::daemon_reap::read_codex_daemon_reap;
 use super::refresh::git_stats::{
     DiffStatsCache, DiffStatsCacheEntry, read_diff_stats_cache, worktree_group_path,
 };
-use super::refresh::live_spend::{apply_live_today_spend, refresh_live_spend_baselines};
+use super::refresh::live_spend::apply_live_today_spend;
 use super::refresh::pr::{PrStateCache, read_pr_state_cache};
 use super::refresh::rate_limits::apply_rate_limit_cache;
 use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
@@ -466,18 +465,7 @@ pub fn enrich(
     // consumer, the refold lands the session's fresh cost on its row, and the
     // cockpit's headline retargets in the same frame — no waiting out the
     // walk's TTL.
-    let baselines = refresh_live_spend_baselines(
-        runtime,
-        &snapshot,
-        spending_caches.workspace.refreshed_at_ms,
-        producing,
-    );
-    apply_live_today_spend(
-        &mut snapshot,
-        spending_caches.workspace.tally.headline.usd,
-        spending_caches.workspace.refreshed_at_ms,
-        &baselines.baselines,
-    );
+    apply_live_today_spend(&mut snapshot, &spending_caches.workspace);
     super::unread::derive(&mut snapshot, &episodes, &read_marks);
     snapshot
 }
@@ -648,11 +636,15 @@ fn derive_workspace_spending(
     }
 
     let cursor = read_spending_cache(&cursor_path);
+    let scoped = compute_scoped_spending(files, &cursor, scope, unix_secs_now(), spec);
     let workspace = WorkspaceSpendingCache {
         version: crate::agents::spending::WORKSPACE_SPENDING_VERSION,
         refreshed_at_ms: source_refreshed_at_ms,
         scope_hash,
-        tally: compute_scoped_tally(files, &cursor, scope, unix_secs_now(), spec),
+        tally: scoped.tally,
+        headline_cutoff_secs: scoped.headline_cutoff_secs,
+        carry_usd: 0.0,
+        live_baselines: BTreeMap::new(),
     };
     if let Ok(mut memo) = workspace_derive_memo().lock() {
         *memo = Some(WorkspaceDeriveMemo {
