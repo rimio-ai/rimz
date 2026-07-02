@@ -8,8 +8,8 @@ use anyhow::{Context, Result, bail};
 use crate::cli::GlobalFlags;
 use rimz::agents::{AgentAdapter, hook_trust_fix};
 use rimz::bridge::{self, ExpectedRunFrame, RunWakeOutcome};
+use rimz::harness::run::RunRecord;
 use rimz::mux::PaneCmd;
-use rimz::run::RunRecord;
 use rimz::workspace::WorkspaceResolver;
 
 pub(super) mod output;
@@ -66,7 +66,7 @@ pub(super) fn preflight_program(
             adapter.descriptor().kind
         );
     };
-    let resolves = rimz::launch::program_resolves_after_shell_rc(launch_env, program)
+    let resolves = rimz::harness::launch::program_resolves_after_shell_rc(launch_env, program)
         .with_context(|| format!("checking `{program}` after shell startup"))?;
     if !resolves {
         bail!("finding `{program}` on PATH after shell startup");
@@ -161,13 +161,13 @@ pub(super) fn terminal_record_after_wait(
     outcome: RunWakeOutcome,
 ) -> Result<RunRecord> {
     match outcome {
-        RunWakeOutcome::Completed(_status) => Ok(rimz::run::load(paths, run_id)?),
+        RunWakeOutcome::Completed(_status) => Ok(rimz::harness::run::load(paths, run_id)?),
         RunWakeOutcome::Neutral => {
-            let current = rimz::run::load(paths, run_id)?;
+            let current = rimz::harness::run::load(paths, run_id)?;
             if current.status.is_terminal() {
                 Ok(current)
             } else {
-                Ok(rimz::run::timeout(paths, run_id)?)
+                Ok(rimz::harness::run::timeout(paths, run_id)?)
             }
         }
     }

@@ -548,14 +548,20 @@ fn journey_launch_identity(source: &str) -> Vec<(String, String)> {
 
 fn launch_identity(role: &str, profile: &str) -> Vec<(String, String)> {
     vec![
-        (rimz::run::ENV_AGENT_ROLE.to_owned(), role.to_owned()),
-        (rimz::run::ENV_AGENT_PROFILE.to_owned(), profile.to_owned()),
+        (
+            rimz::harness::run::ENV_AGENT_ROLE.to_owned(),
+            role.to_owned(),
+        ),
+        (
+            rimz::harness::run::ENV_AGENT_PROFILE.to_owned(),
+            profile.to_owned(),
+        ),
     ]
 }
 
 fn launch_team_identity(role: &str, team: &str, profile: &str) -> Vec<(String, String)> {
     let mut identity = launch_identity(role, profile);
-    identity.push((rimz::run::ENV_TEAM.to_owned(), team.to_owned()));
+    identity.push((rimz::harness::run::ENV_TEAM.to_owned(), team.to_owned()));
     identity
 }
 

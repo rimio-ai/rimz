@@ -309,7 +309,7 @@ pub struct SidebarPaneOptions {
     /// rebirth comes back where the user left off instead of empty. Empty on
     /// every launch that births nothing to restore (first start, healthy
     /// reattach) — then the birth is exactly the bare working room. Built from
-    /// the durable agent rollup by [`crate::resume::plan_resume`]; the backend
+    /// the durable agent rollup by [`crate::harness::resume::plan_resume`]; the backend
     /// seeds the tabs and stays ignorant of agents and the ledger.
     pub resume_tabs: Vec<ResumeTab>,
     /// One-shot render-cadence override passed to newly spawned sidebars. This

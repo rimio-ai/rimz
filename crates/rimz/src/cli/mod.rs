@@ -236,12 +236,12 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
 /// (root == worktree) yields `None` for humans, but Rimz-launched members carry
 /// `RIMZ_CHANNEL` or `RIMZ_TEAM`, so their calls scope to that lane.
 pub(crate) fn current_channel(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
-    if let Ok(channel) = std::env::var(rimz::run::ENV_CHANNEL)
+    if let Ok(channel) = std::env::var(rimz::harness::run::ENV_CHANNEL)
         && !channel.is_empty()
     {
         return Some(channel);
     }
-    let team = std::env::var(rimz::run::ENV_TEAM).ok();
+    let team = std::env::var(rimz::harness::run::ENV_TEAM).ok();
     current_channel_for_team(workspace, team.as_deref())
 }
 
@@ -298,7 +298,7 @@ pub(crate) fn resolve_agent_one<'a>(
 ) -> Result<&'a AgentState> {
     map_resolve(
         raw,
-        rimz::target::resolve_one(snapshot, raw, worktree_flag, current_channel),
+        rimz::harness::target::resolve_one(snapshot, raw, worktree_flag, current_channel),
     )
 }
 
@@ -314,7 +314,7 @@ pub(crate) fn resolve_pane_targets<'a>(
 ) -> Result<Vec<&'a rimz::PaneAgent>> {
     map_resolve(
         raw,
-        rimz::target::resolve_targets(snapshot, raw, worktree_flag, current_channel),
+        rimz::harness::target::resolve_targets(snapshot, raw, worktree_flag, current_channel),
     )
 }
 
@@ -907,9 +907,9 @@ fn resume_plan_for_birth(
     session_name: &str,
     resume_cfg: &rimz::config::ResumeConfig,
     no_resume: bool,
-) -> Result<rimz::resume::ResumePlan> {
+) -> Result<rimz::harness::resume::ResumePlan> {
     if was_live {
-        return Ok(rimz::resume::ResumePlan::default());
+        return Ok(rimz::harness::resume::ResumePlan::default());
     }
     let recover_agents = reboot_since_last_birth(workspace_id);
     let plan = plan_room_resume(
@@ -924,7 +924,9 @@ fn resume_plan_for_birth(
     Ok(plan)
 }
 
-fn prompt_recover_or_fresh(plan: rimz::resume::ResumePlan) -> Result<rimz::resume::ResumePlan> {
+fn prompt_recover_or_fresh(
+    plan: rimz::harness::resume::ResumePlan,
+) -> Result<rimz::harness::resume::ResumePlan> {
     let agents = plan.tabs.iter().map(|tab| tab.panes.len()).sum::<usize>();
     if agents == 0 || !std::io::stdin().is_terminal() {
         return Ok(plan);
@@ -944,7 +946,7 @@ fn prompt_recover_or_fresh(plan: rimz::resume::ResumePlan) -> Result<rimz::resum
     )? {
         Ok(plan)
     } else {
-        Ok(rimz::resume::ResumePlan::default())
+        Ok(rimz::harness::resume::ResumePlan::default())
     }
 }
 

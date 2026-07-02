@@ -4,8 +4,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::agents_spec::{self, LayoutErr};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
+use crate::harness::spec::{self as agents_spec, LayoutErr};
 use crate::trust::{self, TrustState};
 
 const PROJECT_CONFIG_REL: &str = ".rimz/config.toml";

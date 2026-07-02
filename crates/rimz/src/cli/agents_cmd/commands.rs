@@ -36,7 +36,7 @@ pub(super) fn list_agents(
         .filter(|agent| {
             channel
                 .as_deref()
-                .is_none_or(|filter| rimz::target::agent_in_worktree(agent, filter))
+                .is_none_or(|filter| rimz::harness::target::agent_in_worktree(agent, filter))
         })
         .collect();
     if json {
@@ -168,7 +168,8 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
         .collect();
     kv.push(
         "agent",
-        render::cell(rimz::target::agent_handle(agent, &peers, true)).fg(render::palette::ACCENT),
+        render::cell(rimz::harness::target::agent_handle(agent, &peers, true))
+            .fg(render::palette::ACCENT),
     );
     kv.push(
         "kind",
@@ -335,7 +336,7 @@ pub(super) fn stop_agent(reference: String, globals: &GlobalFlags) -> Result<()>
     .ok();
     if let Some(run) = newest_run_by_ref(&ledger, &reference, live_agent)? {
         if run_stop_should_cancel(&run) {
-            let (record, wrote) = rimz::run::cancel(ledger.paths(), &run.run_id)?;
+            let (record, wrote) = rimz::harness::run::cancel(ledger.paths(), &run.run_id)?;
             if wrote {
                 rimz::ledger::wakeup::wake_run(ledger.runtime_paths(), &record)
                     .context("waking run waiter")?;
@@ -580,7 +581,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
     let socket_guard = bound
         .as_ref()
         .map(|(_sock, sock_path)| SocketGuard::new(sock_path.clone()));
-    rimz::run::create(ledger.paths(), &record).context("recording run")?;
+    rimz::harness::run::create(ledger.paths(), &record).context("recording run")?;
     let target = own_pane_id(mux);
     let open_result = match run_placement(args.new_tab, target.is_some()) {
         RunPlacement::Split => backend.split_pane(SplitPaneOptions {
@@ -610,7 +611,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
         }),
     };
     if let Err(err) = open_result {
-        let _ = rimz::run::fail(ledger.paths(), &run_id);
+        let _ = rimz::harness::run::fail(ledger.paths(), &run_id);
         let _ = append_launch_event(
             &ledger,
             &workspace,
@@ -719,7 +720,7 @@ fn wait_run_record(
     }
     let deadline = timeout.map(|duration| Instant::now() + duration);
     loop {
-        let current = rimz::run::load(ledger.paths(), &run.run_id)?;
+        let current = rimz::harness::run::load(ledger.paths(), &run.run_id)?;
         if current.status.is_terminal() {
             if json {
                 supervised::output::print_json(&current)?;
@@ -742,7 +743,7 @@ fn newest_run_by_ref(
     reference: &str,
     agent: Option<&AgentState>,
 ) -> Result<Option<RunRecord>> {
-    let mut records = rimz::run::list(ledger.paths())?;
+    let mut records = rimz::harness::run::list(ledger.paths())?;
     records.retain(|record| {
         if record.run_id.as_str() == reference || record.agent_name.as_deref() == Some(reference) {
             return true;
@@ -775,7 +776,8 @@ fn print_run_line(run: &RunRecord) -> std::io::Result<()> {
 /// omits `#channel`; the `CHANNEL` cell carries that scope.
 fn agent_row(agent: &AgentState, peers: &[&AgentState], now: jiff::Timestamp) -> Vec<render::Cell> {
     vec![
-        render::cell(rimz::target::agent_handle(agent, peers, false)).fg(render::palette::ACCENT),
+        render::cell(rimz::harness::target::agent_handle(agent, peers, false))
+            .fg(render::palette::ACCENT),
         render::cell(agent_status_label(agent)).fg(agent_status_style(agent)),
         render::cell(worktree_label(agent)).dash(),
         model_cell(agent),
@@ -949,11 +951,11 @@ fn compact_count(value: u64) -> String {
 }
 
 /// The agent's channel for display, dashed when it runs outside any worktree.
-/// The channel itself comes from [`rimz::target::agent_channel`], the single
+/// The channel itself comes from [`rimz::harness::target::agent_channel`], the single
 /// source of truth; this only chooses the `-` placeholder over the resolver's
 /// prose label.
 fn worktree_label(agent: &AgentState) -> String {
-    rimz::target::agent_channel(agent).unwrap_or_else(|| "-".to_owned())
+    rimz::harness::target::agent_channel(agent).unwrap_or_else(|| "-".to_owned())
 }
 
 fn pane_label(agent: &AgentState) -> String {

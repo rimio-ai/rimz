@@ -92,7 +92,7 @@ pub fn message_for_target(
         kind: target.kind.clone(),
         agent_id,
         agent_name,
-        channel: crate::target::recipient_channel(target, bound, scope_channel),
+        channel: crate::harness::target::recipient_channel(target, bound, scope_channel),
         sender: draft.sender,
         body: draft.body,
         text: draft.text,
@@ -261,7 +261,7 @@ pub fn send_to_live_pane(
         MessageBody::Command => type_into_pane(pane_id, &message.text)?,
         MessageBody::Prompt => {
             let peers: Vec<&AgentState> = snapshot.root_agents().collect();
-            let payload = match crate::target::sender_prefix(
+            let payload = match crate::harness::target::sender_prefix(
                 &message.sender,
                 &peers,
                 message.channel.as_deref(),
@@ -343,7 +343,7 @@ pub fn handle_for_pane_target(
 ) -> String {
     if let Some(agent) = bound {
         let peers: Vec<&AgentState> = snapshot.root_agents().collect();
-        crate::target::agent_handle(agent, &peers, true)
+        crate::harness::target::agent_handle(agent, &peers, true)
     } else {
         format!("@{}", target.label())
     }

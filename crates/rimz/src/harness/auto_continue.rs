@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
+use crate::SidebarSnapshot;
 use crate::agents::{
     AccountBudget, AgentState, ResumeArm, TurnErrorClass, display_turn_error,
     effective_turn_error_class, resume_park,
@@ -43,9 +44,15 @@ use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use crate::ledger::atomic::write_temp_then_rename_cache;
 use crate::ledger::snapshot::{PaneAgent, ResumeOutcome};
 use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
-use crate::sidebar::timing::AUTO_CONTINUE_RETRY_INTERVAL;
+use crate::sidebar::enrich::account_budgets_from_caches;
+#[cfg(not(test))]
+use crate::sidebar::enrich::detached_rimz_command;
 
-use super::SidebarSnapshot;
+/// Minimum gap between auto-continue nudges to one rate-limit-parked agent. One
+/// nudge resumes the turn within a frame, so this mostly bounds the brief window
+/// before the agent's first hook lands; if a nudge fails to wake a still-parked
+/// agent, Rimz retries on this cadence rather than typing every frame.
+const AUTO_CONTINUE_RETRY_INTERVAL: Duration = Duration::from_secs(120);
 
 /// A durable record of one park: written while the park is fresh, read after its
 /// class-specific resume condition is due. It outlives the per-session context
@@ -92,7 +99,7 @@ enum ParkKind {
 /// queueing. Producer-only —
 /// one elected producer drives one room, and the records live in that room's
 /// runtime dir, so one due condition nudges its agent once per retry.
-pub(super) fn resume_parked(
+pub(crate) fn resume_parked(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &ResumeConfig,
@@ -103,7 +110,7 @@ pub(super) fn resume_parked(
     }
     let text = config.auto_continue_text.trim();
     let now = snapshot.now;
-    let account_budgets = super::account_budgets_from_caches(runtime, now);
+    let account_budgets = account_budgets_from_caches(runtime, now);
     for agent in &snapshot.agents {
         if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
             continue;
@@ -191,7 +198,7 @@ pub(super) fn resume_parked(
     }
 }
 
-pub(super) fn exhausted_parks(
+pub(crate) fn exhausted_parks(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &ResumeConfig,
@@ -581,7 +588,7 @@ fn spawn_auto_continue(
             return false;
         }
     };
-    let mut cmd = super::detached_rimz_command(exe, runtime);
+    let mut cmd = detached_rimz_command(exe, runtime);
     cmd.args([
         "agents",
         "auto-continue",

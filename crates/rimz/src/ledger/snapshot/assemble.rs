@@ -162,8 +162,8 @@ thread_local! {
 fn agent_identities_are_current(snapshot: &SidebarSnapshot) -> bool {
     snapshot.agents.iter().all(|agent| {
         agent.name.as_deref().is_some_and(|name| {
-            crate::petname::valid_name(name)
-                && !crate::petname::collides_with_reserved_prefix(
+            crate::harness::petname::valid_name(name)
+                && !crate::harness::petname::collides_with_reserved_prefix(
                     name,
                     crate::agents::known_kinds(),
                 )

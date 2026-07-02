@@ -1,7 +1,7 @@
 use super::*;
 use crate::agents::TurnErrorClass;
 use crate::feed::ResolutionMethod;
-use crate::run::PermissionMode;
+use crate::harness::run::PermissionMode;
 use serde_json::json;
 use std::path::Path;
 

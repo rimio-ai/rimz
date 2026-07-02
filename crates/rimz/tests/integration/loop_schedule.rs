@@ -9,9 +9,9 @@ use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
 use rimz::config::{CheckOn, TaskEntry, TaskTarget, Tasks};
+use rimz::harness::schedule::instances;
+use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
 use rimz::message::MessageStatus;
-use rimz::schedule::instances;
-use rimz::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
 
 use crate::common::Env;
 

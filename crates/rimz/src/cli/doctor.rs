@@ -74,7 +74,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
 /// workspace-independent: it surfaces the scheduled-execution surface this box
 /// carries; `rimz loop list` reports whether each task's room is open.
 fn collect_loop() -> model::LoopTasks {
-    let mut tasks = rimz::schedule::instances::load().0;
+    let mut tasks = rimz::harness::schedule::instances::load().0;
     tasks.extend(
         rimz::config::MachineConfig::load()
             .map(|config| config.r#loop.tasks.0)
@@ -83,7 +83,7 @@ fn collect_loop() -> model::LoopTasks {
     let rows = tasks
         .into_iter()
         .map(|(name, entry)| {
-            let (when, valid) = match rimz::schedule::parse_schedule(&name, &entry) {
+            let (when, valid) = match rimz::harness::schedule::parse_schedule(&name, &entry) {
                 Ok(schedule) => (schedule.describe(), true),
                 Err(err) => (format!("invalid: {err}"), false),
             };

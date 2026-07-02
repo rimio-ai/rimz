@@ -7,9 +7,9 @@ use anyhow::bail;
 #[cfg(test)]
 use super::output;
 use crate::cli::{GlobalFlags, MissingSessionReport, pick_mux_for_session};
+use rimz::harness::run::RunRecord;
 use rimz::ids::PaneId;
 use rimz::mux::PaneListOptions;
-use rimz::run::RunRecord;
 
 pub(crate) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_BACKSTOP_POLL: Duration = Duration::from_millis(250);
@@ -113,7 +113,7 @@ pub(crate) fn latest_resolved_run_pane(
 }
 
 fn latest_run_record(ledger: &rimz::Ledger, fallback: &RunRecord) -> RunRecord {
-    rimz::run::load(ledger.paths(), &fallback.run_id).unwrap_or_else(|err| {
+    rimz::harness::run::load(ledger.paths(), &fallback.run_id).unwrap_or_else(|err| {
         tracing::debug!(
             run_id = %fallback.run_id,
             error = %err,

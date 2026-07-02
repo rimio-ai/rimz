@@ -213,12 +213,6 @@ pub const CODEX_PROBE_MARKER_PREFIX: &str = "rate-limit-probe.codex.";
 /// failure share one coarse cache stamp and the fetch lane only reads it.
 pub const CODEX_DAEMON_REAP_TTL: Duration = Duration::from_secs(30);
 
-/// Minimum gap between auto-continue nudges to one rate-limit-parked agent. One
-/// nudge resumes the turn within a frame, so this mostly bounds the brief window
-/// before the agent's first hook lands; if a nudge fails to wake a still-parked
-/// agent, Rimz retries on this cadence rather than typing every frame.
-pub const AUTO_CONTINUE_RETRY_INTERVAL: Duration = Duration::from_secs(120);
-
 /// Link stats are stale after three missed two-second publishes plus slack.
 /// Stale renders as dim unknown (`⇄ remote ?`) rather than red: during a hard
 /// drop the remote-rendered sidebar cannot reach the user, and a second local

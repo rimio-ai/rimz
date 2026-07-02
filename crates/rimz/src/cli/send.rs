@@ -80,14 +80,14 @@ pub(crate) fn sender_from_env(channel: Option<&str>, no_from: bool) -> MessageSe
     if no_from {
         return MessageSender::Human;
     }
-    let Some(kind) = env_string(rimz::run::ENV_AGENT_KIND) else {
+    let Some(kind) = env_string(rimz::harness::run::ENV_AGENT_KIND) else {
         return MessageSender::Human;
     };
     MessageSender::Agent {
         kind: AgentKind::new_unchecked(kind),
-        name: env_string(rimz::run::ENV_AGENT_NAME),
-        profile: env_string(rimz::run::ENV_AGENT_PROFILE),
-        role: env_string(rimz::run::ENV_AGENT_ROLE),
+        name: env_string(rimz::harness::run::ENV_AGENT_NAME),
+        profile: env_string(rimz::harness::run::ENV_AGENT_PROFILE),
+        role: env_string(rimz::harness::run::ENV_AGENT_ROLE),
         channel: channel.map(ToOwned::to_owned),
     }
 }

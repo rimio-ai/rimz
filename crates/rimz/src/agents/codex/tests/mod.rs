@@ -2,7 +2,7 @@ use serde_json::json;
 
 use super::*;
 use crate::feed::ResolutionMethod;
-use crate::run::PermissionMode;
+use crate::harness::run::PermissionMode;
 use std::io::Write;
 use std::path::Path;
 

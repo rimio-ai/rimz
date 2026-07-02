@@ -129,8 +129,8 @@ fn tmux_room_shows_agent_after_hook() {
     env.install_agent_hooks("codex");
     let hook_env = [
         ("TMUX_PANE", codex_pane.as_str()),
-        (rimz::run::ENV_AGENT_ROLE, "coder"),
-        (rimz::run::ENV_AGENT_PROFILE, "codex-coder"),
+        (rimz::harness::run::ENV_AGENT_ROLE, "coder"),
+        (rimz::harness::run::ENV_AGENT_PROFILE, "codex-coder"),
     ];
     let out = env.run_installed_hook_in_pane(
         "codex",
@@ -246,8 +246,8 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     env.install_agent_hooks("codex");
     let hook_env = [
         ("TMUX_PANE", codex_pane.as_str()),
-        (rimz::run::ENV_AGENT_ROLE, "coder"),
-        (rimz::run::ENV_AGENT_PROFILE, "codex-coder"),
+        (rimz::harness::run::ENV_AGENT_ROLE, "coder"),
+        (rimz::harness::run::ENV_AGENT_PROFILE, "codex-coder"),
     ];
     let out = env.run_installed_hook_in_pane(
         "codex",
@@ -383,8 +383,8 @@ fn zellij_room_shows_agent_after_hook() {
 
     env.install_agent_hooks("codex");
     let hook_env = [
-        (rimz::run::ENV_AGENT_ROLE, "codex"),
-        (rimz::run::ENV_AGENT_PROFILE, "codex"),
+        (rimz::harness::run::ENV_AGENT_ROLE, "codex"),
+        (rimz::harness::run::ENV_AGENT_PROFILE, "codex"),
     ];
     let out = env.run_installed_hook_in_pane(
         "codex",
@@ -706,8 +706,8 @@ fn real_agent_room(env: &Env, agent_session: &str) -> (PathBuf, String, String, 
     let hook_env = [
         ("TMUX_PANE", codex_pane.as_str()),
         ("RIMZ_AGENT_PID", codex_pid.as_str()),
-        (rimz::run::ENV_AGENT_ROLE, "coder"),
-        (rimz::run::ENV_AGENT_PROFILE, "codex-coder"),
+        (rimz::harness::run::ENV_AGENT_ROLE, "coder"),
+        (rimz::harness::run::ENV_AGENT_PROFILE, "codex-coder"),
     ];
     let out = env.run_installed_hook_in_pane(
         "codex",

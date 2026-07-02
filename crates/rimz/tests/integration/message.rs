@@ -106,7 +106,7 @@ fn message_list_scopes_by_channel_status_and_newest_first() {
 
     let scoped = env
         .rimz()
-        .env(rimz::run::ENV_CHANNEL, "docs")
+        .env(rimz::harness::run::ENV_CHANNEL, "docs")
         .args(["message", "list", "--json"])
         .output()
         .expect("scoped list");
@@ -116,7 +116,7 @@ fn message_list_scopes_by_channel_status_and_newest_first() {
 
     let archived = env
         .rimz()
-        .env(rimz::run::ENV_CHANNEL, "docs")
+        .env(rimz::harness::run::ENV_CHANNEL, "docs")
         .args(["message", "list", "--status", "archived", "--json"])
         .output()
         .expect("archived list");

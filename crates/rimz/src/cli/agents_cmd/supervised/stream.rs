@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use super::output;
 use rimz::agents::AgentAdapter;
 use rimz::bridge::{self, ExpectedRunFrame, RunWakeOutcome};
-use rimz::run::{RunLiveStatus, RunRecord};
+use rimz::harness::run::{RunLiveStatus, RunRecord};
 
 pub(crate) fn stream_blocking_run(
     sock: std::os::unix::net::UnixDatagram,
@@ -28,14 +28,14 @@ pub(crate) fn stream_blocking_run(
         let mut cursor = TranscriptCursor::new(true);
         let mut last_live = None;
         loop {
-            let record = rimz::run::load(ledger.paths(), run_id)?;
+            let record = rimz::harness::run::load(ledger.paths(), run_id)?;
             emit_stream_updates(ledger, adapter, &mut cursor, &mut last_live, &record)?;
             if record.status.is_terminal() {
                 emit_stream_end(&record)?;
                 return Ok(record);
             }
             let Some(wait) = next_stream_wait(deadline) else {
-                let timed_out = rimz::run::timeout(ledger.paths(), run_id)?;
+                let timed_out = rimz::harness::run::timeout(ledger.paths(), run_id)?;
                 emit_stream_updates(ledger, adapter, &mut cursor, &mut last_live, &timed_out)?;
                 emit_stream_end(&timed_out)?;
                 return Ok(timed_out);
@@ -45,7 +45,7 @@ pub(crate) fn stream_blocking_run(
                 .context("waiting for run stream tick")?
             {
                 RunWakeOutcome::Completed(_status) => {
-                    let record = rimz::run::load(ledger.paths(), run_id)?;
+                    let record = rimz::harness::run::load(ledger.paths(), run_id)?;
                     emit_stream_updates(ledger, adapter, &mut cursor, &mut last_live, &record)?;
                     emit_stream_end(&record)?;
                     return Ok(record);
@@ -67,7 +67,7 @@ pub(crate) fn stream_attached_run(
     let mut last_live = None;
     let deadline = timeout.map(|duration| Instant::now() + duration);
     loop {
-        let record = rimz::run::load(ledger.paths(), run_id)?;
+        let record = rimz::harness::run::load(ledger.paths(), run_id)?;
         emit_stream_updates(ledger, adapter, &mut cursor, &mut last_live, &record)?;
         if record.status.is_terminal() {
             emit_stream_end(&record)?;
@@ -172,7 +172,7 @@ fn emit_stream_updates(
     if let Some(live) = ledger
         .snapshot_cached()
         .ok()
-        .and_then(|snapshot| rimz::run::live_status(record, &snapshot))
+        .and_then(|snapshot| rimz::harness::run::live_status(record, &snapshot))
         && last_live.as_ref() != Some(&live)
     {
         emit_ndjson(&output::RunStreamEvent::Status { live: live.clone() })?;

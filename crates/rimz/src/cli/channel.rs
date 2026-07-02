@@ -113,7 +113,7 @@ fn list_channels(
         .unwrap_or_default();
     let mut live_by_channel: BTreeMap<String, LiveChannelAgents<'_>> = BTreeMap::new();
     for agent in agents {
-        if let Some(channel) = rimz::target::agent_channel(agent) {
+        if let Some(channel) = rimz::harness::target::agent_channel(agent) {
             let entry = live_by_channel.entry(channel.clone()).or_default();
             entry.explicit_named |= agent.channel.as_deref() == Some(channel.as_str());
             entry.agents.push(agent);
@@ -127,7 +127,7 @@ fn list_channels(
         let agents = here
             .agents
             .iter()
-            .map(|agent| rimz::target::agent_handle(agent, &here.agents, false))
+            .map(|agent| rimz::harness::target::agent_handle(agent, &here.agents, false))
             .collect();
         entries.insert(
             channel.clone(),
@@ -258,7 +258,7 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
         panes: LayoutPanes {
             columns: vec![LayoutColumn {
                 panes: vec![PaneCmd {
-                    argv: rimz::launch::channel_shell_argv(
+                    argv: rimz::harness::launch::channel_shell_argv(
                         &workspace.workspace_id,
                         &workspace.project_root,
                         &workspace.worktree_root,

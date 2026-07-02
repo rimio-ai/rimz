@@ -12,10 +12,11 @@ use std::process::{Command, Stdio};
 use jiff::{Timestamp, Zoned};
 
 use super::instances;
+use crate::RuntimePaths;
 use crate::config::{MachineConfig, TaskEntry};
+use crate::harness::schedule;
 use crate::ids::WorkspaceId;
 use crate::ledger::atomic::write_temp_then_rename_cache;
-use crate::{RuntimePaths, schedule};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {

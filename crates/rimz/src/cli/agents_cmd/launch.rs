@@ -15,7 +15,7 @@ pub(super) fn launch_layout(
     let profiles = effective_launch_profiles(&machine_config, &workspace)?;
     let teams = effective_launch_teams(&machine_config, &workspace)?;
     let mut layout = resolve_launch_layout(spec, &profiles, &teams, &machine_config, &workspace)?;
-    let team_name = spec.and_then(|spec| rimz::agents_spec::spec_team(spec, &teams));
+    let team_name = spec.and_then(|spec| rimz::harness::spec::spec_team(spec, &teams));
     reject_prompt_that_looks_like_spec(
         args.spec.as_deref(),
         args.prompt.as_deref(),
@@ -108,7 +108,14 @@ pub(super) fn launch_layout(
     let worktree_name = launch.worktree_name.clone();
     let cwd = launch.cwd;
     let title = args.channel.as_deref().map_or_else(
-        || rimz::agents_spec::default_tab_title(&layout, &cwd, worktree_name.as_deref(), team_name),
+        || {
+            rimz::harness::spec::default_tab_title(
+                &layout,
+                &cwd,
+                worktree_name.as_deref(),
+                team_name,
+            )
+        },
         |channel| format!("#{channel}"),
     );
     let room = RoomTarget {
@@ -365,43 +372,64 @@ pub(super) fn full_agent_launch_env(
     for (key, value) in adapter.launch_env() {
         env.insert(key.to_owned(), value.to_owned());
     }
-    env.insert(rimz::run::ENV_AGENT_KIND.to_owned(), kind.to_owned());
+    env.insert(
+        rimz::harness::run::ENV_AGENT_KIND.to_owned(),
+        kind.to_owned(),
+    );
     if let Some(run_id) = identity.run_id {
-        env.insert(rimz::run::ENV_RUN_ID.to_owned(), run_id.as_str().to_owned());
+        env.insert(
+            rimz::harness::run::ENV_RUN_ID.to_owned(),
+            run_id.as_str().to_owned(),
+        );
     }
     if let Some(agent_name) = identity.agent_name {
-        env.insert(rimz::run::ENV_AGENT_NAME.to_owned(), agent_name.to_owned());
+        env.insert(
+            rimz::harness::run::ENV_AGENT_NAME.to_owned(),
+            agent_name.to_owned(),
+        );
     }
     if let Some(agent_profile) = identity.agent_profile {
         env.insert(
-            rimz::run::ENV_AGENT_PROFILE.to_owned(),
+            rimz::harness::run::ENV_AGENT_PROFILE.to_owned(),
             agent_profile.to_owned(),
         );
     }
     if let Some(agent_role) = identity.agent_role {
-        env.insert(rimz::run::ENV_AGENT_ROLE.to_owned(), agent_role.to_owned());
+        env.insert(
+            rimz::harness::run::ENV_AGENT_ROLE.to_owned(),
+            agent_role.to_owned(),
+        );
     }
     if let Some(agent_team) = identity.agent_team {
-        env.insert(rimz::run::ENV_TEAM.to_owned(), agent_team.to_owned());
+        env.insert(
+            rimz::harness::run::ENV_TEAM.to_owned(),
+            agent_team.to_owned(),
+        );
     }
     if let Some(agent_channel) = identity.agent_channel {
-        env.insert(rimz::run::ENV_CHANNEL.to_owned(), agent_channel.to_owned());
+        env.insert(
+            rimz::harness::run::ENV_CHANNEL.to_owned(),
+            agent_channel.to_owned(),
+        );
     }
     if let Some(agent_model) = identity.agent_model {
         env.insert(
-            rimz::run::ENV_AGENT_MODEL.to_owned(),
+            rimz::harness::run::ENV_AGENT_MODEL.to_owned(),
             agent_model.to_owned(),
         );
     }
     if let Some(agent_effort) = identity.agent_effort {
         env.insert(
-            rimz::run::ENV_AGENT_EFFORT.to_owned(),
+            rimz::harness::run::ENV_AGENT_EFFORT.to_owned(),
             agent_effort.to_owned(),
         );
     }
-    env.insert(rimz::run::ENV_RTK.to_owned(), rtk.as_str().to_owned());
     env.insert(
-        rimz::run::ENV_TRANSCRIPT_FILE_DAYS.to_owned(),
+        rimz::harness::run::ENV_RTK.to_owned(),
+        rtk.as_str().to_owned(),
+    );
+    env.insert(
+        rimz::harness::run::ENV_TRANSCRIPT_FILE_DAYS.to_owned(),
         transcript_file_days.to_string(),
     );
     validate_agent_launch_env(kind, &env)?;
@@ -409,7 +437,7 @@ pub(super) fn full_agent_launch_env(
 }
 
 pub(super) fn validate_agent_launch_env(kind: &str, env: &BTreeMap<String, String>) -> Result<()> {
-    if let Some(key) = rimz::launch::invalid_env_key(env) {
+    if let Some(key) = rimz::harness::launch::invalid_env_key(env) {
         bail!(
             "agent `{kind}` launch env key `{key}` is invalid; environment variable names must be non-empty, cannot contain `=`, and cannot start with `-`",
         );
@@ -515,10 +543,11 @@ pub(super) fn resolve_launch_layout(
     machine_config: &rimz::config::MachineConfig,
     workspace: &rimz::ResolvedWorkspace,
 ) -> Result<LayoutSpec> {
-    match rimz::agents_spec::resolve_spec(spec, profiles, &machine_config.agents.commands, teams) {
+    match rimz::harness::spec::resolve_spec(spec, profiles, &machine_config.agents.commands, teams)
+    {
         Ok(layout) => Ok(layout),
-        Err(err @ rimz::agents_spec::LayoutErr::UnknownTeam { .. })
-        | Err(err @ rimz::agents_spec::LayoutErr::UnknownCell { .. }) => {
+        Err(err @ rimz::harness::spec::LayoutErr::UnknownTeam { .. })
+        | Err(err @ rimz::harness::spec::LayoutErr::UnknownCell { .. }) => {
             rimz::config::effective::block_untrusted_profile_reference(
                 spec,
                 profiles,
@@ -634,7 +663,7 @@ pub(super) fn reject_prompt_that_looks_like_spec(
     let Some(prompt) = prompt.map(str::trim).filter(|prompt| !prompt.is_empty()) else {
         return Ok(());
     };
-    if rimz::agents_spec::is_known_spec_token(prompt, profiles, commands, layouts) {
+    if rimz::harness::spec::is_known_spec_token(prompt, profiles, commands, layouts) {
         bail!(
             "prompt `{prompt}` looks like another spec cell; did you mean `rimz agents {spec},{prompt}`?"
         );
@@ -962,7 +991,7 @@ pub(super) struct PaneCmdOptions<'a> {
 pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<PaneCmd> {
     let argv = match cell {
         Cell::Command { argv } if argv.is_empty() => {
-            vec![rimz::launch::user_shell_program()]
+            vec![rimz::harness::launch::user_shell_program()]
         }
         Cell::Command { argv } => argv.clone(),
         Cell::Agent {
@@ -1036,6 +1065,6 @@ pub(super) fn validate_agent_name(name: &str) -> Result<()> {
 }
 
 pub(super) fn valid_agent_name_candidate(name: &str) -> bool {
-    rimz::petname::valid_name(name)
-        && !rimz::petname::collides_with_reserved_prefix(name, rimz::agents::known_kinds())
+    rimz::harness::petname::valid_name(name)
+        && !rimz::harness::petname::collides_with_reserved_prefix(name, rimz::agents::known_kinds())
 }

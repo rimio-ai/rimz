@@ -18,6 +18,7 @@ use jiff::{SignedDuration, Timestamp, Zoned};
 pub(crate) mod fire;
 pub mod instances;
 pub mod run_log;
+pub mod runner;
 
 pub use fire::last_stamps;
 

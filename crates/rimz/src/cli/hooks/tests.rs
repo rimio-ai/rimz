@@ -130,11 +130,11 @@ fn launch_identity_env(
     var: &'static str,
 ) -> Option<String> {
     match var {
-        rimz::run::ENV_AGENT_ROLE => Some("coder".to_owned()),
-        rimz::run::ENV_TEAM => Some("pcr".to_owned()),
-        rimz::run::ENV_AGENT_PROFILE => Some("codex-coder".to_owned()),
-        rimz::run::ENV_AGENT_MODEL => Some("env-model".to_owned()),
-        rimz::run::ENV_AGENT_EFFORT => Some("env-effort".to_owned()),
+        rimz::harness::run::ENV_AGENT_ROLE => Some("coder".to_owned()),
+        rimz::harness::run::ENV_TEAM => Some("pcr".to_owned()),
+        rimz::harness::run::ENV_AGENT_PROFILE => Some("codex-coder".to_owned()),
+        rimz::harness::run::ENV_AGENT_MODEL => Some("env-model".to_owned()),
+        rimz::harness::run::ENV_AGENT_EFFORT => Some("env-effort".to_owned()),
         _ => None,
     }
 }
@@ -290,9 +290,9 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
         &mut configured,
         (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
         |_observation, var| match var {
-            rimz::run::ENV_AGENT_ROLE => Some("coder".to_owned()),
-            rimz::run::ENV_TEAM => Some("pcr".to_owned()),
-            rimz::run::ENV_AGENT_PROFILE => Some("codex-coder".to_owned()),
+            rimz::harness::run::ENV_AGENT_ROLE => Some("coder".to_owned()),
+            rimz::harness::run::ENV_TEAM => Some("pcr".to_owned()),
+            rimz::harness::run::ENV_AGENT_PROFILE => Some("codex-coder".to_owned()),
             _ => None,
         },
     );

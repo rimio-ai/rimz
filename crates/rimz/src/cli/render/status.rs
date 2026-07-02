@@ -6,8 +6,8 @@
 use rimz::agents::AgentStatus;
 use rimz::agents::TurnPhase;
 use rimz::feed::FeedStatus;
+use rimz::harness::run::RunStatus;
 use rimz::message::MessageStatus;
-use rimz::run::RunStatus;
 use rimz::trust::TrustState;
 
 use super::palette;

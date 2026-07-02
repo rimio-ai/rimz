@@ -8,7 +8,7 @@
 //!
 //! The load-bearing property here is that the `PaneRef` comes from the production
 //! reducer (append real lifecycle events → `runtime_projection(Audit)`), not a
-//! hand-built test value. The in-module unit tests in `src/resume.rs` cannot
+//! hand-built test value. The in-module unit tests in `src/harness/resume.rs` cannot
 //! catch a rollup-shape mismatch because they fabricate the `AgentState`; these
 //! do, because the fold produces it.
 
@@ -66,15 +66,15 @@ fn registered(
 
 /// Plan a resume from the workspace's real audit rollup, the way `plan_room_resume`
 /// does, so the `AgentState` under test is whatever the fold actually produces.
-fn plan_from_rollup(h: &Harness) -> rimz::resume::ResumePlan {
+fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
     let projection = h
         .ledger
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("audit projection");
-    rimz::resume::plan_resume(
+    rimz::harness::resume::plan_resume(
         &projection.agents,
         &projection.ended,
-        rimz::resume::DEFAULT_RESUME_MAX,
+        rimz::harness::resume::DEFAULT_RESUME_MAX,
         |_| true,
         Path::new("/bin/rimz"),
     )
@@ -335,10 +335,10 @@ fn missing_worktree_candidate_is_tombstoned_not_reported() {
         .ledger
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("audit projection");
-    let plan = rimz::resume::plan_resume(
+    let plan = rimz::harness::resume::plan_resume(
         &projection.agents,
         &projection.ended,
-        rimz::resume::DEFAULT_RESUME_MAX,
+        rimz::harness::resume::DEFAULT_RESUME_MAX,
         |_| false,
         Path::new("/bin/rimz"),
     );

@@ -141,7 +141,7 @@ impl Ledger {
             at: resolution.resolved_at,
             kind: AgentKind::new_unchecked(item.source.clone()),
             agent_id,
-            channel: crate::target::compose_channel(
+            channel: crate::harness::target::compose_channel(
                 None,
                 item.worktree_branch.as_deref(),
                 item.worktree_path.as_deref().and_then(path_basename),

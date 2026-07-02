@@ -21,14 +21,14 @@ use clap::{Args, Subcommand, ValueEnum};
 use super::{GlobalFlags, RoomTarget};
 use rimz::agents::AgentAdapter;
 use rimz::agents::AgentState;
-use rimz::agents_spec::{Cell, LayoutSpec};
 use rimz::bridge::{self, ExpectedRunFrame, SocketGuard};
 use rimz::config::LaunchPlacement;
+use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
+use rimz::harness::spec::{Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId, EventId};
 use rimz::ledger::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
 use rimz::message::{DeliveryGate, gate_open};
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, TabOptions, own_pane_id};
-use rimz::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::workspace::WorkspaceResolver;
 
 use auto_continue::{AutoContinueArgs, run_auto_continue};
@@ -224,7 +224,7 @@ enum AgentsSubcmd {
 struct ExecArgs {
     kind: String,
     /// Resume a prior agent session by id instead of launching fresh — the
-    /// argv resume-on-rebirth panes run ([`rimz::resume::plan_resume`]).
+    /// argv resume-on-rebirth panes run ([`rimz::harness::resume::plan_resume`]).
     #[arg(long, value_name = "SESSION_ID", conflicts_with = "prompt")]
     resume: Option<String>,
     #[arg(long)]
@@ -435,7 +435,8 @@ pub(crate) fn create_on_miss(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let channel_filter = worktree_flag.or(channel_flag);
-    let Some(create) = rimz::target::create_mention(target, channel_filter, current_channel)?
+    let Some(create) =
+        rimz::harness::target::create_mention(target, channel_filter, current_channel)?
     else {
         bail!(
             "`{target}` cannot create an agent; address a kind or profile like `@codex` or `@planner`"
@@ -464,7 +465,7 @@ pub(crate) fn create_on_miss(
     let inline_named_channel = target
         .split_once('#')
         .is_some_and(|(_, channel)| rimz::channel::valid_name(channel));
-    let current_named = std::env::var(rimz::run::ENV_CHANNEL).ok();
+    let current_named = std::env::var(rimz::harness::run::ENV_CHANNEL).ok();
     let named = channel_flag.is_some()
         || (worktree_flag.is_none() && inline_named_channel)
         || create

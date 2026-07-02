@@ -70,7 +70,7 @@ use super::{
 };
 use crate::agents::TurnErrorClass;
 use crate::feed::{FeedItem, FeedKind, Resolution};
-use crate::run::PermissionMode;
+use crate::harness::run::PermissionMode;
 
 /// Claude's effective hook cap. The upstream cap is ~125s; we leave a small
 /// margin so the bridge never holds the hook past Claude's kill window.

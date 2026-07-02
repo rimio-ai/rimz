@@ -181,7 +181,7 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                         "-".to_owned()
                     } else {
                         here.iter()
-                            .map(|agent| rimz::target::agent_handle(agent, &here, false))
+                            .map(|agent| rimz::harness::target::agent_handle(agent, &here, false))
                             .collect::<Vec<_>>()
                             .join(" ")
                     };
@@ -479,14 +479,14 @@ fn dirty_choice(path: &Path) -> Result<DirtyChoice> {
 #[cfg(unix)]
 fn exec_shell(path: &Path) -> Result<()> {
     use std::os::unix::process::CommandExt;
-    let shell = rimz::launch::user_shell_program();
+    let shell = rimz::harness::launch::user_shell_program();
     let err = Command::new(&shell).current_dir(path).exec();
     Err::<(), _>(err).with_context(|| format!("execing {shell}"))
 }
 
 #[cfg(not(unix))]
 fn exec_shell(path: &Path) -> Result<()> {
-    let shell = rimz::launch::user_shell_program();
+    let shell = rimz::harness::launch::user_shell_program();
     let status = Command::new(&shell)
         .current_dir(path)
         .status()

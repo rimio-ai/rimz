@@ -104,7 +104,7 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
             true,
             DeliveryGate::Resume,
         )
-        .with_channel(rimz::target::agent_channel(agent))
+        .with_channel(rimz::harness::target::agent_channel(agent))
         .with_sender(MessageSender::Human)
         .with_pane_id(pane_id.clone());
         let message_id = message.message_id.clone();

@@ -83,7 +83,7 @@ fn standalone_team_role_uses_team_channel_and_role_handle() {
         .expect("planner agent");
     assert_eq!(planner.team.as_deref(), Some("pcr"));
     assert_eq!(
-        rimz::target::agent_channel(planner).as_deref(),
+        rimz::harness::target::agent_channel(planner).as_deref(),
         Some("project/pcr")
     );
 }

@@ -22,9 +22,9 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::feed::FeedStatus;
+use crate::harness::run::RunStatus;
 use crate::ids::{RequestId, RunId, WorkspaceId};
 use crate::ledger::RuntimePaths;
-use crate::run::RunStatus;
 use crate::sock;
 
 #[derive(Debug, thiserror::Error)]

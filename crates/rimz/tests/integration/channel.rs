@@ -144,7 +144,7 @@ fn register_idle_channel_agent(env: &Env, session_id: &str, channel: &str) {
     })
     .to_string();
     let mut cmd = env.hook_command("claude");
-    cmd.env(rimz::run::ENV_CHANNEL, channel)
+    cmd.env(rimz::harness::run::ENV_CHANNEL, channel)
         .env("ZELLIJ_PANE_ID", "3");
     let output = env
         .spawn_payload(cmd, &payload)

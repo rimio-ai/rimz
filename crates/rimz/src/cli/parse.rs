@@ -6,7 +6,7 @@ use std::time::Duration;
 /// `(unit_str, multiplier_in_seconds)`. Returns a human-readable error string
 /// suitable for `clap`'s `value_parser`.
 pub(crate) fn parse_duration_units(raw: &str, allowed: &[(&str, u64)]) -> Result<Duration, String> {
-    rimz::schedule::parse_duration_units(raw, allowed)
+    rimz::harness::schedule::parse_duration_units(raw, allowed)
 }
 
 #[cfg(test)]

@@ -216,7 +216,7 @@ fn steer_message(
     text: Vec<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    rimz::target::require_mention(&target)?;
+    rimz::harness::target::require_mention(&target)?;
     let SendFlags {
         worktree,
         channel: channel_flag,
@@ -263,12 +263,12 @@ fn steer_message(
         Err(err) => return message_miss(&snapshot, channel.as_deref(), &err),
     };
 
-    if targets.len() > 1 && !all && !rimz::target::is_broadcast(&target) {
+    if targets.len() > 1 && !all && !rimz::harness::target::is_broadcast(&target) {
         let labels: Vec<String> = targets.iter().map(|target| target.label()).collect();
         return Err(super::ambiguous_fanout("message --steer", &target, &labels));
     }
-    let text = if targets.len() > 1 || rimz::target::is_broadcast(&target) {
-        rimz::target::group_prefixed(&target, &text)
+    let text = if targets.len() > 1 || rimz::harness::target::is_broadcast(&target) {
+        rimz::harness::target::group_prefixed(&target, &text)
     } else {
         text
     };
@@ -360,7 +360,9 @@ fn message_miss(
     writeln!(out, "{err:#}")?;
     let agents: Vec<&AgentState> = snapshot
         .root_agents()
-        .filter(|agent| channel.is_none_or(|filter| rimz::target::agent_in_worktree(agent, filter)))
+        .filter(|agent| {
+            channel.is_none_or(|filter| rimz::harness::target::agent_in_worktree(agent, filter))
+        })
         .collect();
     if agents.is_empty() {
         writeln!(out, "no agents are running")?;
@@ -505,7 +507,7 @@ fn add_message(
     flags: FanoutFlags,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    rimz::target::require_mention(&target)?;
+    rimz::harness::target::require_mention(&target)?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
     let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
@@ -559,12 +561,12 @@ fn add_message(
             return message_miss(&snapshot, channel.as_deref(), &err);
         }
     };
-    if targets.len() > 1 && !flags.all && !rimz::target::is_broadcast(&target) {
+    if targets.len() > 1 && !flags.all && !rimz::harness::target::is_broadcast(&target) {
         let labels: Vec<String> = targets.iter().map(dispatch::QueueTarget::label).collect();
         return Err(super::ambiguous_fanout("deliver to", &target, &labels));
     }
-    let text = if targets.len() > 1 || rimz::target::is_broadcast(&target) {
-        rimz::target::group_prefixed(&target, &text)
+    let text = if targets.len() > 1 || rimz::harness::target::is_broadcast(&target) {
+        rimz::harness::target::group_prefixed(&target, &text)
     } else {
         text
     };
@@ -652,7 +654,7 @@ fn list_messages(
         messages.retain(|message| message.status != MessageStatus::Archived);
     }
     if let Some(raw) = target {
-        rimz::target::require_mention(&raw)?;
+        rimz::harness::target::require_mention(&raw)?;
         let agent = super::resolve_agent_one(&snapshot, &raw, None, filter_channel)?;
         messages.retain(|message| message.same_agent_card(agent));
     }
@@ -810,7 +812,7 @@ fn clear_messages(
     channel_flag: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    rimz::target::require_mention(&target)?;
+    rimz::harness::target::require_mention(&target)?;
     let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
     let channel = current_channel(&workspace);
     let agent = super::resolve_agent_one(
@@ -1039,7 +1041,7 @@ fn message_target(message: &MessageListRow, agents: &[&AgentState]) -> String {
         .iter()
         .copied()
         .find(|agent| message.same_agent_card(agent))
-        .map(|agent| rimz::target::agent_handle(agent, agents, true))
+        .map(|agent| rimz::harness::target::agent_handle(agent, agents, true))
         .unwrap_or_else(|| format!("{}:{}", message.kind, message.agent_id))
 }
 

@@ -139,7 +139,7 @@ fn record_native_answer(
         .filter(|path| !path.is_empty())
         .map(Cow::Borrowed)
         .unwrap_or_else(|| Cow::Owned(workspace.worktree_root.display().to_string()));
-    let channel = rimz::target::compose_channel(
+    let channel = rimz::harness::target::compose_channel(
         None,
         payload
             .get("worktree_branch")
@@ -217,7 +217,7 @@ fn record_lifecycle_observation(
         if observation.agent_name.is_none() {
             observation.agent_name = agent_identity_env(
                 &observation,
-                rimz::run::ENV_AGENT_NAME,
+                rimz::harness::run::ENV_AGENT_NAME,
                 validate_agent_name_env,
             );
         }
@@ -441,11 +441,11 @@ fn record_run_lifecycle(
     let Some(run_id) = env_run_id() else {
         return;
     };
-    let last_message = rimz::run::terminal_status_for_signal(&recorded.observation.signal)
+    let last_message = rimz::harness::run::terminal_status_for_signal(&recorded.observation.signal)
         .is_some()
         .then(|| agent.last_assistant_message(event_name, payload, &recorded.observation))
         .flatten();
-    match rimz::run::record_lifecycle(
+    match rimz::harness::run::record_lifecycle(
         ledger.paths(),
         &run_id,
         agent.descriptor().kind,
@@ -492,7 +492,7 @@ fn record_transcript_conversation(
         return Ok(());
     };
     let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
-    let channel = rimz::target::compose_channel(
+    let channel = rimz::harness::target::compose_channel(
         observation.channel.as_deref(),
         observation.worktree_branch.as_deref(),
         observation.worktree_path.as_deref().and_then(path_basename),
@@ -523,13 +523,13 @@ fn record_transcript_conversation(
                 .map(str::trim)
                 .filter(|prompt| !prompt.is_empty())
             {
-                for segment in rimz::target::split_batched_prompt(prompt) {
+                for segment in rimz::harness::target::split_batched_prompt(prompt) {
                     let segment = segment.trim();
                     if segment.is_empty() {
                         continue;
                     }
                     let entry = if let Some((sender, body)) =
-                        rimz::target::parse_sender_prefix(segment)
+                        rimz::harness::target::parse_sender_prefix(segment)
                     {
                         let mut entry =
                             entry_base(rimz::ledger::transcript_log::TranscriptKind::Message, body);
@@ -649,7 +649,7 @@ fn spawn_queue_delivery_if_checkpoint(
 }
 
 fn env_run_id() -> Option<rimz::RunId> {
-    let raw = std::env::var(rimz::run::ENV_RUN_ID).ok()?;
+    let raw = std::env::var(rimz::harness::run::ENV_RUN_ID).ok()?;
     match raw.parse() {
         Ok(run_id) => Some(run_id),
         Err(err) => {
@@ -688,30 +688,30 @@ pub(super) fn fill_root_launch_identity(
         return;
     }
     if observation.role.is_none() {
-        observation.role = identity_env(observation, rimz::run::ENV_AGENT_ROLE);
+        observation.role = identity_env(observation, rimz::harness::run::ENV_AGENT_ROLE);
     }
     if observation.team.is_none() {
-        observation.team = identity_env(observation, rimz::run::ENV_TEAM);
+        observation.team = identity_env(observation, rimz::harness::run::ENV_TEAM);
     }
     if observation.channel.is_none() {
-        observation.channel = identity_env(observation, rimz::run::ENV_CHANNEL);
+        observation.channel = identity_env(observation, rimz::harness::run::ENV_CHANNEL);
     }
     if observation.profile.is_none() {
-        observation.profile = identity_env(observation, rimz::run::ENV_AGENT_PROFILE);
+        observation.profile = identity_env(observation, rimz::harness::run::ENV_AGENT_PROFILE);
     }
     if observation.model.is_none() {
-        observation.model =
-            identity_env(observation, rimz::run::ENV_AGENT_MODEL).or(configured_identity.0);
+        observation.model = identity_env(observation, rimz::harness::run::ENV_AGENT_MODEL)
+            .or(configured_identity.0);
     }
     if observation.effort.is_none() {
-        observation.effort =
-            identity_env(observation, rimz::run::ENV_AGENT_EFFORT).or(configured_identity.1);
+        observation.effort = identity_env(observation, rimz::harness::run::ENV_AGENT_EFFORT)
+            .or(configured_identity.1);
     }
 }
 
 fn validate_agent_name_env(raw: String, source: &str, _var: &str) -> Option<String> {
-    if rimz::petname::valid_name(&raw)
-        && !rimz::petname::collides_with_reserved_prefix(&raw, rimz::agents::known_kinds())
+    if rimz::harness::petname::valid_name(&raw)
+        && !rimz::harness::petname::collides_with_reserved_prefix(&raw, rimz::agents::known_kinds())
     {
         Some(raw)
     } else {

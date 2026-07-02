@@ -133,11 +133,11 @@ pub fn queue_targets<'a>(
     rollup_only: bool,
 ) -> std::result::Result<Vec<QueueTarget<'a>>, TargetErr> {
     if rollup_only {
-        let agents = crate::target::resolve_many(snapshot, raw, worktree, channel)?;
+        let agents = crate::harness::target::resolve_many(snapshot, raw, worktree, channel)?;
         return Ok(combine_queue_targets(snapshot, agents, Vec::new()));
     }
-    let agent_result = crate::target::resolve_many(snapshot, raw, worktree, channel);
-    let pane_result = crate::target::resolve_targets(snapshot, raw, worktree, channel);
+    let agent_result = crate::harness::target::resolve_many(snapshot, raw, worktree, channel);
+    let pane_result = crate::harness::target::resolve_targets(snapshot, raw, worktree, channel);
     match (agent_result, pane_result) {
         (Ok(agents), Ok(panes)) => Ok(combine_queue_targets(snapshot, agents, panes)),
         (Ok(agents), Err(_)) => Ok(combine_queue_targets(snapshot, agents, Vec::new())),
@@ -149,7 +149,7 @@ pub fn queue_targets<'a>(
 pub fn handle_for_target(snapshot: &SidebarSnapshot, target: &QueueTarget<'_>) -> String {
     if let Some(agent) = target.agent {
         let peers: Vec<&AgentState> = snapshot.root_agents().collect();
-        crate::target::agent_handle(agent, &peers, true)
+        crate::harness::target::agent_handle(agent, &peers, true)
     } else if let Some(pane) = target.pane {
         send::handle_for_pane_target(snapshot, pane, None)
     } else {
@@ -201,7 +201,7 @@ pub(crate) fn pane_matches_agent(pane: &PaneAgent, agent: &AgentState) -> bool {
     }
     pane.agent_id.is_none()
         && agent.agent_id.is_provisional()
-        && pane.channel() == crate::target::agent_channel(agent)
+        && pane.channel() == crate::harness::target::agent_channel(agent)
 }
 
 fn provisional_agent_for_pane<'a>(
@@ -211,7 +211,7 @@ fn provisional_agent_for_pane<'a>(
     snapshot.root_agents().find(|agent| {
         agent.kind == pane.kind
             && agent.agent_id.is_provisional()
-            && crate::target::agent_channel(agent) == pane.channel()
+            && crate::harness::target::agent_channel(agent) == pane.channel()
     })
 }
 
@@ -224,10 +224,10 @@ pub fn rollup_targets_all_park_without_live(
     gate: DeliveryGate,
     force: bool,
 ) -> bool {
-    if crate::target::is_broadcast(raw) {
+    if crate::harness::target::is_broadcast(raw) {
         return false;
     }
-    let Ok(agents) = crate::target::resolve_many(snapshot, raw, worktree, channel) else {
+    let Ok(agents) = crate::harness::target::resolve_many(snapshot, raw, worktree, channel) else {
         return false;
     };
     let now = Timestamp::now();
@@ -367,7 +367,7 @@ pub fn add_for_targets(
         .with_force(spec.force)
         .with_channel(
             spec.stamp_channel
-                .then(|| crate::target::agent_channel(agent))
+                .then(|| crate::harness::target::agent_channel(agent))
                 .flatten(),
         )
         .with_sender(ctx.sender.clone())

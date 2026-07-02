@@ -18,10 +18,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::config::Team;
+use crate::harness::run::PermissionMode;
 use crate::ids::WorkspaceId;
 use crate::ledger::atomic::{self, write_bytes_atomically};
 use crate::ledger::paths::config_home;
-use crate::run::PermissionMode;
 
 const CONFIG_REL: &str = ".rimz/config.toml";
 const PROJECTS_SUBDIR: [&str; 2] = ["rimz", "projects"];

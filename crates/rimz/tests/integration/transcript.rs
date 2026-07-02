@@ -678,7 +678,7 @@ fn bridge_permission_to_allow(
     .expect("payload");
     let mut cmd = env.hook_command("claude");
     cmd.env_remove("RIMZ_AGENT_PID");
-    cmd.env(rimz::run::ENV_AGENT_ROLE, "claude");
+    cmd.env(rimz::harness::run::ENV_AGENT_ROLE, "claude");
     let child = env.spawn_payload(cmd, &payload);
     let request_id = env
         .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
@@ -703,7 +703,7 @@ fn run_hook(env: &Env, source: &str, payload: serde_json::Value) {
     let payload = serde_json::to_string(&payload).expect("payload");
     let mut cmd = env.hook_command(source);
     cmd.env_remove("RIMZ_AGENT_PID");
-    cmd.env(rimz::run::ENV_AGENT_ROLE, source);
+    cmd.env(rimz::harness::run::ENV_AGENT_ROLE, source);
     let output = env
         .spawn_payload(cmd, &payload)
         .wait_with_output()

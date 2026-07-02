@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use anyhow::Result;
-use rimz::run::{RunLiveStatus, RunRecord, RunStatus};
+use rimz::harness::run::{RunLiveStatus, RunRecord, RunStatus};
 
 pub(crate) fn print_run_output(record: &RunRecord) -> Result<()> {
     if let Some(message) = record

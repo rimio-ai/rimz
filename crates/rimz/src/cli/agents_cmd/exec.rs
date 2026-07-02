@@ -59,7 +59,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             agent_effort: args.agent_effort.as_deref(),
         },
     )?;
-    let argv = rimz::launch::login_shell_argv(&rimz_env, &argv);
+    let argv = rimz::harness::launch::login_shell_argv(&rimz_env, &argv);
     let (program, rest) = argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("agent `{}` produced an empty launch command", args.kind))?;
@@ -313,7 +313,7 @@ pub(super) struct RunExecContext {
 
 impl RunExecContext {
     fn is_terminal(&self) -> bool {
-        match rimz::run::load(&self.paths, &self.run_id) {
+        match rimz::harness::run::load(&self.paths, &self.run_id) {
             Ok(record) => record.status.is_terminal(),
             Err(err) => {
                 tracing::debug!(
@@ -373,7 +373,9 @@ fn record_own_run_pane(context: &RunExecContext) {
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
         return;
     };
-    if let Err(err) = rimz::run::record_pane(&context.paths, &context.run_id, pane_id.clone()) {
+    if let Err(err) =
+        rimz::harness::run::record_pane(&context.paths, &context.run_id, pane_id.clone())
+    {
         tracing::debug!(
             run_id = %context.run_id,
             pane = %pane_id,
@@ -552,9 +554,9 @@ fn fail_run_on_exec_precondition(context: Option<&RunExecContext>) {
 }
 
 fn fail_run_if_nonterminal(context: &RunExecContext, reason: &'static str) {
-    match rimz::run::load(&context.paths, &context.run_id) {
+    match rimz::harness::run::load(&context.paths, &context.run_id) {
         Ok(record) if record.status.is_terminal() => {}
-        Ok(_) => match rimz::run::fail_if_nonterminal(&context.paths, &context.run_id) {
+        Ok(_) => match rimz::harness::run::fail_if_nonterminal(&context.paths, &context.run_id) {
             Ok(Some(record)) => {
                 if let Err(err) = rimz::ledger::wakeup::wake_run(&context.runtime, &record) {
                     tracing::debug!(

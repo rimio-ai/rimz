@@ -12,44 +12,42 @@
 //! spawns. The runner appends exactly one history record after loading a task:
 //! the pure executor returns an outcome, and this wrapper records success,
 //! failure, or error with capped forensics.
-//! Pure schedule parsing and due evaluation live in [`rimz::schedule`];
+//! Pure schedule parsing and due evaluation live in [`rimz::harness::schedule`];
 //! delivery mode reuses the shared message seam, and ephemeral self-wakes live
-//! in [`rimz::schedule::instances`].
+//! in [`rimz::harness::schedule::instances`].
 
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use fs4::FileExt;
 use jiff::Timestamp;
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use rimz::agents::{find_adapter, hook_trust_fix};
-use rimz::agents_spec::{self, Cell, LayoutSpec};
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
+use rimz::harness::schedule::run_log::{
+    self, CheckRecord, LoopRunMode, LoopRunRecord, LoopRunResult,
+};
+use rimz::harness::schedule::runner::{
+    CHECK_DEFAULT_TIMEOUT, acquire_run_lock, augment_prompt, check_only_result, check_record,
+    check_timeout, deadline_expired, polarity_fires, run_check, tail_output,
+    window_already_running,
+};
+use rimz::harness::schedule::{self, instances};
+use rimz::harness::spec::{self as agents_spec, Cell, LayoutSpec};
 use rimz::ids::WorkspaceId;
 use rimz::ledger::atomic::write_bytes_atomically;
-use rimz::ledger::paths::{
-    RuntimePaths, StatePaths, agents_home, config_home, runtime_home, state_home,
-};
+use rimz::ledger::paths::{RuntimePaths, StatePaths, agents_home, config_home, state_home};
 use rimz::message::DeliveryGate;
-use rimz::schedule::run_log::{self, CheckRecord, LoopRunMode, LoopRunRecord, LoopRunResult};
-use rimz::schedule::{self, instances};
-use rimz::sidebar::enrich::shortest_window_running;
 use rimz::sidebar::fresh_sidebar_present;
 use rimz::workspace::WorkspaceResolver;
 
 use super::GlobalFlags;
 use super::render as ui;
 
-const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
-const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(20);
-const CHECK_OUTPUT_CAP: usize = 16 * 1024;
 const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
 
 #[derive(Debug, Args)]
@@ -380,7 +378,7 @@ fn list() -> Result<()> {
         };
         let stamps = runtime
             .as_ref()
-            .map(rimz::schedule::last_stamps)
+            .map(rimz::harness::schedule::last_stamps)
             .unwrap_or_default();
         let next = parsed
             .ok()
@@ -442,7 +440,7 @@ fn show(args: ShowArgs) -> Result<()> {
     let runtime = runtime_for_root(&root);
     let stamps = runtime
         .as_ref()
-        .map(rimz::schedule::last_stamps)
+        .map(rimz::harness::schedule::last_stamps)
         .unwrap_or_default();
     let room = if runtime.as_ref().is_some_and(fresh_sidebar_present) {
         "open"
@@ -642,7 +640,7 @@ fn transcript_path_for_record(entry: &TaskEntry, run_id: &str) -> Option<String>
         &state_home(),
     )
     .ok()?;
-    rimz::run::load(&paths, &run_id)
+    rimz::harness::run::load(&paths, &run_id)
         .ok()
         .and_then(|record| record.transcript_path)
 }
@@ -741,38 +739,6 @@ fn append_error_record(name: &str, mode: LoopRunMode, started: Instant, err: &an
         target: None,
     });
     tracing::warn!(task = name, error = %error, "loop task run failed");
-}
-
-struct RunLockGuard {
-    file: File,
-}
-
-impl Drop for RunLockGuard {
-    fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.file);
-    }
-}
-
-fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<Option<RunLockGuard>> {
-    let runtime =
-        RuntimePaths::for_workspace(WorkspaceId::from_project_root(&entry.resolved_root()))
-            .context("locating loop task runtime")?;
-    std::fs::create_dir_all(&runtime.root)
-        .with_context(|| format!("creating loop task runtime `{}`", runtime.root.display()))?;
-    let path = runtime.root.join(format!("loop-run-{name}.lock"));
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&path)
-        .with_context(|| format!("opening loop run lock `{}`", path.display()))?;
-    match FileExt::try_lock(&file) {
-        Ok(()) => Ok(Some(RunLockGuard { file })),
-        Err(fs4::TryLockError::WouldBlock) => Ok(None),
-        Err(err) => Err(std::io::Error::from(err))
-            .with_context(|| format!("locking loop run lock `{}`", path.display())),
-    }
 }
 
 fn execute_task(
@@ -1053,123 +1019,6 @@ fn queue_resolution_miss(err: &anyhow::Error) -> bool {
     )
 }
 
-struct CheckOutcome {
-    passed: bool,
-    timed_out: bool,
-    output: String,
-    code: Option<i32>,
-}
-
-fn check_record(outcome: &CheckOutcome) -> CheckRecord {
-    CheckRecord {
-        code: outcome.code,
-        timed_out: outcome.timed_out,
-        output: outcome.output.clone(),
-    }
-}
-
-fn deadline_expired(entry: &TaskEntry) -> bool {
-    entry
-        .deadline
-        .is_some_and(|deadline| Timestamp::now() >= deadline)
-}
-
-fn check_timeout(entry: &TaskEntry) -> Result<Option<Duration>> {
-    entry
-        .timeout
-        .as_deref()
-        .map(parse_task_timeout)
-        .transpose()
-        .map_err(|err| anyhow::anyhow!("{err}"))
-}
-
-fn check_only_result(outcome: &CheckOutcome) -> LoopRunResult {
-    if outcome.timed_out {
-        LoopRunResult::TimedOut
-    } else if outcome.passed {
-        LoopRunResult::Completed
-    } else {
-        LoopRunResult::Failed
-    }
-}
-
-fn polarity_fires(on: Option<CheckOn>, outcome: &CheckOutcome) -> bool {
-    match on.unwrap_or_default() {
-        CheckOn::Fail => !outcome.passed,
-        CheckOn::Success => outcome.passed,
-    }
-}
-
-fn augment_prompt(base: String, cmd: &str, outcome: &CheckOutcome) -> String {
-    let status = if outcome.timed_out {
-        "timeout".to_owned()
-    } else {
-        outcome
-            .code
-            .map(|code| code.to_string())
-            .unwrap_or_else(|| "signal".to_owned())
-    };
-    format!(
-        "{base}\n\n--- check `{cmd}` exited {status} ---\n{}",
-        outcome.output
-    )
-}
-
-fn run_check(dir: &Path, cmd: &str, timeout: Duration) -> Result<CheckOutcome> {
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .current_dir(dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("running loop check `{cmd}` in {}", dir.display()))?;
-    let stdout = drain_pipe(child.stdout.take());
-    let stderr = drain_pipe(child.stderr.take());
-    let deadline = Instant::now() + timeout;
-    let (status, timed_out) = loop {
-        if let Some(status) = child
-            .try_wait()
-            .with_context(|| format!("waiting for loop check `{cmd}`"))?
-        {
-            break (status, false);
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let status = child
-                .wait()
-                .with_context(|| format!("reaping timed-out loop check `{cmd}`"))?;
-            break (status, true);
-        }
-        std::thread::sleep(CHECK_POLL_INTERVAL);
-    };
-    let mut output = stdout.join().unwrap_or_default();
-    output.extend(stderr.join().unwrap_or_default());
-    let output = tail_output(&output, CHECK_OUTPUT_CAP);
-    Ok(CheckOutcome {
-        passed: status.success() && !timed_out,
-        timed_out,
-        output,
-        code: status.code(),
-    })
-}
-
-fn drain_pipe(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut buf);
-        }
-        buf
-    })
-}
-
-fn tail_output(bytes: &[u8], cap: usize) -> String {
-    let start = bytes.len().saturating_sub(cap);
-    String::from_utf8_lossy(&bytes[start..]).into_owned()
-}
-
 pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
     let mut reaped = 0;
     for (name, (entry, source)) in load_all() {
@@ -1193,18 +1042,6 @@ pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
         }
     }
     Ok(reaped)
-}
-
-/// Whether `entry`'s provider already has a budget window counting down, read
-/// from the shared account-scoped cache. The window state is account-scoped, so
-/// the entry's workspace is resolved only to reach this user's runtime root.
-fn window_already_running(entry: &TaskEntry, kind: &str) -> Result<bool> {
-    let root = entry.resolved_root();
-    let workspace = WorkspaceResolver::resolve(&root, None)
-        .with_context(|| format!("resolving project root at {}", root.display()))?;
-    let runtime = RuntimePaths::under(workspace.workspace_id, &runtime_home())
-        .context("locating the runtime root")?;
-    Ok(shortest_window_running(&runtime, kind, Timestamp::now()) == Some(true))
 }
 
 // ---- shared helpers ---------------------------------------------------------
@@ -1305,7 +1142,7 @@ fn resolve_delivery_target(
     Ok(TaskTarget {
         kind: agent.kind.as_str().to_owned(),
         session: agent.agent_id.as_str().to_owned(),
-        handle: rimz::target::agent_handle(agent, &peers, true),
+        handle: rimz::harness::target::agent_handle(agent, &peers, true),
     })
 }
 
@@ -1775,72 +1612,4 @@ fn config_rename(name: &str, new_name: &str) -> Result<bool> {
     write_bytes_atomically(&path, rendered.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(true)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn check_polarity_truth_table() {
-        let passed = CheckOutcome {
-            passed: true,
-            timed_out: false,
-            output: String::new(),
-            code: Some(0),
-        };
-        let failed = CheckOutcome {
-            passed: false,
-            timed_out: false,
-            output: String::new(),
-            code: Some(1),
-        };
-        let timed_out = CheckOutcome {
-            passed: false,
-            timed_out: true,
-            output: String::new(),
-            code: None,
-        };
-
-        assert!(!polarity_fires(Some(CheckOn::Fail), &passed));
-        assert!(polarity_fires(Some(CheckOn::Fail), &failed));
-        assert!(polarity_fires(Some(CheckOn::Fail), &timed_out));
-        assert!(polarity_fires(Some(CheckOn::Success), &passed));
-        assert!(!polarity_fires(Some(CheckOn::Success), &failed));
-        assert!(!polarity_fires(Some(CheckOn::Success), &timed_out));
-    }
-
-    #[test]
-    fn run_check_captures_output_and_status() {
-        let dir = tempfile::tempdir().expect("tempdir");
-
-        let passed = run_check(
-            dir.path(),
-            "printf out; printf err >&2",
-            Duration::from_secs(1),
-        )
-        .expect("passed check");
-        assert!(passed.passed);
-        assert_eq!(passed.code, Some(0));
-        assert!(passed.output.contains("out"));
-        assert!(passed.output.contains("err"));
-
-        let failed = run_check(dir.path(), "printf nope; exit 1", Duration::from_secs(1))
-            .expect("failed check");
-        assert!(!failed.passed);
-        assert!(!failed.timed_out);
-        assert_eq!(failed.code, Some(1));
-        assert!(failed.output.contains("nope"));
-    }
-
-    #[test]
-    fn run_check_honours_timeout() {
-        let dir = tempfile::tempdir().expect("tempdir");
-
-        let outcome =
-            run_check(dir.path(), "sleep 1", Duration::from_millis(50)).expect("timed-out check");
-
-        assert!(!outcome.passed);
-        assert!(outcome.timed_out);
-    }
 }

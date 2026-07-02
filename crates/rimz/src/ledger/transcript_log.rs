@@ -174,7 +174,7 @@ fn bucket_path(paths: &StatePaths, at: Timestamp) -> PathBuf {
 }
 
 fn file_days() -> u32 {
-    std::env::var(crate::run::ENV_TRANSCRIPT_FILE_DAYS)
+    std::env::var(crate::harness::run::ENV_TRANSCRIPT_FILE_DAYS)
         .ok()
         .and_then(|raw| raw.parse::<u32>().ok())
         .filter(|days| *days > 0)

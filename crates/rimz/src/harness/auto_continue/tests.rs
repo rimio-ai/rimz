@@ -4,6 +4,7 @@ use crate::agents::{
     AgentContext, AgentRateLimits, AgentStatus, AgentTurnError, RateLimitWindow, TurnErrorClass,
 };
 use crate::ids::{AgentSessionId, MuxName, WorkspaceId};
+use crate::sidebar::enrich::RateLimitsCache;
 
 fn ts(secs: i64) -> Timestamp {
     Timestamp::from_second(secs).expect("valid test timestamp")
@@ -73,6 +74,11 @@ fn temp_runtime() -> (tempfile::TempDir, RuntimePaths) {
         .expect("runtime paths");
     runtime.ensure_dirs().expect("runtime dirs");
     (dir, runtime)
+}
+
+fn write_rate_limits_cache(runtime: &RuntimePaths, cache: &RateLimitsCache) {
+    crate::ledger::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), cache)
+        .expect("write rate-limits cache");
 }
 
 fn park_path(runtime: &RuntimePaths) -> PathBuf {
@@ -440,9 +446,9 @@ fn recovered_budget_fires_due_rate_limit_record_before_clearing() {
     let (_dir, runtime) = temp_runtime();
     let path = park_path(&runtime);
     write_park(&path, &rate_record(5_000, 1_000, None, 0));
-    super::super::rate_limits::write_rate_limits_cache(
-        &runtime.shared_rate_limits_path(),
-        &super::super::rate_limits::RateLimitsCache {
+    write_rate_limits_cache(
+        &runtime,
+        &RateLimitsCache {
             refreshed_at_ms: 0,
             windows: [(
                 "claude".to_owned(),
@@ -483,9 +489,9 @@ fn recovered_budget_fires_due_rate_limit_record_before_clearing() {
 fn recovered_budget_rearms_a_lost_limit_park() {
     let (_dir, runtime) = temp_runtime();
     let path = park_path(&runtime);
-    super::super::rate_limits::write_rate_limits_cache(
-        &runtime.shared_rate_limits_path(),
-        &super::super::rate_limits::RateLimitsCache {
+    write_rate_limits_cache(
+        &runtime,
+        &RateLimitsCache {
             refreshed_at_ms: 0,
             windows: [(
                 "claude".to_owned(),
@@ -527,9 +533,9 @@ fn recovered_budget_clears_a_stale_rate_limit_record() {
     let (_dir, runtime) = temp_runtime();
     let path = park_path(&runtime);
     write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 1));
-    super::super::rate_limits::write_rate_limits_cache(
-        &runtime.shared_rate_limits_path(),
-        &super::super::rate_limits::RateLimitsCache {
+    write_rate_limits_cache(
+        &runtime,
+        &RateLimitsCache {
             refreshed_at_ms: 0,
             windows: [(
                 "claude".to_owned(),

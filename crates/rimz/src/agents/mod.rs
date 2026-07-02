@@ -46,7 +46,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::feed::{FeedItem, FeedKind, Resolution};
-use crate::run::PermissionMode;
+use crate::harness::run::PermissionMode;
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
@@ -670,7 +670,7 @@ pub trait AgentAdapter: Send + Sync {
     /// than coming up empty; the agent's own hooks re-fire on its
     /// `SessionStart` with `source: "resume"`, coalescing back onto the same
     /// `(kind, agent_id)` rollup row and re-stamping the new pane. `None` when
-    /// the agent has no resume CLI, so [`crate::resume::plan_resume`] skips it.
+    /// the agent has no resume CLI, so [`crate::harness::resume::plan_resume`] skips it.
     /// Default `None` keeps the contract "implement nothing else" for an agent
     /// that cannot resume yet.
     fn resume_command(&self, _session_id: &str, _cwd: &Path) -> Option<Vec<String>> {

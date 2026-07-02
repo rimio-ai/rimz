@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::config::{CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig};
+use crate::harness::run::PermissionMode;
 use crate::ids::AgentKind;
-use crate::run::PermissionMode;
 
 const BUILTIN_PEER: &str = "claude,codex";
 const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo", "plan"];
@@ -632,7 +632,7 @@ pub fn default_tab_title(
         return format!("team:{team}");
     }
     let kind = spec.first_agent_kind().unwrap_or("term");
-    crate::resume::build_label(kind, None, None, cwd)
+    crate::harness::resume::build_label(kind, None, None, cwd)
 }
 
 pub fn is_known_spec_token(

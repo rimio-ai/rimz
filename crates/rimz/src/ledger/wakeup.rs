@@ -28,8 +28,8 @@ use tracing::debug;
 
 use crate::bridge::{WakeupFrame, feed_socket_path, run_socket_path};
 use crate::feed::{FeedItem, FeedStatus};
+use crate::harness::run::RunRecord;
 use crate::ledger::RuntimePaths;
-use crate::run::RunRecord;
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
 use crate::schema::event::{EventEnvelope, EventKind};
 use crate::schema::heartbeat::SidebarHeartbeat;

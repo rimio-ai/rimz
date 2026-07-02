@@ -189,7 +189,7 @@ fn transcript_ask_entry(
         .map(|message| message.trim().to_owned())
         .filter(|message| !message.is_empty());
     let text = last.unwrap_or_default();
-    let channel = rimz::target::compose_channel(
+    let channel = rimz::harness::target::compose_channel(
         None,
         item.worktree_branch.as_deref(),
         item.worktree_path.as_deref().and_then(path_basename),

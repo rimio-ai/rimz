@@ -1,6 +1,6 @@
 # Rimz core
 
-Local contract for `crates/rimz/` — the CLI binary, hook entrypoints, and the runtime/domain library. Extends the root [AGENTS.md](../../AGENTS.md); it never restates parent rules. The module map lives in [ARCHITECTURE.md](../../ARCHITECTURE.md); deeper subtree contracts live in [src/agents/](./src/agents/AGENTS.md), [src/ledger/](./src/ledger/AGENTS.md), [src/mux/](./src/mux/AGENTS.md), and [tests/integration/](./tests/integration/AGENTS.md).
+Local contract for `crates/rimz/` — the CLI binary, hook entrypoints, and the runtime/domain library. Extends the root [AGENTS.md](../../AGENTS.md); it never restates parent rules. The module map lives in [ARCHITECTURE.md](../../ARCHITECTURE.md); deeper subtree contracts live in [src/agents/](./src/agents/AGENTS.md), [src/harness/](./src/harness/AGENTS.md), [src/ledger/](./src/ledger/AGENTS.md), [src/mux/](./src/mux/AGENTS.md), and [tests/integration/](./tests/integration/AGENTS.md).
 
 ## Crate-wide seams
 

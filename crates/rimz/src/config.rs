@@ -125,7 +125,7 @@ pub enum ConfigErr {
     Agents {
         path: PathBuf,
         #[source]
-        source: crate::agents_spec::LayoutErr,
+        source: crate::harness::spec::LayoutErr,
     },
     #[error("invalid per-machine notifications config at {path}: {source}")]
     Notifications {
@@ -664,8 +664,8 @@ fn discover_agents_home_subdir(
         let Some(mut fragment) = load_optional(&path, parse_agents_fragment_text)? else {
             continue;
         };
-        crate::agents_spec::resolve_profile_prompt_paths(&mut fragment.profiles, &dir);
-        crate::agents_spec::resolve_team_prompt_paths(&mut fragment.teams, &dir);
+        crate::harness::spec::resolve_profile_prompt_paths(&mut fragment.profiles, &dir);
+        crate::harness::spec::resolve_team_prompt_paths(&mut fragment.teams, &dir);
         out.profiles.0.extend(fragment.profiles.0);
         out.teams.0.extend(fragment.teams.0);
         out.commands.0.extend(fragment.commands.0);
@@ -725,14 +725,13 @@ fn overlay_under<V>(file: &mut BTreeMap<String, V>, fragment: BTreeMap<String, V
 
 fn validate_agents_config(agents: &mut AgentsConfig, path: &Path) -> Result<()> {
     let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    crate::agents_spec::resolve_profile_prompt_paths(&mut agents.profiles, config_dir);
-    crate::agents_spec::resolve_team_prompt_paths(&mut agents.teams, config_dir);
-    crate::agents_spec::validate_config(&agents.profiles, &agents.commands, &agents.teams).map_err(
-        |source| ConfigErr::Agents {
+    crate::harness::spec::resolve_profile_prompt_paths(&mut agents.profiles, config_dir);
+    crate::harness::spec::resolve_team_prompt_paths(&mut agents.teams, config_dir);
+    crate::harness::spec::validate_config(&agents.profiles, &agents.commands, &agents.teams)
+        .map_err(|source| ConfigErr::Agents {
             path: path.to_path_buf(),
             source,
-        },
-    )
+        })
 }
 
 fn validate_notifications_config(notifications: &NotificationsPrefs, path: &Path) -> Result<()> {

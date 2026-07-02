@@ -6,7 +6,7 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use crate::feed::{AbandonReason, FeedItem, FeedStatus, Resolution, ResolutionMethod};
-use crate::run::{RunRecord, RunStatus};
+use crate::harness::run::{RunRecord, RunStatus};
 use crate::schema::event::EventEnvelope;
 
 use super::super::{

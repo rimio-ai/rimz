@@ -516,8 +516,11 @@ fn validate_agent_launch_name(name: &str) -> Result<()> {
 }
 
 fn valid_agent_launch_name(name: &str) -> bool {
-    crate::petname::valid_name(name)
-        && !crate::petname::collides_with_reserved_prefix(name, crate::agents::known_kinds())
+    crate::harness::petname::valid_name(name)
+        && !crate::harness::petname::collides_with_reserved_prefix(
+            name,
+            crate::agents::known_kinds(),
+        )
 }
 
 fn name_taken(name: &str, taken: &BTreeSet<String>, session_ids: &[&str]) -> bool {
@@ -526,7 +529,7 @@ fn name_taken(name: &str, taken: &BTreeSet<String>, session_ids: &[&str]) -> boo
 
 fn mint_available_agent_name(taken: &BTreeSet<String>, session_ids: &[&str]) -> String {
     loop {
-        let candidate = crate::petname::mint(taken.iter().map(String::as_str));
+        let candidate = crate::harness::petname::mint(taken.iter().map(String::as_str));
         if valid_agent_launch_name(&candidate) && !name_taken(&candidate, taken, session_ids) {
             return candidate;
         }

@@ -4,8 +4,8 @@ use super::*;
 use clap::Parser;
 use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::config::LaunchPlacement;
+use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::ids::{AgentKind, WorkspaceId};
-use rimz::run::{PermissionMode, RunRecord, RunStatus};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Parser)]
@@ -140,36 +140,45 @@ fn full_launch_env_marks_agent_kind() {
     .expect("launch env");
 
     assert_eq!(
-        env.get(rimz::run::ENV_AGENT_KIND).map(String::as_str),
+        env.get(rimz::harness::run::ENV_AGENT_KIND)
+            .map(String::as_str),
         Some("claude")
     );
     assert_eq!(
-        env.get(rimz::run::ENV_AGENT_NAME).map(String::as_str),
+        env.get(rimz::harness::run::ENV_AGENT_NAME)
+            .map(String::as_str),
         Some("swift-otter")
     );
     assert_eq!(
-        env.get(rimz::run::ENV_AGENT_PROFILE).map(String::as_str),
+        env.get(rimz::harness::run::ENV_AGENT_PROFILE)
+            .map(String::as_str),
         Some("planner")
     );
     assert_eq!(
-        env.get(rimz::run::ENV_AGENT_ROLE).map(String::as_str),
+        env.get(rimz::harness::run::ENV_AGENT_ROLE)
+            .map(String::as_str),
         Some("coder")
     );
     assert_eq!(
-        env.get(rimz::run::ENV_TEAM).map(String::as_str),
+        env.get(rimz::harness::run::ENV_TEAM).map(String::as_str),
         Some("pcr")
     );
     assert_eq!(
-        env.get(rimz::run::ENV_AGENT_MODEL).map(String::as_str),
+        env.get(rimz::harness::run::ENV_AGENT_MODEL)
+            .map(String::as_str),
         Some("gpt-5.5")
     );
     assert_eq!(
-        env.get(rimz::run::ENV_AGENT_EFFORT).map(String::as_str),
+        env.get(rimz::harness::run::ENV_AGENT_EFFORT)
+            .map(String::as_str),
         Some("xhigh")
     );
-    assert_eq!(env.get(rimz::run::ENV_RTK).map(String::as_str), Some("on"));
     assert_eq!(
-        env.get(rimz::run::ENV_TRANSCRIPT_FILE_DAYS)
+        env.get(rimz::harness::run::ENV_RTK).map(String::as_str),
+        Some("on")
+    );
+    assert_eq!(
+        env.get(rimz::harness::run::ENV_TRANSCRIPT_FILE_DAYS)
             .map(String::as_str),
         Some("30")
     );
@@ -256,14 +265,14 @@ fn team_role_spec_stamps_launch_identity_and_pane_command() {
             layout: None,
         },
     )]));
-    let layout = rimz::agents_spec::resolve_spec(
+    let layout = rimz::harness::spec::resolve_spec(
         Some("pcr.planner"),
         &profiles,
         &rimz::config::CommandsConfig::default(),
         &teams,
     )
     .expect("team role spec");
-    let team_name = rimz::agents_spec::spec_team("pcr.planner", &teams);
+    let team_name = rimz::harness::spec::spec_team("pcr.planner", &teams);
 
     let requests = launch_identity_requests(&layout, None, None, team_name, None).unwrap();
 
@@ -819,7 +828,7 @@ fn single_role_team_launch_takes_over_caller_pane() {
         },
     )]));
     for spec in ["solo", "solo.planner"] {
-        let layout = rimz::agents_spec::resolve_spec(
+        let layout = rimz::harness::spec::resolve_spec(
             Some(spec),
             &profiles,
             &rimz::config::CommandsConfig::default(),
@@ -832,7 +841,7 @@ fn single_role_team_launch_takes_over_caller_pane() {
             .map(|column| column.rows.len())
             .sum::<usize>()
             == 1;
-        let team_name = rimz::agents_spec::spec_team(spec, &teams);
+        let team_name = rimz::harness::spec::spec_team(spec, &teams);
 
         let placement = apply_in_place_downgrade(
             resolve_placement(
@@ -1456,7 +1465,7 @@ async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
         Path::new("/tmp/rimz-run").to_path_buf(),
     );
     let run_id = record.run_id.clone();
-    rimz::run::create(&paths, &record).expect("create run");
+    rimz::harness::run::create(&paths, &record).expect("create run");
     let (sock, _sock_path) = rimz::bridge::bind_run(&runtime, &run_id).expect("bind run");
     let context = RunExecContext {
         run_id: run_id.clone(),
@@ -1467,7 +1476,7 @@ async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
 
     fail_run_if_child_exited_first(&context, Duration::ZERO);
 
-    let failed = rimz::run::load(&paths, &run_id).expect("load failed run");
+    let failed = rimz::harness::run::load(&paths, &run_id).expect("load failed run");
     assert_eq!(failed.status, RunStatus::Failed);
     let outcome = rimz::bridge::wait_for_run_completion_owning(
         sock,
@@ -1523,7 +1532,7 @@ fn profile_launch_requires_its_system_prompt_file() {
     std::fs::write(&present_append, "follow house style").expect("write append prompt");
 
     let profiles = agent_profile(Some(&present), Some(&present_append));
-    let layout = rimz::agents_spec::resolve_spec(
+    let layout = rimz::harness::spec::resolve_spec(
         Some("planner"),
         &profiles,
         &rimz::config::CommandsConfig::default(),
@@ -1536,7 +1545,7 @@ fn profile_launch_requires_its_system_prompt_file() {
 
     // A missing prompt file fails the launch with the path to fix.
     let missing = dir.path().join("absent.md");
-    let missing_layout = rimz::agents_spec::resolve_spec(
+    let missing_layout = rimz::harness::spec::resolve_spec(
         Some("planner"),
         &agent_profile(Some(&missing), None),
         &rimz::config::CommandsConfig::default(),
@@ -1547,7 +1556,7 @@ fn profile_launch_requires_its_system_prompt_file() {
     assert!(err.to_string().contains("system-prompt-file"));
 
     let missing_append = dir.path().join("absent-append.md");
-    let missing_append_layout = rimz::agents_spec::resolve_spec(
+    let missing_append_layout = rimz::harness::spec::resolve_spec(
         Some("planner"),
         &agent_profile(None, Some(&missing_append)),
         &rimz::config::CommandsConfig::default(),

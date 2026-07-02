@@ -574,7 +574,7 @@ fn same_delivery_lane(candidate: DeliveryGate, queued: DeliveryGate) -> bool {
 
 pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, String> {
     const UNITS: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)];
-    if let Ok(duration) = crate::schedule::parse_duration_units(raw, UNITS) {
+    if let Ok(duration) = crate::harness::schedule::parse_duration_units(raw, UNITS) {
         if duration.is_zero() {
             return Err("schedule duration must be greater than zero".to_owned());
         }

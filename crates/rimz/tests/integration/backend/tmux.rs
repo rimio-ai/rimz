@@ -2831,15 +2831,15 @@ fn wait_for_agent_tombstone(env: &Env, agent_id: &str) {
     panic!("agent.ended tombstone was not recorded for {agent_id}");
 }
 
-fn plan_from_env(env: &Env) -> rimz::resume::ResumePlan {
+fn plan_from_env(env: &Env) -> rimz::harness::resume::ResumePlan {
     let projection = env
         .ledger()
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("audit projection");
-    rimz::resume::plan_resume(
+    rimz::harness::resume::plan_resume(
         &projection.agents,
         &projection.ended,
-        rimz::resume::DEFAULT_RESUME_MAX,
+        rimz::harness::resume::DEFAULT_RESUME_MAX,
         |path| path.is_dir(),
         &env.rimz_bin(),
     )

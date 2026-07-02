@@ -1,7 +1,7 @@
 use crate::common::Env;
 use jiff::Timestamp;
+use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::ids::AgentKind;
-use rimz::run::{PermissionMode, RunRecord, RunStatus};
 use serde_json::json;
 use std::io::Write as _;
 use std::process::Command;
@@ -29,7 +29,7 @@ fn hooks_bind_and_complete_supervised_run() {
         env.project_root.clone(),
     );
     let run_id = record.run_id.clone();
-    rimz::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
 
     let prompt_payload = json!({
         "hook_event_name": "UserPromptSubmit",
@@ -38,7 +38,7 @@ fn hooks_bind_and_complete_supervised_run() {
     })
     .to_string();
     let mut prompt_cmd = env.hook_command("codex");
-    prompt_cmd.env(rimz::run::ENV_RUN_ID, run_id.as_str());
+    prompt_cmd.env(rimz::harness::run::ENV_RUN_ID, run_id.as_str());
     prompt_cmd.env("RIMZ_CODEX_SESSIONS", &sessions);
     let out = env
         .spawn_payload(prompt_cmd, &prompt_payload)
@@ -50,7 +50,7 @@ fn hooks_bind_and_complete_supervised_run() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let running = rimz::run::load(ledger.paths(), &run_id).expect("load running run");
+    let running = rimz::harness::run::load(ledger.paths(), &run_id).expect("load running run");
     assert_eq!(running.status, RunStatus::Running);
     assert_eq!(running.agent_id.as_deref(), Some("sess-run"));
     assert_eq!(
@@ -65,7 +65,7 @@ fn hooks_bind_and_complete_supervised_run() {
     })
     .to_string();
     let mut stop_cmd = env.hook_command("codex");
-    stop_cmd.env(rimz::run::ENV_RUN_ID, run_id.as_str());
+    stop_cmd.env(rimz::harness::run::ENV_RUN_ID, run_id.as_str());
     stop_cmd.env("RIMZ_CODEX_SESSIONS", &sessions);
     let out = env
         .spawn_payload(stop_cmd, &stop_payload)
@@ -77,7 +77,7 @@ fn hooks_bind_and_complete_supervised_run() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let completed = rimz::run::load(ledger.paths(), &run_id).expect("load completed run");
+    let completed = rimz::harness::run::load(ledger.paths(), &run_id).expect("load completed run");
     assert_eq!(completed.status, RunStatus::Completed);
     assert_eq!(completed.last_message.as_deref(), Some("done"));
     assert_eq!(
@@ -121,7 +121,7 @@ fn run_rejects_invalid_agent_env_before_recording() {
         "agents -p error should name the invalid key\nstderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let records = rimz::run::list(env.ledger().paths()).expect("list runs");
+    let records = rimz::harness::run::list(env.ledger().paths()).expect("list runs");
     assert!(
         records.is_empty(),
         "invalid launch env should fail before recording a run: {records:?}"
@@ -238,7 +238,7 @@ fn run_stop_marks_canceled_and_wakes_waiter() {
     );
     record.status = RunStatus::Running;
     let run_id = record.run_id.clone();
-    rimz::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
     let (sock, _sock_path) =
         rimz::bridge::bind_run(ledger.runtime_paths(), &run_id).expect("bind run socket");
 
@@ -254,7 +254,7 @@ fn run_stop_marks_canceled_and_wakes_waiter() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let canceled = rimz::run::load(ledger.paths(), &run_id).expect("load canceled run");
+    let canceled = rimz::harness::run::load(ledger.paths(), &run_id).expect("load canceled run");
     assert_eq!(canceled.status, RunStatus::Canceled);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -303,7 +303,7 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
         nested.clone(),
     );
     let run_id = record.run_id.clone();
-    rimz::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
 
     let out = env
         .rimz()
@@ -491,7 +491,7 @@ fn run_stream_polls_transcript_until_terminal_record() {
     record.status = RunStatus::Running;
     record.transcript_path = Some(transcript.to_string_lossy().into_owned());
     let run_id = record.run_id.clone();
-    rimz::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
 
     let child = env
         .rimz()
@@ -515,7 +515,7 @@ fn run_stream_polls_transcript_until_terminal_record() {
             b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"hello\"}}\n",
         )
         .expect("append transcript");
-    let mut terminal = rimz::run::load(ledger.paths(), &run_id).expect("load run");
+    let mut terminal = rimz::harness::run::load(ledger.paths(), &run_id).expect("load run");
     terminal.status = RunStatus::Completed;
     terminal.last_message = Some("hello".to_owned());
     terminal.updated_at = Timestamp::now();
@@ -553,7 +553,7 @@ fn run_stream_timeout_stops_watching_without_timing_out_run() {
     );
     record.status = RunStatus::Running;
     let run_id = record.run_id.clone();
-    rimz::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
 
     let out = env
         .rimz()
@@ -574,6 +574,6 @@ fn run_stream_timeout_stops_watching_without_timing_out_run() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let loaded = rimz::run::load(ledger.paths(), &run_id).expect("load run");
+    let loaded = rimz::harness::run::load(ledger.paths(), &run_id).expect("load run");
     assert_eq!(loaded.status, RunStatus::Running);
 }

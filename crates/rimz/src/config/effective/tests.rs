@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::{CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig};
-use crate::run::PermissionMode;
+use crate::harness::run::PermissionMode;
 use std::collections::BTreeMap;
 use tempfile::tempdir;
 
@@ -152,7 +152,7 @@ fn repo_profile_cannot_inherit_machine_profile() {
     assert!(matches!(
         err,
         EffectiveConfigErr::Agents {
-            source: crate::agents_spec::LayoutErr::RepoProfileEscapesTrust { profile, base },
+            source: crate::harness::spec::LayoutErr::RepoProfileEscapesTrust { profile, base },
             ..
         } if profile == "child" && base == "machine-base"
     ));
@@ -171,7 +171,7 @@ fn repo_profile_typo_reports_unknown_base_not_machine_escape() {
     assert!(matches!(
         err,
         EffectiveConfigErr::Agents {
-            source: crate::agents_spec::LayoutErr::UnknownProfileBase { profile, base },
+            source: crate::harness::spec::LayoutErr::UnknownProfileBase { profile, base },
             ..
         } if profile == "child" && base == "typoo"
     ));
@@ -190,7 +190,7 @@ fn repo_profiles_resolve_repo_and_builtin_bases() {
     let effective = effective_profiles(&ProfilesConfig::default(), project.path(), config.path())
         .expect("effective");
 
-    let child = crate::agents_spec::resolve_profile("child", &effective).expect("resolve child");
+    let child = crate::harness::spec::resolve_profile("child", &effective).expect("resolve child");
     assert_eq!(child.kind.as_str(), "codex");
     assert_eq!(child.mode, Some(PermissionMode::Ask));
     assert_eq!(child.args.as_deref(), Some("--child"));

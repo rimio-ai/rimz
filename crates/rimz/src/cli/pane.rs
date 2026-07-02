@@ -265,9 +265,8 @@ fn pane_row(
 ) -> Vec<render::Cell> {
     let focus = if pane.is_focused { "●" } else { "" };
     let occupant_cell = match agent {
-        Some(agent) => {
-            render::cell(rimz::target::agent_handle(agent, peers, true)).fg(render::palette::ACCENT)
-        }
+        Some(agent) => render::cell(rimz::harness::target::agent_handle(agent, peers, true))
+            .fg(render::palette::ACCENT),
         None => render::cell("process").fg(render::palette::MUTED),
     };
     let status_cell = match agent {
@@ -347,9 +346,9 @@ fn pane_json<'a>(
         kind: if agent.is_some() { "agent" } else { "process" },
         agent: agent.map(|agent| AgentJson {
             kind: agent.kind.to_string(),
-            handle: rimz::target::agent_handle(agent, peers, true),
+            handle: rimz::harness::target::agent_handle(agent, peers, true),
             status: agent.effective_status().as_str().to_owned(),
-            worktree: rimz::target::agent_channel(agent),
+            worktree: rimz::harness::target::agent_channel(agent),
         }),
         command: pane.command.as_deref(),
         cwd: pane.cwd.as_deref(),

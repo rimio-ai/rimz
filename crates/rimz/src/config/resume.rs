@@ -61,7 +61,7 @@ impl Default for ResumeConfig {
     fn default() -> Self {
         Self {
             on_rebirth: true,
-            max: crate::resume::DEFAULT_RESUME_MAX,
+            max: crate::harness::resume::DEFAULT_RESUME_MAX,
             auto_continue: false,
             auto_continue_backoff_secs: DEFAULT_AUTO_CONTINUE_BACKOFF_SECS.to_vec(),
             auto_continue_max_retries: DEFAULT_AUTO_CONTINUE_MAX_RETRIES,

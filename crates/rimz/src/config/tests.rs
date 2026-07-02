@@ -1,5 +1,5 @@
 use super::*;
-use crate::run::PermissionMode;
+use crate::harness::run::PermissionMode;
 use std::num::NonZeroU16;
 use tempfile::tempdir;
 

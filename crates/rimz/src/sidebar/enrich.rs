@@ -17,6 +17,7 @@ use crate::agents::spending::{
     read_spending_cache, read_workspace_spending_cache, unix_secs_now,
 };
 use crate::agents::{AccountBudget, AgentStatus};
+use crate::harness::auto_continue::{self, ResumeMessage};
 use crate::ids::AgentKind;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::ledger::snapshot::{
@@ -37,7 +38,6 @@ use super::frame::{PaneFrame, PaneMetrics};
 use super::timing::{CODEX_DAEMON_REAP_TTL, LINK_STATS_EXPIRE, LINK_STATS_STALE};
 
 mod accounts;
-mod auto_continue;
 mod codex_refresh;
 mod credits;
 mod forge;
@@ -47,7 +47,6 @@ mod rate_limits;
 mod tests;
 mod usage_refresh;
 
-pub(crate) use auto_continue::ResumeMessage;
 pub use codex_refresh::refresh_codex_transcript_context;
 pub(crate) use credits::apply_credits_cache;
 pub use credits::{
@@ -65,7 +64,7 @@ use forge::{produce_pr_states, read_pr_state_cache};
 use live_spend::refresh_live_spend_baselines;
 use usage_refresh::refresh_account_usage;
 
-fn account_budgets_from_caches(
+pub(crate) fn account_budgets_from_caches(
     runtime: &RuntimePaths,
     now: Timestamp,
 ) -> BTreeMap<AgentKind, AccountBudget> {
@@ -170,7 +169,7 @@ pub fn resume_gate_recovered(
 
 /// Build a detached `rimz` helper command for the sidebar producer, anchored to
 /// Rimz-owned shared storage so a deleted launch CWD cannot ENOENT the spawn.
-pub(super) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {
+pub(crate) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {
     let mut cmd = Command::new(exe);
     cmd.current_dir(&runtime.shared_root)
         .stdin(Stdio::null())

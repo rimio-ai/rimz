@@ -408,7 +408,7 @@ impl TmuxBackend {
             let first = if let Some(first) = tab.panes.first() {
                 first
             } else {
-                fallback_shell = crate::launch::channel_label_shell_argv(
+                fallback_shell = crate::harness::launch::channel_label_shell_argv(
                     &opts.workspace_id,
                     &opts.project_root,
                     &tab.cwd,

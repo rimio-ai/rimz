@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::harness::run::RunStatus;
 use crate::ledger::paths::state_home;
-use crate::run::RunStatus;
 
 const NAME: &str = "loop-runs.log.jsonl";
 const MAX_BYTES: u64 = 4 * 1_048_576;

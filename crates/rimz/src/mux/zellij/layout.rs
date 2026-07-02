@@ -160,7 +160,7 @@ pub(super) fn render_session_layout(
         let tab_name = kdl_string(&tab.label)?;
         let agent_panes = if tab.panes.is_empty() {
             render_command_pane(
-                &crate::launch::channel_label_shell_argv(
+                &crate::harness::launch::channel_label_shell_argv(
                     &opts.workspace_id,
                     &opts.project_root,
                     &tab.cwd,

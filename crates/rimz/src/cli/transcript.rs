@@ -324,7 +324,7 @@ fn build_identities(entries: &[TranscriptEntry]) -> HashMap<AgentKey, Identity> 
     let mut identities = HashMap::new();
     for entry in entries {
         let candidate = Identity {
-            base_handle: rimz::target::identity_handle(
+            base_handle: rimz::harness::target::identity_handle(
                 &entry.kind,
                 entry.name.as_deref(),
                 entry.profile.as_deref(),
@@ -560,7 +560,7 @@ fn handle_for(
             include_channel,
         );
     }
-    let base = rimz::target::identity_handle(&entry.kind, None, None, None);
+    let base = rimz::harness::target::identity_handle(&entry.kind, None, None, None);
     render_handle(&base, entry.channel.as_deref(), include_channel)
 }
 

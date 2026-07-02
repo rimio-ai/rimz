@@ -94,10 +94,10 @@ pub fn channel_shell_argv(
         ),
         format!(
             "{}={}",
-            crate::run::ENV_WORKTREE_PATH,
+            crate::harness::run::ENV_WORKTREE_PATH,
             worktree_path.display()
         ),
-        format!("{}={channel}", crate::run::ENV_CHANNEL),
+        format!("{}={channel}", crate::harness::run::ENV_CHANNEL),
         user_shell_program(),
     ]
 }

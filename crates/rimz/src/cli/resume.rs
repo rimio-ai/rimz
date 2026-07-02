@@ -158,18 +158,18 @@ pub(super) fn plan_room_resume(
     resume_cfg: &rimz::config::ResumeConfig,
     disabled: bool,
     recover_agents: bool,
-) -> rimz::resume::ResumePlan {
+) -> rimz::harness::resume::ResumePlan {
     if disabled || !resume_cfg.on_rebirth {
-        return rimz::resume::ResumePlan::default();
+        return rimz::harness::resume::ResumePlan::default();
     }
-    let planned = (|| -> Result<rimz::resume::ResumePlan> {
+    let planned = (|| -> Result<rimz::harness::resume::ResumePlan> {
         let paths = StatePaths::for_workspace(workspace_id.clone())?;
         let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
         plan_room_resume_at(&paths, &runtime, session_name, resume_cfg, recover_agents)
     })();
     planned.unwrap_or_else(|err| {
         tracing::warn!(workspace = %workspace_id, error = %err, "resume planning skipped");
-        rimz::resume::ResumePlan::default()
+        rimz::harness::resume::ResumePlan::default()
     })
 }
 
@@ -179,8 +179,8 @@ fn plan_room_resume_at(
     session_name: &str,
     resume_cfg: &rimz::config::ResumeConfig,
     recover_agents: bool,
-) -> Result<rimz::resume::ResumePlan> {
-    let mut plan = rimz::resume::ResumePlan::default();
+) -> Result<rimz::harness::resume::ResumePlan> {
+    let mut plan = rimz::harness::resume::ResumePlan::default();
     if recover_agents {
         match plan_agent_resume_at(paths, runtime, session_name, resume_cfg) {
             Ok(agent_plan) => plan = agent_plan,
@@ -202,11 +202,11 @@ fn plan_agent_resume_at(
     runtime: &RuntimePaths,
     session_name: &str,
     resume_cfg: &rimz::config::ResumeConfig,
-) -> Result<rimz::resume::ResumePlan> {
+) -> Result<rimz::harness::resume::ResumePlan> {
     let ledger = Ledger::open(paths.clone(), runtime.clone())?;
     let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
     let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
-    let plan = rimz::resume::plan_resume(
+    let plan = rimz::harness::resume::plan_resume(
         &projection.agents,
         &projection.ended,
         resume_cfg.max,
@@ -217,7 +217,7 @@ fn plan_agent_resume_at(
     Ok(plan)
 }
 
-fn add_empty_named_channel_tabs(paths: &StatePaths, plan: &mut rimz::resume::ResumePlan) {
+fn add_empty_named_channel_tabs(paths: &StatePaths, plan: &mut rimz::harness::resume::ResumePlan) {
     let Ok(record) = rimz::ledger::workspace_record::read(&paths.workspace_record) else {
         return;
     };
@@ -262,7 +262,7 @@ pub(super) fn record_rebirth_boundary(workspace_id: &rimz::WorkspaceId, session_
 /// Tell the user which prior agents the reborn room brought back, and which it
 /// could not — to stderr, so the attach command on stdout stays clean for
 /// scripting. Silent when there is nothing to resume.
-pub(super) fn report_resume(plan: &rimz::resume::ResumePlan) {
+pub(super) fn report_resume(plan: &rimz::harness::resume::ResumePlan) {
     if !plan.tabs.is_empty() {
         let agents = plan.tabs.iter().map(|tab| tab.panes.len()).sum::<usize>();
         let labels = plan
@@ -293,10 +293,10 @@ pub(super) fn report_resume(plan: &rimz::resume::ResumePlan) {
     }
 }
 
-fn resume_skip_reason(reason: rimz::resume::ResumeSkipReason) -> &'static str {
+fn resume_skip_reason(reason: rimz::harness::resume::ResumeSkipReason) -> &'static str {
     match reason {
-        rimz::resume::ResumeSkipReason::NoResumeSupport => "no resume CLI",
-        rimz::resume::ResumeSkipReason::OverCap => "over the resume cap",
+        rimz::harness::resume::ResumeSkipReason::NoResumeSupport => "no resume CLI",
+        rimz::harness::resume::ResumeSkipReason::OverCap => "over the resume cap",
     }
 }
 
@@ -304,7 +304,7 @@ fn record_worktree_gone_tombstones(
     ledger: &Ledger,
     workspace_id: &rimz::WorkspaceId,
     session_name: &str,
-    plan: &rimz::resume::ResumePlan,
+    plan: &rimz::harness::resume::ResumePlan,
 ) {
     for (kind, agent_id) in &plan.tombstone {
         let observation = rimz::agents::AgentLifecycleObservation::new(
@@ -432,7 +432,7 @@ processes 2915
         assert_eq!(agent_count(&allowed), 1);
     }
 
-    fn agent_count(plan: &rimz::resume::ResumePlan) -> usize {
+    fn agent_count(plan: &rimz::harness::resume::ResumePlan) -> usize {
         plan.tabs.iter().map(|tab| tab.panes.len()).sum()
     }
 }

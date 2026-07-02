@@ -1,10 +1,10 @@
 use super::*;
 use rimz::agents::{AgentState, AgentStatus};
 use rimz::bridge::{ExpectedRunFrame, WakeupFrame};
+use rimz::harness::run::{PermissionMode, RunStatus};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::ledger::{RuntimePaths, StatePaths};
 use rimz::pane::PaneRef;
-use rimz::run::{PermissionMode, RunStatus};
 use std::path::PathBuf;
 use tokio::net::UnixDatagram;
 
@@ -104,7 +104,7 @@ fn pane_resolution_uses_snapshot_when_record_has_no_pane() {
 fn stop_backstop_uses_late_recorded_pane_id() {
     let fixture = RunFixture::new(RunStatus::Canceled);
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%8");
-    rimz::run::record_pane(
+    rimz::harness::run::record_pane(
         fixture.ledger.paths(),
         &fixture.record.run_id,
         pane_id.clone(),
@@ -161,7 +161,7 @@ impl RunFixture {
             Path::new("/tmp/rimz-run").to_path_buf(),
         );
         record.status = status;
-        rimz::run::create(&paths, &record).unwrap();
+        rimz::harness::run::create(&paths, &record).unwrap();
         Self {
             _dir: dir,
             workspace_id,
@@ -242,7 +242,9 @@ fn blocking_stream_timeout_marks_run_timed_out() {
 
     assert_eq!(timed_out.status, RunStatus::TimedOut);
     assert_eq!(
-        rimz::run::load(&fixture.paths, &run_id).unwrap().status,
+        rimz::harness::run::load(&fixture.paths, &run_id)
+            .unwrap()
+            .status,
         RunStatus::TimedOut
     );
 }
@@ -263,7 +265,9 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
 
     assert_eq!(outcome, None);
     assert_eq!(
-        rimz::run::load(&fixture.paths, &run_id).unwrap().status,
+        rimz::harness::run::load(&fixture.paths, &run_id)
+            .unwrap()
+            .status,
         RunStatus::Running
     );
 }

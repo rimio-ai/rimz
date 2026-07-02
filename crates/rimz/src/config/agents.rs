@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::{AttentionConfig, WorktreeConfig};
-use crate::run::PermissionMode;
+use crate::harness::run::PermissionMode;
 
 /// Agent-launch preferences. Team entries bind role names to profiles; inline
 /// launch specs still resolve through profile/command parsing in
-/// [`crate::agents_spec`].
+/// [`crate::harness::spec`].
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentsConfig {

@@ -29,7 +29,7 @@ pub(crate) fn launch_identity_env(
             workspace.project_root.display().to_string(),
         ),
         (
-            rimz::run::ENV_WORKTREE_PATH.to_owned(),
+            rimz::harness::run::ENV_WORKTREE_PATH.to_owned(),
             workspace.worktree_root.display().to_string(),
         ),
     ]);
@@ -37,12 +37,12 @@ pub(crate) fn launch_identity_env(
         .map(ToOwned::to_owned)
         .or_else(|| {
             inherit_channel
-                .then(|| std::env::var(rimz::run::ENV_CHANNEL).ok())
+                .then(|| std::env::var(rimz::harness::run::ENV_CHANNEL).ok())
                 .flatten()
         })
         .filter(|value| !value.is_empty());
     if let Some(channel) = channel {
-        env.insert(rimz::run::ENV_CHANNEL.to_owned(), channel);
+        env.insert(rimz::harness::run::ENV_CHANNEL.to_owned(), channel);
     }
     env
 }

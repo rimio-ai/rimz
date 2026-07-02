@@ -628,7 +628,7 @@ impl CardIdentityAllocator {
             .iter()
             .filter(|(_name, owner)| *owner != key)
             .map(|(name, _owner)| name.as_str());
-        let name = crate::petname::mint_for_session(fallback_id, taken);
+        let name = crate::harness::petname::mint_for_session(fallback_id, taken);
         self.names.insert(name.clone(), key.clone());
         name
     }
@@ -707,8 +707,11 @@ impl CardIdentityAllocator {
 }
 
 fn usable_name(name: &str) -> bool {
-    crate::petname::valid_name(name)
-        && !crate::petname::collides_with_reserved_prefix(name, crate::agents::known_kinds())
+    crate::harness::petname::valid_name(name)
+        && !crate::harness::petname::collides_with_reserved_prefix(
+            name,
+            crate::agents::known_kinds(),
+        )
 }
 
 fn is_provisional_agent_id(agent_id: &AgentSessionId) -> bool {

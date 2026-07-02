@@ -9,9 +9,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::harness::run::RunRecord;
 use crate::ids::RunId;
 use crate::ledger::atomic::{self, write_temp_then_rename};
-use crate::run::RunRecord;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunStoreErr {
@@ -95,8 +95,8 @@ pub fn list(runs_dir: &Path) -> Result<Vec<RunRecord>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::run::{PermissionMode, RunStatus};
     use crate::ids::{AgentKind, WorkspaceId};
-    use crate::run::{PermissionMode, RunStatus};
     use tempfile::tempdir;
 
     #[test]

@@ -84,7 +84,7 @@ use super::{
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
-use crate::run::PermissionMode;
+use crate::harness::run::PermissionMode;
 
 /// Codex's effective hook cap. Upstream's blocking-hook deadline is shorter
 /// than Claude's; this leaves a small safety margin so the bridge never holds

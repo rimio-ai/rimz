@@ -67,7 +67,7 @@ A **handle** falls into three classes, narrowing from group to instance:
 - A **type handle** names a kind (`@codex`) or a profile (`@planner`) and matches every agent of it in the channel. It carries enough to launch one, so only a type handle can create.
 - An **instance handle** names one running agent and only ever addresses what exists: a petname (`@swift-otter`), a kind ordinal (`@claude-2`), a session-id prefix, or a precise `<mux>:<pane>` pane address. `@all` is the broadcast handle for the whole channel.
 
-The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. Rimz renders it role-first — the role when unique in scope, then the profile when unique, else the kind, else `@<kind>-<n>`, else the petname — so a listing always shows a handle you could type back, and a handle appears only when typing it reaches that one agent. One canonical renderer, the inverse of the parser, is shared by every agent-bearing listing; [target.rs](../../../crates/rimz/src/target.rs) owns both.
+The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. Rimz renders it role-first — the role when unique in scope, then the profile when unique, else the kind, else `@<kind>-<n>`, else the petname — so a listing always shows a handle you could type back, and a handle appears only when typing it reaches that one agent. One canonical renderer, the inverse of the parser, is shared by every agent-bearing listing; [target.rs](../../../crates/rimz/src/harness/target.rs) owns both.
 
 An address resolves to zero, one, or many agents against a fresh snapshot, and arity decides the outcome:
 
@@ -155,11 +155,12 @@ A task whose `spec` is a `<kind>-ping` virtual cell starts a provider's budget w
 
 Durable definitions live in `~/.config/rimz/loop.toml` under `[tasks.*]`. Machine-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` with the same task shape; `is_ephemeral = once || deadline.is_some()` routes a task between the two on add and drives removal-on-fire. Per-room arm/fire stamps live in runtime `loop-fire.json`; per-task run locks live beside it. `Schedule::next_after` combines those stamps with the configured timezone so `rimz loop list` and `rimz loop show` render the NEXT column as `due`, `in 12m`, or `-`. User-global run history lives in state `loop-runs.log.jsonl`, and `rimz loop show <name>` reads it for recent runs plus the newest stored check output, error chain, delivery target, run id, last message, and transcript path when the run store still has it.
 
-- [`schedule.rs`](../../../crates/rimz/src/schedule.rs) — pure parsing, descriptions, due evaluation, and next-occurrence calculation.
-- [`cli/loop_cmd.rs`](../../../crates/rimz/src/cli/loop_cmd.rs) — config and state editing, the `list`/`show` surfaces, and the hidden `run` runner, including check execution, prompt augmentation, and one-record append discipline.
-- [`schedule/instances.rs`](../../../crates/rimz/src/schedule/instances.rs) — the ephemeral state store.
-- [`schedule/fire.rs`](../../../crates/rimz/src/schedule/fire.rs) — elder firing and the `loop-fire.json` state.
-- [`schedule/run_log.rs`](../../../crates/rimz/src/schedule/run_log.rs) — result history, including mode, duration, check forensics, errors, run links, `check_skipped`, and `expired`.
+- [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs) — pure parsing, descriptions, due evaluation, and next-occurrence calculation.
+- [`schedule/runner.rs`](../../../crates/rimz/src/harness/schedule/runner.rs) — check execution, prompt augmentation, per-task run locks, and the window-priming ping gate.
+- [`cli/loop_cmd.rs`](../../../crates/rimz/src/cli/loop_cmd.rs) — config and state editing, the `list`/`show` surfaces, and hidden `run` orchestration.
+- [`schedule/instances.rs`](../../../crates/rimz/src/harness/schedule/instances.rs) — the ephemeral state store.
+- [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) — elder firing and the `loop-fire.json` state.
+- [`schedule/run_log.rs`](../../../crates/rimz/src/harness/schedule/run_log.rs) — result history, including mode, duration, check forensics, errors, run links, `check_skipped`, and `expired`.
 
 ## Cleanup
 

@@ -10,7 +10,6 @@
 
 pub mod agent_activity;
 pub mod agents;
-pub mod agents_spec;
 pub mod bridge;
 pub mod build_id;
 pub mod channel;
@@ -20,30 +19,25 @@ pub mod daemon_content;
 pub mod diag;
 pub mod feed;
 pub mod forge;
+pub mod harness;
 pub mod ids;
 pub mod lane;
-pub mod launch;
 pub mod ledger;
 pub mod message;
 pub mod mux;
 pub mod observability;
 pub mod osc;
 pub mod pane;
-pub mod petname;
 pub mod proc;
 pub mod reload;
 pub mod remote;
 pub mod remote_control;
 pub mod resolver;
-pub mod resume;
-pub mod run;
-pub mod schedule;
 pub mod schema;
 pub mod sidebar;
 pub mod sidebar_pane;
 pub mod sock;
 pub mod storage;
-pub mod target;
 #[cfg(feature = "testkit")]
 #[doc(hidden)]
 pub mod testkit;
@@ -60,6 +54,7 @@ pub use crate::feed::{
     AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, ResolverStep,
     ResolverStepState, Surface,
 };
+pub use crate::harness::target::TargetErr;
 pub use crate::ids::{
     EventId, MessageId, MuxName, PaneId, RequestId, ResolverId, RunId, SidebarInstanceId, ViewKind,
     WorkspaceId,
@@ -74,5 +69,4 @@ pub use crate::ledger::{
 };
 pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind};
 pub use crate::schema::event::EventEnvelope;
-pub use crate::target::TargetErr;
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

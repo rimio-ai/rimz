@@ -13,8 +13,8 @@ use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::feed::{FeedItem, FeedKind, Surface};
+use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
-use rimz::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::schema::event::EventEnvelope;
 use rimz::workspace::WorkspaceResolver;
 
@@ -225,7 +225,7 @@ fn reset_cancels_active_runs_and_wakes_waiters() {
     );
     record.status = RunStatus::Running;
     let run_id = record.run_id.clone();
-    rimz::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
     let (sock, _sock_path) =
         rimz::bridge::bind_run(ledger.runtime_paths(), &run_id).expect("bind run socket");
 
@@ -251,7 +251,7 @@ fn reset_cancels_active_runs_and_wakes_waiters() {
         .expect("wait for run wakeup");
     assert_eq!(outcome, RunWakeOutcome::Completed(RunStatus::Canceled));
 
-    let after = rimz::run::load(ledger.paths(), &run_id).expect("load run");
+    let after = rimz::harness::run::load(ledger.paths(), &run_id).expect("load run");
     assert_eq!(after.status, RunStatus::Canceled);
 }
 
