@@ -283,6 +283,12 @@ impl LoopState {
         if let Some(mut outcome) = latest {
             if outcome.unchanged {
                 self.fetched_at = Instant::now();
+                if !self.should_exit
+                    && saw_final
+                    && let Some(request) = fetch.take_pending()
+                {
+                    fetch.request(request, false);
+                }
                 return Ok(());
             }
             let snapshot_ok = outcome.snapshot.is_ok();

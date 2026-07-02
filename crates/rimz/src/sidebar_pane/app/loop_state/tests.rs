@@ -266,6 +266,46 @@ fn unchanged_fetch_outcome_clears_in_flight_without_dirtying_frame() {
 }
 
 #[test]
+fn unchanged_fetch_outcome_dispatches_queued_refetch() {
+    let ws = workspace();
+    let (_dir, mut state) = loop_state(&ws);
+    state.dirty = false;
+    let config = serve_config(&ws);
+    let (mut fetch, request_rx) = fetch_dispatcher();
+    fetch.request(FetchRequest::default(), false);
+    assert!(request_rx.try_recv().is_ok());
+    fetch.request(FetchRequest::producer_fresh_panes(), true);
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    result_tx
+        .send(FetchOutcome {
+            snapshot: Err("unchanged".to_owned()),
+            final_for_request: true,
+            fresh_pane_frame: false,
+            unchanged: true,
+        })
+        .expect("send unchanged outcome");
+
+    state
+        .on_snapshot(
+            &config,
+            &mut fetch,
+            &result_rx,
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("apply unchanged outcome");
+
+    assert!(!state.dirty);
+    assert!(
+        request_rx
+            .try_recv()
+            .expect("pending refetch dispatched")
+            .is_producer_fresh_panes(),
+        "unchanged final outcome must not strand a queued forced refetch"
+    );
+}
+
+#[test]
 fn maintenance_requests_releasing_fetch_when_order_hold_expires() {
     let ws = workspace();
     let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
