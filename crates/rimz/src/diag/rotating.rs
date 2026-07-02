@@ -36,7 +36,7 @@ impl JsonlLog {
     }
 }
 
-pub fn append_rotating_jsonl<T: Serialize>(
+fn append_rotating_jsonl<T: Serialize>(
     path: &Path,
     max_bytes: u64,
     record: &T,
