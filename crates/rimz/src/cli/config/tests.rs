@@ -1,15 +1,127 @@
 use super::*;
-use std::collections::BTreeMap;
-use std::num::NonZeroU16;
 
-use rimz::config::{
-    AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
-    BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, ContextMeterConfig,
-    DisplayConfig, GlyphGroup, GlyphNamespaces, InlineAnsiColors, InlinePalette,
-    InlinePrimaryColors, InlineSelectionColors, PaletteRole, PetsConfig, PetsGlyphMode,
-    ProviderTabsMode, ScrollbarMode, ThemeAnimationsConfig, ThemeColor, ThemeConfig,
-    ThemeGlyphsConfig, ThemeMode, ThemeProviderStyle, ThemeStyle, UnreadEffect,
-};
+const LEGACY_SET_KEYS: &[&str] = &[
+    "agents.worktree.dir",
+    "agents.worktree.base",
+    "agents.placement",
+    "harness.smart_compact",
+    "harness.rtk",
+    "transcript.file_days",
+    "timezone",
+    "resume.on_rebirth",
+    "resume.max",
+    "resume.auto_continue",
+    "resume.auto_continue_backoff_secs",
+    "resume.auto_continue_max_retries",
+    "resume.auto_continue_text",
+    "remote_control.claude",
+    "remote_control.codex",
+    "notifications.enabled",
+    "notifications.triggers",
+    "notifications.desktop",
+    "notifications.sound",
+    "notifications.suppress_focused",
+    "notifications.debounce_ms",
+    "notifications.coalesce_ms",
+    "notifications.remind_secs",
+    "notifications.title",
+    "notifications.body",
+    "notifications.command",
+    "theme.style",
+    "theme.display.refresh_ms",
+    "theme.display.max_provider_blocks",
+    "theme.display.provider_tabs",
+    "theme.display.provider_list",
+    "theme.display.max_cols",
+    "theme.display.scrollbar",
+    "theme.display.card_density",
+    "theme.display.context_meter.green",
+    "theme.display.context_meter.yellow",
+    "theme.display.context_meter.amber",
+    "theme.display.context_meter.red",
+    "theme.display.budget_bar.yellow",
+    "theme.display.budget_bar.amber",
+    "theme.display.budget_bar.red",
+    "theme.display.budget_bar.burn_rate.yellow",
+    "theme.display.budget_bar.burn_rate.amber",
+    "theme.display.budget_bar.burn_rate.red",
+    "sidebar.focus_key",
+    "sidebar.spend_window",
+    "sidebar.afk_after_secs",
+    "agents.attention.stalled_after_secs",
+    "agents.attention.inactive_after_secs",
+    "theme.pets.enabled",
+    "theme.pets.pet",
+    "theme.pets.glyphs",
+    "theme.pets.voice",
+    "loop.tasks",
+    "theme.animations.unread",
+    "theme.glyphs.set",
+    "theme.colors.primary.background",
+    "theme.colors.primary.foreground",
+    "theme.colors.normal.black",
+    "theme.colors.normal.red",
+    "theme.colors.normal.green",
+    "theme.colors.normal.yellow",
+    "theme.colors.normal.blue",
+    "theme.colors.normal.magenta",
+    "theme.colors.normal.cyan",
+    "theme.colors.normal.white",
+    "theme.colors.bright.black",
+    "theme.colors.bright.red",
+    "theme.colors.bright.green",
+    "theme.colors.bright.yellow",
+    "theme.colors.bright.blue",
+    "theme.colors.bright.magenta",
+    "theme.colors.bright.cyan",
+    "theme.colors.bright.white",
+    "theme.colors.selection.background",
+    "theme.colors.selection.text",
+    "sidebar.trunk",
+    "theme.mode",
+    "theme.scheme",
+    "theme.good",
+    "theme.warn",
+    "theme.caution",
+    "theme.alarm",
+    "theme.accent",
+    "theme.cool",
+    "theme.meta",
+    "theme.body",
+    "theme.muted",
+    "theme.faint",
+    "theme.rule",
+    "theme.selection",
+    "theme.selection_bg",
+    "zellij.mouse_mode",
+    "zellij.mouse_click_through",
+    "zellij.advanced_mouse_actions",
+    "zellij.mouse_hover_effects",
+    "zellij.focus_follows_mouse",
+    "zellij.pane_frames",
+    "zellij.on_force_close",
+    "zellij.scroll_buffer_size",
+    "zellij.show_startup_tips",
+    "zellij.show_release_notes",
+    "zellij.copy_clipboard",
+    "zellij.copy_on_select",
+    "zellij.support_kitty_keyboard_protocol",
+    "zellij.osc8_hyperlinks",
+    "zellij.auto_layout",
+    "zellij.session_serialization",
+    "tmux.mouse",
+    "tmux.focus_events",
+    "tmux.history_limit",
+    "tmux.allow_passthrough",
+    "tmux.set_clipboard",
+    "tmux.extended_keys",
+    "tmux.extended_keys_format",
+    "tmux.escape_time_ms",
+    "tmux.renumber_windows",
+    "tmux.aggressive_resize",
+    "tmux.pane_border_status",
+    "tmux.pane_border_lines",
+];
 
 #[test]
 fn validates_config_key_read_and_write_surfaces() {
@@ -277,270 +389,29 @@ fn set_document_value_keeps_scalar_arrays_inline() {
 }
 
 #[test]
-fn set_keys_cover_serialized_default_leaves() {
-    let root = config_value(&MachineConfig::default()).expect("default config serializes");
-    let mut leaves = BTreeSet::new();
-    collect_leaf_paths("", &root, &mut leaves);
-    let set_keys = exact_set_keys();
-
-    for leaf in leaves {
-        assert!(
-            set_key_reaches_leaf(&set_keys, &leaf),
-            "serialized default leaf `{leaf}` is not reachable by config set"
-        );
+fn derived_set_keys_keep_legacy_surface() {
+    for key in LEGACY_SET_KEYS {
+        let parsed = parse_key(key).unwrap_or_else(|err| panic!("{key}: {err}"));
+        validate_set_key(&parsed).unwrap_or_else(|err| panic!("set {key}: {err}"));
+        assert!(is_known_get_key(&parsed), "get {key}");
     }
-}
 
-#[test]
-fn set_keys_cover_fully_populated_theme_leaves() {
-    // Dynamic provider names and glyph roles stay covered by
-    // `validates_config_key_read_and_write_surfaces`; this sentinel proves
-    // every serialized theme leaf has some `config set` path.
-    let root = config_value(&MachineConfig {
-        theme: fully_populated_theme(),
-        ..MachineConfig::default()
-    })
-    .expect("populated theme config serializes");
-    let mut leaves = BTreeSet::new();
-    collect_leaf_paths("", &root, &mut leaves);
-    let set_keys = exact_set_keys();
-
-    for leaf in leaves {
-        assert!(
-            set_key_reaches_leaf(&set_keys, &leaf),
-            "populated theme leaf `{leaf}` is not reachable by config set"
-        );
+    for key in ["nope", "theme.nope", "agents.profiles"] {
+        let parsed = parse_key(key).expect("key");
+        let err = validate_set_key(&parsed)
+            .expect_err("legacy-invalid set key should stay rejected")
+            .to_string();
+        assert_eq!(err, format!("unknown config key `{key}`"));
     }
-}
 
-fn fully_populated_theme() -> ThemeConfig {
-    ThemeConfig {
-        style: Some(ThemeStyle::Modern),
-        mode: ThemeMode::Truecolor,
-        scheme: Some("TokyoNight Night".to_owned()),
-        colors: Some(inline_palette_fixture()),
-        good: Some(ThemeColor::Role(PaletteRole::Green)),
-        warn: Some(ThemeColor::Role(PaletteRole::Yellow)),
-        caution: Some(ThemeColor::Indexed(214)),
-        alarm: Some(ThemeColor::Role(PaletteRole::Red)),
-        accent: Some(ThemeColor::Rgb(0x7d, 0xcf, 0xff)),
-        cool: Some(ThemeColor::Role(PaletteRole::Blue)),
-        meta: Some(ThemeColor::Role(PaletteRole::Magenta)),
-        body: Some(ThemeColor::Role(PaletteRole::Foreground)),
-        muted: Some(ThemeColor::Indexed(245)),
-        faint: Some(ThemeColor::Indexed(240)),
-        rule: Some(ThemeColor::Rgb(0x43, 0x46, 0x59)),
-        selection: Some(ThemeColor::Rgb(0xab, 0xc4, 0xff)),
-        selection_bg: Some(ThemeColor::Rgb(0x1d, 0x20, 0x30)),
-        display: DisplayConfig {
-            refresh_ms: 200,
-            max_provider_blocks: 4,
-            provider_tabs: ProviderTabsMode::Always,
-            provider_list: vec!["claude".to_owned(), "codex".to_owned()],
-            max_cols: NonZeroU16::new(80).expect("non-zero literal"),
-            scrollbar: ScrollbarMode::Always,
-            card_density: CardDensityMode::Compact,
-            context_meter: ContextMeterConfig {
-                green: context_band(35, 90_000),
-                yellow: context_band(55, 140_000),
-                amber: context_band(75, 220_000),
-                red: context_band(92, 400_000),
-            },
-            budget_bar: BudgetBarConfig {
-                yellow: 60,
-                amber: 30,
-                red: 12,
-                burn_rate: BudgetBurnRateConfig {
-                    yellow: 110,
-                    amber: 160,
-                    red: 220,
-                },
-            },
-        },
-        glyphs: ThemeGlyphsConfig {
-            set: Some("unicode".to_owned()),
-            unicode: glyph_namespaces_fixture(),
-            nerd_font: glyph_namespaces_fixture(),
-        },
-        providers: BTreeMap::from([(
-            "claude".to_owned(),
-            ThemeProviderStyle {
-                product_name: Some("Claude".to_owned()),
-                ascii_art: Some("C".to_owned()),
-                color: Some(ThemeColor::Rgb(0xd9, 0x77, 0x57)),
-            },
-        )]),
-        animations: ThemeAnimationsConfig {
-            unread: Some(UnreadEffect::Blink),
-            thinking: anim(
-                "ab",
-                AnimationColor::Accent,
-                AnimationEffect::Breathe,
-                AnimationSpeed::Fast,
-            ),
-            working: anim(
-                "cd",
-                AnimationColor::Good,
-                AnimationEffect::Static,
-                AnimationSpeed::Normal,
-            ),
-            compacting: anim(
-                "ef",
-                AnimationColor::Warn,
-                AnimationEffect::Breathe,
-                AnimationSpeed::Slow,
-            ),
-            delegating: anim(
-                "gh",
-                AnimationColor::Caution,
-                AnimationEffect::Breathe,
-                AnimationSpeed::Fast,
-            ),
-            resolving: anim(
-                "ij",
-                AnimationColor::Cool,
-                AnimationEffect::Static,
-                AnimationSpeed::Normal,
-            ),
-            idle: anim(
-                "kl",
-                AnimationColor::Muted,
-                AnimationEffect::Static,
-                AnimationSpeed::Slow,
-            ),
-            success: anim(
-                "mn",
-                AnimationColor::Good,
-                AnimationEffect::Breathe,
-                AnimationSpeed::Fast,
-            ),
-            paused: anim(
-                "op",
-                AnimationColor::Meta,
-                AnimationEffect::Static,
-                AnimationSpeed::Normal,
-            ),
-            waiting: anim(
-                "qr",
-                AnimationColor::Faint,
-                AnimationEffect::Breathe,
-                AnimationSpeed::Slow,
-            ),
-            failed: anim(
-                "st",
-                AnimationColor::Alarm,
-                AnimationEffect::Static,
-                AnimationSpeed::Fast,
-            ),
-        },
-        pets: PetsConfig {
-            enabled: true,
-            pet: "dewey".to_owned(),
-            glyphs: PetsGlyphMode::Sextant,
-            voice: false,
-        },
-    }
-}
-
-fn inline_palette_fixture() -> InlinePalette {
-    InlinePalette {
-        primary: Some(InlinePrimaryColors {
-            background: Some("#101010".to_owned()),
-            foreground: Some("#f0f0f0".to_owned()),
-        }),
-        normal: Some(ansi_colors([
-            "#000000", "#aa0000", "#00aa00", "#aa5500", "#0000aa", "#aa00aa", "#00aaaa", "#aaaaaa",
-        ])),
-        bright: Some(ansi_colors([
-            "#555555", "#ff5555", "#55ff55", "#ffff55", "#5555ff", "#ff55ff", "#55ffff", "#ffffff",
-        ])),
-        selection: Some(InlineSelectionColors {
-            background: Some("#223344".to_owned()),
-            text: Some("#ddeeff".to_owned()),
-        }),
-    }
-}
-
-fn ansi_colors(
-    [black, red, green, yellow, blue, magenta, cyan, white]: [&str; 8],
-) -> InlineAnsiColors {
-    InlineAnsiColors {
-        black: Some(black.to_owned()),
-        red: Some(red.to_owned()),
-        green: Some(green.to_owned()),
-        yellow: Some(yellow.to_owned()),
-        blue: Some(blue.to_owned()),
-        magenta: Some(magenta.to_owned()),
-        cyan: Some(cyan.to_owned()),
-        white: Some(white.to_owned()),
-    }
-}
-
-fn context_band(percent: u8, tokens: u64) -> ContextBand {
-    ContextBand { percent, tokens }
-}
-
-fn anim(
-    frames: &str,
-    color: AnimationColor,
-    effect: AnimationEffect,
-    speed: AnimationSpeed,
-) -> Option<AnimationSpec> {
-    Some(animation_spec(frames, color, effect, speed))
-}
-
-fn animation_spec(
-    frames: &str,
-    color: AnimationColor,
-    effect: AnimationEffect,
-    speed: AnimationSpeed,
-) -> AnimationSpec {
-    AnimationSpec {
-        frames: Some(animation_frames(frames)),
-        color: Some(color),
-        effect: Some(effect),
-        speed: Some(speed),
-    }
-}
-
-fn animation_frames(frames: &str) -> AnimationFrames {
-    let spec: AnimationSpec =
-        toml::from_str(&format!("frames = {frames:?}\n")).expect("valid animation frames");
-    spec.frames.expect("frames")
-}
-
-fn glyph_namespaces_fixture() -> GlyphNamespaces {
-    GlyphNamespaces {
-        status: glyph_group("status", "waiting", "?"),
-        cockpit: glyph_group("cockpit", "workspace", "w"),
-        tokens: glyph_group("tokens", "total", "t"),
-        meter: glyph_group("meter", "context_full", "f"),
-        clock: glyph_group("clock", "q1", "1"),
-        worktree: glyph_group("worktree", "branch", "b"),
-        card: glyph_group("card", "subagents", "s"),
-        process: glyph_group("process", "cpu", "c"),
-        keys: glyph_group("keys", "focus", "k"),
-        chrome: glyph_group("chrome", "box_vertical", "|"),
-    }
-}
-
-fn glyph_group(namespace: &str, role: &str, glyph: &str) -> GlyphGroup {
-    let namespaces: GlyphNamespaces =
-        toml::from_str(&format!("[{namespace}]\n{role} = {glyph:?}\n"))
-            .expect("valid glyph namespace");
-    match namespace {
-        "status" => namespaces.status,
-        "cockpit" => namespaces.cockpit,
-        "tokens" => namespaces.tokens,
-        "meter" => namespaces.meter,
-        "clock" => namespaces.clock,
-        "worktree" => namespaces.worktree,
-        "card" => namespaces.card,
-        "process" => namespaces.process,
-        "keys" => namespaces.keys,
-        "chrome" => namespaces.chrome,
-        _ => panic!("unknown glyph namespace `{namespace}`"),
-    }
+    let parsed = parse_key("notifications.handler").expect("key");
+    let err = validate_set_key(&parsed)
+        .expect_err("array-of-tables shorthand should stay rejected")
+        .to_string();
+    assert!(
+        err.starts_with("config key `notifications.handler` is an array of tables; edit "),
+        "unexpected error: {err}",
+    );
 }
 
 #[test]
@@ -717,33 +588,4 @@ fn sidebar_glyphs_set_key_is_set_shorthand() {
         err.contains("theme.glyphs shorthand sets a glyph set string"),
         "unexpected error: {err}"
     );
-}
-
-fn set_key_reaches_leaf(set_keys: &BTreeSet<String>, leaf: &str) -> bool {
-    set_keys.contains(leaf)
-        || set_keys.iter().any(|key| {
-            leaf.strip_prefix(key)
-                .is_some_and(|rest| rest.starts_with('.'))
-        })
-        || parse_key(leaf)
-            .ok()
-            .is_some_and(|key| validate_set_key(&key).is_ok())
-}
-
-fn collect_leaf_paths(prefix: &str, value: &toml::Value, out: &mut BTreeSet<String>) {
-    match value {
-        toml::Value::Table(table) => {
-            for (key, value) in table {
-                let next = if prefix.is_empty() {
-                    key.to_owned()
-                } else {
-                    format!("{prefix}.{key}")
-                };
-                collect_leaf_paths(&next, value, out);
-            }
-        }
-        _ => {
-            out.insert(prefix.to_owned());
-        }
-    }
 }

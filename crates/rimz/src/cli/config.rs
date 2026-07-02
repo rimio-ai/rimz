@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -536,337 +537,546 @@ fn is_known_get_key(path: &[String]) -> bool {
     let joined = path.join(".");
     let prefix = format!("{joined}.");
     exact_set_keys().iter().any(|key| key.starts_with(&prefix))
-        || matches!(path, [root] if root == "agents")
-        || matches!(path, [root] if root == "loop")
-        || matches!(path, [root] if root == "accounts")
-        || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "commands" | "teams" | "worktree" | "attention"))
-        || matches!(path, [root, child] if root == "loop" && child == "tasks")
-        || is_account_usage_limit_get_key(path)
-        || is_sidebar_animation_get_key(path)
-        || is_sidebar_glyph_get_key(path)
-        || is_theme_colors_get_key(path)
-        || matches!(path, [root, child] if root == "theme" && child == "providers")
-        || matches!(path, [root, child, _] if root == "theme" && child == "providers")
+        || key_patterns()
+            .iter()
+            .any(|pattern| pattern.get && pattern_matches_prefix(path, pattern))
 }
 
 fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
     let joined = path.join(".");
     exact_set_keys().contains(&joined)
-        || is_agents_key(path)
-        || is_loop_key(path)
-        || is_account_usage_limit_key(path)
-        || is_provider_style_key(path)
-        || is_sidebar_animation_set_key(path)
-        || is_sidebar_glyph_set_key(path)
-        || is_theme_colors_set_key(path)
-}
-
-fn is_agents_key(path: &[String]) -> bool {
-    matches!(
-        path,
-        [root, child, _, leaf]
-            if root == "agents" && child == "teams" && matches!(leaf.as_str(), "roles" | "layout")
-    ) || matches!(path, [root, child, _] if root == "agents" && child == "commands")
-        || matches!(
-            path,
-            [root, child, _, leaf]
-                if root == "agents"
-                    && child == "profiles"
-                    && matches!(leaf.as_str(), "agent" | "mode" | "model" | "effort" | "args" | "system-prompt-file")
-        )
-}
-
-fn is_loop_key(path: &[String]) -> bool {
-    matches!(
-        path,
-        [root, tasks, _, leaf]
-            if root == "loop"
-                && tasks == "tasks"
-                && matches!(
-                    leaf.as_str(),
-                    "spec"
-                        | "prompt"
-                        | "prompt-file"
-                        | "check"
-                        | "on"
-                        | "root"
-                        | "worktree"
-                        | "mode"
-                        | "effort"
-                        | "system-prompt-file"
-                        | "timeout"
-                        | "at"
-                        | "days"
-                        | "every"
-                        | "cron"
-                        | "deadline"
-                        | "once"
-                        | "bind"
-                )
-    ) || matches!(
-        path,
-        [root, tasks, _, target, leaf]
-            if root == "loop"
-                && tasks == "tasks"
-                && target == "bind"
-                && matches!(
-                    leaf.as_str(),
-                    "kind"
-                        | "session"
-                        | "handle"
-                )
-    )
-}
-
-fn is_provider_style_key(path: &[String]) -> bool {
-    path.len() == 4
-        && path[0] == "theme"
-        && path[1] == "providers"
-        && matches!(path[3].as_str(), "product_name" | "ascii_art" | "color")
-}
-
-fn is_account_usage_limit_key(path: &[String]) -> bool {
-    matches!(
-        path,
-        [root, child, provider] if root == "accounts" && child == "usage_limit_usd" && !provider.is_empty()
-    )
-}
-
-fn is_account_usage_limit_get_key(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "accounts" && child == "usage_limit_usd")
-        || is_account_usage_limit_key(path)
-}
-
-fn is_sidebar_animation_get_key(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "theme" && child == "animations")
-        || matches!(path, [root, child, role] if root == "theme" && child == "animations" && is_sidebar_animation_role(role))
-}
-
-fn is_sidebar_animation_set_key(path: &[String]) -> bool {
-    matches!(
-        path,
-        [root, child, role, field]
-            if root == "theme"
-                && child == "animations"
-                && is_sidebar_animation_role(role)
-                && matches!(field.as_str(), "frames" | "color" | "effect" | "speed")
-    )
-}
-
-fn is_sidebar_animation_role(role: &str) -> bool {
-    matches!(
-        role,
-        "thinking"
-            | "working"
-            | "compacting"
-            | "delegating"
-            | "resolving"
-            | "idle"
-            | "success"
-            | "paused"
-            | "waiting"
-            | "failed"
-    )
-}
-
-fn is_sidebar_glyph_get_key(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "theme" && child == "glyphs")
-        || matches!(path, [root, child, leaf] if root == "theme" && child == "glyphs" && leaf == "set")
-        || matches!(path, [root, child, set] if root == "theme" && child == "glyphs" && is_theme_glyph_set(set))
-        || matches!(path, [root, child, set, namespace] if root == "theme" && child == "glyphs" && is_theme_glyph_set(set) && is_sidebar_glyph_namespace(namespace))
-        || matches!(
-            path,
-            [root, child, set, namespace, role]
-                if root == "theme"
-                    && child == "glyphs"
-                    && is_theme_glyph_set(set)
-                    && GlyphRole::from_namespaced(namespace, role).is_some()
-        )
+        || key_patterns()
+            .iter()
+            .any(|pattern| pattern.set && path_matches_pattern(path, pattern))
 }
 
 fn is_sidebar_glyph_set_key(path: &[String]) -> bool {
-    matches!(
-        path,
-        [root, child, set, namespace, role]
-            if root == "theme"
-                && child == "glyphs"
-                && is_theme_glyph_set(set)
-                && GlyphRole::from_namespaced(namespace, role).is_some()
-    )
+    key_patterns()
+        .iter()
+        .any(|pattern| pattern.name == "theme glyph" && path_matches_pattern(path, pattern))
 }
 
 fn is_theme_glyph_set(set: &str) -> bool {
-    matches!(set, "unicode" | "nerd_font")
+    GLYPH_SETS.contains(&set)
 }
 
-fn is_sidebar_glyph_namespace(namespace: &str) -> bool {
-    matches!(
-        namespace,
-        "status"
-            | "cockpit"
-            | "tokens"
-            | "meter"
-            | "clock"
-            | "worktree"
-            | "card"
-            | "process"
-            | "keys"
-            | "chrome"
-    )
+#[derive(Clone, Copy)]
+struct KeyPattern {
+    name: &'static str,
+    segments: &'static [KeySegment],
+    set: bool,
+    get: bool,
 }
 
-fn is_theme_colors_get_key(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "theme" && child == "colors")
-        || matches!(path, [root, child, table] if root == "theme" && child == "colors" && is_theme_colors_table(table))
-        || is_theme_colors_set_key(path)
+#[derive(Clone, Copy)]
+enum KeySegment {
+    Lit(&'static str),
+    Any,
+    OneOf(&'static [&'static str]),
+    Pred(fn(&[String], usize) -> bool),
 }
 
-fn is_theme_colors_set_key(path: &[String]) -> bool {
-    matches!(
-        path,
-        [root, child, table, leaf]
-            if root == "theme"
-                && child == "colors"
-                && match table.as_str() {
-                    "primary" => matches!(leaf.as_str(), "background" | "foreground"),
-                    "normal" | "bright" => matches!(leaf.as_str(), "black" | "red" | "green" | "yellow" | "blue" | "magenta" | "cyan" | "white"),
-                    "selection" => matches!(leaf.as_str(), "background" | "text"),
-                    _ => false,
-                }
-    )
-}
+const AGENT_PROFILE_FIELDS: &[&str] = &[
+    "agent",
+    "mode",
+    "model",
+    "effort",
+    "args",
+    "system-prompt-file",
+];
+const AGENT_TEAM_FIELDS: &[&str] = &["roles", "layout"];
+const LOOP_TASK_FIELDS: &[&str] = &[
+    "spec",
+    "prompt",
+    "prompt-file",
+    "check",
+    "on",
+    "root",
+    "worktree",
+    "mode",
+    "effort",
+    "system-prompt-file",
+    "timeout",
+    "at",
+    "days",
+    "every",
+    "cron",
+    "deadline",
+    "once",
+    "bind",
+];
+const LOOP_BIND_FIELDS: &[&str] = &["kind", "session", "handle"];
+const PROVIDER_STYLE_FIELDS: &[&str] = &["product_name", "ascii_art", "color"];
+const ANIMATION_ROLES: &[&str] = &[
+    "thinking",
+    "working",
+    "compacting",
+    "delegating",
+    "resolving",
+    "idle",
+    "success",
+    "paused",
+    "waiting",
+    "failed",
+];
+const ANIMATION_FIELDS: &[&str] = &["frames", "color", "effect", "speed"];
+const CONTEXT_METER_BANDS: &[&str] = &["green", "yellow", "amber", "red"];
+const GLYPH_SETS: &[&str] = &["unicode", "nerd_font"];
+const GLYPH_NAMESPACES: &[&str] = &[
+    "status", "cockpit", "tokens", "meter", "clock", "worktree", "card", "process", "keys",
+    "chrome",
+];
+const COLOR_TABLES: &[&str] = &["primary", "normal", "bright", "selection"];
 
-fn is_theme_colors_table(table: &str) -> bool {
-    matches!(table, "primary" | "normal" | "bright" | "selection")
-}
-
-fn exact_set_keys() -> BTreeSet<String> {
-    [
-        "agents.worktree.dir",
-        "agents.worktree.base",
-        "agents.placement",
-        "harness.smart_compact",
-        "harness.rtk",
-        "transcript.file_days",
-        "timezone",
-        "resume.on_rebirth",
-        "resume.max",
-        "resume.auto_continue",
-        "resume.auto_continue_backoff_secs",
-        "resume.auto_continue_max_retries",
-        "resume.auto_continue_text",
-        "remote_control.claude",
-        "remote_control.codex",
-        "notifications.enabled",
-        "notifications.triggers",
-        "notifications.desktop",
-        "notifications.sound",
-        "notifications.suppress_focused",
-        "notifications.debounce_ms",
-        "notifications.coalesce_ms",
-        "notifications.remind_secs",
-        "notifications.title",
-        "notifications.body",
-        "notifications.command",
-        "theme.style",
-        "theme.display.refresh_ms",
-        "theme.display.max_provider_blocks",
-        "theme.display.provider_tabs",
-        "theme.display.provider_list",
-        "theme.display.max_cols",
-        "theme.display.scrollbar",
-        "theme.display.card_density",
-        "theme.display.context_meter.green",
-        "theme.display.context_meter.yellow",
-        "theme.display.context_meter.amber",
-        "theme.display.context_meter.red",
-        "theme.display.budget_bar.yellow",
-        "theme.display.budget_bar.amber",
-        "theme.display.budget_bar.red",
-        "theme.display.budget_bar.burn_rate.yellow",
-        "theme.display.budget_bar.burn_rate.amber",
-        "theme.display.budget_bar.burn_rate.red",
-        "sidebar.focus_key",
-        "sidebar.spend_window",
-        "sidebar.afk_after_secs",
-        "agents.attention.stalled_after_secs",
-        "agents.attention.inactive_after_secs",
-        "theme.pets.enabled",
-        "theme.pets.pet",
-        "theme.pets.glyphs",
-        "theme.pets.voice",
-        "loop.tasks",
-        "theme.animations.unread",
-        "theme.glyphs.set",
-        "theme.colors.primary.background",
-        "theme.colors.primary.foreground",
-        "theme.colors.normal.black",
-        "theme.colors.normal.red",
-        "theme.colors.normal.green",
-        "theme.colors.normal.yellow",
-        "theme.colors.normal.blue",
-        "theme.colors.normal.magenta",
-        "theme.colors.normal.cyan",
-        "theme.colors.normal.white",
-        "theme.colors.bright.black",
-        "theme.colors.bright.red",
-        "theme.colors.bright.green",
-        "theme.colors.bright.yellow",
-        "theme.colors.bright.blue",
-        "theme.colors.bright.magenta",
-        "theme.colors.bright.cyan",
-        "theme.colors.bright.white",
-        "theme.colors.selection.background",
-        "theme.colors.selection.text",
-        "sidebar.trunk",
-        "theme.mode",
-        "theme.scheme",
-        "theme.good",
-        "theme.warn",
-        "theme.caution",
-        "theme.alarm",
-        "theme.accent",
-        "theme.cool",
-        "theme.meta",
-        "theme.body",
-        "theme.muted",
-        "theme.faint",
-        "theme.rule",
-        "theme.selection",
-        "theme.selection_bg",
-        "zellij.mouse_mode",
-        "zellij.mouse_click_through",
-        "zellij.advanced_mouse_actions",
-        "zellij.mouse_hover_effects",
-        "zellij.focus_follows_mouse",
-        "zellij.pane_frames",
-        "zellij.on_force_close",
-        "zellij.scroll_buffer_size",
-        "zellij.show_startup_tips",
-        "zellij.show_release_notes",
-        "zellij.copy_clipboard",
-        "zellij.copy_on_select",
-        "zellij.support_kitty_keyboard_protocol",
-        "zellij.osc8_hyperlinks",
-        "zellij.auto_layout",
-        "zellij.session_serialization",
-        "tmux.mouse",
-        "tmux.focus_events",
-        "tmux.history_limit",
-        "tmux.allow_passthrough",
-        "tmux.set_clipboard",
-        "tmux.extended_keys",
-        "tmux.extended_keys_format",
-        "tmux.escape_time_ms",
-        "tmux.renumber_windows",
-        "tmux.aggressive_resize",
-        "tmux.pane_border_status",
-        "tmux.pane_border_lines",
+fn key_patterns() -> &'static [KeyPattern] {
+    &[
+        KeyPattern {
+            name: "agents team",
+            segments: &[
+                KeySegment::Lit("agents"),
+                KeySegment::Lit("teams"),
+                KeySegment::Any,
+                KeySegment::OneOf(AGENT_TEAM_FIELDS),
+            ],
+            set: true,
+            get: true,
+        },
+        KeyPattern {
+            name: "agents command",
+            segments: &[
+                KeySegment::Lit("agents"),
+                KeySegment::Lit("commands"),
+                KeySegment::Any,
+            ],
+            set: true,
+            get: true,
+        },
+        KeyPattern {
+            name: "agents profile",
+            segments: &[
+                KeySegment::Lit("agents"),
+                KeySegment::Lit("profiles"),
+                KeySegment::Any,
+                KeySegment::OneOf(AGENT_PROFILE_FIELDS),
+            ],
+            set: true,
+            get: true,
+        },
+        KeyPattern {
+            name: "loop tasks",
+            segments: &[KeySegment::Lit("loop"), KeySegment::Lit("tasks")],
+            set: true,
+            get: true,
+        },
+        KeyPattern {
+            name: "loop task",
+            segments: &[
+                KeySegment::Lit("loop"),
+                KeySegment::Lit("tasks"),
+                KeySegment::Any,
+                KeySegment::OneOf(LOOP_TASK_FIELDS),
+            ],
+            set: true,
+            get: true,
+        },
+        KeyPattern {
+            name: "loop bind",
+            segments: &[
+                KeySegment::Lit("loop"),
+                KeySegment::Lit("tasks"),
+                KeySegment::Any,
+                KeySegment::Lit("bind"),
+                KeySegment::OneOf(LOOP_BIND_FIELDS),
+            ],
+            set: true,
+            get: true,
+        },
+        KeyPattern {
+            name: "account usage limit",
+            segments: &[
+                KeySegment::Lit("accounts"),
+                KeySegment::Lit("usage_limit_usd"),
+                KeySegment::Any,
+            ],
+            set: true,
+            get: true,
+        },
+        KeyPattern {
+            name: "theme provider",
+            segments: &[
+                KeySegment::Lit("theme"),
+                KeySegment::Lit("providers"),
+                KeySegment::Any,
+                KeySegment::OneOf(PROVIDER_STYLE_FIELDS),
+            ],
+            set: true,
+            get: true,
+        },
+        KeyPattern {
+            name: "theme animation",
+            segments: &[
+                KeySegment::Lit("theme"),
+                KeySegment::Lit("animations"),
+                KeySegment::OneOf(ANIMATION_ROLES),
+                KeySegment::OneOf(ANIMATION_FIELDS),
+            ],
+            set: true,
+            get: true,
+        },
+        KeyPattern {
+            name: "theme context meter",
+            segments: &[
+                KeySegment::Lit("theme"),
+                KeySegment::Lit("display"),
+                KeySegment::Lit("context_meter"),
+                KeySegment::OneOf(CONTEXT_METER_BANDS),
+            ],
+            set: true,
+            get: true,
+        },
+        KeyPattern {
+            name: "theme glyph",
+            segments: &[
+                KeySegment::Lit("theme"),
+                KeySegment::Lit("glyphs"),
+                KeySegment::OneOf(GLYPH_SETS),
+                KeySegment::OneOf(GLYPH_NAMESPACES),
+                KeySegment::Pred(is_glyph_role_segment),
+            ],
+            set: true,
+            get: true,
+        },
+        KeyPattern {
+            name: "theme colors",
+            segments: &[
+                KeySegment::Lit("theme"),
+                KeySegment::Lit("colors"),
+                KeySegment::OneOf(COLOR_TABLES),
+                KeySegment::Pred(is_theme_color_leaf_segment),
+            ],
+            set: true,
+            get: true,
+        },
     ]
-    .into_iter()
-    .map(ToOwned::to_owned)
-    .collect()
 }
+
+fn path_matches_pattern(path: &[String], pattern: &KeyPattern) -> bool {
+    path.len() == pattern.segments.len()
+        && pattern
+            .segments
+            .iter()
+            .enumerate()
+            .all(|(idx, segment)| segment_matches(path, idx, *segment))
+}
+
+fn pattern_matches_prefix(path: &[String], pattern: &KeyPattern) -> bool {
+    path.len() < pattern.segments.len()
+        && pattern
+            .segments
+            .iter()
+            .take(path.len())
+            .enumerate()
+            .all(|(idx, segment)| segment_matches(path, idx, *segment))
+}
+
+fn segment_matches(path: &[String], idx: usize, segment: KeySegment) -> bool {
+    let Some(value) = path.get(idx).map(String::as_str) else {
+        return false;
+    };
+    match segment {
+        KeySegment::Lit(expected) => value == expected,
+        KeySegment::Any => !value.is_empty(),
+        KeySegment::OneOf(values) => values.contains(&value),
+        KeySegment::Pred(pred) => pred(path, idx),
+    }
+}
+
+fn is_glyph_role_segment(path: &[String], idx: usize) -> bool {
+    let (Some(namespace), Some(role)) = (
+        idx.checked_sub(1).and_then(|idx| path.get(idx)),
+        path.get(idx),
+    ) else {
+        return false;
+    };
+    GlyphRole::from_namespaced(namespace, role).is_some()
+}
+
+fn is_theme_color_leaf_segment(path: &[String], idx: usize) -> bool {
+    let (Some(table), Some(leaf)) = (
+        idx.checked_sub(1).and_then(|idx| path.get(idx)),
+        path.get(idx),
+    ) else {
+        return false;
+    };
+    match table.as_str() {
+        "primary" => matches!(leaf.as_str(), "background" | "foreground"),
+        "normal" | "bright" => matches!(
+            leaf.as_str(),
+            "black" | "red" | "green" | "yellow" | "blue" | "magenta" | "cyan" | "white"
+        ),
+        "selection" => matches!(leaf.as_str(), "background" | "text"),
+        _ => false,
+    }
+}
+
+fn exact_set_keys() -> &'static BTreeSet<String> {
+    static KEYS: OnceLock<BTreeSet<String>> = OnceLock::new();
+    KEYS.get_or_init(|| {
+        let root = config_value(&schema_config())
+            .expect("static config key schema must serialize to a TOML value");
+        let mut leaves = BTreeSet::new();
+        collect_leaf_paths("", &root, &mut leaves);
+        leaves
+    })
+}
+
+fn collect_leaf_paths(prefix: &str, value: &toml::Value, out: &mut BTreeSet<String>) {
+    match value {
+        toml::Value::Table(table) => {
+            for (key, value) in table {
+                let next = if prefix.is_empty() {
+                    key.to_owned()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                collect_leaf_paths(&next, value, out);
+            }
+        }
+        _ => {
+            out.insert(prefix.to_owned());
+        }
+    }
+}
+
+fn schema_config() -> MachineConfig {
+    // Static schema fixture: parse failures are programmer errors in the
+    // checked-in config key description.
+    toml::from_str(SCHEMA_CONFIG).expect("static config key schema must parse")
+}
+
+const SCHEMA_CONFIG: &str = r##"
+timezone = "UTC"
+
+[accounts.usage_limit_usd]
+schema = 50.0
+
+[remote_control]
+claude = true
+codex = true
+
+[notifications]
+enabled = true
+triggers = ["waiting", "failed", "paused", "success"]
+desktop = "auto"
+sound = "bell"
+suppress_focused = true
+debounce_ms = 5000
+coalesce_ms = 1000
+remind_secs = 60
+title = "Rimz: {{agent}} {{kind}}"
+body = "{{task}}"
+command = "ntfy publish rimz"
+
+[sidebar]
+spend_window = "24h"
+trunk = "main"
+focus_key = "Alt+p"
+afk_after_secs = 900
+
+[zellij]
+mouse_mode = true
+mouse_click_through = true
+advanced_mouse_actions = true
+mouse_hover_effects = false
+focus_follows_mouse = false
+pane_frames = true
+on_force_close = "detach"
+scroll_buffer_size = 100000
+show_startup_tips = false
+show_release_notes = false
+copy_clipboard = "system"
+copy_on_select = true
+support_kitty_keyboard_protocol = true
+osc8_hyperlinks = true
+auto_layout = true
+session_serialization = false
+
+[tmux]
+mouse = true
+focus_events = true
+history_limit = 100000
+allow_passthrough = true
+set_clipboard = "on"
+extended_keys = true
+extended_keys_format = "csi-u"
+escape_time_ms = 0
+renumber_windows = true
+aggressive_resize = true
+pane_border_status = "top"
+pane_border_lines = "heavy"
+
+[resume]
+on_rebirth = true
+max = 8
+auto_continue = true
+auto_continue_backoff_secs = [180, 300]
+auto_continue_max_retries = 13
+auto_continue_text = "continue"
+
+[harness]
+smart_compact = "70%"
+rtk = "auto"
+
+[transcript]
+file_days = 7
+
+[theme]
+style = "modern"
+mode = "truecolor"
+scheme = "TokyoNight Night"
+good = "green"
+warn = "yellow"
+caution = "#e0915c"
+alarm = "red"
+accent = "cyan"
+cool = "blue"
+meta = "magenta"
+body = "#a6a19a"
+muted = "#767168"
+faint = "#45423d"
+rule = "#343230"
+selection = "bright_blue"
+selection_bg = "#2a2723"
+
+[theme.display]
+refresh_ms = 100
+max_cols = 72
+scrollbar = "auto"
+card_density = "auto"
+provider_tabs = "auto"
+provider_list = ["claude"]
+max_provider_blocks = 3
+
+[theme.display.context_meter]
+green = { percent = 40, tokens = 100000 }
+yellow = { percent = 60, tokens = 160000 }
+amber = { percent = 75, tokens = 258000 }
+red = { percent = 90, tokens = 420000 }
+
+[theme.display.budget_bar]
+yellow = 50
+amber = 25
+red = 10
+
+[theme.display.budget_bar.burn_rate]
+yellow = 100
+amber = 150
+red = 200
+
+[theme.colors.primary]
+background = "#101010"
+foreground = "#f0f0f0"
+
+[theme.colors.normal]
+black = "#000000"
+red = "#aa0000"
+green = "#00aa00"
+yellow = "#aa5500"
+blue = "#0000aa"
+magenta = "#aa00aa"
+cyan = "#00aaaa"
+white = "#aaaaaa"
+
+[theme.colors.bright]
+black = "#555555"
+red = "#ff5555"
+green = "#55ff55"
+yellow = "#ffff55"
+blue = "#5555ff"
+magenta = "#ff55ff"
+cyan = "#55ffff"
+white = "#ffffff"
+
+[theme.colors.selection]
+background = "#223344"
+text = "#ddeeff"
+
+[theme.pets]
+enabled = true
+pet = "dewey"
+glyphs = "sextant"
+voice = false
+
+[theme.animations]
+unread = "blink"
+
+[theme.animations.thinking]
+frames = "ab"
+color = "accent"
+effect = "breathe"
+speed = "fast"
+
+[theme.glyphs]
+set = "unicode"
+
+[theme.providers.claude]
+product_name = "Claude"
+ascii_art = "C"
+color = "#d97757"
+
+[agents]
+placement = "tab"
+
+[agents.worktree]
+dir = "../{repo}-worktrees"
+base = "fresh"
+
+[agents.attention]
+stalled_after_secs = 1800
+inactive_after_secs = 3600
+
+[agents.profiles.schema]
+agent = "codex"
+mode = "auto"
+model = "gpt-5.5"
+effort = "low"
+system-prompt-file = "~/.config/rimz/prompts/schema.md"
+args = "--search none"
+
+[agents.commands]
+schema = "nvim -p"
+
+[agents.teams.schema]
+layout = "coder"
+
+[[agents.teams.schema.roles]]
+role = "coder"
+profile = "schema"
+
+[loop.tasks.schema]
+spec = "codex"
+prompt = "check CI"
+prompt-file = "~/.config/rimz/prompts/ci.md"
+check = "cargo test"
+on = "fail"
+root = "/tmp"
+worktree = "main"
+mode = "auto"
+effort = "low"
+system-prompt-file = "~/.config/rimz/prompts/loop.md"
+timeout = "30m"
+at = "09:30"
+days = "weekdays"
+every = "15m"
+cron = "*/15 * * * *"
+deadline = "2026-07-01T12:00:00Z"
+once = true
+
+[loop.tasks.schema.bind]
+kind = "claude"
+session = "sess-abc123"
+handle = "@planner"
+"##;
 
 fn parse_edit_value(raw: &str) -> Value {
     raw.parse::<Value>()
