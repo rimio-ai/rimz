@@ -71,6 +71,7 @@ fn non_empty_trimmed(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn parse_proc_btime(stat: &str) -> Option<String> {
     stat.lines().find_map(|line| {
         let mut fields = line.split_whitespace();
