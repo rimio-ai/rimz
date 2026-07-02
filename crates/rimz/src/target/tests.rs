@@ -459,6 +459,10 @@ fn split_batched_prompt_splits_only_on_prefixed_sections() {
         vec!["human note", "from @coder: second"]
     );
     assert_eq!(
+        split_batched_prompt("from @planner: first\n\n\nfrom @coder: second"),
+        vec!["from @planner: first", "from @coder: second"]
+    );
+    assert_eq!(
         split_batched_prompt("from @planner: first\n\nsecond paragraph"),
         vec!["from @planner: first\n\nsecond paragraph"]
     );

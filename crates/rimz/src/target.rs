@@ -686,7 +686,10 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
     let mut cursor = 0;
     while let Some(relative) = text[cursor..].find("\n\n") {
         let boundary = cursor + relative;
-        let next_start = boundary + 2;
+        let mut next_start = boundary + 2;
+        while text[next_start..].starts_with('\n') {
+            next_start += 1;
+        }
         let first_line = text[next_start..].lines().next().unwrap_or_default();
         if parse_sender_prefix(first_line).is_some() {
             segments.push(&text[start..boundary]);
