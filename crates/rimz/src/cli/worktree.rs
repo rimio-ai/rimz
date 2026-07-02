@@ -16,7 +16,6 @@ use rimz::mux::own_pane_id;
 use rimz::workspace::{RootClass, WorkspaceResolver};
 
 const CLEANUP_SIGNAL_ROSTER_GRACE: Duration = Duration::from_millis(300);
-const CLEANUP_ROSTER_RECENT: Duration = Duration::from_secs(10);
 const WORKTREE_REMOVED_ARCHIVE_REASON: &str = "worktree removed";
 
 pub(super) struct RemovedWorktree {
@@ -382,38 +381,40 @@ fn roster_binds_worktree_from_ledger(
         }
     };
     let own = rimz::mux::ambient_pane_id();
-    roster_binds_worktree(
-        &snapshot.agents,
-        own.as_ref(),
-        path,
-        jiff::Timestamp::now(),
-        CLEANUP_ROSTER_RECENT,
-    )
+    roster_binds_worktree(&snapshot.agents, own.as_ref(), path)
 }
 
-fn roster_binds_worktree(
+fn roster_binds_worktree(agents: &[AgentState], own: Option<&rimz::PaneId>, path: &Path) -> bool {
+    let target = rimz::worktree::normalize_path_lexical(path);
+    agent_pinned_paths(agents, own)
+        .iter()
+        .any(|path| rimz::worktree::path_inside(path, &target))
+}
+
+pub(super) fn agent_pinned_paths(
     agents: &[AgentState],
     own: Option<&rimz::PaneId>,
-    path: &Path,
-    now: jiff::Timestamp,
-    recent: Duration,
-) -> bool {
-    let target = rimz::worktree::normalize_path_lexical(path);
-    agents.iter().any(|agent| {
-        agent_seen_recently(agent.last_seen, now, recent)
-            && agent
-                .worktree_path
-                .as_deref()
-                .map(Path::new)
-                .map(rimz::worktree::normalize_path_lexical)
-                .is_some_and(|bound| rimz::worktree::path_inside(&bound, &target))
-            && agent_is_not_own(agent, own)
-    })
-}
-
-fn agent_seen_recently(last_seen: jiff::Timestamp, now: jiff::Timestamp, recent: Duration) -> bool {
-    let span = now.duration_since(last_seen);
-    span.is_negative() || (span.as_secs().max(0) as u64) <= recent.as_secs()
+) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for agent in agents.iter().filter(|agent| agent_is_not_own(agent, own)) {
+        match rimz::ledger::runtime::agent_liveness(agent) {
+            rimz::ledger::runtime::AgentLiveness::Dead => {}
+            rimz::ledger::runtime::AgentLiveness::Unknown => {
+                if let Some(path) = agent.worktree_path.as_deref() {
+                    paths.push(rimz::worktree::normalize_path_lexical(Path::new(path)));
+                }
+            }
+            rimz::ledger::runtime::AgentLiveness::Live { pid } => {
+                if let Some(path) = agent.worktree_path.as_deref() {
+                    paths.push(rimz::worktree::normalize_path_lexical(Path::new(path)));
+                }
+                if let Some(cwd) = rimz::proc::cwd(pid) {
+                    paths.push(rimz::worktree::normalize_path_lexical(&cwd));
+                }
+            }
+        }
+    }
+    paths
 }
 
 fn agent_is_not_own(agent: &AgentState, own: Option<&rimz::PaneId>) -> bool {
@@ -573,11 +574,10 @@ mod tests {
     }
 
     #[test]
-    fn roster_binds_worktree_filters_own_stale_and_other_worktrees() {
+    fn roster_binds_worktree_filters_own_dead_and_other_worktrees() {
         let worktree = Path::new("/repo-worktrees/demo");
         let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
         let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
-        let recent = Duration::from_secs(5);
 
         assert!(roster_binds_worktree(
             &[agent(
@@ -588,8 +588,6 @@ mod tests {
             )],
             Some(&own),
             worktree,
-            now,
-            recent,
         ));
         assert!(roster_binds_worktree(
             &[agent(
@@ -600,8 +598,6 @@ mod tests {
             )],
             Some(&own),
             worktree,
-            now,
-            recent,
         ));
         assert!(!roster_binds_worktree(
             &[agent(
@@ -612,21 +608,26 @@ mod tests {
             )],
             Some(&own),
             worktree,
-            now,
-            recent,
         ));
-        assert!(!roster_binds_worktree(
+        assert!(roster_binds_worktree(
             &[agent(
-                "stale",
+                "idle-live-unknown",
                 Some("/repo-worktrees/demo"),
                 None,
                 now - Duration::from_secs(30),
             )],
             Some(&own),
             worktree,
-            now,
-            recent,
         ));
+        #[cfg(target_os = "linux")]
+        {
+            let mut dead = agent("dead", Some("/repo-worktrees/demo"), None, now);
+            dead.agent_pid = Some(u32::MAX);
+            assert!(!roster_binds_worktree(&[dead], Some(&own), worktree));
+        }
+        let mut live = agent("live", Some("/repo-worktrees/demo"), None, now);
+        live.agent_pid = Some(std::process::id());
+        assert!(roster_binds_worktree(&[live], Some(&own), worktree));
         assert!(!roster_binds_worktree(
             &[agent(
                 "other-worktree",
@@ -636,9 +637,20 @@ mod tests {
             )],
             Some(&own),
             worktree,
-            now,
-            recent,
         ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn agent_pinned_paths_includes_realtime_process_cwd() {
+        let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
+        let mut live = agent("live", Some("/repo-worktrees/other"), None, now);
+        live.agent_pid = Some(std::process::id());
+
+        let current =
+            rimz::worktree::normalize_path_lexical(&std::env::current_dir().expect("current dir"));
+
+        assert!(agent_pinned_paths(&[live], None).contains(&current));
     }
 
     fn pane(raw: &str, command: Option<&str>, cwd: Option<&Path>) -> rimz::pane::PaneRef {

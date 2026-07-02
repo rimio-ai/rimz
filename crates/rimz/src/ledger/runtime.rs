@@ -16,6 +16,14 @@ pub enum RuntimeScope {
     Audit,
 }
 
+/// Tri-state process liveness for an agent session record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentLiveness {
+    Live { pid: u32 },
+    Dead,
+    Unknown,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RuntimeProjection {
     pub items: Vec<FeedItem>,
@@ -86,6 +94,24 @@ pub fn process_owner(
 
 pub fn owner_is_live(owner: &RuntimeOwner) -> bool {
     process_is_live(owner.pid, owner.process_start.as_deref())
+}
+
+pub fn agent_liveness(agent: &AgentState) -> AgentLiveness {
+    if let Some(owner) = &agent.runtime_owner {
+        return if owner_is_live(owner) {
+            AgentLiveness::Live { pid: owner.pid }
+        } else {
+            AgentLiveness::Dead
+        };
+    }
+    let Some(pid) = agent.agent_pid else {
+        return AgentLiveness::Unknown;
+    };
+    if process_is_live(pid, agent.agent_process_start.as_deref()) {
+        AgentLiveness::Live { pid }
+    } else {
+        AgentLiveness::Dead
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -268,5 +294,47 @@ mod tests {
             1,
             "unknown pid abstains while known-dead owners suppress stale overlays"
         );
+    }
+
+    #[test]
+    fn agent_liveness_reports_live_runtime_owner() {
+        let owner = current_process_owner(RuntimeOwnerKind::Agent, "sess-live");
+        assert_eq!(
+            agent_liveness(&agent(Some(owner))),
+            AgentLiveness::Live {
+                pid: std::process::id()
+            }
+        );
+    }
+
+    #[test]
+    fn agent_liveness_reports_unknown_without_process_identity() {
+        assert_eq!(agent_liveness(&agent(None)), AgentLiveness::Unknown);
+    }
+
+    #[test]
+    fn agent_liveness_checks_agent_pid_without_runtime_owner() {
+        let mut state = agent(None);
+        state.agent_pid = Some(std::process::id());
+        state.agent_process_start = process_start_token(std::process::id());
+
+        assert_eq!(
+            agent_liveness(&state),
+            AgentLiveness::Live {
+                pid: std::process::id()
+            }
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn agent_liveness_reports_dead_for_missing_or_wrong_process() {
+        let mut state = agent(None);
+        state.agent_pid = Some(u32::MAX);
+        assert_eq!(agent_liveness(&state), AgentLiveness::Dead);
+
+        state.agent_pid = Some(std::process::id());
+        state.agent_process_start = Some("definitely-not-this-process".to_owned());
+        assert_eq!(agent_liveness(&state), AgentLiveness::Dead);
     }
 }

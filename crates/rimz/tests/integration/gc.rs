@@ -1,5 +1,7 @@
 //! Integration coverage for `rimz gc`.
 
+use std::path::Path;
+use std::process::Command;
 use std::time::{Duration, SystemTime};
 
 use assert_cmd::assert::OutputAssertExt;
@@ -292,14 +294,88 @@ fn gc_keeps_spawn_and_live_loop_schedules() {
     );
 }
 
+#[test]
+fn gc_keeps_worktree_with_live_agent() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let worktree = env.home_root.join("project-worktrees").join("demo");
+    register_running_agent_at(&env, "sess-worktree-live", "demo", &worktree, &[]);
+
+    let assert = env
+        .rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+
+    assert!(worktree.exists(), "live agent should keep the worktree");
+    assert!(
+        !stdout.contains("worktrees"),
+        "gc should not report a worktree sweep: {stdout}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn gc_sweeps_worktree_after_agent_dies() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let worktree = env.home_root.join("project-worktrees").join("demo");
+    register_running_agent_at(
+        &env,
+        "sess-worktree-dead",
+        "demo",
+        &worktree,
+        &[("RIMZ_AGENT_PID", &u32::MAX.to_string())],
+    );
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("worktrees"))
+        .stdout(contains("swept"));
+
+    assert!(!worktree.exists(), "dead agent should release the worktree");
+}
+
 fn register_running_agent(env: &Env, session_id: &str, branch: &str) {
+    register_running_agent_at(env, session_id, branch, &env.project_root, &[]);
+}
+
+fn register_running_agent_at(
+    env: &Env,
+    session_id: &str,
+    branch: &str,
+    cwd: &Path,
+    pane_env: &[(&str, &str)],
+) {
+    let cwd = cwd.display().to_string();
     run_hook(
         env,
         json!({
             "hook_event_name": "SessionStart",
             "session_id": session_id,
             "worktree_branch": branch,
+            "cwd": cwd.clone(),
         }),
+        pane_env,
     );
     run_hook(
         env,
@@ -308,16 +384,50 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str) {
             "session_id": session_id,
             "prompt": "work",
             "worktree_branch": branch,
+            "cwd": cwd,
         }),
+        pane_env,
     );
 }
 
-fn run_hook(env: &Env, payload: serde_json::Value) {
+fn run_hook(env: &Env, payload: serde_json::Value, pane_env: &[(&str, &str)]) {
     let payload = serde_json::to_string(&payload).expect("payload");
-    let output = env.run_installed_hook_in_pane("claude", &payload, &[]);
+    let output = env.run_installed_hook_in_pane("claude", &payload, pane_env);
     assert!(
         output.status.success(),
         "hook failed: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn git_missing() -> bool {
+    Command::new("git").arg("--version").output().is_err()
+}
+
+fn init_repo(path: &Path) {
+    git(path, &["init", "-b", "main"]);
+    git(path, &["config", "user.email", "rimz@example.com"]);
+    git(path, &["config", "user.name", "Rimz Test"]);
+    commit_file(path, "README.md", "fixture\n", "initial");
+}
+
+fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {
+    std::fs::write(repo.join(name), contents).expect("write committed file");
+    git(repo, &["add", name]);
+    git(repo, &["commit", "-m", message]);
+}
+
+fn git(cwd: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("spawn git");
+    assert!(
+        output.status.success(),
+        "git {} failed\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
 }

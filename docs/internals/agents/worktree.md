@@ -33,14 +33,15 @@ Seeding is best-effort enrichment layered over creation: a missing file is a sil
 
 A worktree is reclaimed once its work has landed — proven, never assumed. `rimz worktree remove <name>` runs the decision on demand; the agent wrapper runs the same one through the on-disk `rimz worktree cleanup <path>` helper when an agent launched with `--worktree-path` deliberately exits or its tab/pane closes while the room stays live ([harness.md → Cleanup](./harness.md#cleanup)), falling back to the in-process implementation if the helper cannot be resolved or spawned. Signal-close cleanup runs outside the dying pane's process group, narrowing `rimz gc` to crash residue, dirty work, pending work, and trees still occupied by user panes.
 
-The decision is pure, over three inputs — the marker, `git status --porcelain`, and whether a live **user** pane still sits inside the path. Sidebar panes are chrome that inherit the tab cwd, so worktree liveness reads user panes only.
+The decision is pure, over four inputs — the marker, `git status --porcelain`, whether a live **user** pane still sits inside the path, and whether a registered agent session binds to the path. Sidebar panes are chrome that inherit the tab cwd, so worktree liveness reads user panes only. A registered agent whose process is live, or whose liveness is unknown, pins its worktree by recorded launch path and live process cwd when available; only a proven-dead process releases that guard.
 
-| Marker | Status | User pane inside | Decision |
-| --- | --- | --- | --- |
-| absent | any | any | skip — not Rimz-owned |
-| present | clean and content-landed | no | remove the tree, then delete the branch |
-| present | dirty, pending, or unknown | no | prompt `keep / remove / shell` on a TTY; keep on EOF or non-TTY |
-| present | any | yes | skip — in use |
+| Marker | Status | User pane inside | Agent session bound | Decision |
+| --- | --- | --- | --- | --- |
+| absent | any | any | any | skip — not Rimz-owned |
+| present | clean and content-landed | no | no | remove the tree, then delete the branch |
+| present | dirty, pending, or unknown | no | no | prompt `keep / remove / shell` on a TTY; keep on EOF or non-TTY |
+| present | any | yes | any | skip — in use |
+| present | any | any | yes | skip — in use |
 
 **Content-landed** is the conservative core, shared by cleanup, the sidebar, and `rimz gc`. It compares the branch against a ref ladder — the marker's base branch, then `main`, `master`, `origin/HEAD`, then the creation snapshot — where a base branch counts only while it is still a live destination: once it has diverged from the trunk with its own commits already landed there, the ladder falls through to the trunk, so work built on an already-merged branch is measured against where it truly landed. The verdict accepts a branch with no commits beyond the ref, or identical base/head trees; then it accepts a branch whose three-way merge into the comparison ref reproduces that ref's tree, proving the branch adds nothing and recognizing rebase or squash landings even when concurrent edits to the same files shift patch context. Otherwise it asks Git for branch-side non-merge commits whose patch is absent on the comparison side and treats any result as pending, and requires any surviving merge commits' trees to already appear in the comparison ref's recent history. That covers rebased, cherry-picked, squash-landed, and merge-back shapes without trusting ancestry counts or sidebar wakeups. A missing ref or Git error is `unknown`, which keeps the tree.
 
@@ -48,4 +49,4 @@ Branch deletion follows the same proof. The automatic path tries `git branch -d`
 
 ## `rimz gc`
 
-`rimz gc` sweeps every clean, marked, content-landed worktree in the current repo that no live user pane occupies, measures the checkout bytes it reclaims, then runs `git worktree prune`. Routine deliberate agent closes already launch the same cleanup path, so `gc` primarily reclaims crash residue and trees that became safe only after later Git or pane state changed. A `fresh`-based worktree compares against `origin/…`, so an unfetched merge keeps the tree until a fetch updates the remote-tracking base. Named-channel records stay until `rimz channel rm`; `gc` acts on worktrees only.
+`rimz gc` sweeps every clean, marked, content-landed worktree in the current repo that no live user pane occupies and no live-or-unknown agent session binds by recorded launch path or live process cwd, measures the checkout bytes it reclaims, then runs `git worktree prune`. The sweep requires a readable agent roster and skips worktree reclamation when it cannot get one. Routine deliberate agent closes already launch the same cleanup path, so `gc` primarily reclaims crash residue and trees that became safe only after later Git, pane, or agent state changed. A `fresh`-based worktree compares against `origin/…`, so an unfetched merge keeps the tree until a fetch updates the remote-tracking base. Named-channel records stay until `rimz channel rm`; `gc` acts on worktrees only.

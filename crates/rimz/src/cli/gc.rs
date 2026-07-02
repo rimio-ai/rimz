@@ -161,14 +161,34 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
     if workspace.root_class != rimz::workspace::RootClass::Repo {
         return WorktreeSweep::default();
     }
-    let ledger = open_ledger(&workspace).ok();
-    let live_cwds = match rimz::mux::auto_detect_backend(globals.mux) {
+    let ledger = match open_ledger(&workspace) {
+        Ok(ledger) => ledger,
+        Err(err) => {
+            tracing::debug!(
+                error = %err,
+                "workspace ledger unavailable; worktree gc skipped"
+            );
+            return WorktreeSweep::default();
+        }
+    };
+    let snapshot = match ledger.snapshot_cached() {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            tracing::debug!(
+                error = %err,
+                "agent roster unavailable; worktree gc skipped"
+            );
+            return WorktreeSweep::default();
+        }
+    };
+    let mut protected_paths = match rimz::mux::auto_detect_backend(globals.mux) {
         Ok(mux) => rimz::mux::backend_for(mux)
             .list_panes(rimz::mux::PaneListOptions::default())
             .map(|listing| live_user_cwds(&listing.panes))
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };
+    protected_paths.extend(super::worktree::agent_pinned_paths(&snapshot.agents, None));
     spinner.set("scanning worktrees…");
     let entries = match rimz::worktree::list(&workspace.project_root) {
         Ok(entries) => entries,
@@ -180,7 +200,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
     let candidates: Vec<_> = entries
         .into_iter()
         .filter(|entry| {
-            !live_cwds
+            !protected_paths
                 .iter()
                 .any(|cwd| rimz::worktree::path_inside(cwd, &entry.path))
                 && !entry.dirty
@@ -215,14 +235,10 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
                 .map_err(Into::into)
             },
             |branch, reason| {
-                if let Some(ledger) = ledger.as_ref() {
-                    ledger
-                        .archive_channel_messages(branch, reason, &workspace.session_name)
-                        .map(|_| ())
-                        .map_err(Into::into)
-                } else {
-                    Ok(())
-                }
+                ledger
+                    .archive_channel_messages(branch, reason, &workspace.session_name)
+                    .map(|_| ())
+                    .map_err(Into::into)
             },
         ) {
             Ok(removed) => {
