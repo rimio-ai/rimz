@@ -167,7 +167,7 @@ fn write_intro(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<(
 }
 
 fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
-    for line in intro_card_lines(terminal_columns()) {
+    for line in intro_card_lines(render::terminal_columns(80)) {
         writeln!(out, "{line}")?;
     }
     writeln!(out)?;
@@ -253,12 +253,6 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
         lines.push(current);
     }
     lines
-}
-
-fn terminal_columns() -> usize {
-    ratatui::crossterm::terminal::size()
-        .map(|(cols, _)| usize::from(cols))
-        .unwrap_or(80)
 }
 
 fn write_agent_body(

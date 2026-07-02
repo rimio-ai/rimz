@@ -895,28 +895,17 @@ fn severity_label(severity: DiagSeverity) -> &'static str {
 
 /// Relative age of `then` from `now`, rendered compactly (`5s ago`, `2m ago`).
 fn age_short(now: Timestamp, then: Timestamp) -> String {
-    let span = now.duration_since(then);
-    if span.is_negative() {
+    if now.duration_since(then).is_negative() {
         return "now".to_owned();
     }
-    let secs = span.as_secs().max(0) as u64;
-    age_label(secs)
+    format!("{} ago", crate::cli::render::age_short(then, now))
 }
 
 fn age_ms_short(now_ms: u64, then_ms: u64) -> String {
-    age_label(now_ms.saturating_sub(then_ms) / 1_000)
-}
-
-fn age_label(secs: u64) -> String {
-    if secs < 60 {
-        format!("{secs}s ago")
-    } else if secs < 3_600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h ago", secs / 3_600)
-    } else {
-        format!("{}d ago", secs / 86_400)
-    }
+    format!(
+        "{} ago",
+        crate::cli::render::age_label(now_ms.saturating_sub(then_ms) / 1_000)
+    )
 }
 
 #[cfg(test)]

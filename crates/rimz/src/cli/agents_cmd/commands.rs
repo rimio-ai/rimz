@@ -778,7 +778,7 @@ fn agent_row(agent: &AgentState, peers: &[&AgentState], now: jiff::Timestamp) ->
         model_cell(agent),
         context_cell(agent),
         render::cell(tokens_label(agent)).dash(),
-        render::cell(age_label(now, agent.last_seen)),
+        render::cell(render::age_short(agent.last_seen, now)),
     ]
 }
 
@@ -908,11 +908,7 @@ fn model_cell(agent: &AgentState) -> render::Cell {
 /// The agent kind's brand tone for truecolor output, or `None` for an unknown kind.
 fn brand_style(kind: &str) -> Option<anstyle::Style> {
     let (r, g, b) = rimz::agents::descriptor_by_kind(kind)?.brand.color_rgb;
-    Some(rgb_style((r, g, b)))
-}
-
-fn rgb_style((r, g, b): (u8, u8, u8)) -> anstyle::Style {
-    anstyle::Style::new().fg_color(Some(anstyle::Color::Rgb(anstyle::RgbColor(r, g, b))))
+    Some(render::palette::rgb((r, g, b)))
 }
 
 fn tokens_label(agent: &AgentState) -> String {
@@ -920,19 +916,6 @@ fn tokens_label(agent: &AgentState) -> String {
         .total_tokens
         .map(compact_count)
         .unwrap_or_else(|| "-".to_owned())
-}
-
-fn age_label(now: jiff::Timestamp, last_seen: jiff::Timestamp) -> String {
-    let secs = now.duration_since(last_seen).as_secs().max(0);
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3_600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h", secs / 3_600)
-    } else {
-        format!("{}d", secs / 86_400)
-    }
 }
 
 fn compact_count(value: u64) -> String {
@@ -990,7 +973,7 @@ mod tests {
                 .expect("registered descriptor")
                 .brand
                 .color_rgb;
-            assert_eq!(brand_style(kind), Some(rgb_style(expected)));
+            assert_eq!(brand_style(kind), Some(render::palette::rgb(expected)));
         }
 
         assert_eq!(brand_style("unknown"), None);

@@ -866,7 +866,7 @@ struct PanelGeometry {
 
 impl PanelGeometry {
     fn current() -> Self {
-        let cols = term_cols();
+        let cols = render::terminal_columns(80);
         let weeks = weeks_for_terminal(cols);
         let panel_width = GUTTER + weeks * 2;
         let outer = cols.saturating_sub(panel_width) / 2;
@@ -896,7 +896,7 @@ fn render_panel(
     if stats.by_day.is_empty() {
         let message = "No token usage recorded yet - run an agent and check back.";
         lines.push(center(
-            &render::paint(muted(), message),
+            &render::paint(render::palette::MUTED, message),
             message.chars().count(),
             geometry.panel_width,
         ));
@@ -946,10 +946,13 @@ fn header_lines(panel_width: usize) -> Vec<String> {
         .unwrap_or(0);
     let wm_indent = " ".repeat(panel_width.saturating_sub(art_width) / 2);
     for line in WORDMARK.lines() {
-        lines.push(format!("{wm_indent}{}", render::paint(brand(), line)));
+        lines.push(format!(
+            "{wm_indent}{}",
+            render::paint(render::palette::ACCENT.bold(), line)
+        ));
     }
     lines.push(center(
-        &render::paint(muted(), TAGLINE),
+        &render::paint(render::palette::MUTED, TAGLINE),
         TAGLINE.chars().count(),
         panel_width,
     ));
@@ -985,8 +988,11 @@ fn heatmap_lines(
     } else {
         "Token activity"
     };
-    lines.push(format!("  {}", render::paint(meta(), header)));
-    lines.push(render::paint(muted(), &month_row(&grid)));
+    lines.push(format!(
+        "  {}",
+        render::paint(render::palette::META, header)
+    ));
+    lines.push(render::paint(render::palette::MUTED, &month_row(&grid)));
 
     let styles = ramp_styles();
     for row in 0..7 {
@@ -996,7 +1002,7 @@ fn heatmap_lines(
             5 => "Fri",
             _ => "",
         };
-        let mut line = render::paint(muted(), &format!("  {label:<4}"));
+        let mut line = render::paint(render::palette::MUTED, &format!("  {label:<4}"));
         for week in &grid.cells {
             match week[row] {
                 Some(value) => {
@@ -1014,12 +1020,12 @@ fn heatmap_lines(
 
 /// The compact `Less · ░ ▒ ▓ █ More` key in the cool ramp.
 fn ramp_key(styles: &[anstyle::Style; 5]) -> String {
-    let mut s = format!("{} ", render::paint(muted(), "Less"));
+    let mut s = format!("{} ", render::paint(render::palette::MUTED, "Less"));
     for (lvl, glyph) in RAMP.iter().enumerate() {
         s.push_str(&render::paint(styles[lvl], &glyph.to_string()));
         s.push(' ');
     }
-    s.push_str(&render::paint(muted(), "More"));
+    s.push_str(&render::paint(render::palette::MUTED, "More"));
     s
 }
 
@@ -1029,15 +1035,15 @@ fn windows_lines(lines: &mut Vec<String>, stats: &Stats, active: Option<Window>)
         let tokens = stats_tokens(&window.select(&stats.total));
         (window, window.label(), fmt_tokens(tokens))
     });
-    let sep = render::paint(muted(), "  ·  ");
+    let sep = render::paint(render::palette::MUTED, "  ·  ");
     let Some(active) = active else {
         let row = cells
             .into_iter()
             .map(|(_, label, tokens)| {
                 format!(
                     "{} {}",
-                    render::paint(muted(), label),
-                    render::paint(cool(), &tokens)
+                    render::paint(render::palette::MUTED, label),
+                    render::paint(render::palette::COOL, &tokens)
                 )
             })
             .collect::<Vec<_>>()
@@ -1061,8 +1067,8 @@ fn windows_lines(lines: &mut Vec<String>, stats: &Stats, active: Option<Window>)
             } else {
                 format!(
                     " {} {}{pad} ",
-                    render::paint(muted(), label),
-                    render::paint(cool(), &tokens)
+                    render::paint(render::palette::MUTED, label),
+                    render::paint(render::palette::COOL, &tokens)
                 )
             }
         })
@@ -1150,25 +1156,25 @@ fn model_cells(
         .map(|row| display_width(&row.cache_read))
         .max()
         .unwrap_or(0);
-    let sep = render::paint(muted(), "·");
+    let sep = render::paint(render::palette::MUTED, "·");
 
     rows.iter()
         .map(|row| {
-            let name = pad_to(&render::paint(cool(), &row.name), name_w);
+            let name = pad_to(&render::paint(render::palette::COOL, &row.name), name_w);
             let left_full = format!(
                 "{} {name} {} {sep} {} {} {sep} {} {} {sep} {} {}",
-                render::paint(cool(), "●"),
+                render::paint(render::palette::COOL, "●"),
                 pad_left(&row.usd, usd_w),
-                render::paint(muted(), &glyphs.input),
+                render::paint(render::palette::MUTED, &glyphs.input),
                 pad_left(&row.input, input_w),
-                render::paint(muted(), &glyphs.output),
+                render::paint(render::palette::MUTED, &glyphs.output),
                 pad_left(&row.output, output_w),
-                render::paint(muted(), &glyphs.cache_read),
+                render::paint(render::palette::MUTED, &glyphs.cache_read),
                 pad_left(&row.cache_read, cache_w),
             );
             let left_compact = format!(
                 "{} {name} {}",
-                render::paint(cool(), "●"),
+                render::paint(render::palette::COOL, "●"),
                 pad_left(&row.usd, usd_w),
             );
             StatCell {
@@ -1316,17 +1322,17 @@ fn agent_cells(
         .map(|row| display_width(&row.usd))
         .max()
         .unwrap_or(0);
-    let sep = render::paint(muted(), "·");
+    let sep = render::paint(render::palette::MUTED, "·");
 
     rows.iter()
         .map(|row| {
-            let name = pad_to(&render::paint(cool(), &row.name), name_w);
+            let name = pad_to(&render::paint(render::palette::COOL, &row.name), name_w);
             let left = format!(
                 "{} {name} {} {} {sep} {} {} {sep} {}",
-                render::paint(cool(), "●"),
-                render::paint(muted(), &glyphs.sessions),
+                render::paint(render::palette::COOL, "●"),
+                render::paint(render::palette::MUTED, &glyphs.sessions),
                 pad_left(&row.sessions, sess_w),
-                render::paint(muted(), &glyphs.total),
+                render::paint(render::palette::MUTED, &glyphs.total),
                 pad_left(&row.tokens, tok_w),
                 pad_left(&row.usd, usd_w),
             );
@@ -1401,9 +1407,9 @@ fn share_bar(share_pct: f64, width: usize, glyphs: &PanelGlyphs) -> String {
         .clamp(0.0, width as f64) as usize;
     format!(
         "{}{}",
-        render::paint(cool(), &glyphs.bar_filled.repeat(filled)),
+        render::paint(render::palette::COOL, &glyphs.bar_filled.repeat(filled)),
         render::paint(
-            rgb(Semantic::DEFAULT.faint),
+            render::palette::rgb(Semantic::DEFAULT.faint),
             &glyphs.bar_track.repeat(width - filled),
         ),
     )
@@ -1420,7 +1426,10 @@ fn emit_stat_section(
         return;
     }
 
-    lines.push(format!("  {}", render::paint(meta(), header)));
+    lines.push(format!(
+        "  {}",
+        render::paint(render::palette::META, header)
+    ));
     let gutter = " ".repeat(STAT_GUTTER);
     for cell in cells {
         let pct = format!("{:.1}", cell.share_pct);
@@ -1455,7 +1464,7 @@ fn insights_lines(
     let selected = active.select(&stats.total);
     lines.push(format!(
         "  {} {}",
-        render::paint(muted(), "Sessions:"),
+        render::paint(render::palette::MUTED, "Sessions:"),
         group_thousands(selected.sessions as u64)
     ));
 
@@ -1504,7 +1513,7 @@ fn insights_lines(
 
 /// A muted `label` followed by its value — the insight line shape.
 fn kv(label: &str, value: &str) -> String {
-    format!("{} {value}", render::paint(muted(), label))
+    format!("{} {value}", render::paint(render::palette::MUTED, label))
 }
 
 /// A day count with a pluralized unit: `1 day`, `27 days`.
@@ -1675,34 +1684,12 @@ fn streaks(active: &BTreeSet<i64>, today_day: i64) -> (u32, u32) {
 
 // ── Styling ────────────────────────────────────────────────────────────────────
 
-fn rgb(rgb: (u8, u8, u8)) -> anstyle::Style {
-    anstyle::Style::new().fg_color(Some(rgb_color(rgb)))
-}
-
-fn rgb_color(rgb: (u8, u8, u8)) -> anstyle::Color {
-    anstyle::Color::Rgb(anstyle::RgbColor(rgb.0, rgb.1, rgb.2))
-}
-
-fn brand() -> anstyle::Style {
-    rgb(Semantic::DEFAULT.accent).bold()
-}
-
-fn muted() -> anstyle::Style {
-    rgb(Semantic::DEFAULT.muted)
-}
-
-fn meta() -> anstyle::Style {
-    rgb(Semantic::DEFAULT.meta)
-}
-
-fn cool() -> anstyle::Style {
-    rgb(Semantic::DEFAULT.cool)
-}
-
 fn active_tab() -> anstyle::Style {
     anstyle::Style::new()
-        .fg_color(Some(rgb_color(Semantic::DEFAULT.selection_bg)))
-        .bg_color(Some(rgb_color(Semantic::DEFAULT.cool)))
+        .fg_color(Some(render::palette::rgb_color(
+            Semantic::DEFAULT.selection_bg,
+        )))
+        .bg_color(Some(render::palette::rgb_color(Semantic::DEFAULT.cool)))
         .bold()
 }
 
@@ -1719,11 +1706,11 @@ fn ramp_styles() -> [anstyle::Style; 5] {
     };
     let cool = Semantic::DEFAULT.cool;
     [
-        rgb(Semantic::DEFAULT.faint),
-        rgb(scale(cool, 0.50)),
-        rgb(scale(cool, 0.66)),
-        rgb(scale(cool, 0.82)),
-        rgb(cool),
+        render::palette::rgb(Semantic::DEFAULT.faint),
+        render::palette::rgb(scale(cool, 0.50)),
+        render::palette::rgb(scale(cool, 0.66)),
+        render::palette::rgb(scale(cool, 0.82)),
+        render::palette::rgb(cool),
     ]
 }
 
@@ -1833,13 +1820,6 @@ fn fmt_day(day: i64) -> String {
         (Some(m), Some(d)) => format!("{} {d}", MONTHS[m - 1]),
         _ => date,
     }
-}
-
-/// Terminal width in columns; a non-TTY (a pipe) falls back to 80.
-fn term_cols() -> usize {
-    ratatui::crossterm::terminal::size()
-        .map(|(c, _)| c as usize)
-        .unwrap_or(80)
 }
 
 /// Heatmap span from the terminal width: wider screens show more weeks.

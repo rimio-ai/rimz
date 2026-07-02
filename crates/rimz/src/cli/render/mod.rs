@@ -82,15 +82,30 @@ pub(crate) fn rel_age(ts: Timestamp, now: Timestamp) -> String {
         return "now".to_owned();
     }
     let secs = age.as_secs().max(0) as u64;
+    format!("{} ago", age_label(secs))
+}
+
+pub(crate) fn age_label(secs: u64) -> String {
     if secs < 60 {
-        format!("{secs}s ago")
+        format!("{secs}s")
     } else if secs < 3_600 {
-        format!("{}m ago", secs / 60)
+        format!("{}m", secs / 60)
     } else if secs < 86_400 {
-        format!("{}h ago", secs / 3_600)
+        format!("{}h", secs / 3_600)
     } else {
-        format!("{}d ago", secs / 86_400)
+        format!("{}d", secs / 86_400)
     }
+}
+
+pub(crate) fn age_short(ts: Timestamp, now: Timestamp) -> String {
+    let age = now.duration_since(ts);
+    age_label(age.as_secs().max(0) as u64)
+}
+
+pub(crate) fn terminal_columns(fallback: usize) -> usize {
+    terminal_size::terminal_size()
+        .map(|(terminal_size::Width(width), _)| usize::from(width))
+        .unwrap_or(fallback)
 }
 
 pub(crate) fn rel_until(ts: Timestamp, now: Timestamp) -> String {

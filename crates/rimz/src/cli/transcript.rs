@@ -977,10 +977,7 @@ struct WrapToken {
 }
 
 fn card_content_width() -> usize {
-    let terminal = terminal_size::terminal_size()
-        .map(|(terminal_size::Width(width), _)| usize::from(width))
-        .unwrap_or(MAX_CARD_WIDTH)
-        .min(MAX_CARD_WIDTH);
+    let terminal = render::terminal_columns(MAX_CARD_WIDTH).min(MAX_CARD_WIDTH);
     let prefix_width = UnicodeWidthStr::width(format!("{BODY_INDENT}▌ ").as_str());
     terminal
         .saturating_sub(prefix_width)
