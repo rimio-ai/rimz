@@ -12,7 +12,7 @@ use jiff::Timestamp;
 
 use super::command::ScrubSessionEnvExt;
 use rimz::pane::PaneRef;
-use rimz::schema::heartbeat::ResolverHeartbeat;
+use rimz::resolver::heartbeat::ResolverHeartbeat;
 use rimz::{EventEnvelope, Ledger, RuntimePaths, StatePaths, WorkspaceId, WorkspaceResolver};
 use serde_json::Value;
 use tempfile::TempDir;

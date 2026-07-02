@@ -1,6 +1,6 @@
 use super::*;
 use crate::agents::AgentStatus;
-use crate::schema::diag::{DiagEvent, GateRule};
+use crate::diag::record::{DiagEvent, GateRule};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar_pane::app::ServeConfig;
 use crate::sidebar_pane::app::fetch::FetchOutcome;
@@ -59,7 +59,7 @@ fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<DiagEvent> {
         .expect("diagnostic log")
         .lines()
         .map(|line| {
-            serde_json::from_str::<crate::schema::diag::DiagEnvelope>(line)
+            serde_json::from_str::<crate::diag::record::DiagEnvelope>(line)
                 .expect("diagnostic envelope")
                 .event
         })
@@ -375,7 +375,7 @@ fn focus_event_resolves_contest_then_republished_contest_holds_clicked_baseline(
     contested.focus_contested_panes = vec![first.clone(), second.clone()];
     let mut events = crate::sidebar::events::EventStore::default();
     events.append(
-        crate::schema::sidebar_event::SidebarEvent::FocusChanged {
+        crate::sidebar::events::SidebarEvent::FocusChanged {
             focused: vec![second.clone()],
             unfocused: Vec::new(),
         },

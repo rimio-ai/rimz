@@ -92,7 +92,7 @@ pub(super) fn launch_layout(
             channel: args.channel.clone(),
             prompt: args.prompt.clone(),
             description: args.description.clone(),
-            state: rimz::schema::event::AgentLaunchState::Starting,
+            state: rimz::ledger::event::AgentLaunchState::Starting,
             pane_id: None,
         },
     )?;
@@ -189,7 +189,7 @@ pub(super) fn launch_layout(
                 worktree_name: worktree_name.as_deref(),
                 channel: args.channel.as_deref(),
                 prompt: args.prompt.as_deref(),
-                state: rimz::schema::event::AgentLaunchState::Failed,
+                state: rimz::ledger::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
         );
@@ -868,11 +868,11 @@ pub(super) fn append_launch_event(
             identity.agent_id.as_str(),
         )
     });
-    let event = rimz::schema::event::EventEnvelope::agent_launched(
+    let event = rimz::ledger::event::EventEnvelope::agent_launched(
         workspace.workspace_id.clone(),
         workspace.session_name.clone(),
         &identity.kind,
-        rimz::schema::event::AgentLaunchPayload {
+        rimz::ledger::event::AgentLaunchPayload {
             agent_id: identity.agent_id.clone(),
             agent_name: identity.name.clone(),
             profile: identity.profile.clone(),

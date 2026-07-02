@@ -10,7 +10,7 @@ use std::thread::JoinHandle;
 use tracing::{debug, error};
 
 use crate::agents::spending::SpendingWalker;
-use crate::schema::diag::TickLoop;
+use crate::diag::record::TickLoop;
 use crate::sidebar::consumer::RollupCursor;
 use crate::sidebar::meter::TickMeter;
 use crate::{RuntimePaths, StatePaths};

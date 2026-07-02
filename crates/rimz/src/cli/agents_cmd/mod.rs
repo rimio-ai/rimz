@@ -55,7 +55,7 @@ struct LaunchEventParams<'a> {
     worktree_name: Option<&'a str>,
     channel: Option<&'a str>,
     prompt: Option<&'a str>,
-    state: rimz::schema::event::AgentLaunchState,
+    state: rimz::ledger::event::AgentLaunchState,
     pane_id: Option<rimz::ids::PaneId>,
 }
 

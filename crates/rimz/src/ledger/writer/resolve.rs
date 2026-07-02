@@ -6,7 +6,7 @@ use crate::feed::{
     AbandonReason, FeedItem, FeedStatus, Resolution, ResolutionMethod, ResolverStepState,
 };
 use crate::ids::{AgentKind, AgentSessionId, RequestId, ResolverId};
-use crate::schema::event::EventEnvelope;
+use crate::ledger::event::EventEnvelope;
 
 use super::super::{
     AbstainOutcome, ElapseOutcome, Ledger, ResolveOutcome, Result, TimeoutOutcome, feed_store,

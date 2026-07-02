@@ -11,13 +11,14 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::ids::{SidebarInstanceId, WorkspaceId};
-use crate::schema::diag::{DiagEnvelope, DiagEvent};
-use crate::schema::notify_trace::{NotifyTraceEnvelope, NotifyTraceEvent};
+use crate::diag::notify::{NotifyTraceEnvelope, NotifyTraceEvent};
+use crate::diag::record::{DiagEnvelope, DiagEvent};
+use crate::ids::{PaneId, SidebarInstanceId, WorkspaceId};
 
 pub mod binding;
-mod notify;
+pub mod notify;
 pub mod plugin_presence;
+pub mod record;
 pub(crate) mod rotating;
 
 pub use rotating::JsonlLog;
@@ -352,7 +353,7 @@ fn rotated_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::ids::{MuxName, PaneId, WorkspaceId};
-    use crate::schema::diag::FrameRejectReason;
+    use crate::diag::record::FrameRejectReason;
 
     fn sink(dir: &Path) -> DiagSink {
         DiagSink::under(

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::ledger::atomic;
-use crate::schema::event::EventEnvelope;
+use crate::ledger::event::EventEnvelope;
 
 mod frame;
 mod recovery;

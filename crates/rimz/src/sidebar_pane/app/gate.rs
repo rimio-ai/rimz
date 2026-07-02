@@ -7,8 +7,8 @@
 //! Agent→Process demotion.
 
 use crate::SidebarSnapshot;
+use crate::diag::record::GateRule;
 use crate::ids::PaneId;
-use crate::schema::diag::GateRule;
 use jiff::Timestamp;
 use std::collections::{HashMap, HashSet};
 

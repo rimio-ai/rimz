@@ -11,9 +11,9 @@ use serde_json::Value;
 
 use crate::ids::{MuxName, PaneId, ViewId, WorkspaceId};
 use crate::ledger::paths;
+use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 use crate::mux::{PaneListing, ViewSidebars};
 use crate::pane::SIDEBAR_CHROME_TITLE;
-use crate::schema::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 
 /// Cleanliness of a live room after a successful pane inspection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

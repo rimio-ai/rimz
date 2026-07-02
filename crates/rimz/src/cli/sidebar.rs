@@ -18,8 +18,8 @@ use crate::cli::render;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::ledger::paths::env_path;
 use rimz::ledger::workspace_record;
-use rimz::schema::sidebar_event::SidebarEvent;
 use rimz::sidebar::consumer::read_published_snapshot;
+use rimz::sidebar::events::SidebarEvent;
 use rimz::sidebar::notify::{Notification, NotificationAgent, NotificationKind};
 use rimz::sidebar::produce::{
     ProduceOptions, pane_fixture_active, produce_rollup_snapshot_with_refresh,
@@ -822,7 +822,7 @@ fn mark_read(globals: &GlobalFlags, target: String, worktree: Option<String>) ->
     let diag = diag_for_workspace(&resolved.workspace);
     for row in cleared {
         diag.trace_notify(
-            rimz::schema::notify_trace::NotifyTraceEvent::UnreadCleared {
+            rimz::diag::notify::NotifyTraceEvent::UnreadCleared {
                 row_id: row.id.clone(),
                 label: Some(rimz::sidebar::unread::row_label(row)),
                 agent_kind: Some(AgentKind::new_unchecked(row.name.clone())),
@@ -850,7 +850,7 @@ fn mark_unread(globals: &GlobalFlags, target: String, worktree: Option<String>) 
         .context("writing unread episodes")?;
     let diag = diag_for_workspace(&resolved.workspace);
     for item in &opened {
-        diag.trace_notify(rimz::schema::notify_trace::NotifyTraceEvent::UnreadMarked {
+        diag.trace_notify(rimz::diag::notify::NotifyTraceEvent::UnreadMarked {
             row_id: item.row_id.clone(),
             label: Some(item.label.clone()),
             agent_kind: Some(item.agent_kind.clone()),

@@ -8,8 +8,8 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use rimz::agents::AgentStatus;
+use rimz::diag::record::DiagSeverity;
 use rimz::ids::MuxName;
-use rimz::schema::diag::DiagSeverity;
 use rimz::trust::TrustState;
 use rimz::workspace::RootClass;
 

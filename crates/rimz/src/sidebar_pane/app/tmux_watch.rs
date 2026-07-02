@@ -13,7 +13,7 @@
 //! poll. Demotion is rare (an elder appearing above a live producer), so it
 //! is re-checked per nudge rather than mid-block.
 //!
-//! [`PanesChanged`]: crate::schema::sidebar_event::SidebarEvent::PanesChanged
+//! [`PanesChanged`]: crate::sidebar::events::SidebarEvent::PanesChanged
 
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};

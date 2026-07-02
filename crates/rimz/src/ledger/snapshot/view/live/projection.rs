@@ -4,6 +4,7 @@ use jiff::Timestamp;
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentState, AgentStatus};
+use crate::diag::record::DiagEvent;
 use crate::feed::{FeedItem, pending_ask_for};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::ledger::snapshot::panes::{
@@ -15,7 +16,6 @@ use crate::ledger::snapshot::process::{
 };
 use crate::ledger::snapshot::row::{PaneAgent, SidebarRow};
 use crate::pane::PaneRef;
-use crate::schema::diag::DiagEvent;
 
 use super::super::rows::{active_resolver_state, row_from_agent, row_from_standalone_item};
 

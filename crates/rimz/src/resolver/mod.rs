@@ -8,6 +8,7 @@
 
 pub mod allowlist;
 pub mod freshness;
+pub mod heartbeat;
 
 pub use allowlist::{Allowlist, AllowlistEntry, AllowlistErr};
 pub use freshness::{

@@ -33,7 +33,6 @@ pub mod reload;
 pub mod remote;
 pub mod remote_control;
 pub mod resolver;
-pub mod schema;
 pub mod sidebar;
 pub mod sidebar_pane;
 pub mod sock;
@@ -59,6 +58,7 @@ pub use crate::ids::{
     EventId, MessageId, MuxName, PaneId, RequestId, ResolverId, RunId, SidebarInstanceId, ViewKind,
     WorkspaceId,
 };
+pub use crate::ledger::event::EventEnvelope;
 pub use crate::ledger::{
     AgentCard, Ledger, PaneAgent, PresenceSample, ProcessCard, ProcessState, RowCallSplit, RowCard,
     RuntimePaths, RuntimeProjection, RuntimeScope, SidebarLinkFreshness, SidebarLinkHealth,
@@ -68,5 +68,4 @@ pub use crate::ledger::{
     WorktreeTrunkSync, lead_unread_row,
 };
 pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind};
-pub use crate::schema::event::EventEnvelope;
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

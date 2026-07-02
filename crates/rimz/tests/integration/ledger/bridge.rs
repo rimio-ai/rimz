@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, WakeupFrame};
-use rimz::schema::heartbeat::SidebarHeartbeat;
+use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::{
     FeedItem, FeedKind, FeedStatus, MuxName, Resolution, ResolutionMethod, SidebarInstanceId,
     Surface,
@@ -233,10 +233,7 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
         .recv_from(&mut buf)
         .expect("fresh sidebar should receive");
     let parsed: serde_json::Value = serde_json::from_slice(&buf[..n]).expect("parse envelope");
-    assert_eq!(
-        parsed["v"],
-        rimz::schema::sidebar_event::SIDEBAR_EVENT_VERSION
-    );
+    assert_eq!(parsed["v"], rimz::sidebar::events::SIDEBAR_EVENT_VERSION);
     assert_eq!(
         parsed["workspace_id"],
         serde_json::to_value(&h.workspace_id).expect("ws json"),

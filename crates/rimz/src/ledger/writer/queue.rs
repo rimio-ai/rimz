@@ -3,11 +3,11 @@ use std::time::Duration;
 use jiff::Timestamp;
 
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
+use crate::ledger::event::{EventEnvelope, MessageEventMethod};
 use crate::message::{
     MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus, claim_expired,
     queue_head_for_message,
 };
-use crate::schema::event::{EventEnvelope, MessageEventMethod};
 
 use super::super::{Ledger, Result, message_store};
 use super::{PublishPolicy, Txn};

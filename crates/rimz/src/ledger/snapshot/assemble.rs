@@ -195,7 +195,7 @@ mod tests {
     use crate::agents::AgentLifecycleObservation;
     use crate::agents::lifecycle::LifecycleSignal;
     use crate::ids::{AgentSessionId, WorkspaceId};
-    use crate::schema::event::EventEnvelope;
+    use crate::ledger::event::EventEnvelope;
 
     #[cfg(target_os = "linux")]
     #[test]

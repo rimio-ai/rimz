@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::RuntimePaths;
-use rimz::schema::heartbeat::SidebarHeartbeat;
+use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use tempfile::TempDir;
 
 use crate::common::ScrubSessionEnvExt;
@@ -192,10 +192,7 @@ fn assert_ledger_delta(
         .unwrap_or_else(|err| panic!("the wakeup walk sends a datagram to {who}: {err}"));
     let parsed: serde_json::Value =
         serde_json::from_slice(&buf[..len]).expect("datagram payload is JSON");
-    assert_eq!(
-        parsed["v"],
-        rimz::schema::sidebar_event::SIDEBAR_EVENT_VERSION
-    );
+    assert_eq!(parsed["v"], rimz::sidebar::events::SIDEBAR_EVENT_VERSION);
     assert_eq!(
         parsed["workspace_id"],
         serde_json::to_value(workspace_id).expect("workspace_id JSON"),

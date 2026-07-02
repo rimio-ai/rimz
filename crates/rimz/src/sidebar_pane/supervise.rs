@@ -10,8 +10,8 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use crate::diag::record::DiagEvent;
 use crate::ids::SidebarInstanceId;
-use crate::schema::diag::DiagEvent;
 use crate::sidebar_pane::app::ServeConfig;
 use crate::tui::{MouseCapture, restore_terminal};
 

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use jiff::Timestamp;
+use rimz::ledger::event::{EventKind, MessageEventPayload};
 use rimz::message::{MessageRecord, MessageStatus};
-use rimz::schema::event::{EventKind, MessageEventPayload};
 
 use super::super::open_ledger;
 use super::model::{MessageProblemRow, Messages, OpenCounts, Probe};

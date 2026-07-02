@@ -5,9 +5,10 @@
 use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::ids::{MuxName, ResolverId, SidebarInstanceId};
+use rimz::ledger::event::{EventEnvelope, MessageEventMethod};
 use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
-use rimz::schema::event::{EventEnvelope, MessageEventMethod};
-use rimz::schema::heartbeat::{ResolverHeartbeat, SidebarHeartbeat};
+use rimz::resolver::heartbeat::ResolverHeartbeat;
+use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use serde_json::Value;
 
 use crate::common::Env;

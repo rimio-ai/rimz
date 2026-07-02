@@ -20,8 +20,8 @@ use crate::agents::{
 };
 use crate::feed::FeedItem;
 use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
+use crate::ledger::event::EventEnvelope;
 use crate::pane::PaneRef;
-use crate::schema::event::EventEnvelope;
 
 /// The suite's fixed "now": an arbitrary instant every fixture offsets from
 /// and every scenario projects at, so the tests are deterministic on any

@@ -30,7 +30,7 @@ pub(super) fn emit_terminal_notification(
         ));
     }
     let bell = bell_decision(snapshot, notice.panes, notice.recheck_unread);
-    diag.trace_notify(crate::schema::notify_trace::NotifyTraceEvent::BellRing {
+    diag.trace_notify(crate::diag::notify::NotifyTraceEvent::BellRing {
         notification_kind: notice.kind.to_owned(),
         fired: bell.fired(),
         recheck_unread: notice.recheck_unread,

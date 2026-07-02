@@ -545,7 +545,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
             channel: args.channel.clone(),
             prompt: Some(prompt.clone()),
             description: args.description.clone(),
-            state: rimz::schema::event::AgentLaunchState::Starting,
+            state: rimz::ledger::event::AgentLaunchState::Starting,
             pane_id: None,
         },
     )?;
@@ -616,7 +616,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
                 worktree_name: launch.worktree_name.as_deref(),
                 channel: args.channel.as_deref(),
                 prompt: Some(&prompt),
-                state: rimz::schema::event::AgentLaunchState::Failed,
+                state: rimz::ledger::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
         );

@@ -185,7 +185,7 @@ fn matching_sidebar_heartbeat_mtime(
     record: &WorkspaceRecord,
     path: &Path,
 ) -> Option<SystemTime> {
-    if !rimz::schema::heartbeat::SidebarHeartbeat::is_heartbeat_file(path) {
+    if !rimz::sidebar::heartbeat::SidebarHeartbeat::is_heartbeat_file(path) {
         return None;
     }
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
@@ -196,8 +196,8 @@ fn matching_sidebar_heartbeat_mtime(
     if !fresh {
         return None;
     }
-    let heartbeat = rimz::schema::heartbeat::SidebarHeartbeat::read_from(path).ok()?;
-    (heartbeat.protocol_version == rimz::schema::SIDEBAR_PROTOCOL_VERSION
+    let heartbeat = rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(path).ok()?;
+    (heartbeat.protocol_version == rimz::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION
         && heartbeat.session_name == session
         && heartbeat.workspace_id == record.workspace_id)
         .then_some(modified)
@@ -242,7 +242,7 @@ mod tests {
         let runtime = RuntimePaths::under(live_id.clone(), &runtime_root).unwrap();
         runtime.ensure_dirs().unwrap();
         let instance = rimz::SidebarInstanceId::new();
-        let heartbeat = rimz::schema::heartbeat::SidebarHeartbeat::new(
+        let heartbeat = rimz::sidebar::heartbeat::SidebarHeartbeat::new(
             live_id.clone(),
             instance.clone(),
             MuxName::Zellij,

@@ -7,8 +7,8 @@
 use std::collections::HashSet;
 
 use crate::SidebarSnapshot;
-use crate::schema::sidebar_event::SidebarEvent;
 use crate::sidebar::events::EventStore;
+use crate::sidebar::events::SidebarEvent;
 
 pub fn fuse(pulled: &SidebarSnapshot, events: &EventStore, now_ms: u64) -> SidebarSnapshot {
     let baseline = pulled

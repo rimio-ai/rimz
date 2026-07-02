@@ -9,8 +9,8 @@ use rimz::mux::{
     SessionOptions, SidebarPaneOptions, SidebarWidth, SplitPaneOptions,
 };
 use rimz::pane::PaneRef;
-use rimz::schema::SIDEBAR_PROTOCOL_VERSION;
-use rimz::schema::heartbeat::SidebarHeartbeat;
+use rimz::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION;
+use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed};
 use rimz::{RuntimePaths, ViewKind};
 use tempfile::TempDir;

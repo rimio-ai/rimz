@@ -261,7 +261,7 @@ fn rejected_frame_holds_only_a_publishable_prior() {
         matches!(
             err,
             crate::sidebar::produce::ProduceErr::FrameRejected(
-                crate::schema::diag::FrameRejectReason::Empty
+                crate::diag::record::FrameRejectReason::Empty
             )
         ),
         "unexpected error: {err:?}"
@@ -304,8 +304,8 @@ fn missing_own_rejection_captures_prior_and_offending_frames() {
 
     assert_eq!(pane_count(&held), 1);
     let event = diagnostic_events(&sink).pop().expect("diagnostic event");
-    let crate::schema::diag::DiagEvent::FrameRejected {
-        reason: crate::schema::diag::FrameRejectReason::MissingOwnPane,
+    let crate::diag::record::DiagEvent::FrameRejected {
+        reason: crate::diag::record::FrameRejectReason::MissingOwnPane,
         frames_ref: Some(frames_ref),
         ..
     } = event
@@ -532,7 +532,7 @@ fn refuted_initial_carry_records_diagnostic() {
     let events = diagnostic_events(&sink);
     assert!(matches!(
         events.as_slice(),
-        [crate::schema::diag::DiagEvent::PaneCarryRefuted {
+        [crate::diag::record::DiagEvent::PaneCarryRefuted {
             carried,
             pids,
             prior: 2,
@@ -607,7 +607,7 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
     let events = diagnostic_events(&sink);
     assert!(matches!(
         events.as_slice(),
-        [crate::schema::diag::DiagEvent::PaneCarryForward {
+        [crate::diag::record::DiagEvent::PaneCarryForward {
             carried,
             pids,
             prior: 2,
@@ -667,7 +667,7 @@ fn prior_frame_from_another_build_records_mixed_writers() {
     let mixed = diagnostic_events(&sink)
         .into_iter()
         .filter_map(|event| match event {
-            crate::schema::diag::DiagEvent::MixedBuildWriters {
+            crate::diag::record::DiagEvent::MixedBuildWriters {
                 prior_build,
                 own_build,
             } => Some((prior_build, own_build)),
@@ -685,12 +685,12 @@ fn prior_frame_from_another_build_records_mixed_writers() {
     );
 }
 
-fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::schema::diag::DiagEvent> {
+fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::diag::record::DiagEvent> {
     std::fs::read_to_string(sink.log_path().unwrap())
         .expect("diagnostic log")
         .lines()
         .map(|line| {
-            serde_json::from_str::<crate::schema::diag::DiagEnvelope>(line)
+            serde_json::from_str::<crate::diag::record::DiagEnvelope>(line)
                 .expect("diagnostic envelope")
                 .event
         })

@@ -141,11 +141,11 @@ pub(super) fn gate_notice_lines(theme: &Theme, notice: &GateNotice) -> Vec<Line<
     )]
 }
 
-fn gate_rule_label(rule: crate::schema::diag::GateRule) -> &'static str {
+fn gate_rule_label(rule: crate::diag::record::GateRule) -> &'static str {
     match rule {
-        crate::schema::diag::GateRule::FramelessOverFrame => "frameless update",
-        crate::schema::diag::GateRule::AgentDemotedToProcess => "agent demotion",
-        crate::schema::diag::GateRule::EmptyStampedFrame => "empty pane frame",
+        crate::diag::record::GateRule::FramelessOverFrame => "frameless update",
+        crate::diag::record::GateRule::AgentDemotedToProcess => "agent demotion",
+        crate::diag::record::GateRule::EmptyStampedFrame => "empty pane frame",
     }
 }
 

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ids::{MuxName, PaneId};
 use crate::pane::SIDEBAR_CHROME_TITLE;
-use crate::schema::sidebar_event::SidebarEvent;
+use crate::sidebar::events::SidebarEvent;
 
 use super::ControlLine;
 

@@ -117,7 +117,7 @@ fn fuse_fixture() -> FuseFixture {
         .unwrap_or_else(rimz::sidebar::timing::unix_now_ms)
         .saturating_add(1);
     events.append(
-        rimz::schema::sidebar_event::SidebarEvent::CommandChanged {
+        rimz::sidebar::events::SidebarEvent::CommandChanged {
             pane_id,
             command: "claude".to_owned(),
         },

@@ -16,9 +16,9 @@ use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 #[cfg(unix)]
 use rimz::ids::AgentKind;
 use rimz::ids::AgentSessionId;
-use rimz::message::{DeliveryGate, MessageRecord};
 #[cfg(unix)]
-use rimz::schema::event::{AgentLaunchPayload, AgentLaunchState};
+use rimz::ledger::event::{AgentLaunchPayload, AgentLaunchState};
+use rimz::message::{DeliveryGate, MessageRecord};
 use serde_json::Value;
 
 use crate::common::Env;

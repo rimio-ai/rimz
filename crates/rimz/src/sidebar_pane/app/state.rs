@@ -138,13 +138,13 @@ pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchD
         now,
     } = diagnostics;
     if let Some(reason) = fetch_failure {
-        diag.emit(crate::schema::diag::DiagEvent::FetchFailure {
+        diag.emit(crate::diag::record::DiagEvent::FetchFailure {
             reason,
             failure_streak: next_health.failure_streak,
         });
     }
     if rejected && let Some(rule) = next_gate.rule {
-        diag.emit(crate::schema::diag::DiagEvent::GateHold {
+        diag.emit(crate::diag::record::DiagEvent::GateHold {
             rule,
             prev_produced_at_ms: prev_snapshot.panes_produced_at_ms,
             incoming_produced_at_ms: incoming_snapshot.panes_produced_at_ms,
@@ -153,7 +153,7 @@ pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchD
     } else if next_gate.rule.is_none()
         && let Some(rule) = prev_gate.rule
     {
-        diag.emit(crate::schema::diag::DiagEvent::GateRelease {
+        diag.emit(crate::diag::record::DiagEvent::GateRelease {
             rule,
             held_ms: gate_held_ms(prev_gate, now),
             via_escape_hatch: released_via_escape_hatch,
@@ -161,7 +161,7 @@ pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchD
     }
     match (prev_health.alert.as_ref(), next_health.alert.as_ref()) {
         (prev, Some(next)) if next.is_active() && !prev.is_some_and(|alert| alert.is_active()) => {
-            diag.emit_unlimited(crate::schema::diag::DiagEvent::HealthAlert {
+            diag.emit_unlimited(crate::diag::record::DiagEvent::HealthAlert {
                 reason: next.reason.clone(),
                 since_ms: next.since.as_millisecond().max(0) as u64,
                 recovered_after_ms: None,
@@ -175,7 +175,7 @@ pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchD
                     .try_into()
                     .ok()
             });
-            diag.emit_unlimited(crate::schema::diag::DiagEvent::HealthAlert {
+            diag.emit_unlimited(crate::diag::record::DiagEvent::HealthAlert {
                 reason: next.reason.clone(),
                 since_ms: next.since.as_millisecond().max(0) as u64,
                 recovered_after_ms,

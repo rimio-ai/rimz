@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::ids::{SidebarInstanceId, WorkspaceId};
-use crate::schema::heartbeat::SidebarHeartbeat;
+use crate::sidebar::heartbeat::SidebarHeartbeat;
 use crate::sidebar::timing::{CODEX_PROBE_MARKER_PREFIX, CODEX_PROBE_MARKER_TTL};
 
 use super::{GcErr, GcReport, Result};
@@ -427,7 +427,8 @@ mod tests {
     use super::*;
     use crate::ids::{MuxName, ResolverId, SidebarInstanceId};
     use crate::ledger::RuntimePaths;
-    use crate::schema::heartbeat::{ResolverHeartbeat, SidebarHeartbeat};
+    use crate::resolver::heartbeat::ResolverHeartbeat;
+    use crate::sidebar::heartbeat::SidebarHeartbeat;
     use tempfile::tempdir;
 
     #[test]

@@ -5,9 +5,9 @@ use super::*;
 use crate::agents::AgentStatus;
 use crate::agents::lifecycle;
 use crate::ids::{AgentKind, AgentSessionId, MessageId, WorkspaceId};
+use crate::ledger::event::{EventEnvelope, MessageEventMethod};
 use crate::ledger::snapshot::testkit::*;
 use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
-use crate::schema::event::{EventEnvelope, MessageEventMethod};
 
 /// Test-local shorthand over [`merge_agent_rollups_with_tombstones`]
 /// with no tombstones in play.

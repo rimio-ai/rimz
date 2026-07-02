@@ -12,8 +12,8 @@
 use std::time::{Duration, Instant};
 
 use crate::diag::DiagSink;
+use crate::diag::record::{DiagEvent, TickLoop};
 use crate::lane::WorkLane;
-use crate::schema::diag::{DiagEvent, TickLoop};
 
 /// Lifecycle frames are pinned under 1KiB; a 100-agent burst folds about 100KiB,
 /// and warm unchanged logs fold zero bytes. Cold catch-up trips one tick only.

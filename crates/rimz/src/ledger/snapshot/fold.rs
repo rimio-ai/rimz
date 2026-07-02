@@ -19,13 +19,13 @@ use crate::agents::AgentState;
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::ledger::atomic::{self, write_temp_then_rename};
+#[cfg(test)]
+use crate::ledger::event::EventEnvelope;
+use crate::ledger::event::EventKind;
 use crate::ledger::event_log::{self};
 use crate::ledger::parse_cache::ParseCache;
 use crate::ledger::paths::StatePaths;
 use crate::message::{DeliveryGate, MessageBody, MessageStatus};
-#[cfg(test)]
-use crate::schema::event::EventEnvelope;
-use crate::schema::event::EventKind;
 
 const RESUME_OUTCOME_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
 

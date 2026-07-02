@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 use crate::config::NotificationsPrefs;
 use crate::ids::PaneId;
 use crate::ledger::paths::PathErr;
-use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::events::EventStore;
+use crate::sidebar::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::fuse::fuse;
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
@@ -340,7 +340,7 @@ fn install_panic_diagnostic_hook(diag: crate::diag::DiagSink) {
             prior(info);
             return;
         }
-        diag.emit_unlimited(crate::schema::diag::DiagEvent::RendererPanic {
+        diag.emit_unlimited(crate::diag::record::DiagEvent::RendererPanic {
             message: panic_message(info),
             backtrace: Some(std::backtrace::Backtrace::force_capture().to_string()),
         });

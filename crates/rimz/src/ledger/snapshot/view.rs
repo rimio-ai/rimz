@@ -18,10 +18,10 @@ use crate::agents::SpendTally;
 use crate::feed::{FeedItem, FeedStatus, Surface};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::agent_context::AgentContextRecord;
+#[cfg(test)]
+use crate::ledger::event::EventEnvelope;
 use crate::ledger::event_log::{self};
 use crate::ledger::subagent_context::SubagentContextRecord;
-#[cfg(test)]
-use crate::schema::event::EventEnvelope;
 use crate::workspace::RootClass;
 
 mod aggregate;

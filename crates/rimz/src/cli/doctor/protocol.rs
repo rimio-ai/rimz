@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use rimz::ledger::event::EVENT_SCHEMA_VERSION;
 use rimz::ledger::event_log;
-use rimz::schema::{EVENT_SCHEMA_VERSION, RESOLVER_PROTOCOL_VERSION, SIDEBAR_PROTOCOL_VERSION};
+use rimz::resolver::heartbeat::RESOLVER_PROTOCOL_VERSION;
+use rimz::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION;
 use rimz::{RuntimePaths, StatePaths};
 
 use super::model::Protocols;

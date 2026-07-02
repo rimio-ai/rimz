@@ -9,10 +9,10 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
 use crate::config::NotificationsPrefs;
+use crate::diag::record::TickLoop;
 use crate::ids::{PaneId, SidebarInstanceId};
-use crate::schema::diag::TickLoop;
-use crate::schema::sidebar_event::SidebarEvent;
 use crate::sidebar::consumer::RollupCursor;
+use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
 use crate::sidebar::read_marks::ReadMarks;
@@ -276,10 +276,10 @@ fn emit_producer_transition(
     };
     match (prior.elder, election.elder) {
         (Some(prior_elder), None) => {
-            diag.emit_unlimited(crate::schema::diag::DiagEvent::ProducerElected { prior_elder })
+            diag.emit_unlimited(crate::diag::record::DiagEvent::ProducerElected { prior_elder })
         }
         (None, Some(new_elder)) => {
-            diag.emit_unlimited(crate::schema::diag::DiagEvent::ProducerDemoted { new_elder })
+            diag.emit_unlimited(crate::diag::record::DiagEvent::ProducerDemoted { new_elder })
         }
         _ => {}
     }
@@ -375,8 +375,8 @@ fn emit_unread_reconcile_trace(
 fn notification_emitted_trace(
     notification: &Notification,
     panes: &[PaneId],
-) -> crate::schema::notify_trace::NotifyTraceEvent {
-    use crate::schema::notify_trace::{NotifyTraceEvent, TraceAgent};
+) -> crate::diag::notify::NotifyTraceEvent {
+    use crate::diag::notify::{NotifyTraceEvent, TraceAgent};
     NotifyTraceEvent::NotificationEmitted {
         notification_kind: notification.kind_env().to_owned(),
         agents: notification
@@ -396,7 +396,7 @@ fn notification_emitted_trace(
 }
 
 fn emit_link_alert(diag: &crate::diag::DiagSink, alert: LinkAlert) {
-    diag.emit(crate::schema::diag::DiagEvent::LinkAlert {
+    diag.emit(crate::diag::record::DiagEvent::LinkAlert {
         tier: alert.tier,
         rtt_ms: alert.rtt_ms,
         miss_pct: alert.miss_pct,

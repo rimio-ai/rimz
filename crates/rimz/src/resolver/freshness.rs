@@ -23,8 +23,8 @@ use crate::ids::{RequestId, ResolverId};
 use crate::ledger::RuntimePaths;
 use crate::resolver::Allowlist;
 use crate::resolver::allowlist::AllowlistEntry;
-use crate::schema::RESOLVER_PROTOCOL_VERSION;
-use crate::schema::heartbeat::ResolverHeartbeat;
+use crate::resolver::heartbeat::RESOLVER_PROTOCOL_VERSION;
+use crate::resolver::heartbeat::ResolverHeartbeat;
 
 /// Maximum age of a resolver heartbeat. The doc-suggested cadence is 1s tick,
 /// 3s TTL (`docs/internals/agents/resolvers.md`).

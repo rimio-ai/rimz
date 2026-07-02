@@ -260,8 +260,8 @@ pub struct OpenedUnread {
 }
 
 impl OpenedUnread {
-    pub(crate) fn trace_event(&self) -> crate::schema::notify_trace::NotifyTraceEvent {
-        crate::schema::notify_trace::NotifyTraceEvent::UnreadMarked {
+    pub(crate) fn trace_event(&self) -> crate::diag::notify::NotifyTraceEvent {
+        crate::diag::notify::NotifyTraceEvent::UnreadMarked {
             row_id: self.row_id.clone(),
             label: Some(self.label.clone()),
             agent_kind: Some(self.agent_kind.clone()),
@@ -287,8 +287,8 @@ pub(crate) struct ClearedUnread {
 }
 
 impl ClearedUnread {
-    pub(crate) fn trace_event(&self) -> crate::schema::notify_trace::NotifyTraceEvent {
-        crate::schema::notify_trace::NotifyTraceEvent::UnreadCleared {
+    pub(crate) fn trace_event(&self) -> crate::diag::notify::NotifyTraceEvent {
+        crate::diag::notify::NotifyTraceEvent::UnreadCleared {
             row_id: self.row_id.clone(),
             label: self.label.clone(),
             agent_kind: self.agent_kind.clone(),

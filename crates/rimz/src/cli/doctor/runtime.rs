@@ -218,9 +218,9 @@ struct SidebarSessionGroup {
 }
 
 fn duplicate_sidebar_session_groups(
-    heartbeats: &[rimz::schema::heartbeat::SidebarHeartbeat],
+    heartbeats: &[rimz::sidebar::heartbeat::SidebarHeartbeat],
 ) -> Vec<SidebarSessionGroup> {
-    let mut by_session: BTreeMap<String, Vec<&rimz::schema::heartbeat::SidebarHeartbeat>> =
+    let mut by_session: BTreeMap<String, Vec<&rimz::sidebar::heartbeat::SidebarHeartbeat>> =
         BTreeMap::new();
     for heartbeat in heartbeats {
         by_session
@@ -254,7 +254,7 @@ fn duplicate_sidebar_session_groups(
 
 fn fresh_sidebar_heartbeats_for_doctor(
     runtime: &RuntimePaths,
-) -> std::io::Result<Vec<rimz::schema::heartbeat::SidebarHeartbeat>> {
+) -> std::io::Result<Vec<rimz::sidebar::heartbeat::SidebarHeartbeat>> {
     let entries = match fs::read_dir(&runtime.heartbeat_dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -263,16 +263,16 @@ fn fresh_sidebar_heartbeats_for_doctor(
     let mut heartbeats = Vec::new();
     for entry in entries {
         let path = entry?.path();
-        if !rimz::schema::heartbeat::SidebarHeartbeat::is_heartbeat_file(&path)
+        if !rimz::sidebar::heartbeat::SidebarHeartbeat::is_heartbeat_file(&path)
             || !heartbeat_mtime_is_fresh(&path)
         {
             continue;
         }
-        let heartbeat = match rimz::schema::heartbeat::SidebarHeartbeat::read_from(&path) {
+        let heartbeat = match rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(&path) {
             Ok(heartbeat) => heartbeat,
             Err(_) => continue,
         };
-        if heartbeat.protocol_version != rimz::schema::SIDEBAR_PROTOCOL_VERSION
+        if heartbeat.protocol_version != rimz::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION
             || heartbeat.workspace_id != runtime.workspace_id
         {
             continue;
@@ -455,10 +455,10 @@ pub(super) fn collect_diagnostics(ws: &rimz::ResolvedWorkspace) -> model::Diagno
 }
 
 fn diagnostic_rows(
-    records: Vec<rimz::schema::diag::DiagEnvelope>,
+    records: Vec<rimz::diag::record::DiagEnvelope>,
     limit: usize,
 ) -> Vec<model::DiagRow> {
-    let mut groups: Vec<(String, rimz::schema::diag::DiagEnvelope, usize)> = Vec::new();
+    let mut groups: Vec<(String, rimz::diag::record::DiagEnvelope, usize)> = Vec::new();
     for record in records {
         let key = record.event.identity_key();
         match groups.last_mut() {
@@ -478,7 +478,7 @@ fn diagnostic_rows(
         .collect()
 }
 
-fn diagnostic_row(record: rimz::schema::diag::DiagEnvelope, count: usize) -> model::DiagRow {
+fn diagnostic_row(record: rimz::diag::record::DiagEnvelope, count: usize) -> model::DiagRow {
     let summary = summary_with_record_count(
         summary_with_suppressed(
             diagnostic_summary(&record.event),
@@ -494,8 +494,8 @@ fn diagnostic_row(record: rimz::schema::diag::DiagEnvelope, count: usize) -> mod
     }
 }
 
-fn diagnostic_summary(event: &rimz::schema::diag::DiagEvent) -> String {
-    use rimz::schema::diag::DiagEvent;
+fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
+    use rimz::diag::record::DiagEvent;
     match event {
         DiagEvent::FrameRejected {
             reason,
@@ -719,7 +719,7 @@ fn summary_with_record_count(summary: String, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rimz::schema::diag::{DiagEnvelope, DiagEvent, FrameRejectReason, TickLoop};
+    use rimz::diag::record::{DiagEnvelope, DiagEvent, FrameRejectReason, TickLoop};
 
     fn sidebar(raw: &str) -> rimz::SidebarInstanceId {
         rimz::SidebarInstanceId::parse(raw).expect("valid sidebar id")
@@ -729,8 +729,8 @@ mod tests {
         session_name: &str,
         instance_id: &str,
         pane: Option<&str>,
-    ) -> rimz::schema::heartbeat::SidebarHeartbeat {
-        rimz::schema::heartbeat::SidebarHeartbeat::new(
+    ) -> rimz::sidebar::heartbeat::SidebarHeartbeat {
+        rimz::sidebar::heartbeat::SidebarHeartbeat::new(
             rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
             sidebar(instance_id),
             rimz::MuxName::Zellij,

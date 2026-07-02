@@ -30,10 +30,10 @@ use crate::bridge::{WakeupFrame, feed_socket_path, run_socket_path};
 use crate::feed::{FeedItem, FeedStatus};
 use crate::harness::run::RunRecord;
 use crate::ledger::RuntimePaths;
-use crate::schema::SIDEBAR_PROTOCOL_VERSION;
-use crate::schema::event::{EventEnvelope, EventKind};
-use crate::schema::heartbeat::SidebarHeartbeat;
-use crate::schema::sidebar_event::{RELOAD_CONTROL_WORD, SidebarEvent, SidebarEventEnvelope};
+use crate::ledger::event::{EventEnvelope, EventKind};
+use crate::sidebar::events::{RELOAD_CONTROL_WORD, SidebarEvent, SidebarEventEnvelope};
+use crate::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION;
+use crate::sidebar::heartbeat::SidebarHeartbeat;
 pub use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
 
 #[derive(Debug, thiserror::Error)]

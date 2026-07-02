@@ -424,7 +424,7 @@ fn record_own_launch_pane(
                 worktree_name: None,
                 channel: identity.channel.as_deref(),
                 prompt,
-                state: rimz::schema::event::AgentLaunchState::Bound,
+                state: rimz::ledger::event::AgentLaunchState::Bound,
                 pane_id: Some(pane_id.clone()),
             },
         )
@@ -455,7 +455,7 @@ fn record_launch_failed(
                 worktree_name: None,
                 channel: identity.channel.as_deref(),
                 prompt,
-                state: rimz::schema::event::AgentLaunchState::Failed,
+                state: rimz::ledger::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
         )

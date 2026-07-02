@@ -12,6 +12,7 @@
 mod backend;
 mod layout;
 mod pane_pid;
+pub mod pane_topology;
 mod parse;
 mod presence;
 mod raw_pane;

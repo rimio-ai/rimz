@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-pub use crate::schema::diag::{AggregateKey, EventPaneSig, EventsSig, StatusCountSig};
-use crate::schema::sidebar_event::SidebarEvent;
+pub use crate::diag::record::{AggregateKey, EventPaneSig, EventsSig, StatusCountSig};
 use crate::sidebar::events::EventStore;
+use crate::sidebar::events::SidebarEvent;
 use crate::{SidebarSnapshot, SidebarWorktreeKind};
 
 use super::WatchedField;

@@ -4,13 +4,13 @@
 //! The pure detectors run in-process; the writer thread handles cooldown,
 //! elder-only real-world checks, and emission into the typed diagnostics
 //! channel ([`crate::diag`]). The durable record vocabulary lives in
-//! [`crate::schema::diag`].
+//! [`crate::diag::record`].
 
 mod detect;
 mod sig;
 pub mod writer;
 
-pub use crate::schema::diag::{AggregateKey, AnomalyKind, FrameStamp, ObserveRole, WatchedField};
+pub use crate::diag::record::{AggregateKey, AnomalyKind, FrameStamp, ObserveRole, WatchedField};
 pub use detect::Observer;
 pub use sig::{
     AggregateSig, EventsSig, FrameSig, GroupSig, OwnViewSig, RosterRowSig, RosterSig, RowSig,

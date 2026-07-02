@@ -12,7 +12,12 @@ use crate::ids::{
 };
 use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus};
 use crate::pane::RuntimeOwner;
-use crate::schema::EVENT_SCHEMA_VERSION;
+
+// v2: `agent.lifecycle` params carry a `signal` (the agent-agnostic lifecycle
+// intent folded through `agents::lifecycle::step`) in place of the legacy bare
+// `status` + `compacting`; signal-less lifecycle frames fold to nothing.
+pub const EVENT_SCHEMA_VERSION: &str = "rimz.event.v2";
+pub const AGENT_LIFECYCLE_METHOD: &str = "agent.lifecycle";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentLifecyclePayload {
@@ -341,14 +346,16 @@ impl EventEnvelope {
 
     pub fn kind(&self) -> EventKind<'_> {
         match self.method.as_str() {
-            "agent.lifecycle" => serde_json::from_str::<AgentLifecyclePayload>(self.params.get())
-                .ok()
-                .map(Box::new)
-                .map(EventKind::AgentLifecycle)
-                .unwrap_or(EventKind::Other {
-                    method: self.method.as_str(),
-                    params: &self.params,
-                }),
+            AGENT_LIFECYCLE_METHOD => {
+                serde_json::from_str::<AgentLifecyclePayload>(self.params.get())
+                    .ok()
+                    .map(Box::new)
+                    .map(EventKind::AgentLifecycle)
+                    .unwrap_or(EventKind::Other {
+                        method: self.method.as_str(),
+                        params: &self.params,
+                    })
+            }
             "agent.launched" => serde_json::from_str(self.params.get())
                 .map(EventKind::AgentLaunch)
                 .unwrap_or(EventKind::Other {
@@ -404,7 +411,7 @@ impl EventEnvelope {
             session_name,
             agent_kind.clone(),
             "agent-hook",
-            "agent.lifecycle",
+            AGENT_LIFECYCLE_METHOD,
             params,
         )
     }

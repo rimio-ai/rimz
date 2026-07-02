@@ -93,7 +93,7 @@ History and runtime are separate views over the one durable ledger ([`runtime.rs
 
 ## Wakeups
 
-After every write, the writer wakes live consumers off-lock: it walks fresh sidebar heartbeats (TTL ~5s) and sends each a `ledger_delta` wakeup datagram, and it pings any per-request bridge socket. The envelope and its event taxonomy live in [state.md → event taxonomy](./state.md#event-taxonomy) and [`schema/sidebar_event.rs`](../../../crates/rimz/src/schema/sidebar_event.rs).
+After every write, the writer wakes live consumers off-lock: it walks fresh sidebar heartbeats (TTL ~5s) and sends each a `ledger_delta` wakeup datagram, and it pings any per-request bridge socket. The envelope and its event taxonomy live in [state.md → event taxonomy](./state.md#event-taxonomy) and [`sidebar/events.rs`](../../../crates/rimz/src/sidebar/events.rs).
 
 A wakeup carries latency, not truth: the consumer folds the log tail from its own cursor, and the published checkpoint is a catch-up accelerator it can skip. A missed wakeup is closed by the next sidebar tick (`--tick-seconds`, default 1s) ([`wakeup.rs`](../../../crates/rimz/src/ledger/wakeup.rs)).
 

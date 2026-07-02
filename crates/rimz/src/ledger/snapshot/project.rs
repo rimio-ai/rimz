@@ -12,11 +12,11 @@ use crate::agents::AgentLifecycleObservation;
 use crate::agents::lifecycle::{self, Transition};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::message::{MessageBody, MessageStatus};
-use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
-use crate::schema::event::{
+use crate::ledger::event::{
     AgentLaunchPayload, AgentLaunchState, EventEnvelope, EventKind, MessageEventPayload,
 };
+use crate::message::{MessageBody, MessageStatus};
+use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
 /// How many user prompts a session's rollup keeps (`AgentState::recent_prompts`,
 /// newest last). The events are durable, so the cap bounds only the projected

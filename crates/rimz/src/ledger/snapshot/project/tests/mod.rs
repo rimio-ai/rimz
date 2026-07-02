@@ -7,9 +7,9 @@ use crate::agents::AgentStatus;
 use crate::agents::SessionOrigin;
 use crate::agents::lifecycle::TurnPhase;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+use crate::ledger::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use crate::ledger::snapshot::SidebarSnapshot;
 use crate::ledger::snapshot::testkit::*;
-use crate::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use jiff::Timestamp;
 use serde_json::json;
 

@@ -10,7 +10,7 @@ use rimz::EventEnvelope;
 use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::ids::AgentSessionId;
-use rimz::schema::heartbeat::ResolverHeartbeat;
+use rimz::resolver::heartbeat::ResolverHeartbeat;
 use serde_json::json;
 
 use super::command::ScrubSessionEnvExt;

@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::feed::{AbandonReason, FeedItem, FeedStatus, Resolution, ResolutionMethod};
 use crate::harness::run::{RunRecord, RunStatus};
-use crate::schema::event::EventEnvelope;
+use crate::ledger::event::EventEnvelope;
 
 use super::super::{
     Ledger, LedgerErr, ResetRecordsOutcome, Result, event_log, feed_store, lock, run_store,

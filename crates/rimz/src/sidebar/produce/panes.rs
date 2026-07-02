@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::Result;
+use crate::diag::record::{DiagEvent, FrameRejectReason};
 use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
 use crate::ledger::snapshot::PresenceSample;
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing};
-use crate::schema::diag::{DiagEvent, FrameRejectReason};
 use crate::sidebar::cache::{
     effective_pane_ttl, presence_stamp_age_ms, published_frame_unwatched, read_snapshot_cache,
     snapshot_cache_is_fresh,

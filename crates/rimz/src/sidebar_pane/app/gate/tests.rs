@@ -1,6 +1,6 @@
 use super::*;
 use crate::WorkspaceId;
-use crate::schema::diag::GateRule;
+use crate::diag::record::GateRule;
 use crate::sidebar_pane::app::fixtures::{
     agent_snapshot, pane, snapshot, snapshot_with_panes, workspace,
 };

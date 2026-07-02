@@ -1,6 +1,6 @@
 use crate::agents::AgentStatus;
+use crate::diag::record::GateRule;
 use crate::ids::PaneId;
-use crate::schema::diag::GateRule;
 use crate::sidebar_pane::pets::PetView;
 use jiff::Timestamp;
 use ratatui::layout::Rect;

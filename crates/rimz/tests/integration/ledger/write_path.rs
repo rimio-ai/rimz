@@ -5,8 +5,8 @@
 
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::ledger::event::AgentLaunchState;
 use rimz::ledger::{AgentLaunchAppend, AgentLaunchName, AgentLaunchRequest, AskExpiry, snapshot};
-use rimz::schema::event::AgentLaunchState;
 use rimz::{
     EventEnvelope, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, RuntimeOwner,
     RuntimeOwnerKind, RuntimeScope, Surface,

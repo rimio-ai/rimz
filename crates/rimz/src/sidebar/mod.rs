@@ -18,6 +18,7 @@ pub mod events;
 pub mod focus_anchor;
 pub mod frame;
 pub mod fuse;
+pub mod heartbeat;
 pub mod meter;
 pub mod notify;
 pub mod observe;
@@ -41,8 +42,7 @@ use crate::ledger::RuntimePaths;
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
 use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
-use crate::schema::SIDEBAR_PROTOCOL_VERSION;
-use crate::schema::heartbeat::SidebarHeartbeat;
+use crate::sidebar::heartbeat::{SIDEBAR_PROTOCOL_VERSION, SidebarHeartbeat};
 use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
 
 /// Launch-lock poll cadence: the producer holds the election lock while the

@@ -65,7 +65,7 @@ The remaining files are **coordination and receipts**, terse by design: `heartbe
 
 ## Realtime Events
 
-Wakeup datagrams carry `SidebarEventEnvelope` ([`schema/sidebar_event.rs`](../../../crates/rimz/src/schema/sidebar_event.rs)): a schema version, the workspace id, an optional session scope, a sender timestamp, and the typed event. `session_name` is the scope — `Some` targets the one mux session whose pane ids the event names, `None` is workspace-wide (ledger deltas, reloads, and pane-frame publications reach every renderer of the workspace).
+Wakeup datagrams carry `SidebarEventEnvelope` ([`sidebar/events.rs`](../../../crates/rimz/src/sidebar/events.rs)): a schema version, the workspace id, an optional session scope, a sender timestamp, and the typed event. `session_name` is the scope — `Some` targets the one mux session whose pane ids the event names, `None` is workspace-wide (ledger deltas, reloads, and pane-frame publications reach every renderer of the workspace).
 
 The receive path drops an event for another workspace or session before it reaches the store. The store keeps each event under a receiver-clock TTL and records both `sent_at_ms` (for supersession) and the receive time (for expiry), so a skewed sender clock can mis-order an overlay briefly but never pin it. Only **overlay** events live in the store — `PaneClosed`, `CommandChanged`, `FocusChanged`, and a `PaneOpened` that carries a command; the rest are consumed as renderer actions or producer-verification nudges.
 

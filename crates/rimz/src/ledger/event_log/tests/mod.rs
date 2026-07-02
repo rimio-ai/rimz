@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::*;
 use crate::ids::WorkspaceId;
-use crate::schema::event::EventEnvelope;
+use crate::ledger::event::EventEnvelope;
 
 mod frame;
 mod recovery;

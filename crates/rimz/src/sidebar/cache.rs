@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::ledger::parse_cache::ParseCache;
-use crate::schema::pane_topology::PaneTopologyCache;
+use crate::mux::zellij::pane_topology::PaneTopologyCache;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::{
     EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, unix_now_ms,

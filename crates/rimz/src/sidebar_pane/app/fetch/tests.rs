@@ -111,12 +111,12 @@ fn diagnostics_name_producer_transitions_and_link_alerts() {
     assert_eq!(events.len(), 2);
     assert!(matches!(
         &events[0],
-        crate::schema::diag::DiagEvent::ProducerElected { prior_elder }
+        crate::diag::record::DiagEvent::ProducerElected { prior_elder }
             if prior_elder == &elder
     ));
     assert!(matches!(
         &events[1],
-        crate::schema::diag::DiagEvent::ProducerDemoted { new_elder: observed }
+        crate::diag::record::DiagEvent::ProducerDemoted { new_elder: observed }
             if observed == &new_elder
     ));
 
@@ -134,7 +134,7 @@ fn diagnostics_name_producer_transitions_and_link_alerts() {
     let events = diagnostic_events(&sink);
     assert!(matches!(
         &events[2],
-        crate::schema::diag::DiagEvent::LinkAlert {
+        crate::diag::record::DiagEvent::LinkAlert {
             tier: crate::remote::link::LinkTier::Degraded,
             rtt_ms: Some(230),
             miss_pct: 4,
@@ -348,12 +348,12 @@ fn test_config(workspace_id: WorkspaceId, instance_id: SidebarInstanceId) -> Ser
     }
 }
 
-fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::schema::diag::DiagEvent> {
+fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::diag::record::DiagEvent> {
     std::fs::read_to_string(sink.log_path().unwrap())
         .expect("diagnostic log")
         .lines()
         .map(|line| {
-            serde_json::from_str::<crate::schema::diag::DiagEnvelope>(line)
+            serde_json::from_str::<crate::diag::record::DiagEnvelope>(line)
                 .expect("diagnostic envelope")
                 .event
         })

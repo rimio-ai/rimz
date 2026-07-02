@@ -6,12 +6,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Instant;
 
-use jiff::Timestamp;
-
 use crate::diag::{DiagSink, Limiter};
+use crate::diag::record::DiagEvent;
+use jiff::Timestamp;
 use crate::ids::SidebarInstanceId;
 use crate::ledger::paths::RuntimePaths;
-use crate::schema::diag::DiagEvent;
 use crate::sidebar::cache::read_snapshot_cache;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::unix_now_ms;
@@ -253,9 +252,9 @@ fn timestamp_diff_gt(left: Timestamp, right: Timestamp, tolerance: std::time::Du
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diag::record::DiagEnvelope;
     use crate::ids::{MuxName, PaneId, ViewKind, WorkspaceId};
     use crate::pane::PaneRef;
-    use crate::schema::diag::DiagEnvelope;
     use crate::sidebar::frame::assemble_frame;
     use crate::sidebar::observe::RosterRowSig;
 
@@ -434,7 +433,7 @@ mod tests {
         assert_eq!(record.at_ms, 42);
         assert!(matches!(
             record.event,
-            crate::schema::diag::DiagEvent::FrameAnomaly {
+            crate::diag::record::DiagEvent::FrameAnomaly {
                 anomaly: AnomalyKind::DuplicateRowId { .. },
                 dropped_msgs: 7,
                 ..

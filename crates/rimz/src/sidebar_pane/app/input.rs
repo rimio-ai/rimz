@@ -7,7 +7,7 @@ use std::io;
 use std::os::unix::net::UnixDatagram;
 
 use crate::agents::AgentStatus;
-use crate::schema::sidebar_event::{RELOAD_CONTROL_WORD, SidebarEventEnvelope};
+use crate::sidebar::events::{RELOAD_CONTROL_WORD, SidebarEventEnvelope};
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -291,7 +291,7 @@ mod tests {
             crate::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
             Some("rimz-test".to_owned()),
             42,
-            crate::schema::sidebar_event::SidebarEvent::LedgerDelta {
+            crate::sidebar::events::SidebarEvent::LedgerDelta {
                 event_method: None,
                 agent_signal: None,
             },
@@ -303,13 +303,13 @@ mod tests {
 
     #[test]
     fn agent_session_boundary_event_requests_fresh_panes() {
-        let start = crate::schema::sidebar_event::SidebarEvent::LedgerDelta {
+        let start = crate::sidebar::events::SidebarEvent::LedgerDelta {
             event_method: Some("agent.lifecycle".to_owned()),
             agent_signal: Some(crate::agents::LifecycleSignal::Registered.tag().to_owned()),
         };
         assert!(start.requests_producer_verification());
 
-        let status = crate::schema::sidebar_event::SidebarEvent::LedgerDelta {
+        let status = crate::sidebar::events::SidebarEvent::LedgerDelta {
             event_method: Some("agent.lifecycle".to_owned()),
             agent_signal: Some(crate::agents::LifecycleSignal::TurnStarted.tag().to_owned()),
         };

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
-use rimz::schema::event::EventEnvelope;
+use rimz::ledger::event::EventEnvelope;
 
 use crate::common::Env;
 

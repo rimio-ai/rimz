@@ -15,7 +15,7 @@ use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
-use rimz::schema::event::EventEnvelope;
+use rimz::ledger::event::EventEnvelope;
 use rimz::workspace::WorkspaceResolver;
 
 use crate::common::Env;

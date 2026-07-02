@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 use crate::agents::AgentState;
 use crate::feed::pending_ask_in_snapshot;
 use crate::ids::{AgentSessionId, MessageId, WorkspaceId};
+use crate::ledger::event::EventKind;
 use crate::ledger::event_log;
 use crate::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
 };
 use crate::mux::{NamedKey, paste_into_pane, press_pane_key, type_into_pane};
-use crate::schema::event::EventKind;
 use crate::workspace::ResolvedWorkspace;
 use crate::{Ledger, PaneAgent, SidebarSnapshot};
 
@@ -432,8 +432,8 @@ mod tests {
 
     use crate::agents::{AgentStatus, TurnPhase};
     use crate::ids::{AgentKind, WorkspaceId};
+    use crate::ledger::event::{EventEnvelope, MessageEventMethod};
     use crate::ledger::{RuntimePaths, StatePaths};
-    use crate::schema::event::{EventEnvelope, MessageEventMethod};
     use jiff::Timestamp;
 
     fn agent() -> AgentState {

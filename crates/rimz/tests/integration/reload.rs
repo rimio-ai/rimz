@@ -15,8 +15,8 @@ use jiff::Timestamp;
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::RuntimePaths;
 use rimz::ledger::wakeup::reload_sidebars;
-use rimz::schema::heartbeat::SidebarHeartbeat;
-use rimz::schema::sidebar_event::RELOAD_CONTROL_WORD;
+use rimz::sidebar::events::RELOAD_CONTROL_WORD;
+use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use tempfile::TempDir;
 
 const SESSION_NAME: &str = "rimz-reload-test";

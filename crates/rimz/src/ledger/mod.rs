@@ -37,6 +37,7 @@
 
 pub mod agent_context;
 pub mod atomic;
+pub mod event;
 pub mod event_log;
 pub mod feed_store;
 pub mod gc;
@@ -63,7 +64,7 @@ use std::sync::Arc;
 
 use crate::feed::{AbandonReason, FeedItem, FeedStatus, Surface};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId, RunId, WorkspaceId};
-use crate::schema::event::{AgentLaunchState, EventEnvelope};
+use crate::ledger::event::{AgentLaunchState, EventEnvelope};
 
 pub use crate::ledger::feed_store::FeedStoreErr;
 pub use crate::ledger::paths::{RuntimePaths, StatePaths};

@@ -1,7 +1,7 @@
 //! Pure publish verdicts for producer pane frames.
 
+use crate::diag::record::FrameRejectReason;
 use crate::ids::PaneId;
-use crate::schema::diag::FrameRejectReason;
 use crate::sidebar::frame::PaneFrame;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -12,7 +12,7 @@ use crate::cli::render::{
     Cell, KeyVals, Table, cell, fmt_bytes, home_relative, paint, palette, status,
 };
 use rimz::agents::AgentStatus;
-use rimz::schema::diag::DiagSeverity;
+use rimz::diag::record::DiagSeverity;
 use rimz::trust::TrustState;
 
 use super::model::{

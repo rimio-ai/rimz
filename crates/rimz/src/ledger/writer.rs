@@ -9,8 +9,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::feed::FeedItem;
+use crate::ledger::event::{AgentLaunchPayload, EventEnvelope};
 use crate::pane::RuntimeOwnerKind;
-use crate::schema::event::{AgentLaunchPayload, EventEnvelope};
 use crate::workspace::ResolvedWorkspace;
 
 use super::{
@@ -605,9 +605,9 @@ mod tests {
     use crate::agents::TurnPhase;
     use crate::agents::{AgentState, AgentStatus};
     use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
+    use crate::ledger::event::MessageEventMethod;
     use crate::ledger::paths::{RuntimePaths, StatePaths};
     use crate::message::{DeliveryGate, MessageRecord, MessageStatus};
-    use crate::schema::event::MessageEventMethod;
 
     #[test]
     fn rotate_event_log_writes_carryover_before_archiving_active_log() {
@@ -684,7 +684,7 @@ mod tests {
                     launch_ordinal: None,
                     channel: None,
                     kind_ordinal: None,
-                    state: crate::schema::event::AgentLaunchState::Bound,
+                    state: crate::ledger::event::AgentLaunchState::Bound,
                     run_id: None,
                     pane_id: None,
                     runtime_owner: Some(runtime::process_owner(
@@ -789,7 +789,7 @@ mod tests {
                     launch_ordinal: None,
                     channel: None,
                     kind_ordinal: None,
-                    state: crate::schema::event::AgentLaunchState::Bound,
+                    state: crate::ledger::event::AgentLaunchState::Bound,
                     run_id: None,
                     pane_id: None,
                     runtime_owner: None,

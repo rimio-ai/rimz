@@ -12,9 +12,9 @@ pub mod fleet {
     use crate::agents::AgentLifecycleObservation;
     use crate::agents::lifecycle::LifecycleSignal;
     use crate::ids::{AgentSessionId, MuxName, PaneId, ViewKind, WorkspaceId};
+    use crate::ledger::event::EventEnvelope;
     use crate::ledger::{StatePaths, event_log};
     use crate::pane::PaneRef;
-    use crate::schema::event::EventEnvelope;
     use crate::sidebar::produce::ProduceOptions;
     use crate::sidebar::refresh::AccountsCache;
     use crate::{RuntimePaths, agents, sidebar};

@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use rimz::schema::diag::{DiagEnvelope, DiagEvent};
+use rimz::diag::record::{DiagEnvelope, DiagEvent};
 
 use crate::common::{CommandTimeoutExt, Env};
 

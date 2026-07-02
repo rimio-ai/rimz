@@ -7,7 +7,7 @@ use crate::ids::RequestId;
 use super::super::{AskExpiry, Ledger, Result, feed_store, runtime};
 use super::debounce::{abandon_sweep_due, abandon_sweep_stamp, touch_stamp};
 use super::{PublishPolicy, Txn};
-use crate::schema::event::EventEnvelope;
+use crate::ledger::event::EventEnvelope;
 
 /// Run the dead-owner sweep at most once per the abandon sweep interval.
 /// Caller holds the workspace lock. The common case is one stamp stat — the

@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
-use crate::schema::event::EventEnvelope;
+use crate::ledger::event::EventEnvelope;
 
 use super::{EventLogErr, Result, testkit};
 

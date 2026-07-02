@@ -10,8 +10,8 @@ use rimz::agents::{
 };
 use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
+use rimz::ledger::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use rimz::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus};
-use rimz::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 
 use crate::common::Env;
 

@@ -4,7 +4,7 @@ pub(super) fn write_topology_cache(runtime: &RuntimePaths, topology: Option<&str
     let Some(topology) = topology else {
         return;
     };
-    match serde_json::from_str::<rimz::schema::pane_topology::PaneTopologyCache>(topology) {
+    match serde_json::from_str::<rimz::mux::zellij::pane_topology::PaneTopologyCache>(topology) {
         Ok(mut cache) => {
             sanitize_topology_cache(&mut cache);
             if let Err(err) = rimz::sidebar::cache::write_pane_topology_cache(runtime, &cache) {
@@ -17,7 +17,7 @@ pub(super) fn write_topology_cache(runtime: &RuntimePaths, topology: Option<&str
     }
 }
 
-fn sanitize_topology_cache(cache: &mut rimz::schema::pane_topology::PaneTopologyCache) {
+fn sanitize_topology_cache(cache: &mut rimz::mux::zellij::pane_topology::PaneTopologyCache) {
     for pane in &mut cache.panes {
         if pane
             .pane_command

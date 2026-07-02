@@ -13,10 +13,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::diag::record::DiagEvent;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, ViewId, ViewKind};
 use crate::ledger::snapshot::{PresenceSample, SidebarOwnView};
 use crate::pane::{ElevatedAgent, PaneRef};
-use crate::schema::diag::DiagEvent;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneFrame {

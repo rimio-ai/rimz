@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
-use rimz::schema::heartbeat::ResolverHeartbeat;
+use rimz::resolver::heartbeat::ResolverHeartbeat;
 use serde_json::Value;
 
 use crate::common::{Env, permission_payload};

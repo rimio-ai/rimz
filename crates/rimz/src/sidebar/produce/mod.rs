@@ -47,7 +47,7 @@ pub enum ProduceErr {
     /// The mux returned an Ok-but-implausible pane frame and no prior frame was
     /// available to hold.
     #[error("pane frame rejected: {0:?}")]
-    FrameRejected(crate::schema::diag::FrameRejectReason),
+    FrameRejected(crate::diag::record::FrameRejectReason),
     /// The ledger rollup could not be read or projected.
     #[error(transparent)]
     Rollup(#[from] crate::ledger::snapshot::SnapshotErr),

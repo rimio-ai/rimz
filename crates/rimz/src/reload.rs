@@ -25,7 +25,7 @@ use crate::mux::recovery;
 use crate::mux::{
     MuxBackend, PaneListOptions, SidebarLiveness, SidebarPaneOptions, SidebarWidth, backend_for,
 };
-use crate::schema::heartbeat::SidebarHeartbeat;
+use crate::sidebar::heartbeat::SidebarHeartbeat;
 use crate::sidebar::timing::{RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT};
 use crate::workspace::{self, KnownWorkspace};
 

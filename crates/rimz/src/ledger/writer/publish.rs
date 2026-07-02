@@ -5,7 +5,7 @@ use tracing::warn;
 use crate::feed::FeedItem;
 use crate::harness::run::RunRecord;
 use crate::ids::RequestId;
-use crate::schema::event::EventEnvelope;
+use crate::ledger::event::EventEnvelope;
 
 use super::super::{Ledger, LedgerErr, Result, StatePaths, event_log, lock, snapshot, wakeup};
 use super::debounce::sync_log_debounced;

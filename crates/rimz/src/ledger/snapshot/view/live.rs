@@ -2,12 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::agent_activity::AgentActivity;
 use crate::agents::{AccountBudget, AgentState};
+use crate::diag::record::DiagEvent;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::ledger::snapshot::panes::{
     LazyAgentPairingResult, pane_admits_card, row_from_frame_pane, stamped_agent_for_pane,
 };
 use crate::pane::PaneRef;
-use crate::schema::diag::DiagEvent;
 
 use super::SidebarSnapshot;
 use super::aggregate::{AgentProjection, AttentionWindows, build_worktree_groups_from_rows};

@@ -2,8 +2,8 @@ use super::*;
 use std::collections::HashSet;
 
 use crate::ids::{MuxName, PaneId, ViewId, ViewKind};
+use crate::mux::zellij::pane_topology::PaneTopologyCache;
 use crate::pane::PaneRef;
-use crate::schema::pane_topology::PaneTopologyCache;
 
 #[test]
 fn raw_pane_position_metadata_accepts_live_and_topology_shapes() {

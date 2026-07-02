@@ -11,8 +11,8 @@ use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentState, AgentStatus};
 use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::ledger::event::EventEnvelope;
 use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
-use rimz::schema::event::EventEnvelope;
 
 use crate::common::{Env, canonical};
 

@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
-use rimz::schema::heartbeat::ResolverHeartbeat;
+use rimz::resolver::heartbeat::ResolverHeartbeat;
 use rimz::sidebar::timing::{CODEX_PROBE_MARKER_PREFIX, CODEX_PROBE_MARKER_TTL};
 use rimz::{ResolverId, RuntimePaths, SidebarInstanceId, WorkspaceId};
 use serde_json::json;
