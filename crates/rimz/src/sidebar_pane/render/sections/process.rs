@@ -8,10 +8,11 @@ use jiff::Timestamp;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
-use crate::sidebar_pane::render::fmt::{age_short, clip, fmt_cpu, fmt_io, fmt_rss};
+use crate::sidebar_pane::render::fmt::{age_short, fmt_cpu, fmt_io, fmt_rss};
 use crate::sidebar_pane::render::labels::{
     status_glyph, status_style, working_glyph, working_style,
 };
+use crate::sidebar_pane::render::layout::{ellipsize, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
 use super::{Tier, pin_right, trim_spans_to_width};
@@ -169,16 +170,20 @@ pub(super) fn composed_row(
     let age_width = age.chars().count();
     let fixed = lead_width + name_width + 2 + age_width;
     let task_width = width.saturating_sub(fixed).max(1);
-    let name = format!("{:<name_width$}", clip(name, name_width));
-    let task = clip(task, task_width);
+    let name = ellipsize(name, name_width);
+    let name_pad = name_width.saturating_sub(text_width(&name));
+    let task = ellipsize(task, task_width);
     let padding = width
-        .saturating_sub(lead_width + name.chars().count() + 1 + task.chars().count() + age_width)
+        .saturating_sub(
+            lead_width + text_width(&name) + name_pad + 1 + text_width(&task) + age_width,
+        )
         .max(1);
 
     Line::from(vec![
         lead,
         Span::raw(" "),
         Span::raw(name),
+        Span::raw(" ".repeat(name_pad)),
         Span::raw(" "),
         Span::raw(task),
         Span::raw(" ".repeat(padding)),

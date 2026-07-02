@@ -13,10 +13,10 @@ use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::BodyFilter;
 use crate::sidebar_pane::render::CostRolls;
-use crate::sidebar_pane::render::fmt::clip;
 use crate::sidebar_pane::render::labels::{
     branch_delta_spans, diff_spans, status_glyph, trunk_equal_spans, trunk_glyph_spans,
 };
+use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::row_passes_filter;
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
@@ -153,7 +153,7 @@ fn group_header(
         SidebarWorktreeKind::Root | SidebarWorktreeKind::Channel => Vec::new(),
         _ => group_git_spans(theme, group),
     };
-    let right_width: usize = right.iter().map(|span| span.content.chars().count()).sum();
+    let right_width = spans_width(&right);
     let label_width = cw.saturating_sub(right_width + 1).max(1);
     let label_with_prefix = match group.kind {
         SidebarWorktreeKind::Root => group.label.clone(),
@@ -169,13 +169,13 @@ fn group_header(
             format!("{} {}", theme.glyph(role), group.label)
         }
     };
-    let left = clip(&label_with_prefix, label_width);
+    let left = ellipsize(&label_with_prefix, label_width);
     // The dotted `┄` seal caps only the *selected* worktree's header, so the lane
     // reads as one bracketed block; every other header is just its bold label and
     // right-pinned stats, with plain space filling the gap. Sized to land the line
     // exactly on the content width — a space frames the dotted run from the text
     // on each side it touches.
-    let middle = cw.saturating_sub(left.chars().count() + right_width);
+    let middle = cw.saturating_sub(text_width(&left) + right_width);
     let fill = if sealed {
         match (right.is_empty(), middle) {
             (false, m) if m >= 2 => {
@@ -289,7 +289,7 @@ fn external_divider(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -
         format!(" {tally}")
     };
     let fill = cw
-        .saturating_sub(head.chars().count() + tail.chars().count())
+        .saturating_sub(text_width(&head) + text_width(&tail))
         .max(1);
     let mut spans = vec![
         Span::styled(head, theme.faint()),

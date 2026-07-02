@@ -77,17 +77,6 @@ pub(super) fn time_remaining(deadline: Timestamp, now: Timestamp) -> String {
     }
 }
 
-pub(super) fn clip(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_owned();
-    }
-    value
-        .chars()
-        .take(max_chars.saturating_sub(3))
-        .collect::<String>()
-        + "..."
-}
-
 /// A budget window's reset countdown, two units scaled to how much time is left:
 /// `{d}d{hh:02}h` at a day or more (`30d10h`, `6d23h`, `1d02h`), `{h}h{mm:02}m`
 /// under a day (`20h20m`, `5h00m`, `0h45m`). The provider panel right-aligns the

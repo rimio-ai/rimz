@@ -13,8 +13,8 @@ use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::CostRolls;
 use crate::sidebar_pane::render::fmt::{
-    activity_short, age_secs, clip, dollars2, elapsed_label, model_label, pct_label,
-    time_remaining, tokens_int, window_short,
+    activity_short, age_secs, dollars2, elapsed_label, model_label, pct_label, time_remaining,
+    tokens_int, window_short,
 };
 use crate::sidebar_pane::render::labels::{
     CardAttention, CardEmphasis, activity_age_style, agent_glyph, agent_lead_style_with_attention,
@@ -23,6 +23,7 @@ use crate::sidebar_pane::render::labels::{
     loading_dots, resolver_glyph, resolver_style, severity_heat_amount, severity_heat_color,
     subagent_glyph, subagent_head_style, token_total_glyph, unread_run_spans, window_style,
 };
+use crate::sidebar_pane::render::layout::ellipsize;
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
 mod description;

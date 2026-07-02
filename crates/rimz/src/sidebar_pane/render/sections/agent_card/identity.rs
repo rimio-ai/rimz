@@ -20,7 +20,7 @@ pub(super) fn attention_name_spans(
         .find(|panel| panel.kind == kind)
         .map(|panel| theme.brand_tone(panel))
         .unwrap_or_else(|| theme.component(Component::UnknownBrand));
-    let text = clip(display, NAME_MAX);
+    let text = ellipsize(display, NAME_MAX);
     match attention.emphasis {
         CardEmphasis::Blink => unread_run_spans(theme, Some(brand), attention.anim, &text),
         _ => vec![Span::styled(

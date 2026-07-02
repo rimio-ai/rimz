@@ -20,6 +20,7 @@ mod embedded_themes;
 mod fmt;
 pub mod glyph_set;
 mod labels;
+mod layout;
 mod odometer;
 mod oklab;
 pub mod scheme;

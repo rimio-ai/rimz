@@ -1,4 +1,5 @@
 use crate::sidebar_pane::pets::{PetBody, PetCellGrid, PetView};
+use crate::sidebar_pane::render::layout::{clip, text_width};
 use crate::sidebar_pane::render::theme::Theme;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -111,7 +112,7 @@ fn body_lines(
     // Right-align the caption block so its words hug the sprite's left edge.
     let block_w = wrapped
         .iter()
-        .map(|line| line.chars().count())
+        .map(|line| text_width(line))
         .max()
         .unwrap_or(0);
     let lead = left_edge.saturating_sub(CAPTION_GAP + block_w);
@@ -122,7 +123,7 @@ fn body_lines(
         let mut spans = Vec::new();
         match row_index.checked_sub(top_pad).and_then(|i| wrapped.get(i)) {
             Some(line) => {
-                let trailing = block_w.saturating_sub(line.chars().count()) + CAPTION_GAP;
+                let trailing = block_w.saturating_sub(text_width(line)) + CAPTION_GAP;
                 if lead > 0 {
                     spans.push(Span::raw(" ".repeat(lead)));
                 }
@@ -148,18 +149,17 @@ fn body_lines(
 /// Greedy word wrap to `width` columns. A word longer than `width` is hard-cut
 /// so a caption never overflows the panel.
 fn wrap_words(text: &str, width: usize) -> Vec<String> {
-    let clip = |word: &str| word.chars().take(width).collect::<String>();
     let mut lines = Vec::new();
     let mut current = String::new();
     for word in text.split_whitespace() {
         if current.is_empty() {
-            current = clip(word);
-        } else if current.chars().count() + 1 + word.chars().count() <= width {
+            current = clip(word, width);
+        } else if text_width(&current) + 1 + text_width(word) <= width {
             current.push(' ');
             current.push_str(word);
         } else {
             lines.push(std::mem::take(&mut current));
-            current = clip(word);
+            current = clip(word, width);
         }
     }
     if !current.is_empty() {
@@ -194,12 +194,8 @@ fn grid_lines(grid: &PetCellGrid, width: usize) -> Vec<Line<'static>> {
 }
 
 fn centered_caption(caption: &str, theme: &Theme, width: usize) -> Line<'static> {
-    let clipped = if caption.chars().count() > width {
-        caption.chars().take(width).collect::<String>()
-    } else {
-        caption.to_owned()
-    };
-    let left = width.saturating_sub(clipped.chars().count()) / 2;
+    let clipped = clip(caption, width);
+    let left = width.saturating_sub(text_width(&clipped)) / 2;
     let mut spans = Vec::new();
     if left > 0 {
         spans.push(Span::raw(" ".repeat(left)));

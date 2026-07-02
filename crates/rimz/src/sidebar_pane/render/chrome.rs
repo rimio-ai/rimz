@@ -4,10 +4,10 @@ use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarSna
 use jiff::Timestamp;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::fmt::{age_label, age_short};
 use super::labels::{status_glyph, subagent_glyph, thinking_glyph};
+use super::layout;
 use super::theme::Theme;
 use super::{Alert, GateNotice};
 use crate::remote::link::link_badge_heat;
@@ -24,13 +24,15 @@ pub(super) fn repo_header_lines(
     width: usize,
 ) -> Vec<Line<'static>> {
     let title = theme.good(Modifier::BOLD);
-    let clip = |text: &str| -> String { text.chars().take(width.max(1)).collect() };
-    let name = clip(&format!(
-        "{} {}",
-        theme.glyph(GlyphRole::CockpitWorkspace),
-        snapshot.display_name
-    ));
-    let name_width = name.chars().count();
+    let name = layout::clip(
+        &format!(
+            "{} {}",
+            theme.glyph(GlyphRole::CockpitWorkspace),
+            snapshot.display_name
+        ),
+        width.max(1),
+    );
+    let name_width = layout::text_width(&name);
 
     let Some(root) = snapshot.project_root.as_deref() else {
         return vec![Line::styled(name, title)];
@@ -40,30 +42,15 @@ pub(super) fn repo_header_lines(
     if path_budget == 0 {
         return vec![Line::styled(name, title)];
     }
-    let path = truncate_left(&path, path_budget);
+    let path = layout::truncate_left(&path, path_budget);
     let gap = width
-        .saturating_sub(name_width + path.chars().count())
+        .saturating_sub(name_width + layout::text_width(&path))
         .max(1);
     vec![Line::from(vec![
         Span::styled(name, title),
         Span::raw(" ".repeat(gap)),
         Span::styled(path, theme.muted()),
     ])]
-}
-
-/// Truncate `text` from its left to fit `budget` cells, marking the cut with a
-/// leading `…` so the meaningful tail (`…engine/main`) survives. Shorter text
-/// passes through unchanged.
-pub(super) fn truncate_left(text: &str, budget: usize) -> String {
-    let len = text.chars().count();
-    if len <= budget {
-        return text.to_owned();
-    }
-    if budget <= 1 {
-        return "…".chars().take(budget).collect();
-    }
-    let tail: String = text.chars().skip(len - (budget - 1)).collect();
-    format!("…{tail}")
 }
 
 /// Abbreviate a leading `$HOME` to `~` for the path line, so a deep home path
@@ -179,9 +166,9 @@ fn footer_line(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Line<
         .as_ref()
         .map(|link| link_badge(link, theme, width));
     let has_presence = presence.is_some();
-    let help_text: String = HELP_TEXT.chars().take(width).collect();
+    let help_text = layout::clip(HELP_TEXT, width);
     let help = Span::styled(help_text, theme.faint());
-    let help_start = right_start(width, span_width(&help)).unwrap_or(0);
+    let help_start = width.saturating_sub(help.width());
     let help_slot = Some((help_start, help.clone()));
 
     if let Some(line) = positioned_footer_line(
@@ -211,10 +198,10 @@ fn positioned_footer_line(
     let mut cursor = 0;
     let mut spans = Vec::new();
     for span in left {
-        if span_width(&span) == 0 {
+        if span.width() == 0 {
             return None;
         }
-        cursor += span_width(&span);
+        cursor += span.width();
         spans.push(span);
     }
     if let Some((start, span)) = help {
@@ -254,9 +241,7 @@ fn presence_badge(
         }
         SidebarPresence::Detached => format!("{glyph} away"),
     };
-    if text.chars().count() > width {
-        text = text.chars().take(width).collect();
-    }
+    text = layout::clip(&text, width);
     Some(Span::styled(text, theme.muted()))
 }
 
@@ -275,15 +260,11 @@ fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'st
     };
     if link.freshness == SidebarLinkFreshness::Fresh && link.miss_pct > 10 {
         let loss = format!(" {}%", link.miss_pct);
-        if text.chars().count() + loss.chars().count() <= width {
+        if layout::text_width(&text) + layout::text_width(&loss) <= width {
             text.push_str(&loss);
         }
     }
-    let text = if text.chars().count() > width {
-        text.chars().take(width).collect()
-    } else {
-        text
-    };
+    let text = layout::clip(&text, width);
     let style = match link.freshness {
         SidebarLinkFreshness::Stale => theme.muted(),
         SidebarLinkFreshness::Fresh => {
@@ -300,14 +281,6 @@ fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'st
         }
     };
     Span::styled(text, style)
-}
-
-fn right_start(width: usize, content_width: usize) -> Option<usize> {
-    (content_width <= width).then(|| width - content_width)
-}
-
-fn span_width(span: &Span<'_>) -> usize {
-    span.content.chars().count()
 }
 
 /// The `?` popup: a which-key style block with action glyphs and the status
@@ -329,7 +302,7 @@ pub(super) fn help_lines(
     }
 
     let max_row_width = rows.iter().map(Line::width).max().unwrap_or(0);
-    let title_width = UnicodeWidthStr::width(TITLE) + 2;
+    let title_width = layout::text_width(TITLE) + 2;
     let desired_width = (max_row_width + 4).max(title_width + 3);
     framed_box(
         theme,
@@ -449,7 +422,7 @@ fn framed_box(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(rows.len() + 2);
     let title = format!(" {title} ");
-    let fill = box_width.saturating_sub(2 + UnicodeWidthStr::width(title.as_str()));
+    let fill = box_width.saturating_sub(2 + layout::text_width(&title));
     lines.push(
         Line::from(vec![
             rule_span(theme, GlyphRole::ChromeBoxTopLeft),
@@ -465,7 +438,7 @@ fn framed_box(
 
     let inner_width = box_width.saturating_sub(4);
     for row in rows {
-        let row = pad_line_to_width(row, inner_width);
+        let row = layout::pad_line_to(row, inner_width);
         let mut spans = Vec::with_capacity(row.spans.len() + 4);
         spans.push(rule_span(theme, GlyphRole::ChromeBoxVertical));
         spans.push(Span::raw(" "));
@@ -479,7 +452,7 @@ fn framed_box(
     let bottom_spans = match bottom_caption {
         Some(caption) => {
             let caption = format!(" {caption} ");
-            let caption_width = UnicodeWidthStr::width(caption.as_str());
+            let caption_width = layout::text_width(&caption);
             if caption_width <= inner {
                 let left = (inner - caption_width) / 2;
                 let right = inner - caption_width - left;
@@ -526,52 +499,11 @@ fn rule_span(theme: &Theme, role: GlyphRole) -> Span<'static> {
 
 fn borderless_line(line: Line<'static>, width: usize) -> Line<'static> {
     if width == 0 {
-        return trim_line_to_width(line, width);
+        return Line::from(layout::trim_spans_to_width(line.spans, width)).style(line.style);
     }
     let style = line.style;
     let mut spans = Vec::with_capacity(line.spans.len() + 1);
     spans.push(Span::raw(" "));
     spans.extend(line.spans);
-    pad_line_to_width(Line::from(spans).style(style), width)
-}
-
-fn pad_line_to_width(line: Line<'static>, width: usize) -> Line<'static> {
-    let mut line = trim_line_to_width(line, width);
-    let pad = width.saturating_sub(line.width());
-    if pad > 0 {
-        line.spans.push(Span::raw(" ".repeat(pad)));
-    }
-    line
-}
-
-fn trim_line_to_width(line: Line<'static>, width: usize) -> Line<'static> {
-    let style = line.style;
-    let mut remaining = width;
-    let mut spans = Vec::new();
-    for span in line.spans {
-        if remaining == 0 {
-            break;
-        }
-        let span_width = UnicodeWidthStr::width(span.content.as_ref());
-        if span_width <= remaining {
-            remaining -= span_width;
-            spans.push(span);
-            continue;
-        }
-        let mut content = String::new();
-        let mut used = 0;
-        for ch in span.content.chars() {
-            let width = UnicodeWidthChar::width(ch).unwrap_or(0);
-            if used + width > remaining {
-                break;
-            }
-            used += width;
-            content.push(ch);
-        }
-        if !content.is_empty() {
-            spans.push(Span::styled(content, span.style));
-        }
-        break;
-    }
-    Line::from(spans).style(style)
+    layout::pad_line_to(Line::from(spans).style(style), width)
 }

@@ -16,6 +16,7 @@ use crate::sidebar_pane::render::labels::{
     mana_bar_spans, mana_style, pace_ratio, pace_style, token_breakdown_spans,
     unknown_mana_bar_spans,
 };
+use crate::sidebar_pane::render::layout::{clip, pad_line_to, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
 use super::{pin_right, trim_spans_to_width};
@@ -237,7 +238,7 @@ impl WmColumns {
 fn total_delimiter_row(theme: &Theme, width: usize) -> Vec<Span<'static>> {
     let hairline = theme.glyph(GlyphRole::ChromeHairline);
     let label = format!("{hairline}{hairline} Total: ");
-    let used = 1 + label.chars().count();
+    let used = 1 + text_width(&label);
     let fill = width.saturating_sub(used);
     trim_spans_to_width(
         vec![
@@ -322,9 +323,9 @@ fn spend_token_row_width(
     token_detail: TokenDetail,
     cols: &WmColumns,
 ) -> usize {
-    provider_spans_width(&spend_session_spans(theme, label, window, cols))
+    spans_width(&spend_session_spans(theme, label, window, cols))
         + 1
-        + provider_spans_width(&spend_token_metric_spans(
+        + spans_width(&spend_token_metric_spans(
             theme,
             window,
             token_format,
@@ -723,8 +724,8 @@ fn provider_pet_caption_line(theme: &Theme, pet: Option<&PetView>, width: usize)
         return Line::from("");
     };
     let caption_w = width.saturating_sub(PET_CAPTION_RIGHT_PAD);
-    let clipped = caption.chars().take(caption_w).collect::<String>();
-    let lead = caption_w.saturating_sub(clipped.chars().count());
+    let clipped = clip(caption, caption_w);
+    let lead = caption_w.saturating_sub(text_width(&clipped));
     let mut spans = Vec::new();
     if lead > 0 {
         spans.push(Span::raw(" ".repeat(lead)));
@@ -777,15 +778,6 @@ fn zip_provider_pet_lines(
         lines.push(block_line);
     }
     lines
-}
-
-fn pad_line_to(mut line: Line<'static>, width: usize) -> Line<'static> {
-    line.spans = trim_spans_to_width(line.spans, width);
-    let pad = width.saturating_sub(line.width());
-    if pad > 0 {
-        line.spans.push(Span::raw(" ".repeat(pad)));
-    }
-    line
 }
 
 /// The dashboard's tab rail — the top hairline with every account set into it:
@@ -915,7 +907,7 @@ fn provider_header_line(
         Vec::new()
     };
     let full = provider_header_left(theme, panel, width, tabbed, inline_art, true);
-    let left = if provider_spans_width(&full) + provider_spans_width(&right) <= width {
+    let left = if spans_width(&full) + spans_width(&right) <= width {
         full
     } else {
         provider_header_left(theme, panel, width, tabbed, inline_art, false)
@@ -967,10 +959,6 @@ fn provider_header_left(
     left
 }
 
-fn provider_spans_width(spans: &[Span<'static>]) -> usize {
-    spans.iter().map(Span::width).sum()
-}
-
 /// The provider body: the brand emblem in a fixed left column zipped against the
 /// right column. The stats stay on one row; normal and narrow use the same row
 /// in the smaller provider column and drop input/output splits when it would
@@ -1002,10 +990,16 @@ fn provider_body_lines(
         let mut spans: Vec<Span<'static>> = Vec::new();
         if show_art {
             let art_line = art.get(index).map(String::as_str).unwrap_or("");
-            spans.push(Span::styled(
-                pad_to(art_line, PROVIDER_ART_WIDTH),
-                theme.style(theme.brand_tone(panel), Modifier::empty()),
-            ));
+            spans.extend(
+                pad_line_to(
+                    Line::from(Span::styled(
+                        clip(art_line, PROVIDER_ART_WIDTH),
+                        theme.style(theme.brand_tone(panel), Modifier::empty()),
+                    )),
+                    PROVIDER_ART_WIDTH,
+                )
+                .spans,
+            );
             spans.push(Span::raw(" "));
         }
         if let Some(right) = rights.get(index) {
@@ -1087,7 +1081,7 @@ fn provider_token_detail(
         dollars2(headline.usd),
         theme.money_style(Modifier::BOLD),
     )];
-    if provider_spans_width(&left) + provider_spans_width(&right) < region {
+    if spans_width(&left) + spans_width(&right) < region {
         TokenDetail::Full
     } else {
         TokenDetail::Summary
@@ -1398,8 +1392,8 @@ fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<
         ];
     }
     let value_width = PROVIDER_VALUE_WIDTH.saturating_sub(1);
-    let clipped: String = value.chars().take(value_width).collect();
-    let pad = value_width.saturating_sub(clipped.chars().count());
+    let clipped = clip(&value, value_width);
+    let pad = value_width.saturating_sub(text_width(&clipped));
     vec![
         Span::raw(" ".repeat(pad)),
         Span::styled(clipped, theme.money_style(Modifier::BOLD)),
@@ -1443,17 +1437,4 @@ fn provider_bar_width(region: usize) -> usize {
     region
         .saturating_sub(PROVIDER_LABEL_WIDTH + 1 + 1 + PROVIDER_VALUE_WIDTH)
         .max(1)
-}
-
-/// Pad (or clip) a string to exactly `width` terminal cells — the fixed art
-/// column, so the right column starts at one shared cell for every block.
-fn pad_to(value: &str, width: usize) -> String {
-    let count = value.chars().count();
-    if count >= width {
-        value.chars().take(width).collect()
-    } else {
-        let mut padded = value.to_owned();
-        padded.extend(std::iter::repeat_n(' ', width - count));
-        padded
-    }
 }

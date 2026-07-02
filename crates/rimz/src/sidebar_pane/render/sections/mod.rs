@@ -10,14 +10,15 @@
 //! (the make-up line), [`worktree`] (group headers and the
 //! row roster), [`agent_card`] (the per-agent card), [`process`] (bare process
 //! rows), and [`provider`] (the provider dashboard and the W/M fleet ledger).
-//! This file owns only the shared layout primitives — the width tiers, the
-//! gutter, and the span-packing helpers every section composes with.
+//! This file owns only the shared section primitives — the width tiers and the
+//! gutter every section composes with.
 
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
 use crate::config::GlyphRole;
 
+pub(super) use super::layout::{pin_right, spans_width, trim_spans_to_width};
 use super::theme::{Component, Theme};
 
 mod agent_card;
@@ -178,64 +179,6 @@ fn banded(span: Span<'static>, band: Option<Color>) -> Span<'static> {
         Some(bg) => Span::styled(span.content, span.style.bg(bg)),
         None => span,
     }
-}
-
-/// Pack `left` from the start and pin `right` flush to the trailing edge: trim
-/// the left to leave room for the right plus a one-cell gap, then pad the gap so
-/// the right cluster ends at `width`. Shared by the identity line and the meter
-/// rows so every right-anchored column lands on one edge.
-fn pin_right(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -> Line<'static> {
-    if right.is_empty() {
-        return Line::from(trim_spans_to_width(left, width));
-    }
-    let right_width = spans_width(&right);
-    let mut spans = trim_spans_to_width(left, width.saturating_sub(right_width + 1));
-    let padding = width
-        .saturating_sub(spans_width(&spans) + right_width)
-        .max(1);
-    spans.push(Span::raw(" ".repeat(padding)));
-    spans.extend(right);
-    Line::from(spans)
-}
-
-/// Total display width of a span run, in terminal cells.
-fn spans_width(spans: &[Span<'static>]) -> usize {
-    spans.iter().map(Span::width).sum()
-}
-
-pub(super) fn trim_spans_to_width(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
-    let mut remaining = width;
-    let mut trimmed = Vec::new();
-    for span in spans {
-        if remaining == 0 {
-            break;
-        }
-        let span_width = span.width();
-        if span_width <= remaining {
-            remaining -= span_width;
-            trimmed.push(span);
-            continue;
-        }
-        let content = take_cells(span.content.as_ref(), remaining);
-        if !content.is_empty() {
-            trimmed.push(Span::styled(content, span.style));
-        }
-        break;
-    }
-    trimmed
-}
-
-fn take_cells(content: &str, width: usize) -> String {
-    let mut taken = String::new();
-    for ch in content.chars() {
-        let mut candidate = taken.clone();
-        candidate.push(ch);
-        if Span::raw(candidate.as_str()).width() > width {
-            break;
-        }
-        taken.push(ch);
-    }
-    taken
 }
 
 /// A stats metric as a colored icon glyph + value (`◷ 2h34m`, `¤ 5`): the
