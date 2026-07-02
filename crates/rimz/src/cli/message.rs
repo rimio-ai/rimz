@@ -15,10 +15,10 @@ use crate::cli::render;
 use rimz::SidebarSnapshot;
 use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
-use rimz::message::dispatch::{AddContext, AddOutput, AddSpec};
+use rimz::message::dispatch::{AddContext, AddOutput, AddSpec, SteerContext, SteerSpec};
 use rimz::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
-    parse_schedule_at,
+    card_matches, parse_schedule_at,
 };
 use rimz::message::{deliver, dispatch};
 use rimz::schema::event::{EventEnvelope, EventKind, MessageEventPayload};
@@ -272,67 +272,27 @@ fn steer_message(
     } else {
         text
     };
-    let mut live_send = send::LiveSend {
-        force,
-        pacer: send::Pacer::new(rimz::message::message_interval_from_env()),
-    };
     let wait = if let Some(timeout) = wait {
         Some((timeout, ledger.wait_fold_base()?))
     } else {
         None
     };
-    let mut outcomes = Vec::with_capacity(targets.len());
-    let mut compacted = Vec::new();
-    for target in &targets {
-        let bound = send::bound_agent(&snapshot, target);
-        let handle = send::handle_for_pane_target(&snapshot, target, bound);
-        let message = send::message_for_target(
-            workspace.workspace_id.clone(),
-            target,
-            bound,
-            channel.as_deref(),
-            send::MessageDraft {
-                text: text.clone(),
-                body: rimz::message::MessageBody::Prompt,
-                enter: !no_enter,
-                gate: DeliveryGate::Any,
-                sender: sender.clone(),
-                force,
-                auto_compact,
-            },
-        );
-        let sent = match send::send_prompt_to_live_pane(
-            &workspace,
-            &ledger,
-            &snapshot,
-            target,
-            bound,
-            &message,
-            &mut live_send,
-        ) {
-            Ok(sent) => sent,
-            Err(err) => {
-                if deliver::message_recorded_as_sent(&ledger, &message.message_id)? {
-                    deliver::register_message_wake(&workspace, &ledger)?;
-                    outcomes.push(send::Outcome::Sent {
-                        label: handle,
-                        message_id: message.message_id.clone(),
-                    });
-                    continue;
-                }
-                ledger.record_send_error(&message, &err.to_string(), &workspace.session_name)?;
-                deliver::register_message_wake(&workspace, &ledger)?;
-                return Err(err.into());
-            }
-        };
-        if sent.compacted.is_some() {
-            compacted.push(handle);
-        }
-        if deliver::sent_prompt_has_sent_record(&sent) {
-            deliver::register_message_wake(&workspace, &ledger)?;
-        }
-        outcomes.push(sent.outcome);
-    }
+    let result = dispatch::steer_for_targets(
+        SteerContext {
+            workspace: &workspace,
+            ledger: &ledger,
+            snapshot: &snapshot,
+            scope_channel: channel.as_deref(),
+            sender: &sender,
+        },
+        &targets,
+        &text,
+        SteerSpec {
+            enter: !no_enter,
+            force,
+            auto_compact,
+        },
+    )?;
 
     report_steer(
         &ledger,
@@ -340,8 +300,8 @@ fn steer_message(
         wait,
         &target,
         targets.len(),
-        &outcomes,
-        &compacted,
+        &result.outcomes,
+        &result.compacted,
     )
 }
 
@@ -492,9 +452,14 @@ impl MessageListRow {
     }
 
     fn same_agent_card(&self, agent: &AgentState) -> bool {
-        self.kind == agent.kind
-            && (self.agent_id == agent.agent_id
-                || (agent.name.is_some() && self.agent_name.as_deref() == agent.name.as_deref()))
+        card_matches(
+            &self.kind,
+            &self.agent_id,
+            self.agent_name.as_deref(),
+            &agent.kind,
+            &agent.agent_id,
+            agent.name.as_deref(),
+        )
     }
 }
 
@@ -604,22 +569,22 @@ fn add_message(
     let mut failed = false;
     let wait_deadline = spec.wait.map(|timeout| std::time::Instant::now() + timeout);
     for output in &result.outputs {
-        let mut status = output.status;
         if let Some(deadline) = wait_deadline {
-            status = send::wait_for_message_until(
+            if !wait_and_print_message(
                 &ledger,
-                &output.message_id,
                 &workspace.session_name,
+                &output.label,
+                &output.message_id,
                 wait_base.unwrap_or(0),
                 deadline,
-            )?;
-            if status != MessageStatus::Delivered {
+            )? {
                 failed = true;
             }
-        }
-        #[expect(clippy::print_stdout, reason = "command result")]
-        {
-            println!("{}", render_add_output(output, status, spec.wait.is_some()));
+        } else {
+            #[expect(clippy::print_stdout, reason = "command result")]
+            {
+                println!("{}", render_add_output(output, output.status));
+            }
         }
     }
     if failed {
@@ -834,15 +799,7 @@ fn clear_messages(
     Ok(())
 }
 
-fn render_add_output(output: &AddOutput, status: MessageStatus, waited: bool) -> String {
-    if waited {
-        return format!(
-            "{} {} ({})",
-            wait_status_label(status),
-            output.label,
-            output.message_id
-        );
-    }
+fn render_add_output(output: &AddOutput, status: MessageStatus) -> String {
     match status {
         MessageStatus::Sent => format!("sent to {} ({})", output.label, output.message_id),
         MessageStatus::Queued => format!("queued for {} ({})", output.label, output.message_id),
@@ -853,6 +810,23 @@ fn render_add_output(output: &AddOutput, status: MessageStatus, waited: bool) ->
             output.message_id
         ),
     }
+}
+
+fn wait_and_print_message(
+    ledger: &rimz::Ledger,
+    session_name: &str,
+    label: &str,
+    message_id: &MessageId,
+    wait_base: u64,
+    deadline: std::time::Instant,
+) -> Result<bool> {
+    let status =
+        send::wait_for_message_until(ledger, message_id, session_name, wait_base, deadline)?;
+    #[expect(clippy::print_stdout, reason = "wait status")]
+    {
+        println!("{} {label} ({message_id})", wait_status_label(status));
+    }
+    Ok(status == MessageStatus::Delivered)
 }
 
 /// Report a `--steer` fan-out. A lone agent that was skipped fails with the
@@ -896,19 +870,15 @@ fn report_steer(
         for outcome in outcomes {
             if let send::Outcome::Sent { label, message_id } = outcome {
                 print_compacted_if_needed(label, compacted);
-                let status = send::wait_for_message_until(
+                if !wait_and_print_message(
                     ledger,
-                    message_id,
                     session_name,
+                    label,
+                    message_id,
                     wait_base,
                     deadline,
-                )?;
-                if status != MessageStatus::Delivered {
+                )? {
                     failed = true;
-                }
-                #[expect(clippy::print_stdout, reason = "wait status")]
-                {
-                    println!("{} {label} ({message_id})", wait_status_label(status));
                 }
             }
         }

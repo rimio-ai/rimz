@@ -84,7 +84,7 @@ pub fn deliver_one(
         .cloned()
         .map(|message| message.with_pane_id(candidate.target.pane_id.clone()))
         .collect();
-    let sent = send::send_prompt_batch_to_live_pane(
+    let sent = send::send_batch_to_live_pane(
         workspace,
         ledger,
         &candidate.snapshot,
@@ -282,10 +282,6 @@ pub fn refresh_wake_stamp(runtime: &RuntimePaths, ledger: &Ledger, now: Timestam
         },
     }
     Ok(())
-}
-
-pub fn sent_prompt_has_sent_record(sent: &send::SentPrompt) -> bool {
-    sent.compacted.is_some() || matches!(sent.outcome, send::Outcome::Sent { .. })
 }
 
 pub fn message_recorded_as_sent(ledger: &Ledger, message_id: &MessageId) -> Result<bool> {

@@ -33,14 +33,6 @@ fn gates_open_only_on_resting_statuses() {
 }
 
 #[test]
-fn delivery_gate_parse_round_trips_resume() {
-    for gate in [DeliveryGate::Done, DeliveryGate::Any, DeliveryGate::Resume] {
-        assert_eq!(DeliveryGate::parse(gate.as_str()).unwrap(), gate);
-    }
-    assert!(DeliveryGate::parse("bogus").is_err());
-}
-
-#[test]
 fn delivery_checkpoint_is_only_unparked_turn_end() {
     assert!(delivery_checkpoint(&LifecycleSignal::TurnEnded {
         errored: false,

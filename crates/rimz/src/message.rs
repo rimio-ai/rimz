@@ -98,17 +98,6 @@ impl DeliveryGate {
             Self::Resume => "resume",
         }
     }
-
-    pub fn parse(raw: &str) -> Result<Self, String> {
-        match raw {
-            "done" => Ok(Self::Done),
-            "any" => Ok(Self::Any),
-            "resume" => Ok(Self::Resume),
-            other => Err(format!(
-                "unknown delivery gate `{other}`; expected done, any, or resume"
-            )),
-        }
-    }
 }
 
 impl std::fmt::Display for DeliveryGate {
@@ -331,13 +320,33 @@ impl MessageRecord {
         enter: bool,
         gate: DeliveryGate,
     ) -> Self {
+        Self::new_for_card(
+            workspace_id,
+            agent.kind.clone(),
+            agent.agent_id.clone(),
+            agent.name.clone(),
+            text,
+            enter,
+            gate,
+        )
+    }
+
+    pub fn new_for_card(
+        workspace_id: WorkspaceId,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        agent_name: Option<String>,
+        text: String,
+        enter: bool,
+        gate: DeliveryGate,
+    ) -> Self {
         let now = Timestamp::now();
         Self {
             message_id: MessageId::new(),
             workspace_id,
-            kind: agent.kind.clone(),
-            agent_id: agent.agent_id.clone(),
-            agent_name: agent.name.clone(),
+            kind,
+            agent_id,
+            agent_name,
             channel: None,
             sender: MessageSender::Human,
             body: MessageBody::Prompt,
@@ -429,9 +438,14 @@ impl MessageRecord {
         agent_id: &AgentSessionId,
         agent_name: Option<&str>,
     ) -> bool {
-        self.kind == *kind
-            && (self.agent_id == *agent_id
-                || (agent_name.is_some() && self.agent_name.as_deref() == agent_name))
+        card_matches(
+            &self.kind,
+            &self.agent_id,
+            self.agent_name.as_deref(),
+            kind,
+            agent_id,
+            agent_name,
+        )
     }
 
     pub fn same_agent_card(&self, agent: &AgentState) -> bool {
@@ -470,6 +484,19 @@ impl MessageRecord {
     pub fn batchable(&self) -> bool {
         self.body == MessageBody::Prompt && self.enter && !self.text.trim_start().starts_with('/')
     }
+}
+
+pub fn card_matches(
+    record_kind: &AgentKind,
+    record_agent_id: &AgentSessionId,
+    record_agent_name: Option<&str>,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    agent_name: Option<&str>,
+) -> bool {
+    record_kind == kind
+        && (record_agent_id == agent_id
+            || (agent_name.is_some() && record_agent_name == agent_name))
 }
 
 pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {

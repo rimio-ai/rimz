@@ -7,10 +7,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use rimz::ids::AgentKind;
-pub(crate) use rimz::message::send::{
-    LiveSend, MessageDraft, Outcome, Pacer, bound_agent, handle_for_pane_target,
-    message_for_target, send_prompt_to_live_pane, wait_for_message_until,
-};
+pub(crate) use rimz::message::send::{Outcome, wait_for_message_until};
 use rimz::message::{AutoCompact, MessageSender, delivery_window_from_env};
 
 /// The flags shared by immediate and parked message delivery.

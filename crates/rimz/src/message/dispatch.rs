@@ -31,6 +31,12 @@ pub struct AddSpec {
     pub stamp_channel: bool,
 }
 
+pub struct SteerSpec {
+    pub enter: bool,
+    pub force: bool,
+    pub auto_compact: Option<AutoCompact>,
+}
+
 pub struct AddOutput {
     pub label: String,
     pub message_id: MessageId,
@@ -42,11 +48,24 @@ pub struct AddResult {
     pub compacted: Vec<String>,
 }
 
+pub struct SteerResult {
+    pub outcomes: Vec<send::Outcome>,
+    pub compacted: Vec<String>,
+}
+
 pub struct AddContext<'a> {
     pub workspace: &'a ResolvedWorkspace,
     pub ledger: &'a Ledger,
     pub snapshot: &'a SidebarSnapshot,
     pub pending: &'a mut Vec<MessageRecord>,
+    pub scope_channel: Option<&'a str>,
+    pub sender: &'a MessageSender,
+}
+
+pub struct SteerContext<'a> {
+    pub workspace: &'a ResolvedWorkspace,
+    pub ledger: &'a Ledger,
+    pub snapshot: &'a SidebarSnapshot,
     pub scope_channel: Option<&'a str>,
     pub sender: &'a MessageSender,
 }
@@ -75,6 +94,26 @@ pub enum DispatchErr {
     },
     #[error("`{label}` cannot receive now and has no durable session to park")]
     NoDurableSession { label: String },
+}
+
+enum LiveAttempt {
+    Sent {
+        message_id: MessageId,
+        compacted: bool,
+    },
+    SkippedPending {
+        message_id: MessageId,
+        request_id: String,
+    },
+    ParkInstead,
+}
+
+struct LiveRecovery<'a> {
+    workspace: &'a ResolvedWorkspace,
+    ledger: &'a Ledger,
+    snapshot: &'a SidebarSnapshot,
+    live_send: &'a mut send::LiveSend,
+    park_on_timeout: bool,
 }
 
 impl QueueTarget<'_> {
@@ -298,52 +337,29 @@ pub fn add_for_targets(
                     auto_compact: spec.auto_compact,
                 },
             );
-            match send::send_prompt_to_live_pane(
-                ctx.workspace,
-                ctx.ledger,
-                ctx.snapshot,
-                pane,
-                bound,
-                &message,
-                &mut live_send,
-            ) {
-                Ok(sent) => match sent.outcome {
-                    send::Outcome::Sent { message_id, .. } => {
-                        if sent.compacted.is_some() {
-                            compacted.push(handle.clone());
-                        }
-                        deliver::register_message_wake(ctx.workspace, ctx.ledger)?;
-                        outputs.push(AddOutput {
-                            label: handle,
-                            message_id,
-                            status: MessageStatus::Sent,
-                        });
-                        continue;
+            let mut recovery = LiveRecovery {
+                workspace: ctx.workspace,
+                ledger: ctx.ledger,
+                snapshot: ctx.snapshot,
+                live_send: &mut live_send,
+                park_on_timeout: target.agent.is_some(),
+            };
+            match send_live_with_recovery(&mut recovery, pane, bound, &message)? {
+                LiveAttempt::Sent {
+                    message_id,
+                    compacted: was_compacted,
+                } => {
+                    if was_compacted {
+                        compacted.push(handle.clone());
                     }
-                    send::Outcome::SkippedPending { .. } => park = true,
-                },
-                Err(err) => {
-                    if deliver::message_recorded_as_sent(ctx.ledger, &message.message_id)? {
-                        deliver::register_message_wake(ctx.workspace, ctx.ledger)?;
-                        outputs.push(AddOutput {
-                            label: handle,
-                            message_id: message.message_id.clone(),
-                            status: MessageStatus::Sent,
-                        });
-                        continue;
-                    }
-                    if deliver::is_mux_timeout(&err) && target.agent.is_some() {
-                        park = true;
-                    } else {
-                        ctx.ledger.record_send_error(
-                            &message,
-                            &err.to_string(),
-                            &ctx.workspace.session_name,
-                        )?;
-                        deliver::register_message_wake(ctx.workspace, ctx.ledger)?;
-                        return Err(err.into());
-                    }
+                    outputs.push(AddOutput {
+                        label: handle,
+                        message_id,
+                        status: MessageStatus::Sent,
+                    });
+                    continue;
                 }
+                LiveAttempt::SkippedPending { .. } | LiveAttempt::ParkInstead => park = true,
             }
         }
         if !park {
@@ -385,6 +401,125 @@ pub fn add_for_targets(
     }
     deliver::register_message_wake(ctx.workspace, ctx.ledger)?;
     Ok(AddResult { outputs, compacted })
+}
+
+pub fn steer_for_targets(
+    ctx: SteerContext<'_>,
+    targets: &[&PaneAgent],
+    text: &str,
+    spec: SteerSpec,
+) -> Result<SteerResult> {
+    let mut live_send = send::LiveSend {
+        force: spec.force,
+        pacer: send::Pacer::new(message_interval_from_env()),
+    };
+    let mut outcomes = Vec::with_capacity(targets.len());
+    let mut compacted = Vec::new();
+    for &target in targets {
+        let bound = send::bound_agent(ctx.snapshot, target);
+        let handle = send::handle_for_pane_target(ctx.snapshot, target, bound);
+        let message = send::message_for_target(
+            ctx.workspace.workspace_id.clone(),
+            target,
+            bound,
+            ctx.scope_channel,
+            send::MessageDraft {
+                text: text.to_owned(),
+                body: MessageBody::Prompt,
+                enter: spec.enter,
+                gate: DeliveryGate::Any,
+                sender: ctx.sender.clone(),
+                force: spec.force,
+                auto_compact: spec.auto_compact,
+            },
+        );
+        let mut recovery = LiveRecovery {
+            workspace: ctx.workspace,
+            ledger: ctx.ledger,
+            snapshot: ctx.snapshot,
+            live_send: &mut live_send,
+            park_on_timeout: false,
+        };
+        match send_live_with_recovery(&mut recovery, target, bound, &message)? {
+            LiveAttempt::Sent {
+                message_id,
+                compacted: was_compacted,
+            } => {
+                if was_compacted {
+                    compacted.push(handle.clone());
+                }
+                outcomes.push(send::Outcome::Sent {
+                    label: handle,
+                    message_id,
+                });
+            }
+            LiveAttempt::SkippedPending {
+                message_id,
+                request_id,
+            } => outcomes.push(send::Outcome::SkippedPending {
+                label: handle,
+                message_id,
+                request_id,
+            }),
+            LiveAttempt::ParkInstead => unreachable!("steer sends never park"),
+        }
+    }
+    deliver::register_message_wake(ctx.workspace, ctx.ledger)?;
+    Ok(SteerResult {
+        outcomes,
+        compacted,
+    })
+}
+
+fn send_live_with_recovery(
+    recovery: &mut LiveRecovery<'_>,
+    pane: &PaneAgent,
+    bound: Option<&AgentState>,
+    message: &MessageRecord,
+) -> Result<LiveAttempt> {
+    let sent = match send::send_batch_to_live_pane(
+        recovery.workspace,
+        recovery.ledger,
+        recovery.snapshot,
+        pane,
+        bound,
+        std::slice::from_ref(message),
+        recovery.live_send,
+    ) {
+        Ok(sent) => sent,
+        Err(err) => {
+            if deliver::message_recorded_as_sent(recovery.ledger, &message.message_id)? {
+                return Ok(LiveAttempt::Sent {
+                    message_id: message.message_id.clone(),
+                    compacted: false,
+                });
+            }
+            if deliver::is_mux_timeout(&err) && recovery.park_on_timeout {
+                return Ok(LiveAttempt::ParkInstead);
+            }
+            recovery.ledger.record_send_error(
+                message,
+                &err.to_string(),
+                &recovery.workspace.session_name,
+            )?;
+            deliver::register_message_wake(recovery.workspace, recovery.ledger)?;
+            return Err(err.into());
+        }
+    };
+    match sent.outcome {
+        send::Outcome::Sent { message_id, .. } => Ok(LiveAttempt::Sent {
+            message_id,
+            compacted: sent.compacted.is_some(),
+        }),
+        send::Outcome::SkippedPending {
+            message_id,
+            request_id,
+            ..
+        } => Ok(LiveAttempt::SkippedPending {
+            message_id,
+            request_id,
+        }),
+    }
 }
 
 fn preflight_queue_hooks(agent: &AgentState) -> Result<()> {

@@ -78,7 +78,6 @@ pub fn message_for_target(
     scope_channel: Option<&str>,
     draft: MessageDraft,
 ) -> MessageRecord {
-    let now = jiff::Timestamp::now();
     let agent_id = bound
         .map(|agent| agent.agent_id.clone())
         .or_else(|| target.agent_id.clone())
@@ -86,64 +85,29 @@ pub fn message_for_target(
     let agent_name = bound
         .and_then(|agent| agent.name.clone())
         .or_else(|| target.name.clone());
-    MessageRecord {
-        message_id: MessageId::new(),
+    MessageRecord::new_for_card(
         workspace_id,
-        kind: target.kind.clone(),
+        target.kind.clone(),
         agent_id,
         agent_name,
-        channel: crate::harness::target::recipient_channel(target, bound, scope_channel),
-        sender: draft.sender,
-        body: draft.body,
-        text: draft.text,
-        enter: draft.enter,
-        gate: draft.gate,
-        force: draft.force,
-        pane_id: Some(target.pane_id.clone()),
-        status: MessageStatus::Created,
-        enqueued_at: now,
-        updated_at: now,
-        attempts: 0,
-        unconfirmed_sends: 0,
-        last_attempt_at: None,
-        last_error: None,
-        delivered_at: None,
-        not_before: None,
-        retry_after: None,
-        auto_compact: draft.auto_compact,
-        compacted_context_tokens: None,
-        batch_id: None,
-    }
-}
-
-pub fn send_prompt_to_live_pane(
-    workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
-    snapshot: &SidebarSnapshot,
-    target: &PaneAgent,
-    bound: Option<&AgentState>,
-    prompt: &MessageRecord,
-    send: &mut LiveSend,
-) -> Result<SentPrompt> {
-    if prompt.body != MessageBody::Prompt {
-        let outcome = send_to_live_pane(workspace, ledger, snapshot, target, bound, prompt, send)?;
-        return Ok(SentPrompt {
-            outcome,
-            compacted: None,
-        });
-    }
-    send_prompt_batch_to_live_pane(
-        workspace,
-        ledger,
-        snapshot,
+        draft.text,
+        draft.enter,
+        draft.gate,
+    )
+    .with_channel(crate::harness::target::recipient_channel(
         target,
         bound,
-        std::slice::from_ref(prompt),
-        send,
-    )
+        scope_channel,
+    ))
+    .with_sender(draft.sender)
+    .with_body(draft.body)
+    .with_force(draft.force)
+    .with_pane_id(target.pane_id.clone())
+    .with_auto_compact(draft.auto_compact)
+    .with_status(MessageStatus::Created)
 }
 
-pub fn send_prompt_batch_to_live_pane(
+pub fn send_batch_to_live_pane(
     workspace: &ResolvedWorkspace,
     ledger: &Ledger,
     snapshot: &SidebarSnapshot,
@@ -152,12 +116,13 @@ pub fn send_prompt_batch_to_live_pane(
     batch: &[MessageRecord],
     send: &mut LiveSend,
 ) -> Result<SentPrompt> {
-    // Wrapper callers and delivery claims always pass a non-empty batch.
+    // Dispatch and delivery claims always pass a non-empty batch.
     let head = batch
         .first()
-        .expect("send_prompt_batch_to_live_pane requires at least one message");
-    if batch.len() == 1 && head.body != MessageBody::Prompt {
-        let outcome = send_to_live_pane(workspace, ledger, snapshot, target, bound, head, send)?;
+        .expect("send_batch_to_live_pane requires at least one message");
+    if head.body == MessageBody::Command {
+        debug_assert_eq!(batch.len(), 1);
+        let outcome = write_batch(workspace, ledger, snapshot, target, bound, batch, send)?;
         return Ok(SentPrompt {
             outcome,
             compacted: None,
@@ -173,7 +138,15 @@ pub fn send_prompt_batch_to_live_pane(
         .iter()
         .find_map(|message| compact_message_for_target(ledger, target, bound, message));
     if let Some(command) = command {
-        match send_to_live_pane(workspace, ledger, snapshot, target, bound, &command, send) {
+        match write_batch(
+            workspace,
+            ledger,
+            snapshot,
+            target,
+            bound,
+            std::slice::from_ref(&command),
+            send,
+        ) {
             Ok(Outcome::Sent { message_id, .. }) => {
                 compacted = Some(message_id);
             }
@@ -189,8 +162,7 @@ pub fn send_prompt_batch_to_live_pane(
             }
         }
     }
-    let outcome =
-        send_prompt_records_to_live_pane(workspace, ledger, snapshot, target, bound, batch, send)?;
+    let outcome = write_batch(workspace, ledger, snapshot, target, bound, batch, send)?;
     Ok(SentPrompt { outcome, compacted })
 }
 
@@ -232,59 +204,7 @@ impl Pacer {
     }
 }
 
-/// Type into one live agent pane, recording the message between the paste and
-/// the submit Enter. A pending ask skips the agent rather than aborting a broadcast;
-/// mux failures return errors.
-pub fn send_to_live_pane(
-    workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
-    snapshot: &SidebarSnapshot,
-    target: &PaneAgent,
-    bound: Option<&AgentState>,
-    message: &MessageRecord,
-    send: &mut LiveSend,
-) -> Result<Outcome> {
-    let label = handle_for_pane_target(snapshot, target, bound);
-    if !send.force
-        && let Some(agent) = bound
-        && let Some(ask) = pending_ask_in_snapshot(agent, snapshot)
-    {
-        return Ok(Outcome::SkippedPending {
-            label,
-            message_id: message.message_id.clone(),
-            request_id: ask.request_id.to_string(),
-        });
-    }
-    let pane_id = &target.pane_id;
-    send.pacer.tick();
-    match message.body {
-        MessageBody::Command => type_into_pane(pane_id, &message.text)?,
-        MessageBody::Prompt => {
-            let peers: Vec<&AgentState> = snapshot.root_agents().collect();
-            let payload = match crate::harness::target::sender_prefix(
-                &message.sender,
-                &peers,
-                message.channel.as_deref(),
-            ) {
-                Some(prefix) => format!("{prefix}{}", message.text),
-                None => message.text.clone(),
-            };
-            paste_into_pane(pane_id, &payload)?;
-        }
-    }
-    // Record the send once the text lands and before the submit keystroke, so a
-    // submitted message is always preceded by its durable record and audit event.
-    ledger.record_sent_message(message, &workspace.session_name)?;
-    if message.enter {
-        press_pane_key(pane_id, NamedKey::Enter)?;
-    }
-    Ok(Outcome::Sent {
-        label,
-        message_id: message.message_id.clone(),
-    })
-}
-
-fn send_prompt_records_to_live_pane(
+fn write_batch(
     workspace: &ResolvedWorkspace,
     ledger: &Ledger,
     snapshot: &SidebarSnapshot,
@@ -293,10 +213,10 @@ fn send_prompt_records_to_live_pane(
     batch: &[MessageRecord],
     send: &mut LiveSend,
 ) -> Result<Outcome> {
-    // Wrapper callers and delivery claims always pass a non-empty batch.
+    // Dispatch and delivery claims always pass a non-empty batch.
     let head = batch
         .first()
-        .expect("send_prompt_records_to_live_pane requires at least one message");
+        .expect("write_batch requires at least one message");
     debug_assert!(batch.iter().all(|message| message.enter == head.enter));
     let label = handle_for_pane_target(snapshot, target, bound);
     if !send.force
@@ -311,22 +231,37 @@ fn send_prompt_records_to_live_pane(
     }
     let pane_id = &target.pane_id;
     send.pacer.tick();
-    let peers: Vec<&AgentState> = snapshot.root_agents().collect();
-    let payload = batch
-        .iter()
-        .map(|message| {
-            match crate::harness::target::sender_prefix(
-                &message.sender,
-                &peers,
-                message.channel.as_deref(),
-            ) {
-                Some(prefix) => format!("{prefix}{}", message.text),
-                None => message.text.clone(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    paste_into_pane(pane_id, &payload)?;
+    match head.body {
+        MessageBody::Command => {
+            debug_assert_eq!(batch.len(), 1);
+            type_into_pane(pane_id, &head.text)?;
+        }
+        MessageBody::Prompt => {
+            debug_assert!(
+                batch
+                    .iter()
+                    .all(|message| message.body == MessageBody::Prompt)
+            );
+            let peers: Vec<&AgentState> = snapshot.root_agents().collect();
+            let payload = batch
+                .iter()
+                .map(|message| {
+                    match crate::harness::target::sender_prefix(
+                        &message.sender,
+                        &peers,
+                        message.channel.as_deref(),
+                    ) {
+                        Some(prefix) => format!("{prefix}{}", message.text),
+                        None => message.text.clone(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            paste_into_pane(pane_id, &payload)?;
+        }
+    }
+    // Record the send once the text lands and before the submit keystroke, so a
+    // submitted message is always preceded by its durable record and audit event.
     for message in batch {
         ledger.record_sent_message(message, &workspace.session_name)?;
     }

@@ -43,7 +43,7 @@ use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use crate::ledger::atomic::write_temp_then_rename_cache;
 use crate::ledger::snapshot::{PaneAgent, ResumeOutcome};
-use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
+use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus, card_matches};
 use crate::sidebar::enrich::account_budgets_from_caches;
 #[cfg(not(test))]
 use crate::sidebar::enrich::detached_rimz_command;
@@ -470,9 +470,14 @@ impl ResumeMessage {
     }
 
     fn same_agent_card(&self, agent: &AgentState) -> bool {
-        self.kind == agent.kind
-            && (self.agent_id == agent.agent_id
-                || (agent.name.is_some() && self.agent_name.as_deref() == agent.name.as_deref()))
+        card_matches(
+            &self.kind,
+            &self.agent_id,
+            self.agent_name.as_deref(),
+            &agent.kind,
+            &agent.agent_id,
+            agent.name.as_deref(),
+        )
     }
 }
 
