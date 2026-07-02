@@ -280,22 +280,6 @@ fn frame_timing_suspends_unwatched_animation() {
 }
 
 #[test]
-fn frame_timing_keeps_unwatched_transition_flash_hot() {
-    let ws = workspace();
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
-    let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane));
-    state.current = animating_agent_snapshot(&ws);
-    state.current.own_view = Some(own_view(false, false));
-    state.current.viewed_panes.clear();
-    state.dirty = false;
-
-    assert!(!frame_active(&state));
-
-    state.ui.effects.seed_flash_for_test("agent-1");
-    assert!(frame_active(&state));
-}
-
-#[test]
 fn frame_timing_resumes_on_own_pane_focus() {
     let ws = workspace();
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
@@ -663,36 +647,6 @@ fn background_paint_updates_hidden_attached_sidebar_on_status_change() {
     assert!(!state.dirty, "meaningful background change paints");
     assert!(state.last_bg_paint.is_some());
     assert_eq!(state.last_bg_key.as_ref(), Some(&current_key));
-}
-
-#[test]
-fn unwatched_transition_flash_paints_its_decay() {
-    let ws = workspace();
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
-    let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane));
-    state.current = animating_agent_snapshot(&ws);
-    state.current.theme.display.glow = crate::config::GlowMode::Always;
-    state.current.own_view = Some(own_view(false, false));
-    state.current.viewed_panes.clear();
-    state.dirty = false;
-    state.ui.effects.seed_flash_for_test("agent-1");
-    assert!(state.ui.effects.flash_born_for_test("agent-1"));
-    state.next_frame = Instant::now() - Duration::from_millis(1);
-    state.ui.animation_phase = 0;
-
-    let mut terminal = fixed_terminal();
-    state
-        .paint_frame_if_due(
-            &mut terminal,
-            Instant::now() - Duration::from_secs(5),
-            frame_active(&state),
-        )
-        .expect("transition flash paint");
-
-    assert!(
-        !state.ui.effects.flash_born_for_test("agent-1"),
-        "unwatched transition flash advances through the effects pass"
-    );
 }
 
 #[test]

@@ -162,12 +162,7 @@ impl LoopState {
             .is_some_and(render::Alert::is_active);
         let watched = self.watched();
         let animating = is_animating(&self.current, &self.ui, phase, alert_active);
-        let transition_effect_active = self.ui.effects.any_active();
-        // Transition effects are bounded one-shots; keep their decay grid hot
-        // even when continuous animation yields on an unwatched pane.
-        let active = (watched && animating)
-            || transition_effect_active
-            || (self.dirty && self.dirty_paintable(watched));
+        let active = (watched && animating) || (self.dirty && self.dirty_paintable(watched));
         let timeout = if active {
             self.next_frame
                 .saturating_duration_since(Instant::now())
@@ -727,9 +722,7 @@ impl LoopState {
                     >= crate::sidebar::timing::BACKGROUND_PAINT_MIN_INTERVAL
             }) && self.last_bg_key.as_ref() != Some(key)
         });
-        let paintable = (active && watched)
-            || self.ui.effects.any_active()
-            || (self.dirty && self.dirty_paintable(watched));
+        let paintable = (active && watched) || (self.dirty && self.dirty_paintable(watched));
         if !self.should_exit
             && !paint_blocked
             && ((paintable && now >= self.next_frame) || background)

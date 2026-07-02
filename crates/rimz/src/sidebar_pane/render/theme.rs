@@ -5,17 +5,14 @@
 //! The default palette depth is automatic: truecolor terminals get RGB
 //! palette tones, and other terminals get the same tones quantized to xterm
 //! 256-color indexes. `NO_COLOR` strips color but keeps Unicode and
-//! modifiers, so every gauge still reads by shape and fill. The color-only
-//! transition effects pass ([`super::effects`]) remains a separate tier
-//! controlled by `[theme.display] glow`: it runs only when glow permits it and
-//! `NO_COLOR` is off.
+//! modifiers, so every gauge still reads by shape and fill.
 //!
 //! Palette choice is data in the snapshot's `[theme]`: `scheme`
 //! selects a bundled Alacritty theme or an Alacritty TOML file, defaulting to
 //! `TokyoNight Night`; per-slot overrides then win over the selected scheme. The
 //! renderer resolves depth because terminal capability is a renderer-local fact.
 
-use crate::config::{ColorDepth, GlowMode, GlyphRole, ThemeConfig};
+use crate::config::{ColorDepth, GlyphRole, ThemeConfig};
 use ratatui::style::{Color, Modifier, Style};
 
 use super::animation::{BreathSample, ResolvedAnimations};
@@ -106,11 +103,7 @@ pub(crate) const DEFAULT_SCHEME: &str = "TokyoNight Night";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Theme {
     no_color: bool,
-    /// The terminal advertises 24-bit color. Gates the
-    /// post-render effects pass; palette depth has its own mode.
-    truecolor: bool,
     depth: ColorDepth,
-    glow: GlowMode,
     palette: Palette,
     glyphs: GlyphSet,
     pub(crate) animations: ResolvedAnimations,
@@ -118,20 +111,18 @@ pub(crate) struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::assemble(false, false, ColorDepth::Indexed, &ThemeConfig::default())
+        Self::assemble(false, ColorDepth::Indexed, &ThemeConfig::default())
     }
 }
 
 impl Theme {
-    fn assemble(no_color: bool, truecolor: bool, depth: ColorDepth, theme: &ThemeConfig) -> Self {
+    fn assemble(no_color: bool, depth: ColorDepth, theme: &ThemeConfig) -> Self {
         let palette = Palette::resolve(theme, depth);
         let glyphs = GlyphSet::resolve_with_set(theme.glyph_set_source().as_deref(), &theme.glyphs);
         let animations = ResolvedAnimations::resolve(&theme.animations, &glyphs, &palette);
         Self {
             no_color,
-            truecolor,
             depth,
-            glow: theme.display.glow,
             animations,
             glyphs,
             palette,
@@ -139,39 +130,24 @@ impl Theme {
     }
 
     /// The active theme for a frame: cached terminal color-capability readings
-    /// plus the palette, depth, and glow mode resolved from the snapshot's
-    /// `[theme.display]` config.
+    /// plus the palette and depth resolved from the snapshot's `[theme]` config.
     pub(crate) fn for_sidebar(theme: &ThemeConfig) -> Self {
         let truecolor = crate::tui::truecolor();
         let depth = theme.effective_theme_mode().depth(truecolor);
-        Self::assemble(crate::tui::no_color(), truecolor, depth, theme)
+        Self::assemble(crate::tui::no_color(), depth, theme)
     }
 
     /// Build a deterministic test theme. Tests use the default indexed palette
     /// unless they explicitly pass a theme config to [`Self::fixed_for_theme`].
     #[cfg(test)]
     pub(crate) fn fixed(no_color: bool) -> Self {
-        Self::assemble(
-            no_color,
-            false,
-            ColorDepth::Indexed,
-            &ThemeConfig::default(),
-        )
+        Self::assemble(no_color, ColorDepth::Indexed, &ThemeConfig::default())
     }
 
     #[cfg(test)]
     pub(crate) fn fixed_for_theme(no_color: bool, theme: &ThemeConfig) -> Self {
         let depth = theme.effective_theme_mode().depth(false);
-        Self::assemble(no_color, false, depth, theme)
-    }
-
-    pub(crate) fn effects_enabled(&self) -> bool {
-        !self.no_color
-            && match self.glow {
-                GlowMode::Never => false,
-                GlowMode::Always => true,
-                GlowMode::Auto => self.truecolor,
-            }
+        Self::assemble(no_color, depth, theme)
     }
 
     /// Emit a style at `fg` with `modifier`, dropping the color under
@@ -292,8 +268,8 @@ impl Theme {
     }
 
     /// The body-text tone as a concrete color, so a pulsing description can lift
-    /// and dim (and join the glow pass) instead of riding the terminal default
-    /// the lightness shift cannot move.
+    /// and dim instead of riding the terminal default the lightness shift cannot
+    /// move.
     pub(super) fn body_tone(&self) -> Color {
         self.palette.body
     }

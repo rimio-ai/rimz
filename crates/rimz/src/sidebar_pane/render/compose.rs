@@ -59,10 +59,9 @@ pub(crate) fn compose_lines(
     height: u16,
 ) -> ComposedFrame {
     // One `Theme` per frame, handed to the body and the bottom chrome alike:
-    // the cached `NO_COLOR` reading plus the palette and glow mode the
-    // producer resolved from `[theme]` onto the snapshot — so a re-themed
-    // config lands with the next snapshot, identically on every renderer of
-    // the workspace.
+    // the cached `NO_COLOR` reading plus the palette the producer resolved from
+    // `[theme]` onto the snapshot — so a re-themed config lands with the next
+    // snapshot, identically on every renderer of the workspace.
     let theme = Theme::for_sidebar(&snapshot.theme);
     let cells = usize::from(width.max(1));
     // The whole sidebar sits inside a one-cell frame: chrome is built to the inner

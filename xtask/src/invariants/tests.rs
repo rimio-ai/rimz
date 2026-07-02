@@ -161,7 +161,7 @@ fn ui_color_exemptions_cover_the_pipeline_and_tests() {
     assert!(ui_color_exempt(Path::new("labels/tests/meters.rs")));
     assert!(ui_color_exempt(Path::new("tests/process.rs")));
     // Ordinary render code must name intent.
-    assert!(!ui_color_exempt(Path::new("effects.rs")));
+    assert!(!ui_color_exempt(Path::new("compose.rs")));
     assert!(!ui_color_exempt(Path::new("labels/meters.rs")));
     assert!(!ui_color_exempt(Path::new("sections/agent_card/gauge.rs")));
 }

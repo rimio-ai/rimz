@@ -16,7 +16,6 @@ mod animation;
 mod ansi;
 mod chrome;
 mod compose;
-mod effects;
 mod embedded_themes;
 mod fmt;
 pub mod glyph_set;
@@ -44,7 +43,6 @@ pub use self::ui_state::{Alert, AnimationCadence, UiState};
 pub(crate) use self::ui_state::{
     BodyFilter, Browse, DashboardTab, FrozenOrder, GateNotice, ManualScroll, OrderHold,
 };
-pub(crate) use effects::EffectState;
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
 
@@ -226,25 +224,6 @@ fn draw_into(
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
     let theme = Theme::for_sidebar(&snapshot.theme);
-    // The transition garnish tier: a color-only effects pass over the buffer
-    // the paragraph just rendered, geometry-locked to the line map this draw wrote.
-    // Gated here rather than inside the pass so a non-truecolor terminal — or a
-    // `[theme.display] glow = "never"` opt-out — pays nothing, not even the
-    // transition observation.
-    if theme.effects_enabled() {
-        ui.effects.apply(
-            snapshot,
-            &theme,
-            ui.make_up_filter,
-            &ui.line_map,
-            ui.selected_pane.as_ref(),
-            ui.animation_phase,
-            frame.buffer_mut(),
-            area,
-        );
-    } else {
-        ui.effects.clear_active();
-    }
     if ui.help_visible {
         draw_help_overlay(
             frame,

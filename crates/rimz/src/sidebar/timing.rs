@@ -333,10 +333,6 @@ pub const MAX_REFRESH_MS: u16 = 1_000;
 /// clamped at runtime to never be faster than the configured base grid.
 pub const BREATH_ANIMATION_FRAME: Duration = Duration::from_millis(120);
 
-/// Cap on one visible effects step. A calm room can paint rarely; clamping
-/// makes a newly spawned flash play on visible frames instead of expiring.
-pub const EFFECT_MAX_STEP_MS: u64 = 300;
-
 /// Declarative pull cadence entry for docs and future diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PullCadence {

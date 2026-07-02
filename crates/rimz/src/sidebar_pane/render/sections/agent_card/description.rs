@@ -20,9 +20,8 @@ pub(super) fn description_line(
     animation_phase: u64,
 ) -> Line<'static> {
     // The shared unread treatment, on a concrete body tone so the description
-    // lifts in unison with the lead glyph and the name — and joins the glow
-    // pass, which the terminal-default fg would skip. Shimmer flows one span per
-    // character; blink and bright stay a single span; calm rows read at the
+    // lifts in unison with the lead glyph and the name. Shimmer flows one span
+    // per character; blink and bright stay a single span; calm rows read at the
     // terminal-default (normal) or muted body (soft) tone.
     let body_spans = |text: &str, italic: bool| -> Vec<Span<'static>> {
         let spans = match attention.emphasis {

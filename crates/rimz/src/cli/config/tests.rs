@@ -5,7 +5,7 @@ use std::num::NonZeroU16;
 use rimz::config::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
     BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, ContextMeterConfig,
-    DisplayConfig, GlowMode, GlyphGroup, GlyphNamespaces, InlineAnsiColors, InlinePalette,
+    DisplayConfig, GlyphGroup, GlyphNamespaces, InlineAnsiColors, InlinePalette,
     InlinePrimaryColors, InlineSelectionColors, PaletteRole, PetsConfig, PetsGlyphMode,
     ProviderTabsMode, ScrollbarMode, ThemeAnimationsConfig, ThemeColor, ThemeConfig,
     ThemeGlyphsConfig, ThemeMode, ThemeProviderStyle, ThemeStyle, UnreadEffect,
@@ -339,7 +339,6 @@ fn fully_populated_theme() -> ThemeConfig {
             provider_list: vec!["claude".to_owned(), "codex".to_owned()],
             max_cols: NonZeroU16::new(80).expect("non-zero literal"),
             scrollbar: ScrollbarMode::Always,
-            glow: GlowMode::Never,
             card_density: CardDensityMode::Compact,
             context_meter: ContextMeterConfig {
                 green: context_band(35, 90_000),

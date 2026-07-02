@@ -1,5 +1,5 @@
 //! Layer 3 — component tokens: the specific UI uses of color. Each names a
-//! role (the sessions glyph, a token-total marker, a flash) and resolves to a
+//! role (the sessions glyph, a token-total marker) and resolves to a
 //! semantic token, so the call site states intent while the hue stays one
 //! central decision. Resolution reads the already-resolved [`Palette`] slots,
 //! so a scheme or per-slot override flows through every component that aliases
@@ -86,22 +86,6 @@ pub(crate) enum Component {
     WindowLarge,
     /// Window token, `1M`+ tier — the loudest, an accent (never a brand clay).
     WindowHuge,
-    /// Transition flash: a card entering `waiting`.
-    FlashWaiting,
-    /// Transition flash: a card entering `failed`.
-    FlashFailed,
-    /// Transition flash: an ask resolving.
-    FlashResolved,
-    /// Transition flash: a paused row lifting.
-    FlashLifted,
-    /// Transition flash: a turn finishing well — the one positive develop a
-    /// completion announces with before it settles to the static unread crest.
-    FlashCompleted,
-    /// Transition flash: the spine under a fresh selection.
-    FlashSelectionLanded,
-    /// The dim recede tone a fresh card develops in from — its ink resolves up
-    /// from this faint floor to its natural color as the card arrives.
-    CardRecede,
 }
 
 #[cfg(test)]
@@ -137,13 +121,6 @@ impl Component {
         Component::WindowMedium,
         Component::WindowLarge,
         Component::WindowHuge,
-        Component::FlashWaiting,
-        Component::FlashFailed,
-        Component::FlashResolved,
-        Component::FlashLifted,
-        Component::FlashCompleted,
-        Component::FlashSelectionLanded,
-        Component::CardRecede,
     ];
 }
 
@@ -153,17 +130,14 @@ impl Component {
         use Component::*;
         match self {
             Sessions | Output | WindowHuge => palette.accent,
-            LaneSpine | FlashSelectionLanded => palette.selection,
+            LaneSpine => palette.selection,
             WorktreeHeader | BranchDelta => palette.body,
-            WorktreePristine | WindowSmall | CardRecede => palette.faint,
-            WorktreeMerged | ProcMem | CacheRead | FlashResolved | FlashLifted | FlashCompleted => {
-                palette.good
-            }
-            WorktreeReconciling | Compaction | FlashWaiting => palette.warn,
+            WorktreePristine | WindowSmall => palette.faint,
+            WorktreeMerged | ProcMem | CacheRead => palette.good,
+            WorktreeReconciling | Compaction => palette.warn,
             WorktreePrOpen | LedgerLabel | TokenTotal | ProcCpu | WindowLarge => palette.cool,
             SubagentHeader | RemoteControl | ProcIo | CacheWrite => palette.meta,
             Input => palette.expense,
-            FlashFailed => palette.alarm,
             WorktreePrClosed | WindowMedium | UnknownBrand => palette.muted,
         }
     }

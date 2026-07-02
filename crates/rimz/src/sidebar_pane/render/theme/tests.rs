@@ -3,7 +3,7 @@
 
 use super::super::scheme;
 use super::*;
-use crate::config::{Semantic, ThemeAnimationsConfig, ThemeColor, ThemeMode, nearest_xterm_index};
+use crate::config::{Semantic, ThemeColor, ThemeMode, nearest_xterm_index};
 
 fn indices(palette: Palette) -> [Color; 13] {
     [
@@ -456,59 +456,6 @@ fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
     assert!(dark.add_modifier.contains(Modifier::BOLD));
 }
 
-#[test]
-fn effects_follow_glow_mode_from_snapshot_and_no_color_beats_it() {
-    let theme = |no_color, truecolor, glow| {
-        let palette = Palette::resolve(&ThemeConfig::default(), ColorDepth::Indexed);
-        let glyphs = GlyphSet::default();
-        Theme {
-            no_color,
-            truecolor,
-            depth: ColorDepth::Indexed,
-            glow,
-            animations: ResolvedAnimations::resolve(
-                &ThemeAnimationsConfig::default(),
-                &glyphs,
-                &palette,
-            ),
-            glyphs,
-            palette,
-        }
-    };
-    assert!(theme(false, true, GlowMode::Auto).effects_enabled());
-    assert!(
-        !theme(false, false, GlowMode::Auto).effects_enabled(),
-        "auto on a terminal that advertises no truecolor stays plain"
-    );
-    assert!(
-        theme(false, false, GlowMode::Always).effects_enabled(),
-        "always forces the pass past a missing truecolor advertisement"
-    );
-    assert!(
-        !theme(false, true, GlowMode::Never).effects_enabled(),
-        "never pins the plain render on a truecolor terminal"
-    );
-    assert!(
-        !theme(true, true, GlowMode::Always).effects_enabled(),
-        "NO_COLOR beats every mode, the forced one included"
-    );
-
-    assert_eq!(
-        Theme::for_sidebar(&ThemeConfig::default()).glow,
-        GlowMode::Auto
-    );
-    let pinned_off = ThemeConfig {
-        display: crate::config::DisplayConfig {
-            glow: GlowMode::Never,
-            ..crate::config::DisplayConfig::default()
-        },
-        ..ThemeConfig::default()
-    };
-    let theme = Theme::for_sidebar(&pinned_off);
-    assert_eq!(theme.glow, GlowMode::Never);
-    assert!(!theme.effects_enabled());
-}
-
 fn truecolor_default() -> Theme {
     Theme::fixed_for_theme(
         false,
@@ -532,16 +479,14 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
         for &component in Component::ALL {
             let expected = match component {
                 Sessions | Output | WindowHuge => p.accent,
-                LaneSpine | FlashSelectionLanded => p.selection,
+                LaneSpine => p.selection,
                 WorktreeHeader | BranchDelta => p.body,
-                WorktreePristine | WindowSmall | CardRecede => p.faint,
-                WorktreeMerged | ProcMem | CacheRead | FlashResolved | FlashLifted
-                | FlashCompleted => p.good,
-                WorktreeReconciling | Compaction | FlashWaiting => p.warn,
+                WorktreePristine | WindowSmall => p.faint,
+                WorktreeMerged | ProcMem | CacheRead => p.good,
+                WorktreeReconciling | Compaction => p.warn,
                 WorktreePrOpen | LedgerLabel | TokenTotal | ProcCpu | WindowLarge => p.cool,
                 SubagentHeader | RemoteControl | ProcIo | CacheWrite => p.meta,
                 Input => p.expense,
-                FlashFailed => p.alarm,
                 WorktreePrClosed | WindowMedium | UnknownBrand => p.muted,
             };
             let got = theme.component(component);

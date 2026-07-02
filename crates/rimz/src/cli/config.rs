@@ -775,7 +775,6 @@ fn exact_set_keys() -> BTreeSet<String> {
         "theme.display.provider_list",
         "theme.display.max_cols",
         "theme.display.scrollbar",
-        "theme.display.glow",
         "theme.display.card_density",
         "theme.display.context_meter.green",
         "theme.display.context_meter.yellow",

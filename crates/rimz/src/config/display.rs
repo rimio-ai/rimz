@@ -20,23 +20,6 @@ pub enum ScrollbarMode {
     Never,
 }
 
-/// `[theme.display] glow`: whether the post-render transition flashes run over
-/// the composed frame. Display-only; with the tier off the base status-head
-/// rendering still carries the attention blink.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum GlowMode {
-    /// Follow the terminal: run when `COLORTERM` or terminfo advertises 24-bit color.
-    #[default]
-    Auto,
-    /// Force the pass on. The lever for a truecolor terminal whose capability
-    /// signal is missing from both the environment and terminfo.
-    /// `NO_COLOR` still wins.
-    Always,
-    /// Pin the plain 256-color render on any terminal.
-    Never,
-}
-
 /// `[theme.display] provider_tabs`: how the bottom provider dashboard switches
 /// between stacked account blocks and a tab rail. Display-only.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -122,13 +105,6 @@ pub struct DisplayConfig {
     /// view settles; `always` keeps it up; `never` removes it. Resolved
     /// producer-side onto the snapshot like the rest of `[theme.display]`.
     pub scrollbar: ScrollbarMode,
-    /// Whether the transition-flash tier runs over the composed frame. `auto`
-    /// (default) follows the terminal's 24-bit advertisement from `COLORTERM`
-    /// or terminfo; `always` forces the pass where both are missing; `never`
-    /// keeps the plain base render and pulse. `NO_COLOR` beats every mode.
-    /// Resolved producer-side onto the snapshot like the rest of
-    /// `[theme.display]`.
-    pub glow: GlowMode,
     /// How much detail resting agent cards show. `auto` keeps the standard card
     /// shape; `expanded` shows every card's subagent section; `compact` trims
     /// resting cards by status while the selected card opens to the full form.
@@ -154,7 +130,6 @@ impl Default for DisplayConfig {
             provider_list: Vec::new(),
             max_cols: default_sidebar_max_cols(),
             scrollbar: ScrollbarMode::default(),
-            glow: GlowMode::default(),
             card_density: CardDensityMode::default(),
             context_meter: ContextMeterConfig::default(),
             budget_bar: BudgetBarConfig::default(),

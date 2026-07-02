@@ -34,7 +34,7 @@ proptest! {
         rows in prop::collection::vec(row_spec(), 0..16),
         provider in prop::option::of(provider_spec()),
     ) {
-        let mut snapshot = build_adversarial_snapshot(display_name, rows, provider);
+        let snapshot = build_adversarial_snapshot(display_name, rows, provider);
         let ui = UiState {
             selected_index,
             scroll_offset,
@@ -50,8 +50,6 @@ proptest! {
                 .expect("fixed render succeeds");
         }
 
-        snapshot.theme.display.glow = crate::config::GlowMode::Always;
-        let _ = compose_lines(&snapshot, None, &ui, width, height);
     }
 }
 

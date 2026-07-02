@@ -453,7 +453,7 @@ mod tests {
 
     #[test]
     fn unread_effect_rejects_unknown_value() {
-        assert!(toml::from_str::<ThemeAnimationsConfig>("unread = \"glow\"\n").is_err());
+        assert!(toml::from_str::<ThemeAnimationsConfig>("unread = \"sparkle\"\n").is_err());
     }
 
     #[test]

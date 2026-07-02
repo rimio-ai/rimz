@@ -81,7 +81,7 @@ Every head's shape, color, effect, and speed is per-machine theme through [`[the
 
 A working agent gone silent past the stall window (`[agents.attention]`, 30 minutes by default) escalates to `!` — unless its provider window is spent without reset, which pauses (`⏸`) instead. A parent waiting on subagents is exempt: its quiet wave is the children's work. An idle agent with no prompt yet shows a static `...` on line 2 in place of the em dash.
 
-How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. `bright` vs. `blink`, the age-paced cadence, the OKLab lift, the transition flashes, and the per-depth and `NO_COLOR` fallbacks — is theme behavior: [theme.md → Unread attention](../reference/theme.md#unread-attention) and [Glow](../reference/theme.md#glow).
+How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. `bright` vs. `blink`, the age-paced cadence, the OKLab lift, and the per-depth and `NO_COLOR` fallbacks — is theme behavior: [theme.md → Unread attention](../reference/theme.md#unread-attention).
 
 **Window — the model's context window on the identity line.** A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the live out-of-band reading (Claude's statusline, Codex's app-server) when one exists, else the hook-derived window, omitted until a source names it. It is dim capability chrome, not a status signal, tinted louder as the window grows so the size reads at a glance.
 

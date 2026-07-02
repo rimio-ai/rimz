@@ -11,7 +11,6 @@ pub(super) fn is_animating(
         || ui.tally.any_rolling(phase)
         || ui.cost_rolls.any_rolling(phase)
         || ui.scrollbar.fading(phase)
-        || ui.effects.any_active()
 }
 
 fn pet_animating(snapshot: &SidebarSnapshot, ui: &UiState, alert_active: bool) -> bool {
@@ -76,10 +75,10 @@ pub(super) fn frame_interval(
 ) -> Duration {
     let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
     let base = crate::sidebar::timing::animation_frame(refresh_ms);
-    // A decaying one-shot flash needs the fast grid to read as motion; it is
-    // brief and self-terminating, so the cost is bounded to the transition
-    // window. Continuous row pulse rides the breath cadence below.
-    if ui.scrollbar.fading(ui.animation_phase) || ui.effects.any_active() {
+    // A scrollbar fade needs the fast grid to read as motion; it is brief and
+    // self-terminating, so the cost is bounded to the settle window. Continuous
+    // row pulse rides the breath cadence below.
+    if ui.scrollbar.fading(ui.animation_phase) {
         return base;
     }
     let cadence = render::animation_cadence(snapshot);

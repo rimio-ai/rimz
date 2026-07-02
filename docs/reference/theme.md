@@ -17,7 +17,7 @@ A painted tone passes through three layers, and tuning happens in the middle one
 
 1. **The scheme** supplies the raw terminal palette — background, foreground, the six ANSI hues, and a selection accent — in [Alacritty's TOML shape](#schemes). This is the only place scheme color enters.
 2. **Thirteen semantic slots** derive from that palette in OKLab, so the steps stay perceptually even across schemes: the ANSI hues map to chromatic slots, the neutral chrome blends background toward foreground, and selection lifts into its own cool tone. **This is the layer you tune** — override a slot and every element that uses it follows.
-3. **Component tokens** are the specific UI roles — the sessions glyph, a token marker, a transition flash. Each names its role and resolves to a semantic slot (or a slot-derived runtime ramp), so the call site states intent while hue stays one central decision.
+3. **Component tokens** are the specific UI roles — the sessions glyph and token markers. Each names its role and resolves to a semantic slot (or a slot-derived runtime ramp), so the call site states intent while hue stays one central decision.
 
 Render code always resolves a tone through a slot or a slot-derived value — never a raw terminal color — and a CI gate enforces it ([UI-color provenance](../contributing/rust-conventions.md#architectural-invariants)). The slot table is the one place hue is decided, so retuning the room means retuning slots. The derivation math lives in the renderer (`crates/rimz/src/sidebar_pane/render/theme/`); the rest of this page is the knobs.
 
@@ -113,7 +113,6 @@ Two rules keep the palette honest: `alarm` red marks danger, and one warm `cauti
 | `refresh_ms` | the animation/paint grid in milliseconds (clamped internally); data polling stays on `--tick-seconds` |
 | `max_cols` | creation-time cap on the sidebar pane width, so an ultra-wide terminal doesn't get an absurd split |
 | `scrollbar` | `auto` shows the overflow indicator only while the view moves; `always` / `never` pin it |
-| `glow` | the transition-flash tier — see [Glow](#glow) |
 | `card_density` | `auto` keeps the standard card; `expanded` shows every card's subagents; `compact` trims resting cards |
 | `provider_tabs` | how the dashboard stacks vs. tabs provider blocks (`auto` / `always` / `never`) |
 | `provider_list` | which providers appear and in what order; `"all"` expands the rest at that position |
@@ -279,15 +278,6 @@ ascii_art = """
 
 `color` accepts a palette role, `#rrggbb`, or a raw index. Which blocks appear and in what order is a [Display](#display) and discovery setting (see [configuration.md → Provider dashboard](./configuration.md#provider-dashboard)); account and emblem resolution is in [provider.md](../internals/agents/provider.md).
 
-## Glow
-
-`[theme.display] glow` gates the post-render transition-flash tier layered over the base palette. `auto` (default) follows the same truecolor signal as palette depth; `always` forces the flashes when a real truecolor terminal under-advertises (pair it with `mode = "truecolor"` for RGB base tones); `never` keeps the plain render. The base attention effect — the unread blink or shimmer — is part of status-head rendering and follows `mode` plus `NO_COLOR`, independent of `glow`.
-
-```toml
-[theme.display]
-glow = "auto"        # or "always", "never"
-```
-
 ## Setting values
 
 `rimz config set` validates before it writes, so a bad value never reaches the file:
@@ -295,7 +285,6 @@ glow = "auto"        # or "always", "never"
 ```sh
 rimz config set theme "TokyoNight Night"
 rimz config set theme.good '#a0d0a0'
-rimz config set theme.display.glow always
 rimz config set theme.glyphs.set nerd_font
 rimz config set theme.glyphs.unicode.tokens.total '◇'
 rimz config set theme.animations.unread shimmer

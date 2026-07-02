@@ -35,7 +35,6 @@
 ## refresh_ms = 100                   # render/animation grid; clamped internally
 ## max_cols = 72                      # creation-time cap for sidebar pane width
 ## scrollbar = "auto"                 # "auto", "always", or "never"
-## glow = "auto"                      # transition flashes: "auto", "always", or "never"
 ## card_density = "auto"              # "auto", "expanded", or "compact"
 ## provider_tabs = "auto"             # "auto", "always", or "never"
 ## provider_list = []                 # explicit provider order; include "all" to expand the rest

@@ -1261,38 +1261,6 @@ fn sidebar_glyphs_parse_and_default_unicode() {
 }
 
 #[test]
-fn sidebar_glow_parses_and_defaults_auto() {
-    let dir = tempdir().expect("tempdir");
-    assert_eq!(
-        MachineConfig::default().theme.display.glow,
-        GlowMode::Auto,
-        "transition flashes ship following the terminal's advertisement",
-    );
-    let config = load_no_fragments(&write_named(
-        &dir,
-        "theme.toml",
-        "[theme.display]\nglow = \"always\"\n",
-    ))
-    .expect("load");
-    assert_eq!(config.theme.display.glow, GlowMode::Always);
-    let config = load_no_fragments(&write_named(
-        &dir,
-        "theme.toml",
-        "[theme.display]\nglow = \"never\"\n",
-    ))
-    .expect("load");
-    assert_eq!(config.theme.display.glow, GlowMode::Never);
-    assert!(
-        load_no_fragments(&write_named(
-            &dir,
-            "theme.toml",
-            "[theme.display]\nglow = false\n"
-        ))
-        .is_err()
-    );
-}
-
-#[test]
 fn zellij_room_defaults_are_agent_friendly() {
     let dir = tempdir().expect("tempdir");
     let config = load_no_fragments(&write(&dir, "")).expect("load");
