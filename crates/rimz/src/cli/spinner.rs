@@ -6,7 +6,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(crate) const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 pub(crate) const SPINNER_TICK: Duration = Duration::from_millis(80);
@@ -23,6 +23,10 @@ struct SpinnerInner {
 
 impl Spinner {
     pub(crate) fn new(label: impl Into<String>) -> Self {
+        Self::delayed(label, Duration::ZERO)
+    }
+
+    pub(crate) fn delayed(label: impl Into<String>, min_age: Duration) -> Self {
         if !std::io::stderr().is_terminal() {
             return Self { inner: None };
         }
@@ -33,20 +37,23 @@ impl Spinner {
         let worker_stop = Arc::clone(&stop);
         let worker = thread::spawn(move || {
             let mut frame = 0;
+            let started = Instant::now();
             while !worker_stop.load(Ordering::Relaxed) {
-                let label = worker_label
-                    .lock()
-                    .map(|label| label.clone())
-                    .unwrap_or_default();
-                let mut stderr = std::io::stderr().lock();
-                let _ = write!(
-                    stderr,
-                    "\r{} {}\x1b[K",
-                    SPINNER_FRAMES[frame % SPINNER_FRAMES.len()],
-                    label
-                );
-                let _ = stderr.flush();
-                frame += 1;
+                if started.elapsed() >= min_age {
+                    let label = worker_label
+                        .lock()
+                        .map(|label| label.clone())
+                        .unwrap_or_default();
+                    let mut stderr = std::io::stderr().lock();
+                    let _ = write!(
+                        stderr,
+                        "\r{} {}\x1b[K",
+                        SPINNER_FRAMES[frame % SPINNER_FRAMES.len()],
+                        label
+                    );
+                    let _ = stderr.flush();
+                    frame += 1;
+                }
                 thread::sleep(SPINNER_TICK);
             }
         });

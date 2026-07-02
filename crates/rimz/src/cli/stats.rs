@@ -30,7 +30,7 @@ use unicode_width::UnicodeWidthChar;
 
 use super::GlobalFlags;
 use crate::cli::render;
-use crate::cli::spinner::{SPINNER_FRAMES, SPINNER_TICK};
+use crate::cli::spinner::Spinner;
 use rimz::RuntimePaths;
 use rimz::agents::AgentAdapter;
 use rimz::agents::pricing;
@@ -660,105 +660,33 @@ fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<LoadedStats> {
     emit(&header_lines(geometry.panel_width), geometry.outer, "\n")?;
 
     let file_count = discover_spending_files().len();
-    let paths = paths.clone();
-    let (tx, rx) = mpsc::channel();
-    let worker = thread::spawn(move || {
-        let progress_tx = tx.clone();
-        let mut progress = |progress| {
-            let _ = progress_tx.send(ColdStatsEvent::Progress(progress));
-        };
-        let mut walker = SpendingWalker::new();
-        let stats = load_or_refresh_stats(&paths, Some(&mut progress), &mut walker);
-        let _ = tx.send(ColdStatsEvent::Done(Box::new(stats)));
-    });
-
-    let stats = wait_for_cold_stats(rx, file_count);
-    if worker.join().is_err() {
-        return Err(anyhow!("stats worker panicked"));
-    }
-    let stats = stats?;
+    let spinner = Spinner::delayed(
+        progress_line(SpendProgress {
+            finished_files: 0,
+            total_files: file_count,
+        }),
+        SPINNER_MIN_AGE,
+    );
+    let mut progress = |progress| spinner.set(progress_line(progress));
+    let mut walker = SpendingWalker::new();
+    let stats = load_or_refresh_stats(paths, Some(&mut progress), &mut walker)?;
     Ok(LoadedStats {
         stats,
         header_printed: true,
     })
 }
 
-enum ColdStatsEvent {
-    Progress(SpendProgress),
-    Done(Box<Result<Stats>>),
-}
-
-fn wait_for_cold_stats(rx: mpsc::Receiver<ColdStatsEvent>, file_count: usize) -> Result<Stats> {
-    let start = Instant::now();
-    let mut frame = 0;
-    let mut shown = false;
-    let mut last_draw: Option<Instant> = None;
-    let mut progress = SpendProgress {
-        finished_files: 0,
-        total_files: file_count,
-    };
-    loop {
-        match rx.recv_timeout(SPINNER_TICK) {
-            Ok(ColdStatsEvent::Done(stats)) => {
-                if shown {
-                    clear_spinner_line()?;
-                }
-                return *stats;
-            }
-            Ok(ColdStatsEvent::Progress(next)) => {
-                progress = next;
-                if start.elapsed() >= SPINNER_MIN_AGE
-                    && last_draw.is_none_or(|draw| draw.elapsed() >= SPINNER_TICK)
-                {
-                    draw_progress(&mut frame, progress, &mut last_draw)?;
-                    shown = true;
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if start.elapsed() < SPINNER_MIN_AGE {
-                    continue;
-                }
-                draw_progress(&mut frame, progress, &mut last_draw)?;
-                shown = true;
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                if shown {
-                    clear_spinner_line()?;
-                }
-                return Err(anyhow!("stats worker exited before sending a result"));
-            }
-        }
-    }
-}
-
-fn draw_progress(
-    frame: &mut usize,
-    progress: SpendProgress,
-    last_draw: &mut Option<Instant>,
-) -> Result<()> {
-    write_progress_line(SPINNER_FRAMES[*frame % SPINNER_FRAMES.len()], progress)?;
-    *frame += 1;
-    *last_draw = Some(Instant::now());
-    Ok(())
-}
-
 fn should_animate_cold_stats(human: bool, stdout_tty: bool, stderr_tty: bool) -> bool {
     human && stdout_tty && stderr_tty
 }
 
-fn write_progress_line(frame: char, progress: SpendProgress) -> Result<()> {
+fn progress_line(progress: SpendProgress) -> String {
     let total = progress.total_files;
     let done = progress.finished_files.min(total);
     let plural = if total == 1 { "" } else { "s" };
     let count_width = total.max(1).to_string().len();
     let bar = progress_bar(done, total);
-    let mut stderr = std::io::stderr().lock();
-    write!(
-        stderr,
-        "\r{frame} Reading session file{plural} [{bar}] {done:>count_width$}/{total}"
-    )?;
-    stderr.flush()?;
-    Ok(())
+    format!("Reading session file{plural} [{bar}] {done:>count_width$}/{total}")
 }
 
 fn progress_bar(done: usize, total: usize) -> String {
@@ -771,13 +699,6 @@ fn progress_bar(done: usize, total: usize) -> String {
     bar.extend(std::iter::repeat_n('█', filled));
     bar.extend(std::iter::repeat_n('░', PROGRESS_BAR_WIDTH - filled));
     bar
-}
-
-fn clear_spinner_line() -> Result<()> {
-    let mut stderr = std::io::stderr().lock();
-    write!(stderr, "\r\x1b[K")?;
-    stderr.flush()?;
-    Ok(())
 }
 
 // ── The grid ───────────────────────────────────────────────────────────────────
