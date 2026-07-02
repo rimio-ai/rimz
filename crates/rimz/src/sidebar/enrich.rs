@@ -20,7 +20,7 @@ use crate::agents::{AccountBudget, AgentStatus};
 use crate::ids::AgentKind;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::ledger::snapshot::{
-    LazyAgentPairingDiagnostic, LazyAgentPairingResult, SidebarPresence,
+    LazyAgentPairingDiagnostic, LazyAgentPairingResult, ResumeOutcome, SidebarPresence,
 };
 use crate::{
     RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarSnapshot,
@@ -152,9 +152,10 @@ pub fn cached_worktree_roots(runtime: &RuntimePaths) -> Vec<PathBuf> {
 pub(crate) fn read_auto_continue_resume_messages(
     runtime: &RuntimePaths,
     config: &crate::config::ResumeConfig,
+    outcomes: &[ResumeOutcome],
 ) -> Vec<ResumeMessage> {
     if config.auto_continue {
-        auto_continue::read_resume_messages(runtime)
+        auto_continue::read_resume_messages(runtime, outcomes)
     } else {
         Vec::new()
     }
@@ -626,7 +627,11 @@ pub fn enrich(
     }
 
     let account_budgets = account_budgets_from_caches(runtime, snapshot.now);
-    let resume_messages = read_auto_continue_resume_messages(runtime, &machine_config.resume);
+    let resume_messages = read_auto_continue_resume_messages(
+        runtime,
+        &machine_config.resume,
+        snapshot.resume_outcomes.as_deref().unwrap_or_default(),
+    );
     let exhausted_resumes = auto_continue::exhausted_parks(
         &snapshot,
         runtime,

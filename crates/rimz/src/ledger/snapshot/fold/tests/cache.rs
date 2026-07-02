@@ -30,6 +30,7 @@ fn write_rollup_cache_emits_compact_json_and_sweeps_stale_temp_siblings() {
                 offset: 10,
             },
             raw_agents: vec![agent("claude", "real", AgentStatus::Running, 1_000)],
+            resume_outcomes: Vec::new(),
             agent_identity: AgentIdentityState::default(),
             saw_session_rebirth: false,
             tombstones: Vec::new(),
@@ -76,12 +77,13 @@ fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
             offset,
         },
         raw_agents: vec![agent("claude", "ghost", AgentStatus::Running, 0)],
+        resume_outcomes: Vec::new(),
         agent_identity: AgentIdentityState::default(),
         saw_session_rebirth: false,
         tombstones: Vec::new(),
     };
     let assert_cold = |label: &str| {
-        let (cache, agents) = catch_up_rollup(&paths).unwrap();
+        let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
         assert!(
             agents.iter().any(|a| a.agent_id == "real"),
             "{label}: the cold fold reads the log"
@@ -128,6 +130,7 @@ fn rollup_parse_cache_hits_on_identity_and_misses_on_republish() {
             offset: 10,
         },
         raw_agents: vec![agent("claude", id, AgentStatus::Running, 1_000)],
+        resume_outcomes: Vec::new(),
         agent_identity: AgentIdentityState::default(),
         saw_session_rebirth: false,
         tombstones: Vec::new(),
@@ -185,7 +188,7 @@ fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
     .unwrap();
 
     let mut cursor = RollupCursor::new();
-    let (first_extent, first) = cursor.fold(&paths).unwrap();
+    let (first_extent, first, _) = cursor.fold(&paths).unwrap();
 
     // Plant a ghost base on disk. A warm cursor over an unchanged log serves
     // its held fold — it never re-reads `rollup.json`, so the ghost cannot
@@ -199,6 +202,7 @@ fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
                 offset: 0,
             },
             raw_agents: vec![agent("claude", "ghost", AgentStatus::Running, 0)],
+            resume_outcomes: Vec::new(),
             agent_identity: AgentIdentityState::default(),
             saw_session_rebirth: false,
             tombstones: Vec::new(),
@@ -206,7 +210,7 @@ fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
     )
     .unwrap();
 
-    let (held_extent, held) = cursor.fold(&paths).unwrap();
+    let (held_extent, held, _) = cursor.fold(&paths).unwrap();
     assert_eq!(held_extent, first_extent);
     assert_eq!(sorted_value(held.clone()), sorted_value(first));
     assert!(
@@ -230,6 +234,7 @@ fn cached_rebirth_continues_to_reset_carryover_identity_after_extent() {
         &EventCarryover {
             agents: vec![carried],
             agent_identity: AgentIdentityState::default(),
+            resume_outcomes: Vec::new(),
         },
     )
     .unwrap();
@@ -238,7 +243,7 @@ fn cached_rebirth_continues_to_reset_carryover_identity_after_extent() {
         &EventEnvelope::session_rebirth(workspace.clone(), "session"),
     )
     .unwrap();
-    let (rebirth_cache, first) = catch_up_rollup(&paths).unwrap();
+    let (rebirth_cache, first, _) = catch_up_rollup(&paths).unwrap();
     assert!(rebirth_cache.saw_session_rebirth);
     assert!(
         first
@@ -259,7 +264,7 @@ fn cached_rebirth_continues_to_reset_carryover_identity_after_extent() {
         ),
     )
     .unwrap();
-    let (next_cache, next) = catch_up_rollup(&paths).unwrap();
+    let (next_cache, next, _) = catch_up_rollup(&paths).unwrap();
     let old = next
         .iter()
         .find(|agent| agent.agent_id.as_str() == "old-session")

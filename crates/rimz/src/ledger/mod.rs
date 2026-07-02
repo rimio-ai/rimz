@@ -297,7 +297,7 @@ impl Ledger {
     ) -> Result<runtime::RuntimeProjection> {
         let items = feed_store::list(&self.inner.paths.feed_dir)?;
         let events = event_log::read_all(&self.inner.paths.events_log)?;
-        let (_, agents) = snapshot::catch_up_rollup(&self.inner.paths)?;
+        let (_, agents, _) = snapshot::catch_up_rollup(&self.inner.paths)?;
         Ok(runtime::RuntimeProjection::from_parts(
             items, events, agents, scope,
         ))

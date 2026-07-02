@@ -199,6 +199,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         today_spend_live_usd: None,
         link: None,
         reflects_log: None,
+        resume_outcomes: Some(Vec::new()),
     }
 }
 

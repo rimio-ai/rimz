@@ -41,9 +41,8 @@ use crate::agents::{
 use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use crate::ledger::atomic::write_temp_then_rename_cache;
-use crate::ledger::snapshot::PaneAgent;
+use crate::ledger::snapshot::{PaneAgent, ResumeOutcome};
 use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
-use crate::schema::event::EventKind;
 use crate::sidebar::timing::AUTO_CONTINUE_RETRY_INTERVAL;
 
 use super::SidebarSnapshot;
@@ -451,6 +450,18 @@ impl ResumeMessage {
         })
     }
 
+    fn from_outcome(outcome: &ResumeOutcome) -> Self {
+        Self {
+            message_id: outcome.message_id.clone(),
+            kind: outcome.kind.clone(),
+            agent_id: outcome.agent_id.clone(),
+            agent_name: outcome.agent_name.clone(),
+            status: outcome.status,
+            enqueued_at: outcome.enqueued_at,
+            updated_at: outcome.updated_at,
+        }
+    }
+
     fn same_agent_card(&self, agent: &AgentState) -> bool {
         self.kind == agent.kind
             && (self.agent_id == agent.agent_id
@@ -458,40 +469,27 @@ impl ResumeMessage {
     }
 }
 
-pub(crate) fn read_resume_messages(runtime: &RuntimePaths) -> Vec<ResumeMessage> {
+pub(crate) fn read_resume_messages(
+    runtime: &RuntimePaths,
+    outcomes: &[ResumeOutcome],
+) -> Vec<ResumeMessage> {
+    let mut messages = outcomes
+        .iter()
+        .map(ResumeMessage::from_outcome)
+        .collect::<Vec<_>>();
     let Ok(state) = crate::StatePaths::for_workspace(runtime.workspace_id.clone()) else {
-        return Vec::new();
+        return messages;
     };
-    let mut messages = crate::ledger::message_store::list(&state.messages_dir)
-        .map(|messages| {
-            messages
-                .iter()
-                .filter_map(ResumeMessage::from_record)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if let Ok(events) = crate::ledger::event_log::read_all(&state.events_log) {
-        messages.extend(events.into_iter().filter_map(|event| {
-            let EventKind::Message { payload, .. } = event.kind() else {
-                return None;
-            };
-            if payload.gate != DeliveryGate::Resume
-                || payload.body != MessageBody::Prompt
-                || !payload.status.is_terminal()
-            {
-                return None;
-            }
-            Some(ResumeMessage {
-                message_id: payload.message_id,
-                kind: payload.kind,
-                agent_id: payload.agent_id,
-                agent_name: payload.agent_name,
-                status: payload.status,
-                enqueued_at: payload.enqueued_at.unwrap_or(event.timestamp),
-                updated_at: event.timestamp,
+    messages.extend(
+        crate::ledger::message_store::list(&state.messages_dir)
+            .map(|messages| {
+                messages
+                    .iter()
+                    .filter_map(ResumeMessage::from_record)
+                    .collect::<Vec<_>>()
             })
-        }));
-    }
+            .unwrap_or_default(),
+    );
     messages
 }
 

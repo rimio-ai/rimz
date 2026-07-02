@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use jiff::Timestamp;
 
 use super::Result;
-use super::fold::{RollupCursor, catch_up_rollup, write_rollup_cache};
+use super::fold::{ResumeOutcome, RollupCursor, catch_up_rollup, write_rollup_cache};
 use super::view::SidebarSnapshot;
 use crate::agents::AgentState;
 use crate::ledger::atomic::{self};
@@ -30,8 +30,8 @@ use crate::workspace::RootClass;
 /// pre-projects the agent rollup into `agents.carryover.json` and reseeds
 /// the fold base, so the reducer stays bounded.
 pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
-    let (rollup, agents) = catch_up_rollup(paths)?;
-    let snapshot = assemble_snapshot(paths, rollup.extent, agents)?;
+    let (rollup, agents, resume_outcomes) = catch_up_rollup(paths)?;
+    let snapshot = assemble_snapshot(paths, rollup.extent, agents, resume_outcomes)?;
     // The fold base lands first: its extent always runs at or past
     // `latest.json`'s stamp, so a crash between the two leaves a stale view
     // that the next catch-up refreshes from the newer base. Both writes are
@@ -45,22 +45,23 @@ pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
 /// Build the snapshot view from the live ledger without persisting anything —
 /// the read-only twin of [`rebuild`], safe from a lock-free reader.
 pub fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
-    let (rollup, agents) = catch_up_rollup(paths)?;
-    assemble_snapshot(paths, rollup.extent, agents)
+    let (rollup, agents, resume_outcomes) = catch_up_rollup(paths)?;
+    assemble_snapshot(paths, rollup.extent, agents, resume_outcomes)
 }
 
 /// [`build_from`] for a long-lived reader: the same projection, but the
 /// rollup base rides in the caller's [`RollupCursor`] instead of being
 /// re-read from `rollup.json` per call — O(new log bytes) per delta.
 pub fn build_with_cursor(paths: &StatePaths, cursor: &mut RollupCursor) -> Result<SidebarSnapshot> {
-    let (extent, agents) = cursor.fold(paths)?;
-    assemble_snapshot(paths, extent, agents)
+    let (extent, agents, resume_outcomes) = cursor.fold(paths)?;
+    assemble_snapshot(paths, extent, agents, resume_outcomes)
 }
 
 fn assemble_snapshot(
     paths: &StatePaths,
     extent: event_log::LogExtent,
     agents: Vec<AgentState>,
+    resume_outcomes: Vec<ResumeOutcome>,
 ) -> Result<SidebarSnapshot> {
     // The one clock read this projection makes: every window verdict below
     // (reap TTLs, stall, compaction) folds against this single instant.
@@ -88,6 +89,7 @@ fn assemble_snapshot(
     // against the live log length, so a racing append can never pass a
     // stale rollup off as current.
     snapshot.reflects_log = Some(extent);
+    snapshot.resume_outcomes = Some(resume_outcomes);
     Ok(snapshot)
 }
 
@@ -122,7 +124,9 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
             .is_some_and(|extent| extent.offset == log_len)
     };
     let snapshot_is_current = |snapshot: &SidebarSnapshot| {
-        stamp_is_current(snapshot) && agent_identities_are_current(snapshot)
+        stamp_is_current(snapshot)
+            && agent_identities_are_current(snapshot)
+            && snapshot.resume_outcomes.is_some()
     };
     let len = meta.len();
     let path = paths.latest_snapshot.as_path();
@@ -307,6 +311,40 @@ mod tests {
         assert!(
             agent_identities_are_current(&rebuilt),
             "fallback rebuild backfills deterministic card identity"
+        );
+    }
+
+    #[test]
+    fn read_fresh_latest_rejects_snapshots_without_resume_outcomes() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        event_log::append(&paths.events_log, &lifecycle(&workspace, "a", None)).unwrap();
+        rebuild(&paths).unwrap();
+        assert!(
+            read_fresh_latest(&paths)
+                .and_then(|snapshot| snapshot.resume_outcomes)
+                .is_some(),
+            "rebuilt snapshots carry the resume outcome migration marker"
+        );
+
+        let bytes = std::fs::read(&paths.latest_snapshot).unwrap();
+        let mut legacy: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        legacy
+            .as_object_mut()
+            .expect("snapshot is an object")
+            .remove("resume_outcomes");
+        atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
+
+        assert!(
+            read_fresh_latest(&paths).is_none(),
+            "old latest.json without resume outcomes is not fresh for the new CLI"
+        );
+        let rebuilt = build_from(&paths).unwrap();
+        assert!(
+            rebuilt.resume_outcomes.is_some(),
+            "fallback rebuild stamps the resume outcome field"
         );
     }
 

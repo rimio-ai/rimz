@@ -557,6 +557,7 @@ mod tests {
             today_spend_live_usd: None,
             link: None,
             reflects_log: None,
+            resume_outcomes: Some(Vec::new()),
         }
     }
 

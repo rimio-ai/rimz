@@ -7,6 +7,7 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::project::{
@@ -16,21 +17,38 @@ use super::project::{
 use super::{Result, SnapshotErr};
 use crate::agents::AgentState;
 use crate::agents::lifecycle::LifecycleSignal;
-use crate::ids::{AgentKind, AgentSessionId};
+use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::ledger::atomic::{self, write_temp_then_rename};
 use crate::ledger::event_log::{self};
 use crate::ledger::parse_cache::ParseCache;
 use crate::ledger::paths::StatePaths;
+use crate::message::{DeliveryGate, MessageBody, MessageStatus};
 use crate::schema::event::{EventEnvelope, EventKind};
 
+const RESUME_OUTCOME_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
+
 /// Carryover state preserved across event-log rotation. Today this is the
-/// agent rollup; other reductions can join when they appear.
+/// agent rollup and terminal resume-message outcomes.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct EventCarryover {
     #[serde(default)]
     pub agents: Vec<AgentState>,
     #[serde(default)]
     pub agent_identity: AgentIdentityState,
+    #[serde(default)]
+    pub resume_outcomes: Vec<ResumeOutcome>,
+}
+
+/// Latest terminal resume-gated prompt outcome for one agent card.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumeOutcome {
+    pub message_id: MessageId,
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    pub agent_name: Option<String>,
+    pub status: MessageStatus,
+    pub enqueued_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 pub(crate) fn read_carryover(path: &Path) -> Result<EventCarryover> {
@@ -143,7 +161,7 @@ fn agent_tombstones_for_decoded_events(
 
 /// Bump when [`RollupCache`]'s shape changes — a mismatched cache reads as
 /// absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 8;
+const ROLLUP_CACHE_VERSION: u32 = 9;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map and this generation's tombstones, stamped
@@ -155,6 +173,8 @@ pub(crate) struct RollupCache {
     pub version: u32,
     pub extent: event_log::LogExtent,
     pub raw_agents: Vec<AgentState>,
+    #[serde(default)]
+    pub resume_outcomes: Vec<ResumeOutcome>,
     #[serde(default)]
     pub agent_identity: AgentIdentityState,
     #[serde(default)]
@@ -202,7 +222,9 @@ pub(super) fn write_rollup_cache(path: &Path, cache: &RollupCache) -> Result<()>
 /// universal recovery path. Read-only: the caller that owns a write
 /// serialization point (a locked rebuild, the single-flighted publisher)
 /// persists the returned cache; a plain reader just uses it.
-pub(crate) fn catch_up_rollup(paths: &StatePaths) -> Result<(RollupCache, Vec<AgentState>)> {
+pub(crate) fn catch_up_rollup(
+    paths: &StatePaths,
+) -> Result<(RollupCache, Vec<AgentState>, Vec<ResumeOutcome>)> {
     let log_len = fs::metadata(&paths.events_log)
         .map(|meta| meta.len())
         .unwrap_or(0);
@@ -221,48 +243,61 @@ pub(crate) fn catch_up_rollup(paths: &StatePaths) -> Result<(RollupCache, Vec<Ag
 fn catch_up_from(
     base: Option<RollupCache>,
     paths: &StatePaths,
-) -> Result<(RollupCache, Vec<AgentState>)> {
+) -> Result<(RollupCache, Vec<AgentState>, Vec<ResumeOutcome>)> {
+    let now = Timestamp::now();
     let mut carryover = read_carryover(&paths.agents_carryover)?;
     carryover.agent_identity =
         backfill_agent_identities(&mut carryover.agents, carryover.agent_identity);
-    let (seed, identity, mut tombstones, generation, start, mut saw_session_rebirth) = match base {
-        Some(RollupCache {
-            extent,
-            raw_agents,
-            agent_identity,
-            saw_session_rebirth,
-            tombstones,
-            ..
-        }) => {
-            let seed: BTreeMap<(AgentKind, AgentSessionId), AgentState> = raw_agents
-                .into_iter()
-                .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
-                .collect();
-            let tombstones: BTreeSet<(AgentKind, AgentSessionId)> =
-                tombstones.into_iter().collect();
-            (
-                seed,
+    let (seed, identity, mut tombstones, resume_seed, generation, start, mut saw_session_rebirth) =
+        match base {
+            Some(RollupCache {
+                extent,
+                raw_agents,
+                resume_outcomes,
                 agent_identity,
-                tombstones,
-                extent.generation,
-                extent.offset,
                 saw_session_rebirth,
-            )
-        }
-        None => (
-            BTreeMap::new(),
-            carryover.agent_identity.clone(),
-            BTreeSet::new(),
-            0,
-            0,
-            false,
-        ),
-    };
+                tombstones,
+                ..
+            }) => {
+                let seed: BTreeMap<(AgentKind, AgentSessionId), AgentState> = raw_agents
+                    .into_iter()
+                    .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
+                    .collect();
+                let tombstones: BTreeSet<(AgentKind, AgentSessionId)> =
+                    tombstones.into_iter().collect();
+                let resume_seed = resume_outcomes
+                    .into_iter()
+                    .map(|outcome| ((outcome.kind.clone(), outcome.agent_id.clone()), outcome))
+                    .collect();
+                (
+                    seed,
+                    agent_identity,
+                    tombstones,
+                    resume_seed,
+                    extent.generation,
+                    extent.offset,
+                    saw_session_rebirth,
+                )
+            }
+            None => (
+                BTreeMap::new(),
+                carryover.agent_identity.clone(),
+                BTreeSet::new(),
+                BTreeMap::new(),
+                0,
+                0,
+                false,
+            ),
+        };
     let (delta, end) = event_log::read_from_offset(&paths.events_log, start)?;
     let decoded_delta = decode_events(&delta);
     saw_session_rebirth |= events_have_rebirth(&decoded_delta);
     let (map, mut agent_identity) =
         reduce_agent_states_seeded_with_identity(seed, identity, &decoded_delta);
+    let resume_outcomes: Vec<ResumeOutcome> =
+        reduce_resume_outcomes_seeded(resume_seed, &decoded_delta, now)
+            .into_values()
+            .collect();
     tombstones.extend(agent_tombstones_for_decoded_events(&decoded_delta));
     let mut raw_agents: Vec<AgentState> = map.into_values().collect();
     if saw_session_rebirth {
@@ -275,6 +310,8 @@ fn catch_up_from(
     }
     let mut merged =
         merge_agent_rollups_with_tombstones(&carryover.agents, &raw_agents, &tombstones);
+    let merged_resume_outcomes =
+        merge_resume_outcomes(&carryover.resume_outcomes, &resume_outcomes, now);
     if saw_session_rebirth {
         backfill_agent_identities(&mut merged, AgentIdentityState::default());
     }
@@ -285,11 +322,90 @@ fn catch_up_from(
             offset: end,
         },
         raw_agents,
+        resume_outcomes,
         agent_identity,
         saw_session_rebirth,
         tombstones: tombstones.into_iter().collect(),
     };
-    Ok((refreshed, merged))
+    Ok((refreshed, merged, merged_resume_outcomes))
+}
+
+fn reduce_resume_outcomes_seeded(
+    mut seed: BTreeMap<(AgentKind, AgentSessionId), ResumeOutcome>,
+    events: &[FoldEvent<'_>],
+    now: Timestamp,
+) -> BTreeMap<(AgentKind, AgentSessionId), ResumeOutcome> {
+    for event in events {
+        let Some(outcome) = resume_outcome_for_event(event) else {
+            continue;
+        };
+        upsert_resume_outcome(&mut seed, outcome);
+    }
+    prune_resume_outcomes(&mut seed, now);
+    seed
+}
+
+fn resume_outcome_for_event(event: &FoldEvent<'_>) -> Option<ResumeOutcome> {
+    let EventKind::Message { payload, .. } = &event.kind else {
+        return None;
+    };
+    if payload.gate != DeliveryGate::Resume
+        || payload.body != MessageBody::Prompt
+        || !payload.status.is_terminal()
+    {
+        return None;
+    }
+    Some(ResumeOutcome {
+        message_id: payload.message_id.clone(),
+        kind: payload.kind.clone(),
+        agent_id: payload.agent_id.clone(),
+        agent_name: payload.agent_name.clone(),
+        status: payload.status,
+        enqueued_at: payload.enqueued_at.unwrap_or(event.envelope.timestamp),
+        updated_at: event.envelope.timestamp,
+    })
+}
+
+fn merge_resume_outcomes(
+    carryover: &[ResumeOutcome],
+    live: &[ResumeOutcome],
+    now: Timestamp,
+) -> Vec<ResumeOutcome> {
+    let mut map: BTreeMap<(AgentKind, AgentSessionId), ResumeOutcome> = BTreeMap::new();
+    for outcome in carryover.iter().chain(live) {
+        upsert_resume_outcome(&mut map, outcome.clone());
+    }
+    prune_resume_outcomes(&mut map, now);
+    map.into_values().collect()
+}
+
+fn upsert_resume_outcome(
+    map: &mut BTreeMap<(AgentKind, AgentSessionId), ResumeOutcome>,
+    outcome: ResumeOutcome,
+) {
+    let key = (outcome.kind.clone(), outcome.agent_id.clone());
+    match map.get(&key) {
+        Some(existing) if resume_outcome_cmp(existing, &outcome).is_ge() => {}
+        _ => {
+            map.insert(key, outcome);
+        }
+    }
+}
+
+fn resume_outcome_cmp(left: &ResumeOutcome, right: &ResumeOutcome) -> std::cmp::Ordering {
+    left.enqueued_at
+        .cmp(&right.enqueued_at)
+        .then_with(|| left.updated_at.cmp(&right.updated_at))
+        .then_with(|| left.message_id.as_str().cmp(right.message_id.as_str()))
+}
+
+fn prune_resume_outcomes(
+    map: &mut BTreeMap<(AgentKind, AgentSessionId), ResumeOutcome>,
+    now: Timestamp,
+) {
+    map.retain(|_, outcome| {
+        now.duration_since(outcome.updated_at).as_secs() <= RESUME_OUTCOME_RETENTION_SECS
+    });
 }
 
 fn events_have_rebirth(events: &[FoldEvent<'_>]) -> bool {
@@ -317,6 +433,7 @@ pub(crate) fn reseed_rollup_cache_for_rotation(paths: &StatePaths) -> Result<()>
                 offset: 0,
             },
             raw_agents: Vec::new(),
+            resume_outcomes: Vec::new(),
             agent_identity: read_carryover(&paths.agents_carryover)?
                 .agent_identity
                 .without_consumed_launches(),
@@ -352,6 +469,7 @@ pub struct RollupCursor {
 struct CursorState {
     cache: RollupCache,
     merged: Vec<AgentState>,
+    resume_outcomes: Vec<ResumeOutcome>,
     file_id: Option<LogFileId>,
 }
 
@@ -395,7 +513,10 @@ impl RollupCursor {
     /// Catch the held rollup up to the live log and return the extent it
     /// reflects beside the carryover-merged agents. The cursor twin of
     /// [`catch_up_rollup`]; see the type docs for the staleness guards.
-    pub fn fold(&mut self, paths: &StatePaths) -> Result<(event_log::LogExtent, Vec<AgentState>)> {
+    pub fn fold(
+        &mut self,
+        paths: &StatePaths,
+    ) -> Result<(event_log::LogExtent, Vec<AgentState>, Vec<ResumeOutcome>)> {
         let meta = fs::metadata(&paths.events_log).ok();
         let file_id = meta.as_ref().and_then(LogFileId::of);
         let log_len = meta.map(|meta| meta.len()).unwrap_or(0);
@@ -407,7 +528,11 @@ impl RollupCursor {
             let same_file = file_id.is_some() && held.file_id == file_id;
             if same_file && held.cache.extent.offset == log_len {
                 // Nothing appended: serve the held fold without opening a file.
-                let out = (held.cache.extent, held.merged.clone());
+                let out = (
+                    held.cache.extent,
+                    held.merged.clone(),
+                    held.resume_outcomes.clone(),
+                );
                 self.held = Some(held);
                 return Ok(out);
             }
@@ -416,30 +541,32 @@ impl RollupCursor {
             // so nothing is masked — only a stale base heals.
             if same_file
                 && held.cache.extent.offset < log_len
-                && let Ok((cache, merged)) = catch_up_from(Some(held.cache), paths)
+                && let Ok((cache, merged, resume_outcomes)) = catch_up_from(Some(held.cache), paths)
             {
-                return Ok(self.hold(cache, merged, file_id));
+                return Ok(self.hold(cache, merged, resume_outcomes, file_id));
             }
             // Identity changed or the offset regressed: the file underneath
             // was swapped, so the in-memory base describes a renamed-away log.
         }
-        let (cache, merged) = catch_up_rollup(paths)?;
-        Ok(self.hold(cache, merged, file_id))
+        let (cache, merged, resume_outcomes) = catch_up_rollup(paths)?;
+        Ok(self.hold(cache, merged, resume_outcomes, file_id))
     }
 
     fn hold(
         &mut self,
         cache: RollupCache,
         merged: Vec<AgentState>,
+        resume_outcomes: Vec<ResumeOutcome>,
         file_id: Option<LogFileId>,
-    ) -> (event_log::LogExtent, Vec<AgentState>) {
+    ) -> (event_log::LogExtent, Vec<AgentState>, Vec<ResumeOutcome>) {
         let extent = cache.extent;
         self.held = Some(CursorState {
             cache,
             merged: merged.clone(),
+            resume_outcomes: resume_outcomes.clone(),
             file_id,
         });
-        (extent, merged)
+        (extent, merged, resume_outcomes)
     }
 }
 

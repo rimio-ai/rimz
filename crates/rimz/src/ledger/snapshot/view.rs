@@ -8,7 +8,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use super::fold::agent_rollup_with_carryover;
+use super::fold::{ResumeOutcome, agent_rollup_with_carryover};
 use super::panes::SidebarOwnView;
 use super::row::PaneAgent;
 use crate::agents::AgentState;
@@ -264,6 +264,11 @@ pub struct SidebarSnapshot {
     /// which read as stale so a fresh fold replaces them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reflects_log: Option<event_log::LogExtent>,
+    /// Latest terminal resume-gated prompt outcome per folded agent card.
+    /// `None` means a pre-outcome snapshot and forces a fresh fold before the
+    /// auto-continue producer reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_outcomes: Option<Vec<ResumeOutcome>>,
 }
 
 impl SidebarSnapshot {
@@ -359,6 +364,7 @@ impl SidebarSnapshot {
             today_spend_live_usd: None,
             link: None,
             reflects_log: None,
+            resume_outcomes: Some(Vec::new()),
         }
     }
 

@@ -38,6 +38,7 @@ pub(super) fn sidebar_fixture_snapshot(
         today_spend_live_usd: None,
         link: None,
         reflects_log: None,
+        resume_outcomes: Some(Vec::new()),
     };
     snapshot.theme.scheme = Some("TokyoNight Night".to_owned());
 

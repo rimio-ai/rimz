@@ -169,8 +169,11 @@ pub fn refresh_producer_caches(
     let config = crate::config::MachineConfig::load().unwrap_or_default();
     let trunk = config.sidebar.trunk.clone();
     let headline_spec = config.headline_spec();
-    let resume_messages =
-        crate::sidebar::enrich::read_auto_continue_resume_messages(runtime, &config.resume);
+    let resume_messages = crate::sidebar::enrich::read_auto_continue_resume_messages(
+        runtime,
+        &config.resume,
+        base.resume_outcomes.as_deref().unwrap_or_default(),
+    );
     let spending = spending::compute_fleet_spending_with_walker(
         spending_walker,
         runtime,

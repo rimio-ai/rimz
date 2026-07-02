@@ -90,6 +90,7 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         today_spend_live_usd: None,
         link: None,
         reflects_log: None,
+        resume_outcomes: Some(Vec::new()),
     }
 }
 

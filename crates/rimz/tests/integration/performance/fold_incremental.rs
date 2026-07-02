@@ -32,7 +32,7 @@ fn delta_fold_is_o_new_bytes() {
 
     let mut cursor = RollupCursor::new();
     let cold_before = bytes_read();
-    let (cold_extent, _) = cursor.fold(paths).expect("cold fold");
+    let (cold_extent, _, _) = cursor.fold(paths).expect("cold fold");
     let cold_bytes = bytes_read() - cold_before;
     assert_eq!(cold_extent.offset, log_len, "the cold fold reaches the end");
     assert_eq!(cold_bytes, log_len, "a cold fold reads the whole history");
@@ -49,7 +49,7 @@ fn delta_fold_is_o_new_bytes() {
         - log_len;
 
     let warm_before = bytes_read();
-    let (warm_extent, agents) = cursor.fold(paths).expect("warm fold");
+    let (warm_extent, agents, _) = cursor.fold(paths).expect("warm fold");
     let warm_bytes = bytes_read() - warm_before;
 
     assert_eq!(warm_extent.offset, log_len + appended);

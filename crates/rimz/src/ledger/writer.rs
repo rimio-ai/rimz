@@ -43,7 +43,7 @@ fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Res
         return Ok((false, existing.agents.len()));
     }
 
-    let (cache, merged_agents) = snapshot::catch_up_rollup(paths)?;
+    let (cache, merged_agents, resume_outcomes) = snapshot::catch_up_rollup(paths)?;
     let live_agents = runtime::RuntimeProjection::from_parts(
         Vec::new(),
         Vec::new(),
@@ -57,6 +57,7 @@ fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Res
         &snapshot::EventCarryover {
             agents: live_agents,
             agent_identity: cache.agent_identity.without_consumed_launches(),
+            resume_outcomes,
         },
     )?;
     Ok((true, carryover_agents))
@@ -150,7 +151,8 @@ impl Ledger {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             let abandoned =
                 expiry::sweep_dead_owned_items_debounced(&self.inner.paths, &append.session_name)?;
-            let (_cache, base_agents) = snapshot::catch_up_rollup(&self.inner.paths)?;
+            let (_cache, base_agents, _resume_outcomes) =
+                snapshot::catch_up_rollup(&self.inner.paths)?;
             let identities = allocate_agent_launch_identities(requests, &base_agents)?;
             let events = identities
                 .iter()
@@ -538,9 +540,10 @@ mod tests {
     use super::*;
     use crate::agents::TurnPhase;
     use crate::agents::{AgentState, AgentStatus};
-    use crate::ids::WorkspaceId;
-    use crate::ids::{AgentKind, AgentSessionId};
+    use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
     use crate::ledger::paths::{RuntimePaths, StatePaths};
+    use crate::message::{DeliveryGate, MessageRecord, MessageStatus};
+    use crate::schema::event::MessageEventMethod;
 
     #[test]
     fn rotate_event_log_writes_carryover_before_archiving_active_log() {
@@ -549,18 +552,24 @@ mod tests {
         let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
         let ledger = Ledger::open(paths.clone(), runtime).expect("open ledger");
+        let mut message = MessageRecord::new(
+            workspace_id.clone(),
+            &agent_state("claude", "sess-resume", Some("lucid-atlas")),
+            "continue".to_owned(),
+            true,
+            DeliveryGate::Resume,
+        );
+        message.status = MessageStatus::Delivered;
         event_log::append(
             &paths.events_log,
-            &EventEnvelope::new(
-                workspace_id,
+            &EventEnvelope::message_event(
+                &message,
                 "rimz-test",
-                "rimz",
-                "cli",
-                "test.event",
-                json!({}),
+                MessageEventMethod::Delivered,
+                None,
             ),
         )
-        .expect("seed event");
+        .expect("seed resume event");
 
         let rotate_called = Cell::new(false);
         ledger
@@ -569,6 +578,13 @@ mod tests {
                 assert!(
                     paths.agents_carryover.exists(),
                     "rotation must persist carryover before archiving the only active-log copy"
+                );
+                let carryover =
+                    snapshot::read_carryover(&paths.agents_carryover).expect("read carryover");
+                assert_eq!(
+                    carryover.resume_outcomes.len(),
+                    1,
+                    "rotation carryover must include terminal resume outcomes"
                 );
                 event_log::rotate(events_log, archive_dir, min_bytes)
             })

@@ -96,18 +96,18 @@ proptest::proptest! {
         for event in &events[..at] {
             event_log::append(&paths.events_log, event).unwrap();
         }
-        let (prefix_cache, _) = catch_up_rollup(&paths).unwrap();
+        let (prefix_cache, _, _) = catch_up_rollup(&paths).unwrap();
         write_rollup_cache(&paths.rollup_cache, &prefix_cache).unwrap();
         let mut cursor = RollupCursor::new();
         cursor.fold(&paths).unwrap();
         for event in &events[at..] {
             event_log::append(&paths.events_log, event).unwrap();
         }
-        let (incremental_cache, incremental) = catch_up_rollup(&paths).unwrap();
-        let (cursor_extent, cursor_merged) = cursor.fold(&paths).unwrap();
+        let (incremental_cache, incremental, _) = catch_up_rollup(&paths).unwrap();
+        let (cursor_extent, cursor_merged, _) = cursor.fold(&paths).unwrap();
 
         std::fs::remove_file(&paths.rollup_cache).unwrap();
-        let (cold_cache, cold) = catch_up_rollup(&paths).unwrap();
+        let (cold_cache, cold, _) = catch_up_rollup(&paths).unwrap();
 
         prop_assert_eq!(
             sorted_value(incremental),

@@ -22,18 +22,19 @@ fn cursor_reloads_across_a_rotation() {
     event_log::append(&paths.events_log, &lifecycle("claude", "a")).unwrap();
 
     let mut cursor = RollupCursor::new();
-    let (warm_extent, _) = cursor.fold(&paths).unwrap();
+    let (warm_extent, _, _) = cursor.fold(&paths).unwrap();
     assert_eq!(warm_extent.generation, 0);
 
     // Rotate: carryover the rollup, swap the log file, reseed the base —
     // then regrow the new log *past* the held offset, the case a
     // length-only guard would misread as appended frames.
-    let (cache, _) = catch_up_rollup(&paths).unwrap();
+    let (cache, _, _) = catch_up_rollup(&paths).unwrap();
     write_carryover(
         &paths.agents_carryover,
         &EventCarryover {
             agents: cache.raw_agents.clone(),
             agent_identity: cache.agent_identity.clone(),
+            resume_outcomes: Vec::new(),
         },
     )
     .unwrap();
@@ -46,9 +47,9 @@ fn cursor_reloads_across_a_rotation() {
         "the regrown log must outgrow the held offset for this test to bite"
     );
 
-    let (extent, merged) = cursor.fold(&paths).unwrap();
+    let (extent, merged, _) = cursor.fold(&paths).unwrap();
     std::fs::remove_file(&paths.rollup_cache).unwrap();
-    let (cold_cache, cold) = catch_up_rollup(&paths).unwrap();
+    let (cold_cache, cold, _) = catch_up_rollup(&paths).unwrap();
     assert_eq!(extent.generation, 1, "the reloaded base carries the bump");
     assert_eq!(extent.offset, cold_cache.extent.offset);
     assert_eq!(
@@ -84,7 +85,7 @@ fn cursor_reloads_on_an_offset_regression() {
     }
 
     let mut cursor = RollupCursor::new();
-    let (warm_extent, _) = cursor.fold(&paths).unwrap();
+    let (warm_extent, _, _) = cursor.fold(&paths).unwrap();
     assert_eq!(warm_extent.offset, frame_ends[1]);
 
     // Truncate in place: identity unchanged, length regressed.
@@ -95,7 +96,7 @@ fn cursor_reloads_on_an_offset_regression() {
         .set_len(frame_ends[0])
         .unwrap();
 
-    let (extent, merged) = cursor.fold(&paths).unwrap();
+    let (extent, merged, _) = cursor.fold(&paths).unwrap();
     assert_eq!(extent.offset, frame_ends[0]);
     let ids: Vec<&str> = merged.iter().map(|a| a.agent_id.as_str()).collect();
     assert_eq!(
@@ -122,7 +123,7 @@ fn reseed_for_rotation_bumps_generation_and_starts_an_empty_fold() {
         ),
     )
     .unwrap();
-    let (cache, _) = catch_up_rollup(&paths).unwrap();
+    let (cache, _, _) = catch_up_rollup(&paths).unwrap();
     write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
     assert_eq!(cache.extent.generation, 0);
     assert!(cache.extent.offset > 0);
@@ -134,13 +135,14 @@ fn reseed_for_rotation_bumps_generation_and_starts_an_empty_fold() {
         &EventCarryover {
             agents: cache.raw_agents.clone(),
             agent_identity: cache.agent_identity.clone(),
+            resume_outcomes: Vec::new(),
         },
     )
     .unwrap();
     std::fs::remove_file(&paths.events_log).unwrap();
     reseed_rollup_cache_for_rotation(&paths).unwrap();
 
-    let (fresh, agents) = catch_up_rollup(&paths).unwrap();
+    let (fresh, agents, _) = catch_up_rollup(&paths).unwrap();
     assert_eq!(
         fresh.extent,
         event_log::LogExtent {
@@ -167,7 +169,7 @@ fn reseed_for_rotation_bumps_generation_and_starts_an_empty_fold() {
         ),
     )
     .unwrap();
-    let (next, agents) = catch_up_rollup(&paths).unwrap();
+    let (next, agents, _) = catch_up_rollup(&paths).unwrap();
     assert_eq!(next.extent.generation, 1);
     assert!(next.extent.offset > 0);
     let ids: Vec<&str> = {

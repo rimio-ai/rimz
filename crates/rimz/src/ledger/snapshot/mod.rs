@@ -28,12 +28,12 @@ use crate::ledger::feed_store::FeedStoreErr;
 
 pub(crate) use assemble::rebuild;
 pub use assemble::{build_from, build_with_cursor, read_fresh_latest};
-pub use fold::RollupCursor;
 pub use fold::agent_tombstones_for_events;
 pub(crate) use fold::{
     EventCarryover, catch_up_rollup, read_carryover, reseed_rollup_cache_for_rotation,
     write_carryover,
 };
+pub use fold::{ResumeOutcome, RollupCursor};
 pub(crate) use panes::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, compute_lazy_agent_pairings,
 };
