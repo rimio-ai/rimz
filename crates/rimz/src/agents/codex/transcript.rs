@@ -11,7 +11,6 @@ use std::sync::{LazyLock, Mutex};
 use std::time::UNIX_EPOCH;
 
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::DEFAULT_CONTEXT_WINDOW;
@@ -21,7 +20,8 @@ use crate::agents::context::{
 };
 use crate::agents::pricing::PriceBook;
 use crate::agents::{
-    LocalContextRefresh, TranscriptStat, optional_payload_string, read_transcript_tail,
+    LocalContextRefresh, SessionOrigin, TranscriptStat, optional_payload_string,
+    read_transcript_tail,
 };
 
 /// Refresh Codex's local transcript-derived context for one session, skipping the
@@ -64,16 +64,6 @@ pub fn refresh_transcript_context(
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
     })
-}
-
-/// A Codex session's origin, read from its rollout `session_meta` head record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionOrigin {
-    /// A fresh `/clear` / `/new` conversation with no fork parent.
-    Fresh,
-    /// A `/side` / `/btw` / `/fork` thread carrying a parent id.
-    Forked,
 }
 
 /// Read a session's origin from the first rollout line. `None` means unknown:

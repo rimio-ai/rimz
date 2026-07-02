@@ -26,7 +26,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::context::{AgentContext, AgentTurnError};
-use crate::agents::{AgentTokenUsage, LocalContextRefresh, TranscriptStat};
+use crate::agents::{AgentCost, AgentTokenUsage, LocalContextRefresh, TranscriptStat};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::ledger::atomic;
 use crate::ledger::paths::RuntimePaths;
@@ -184,6 +184,63 @@ pub fn merge_local_context(
     write_record(runtime, &record)
 }
 
+/// Merge a sparse hook-observed context (Pi/OpenCode envelope fields) onto the
+/// session's sidecar record: field-wise latest-wins, rate-limit freshness
+/// stamped, cost monotonic (a lower total never overwrites a higher one).
+/// Returns whether anything changed and was written.
+pub fn merge_observed(
+    runtime: &RuntimePaths,
+    kind: &str,
+    agent_id: &str,
+    context: AgentContext,
+) -> Result<bool, atomic::AtomicErr> {
+    let observed_at = context.observed_at;
+    let mut record = read_one(runtime, kind, agent_id)
+        .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
+    let mut changed = false;
+    if let Some(rate_limits) = context.rate_limits
+        && record.context.rate_limits.as_ref() != Some(&rate_limits)
+    {
+        record.context.rate_limits = Some(rate_limits);
+        record.rate_limits_observed_at = Some(observed_at);
+        changed = true;
+    }
+    if let Some(tokens) = context.tokens {
+        changed |= merge_observed_tokens(&mut record.context.tokens, tokens);
+    }
+    if let Some(model_id) = context.model_id
+        && record.context.model_id.as_ref() != Some(&model_id)
+    {
+        record.context.model_id = Some(model_id);
+        changed = true;
+    }
+    if let Some(effort) = context.effort
+        && record.context.effort.as_ref() != Some(&effort)
+    {
+        record.context.effort = Some(effort);
+        changed = true;
+    }
+    if let Some(cost) = context.cost
+        && let Some(total_cost_usd) = cost.total_cost_usd
+    {
+        let prior_total_cost = record
+            .context
+            .cost
+            .as_ref()
+            .and_then(|cost| cost.total_cost_usd);
+        if prior_total_cost.is_none_or(|prior| total_cost_usd >= prior) {
+            changed |= merge_observed_cost(&mut record.context.cost, cost, total_cost_usd);
+        }
+    }
+    if !changed {
+        return Ok(false);
+    }
+    record.context.source = kind.to_owned();
+    record.context.observed_at = observed_at;
+    write_record(runtime, &record)?;
+    Ok(true)
+}
+
 /// Merge a provider-native turn-error marker into the latest sidecar record.
 /// The marker is display-only enrichment and shares the same self-clear rule as
 /// transcript-detected turn errors: any newer lifecycle heartbeat moves
@@ -205,6 +262,47 @@ pub fn merge_turn_error(
     record.context.observed_at = observed_at;
     write_record(runtime, &record)?;
     Ok(true)
+}
+
+fn merge_observed_tokens(prior: &mut Option<AgentTokenUsage>, incoming: AgentTokenUsage) -> bool {
+    let target = prior.get_or_insert_with(AgentTokenUsage::default);
+    let before = target.clone();
+    if incoming.context_window_size.is_some() {
+        target.context_window_size = incoming.context_window_size;
+    }
+    if incoming.used_percentage.is_some() {
+        target.used_percentage = incoming.used_percentage;
+    }
+    if incoming.remaining_percentage.is_some() {
+        target.remaining_percentage = incoming.remaining_percentage;
+    }
+    if let Some(current_usage) = incoming.current_usage {
+        target.current_usage = Some(current_usage);
+    }
+    *target != before
+}
+
+fn merge_observed_cost(
+    prior: &mut Option<AgentCost>,
+    incoming: AgentCost,
+    total_cost_usd: f64,
+) -> bool {
+    let target = prior.get_or_insert_with(AgentCost::default);
+    let before = target.clone();
+    target.total_cost_usd = Some(total_cost_usd);
+    if incoming.total_duration_ms.is_some() {
+        target.total_duration_ms = incoming.total_duration_ms;
+    }
+    if incoming.total_api_duration_ms.is_some() {
+        target.total_api_duration_ms = incoming.total_api_duration_ms;
+    }
+    if incoming.total_lines_added.is_some() {
+        target.total_lines_added = incoming.total_lines_added;
+    }
+    if incoming.total_lines_removed.is_some() {
+        target.total_lines_removed = incoming.total_lines_removed;
+    }
+    *target != before
 }
 
 fn preserve_established_tokens(

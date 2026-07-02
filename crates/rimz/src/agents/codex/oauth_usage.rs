@@ -6,22 +6,18 @@
 //! response into Rimz's account-window and paid-usage types. It never writes
 //! auth files or refreshes tokens.
 
-use std::path::Path;
-use std::time::Duration;
-
 use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
+use std::path::Path;
 
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::credits::OauthUsageResponse;
-use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind, url_host};
+use crate::agents::credits::{OauthUsageResponse, oauth_http_get};
+use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
 
 use super::app_server::codex_home;
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
-const TIMEOUT_SECS: u64 = 5;
-const MAX_BYTES: u64 = 512 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CodexOauthUsageErr {
@@ -196,51 +192,18 @@ pub(crate) fn fetch_usage_with_url(
 }
 
 fn http_get(url: &str, credentials: &CodexOauthCredentials) -> Result<String> {
-    tracing::info!(
-        target: crate::observability::BREADCRUMB_TARGET,
-        host = %url_host(url),
-        "codex: fetching OAuth account usage",
-    );
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(TIMEOUT_SECS)))
-        .build()
-        .new_agent();
-    let mut request = agent
-        .get(url)
-        .header(
+    let mut headers = vec![
+        (
             "Authorization",
             format!("Bearer {}", credentials.access_token),
-        )
-        .header("Accept", "application/json");
+        ),
+        ("Accept", "application/json".to_owned()),
+    ];
     if let Some(account_id) = &credentials.account_id {
-        request = request.header("ChatGPT-Account-Id", account_id);
+        headers.push(("ChatGPT-Account-Id", account_id.clone()));
     }
-    // ureq surfaces a non-2xx response as `Error::StatusCode` (its default), so a
-    // 401/429 must be read here — the `status != 200` branch below only sees the
-    // success codes that come back `Ok`.
-    let mut response = request.call().map_err(|err| CodexOauthUsageErr::Http {
-        kind: match err {
-            ureq::Error::StatusCode(code) => HttpErrKind::Status(code),
-            _ => HttpErrKind::Transport,
-        },
-        host: url_host(url).to_owned(),
-    })?;
-    let status = response.status().as_u16();
-    if status != 200 {
-        return Err(CodexOauthUsageErr::Http {
-            kind: HttpErrKind::Status(status),
-            host: url_host(url).to_owned(),
-        });
-    }
-    response
-        .body_mut()
-        .with_config()
-        .limit(MAX_BYTES)
-        .read_to_string()
-        .map_err(|_| CodexOauthUsageErr::Http {
-            kind: HttpErrKind::Body,
-            host: url_host(url).to_owned(),
-        })
+    oauth_http_get(url, &headers, "codex: fetching OAuth account usage")
+        .map_err(|(kind, host)| CodexOauthUsageErr::Http { kind, host })
 }
 
 pub(crate) fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {

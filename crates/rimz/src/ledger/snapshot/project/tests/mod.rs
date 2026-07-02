@@ -4,7 +4,7 @@ use super::*;
 
 use super::super::view::{attach_sub_agents, row_from_agent, sub_agent_from_state};
 use crate::agents::AgentStatus;
-use crate::agents::codex::SessionOrigin;
+use crate::agents::SessionOrigin;
 use crate::agents::lifecycle::TurnPhase;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::snapshot::SidebarSnapshot;

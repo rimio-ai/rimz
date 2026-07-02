@@ -6,6 +6,8 @@
 //! API-key spend projection, or a future admin API, so the type keeps each
 //! figure optional and lets the renderer state only what is known.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::agents::context::AgentRateLimits;
@@ -50,6 +52,58 @@ pub(crate) fn url_host(url: &str) -> &str {
     authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host)
+}
+
+pub(crate) const OAUTH_HTTP_TIMEOUT_SECS: u64 = 5;
+pub(crate) const OAUTH_HTTP_MAX_BYTES: u64 = 512 * 1024;
+
+/// Bounded GET for provider OAuth usage endpoints: 5s global timeout, 512 KiB
+/// body cap, host-only breadcrumb. Returns the body, or the error kind plus
+/// host authority for the caller's provider error enum.
+pub(crate) fn oauth_http_get(
+    url: &str,
+    headers: &[(&str, String)],
+    breadcrumb: &str,
+) -> std::result::Result<String, (HttpErrKind, String)> {
+    tracing::info!(
+        target: crate::observability::BREADCRUMB_TARGET,
+        host = %url_host(url),
+        "{}",
+        breadcrumb,
+    );
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS)))
+        .build()
+        .new_agent();
+    let mut request = agent.get(url);
+    for (name, value) in headers {
+        request = request.header(*name, value);
+    }
+    let host = || url_host(url).to_owned();
+    let mut response = request
+        .call()
+        // ureq surfaces a non-2xx response as `Error::StatusCode` (its default),
+        // so a 401/429 must be read here — the `status != 200` branch below only
+        // sees the success codes that come back `Ok`.
+        .map_err(|err| {
+            (
+                match err {
+                    ureq::Error::StatusCode(code) => HttpErrKind::Status(code),
+                    _ => HttpErrKind::Transport,
+                },
+                host(),
+            )
+        })?;
+    let status = response.status().as_u16();
+    if status != 200 {
+        return Err((HttpErrKind::Status(status), host()));
+    }
+    response
+        .body_mut()
+        .with_config()
+        .limit(OAUTH_HTTP_MAX_BYTES)
+        .read_to_string()
+        .map_err(|_| (HttpErrKind::Body, host()))
 }
 
 /// A provider account-usage reading normalized from a local out-of-band source:

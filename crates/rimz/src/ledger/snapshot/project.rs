@@ -1209,7 +1209,7 @@ fn transcript_path_projection(
 fn origin_projection(
     observation: &AgentLifecycleObservation,
     prior: Option<&AgentState>,
-) -> Option<crate::agents::codex::SessionOrigin> {
+) -> Option<crate::agents::SessionOrigin> {
     observation.origin.or_else(|| prior.and_then(|p| p.origin))
 }
 

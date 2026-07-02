@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Timestamp;
 
 use crate::agents::AgentState;
-use crate::agents::codex::SessionOrigin;
+use crate::agents::SessionOrigin;
 use crate::feed::FeedItem;
 use crate::ledger::snapshot::panes::{agent_owner_pid, is_daemon_mode_codex};
 use crate::ledger::snapshot::process::{

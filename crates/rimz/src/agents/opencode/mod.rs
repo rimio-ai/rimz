@@ -25,16 +25,16 @@ use super::descriptor::{
     PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::managed_source::ManagedSource;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, RefreshSpawn, Result,
-    SubagentIdentity, choice_is_allow, classify_agent_hook, read_optional_file,
-    resolve_subagent_identity, sanitize_user_prompt,
+    SubagentIdentity, choice_is_allow, classify_agent_hook, resolve_subagent_identity,
+    sanitize_user_prompt,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ids::AgentSessionId;
-use crate::ledger::atomic;
 
 static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "opencode",
@@ -269,7 +269,12 @@ const WIRED_EVENTS: &[&str] = &[
 ];
 
 const PLUGIN_SOURCE: &str = include_str!("plugin.ts");
-const RIMZ_MANAGED_MARKER: &str = "_rimz_managed";
+const OPENCODE_MANAGED_SOURCE: ManagedSource = ManagedSource {
+    agent: "opencode",
+    source: PLUGIN_SOURCE,
+    wired_events: WIRED_EVENTS,
+    artifact_noun: "plugin",
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct OpencodeAdapter;
@@ -584,21 +589,21 @@ impl AgentAdapter for OpencodeAdapter {
 
     fn install_hooks(&self) -> Result<HookInstallReport> {
         let path = opencode_plugin_path()?;
-        install_into(&path)
+        OPENCODE_MANAGED_SOURCE.install_into(&path)
     }
 
     fn preview_hook_install(&self) -> Result<HookInstallPreview> {
         let path = opencode_plugin_path()?;
-        preview_install_at(&path)
+        OPENCODE_MANAGED_SOURCE.preview_at(&path)
     }
 
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
         let path = opencode_plugin_path()?;
-        uninstall_from(&path)
+        OPENCODE_MANAGED_SOURCE.uninstall_from(&path)
     }
 
     fn hooks_installed(&self) -> bool {
-        opencode_plugin_path().is_ok_and(|path| hooks_installed_at(&path))
+        opencode_plugin_path().is_ok_and(|path| OPENCODE_MANAGED_SOURCE.installed_at(&path))
     }
 
     fn managed_hook_artifacts_present(&self) -> bool {
@@ -650,84 +655,6 @@ fn opencode_plugin_path() -> Result<PathBuf> {
             reason: "$HOME is not set; cannot resolve ~/.config/opencode/plugin/rimz.ts".to_owned(),
         })?;
     Ok(config_home.join("opencode/plugin/rimz.ts"))
-}
-
-fn file_is_rimz_managed(content: &str) -> bool {
-    content
-        .lines()
-        .next()
-        .is_some_and(|line| line.contains(RIMZ_MANAGED_MARKER))
-}
-
-fn refuse_unmarked(path: &Path, original: Option<&str>) -> Result<()> {
-    match original {
-        Some(existing) if !file_is_rimz_managed(existing) => Err(AgentErr::Install {
-            agent: "opencode",
-            reason: format!(
-                "refusing to overwrite an unmarked user plugin at {}; move it aside or remove it to let Rimz manage this file",
-                path.display()
-            ),
-        }),
-        _ => Ok(()),
-    }
-}
-
-fn install_into(path: &Path) -> Result<HookInstallReport> {
-    let original = read_optional_file("opencode", path)?;
-    refuse_unmarked(path, original.as_deref())?;
-    atomic::write_bytes_atomically(path, PLUGIN_SOURCE.as_bytes())?;
-    Ok(HookInstallReport {
-        agent: "opencode",
-        config_path: path.to_path_buf(),
-        installed_events: installed_event_names(),
-        merged: original.is_some(),
-    })
-}
-
-fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
-    let original = read_optional_file("opencode", path)?;
-    refuse_unmarked(path, original.as_deref())?;
-    Ok(HookInstallPreview {
-        agent: "opencode",
-        config_path: path.to_path_buf(),
-        planned_events: installed_event_names(),
-        merged: original.is_some(),
-        original_config: original,
-        candidate_config: PLUGIN_SOURCE.to_owned(),
-        status_line_change: None,
-        subagent_status_line_change: None,
-    })
-}
-
-fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
-    let original = read_optional_file("opencode", path)?;
-    let existed = original.is_some();
-    let mut removed_events = Vec::new();
-    if original.as_deref().is_some_and(file_is_rimz_managed) {
-        std::fs::remove_file(path).map_err(|source| AgentErr::InstallIo {
-            agent: "opencode",
-            path: path.to_path_buf(),
-            source,
-        })?;
-        removed_events = installed_event_names();
-    }
-    Ok(HookUninstallReport {
-        agent: "opencode",
-        config_path: path.to_path_buf(),
-        removed_events,
-        existed,
-    })
-}
-
-fn hooks_installed_at(path: &Path) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|content| file_is_rimz_managed(&content))
-}
-
-fn installed_event_names() -> Vec<String> {
-    WIRED_EVENTS
-        .iter()
-        .map(|event| (*event).to_owned())
-        .collect()
 }
 
 #[cfg(test)]

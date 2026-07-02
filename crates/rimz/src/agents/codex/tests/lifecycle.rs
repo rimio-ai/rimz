@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::SessionOrigin;
 
 #[test]
 fn observe_lifecycle_maps_each_event_to_its_signal() {

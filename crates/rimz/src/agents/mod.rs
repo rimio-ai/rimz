@@ -25,6 +25,7 @@ pub(crate) mod hook_types;
 pub(crate) mod identity;
 pub mod lifecycle;
 pub(crate) mod locate;
+pub(crate) mod managed_source;
 mod observation;
 pub mod opencode;
 pub(crate) mod payload;
@@ -53,8 +54,8 @@ pub use context::{
     AgentTokenUsage, AgentTurnError, RateLimitWindow, SubagentContext, SubagentObservation,
     TurnErrorClass,
 };
+pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe};
-pub(crate) use credits::{HttpErrKind, url_host};
 pub use descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
     PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
@@ -68,7 +69,7 @@ pub use lifecycle::{
 };
 pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
-pub use observation::AgentLifecycleObservation;
+pub use observation::{AgentLifecycleObservation, SessionOrigin};
 pub(crate) use payload::{
     CONTROL_TAG_PREFIXES, choice_is_allow, classify_agent_hook, non_empty_trimmed,
     optional_payload_string, sanitize_user_prompt, stop_payload_errored,
@@ -601,13 +602,6 @@ pub trait AgentAdapter: Send + Sync {
     /// state. The sidebar uses this only to light a capability-gated flag.
     fn remote_control_status(&self, _account: Option<&AgentAccount>) -> RemoteControlStatus {
         RemoteControlStatus::default()
-    }
-
-    /// Whether this adapter exposes a cheap out-of-band binary version probe.
-    /// The sidebar producer uses this during account refresh to fill a
-    /// display-only provider header when no live context has a fresher version.
-    fn probes_version(&self) -> bool {
-        true
     }
 
     /// Probe the agent binary's version out-of-band. Producer-only and

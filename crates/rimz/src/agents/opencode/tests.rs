@@ -408,53 +408,67 @@ fn install_preview_and_uninstall_only_own_managed_files() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("plugin").join("rimz.ts");
 
-    let report = install_into(&path).unwrap();
+    let report = OPENCODE_MANAGED_SOURCE.install_into(&path).unwrap();
     assert_eq!(report.agent, "opencode");
     assert!(!report.merged);
-    assert_eq!(report.installed_events, installed_event_names());
+    assert_eq!(report.installed_events, managed_event_names());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), PLUGIN_SOURCE);
-    assert!(hooks_installed_at(&path));
+    assert!(OPENCODE_MANAGED_SOURCE.installed_at(&path));
 
     std::fs::write(&path, "// still _rimz_managed\n// user tweak\n").unwrap();
-    assert!(install_into(&path).unwrap().merged);
+    assert!(OPENCODE_MANAGED_SOURCE.install_into(&path).unwrap().merged);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), PLUGIN_SOURCE);
 
-    let preview = preview_install_at(&path).unwrap();
+    let preview = OPENCODE_MANAGED_SOURCE.preview_at(&path).unwrap();
     assert_eq!(preview.agent, "opencode");
     assert!(preview.merged);
     assert_eq!(preview.candidate_config, PLUGIN_SOURCE);
 
-    let removed = uninstall_from(&path).unwrap();
+    let removed = OPENCODE_MANAGED_SOURCE.uninstall_from(&path).unwrap();
     assert!(removed.existed);
-    assert_eq!(removed.removed_events, installed_event_names());
+    assert_eq!(removed.removed_events, managed_event_names());
     assert!(!path.exists());
-    assert!(!hooks_installed_at(&path));
-    assert!(!uninstall_from(&path).unwrap().existed);
+    assert!(!OPENCODE_MANAGED_SOURCE.installed_at(&path));
+    assert!(
+        !OPENCODE_MANAGED_SOURCE
+            .uninstall_from(&path)
+            .unwrap()
+            .existed
+    );
 
     let user_path = dir.path().join("user.ts");
     std::fs::write(&user_path, "// the user's own plugin\n").unwrap();
     assert!(matches!(
-        install_into(&user_path).unwrap_err(),
+        OPENCODE_MANAGED_SOURCE
+            .install_into(&user_path)
+            .unwrap_err(),
         AgentErr::Install {
             agent: "opencode",
             ..
         }
     ));
     assert!(matches!(
-        preview_install_at(&user_path).unwrap_err(),
+        OPENCODE_MANAGED_SOURCE.preview_at(&user_path).unwrap_err(),
         AgentErr::Install {
             agent: "opencode",
             ..
         }
     ));
-    let report = uninstall_from(&user_path).unwrap();
+    let report = OPENCODE_MANAGED_SOURCE.uninstall_from(&user_path).unwrap();
     assert!(report.existed);
     assert!(report.removed_events.is_empty());
     assert_eq!(
         std::fs::read_to_string(&user_path).unwrap(),
         "// the user's own plugin\n"
     );
-    assert!(!hooks_installed_at(&user_path));
+    assert!(!OPENCODE_MANAGED_SOURCE.installed_at(&user_path));
+}
+
+fn managed_event_names() -> Vec<String> {
+    WIRED_EVENTS
+        .iter()
+        .map(|event| (*event).to_owned())
+        .collect()
 }
 
 #[test]

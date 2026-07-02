@@ -16,6 +16,16 @@ use crate::pane::RuntimeOwner;
 use super::optional_payload_string;
 use super::{AgentTurnError, lifecycle::LifecycleSignal};
 
+/// A provider session's origin, read from the session store head record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionOrigin {
+    /// A fresh `/clear` / `/new` conversation with no fork parent.
+    Fresh,
+    /// A `/side` / `/btw` / `/fork` thread carrying a parent id.
+    Forked,
+}
+
 /// One lifecycle observation: the agent-agnostic [`LifecycleSignal`] a native
 /// event carries plus the enrichment it reports. Returned by
 /// [`AgentAdapter::observe_lifecycle`](super::AgentAdapter::observe_lifecycle)
@@ -99,10 +109,11 @@ pub struct AgentLifecycleObservation {
     /// sidecar refresh hints, never as routing truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
-    /// Codex root lineage from the rollout head, carried forward so the
-    /// same-pane `/clear` reap can run in every render lane.
+    /// Provider-reported session lineage from the session store head (Codex
+    /// today), carried forward so the same-pane `/clear` reap can run in every
+    /// render lane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin: Option<crate::agents::codex::SessionOrigin>,
+    pub origin: Option<SessionOrigin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

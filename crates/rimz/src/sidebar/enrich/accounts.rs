@@ -141,7 +141,7 @@ fn probe_accounts(snapshot: &SidebarSnapshot) -> (BTreeMap<String, AgentAccount>
         };
         match adapter.probe_account() {
             crate::agents::account::AccountProbe::Found(mut account) => {
-                if adapter.probes_version() && account.version.is_none() {
+                if account.version.is_none() {
                     account.version = adapter.probe_version();
                 }
                 accounts.insert(kind, account);
@@ -266,9 +266,7 @@ fn active_version_probe_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
         .filter_map(|agent| {
-            crate::agents::find_adapter(agent.kind.as_str())
-                .filter(|adapter| adapter.probes_version())
-                .map(|_| agent.kind.to_string())
+            crate::agents::find_adapter(agent.kind.as_str()).map(|_| agent.kind.to_string())
         })
         .collect()
 }

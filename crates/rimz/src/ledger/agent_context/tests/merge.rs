@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::context::WindowSource;
 use crate::agents::{
     AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage, AgentTurnError,
     LocalContextRefresh, RateLimitWindow, TranscriptStat, TurnErrorClass,
@@ -87,6 +88,92 @@ fn merge_turn_error_skips_identical_marker() {
     );
     let second = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(second, first);
+}
+
+#[test]
+fn observed_context_merge_preserves_fields_and_keeps_cost_monotonic() {
+    let (_dir, runtime) = runtime();
+
+    assert!(merge_observed(&runtime, "pi", "sess-1", observed_context()).unwrap());
+    let first = read_one(&runtime, "pi", "sess-1").unwrap();
+    assert_eq!(first.context.model_id.as_deref(), Some("gpt-5.5"));
+    assert_eq!(first.context.effort.as_deref(), Some("high"));
+    assert_eq!(total_cost(&first), Some(0.5));
+    assert_eq!(
+        first
+            .context
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.current_usage.as_ref())
+            .and_then(|usage| usage.cache_read_input_tokens),
+        Some(30)
+    );
+    assert_eq!(
+        first
+            .context
+            .rate_limits
+            .as_ref()
+            .map(|limits| limits.windows.len()),
+        Some(1)
+    );
+
+    assert!(
+        !merge_observed(&runtime, "pi", "sess-1", observed_context()).unwrap(),
+        "an identical envelope is a no-op"
+    );
+    let after_repeat = read_one(&runtime, "pi", "sess-1").unwrap();
+    assert_eq!(after_repeat, first);
+
+    let mut lower_cost = observed_context();
+    lower_cost.model_id = None;
+    lower_cost.effort = None;
+    lower_cost.tokens = None;
+    lower_cost.rate_limits = None;
+    lower_cost.cost = Some(cost(0.25));
+    assert!(
+        !merge_observed(&runtime, "pi", "sess-1", lower_cost).unwrap(),
+        "a resume-reset extension accumulator must not lower displayed cost"
+    );
+    let after_lower = read_one(&runtime, "pi", "sess-1").unwrap();
+    assert_eq!(after_lower, first);
+
+    let mut partial_tokens = observed_context();
+    partial_tokens.cost = None;
+    partial_tokens.rate_limits = None;
+    partial_tokens.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(300_000),
+        used_percentage: None,
+        remaining_percentage: None,
+        current_usage: None,
+    });
+    assert!(merge_observed(&runtime, "pi", "sess-1", partial_tokens).unwrap());
+    let merged = read_one(&runtime, "pi", "sess-1").unwrap();
+    let tokens = merged.context.tokens.as_ref().unwrap();
+    assert_eq!(tokens.context_window_size, Some(300_000));
+    assert_eq!(tokens.used_percentage, Some(42));
+    assert_eq!(
+        tokens
+            .current_usage
+            .as_ref()
+            .and_then(|usage| usage.input_tokens),
+        Some(10),
+        "missing token subfields preserve the last known values"
+    );
+}
+
+#[test]
+fn context_merge_accepts_model_and_effort_only_enrichment() {
+    let (_dir, runtime) = runtime();
+    let mut model_context = empty_context("pi", observed_at());
+    model_context.model_id = Some("gpt-5.5".to_owned());
+    let mut effort_context = empty_context("pi", observed_at());
+    effort_context.effort = Some("high".to_owned());
+
+    assert!(merge_observed(&runtime, "pi", "sess-1", model_context).unwrap());
+    assert!(merge_observed(&runtime, "pi", "sess-1", effort_context).unwrap());
+    let merged = read_one(&runtime, "pi", "sess-1").unwrap();
+    assert_eq!(merged.context.model_id.as_deref(), Some("gpt-5.5"));
+    assert_eq!(merged.context.effort.as_deref(), Some("high"));
 }
 
 fn codex_record(observed_at: Timestamp) -> AgentContextRecord {
@@ -369,4 +456,50 @@ fn total_cost(record: &AgentContextRecord) -> Option<f64> {
         .cost
         .as_ref()
         .and_then(|cost| cost.total_cost_usd)
+}
+
+fn observed_at() -> Timestamp {
+    Timestamp::from_second(1_700_000_000).unwrap()
+}
+
+fn observed_context() -> AgentContext {
+    AgentContext {
+        source: "pi".to_owned(),
+        session_name: None,
+        session_preview: None,
+        model_id: Some("gpt-5.5".to_owned()),
+        model_display_name: None,
+        effort: Some("high".to_owned()),
+        thinking_enabled: None,
+        output_style: None,
+        vim_mode: None,
+        agent_version: None,
+        exceeds_200k_tokens: None,
+        cost: Some(cost(0.5)),
+        tokens: Some(AgentTokenUsage {
+            context_window_size: Some(272_000),
+            used_percentage: Some(42),
+            remaining_percentage: None,
+            current_usage: Some(AgentCurrentUsage {
+                input_tokens: Some(10),
+                output_tokens: Some(2),
+                cache_creation_input_tokens: Some(4),
+                cache_read_input_tokens: Some(30),
+            }),
+        }),
+        rate_limits: Some(AgentRateLimits {
+            windows: vec![RateLimitWindow {
+                used_percentage: Some(72),
+                resets_at: None,
+                duration_mins: Some(300),
+                observed_at: Some(observed_at()),
+                source: WindowSource::BestEffort,
+            }],
+        }),
+        pr: None,
+        account: None,
+        turn_error: None,
+        turn_complete: None,
+        observed_at: observed_at(),
+    }
 }

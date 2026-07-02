@@ -9,24 +9,20 @@
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use jiff::Timestamp;
 use serde::Deserialize;
 
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::credits::OauthUsageResponse;
-use crate::agents::{
-    AccountUsageSnapshot, ExtraCredits, HttpErrKind, transcript_fs::home_dir, url_host,
-};
+use crate::agents::credits::{OauthUsageResponse, oauth_http_get};
+use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind, transcript_fs::home_dir};
 
 use super::statusline::{CLAUDE_FIVE_HOUR_MINS, CLAUDE_SEVEN_DAY_MINS, clamp_rate_limit_used_pct};
 
 const DEFAULT_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const URL_ENV: &str = "RIMZ_CLAUDE_OAUTH_USAGE_URL";
 const USER_AGENT_FALLBACK_VERSION: &str = "unknown";
-const TIMEOUT_SECS: u64 = 5;
-const MAX_BYTES: u64 = 512 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ClaudeOauthUsageErr {
@@ -196,48 +192,14 @@ fn usage_url() -> String {
 }
 
 fn http_get(url: &str, token: &str, cli_version: Option<&str>) -> Result<String> {
-    tracing::info!(
-        target: crate::observability::BREADCRUMB_TARGET,
-        host = %url_host(url),
-        "claude: fetching OAuth account usage",
-    );
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(TIMEOUT_SECS)))
-        .build()
-        .new_agent();
-    let mut response = agent
-        .get(url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Accept", "application/json")
-        .header("anthropic-beta", "oauth-2025-04-20")
-        .header("User-Agent", claude_code_user_agent(cli_version))
-        .call()
-        // ureq surfaces a non-2xx response as `Error::StatusCode` (its default),
-        // so a 401/429 must be read here — the `status != 200` branch below only
-        // sees the success codes that come back `Ok`.
-        .map_err(|err| ClaudeOauthUsageErr::Http {
-            kind: match err {
-                ureq::Error::StatusCode(code) => HttpErrKind::Status(code),
-                _ => HttpErrKind::Transport,
-            },
-            host: url_host(url).to_owned(),
-        })?;
-    let status = response.status().as_u16();
-    if status != 200 {
-        return Err(ClaudeOauthUsageErr::Http {
-            kind: HttpErrKind::Status(status),
-            host: url_host(url).to_owned(),
-        });
-    }
-    response
-        .body_mut()
-        .with_config()
-        .limit(MAX_BYTES)
-        .read_to_string()
-        .map_err(|_| ClaudeOauthUsageErr::Http {
-            kind: HttpErrKind::Body,
-            host: url_host(url).to_owned(),
-        })
+    let headers = [
+        ("Authorization", format!("Bearer {token}")),
+        ("Accept", "application/json".to_owned()),
+        ("anthropic-beta", "oauth-2025-04-20".to_owned()),
+        ("User-Agent", claude_code_user_agent(cli_version)),
+    ];
+    oauth_http_get(url, &headers, "claude: fetching OAuth account usage")
+        .map_err(|(kind, host)| ClaudeOauthUsageErr::Http { kind, host })
 }
 
 fn claude_code_user_agent(cli_version: Option<&str>) -> String {

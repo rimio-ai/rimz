@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::SessionOrigin;
 
 #[test]
 fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {

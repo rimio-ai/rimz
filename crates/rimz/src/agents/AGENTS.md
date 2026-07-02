@@ -6,7 +6,7 @@ Topic detail lives in the internals leaves the root map describes — [agent.md]
 
 ## Layout
 
-- Shared, provider-agnostic code sits at the top level — the [`AgentAdapter`](./mod.rs) trait, [`state.rs`](./state.rs) rollup types, descriptor/registry/lifecycle/context companions, the wire enums, the account probe contract, [`spending`](./spending.rs) aggregation, the [`pricing/`](./pricing/mod.rs) tables, and helper modules for payloads ([`payload.rs`](./payload.rs)), identity ([`identity.rs`](./identity.rs)), and location ([`locate.rs`](./locate.rs)); per-file detail lives in the `//!` headers.
+- Shared, provider-agnostic code sits at the top level — the [`AgentAdapter`](./mod.rs) trait, [`state.rs`](./state.rs) rollup types, descriptor/registry/lifecycle/context companions, the wire enums, the account probe contract, [`spending`](./spending.rs) aggregation, the [`pricing/`](./pricing/mod.rs) tables, and helper modules for payloads ([`payload.rs`](./payload.rs)), identity ([`identity.rs`](./identity.rs)), location ([`locate.rs`](./locate.rs)), and whole-file managed sources ([`managed_source.rs`](./managed_source.rs)); per-file detail lives in the `//!` headers.
 - Each provider is a sibling directory ([`claude/`](./claude/mod.rs), [`codex/`](./codex/mod.rs), [`pi/`](./pi/mod.rs)) owning its integration, typed payloads, rich-context transport, account probe, and `spend.rs`.
 - `spend.rs` is the read-only, sidebar-safe full-history cost parser; a CI grep keeps every `spend.rs` free of ledger-write, bridge, and broker imports.
 - Pi owns its wire: pi has no hook config — install ships the Rimz-authored [`pi/extension.ts`](./pi/extension.ts), so the payload schema is Rimz's by design and drift is a Rimz bug, never an upstream one.

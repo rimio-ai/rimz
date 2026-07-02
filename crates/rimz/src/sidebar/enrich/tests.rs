@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::codex::SessionOrigin;
+use crate::agents::SessionOrigin;
 use crate::agents::{AgentState, AgentStatus, TurnPhase};
 use crate::ledger::atomic;
 use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};

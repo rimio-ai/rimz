@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::codex::SessionOrigin;
+use crate::agents::SessionOrigin;
 
 #[test]
 fn live_panes_overlay_only_matching_agent_rows() {

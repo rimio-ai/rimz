@@ -50,16 +50,16 @@ use super::descriptor::{
     PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::managed_source::ManagedSource;
 use super::observation::payload_context_pct;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, Result, agent_config_path, choice_is_allow,
-    classify_agent_hook, optional_payload_string, read_optional_file, sanitize_user_prompt,
+    classify_agent_hook, optional_payload_string, sanitize_user_prompt,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ids::AgentSessionId;
-use crate::ledger::atomic;
 
 /// Everything `const` about Pi, in one place. See [`AgentDescriptor`] for the
 /// descriptor-vs-trait split.
@@ -320,13 +320,16 @@ const WIRED_EVENTS: &[&str] = &[
 ];
 
 /// The Rimz pi extension, embedded at compile time and written whole-file on
-/// install. Carries [`RIMZ_MANAGED_MARKER`] on its first line.
+/// install. Carries [`super::managed_source::RIMZ_MANAGED_MARKER`] on its first
+/// line.
 const EXTENSION_SOURCE: &str = include_str!("extension.ts");
 
-/// Ownership marker on the extension's first line. Install reclaims a marked
-/// file (Rimz wrote it) and refuses an unmarked one (the user wrote it);
-/// uninstall removes only a marked file.
-const RIMZ_MANAGED_MARKER: &str = "_rimz_managed";
+const PI_MANAGED_SOURCE: ManagedSource = ManagedSource {
+    agent: "pi",
+    source: EXTENSION_SOURCE,
+    wired_events: WIRED_EVENTS,
+    artifact_noun: "extension",
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct PiAdapter;
@@ -634,21 +637,21 @@ impl AgentAdapter for PiAdapter {
 
     fn install_hooks(&self) -> Result<HookInstallReport> {
         let path = pi_extension_path()?;
-        install_into(&path)
+        PI_MANAGED_SOURCE.install_into(&path)
     }
 
     fn preview_hook_install(&self) -> Result<HookInstallPreview> {
         let path = pi_extension_path()?;
-        preview_install_at(&path)
+        PI_MANAGED_SOURCE.preview_at(&path)
     }
 
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
         let path = pi_extension_path()?;
-        uninstall_from(&path)
+        PI_MANAGED_SOURCE.uninstall_from(&path)
     }
 
     fn hooks_installed(&self) -> bool {
-        pi_extension_path().is_ok_and(|path| hooks_installed_at(&path))
+        pi_extension_path().is_ok_and(|path| PI_MANAGED_SOURCE.installed_at(&path))
     }
 
     fn managed_hook_artifacts_present(&self) -> bool {
@@ -801,96 +804,6 @@ fn pi_extension_path() -> Result<PathBuf> {
         "RIMZ_PI_EXTENSION",
         Path::new(".pi/agent/extensions/rimz.ts"),
     )
-}
-
-/// Whether the on-disk extension is Rimz-owned: the ownership marker rides
-/// the first line of every build of [`EXTENSION_SOURCE`].
-fn file_is_rimz_managed(content: &str) -> bool {
-    content
-        .lines()
-        .next()
-        .is_some_and(|line| line.contains(RIMZ_MANAGED_MARKER))
-}
-
-/// Refuse to clobber a user-authored `rimz.ts`. One shared guard so install
-/// and preview agree on what is reclaimable.
-fn refuse_unmarked(path: &Path, original: Option<&str>) -> Result<()> {
-    match original {
-        Some(existing) if !file_is_rimz_managed(existing) => Err(AgentErr::Install {
-            agent: "pi",
-            reason: format!(
-                "refusing to overwrite an unmarked user extension at {}; move it aside or remove it to let Rimz manage this file",
-                path.display()
-            ),
-        }),
-        _ => Ok(()),
-    }
-}
-
-/// Install is whole-file ownership: pi has no config to merge into, so the
-/// embedded source overwrites the path verbatim — idempotent by construction.
-/// A marked file (Rimz wrote it, however edited since) is reclaimed
-/// byte-for-byte; an unmarked file is the user's own extension and refuses.
-fn install_into(path: &Path) -> Result<HookInstallReport> {
-    let original = read_optional_file("pi", path)?;
-    refuse_unmarked(path, original.as_deref())?;
-    atomic::write_bytes_atomically(path, EXTENSION_SOURCE.as_bytes())?;
-    Ok(HookInstallReport {
-        agent: "pi",
-        config_path: path.to_path_buf(),
-        installed_events: installed_event_names(),
-        merged: original.is_some(),
-    })
-}
-
-fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
-    let original = read_optional_file("pi", path)?;
-    // Mirror install's refusal so the consent gate surfaces the conflict
-    // before a doomed install, not after.
-    refuse_unmarked(path, original.as_deref())?;
-    Ok(HookInstallPreview {
-        agent: "pi",
-        config_path: path.to_path_buf(),
-        planned_events: installed_event_names(),
-        merged: original.is_some(),
-        original_config: original,
-        candidate_config: EXTENSION_SOURCE.to_owned(),
-        // Pi manages no statusline; the gauge rides the hook envelope.
-        status_line_change: None,
-        subagent_status_line_change: None,
-    })
-}
-
-fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
-    let original = read_optional_file("pi", path)?;
-    let existed = original.is_some();
-    let mut removed_events = Vec::new();
-    if original.as_deref().is_some_and(file_is_rimz_managed) {
-        std::fs::remove_file(path).map_err(|source| AgentErr::InstallIo {
-            agent: "pi",
-            path: path.to_path_buf(),
-            source,
-        })?;
-        removed_events = installed_event_names();
-    }
-    // An unmarked `rimz.ts` is user-owned: left in place, nothing removed.
-    Ok(HookUninstallReport {
-        agent: "pi",
-        config_path: path.to_path_buf(),
-        removed_events,
-        existed,
-    })
-}
-
-/// Best-effort like the other adapters: a missing or unreadable file reads as
-/// "not installed". The first-line marker distinguishes the Rimz-owned
-/// extension from a user's own file at the same path.
-fn hooks_installed_at(path: &Path) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|content| file_is_rimz_managed(&content))
-}
-
-fn installed_event_names() -> Vec<String> {
-    WIRED_EVENTS.iter().map(|&e| e.to_owned()).collect()
 }
 
 #[cfg(test)]

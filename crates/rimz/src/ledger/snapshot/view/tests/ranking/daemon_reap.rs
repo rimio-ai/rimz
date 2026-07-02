@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::codex::SessionOrigin;
+use crate::agents::SessionOrigin;
 
 fn daemon_codex(id: &str, worktree: &str, owner_pid: u32) -> AgentState {
     let mut codex = paneless_codex(id, worktree, 1_000);

@@ -258,35 +258,17 @@ fn terminal_turn_error(
 /// The class to use for display and auto-resume decisions. Current adapters
 /// stamp the class directly; the label fallback keeps older sidecars that saw
 /// a provider "session limit" or "spend limit" before Rimz knew that phrase
-/// parked instead of actionable.
+/// parked instead of actionable. Only the limit-park classes remap: a legacy
+/// `Failed` with an overload-ish label stays `Failed`, so old markers never
+/// start arming overload retries.
 pub(crate) fn effective_turn_error_class(error: &AgentTurnError) -> TurnErrorClass {
     if error.class != TurnErrorClass::Failed {
         return error.class;
     }
-    let label = error.label.as_deref();
-    if label_indicates_spend_limit(label) {
-        TurnErrorClass::PausedSpendLimit
-    } else if label_indicates_rate_limit(label) {
-        TurnErrorClass::PausedRateLimit
-    } else {
-        TurnErrorClass::Failed
+    match TurnErrorClass::classify_label(error.label.as_deref()) {
+        class @ (TurnErrorClass::PausedSpendLimit | TurnErrorClass::PausedRateLimit) => class,
+        _ => TurnErrorClass::Failed,
     }
-}
-
-fn label_indicates_spend_limit(label: Option<&str>) -> bool {
-    label.is_some_and(|label| label.to_ascii_lowercase().contains("spend limit"))
-}
-
-fn label_indicates_rate_limit(label: Option<&str>) -> bool {
-    let Some(label) = label else {
-        return false;
-    };
-    let lower = label.to_ascii_lowercase();
-    lower.contains("usage limit")
-        || lower.contains("session limit")
-        || lower.contains("rate limit")
-        || lower.contains("quota")
-        || lower.contains("too many requests")
 }
 
 /// Account-scoped subscription budget for one agent kind. Rate-limit windows are
@@ -542,11 +524,11 @@ pub struct AgentState {
     /// readers keep their own freshness gates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
-    /// Codex root lineage from the rollout head, carried forward from lifecycle
-    /// events. `None` means unknown/non-Codex and keeps the `/clear` reaper
-    /// fail-safe.
+    /// Provider-reported session lineage from the session store head (Codex
+    /// today), carried forward so the same-pane `/clear` reap can run in every
+    /// render lane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin: Option<crate::agents::codex::SessionOrigin>,
+    pub origin: Option<crate::agents::SessionOrigin>,
     /// Recent user prompts for this session, newest last, capped by the rollup.
     /// The sidebar row keeps only `prompt`; snapshot JSON exposes the history on
     /// `agents[]` for diagnostics and future panes.

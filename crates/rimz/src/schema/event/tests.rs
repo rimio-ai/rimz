@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::agents::codex::SessionOrigin;
+use crate::agents::SessionOrigin;
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};

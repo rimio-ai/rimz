@@ -877,9 +877,28 @@ fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
 
     if payload_carries_observed_context(payload)
         && let Some(context) = agent.observe_context(agent.descriptor().kind, payload)
-        && merge_observed_context(ledger, agent, context_agent_id, context)
     {
-        let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+        let kind = agent.descriptor().kind;
+        match rimz::ledger::agent_context::merge_observed(
+            ledger.runtime_paths(),
+            kind,
+            context_agent_id,
+            context,
+        ) {
+            Ok(true) => {
+                let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+            }
+            Ok(false) => {}
+            Err(err) => {
+                warn!(
+                    agent = kind,
+                    session = %context_agent_id,
+                    tags.operation = "agent.context_observed_merge",
+                    error = &err as &dyn std::error::Error,
+                    "lifecycle: failed to merge observed context",
+                );
+            }
+        }
     }
 
     let prior = rimz::ledger::agent_context::read_one(
@@ -1050,122 +1069,6 @@ fn payload_carries_observed_context(payload: &Value) -> bool {
     OBSERVED_CONTEXT_KEYS
         .iter()
         .any(|key| payload.get(*key).is_some())
-}
-
-fn merge_observed_context(
-    ledger: &Ledger,
-    agent: &dyn AgentAdapter,
-    context_agent_id: &str,
-    context: rimz::agents::AgentContext,
-) -> bool {
-    let kind = agent.descriptor().kind;
-    let observed_at = context.observed_at;
-    let prior =
-        rimz::ledger::agent_context::read_one(ledger.runtime_paths(), kind, context_agent_id);
-    let mut record = prior.unwrap_or_else(|| {
-        rimz::ledger::agent_context::new_record(
-            kind,
-            context_agent_id,
-            rimz::ledger::agent_context::empty_context(kind, observed_at),
-        )
-    });
-    let mut changed = false;
-    if let Some(rate_limits) = context.rate_limits
-        && record.context.rate_limits.as_ref() != Some(&rate_limits)
-    {
-        record.context.rate_limits = Some(rate_limits);
-        record.rate_limits_observed_at = Some(observed_at);
-        changed = true;
-    }
-    if let Some(tokens) = context.tokens {
-        changed |= merge_observed_tokens(&mut record.context.tokens, tokens);
-    }
-    if let Some(model_id) = context.model_id
-        && record.context.model_id.as_ref() != Some(&model_id)
-    {
-        record.context.model_id = Some(model_id);
-        changed = true;
-    }
-    if let Some(effort) = context.effort
-        && record.context.effort.as_ref() != Some(&effort)
-    {
-        record.context.effort = Some(effort);
-        changed = true;
-    }
-    if let Some(cost) = context.cost
-        && let Some(total_cost_usd) = cost.total_cost_usd
-    {
-        let prior_total_cost = record
-            .context
-            .cost
-            .as_ref()
-            .and_then(|cost| cost.total_cost_usd);
-        if prior_total_cost.is_none_or(|prior| total_cost_usd >= prior) {
-            changed |= merge_observed_cost(&mut record.context.cost, cost, total_cost_usd);
-        }
-    }
-    if !changed {
-        return false;
-    }
-    record.context.source = kind.to_owned();
-    record.context.observed_at = observed_at;
-    match rimz::ledger::agent_context::write_record(ledger.runtime_paths(), &record) {
-        Ok(()) => true,
-        Err(err) => {
-            warn!(
-                agent = kind,
-                session = %context_agent_id,
-                tags.operation = "agent.context_observed_merge",
-                error = &err as &dyn std::error::Error,
-                "lifecycle: failed to merge observed context",
-            );
-            false
-        }
-    }
-}
-
-fn merge_observed_tokens(
-    prior: &mut Option<rimz::agents::AgentTokenUsage>,
-    incoming: rimz::agents::AgentTokenUsage,
-) -> bool {
-    let target = prior.get_or_insert_with(rimz::agents::AgentTokenUsage::default);
-    let before = target.clone();
-    if incoming.context_window_size.is_some() {
-        target.context_window_size = incoming.context_window_size;
-    }
-    if incoming.used_percentage.is_some() {
-        target.used_percentage = incoming.used_percentage;
-    }
-    if incoming.remaining_percentage.is_some() {
-        target.remaining_percentage = incoming.remaining_percentage;
-    }
-    if let Some(current_usage) = incoming.current_usage {
-        target.current_usage = Some(current_usage);
-    }
-    *target != before
-}
-
-fn merge_observed_cost(
-    prior: &mut Option<rimz::agents::AgentCost>,
-    incoming: rimz::agents::AgentCost,
-    total_cost_usd: f64,
-) -> bool {
-    let target = prior.get_or_insert_with(rimz::agents::AgentCost::default);
-    let before = target.clone();
-    target.total_cost_usd = Some(total_cost_usd);
-    if incoming.total_duration_ms.is_some() {
-        target.total_duration_ms = incoming.total_duration_ms;
-    }
-    if incoming.total_api_duration_ms.is_some() {
-        target.total_api_duration_ms = incoming.total_api_duration_ms;
-    }
-    if incoming.total_lines_added.is_some() {
-        target.total_lines_added = incoming.total_lines_added;
-    }
-    if incoming.total_lines_removed.is_some() {
-        target.total_lines_removed = incoming.total_lines_removed;
-    }
-    *target != before
 }
 
 fn turn_error_refresh_event(event_name: &str) -> bool {
@@ -1406,55 +1309,6 @@ mod tests {
         rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/hooks-test"))
     }
 
-    fn observed_at() -> jiff::Timestamp {
-        jiff::Timestamp::from_second(1_700_000_000).unwrap()
-    }
-
-    fn observed_context() -> rimz::agents::AgentContext {
-        rimz::agents::AgentContext {
-            source: "pi".to_owned(),
-            session_name: None,
-            session_preview: None,
-            model_id: Some("gpt-5.5".to_owned()),
-            model_display_name: None,
-            effort: Some("high".to_owned()),
-            thinking_enabled: None,
-            output_style: None,
-            vim_mode: None,
-            agent_version: None,
-            exceeds_200k_tokens: None,
-            cost: Some(rimz::agents::AgentCost {
-                total_cost_usd: Some(0.5),
-                ..rimz::agents::AgentCost::default()
-            }),
-            tokens: Some(rimz::agents::AgentTokenUsage {
-                context_window_size: Some(272_000),
-                used_percentage: Some(42),
-                remaining_percentage: None,
-                current_usage: Some(rimz::agents::AgentCurrentUsage {
-                    input_tokens: Some(10),
-                    output_tokens: Some(2),
-                    cache_creation_input_tokens: Some(4),
-                    cache_read_input_tokens: Some(30),
-                }),
-            }),
-            rate_limits: Some(rimz::agents::AgentRateLimits {
-                windows: vec![rimz::agents::RateLimitWindow {
-                    used_percentage: Some(72),
-                    resets_at: None,
-                    duration_mins: Some(300),
-                    observed_at: Some(observed_at()),
-                    source: rimz::agents::context::WindowSource::BestEffort,
-                }],
-            }),
-            pr: None,
-            account: None,
-            turn_error: None,
-            turn_complete: None,
-            observed_at: observed_at(),
-        }
-    }
-
     #[test]
     fn lifecycle_event_observation_trims_carry_forward_fields_after_identity() {
         let mut observation = AgentLifecycleObservation::new(
@@ -1506,145 +1360,6 @@ mod tests {
             AUTO_ROTATE_DEBOUNCE - std::time::Duration::from_secs(1)
         )));
         assert!(auto_rotation_stamp_due(Some(AUTO_ROTATE_DEBOUNCE)));
-    }
-
-    #[test]
-    fn observed_context_merge_preserves_fields_and_keeps_cost_monotonic() {
-        let (_dir, ledger) = test_ledger();
-        let agent = rimz::agents::PiAdapter;
-
-        assert!(merge_observed_context(
-            &ledger,
-            &agent,
-            "sess-1",
-            observed_context()
-        ));
-        let first =
-            rimz::ledger::agent_context::read_one(ledger.runtime_paths(), "pi", "sess-1").unwrap();
-        assert_eq!(first.context.model_id.as_deref(), Some("gpt-5.5"));
-        assert_eq!(first.context.effort.as_deref(), Some("high"));
-        assert_eq!(
-            first
-                .context
-                .cost
-                .as_ref()
-                .and_then(|cost| cost.total_cost_usd),
-            Some(0.5)
-        );
-        assert_eq!(
-            first
-                .context
-                .tokens
-                .as_ref()
-                .and_then(|tokens| tokens.current_usage.as_ref())
-                .and_then(|usage| usage.cache_read_input_tokens),
-            Some(30)
-        );
-        assert_eq!(
-            first
-                .context
-                .rate_limits
-                .as_ref()
-                .map(|limits| limits.windows.len()),
-            Some(1)
-        );
-
-        assert!(
-            !merge_observed_context(&ledger, &agent, "sess-1", observed_context()),
-            "an identical envelope is a no-op"
-        );
-        let after_repeat =
-            rimz::ledger::agent_context::read_one(ledger.runtime_paths(), "pi", "sess-1").unwrap();
-        assert_eq!(after_repeat, first);
-
-        let mut lower_cost = observed_context();
-        lower_cost.model_id = None;
-        lower_cost.effort = None;
-        lower_cost.tokens = None;
-        lower_cost.rate_limits = None;
-        lower_cost.cost = Some(rimz::agents::AgentCost {
-            total_cost_usd: Some(0.25),
-            ..rimz::agents::AgentCost::default()
-        });
-        assert!(
-            !merge_observed_context(&ledger, &agent, "sess-1", lower_cost),
-            "a resume-reset extension accumulator must not lower displayed cost"
-        );
-        let after_lower =
-            rimz::ledger::agent_context::read_one(ledger.runtime_paths(), "pi", "sess-1").unwrap();
-        assert_eq!(after_lower, first);
-
-        let mut partial_tokens = observed_context();
-        partial_tokens.cost = None;
-        partial_tokens.rate_limits = None;
-        partial_tokens.tokens = Some(rimz::agents::AgentTokenUsage {
-            context_window_size: Some(300_000),
-            used_percentage: None,
-            remaining_percentage: None,
-            current_usage: None,
-        });
-        assert!(merge_observed_context(
-            &ledger,
-            &agent,
-            "sess-1",
-            partial_tokens
-        ));
-        let merged =
-            rimz::ledger::agent_context::read_one(ledger.runtime_paths(), "pi", "sess-1").unwrap();
-        let tokens = merged.context.tokens.as_ref().unwrap();
-        assert_eq!(tokens.context_window_size, Some(300_000));
-        assert_eq!(tokens.used_percentage, Some(42));
-        assert_eq!(
-            tokens
-                .current_usage
-                .as_ref()
-                .and_then(|usage| usage.input_tokens),
-            Some(10),
-            "missing token subfields preserve the last known values"
-        );
-    }
-
-    #[test]
-    fn lifecycle_context_merge_accepts_model_and_effort_only_enrichment() {
-        let (_dir, ledger) = test_ledger();
-        let workspace = rimz::ResolvedWorkspace {
-            workspace_id: workspace_id(),
-            project_root: std::path::PathBuf::from("/tmp/hooks-test"),
-            root_class: rimz::workspace::RootClass::Directory,
-            worktree_root: std::path::PathBuf::from("/tmp/hooks-test"),
-            worktree_branch: None,
-            session_name: "hooks-test".to_owned(),
-            mux_hint: None,
-        };
-        let globals = GlobalFlags {
-            mux: None,
-            root: None,
-            color: crate::cli::ColorWhen::Never,
-        };
-
-        handle_lifecycle_hook(
-            &workspace,
-            &ledger,
-            &rimz::agents::PiAdapter,
-            "model_select",
-            &serde_json::json!({ "session_id": "sess-1", "model": "gpt-5.5" }),
-            &globals,
-        )
-        .unwrap();
-        handle_lifecycle_hook(
-            &workspace,
-            &ledger,
-            &rimz::agents::PiAdapter,
-            "thinking_level_select",
-            &serde_json::json!({ "session_id": "sess-1", "effort": "high" }),
-            &globals,
-        )
-        .unwrap();
-        let merged =
-            rimz::ledger::agent_context::read_one(ledger.runtime_paths(), "pi", "sess-1").unwrap();
-        assert_eq!(merged.context.model_id.as_deref(), Some("gpt-5.5"));
-        assert_eq!(merged.context.effort.as_deref(), Some("high"));
-        assert!(ledger.snapshot().unwrap().agents.is_empty());
     }
 
     #[test]
