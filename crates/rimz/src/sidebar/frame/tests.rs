@@ -630,39 +630,53 @@ fn duplicate_pane_ids_keep_first_and_report_diagnostic() {
 }
 
 #[test]
-fn foreground_change_with_stable_spawn_does_not_rotate() {
+fn spawn_handoff_rotation_matches_wrapper_identity() {
     let old_start: Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
-    let mut prior = assemble_frame(
-        vec![PaneRef {
-            command: Some("codex".to_owned()),
-            spawn_command: Some(
-                "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/main".to_owned(),
-            ),
-            ..pane("terminal_1", "tab_0", Some("codex"), false)
-        }],
-        1,
-        "rimz-test",
-    );
-    prior.tabs[0].panes[0].current.started_at = Some(old_start);
-    let mut fresh = assemble_frame(
-        vec![PaneRef {
-            command: Some("/usr/bin/codex".to_owned()),
-            spawn_command: Some(
-                "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/main".to_owned(),
-            ),
-            ..pane("terminal_1", "tab_0", Some("codex"), false)
-        }],
-        2,
-        "rimz-test",
-    );
-    fresh.tabs[0].panes[0].current.started_at = Some(old_start);
+    let wrapper = "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/main";
+    for (name, command, spawn_command, expected_start, expected_previous) in [
+        ("spawn wrapper changed", "zsh", "zsh", None, Some("codex")),
+        (
+            "same spawn wrapper",
+            "/usr/bin/codex",
+            wrapper,
+            Some(old_start),
+            None,
+        ),
+    ] {
+        let mut prior = assemble_frame(
+            vec![PaneRef {
+                command: Some("codex".to_owned()),
+                spawn_command: Some(wrapper.to_owned()),
+                ..pane("terminal_1", "tab_0", Some("codex"), false)
+            }],
+            1,
+            "rimz-test",
+        );
+        prior.tabs[0].panes[0].current.started_at = Some(old_start);
+        let mut fresh = assemble_frame(
+            vec![PaneRef {
+                command: Some(command.to_owned()),
+                spawn_command: Some(spawn_command.to_owned()),
+                ..pane("terminal_1", "tab_0", Some(command), false)
+            }],
+            2,
+            "rimz-test",
+        );
 
-    fresh.rotate_against_prior(&prior);
+        fresh.rotate_against_prior(&prior);
 
-    let state = &fresh.tabs[0].panes[0];
-    assert_eq!(state.current.command.as_deref(), Some("/usr/bin/codex"));
-    assert_eq!(state.current.started_at, Some(old_start));
-    assert!(state.previous.is_none());
+        let state = &fresh.tabs[0].panes[0];
+        assert_eq!(state.current.command.as_deref(), Some(command), "{name}");
+        assert_eq!(state.current.started_at, expected_start, "{name}");
+        assert_eq!(
+            state
+                .previous
+                .as_ref()
+                .and_then(|previous| previous.command.as_deref()),
+            expected_previous,
+            "{name}"
+        );
+    }
 }
 
 #[test]

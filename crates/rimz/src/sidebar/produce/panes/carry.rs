@@ -498,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_carried_since_survives_until_ttl() {
+    fn previous_carried_since_survives_until_ttl_then_expires() {
         let mut prior = pidded_frame(&[("terminal_1", 101), ("terminal_2", 202)], 1);
         prior.carried_panes = vec![CarriedPane {
             pane_id: pane_id("terminal_2"),
@@ -508,8 +508,8 @@ mod tests {
         }];
         let fresh = frame(&["terminal_1"], 2);
 
-        let outcome = apply_carry_forward(
-            fresh,
+        let at_ttl = apply_carry_forward(
+            fresh.clone(),
             Some(&prior),
             None,
             &HashMap::new(),
@@ -517,23 +517,11 @@ mod tests {
             1 + PANE_CARRY_TTL.as_millis() as u64,
         );
 
-        assert_eq!(outcome.carried[0].carried_since_ms, 1);
-        assert!(outcome.expired.is_empty());
-        assert!(!outcome.ambiguous_loss);
-    }
+        assert_eq!(at_ttl.carried[0].carried_since_ms, 1);
+        assert!(at_ttl.expired.is_empty());
+        assert!(!at_ttl.ambiguous_loss);
 
-    #[test]
-    fn carried_pane_expires_after_ttl() {
-        let mut prior = pidded_frame(&[("terminal_1", 101), ("terminal_2", 202)], 1);
-        prior.carried_panes = vec![CarriedPane {
-            pane_id: pane_id("terminal_2"),
-            pid: Some(202),
-            start_ticks: Some(9),
-            carried_since_ms: 1,
-        }];
-        let fresh = frame(&["terminal_1"], 2);
-
-        let outcome = apply_carry_forward(
+        let expired = apply_carry_forward(
             fresh,
             Some(&prior),
             None,
@@ -542,10 +530,10 @@ mod tests {
             2 + PANE_CARRY_TTL.as_millis() as u64,
         );
 
-        assert_eq!(outcome.frame.pane_states().count(), 1);
-        assert!(outcome.carried.is_empty());
-        assert_eq!(outcome.expired[0].pane_id, pane_id("terminal_2"));
-        assert!(!outcome.ambiguous_loss);
+        assert_eq!(expired.frame.pane_states().count(), 1);
+        assert!(expired.carried.is_empty());
+        assert_eq!(expired.expired[0].pane_id, pane_id("terminal_2"));
+        assert!(!expired.ambiguous_loss);
     }
 
     #[test]

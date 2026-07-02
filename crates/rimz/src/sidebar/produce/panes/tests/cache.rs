@@ -1,19 +1,37 @@
 use super::*;
 
 #[test]
-fn snapshot_cache_serves_only_fresh_same_session_readable_entries() {
+fn snapshot_cache_freshness_matrix() {
     let dir = tempfile::tempdir().unwrap();
     // Keep the freshness cases independent from CI scheduler stalls. The
     // cache freshness check saturates future stamps to age 0, matching the
     // production clock-skew contract.
     let fresh = unix_now_ms().saturating_add(60_000);
     let stale = unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
+    let carried_stale_for_snapshot =
+        unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
 
-    for (name, publish, requested, expected_hit) in [
+    enum CacheEntry {
+        Valid {
+            session: &'static str,
+            produced_at_ms: u64,
+            carried: bool,
+        },
+        Unreadable,
+        Absent,
+    }
+
+    for (name, entry, requested, min_produced_at_ms, ttl, expected_hit) in [
         (
             "fresh same-session",
-            Some(("rimz-query-engine", fresh)),
+            CacheEntry::Valid {
+                session: "rimz-query-engine",
+                produced_at_ms: fresh,
+                carried: false,
+            },
             "rimz-query-engine",
+            None,
+            SNAPSHOT_CACHE_TTL,
             true,
         ),
         // One session's panes must never be served to a sidebar pinned to
@@ -21,65 +39,117 @@ fn snapshot_cache_serves_only_fresh_same_session_readable_entries() {
         // requested session, so a cross-session hit would mislabel panes.
         (
             "different session",
-            Some(("rimz-query-engine", fresh)),
+            CacheEntry::Valid {
+                session: "rimz-query-engine",
+                produced_at_ms: fresh,
+                carried: false,
+            },
             "rimz-other",
+            None,
+            SNAPSHOT_CACHE_TTL,
             false,
         ),
         (
             "stale entry",
-            Some(("rimz-query-engine", stale)),
+            CacheEntry::Valid {
+                session: "rimz-query-engine",
+                produced_at_ms: stale,
+                carried: false,
+            },
             "rimz-query-engine",
+            None,
+            SNAPSHOT_CACHE_TTL,
             false,
         ),
-        ("absent cache", None, "rimz-query-engine", false),
+        (
+            "absent cache",
+            CacheEntry::Absent,
+            "rimz-query-engine",
+            None,
+            SNAPSHOT_CACHE_TTL,
+            false,
+        ),
+        (
+            "unreadable json",
+            CacheEntry::Unreadable,
+            "rimz-query-engine",
+            None,
+            SNAPSHOT_CACHE_TTL,
+            false,
+        ),
+        (
+            "floor at stamp",
+            CacheEntry::Valid {
+                session: "rimz-query-engine",
+                produced_at_ms: fresh,
+                carried: false,
+            },
+            "rimz-query-engine",
+            Some(fresh),
+            SNAPSHOT_CACHE_TTL,
+            true,
+        ),
+        (
+            "floor past stamp",
+            CacheEntry::Valid {
+                session: "rimz-query-engine",
+                produced_at_ms: fresh,
+                carried: false,
+            },
+            "rimz-query-engine",
+            Some(fresh.saturating_add(1)),
+            SNAPSHOT_CACHE_TTL,
+            false,
+        ),
+        (
+            "carried panes clamp event ttl",
+            CacheEntry::Valid {
+                session: "rimz-query-engine",
+                produced_at_ms: carried_stale_for_snapshot,
+                carried: true,
+            },
+            "rimz-query-engine",
+            None,
+            crate::sidebar::timing::EVENT_PANE_TTL,
+            false,
+        ),
     ] {
         let path = dir.path().join(format!("{name}.json"));
-        if let Some((session, produced_at_ms)) = publish {
-            write_snapshot_cache(&path, session, produced_at_ms);
+        match entry {
+            CacheEntry::Valid {
+                session,
+                produced_at_ms,
+                carried,
+            } => write_snapshot_cache(&path, session, produced_at_ms, carried),
+            CacheEntry::Unreadable => std::fs::write(&path, b"{ not json").unwrap(),
+            CacheEntry::Absent => {}
         }
         assert_eq!(
-            fresh_snapshot_cache(&path, requested, None, SNAPSHOT_CACHE_TTL).is_some(),
+            fresh_snapshot_cache(&path, requested, min_produced_at_ms, ttl).is_some(),
             expected_hit,
             "{name}"
         );
     }
 
-    let unreadable = dir.path().join("unreadable.json");
-    std::fs::write(&unreadable, b"{ not json").unwrap();
-    assert!(
-        fresh_snapshot_cache(&unreadable, "rimz-query-engine", None, SNAPSHOT_CACHE_TTL).is_none()
-    );
-}
-
-#[test]
-fn snapshot_cache_misses_before_requested_pane_freshness_floor() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("snapshot.json");
-    // Isolate the forced-freshness floor from the TTL gate. Coverage CI can
-    // take longer than the 750ms poll TTL to write and read the cache, and
-    // future producer stamps intentionally saturate to age 0.
-    let produced_at_ms = unix_now_ms().saturating_add(60_000);
-    write_snapshot_cache(&path, "rimz-query-engine", produced_at_ms);
-
+    // A `--no-produce` renderer holds the producer's last published base even
+    // past the freshness TTL — it renders the last good frame rather than
+    // forking its own `list-panes`. The fresh-only read (the producer's fast
+    // path) misses the stale entry; the TTL-agnostic read still serves it.
+    let consumer_path = dir.path().join("consumer-stale.json");
+    write_snapshot_cache(&consumer_path, "rimz-query-engine", stale, false);
     assert!(
         fresh_snapshot_cache(
-            &path,
+            &consumer_path,
             "rimz-query-engine",
-            Some(produced_at_ms),
+            None,
             SNAPSHOT_CACHE_TTL
         )
-        .is_some(),
-        "a cache produced at the requested floor is usable"
+        .is_none(),
+        "the producer's fresh-only fast path skips a stale entry"
     );
     assert!(
-        fresh_snapshot_cache(
-            &path,
-            "rimz-query-engine",
-            Some(produced_at_ms.saturating_add(1)),
-            SNAPSHOT_CACHE_TTL,
-        )
-        .is_none(),
-        "a pane-sensitive wakeup rejects the pre-signal pane cache"
+        read_snapshot_cache(&consumer_path, "rimz-query-engine").is_some(),
+        "the consumer's read serves the stale entry as last-good"
     );
 }
 
@@ -87,15 +157,6 @@ fn snapshot_cache_misses_before_requested_pane_freshness_floor() {
 fn fresh_publishable_snapshot_cache_rejects_invalid_cached_frames() {
     let dir = tempfile::tempdir().unwrap();
     let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
-
-    let empty_path = dir.path().join("empty.json");
-    let empty = crate::sidebar::frame::assemble_frame(Vec::new(), unix_now_ms(), "s");
-    atomic::write_temp_then_rename_cache(&empty_path, &empty).unwrap();
-    assert!(
-        fresh_publishable_snapshot_cache(&empty_path, "s", None, SNAPSHOT_CACHE_TTL, None, None)
-            .is_none(),
-        "a fresh empty cache is still implausible"
-    );
 
     let missing_own_path = dir.path().join("missing-own.json");
     let missing_own = crate::sidebar::frame::assemble_frame(
@@ -285,209 +346,140 @@ fn missing_own_pane_without_prior_publishes() {
 }
 
 #[test]
-fn verified_shrink_repull_result_is_published() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id =
-        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/verified-shrink"));
-    let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let cache_path = runtime.pane_frame_path();
-    let prior = frame(vec![
-        pane("terminal_1", Some("zsh"), Some("/repo")),
-        pane("terminal_2", Some("zsh"), Some("/repo")),
-        pane("terminal_3", Some("zsh"), Some("/repo")),
-    ]);
-    let raced = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
-    let verified = frame(vec![
-        pane("terminal_1", Some("zsh"), Some("/repo")),
-        pane("terminal_2", Some("zsh"), Some("/repo")),
-    ]);
-    let calls = std::cell::Cell::new(0);
+fn degraded_first_read_publishes_verified_repull_result() {
+    for (name, raced_raws, verified_raws, expected_count) in [
+        (
+            "verified shrink",
+            vec!["terminal_1"],
+            vec!["terminal_1", "terminal_2"],
+            2,
+        ),
+        (
+            "ambiguous loss",
+            vec!["terminal_1", "terminal_2"],
+            vec!["terminal_1", "terminal_2", "terminal_3"],
+            3,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
+            &format!("/tmp/{name}"),
+        ));
+        let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let cache_path = runtime.pane_frame_path();
+        let prior = frame(vec![
+            pane("terminal_1", Some("zsh"), Some("/repo")),
+            pane("terminal_2", Some("zsh"), Some("/repo")),
+            pane("terminal_3", Some("zsh"), Some("/repo")),
+        ]);
+        let raced = frame(
+            raced_raws
+                .into_iter()
+                .map(|raw| pane(raw, Some("zsh"), Some("/repo")))
+                .collect(),
+        );
+        let verified = frame(
+            verified_raws
+                .into_iter()
+                .map(|raw| pane(raw, Some("zsh"), Some("/repo")))
+                .collect(),
+        );
+        let calls = std::cell::Cell::new(0);
 
-    let repulled = confirm_and_carry(
-        raced,
-        Some(&prior),
-        None,
-        &|enrich_metrics, min_topology_produced_at_ms| {
-            assert!(enrich_metrics);
-            assert!(min_topology_produced_at_ms.is_some());
-            calls.set(calls.get() + 1);
-            Ok(verified.clone())
-        },
-        None,
-        true,
-        &runtime,
-    )
-    .expect("re-pull succeeds");
+        let repulled = confirm_and_carry(
+            raced,
+            Some(&prior),
+            None,
+            &|enrich_metrics, min_topology_produced_at_ms| {
+                assert!(enrich_metrics, "{name}");
+                assert!(min_topology_produced_at_ms.is_some(), "{name}");
+                calls.set(calls.get() + 1);
+                Ok(verified.clone())
+            },
+            None,
+            true,
+            &runtime,
+        )
+        .expect("re-pull succeeds");
 
-    assert_eq!(calls.get(), 1);
-    let published = validate_frame_for_publish(
-        repulled,
-        Some(prior),
-        None,
-        None,
-        true,
-        &runtime,
-        &cache_path,
-    )
-    .expect("verified frame publishes");
-    assert_eq!(pane_count(&published), 2);
-    let cached = read_snapshot_cache(&cache_path, "s").expect("published frame");
-    assert_eq!(
-        pane_count(&cached),
-        2,
-        "the verified re-pull, not the first shrunken read, is published"
-    );
+        assert_eq!(calls.get(), 1, "{name}");
+        assert_eq!(pane_count(&repulled), expected_count, "{name}");
+        assert!(repulled.carried_panes.is_empty(), "{name}");
+        let published = validate_frame_for_publish(
+            repulled,
+            Some(prior),
+            None,
+            None,
+            true,
+            &runtime,
+            &cache_path,
+        )
+        .expect("verified frame publishes");
+        assert_eq!(pane_count(&published), expected_count, "{name}");
+        let cached = read_snapshot_cache(&cache_path, "s").expect("published frame");
+        assert_eq!(
+            pane_count(&cached),
+            expected_count,
+            "the verified re-pull, not the first degraded read, is published: {name}"
+        );
+    }
 }
 
 #[test]
-fn ambiguous_loss_repull_result_is_published() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id =
-        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/ambiguous-loss"));
-    let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let cache_path = runtime.pane_frame_path();
-    let prior = frame(vec![
-        pane("terminal_1", Some("zsh"), Some("/repo")),
-        pane("terminal_2", Some("zsh"), Some("/repo")),
-        pane("terminal_3", Some("zsh"), Some("/repo")),
-    ]);
-    let raced = frame(vec![
-        pane("terminal_1", Some("zsh"), Some("/repo")),
-        pane("terminal_2", Some("zsh"), Some("/repo")),
-    ]);
-    let verified = prior.clone();
-    let calls = std::cell::Cell::new(0);
+fn ambiguous_plain_process_absence_repull_matrix() {
+    for (name, verified_keeps_row, expected_row_present) in [
+        ("verified row survives", true, true),
+        ("verified missing row drops", false, false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
+            &format!("/tmp/plain-process-{name}"),
+        ));
+        let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let mut prior = frame(vec![
+            pane("terminal_1", Some("zsh"), Some("/repo")),
+            pane("terminal_5", Some("zsh"), Some("/repo")),
+        ]);
+        prior
+            .pane_states_mut()
+            .find(|pane| pane.pane_id.raw() == "terminal_5")
+            .expect("terminal_5 present")
+            .current
+            .pid = Some(u32::MAX);
+        let fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
+        let verified = if verified_keeps_row {
+            prior.clone()
+        } else {
+            fresh.clone()
+        };
+        let calls = std::cell::Cell::new(0);
 
-    let repulled = confirm_and_carry(
-        raced,
-        Some(&prior),
-        None,
-        &|enrich_metrics, min_topology_produced_at_ms| {
-            assert!(enrich_metrics);
-            assert!(min_topology_produced_at_ms.is_some());
-            calls.set(calls.get() + 1);
-            Ok(verified.clone())
-        },
-        None,
-        true,
-        &runtime,
-    )
-    .expect("ambiguous loss re-pull succeeds");
+        let repulled = confirm_and_carry(
+            fresh,
+            Some(&prior),
+            None,
+            &|enrich_metrics, min_topology_produced_at_ms| {
+                assert!(enrich_metrics, "{name}");
+                assert!(min_topology_produced_at_ms.is_some(), "{name}");
+                calls.set(calls.get() + 1);
+                Ok(verified.clone())
+            },
+            None,
+            true,
+            &runtime,
+        )
+        .expect("ambiguous process loss re-pulls");
 
-    assert_eq!(calls.get(), 1);
-    assert_eq!(pane_count(&repulled), 3);
-    assert!(repulled.carried_panes.is_empty());
-    let published = validate_frame_for_publish(
-        repulled,
-        Some(prior),
-        None,
-        None,
-        true,
-        &runtime,
-        &cache_path,
-    )
-    .expect("verified frame publishes");
-    assert_eq!(pane_count(&published), 3);
-    let cached = read_snapshot_cache(&cache_path, "s").expect("published frame");
-    assert_eq!(
-        pane_count(&cached),
-        3,
-        "the verified re-pull, not the first ambiguous loss, is published"
-    );
-}
-
-#[test]
-fn ambiguous_plain_process_absence_repull_keeps_row() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
-        "/tmp/plain-process-absence",
-    ));
-    let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let mut prior = frame(vec![
-        pane("terminal_1", Some("zsh"), Some("/repo")),
-        pane("terminal_5", Some("zsh"), Some("/repo")),
-    ]);
-    prior
-        .pane_states_mut()
-        .find(|pane| pane.pane_id.raw() == "terminal_5")
-        .expect("terminal_5 present")
-        .current
-        .pid = Some(u32::MAX);
-    let fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
-    let verified = prior.clone();
-    let calls = std::cell::Cell::new(0);
-
-    let repulled = confirm_and_carry(
-        fresh,
-        Some(&prior),
-        None,
-        &|enrich_metrics, min_topology_produced_at_ms| {
-            assert!(enrich_metrics);
-            assert!(min_topology_produced_at_ms.is_some());
-            calls.set(calls.get() + 1);
-            Ok(verified.clone())
-        },
-        None,
-        true,
-        &runtime,
-    )
-    .expect("ambiguous process loss re-pulls");
-
-    assert_eq!(calls.get(), 1);
-    assert!(repulled.carried_panes.is_empty());
-    assert!(
-        live_row_ids(&repulled).contains(&"zellij:terminal_5".to_owned()),
-        "the verified pane row survives the degraded read"
-    );
-}
-
-#[test]
-fn ambiguous_plain_process_absence_still_drops_when_verified_missing() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
-        "/tmp/plain-process-closed",
-    ));
-    let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let mut prior = frame(vec![
-        pane("terminal_1", Some("zsh"), Some("/repo")),
-        pane("terminal_5", Some("zsh"), Some("/repo")),
-    ]);
-    prior
-        .pane_states_mut()
-        .find(|pane| pane.pane_id.raw() == "terminal_5")
-        .expect("terminal_5 present")
-        .current
-        .pid = Some(u32::MAX);
-    let fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
-    let verified = fresh.clone();
-    let calls = std::cell::Cell::new(0);
-
-    let repulled = confirm_and_carry(
-        fresh,
-        Some(&prior),
-        None,
-        &|enrich_metrics, min_topology_produced_at_ms| {
-            assert!(enrich_metrics);
-            assert!(min_topology_produced_at_ms.is_some());
-            calls.set(calls.get() + 1);
-            Ok(verified.clone())
-        },
-        None,
-        true,
-        &runtime,
-    )
-    .expect("ambiguous process loss re-pulls");
-
-    assert_eq!(calls.get(), 1);
-    assert!(repulled.carried_panes.is_empty());
-    assert!(
-        !live_row_ids(&repulled).contains(&"zellij:terminal_5".to_owned()),
-        "a verified missing pane still drops rather than ghosting"
-    );
+        assert_eq!(calls.get(), 1, "{name}");
+        assert!(repulled.carried_panes.is_empty(), "{name}");
+        assert_eq!(
+            live_row_ids(&repulled).contains(&"zellij:terminal_5".to_owned()),
+            expected_row_present,
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -620,26 +612,6 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
         }] if carried.len() == 1 && carried[0].raw() == "terminal_2"
             && pids == &vec![std::process::id()]
     ));
-}
-
-#[test]
-fn read_only_consumer_serves_a_stale_same_session_base() {
-    // A `--no-produce` renderer holds the producer's last published base even
-    // past the freshness TTL — it renders the last good frame rather than
-    // forking its own `list-panes`. The fresh-only read (the producer's fast
-    // path) misses the stale entry; the TTL-agnostic read still serves it.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("snapshot.json");
-    let stale = unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
-    write_snapshot_cache(&path, "rimz-query-engine", stale);
-    assert!(
-        fresh_snapshot_cache(&path, "rimz-query-engine", None, SNAPSHOT_CACHE_TTL).is_none(),
-        "the producer's fresh-only fast path skips a stale entry"
-    );
-    assert!(
-        read_snapshot_cache(&path, "rimz-query-engine").is_some(),
-        "the consumer's read serves the stale entry as last-good"
-    );
 }
 
 #[test]

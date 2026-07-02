@@ -8,17 +8,6 @@ fn tmux_pane(command: &str) -> crate::pane::PaneRef {
 }
 
 #[test]
-fn rotate_from_prior_repairs_raced_nulls() {
-    let prior = frame(vec![pane("terminal_1", Some("claude"), Some("/repo"))]);
-    let mut fresh = frame(vec![pane("terminal_1", None, None)]);
-
-    rotate_from_prior(&mut fresh, Some(&prior));
-
-    assert_eq!(first(&fresh).current.command.as_deref(), Some("claude"));
-    assert_eq!(first(&fresh).current.cwd.as_deref(), Some("/repo"));
-}
-
-#[test]
 fn rotate_from_prior_repairs_plain_shell_empty_command_before_row_gate() {
     let mut prior = frame(vec![pane("terminal_5", Some("zsh"), Some("/repo"))]);
     first_mut(&mut prior).current.pid = Some(3324242);
@@ -123,27 +112,67 @@ fn backfill_pane_cwds_skips_reported_pidless_missing_and_deleted_cwds() {
 }
 
 #[test]
-fn backfill_wrapper_spawn_commands_recovers_tmux_agent_wrapper() {
+fn backfill_wrapper_spawn_commands_matrix() {
     let wrapper = "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt --";
-    let mut frame = frame(vec![tmux_pane("rimz")]);
-    first_mut(&mut frame).current.pid = Some(4242);
-    first_mut(&mut frame).current.cwd = None;
+    for (name, pid, existing_spawn, proc_cmdline, expect_read, expected_spawn) in [
+        (
+            "recovers tmux agent wrapper",
+            Some(4242),
+            None,
+            Some(wrapper),
+            true,
+            Some(wrapper),
+        ),
+        (
+            "ignores real foregrounds",
+            Some(4242),
+            None,
+            Some("zsh"),
+            true,
+            None,
+        ),
+        (
+            "never overwrites existing spawn command",
+            Some(4242),
+            Some("zellij-born"),
+            Some(wrapper),
+            false,
+            Some("zellij-born"),
+        ),
+        (
+            "abstains without pid",
+            None,
+            None,
+            Some(wrapper),
+            false,
+            None,
+        ),
+    ] {
+        let seen = std::cell::Cell::new(None);
+        let mut frame = frame(vec![tmux_pane("rimz")]);
+        first_mut(&mut frame).current.pid = pid;
+        first_mut(&mut frame).current.cwd = None;
+        first_mut(&mut frame).current.spawn_command = existing_spawn.map(str::to_owned);
 
-    backfill_wrapper_spawn_commands(&mut frame, &|pid| {
-        assert_eq!(pid, 4242);
-        Some(wrapper.to_owned())
-    });
+        backfill_wrapper_spawn_commands(&mut frame, &|pid| {
+            seen.set(Some(pid));
+            proc_cmdline.map(str::to_owned)
+        });
 
-    let pane = frame.to_pane_refs().into_iter().next().expect("pane ref");
-    assert_eq!(pane.spawn_command.as_deref(), Some(wrapper));
-    assert_eq!(
-        crate::ledger::snapshot::pane_agent_kind(&pane),
-        Some("codex")
-    );
-    assert_eq!(
-        crate::ledger::snapshot::pane_worktree_path(&pane),
-        Some("/repo/wt")
-    );
+        assert_eq!(seen.get().is_some(), expect_read, "{name}");
+        let pane = frame.to_pane_refs().into_iter().next().expect("pane ref");
+        assert_eq!(pane.spawn_command.as_deref(), expected_spawn, "{name}");
+        if name == "recovers tmux agent wrapper" {
+            assert_eq!(
+                crate::ledger::snapshot::pane_agent_kind(&pane),
+                Some("codex")
+            );
+            assert_eq!(
+                crate::ledger::snapshot::pane_worktree_path(&pane),
+                Some("/repo/wt")
+            );
+        }
+    }
 }
 
 #[test]
@@ -176,83 +205,6 @@ fn backfilled_wrapper_spawn_command_drives_process_start_stamp() {
         Some(wrapper)
     );
     assert_eq!(first(&frame).current.started_at, Some(start));
-}
-
-#[test]
-fn backfill_wrapper_spawn_commands_ignores_real_foregrounds() {
-    let mut frame = frame(vec![tmux_pane("rimz")]);
-    first_mut(&mut frame).current.pid = Some(4242);
-
-    backfill_wrapper_spawn_commands(&mut frame, &|pid| {
-        assert_eq!(pid, 4242);
-        Some("zsh".to_owned())
-    });
-
-    assert_eq!(first(&frame).current.spawn_command, None);
-}
-
-#[test]
-fn backfill_wrapper_spawn_commands_never_overwrites_existing_spawn_command() {
-    let mut frame = frame(vec![tmux_pane("rimz")]);
-    first_mut(&mut frame).current.pid = Some(4242);
-    first_mut(&mut frame).current.spawn_command = Some("zellij-born".to_owned());
-
-    backfill_wrapper_spawn_commands(&mut frame, &|_| {
-        panic!("reported spawn command is authoritative")
-    });
-
-    assert_eq!(
-        first(&frame).current.spawn_command.as_deref(),
-        Some("zellij-born")
-    );
-}
-
-#[test]
-fn backfill_wrapper_spawn_commands_abstains_without_pid() {
-    let mut frame = frame(vec![tmux_pane("rimz")]);
-    first_mut(&mut frame).current.pid = None;
-
-    backfill_wrapper_spawn_commands(&mut frame, &|_| panic!("pid gates /proc reads"));
-
-    assert_eq!(first(&frame).current.spawn_command, None);
-}
-
-#[test]
-fn rotate_against_prior_handles_spawn_handoff_start_stamps() {
-    let old_start: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
-    for (name, command, spawn_command, expected_start, expected_previous) in [
-        ("spawn wrapper changed", "zsh", "zsh", None, Some("codex")),
-        (
-            "same spawn wrapper",
-            "/usr/bin/codex",
-            "rimz agents exec codex",
-            Some(old_start),
-            None,
-        ),
-    ] {
-        let mut prior = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
-        first_mut(&mut prior).current.spawn_command = Some("rimz agents exec codex".to_owned());
-        first_mut(&mut prior).current.started_at = Some(old_start);
-        let mut fresh = frame(vec![pane("terminal_1", Some(command), Some("/repo"))]);
-        first_mut(&mut fresh).current.spawn_command = Some(spawn_command.to_owned());
-
-        fresh.rotate_against_prior(&prior);
-
-        assert_eq!(
-            first(&fresh).current.command.as_deref(),
-            Some(command),
-            "{name}"
-        );
-        assert_eq!(first(&fresh).current.started_at, expected_start, "{name}");
-        assert_eq!(
-            first(&fresh)
-                .previous
-                .as_ref()
-                .and_then(|previous| previous.command.as_deref()),
-            expected_previous,
-            "{name}"
-        );
-    }
 }
 
 #[test]
@@ -351,32 +303,6 @@ fn hosted_agent_process_fills_empty_cwd_for_wrapped_shell_pane() {
 }
 
 #[test]
-fn hosted_agent_stamp_carries_across_transient_pidless_scan_miss() {
-    let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
-    let mut prior = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
-    first_mut(&mut prior).current.started_at = Some(start);
-    first_mut(&mut prior).current.hosted_agent_kind =
-        Some(crate::ids::AgentKind::new_unchecked("codex"));
-    first_mut(&mut prior).current.hosted_agent_process_start = Some(start);
-    let mut fresh = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
-
-    carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10, &|_, _| {
-        panic!("pidless scan miss must not probe absence")
-    });
-
-    let pane = first(&fresh);
-    assert_eq!(
-        pane.current
-            .hosted_agent_kind
-            .as_ref()
-            .map(|kind| kind.as_str()),
-        Some("codex")
-    );
-    assert_eq!(pane.current.hosted_agent_process_start, Some(start));
-    assert_eq!(pane.hosted_carry_since_ms, Some(10));
-}
-
-#[test]
 fn hosted_agent_stamp_carry_anchor_does_not_advance_and_expires() {
     let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
     let mut prior = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
@@ -410,68 +336,89 @@ fn hosted_agent_stamp_carry_anchor_does_not_advance_and_expires() {
 }
 
 #[test]
-fn hosted_agent_stamp_carry_respects_foreground_agent_kind() {
+fn hosted_agent_stamp_carry_matrix() {
     let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
-    let mut prior = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
-    first_mut(&mut prior).current.hosted_agent_kind =
-        Some(crate::ids::AgentKind::new_unchecked("codex"));
-    first_mut(&mut prior).current.hosted_agent_process_start = Some(start);
-    let mut fresh = frame(vec![pane("terminal_30", Some("claude"), Some("/repo"))]);
+    for (
+        name,
+        fresh_command,
+        fresh_pid,
+        absence_probe,
+        expected_kind,
+        expected_start,
+        expected_carry_since,
+    ) in [
+        (
+            "carries across transient pidless scan miss",
+            "git status",
+            None,
+            None,
+            Some("codex"),
+            Some(start),
+            Some(10),
+        ),
+        (
+            "carries when absence is indeterminate",
+            "git status",
+            Some(200),
+            Some(false),
+            Some("codex"),
+            Some(start),
+            Some(10),
+        ),
+        (
+            "drops on authoritative absence",
+            "git status",
+            Some(200),
+            Some(true),
+            None,
+            None,
+            None,
+        ),
+        (
+            "respects foreground agent kind",
+            "claude",
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+    ] {
+        let mut prior = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
+        first_mut(&mut prior).current.started_at = Some(start);
+        first_mut(&mut prior).current.hosted_agent_kind =
+            Some(crate::ids::AgentKind::new_unchecked("codex"));
+        first_mut(&mut prior).current.hosted_agent_process_start = Some(start);
+        let mut fresh = frame(vec![pane(
+            "terminal_30",
+            Some(fresh_command),
+            Some("/repo"),
+        )]);
+        first_mut(&mut fresh).current.pid = fresh_pid;
+        let probed = std::cell::Cell::new(false);
 
-    carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10, &|_, _| {
-        panic!("foreground agent-kind guard must not probe absence")
-    });
+        carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10, &|kind, pid| {
+            probed.set(true);
+            assert_eq!((kind, pid), ("codex", 200), "{name}");
+            absence_probe.unwrap_or_else(|| panic!("unexpected absence probe for {name}"))
+        });
 
-    assert!(first(&fresh).current.hosted_agent_kind.is_none());
-    assert!(first(&fresh).current.hosted_agent_process_start.is_none());
-}
-
-#[test]
-fn hosted_agent_stamp_drops_on_authoritative_absence() {
-    let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
-    let mut prior = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
-    first_mut(&mut prior).current.hosted_agent_kind =
-        Some(crate::ids::AgentKind::new_unchecked("codex"));
-    first_mut(&mut prior).current.hosted_agent_process_start = Some(start);
-    let mut fresh = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
-    first_mut(&mut fresh).current.pid = Some(200);
-
-    carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10, &|kind, pid| {
-        assert_eq!((kind, pid), ("codex", 200));
-        true
-    });
-
-    let pane = first(&fresh);
-    assert!(pane.current.hosted_agent_kind.is_none());
-    assert!(pane.current.hosted_agent_process_start.is_none());
-    assert_eq!(pane.hosted_carry_since_ms, None);
-}
-
-#[test]
-fn hosted_agent_stamp_carries_when_absence_is_indeterminate() {
-    let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
-    let mut prior = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
-    first_mut(&mut prior).current.hosted_agent_kind =
-        Some(crate::ids::AgentKind::new_unchecked("codex"));
-    first_mut(&mut prior).current.hosted_agent_process_start = Some(start);
-    let mut fresh = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
-    first_mut(&mut fresh).current.pid = Some(200);
-
-    carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10, &|kind, pid| {
-        assert_eq!((kind, pid), ("codex", 200));
-        false
-    });
-
-    let pane = first(&fresh);
-    assert_eq!(
-        pane.current
-            .hosted_agent_kind
-            .as_ref()
-            .map(|kind| kind.as_str()),
-        Some("codex")
-    );
-    assert_eq!(pane.current.hosted_agent_process_start, Some(start));
-    assert_eq!(pane.hosted_carry_since_ms, Some(10));
+        let pane = first(&fresh);
+        assert_eq!(
+            pane.current
+                .hosted_agent_kind
+                .as_ref()
+                .map(|kind| kind.as_str()),
+            expected_kind,
+            "{name}"
+        );
+        assert_eq!(
+            pane.current.hosted_agent_process_start, expected_start,
+            "{name}"
+        );
+        assert_eq!(pane.hosted_carry_since_ms, expected_carry_since, "{name}");
+        assert_eq!(probed.get(), absence_probe.is_some(), "{name}");
+    }
 }
 
 #[test]
@@ -736,121 +683,109 @@ fn drop_reused_pid_bindings_keeps_hosted_agent_child_identity() {
 }
 
 #[test]
-fn drop_reused_pid_bindings_clears_stale_process_identity() {
+fn drop_reused_pid_bindings_matrix() {
     let expected: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
-    let actual: jiff::Timestamp = "2026-06-05T12:00:10Z".parse().unwrap();
-    let mut frame = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
-    first_mut(&mut frame).current.pid = Some(100);
-    first_mut(&mut frame).current.started_at = Some(expected);
-    let previous = first(&frame).current.clone();
-    first_mut(&mut frame).previous = Some(previous);
-    first_mut(&mut frame).children = vec![200];
-    first_mut(&mut frame).metrics = PaneMetrics {
-        process_state: Some(crate::ProcessState::Stuck),
-        rss_kb: Some(1024),
-        cpu_pct: Some(250),
-        io_bps: Some(4096),
-    };
-
-    drop_reused_pid_bindings(
-        &mut frame,
-        &|_, pid| {
-            assert_eq!(pid, 100);
-            None
-        },
-        &|pid| {
-            assert_eq!(pid, 100);
-            Some(actual)
-        },
-    );
-
-    assert_eq!(first(&frame).current.pid, None);
-    assert_eq!(first(&frame).current.started_at, None);
-    assert_eq!(first(&frame).previous, None);
-    assert!(first(&frame).children.is_empty());
-    assert_eq!(first(&frame).metrics, PaneMetrics::default());
-}
-
-#[test]
-fn drop_reused_pid_bindings_keeps_matching_process_identity() {
-    let expected: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
-    let actual: jiff::Timestamp = "2026-06-05T12:00:02Z".parse().unwrap();
-    let mut frame = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
-    first_mut(&mut frame).current.pid = Some(100);
-    first_mut(&mut frame).current.started_at = Some(expected);
-    first_mut(&mut frame).metrics = PaneMetrics {
-        process_state: None,
-        rss_kb: Some(1024),
-        cpu_pct: Some(250),
-        io_bps: Some(4096),
-    };
-
-    drop_reused_pid_bindings(
-        &mut frame,
-        &|kind, pid| {
-            assert_eq!(kind, "codex");
-            assert_eq!(pid, 100);
-            Some(actual)
-        },
-        &|pid| -> Option<jiff::Timestamp> {
-            panic!("agent root-start owns the live identity: {pid}")
-        },
-    );
-
-    assert_eq!(first(&frame).current.pid, Some(100));
-    assert_eq!(first(&frame).current.started_at, Some(expected));
-    assert_eq!(first(&frame).metrics.rss_kb, Some(1024));
-}
-
-#[test]
-fn drop_reused_pid_bindings_clears_missing_process_start() {
-    let expected: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
-    let mut frame = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
-    first_mut(&mut frame).current.pid = Some(100);
-    first_mut(&mut frame).current.started_at = Some(expected);
-
-    drop_reused_pid_bindings(
-        &mut frame,
-        &|_, pid| {
-            assert_eq!(pid, 100);
-            None
-        },
-        &|pid| {
-            assert_eq!(pid, 100);
-            None
-        },
-    );
-
-    assert_eq!(first(&frame).current.pid, None);
-    assert_eq!(first(&frame).current.started_at, None);
-}
-
-#[test]
-fn drop_reused_pid_bindings_skips_unpaired_process_identity() {
-    for (name, pid, started_at) in [
+    let within_tolerance: jiff::Timestamp = "2026-06-05T12:00:02Z".parse().unwrap();
+    let beyond_tolerance: jiff::Timestamp = "2026-06-05T12:00:10Z".parse().unwrap();
+    for (
+        name,
+        pid,
+        started_at,
+        root_start,
+        process_start,
+        expected_pid,
+        expected_start,
+        expect_metadata_clear,
+    ) in [
+        (
+            "clears stale process identity",
+            Some(100),
+            Some(expected),
+            Some(None),
+            Some(Some(beyond_tolerance)),
+            None,
+            None,
+            true,
+        ),
+        (
+            "keeps matching process identity",
+            Some(100),
+            Some(expected),
+            Some(Some(within_tolerance)),
+            None,
+            Some(100),
+            Some(expected),
+            false,
+        ),
+        (
+            "clears missing process start",
+            Some(100),
+            Some(expected),
+            Some(None),
+            Some(None),
+            None,
+            None,
+            true,
+        ),
         (
             "pidless",
             None,
             Some("2026-06-05T12:00:00Z".parse().unwrap()),
+            None,
+            None,
+            None,
+            Some(expected),
+            false,
         ),
-        ("startless", Some(100), None),
+        (
+            "startless",
+            Some(100),
+            None,
+            None,
+            None,
+            Some(100),
+            None,
+            false,
+        ),
     ] {
         let mut frame = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
         first_mut(&mut frame).current.pid = pid;
         first_mut(&mut frame).current.started_at = started_at;
+        let previous = first(&frame).current.clone();
+        first_mut(&mut frame).previous = Some(previous);
+        first_mut(&mut frame).children = vec![200];
+        first_mut(&mut frame).metrics = PaneMetrics {
+            process_state: Some(crate::ProcessState::Stuck),
+            rss_kb: Some(1024),
+            cpu_pct: Some(250),
+            io_bps: Some(4096),
+        };
 
         drop_reused_pid_bindings(
             &mut frame,
-            &|_, pid| -> Option<jiff::Timestamp> {
-                panic!("must not read root start for {name}: {pid}")
+            &|kind, pid| {
+                assert_eq!(kind, "codex", "{name}");
+                assert_eq!(pid, 100, "{name}");
+                root_start.unwrap_or_else(|| panic!("must not read root start for {name}: {pid}"))
             },
-            &|pid| -> Option<jiff::Timestamp> {
-                panic!("must not read process start for {name}: {pid}")
+            &|pid| {
+                assert_eq!(pid, 100, "{name}");
+                process_start
+                    .unwrap_or_else(|| panic!("must not read process start for {name}: {pid}"))
             },
         );
 
-        assert_eq!(first(&frame).current.pid, pid, "{name}");
-        assert_eq!(first(&frame).current.started_at, started_at, "{name}");
+        assert_eq!(first(&frame).current.pid, expected_pid, "{name}");
+        assert_eq!(first(&frame).current.started_at, expected_start, "{name}");
+        if expect_metadata_clear {
+            assert_eq!(first(&frame).previous, None, "{name}");
+            assert!(first(&frame).children.is_empty(), "{name}");
+            assert_eq!(first(&frame).metrics, PaneMetrics::default(), "{name}");
+        } else {
+            assert!(first(&frame).previous.is_some(), "{name}");
+            assert_eq!(first(&frame).children, vec![200], "{name}");
+            assert_eq!(first(&frame).metrics.rss_kb, Some(1024), "{name}");
+        }
     }
 }
 

@@ -34,7 +34,15 @@ fn live_row_ids(frame: &crate::sidebar::frame::PaneFrame) -> Vec<String> {
     ids
 }
 
-fn write_snapshot_cache(path: &Path, session: &str, produced_at_ms: u64) {
-    let cache = crate::sidebar::frame::assemble_frame(Vec::new(), produced_at_ms, session);
+fn write_snapshot_cache(path: &Path, session: &str, produced_at_ms: u64, carried: bool) {
+    let mut cache = crate::sidebar::frame::assemble_frame(Vec::new(), produced_at_ms, session);
+    if carried {
+        cache.carried_panes = vec![crate::sidebar::frame::CarriedPane {
+            pane_id: crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_9"),
+            pid: Some(909),
+            start_ticks: Some(90),
+            carried_since_ms: produced_at_ms,
+        }];
+    }
     atomic::write_temp_then_rename(path, &cache).expect("write snapshot cache");
 }

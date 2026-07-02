@@ -76,17 +76,29 @@ mod tests {
 
     #[test]
     fn large_shrink_needs_verification() {
-        let prior = assemble_frame(
-            vec![
-                pane("terminal_1", Some("zsh"), Some("/repo")),
-                pane("terminal_2", Some("zsh"), Some("/repo")),
-                pane("terminal_3", Some("zsh"), Some("/repo")),
-            ],
-            1,
-            "s",
-        );
-        let fresh = assemble_frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))], 2, "s");
+        for (name, prior_count, fresh_count, expected) in [
+            ("large shrink", Some(3), 1, true),
+            ("exactly half", Some(4), 2, false),
+            ("no prior", None, 1, false),
+        ] {
+            let prior = prior_count.map(|count| frame_with_pane_count(count, 1));
+            let fresh = frame_with_pane_count(fresh_count, 2);
 
-        assert!(shrink_needs_verification(&fresh, Some(&prior)));
+            assert_eq!(
+                shrink_needs_verification(&fresh, prior.as_ref()),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    fn frame_with_pane_count(count: usize, produced_at_ms: u64) -> PaneFrame {
+        assemble_frame(
+            (1..=count)
+                .map(|index| pane(&format!("terminal_{index}"), Some("zsh"), Some("/repo")))
+                .collect(),
+            produced_at_ms,
+            "s",
+        )
     }
 }
