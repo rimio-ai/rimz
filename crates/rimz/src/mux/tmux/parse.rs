@@ -159,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_client_view_dedupes_viewed_panes_and_ignores_malformed_rows() {
+    fn parse_client_view_reads_panes_activity_and_human_clients() {
         let panes = parse_client_view(b"%10\t100\t\n%10\t100\t\n%11\t100\t\n").viewed_panes;
         assert_eq!(
             panes,
@@ -174,10 +174,7 @@ mod tests {
                 .viewed_panes
                 .is_empty()
         );
-    }
 
-    #[test]
-    fn parse_client_view_reads_panes_activity_and_filters_watch_clients() {
         let view = parse_client_view(
             b"%10\t1700000000\t\n\
               %10\t1700000001\tattached\n\
@@ -195,10 +192,7 @@ mod tests {
         );
         assert_eq!(view.presence.human_clients, 3);
         assert_eq!(view.presence.last_input_ms, Some(1_700_000_001_000));
-    }
 
-    #[test]
-    fn parse_client_view_empty_output_has_no_human_clients() {
         let view = parse_client_view(b"\nno-pane\t1700000000\t\n");
 
         assert!(view.viewed_panes.is_empty());

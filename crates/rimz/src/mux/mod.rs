@@ -725,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn command_display_summarizes_args_and_stderr() {
+    fn mux_err_display_summarizes_args_and_stderr() {
         let args = [
             "attach",
             "--create-background",
@@ -737,57 +737,60 @@ mod tests {
             "false",
         ]
         .join(" ");
-        let err = MuxErr::Command {
-            program: "zellij".to_owned(),
-            args: args.clone(),
-            stderr: "one\ntwo\nthree\nfour\nfive\n".to_owned(),
-        };
+        let cases = vec![
+            (
+                MuxErr::Command {
+                    program: "zellij".to_owned(),
+                    args: args.clone(),
+                    stderr: "one\ntwo\nthree\nfour\nfive\n".to_owned(),
+                },
+                vec!["zellij attach rimz-room ...", "one\ntwo\nthree\nfour\n..."],
+                vec!["--default-mode"],
+                Some(args.as_str()),
+            ),
+            (
+                MuxErr::Timeout {
+                    program: "zellij".to_owned(),
+                    args: "attach --create rimz-room options --default-mode locked".to_owned(),
+                    seconds: 8,
+                },
+                vec!["zellij attach rimz-room ..."],
+                vec!["--default-mode"],
+                None,
+            ),
+            (
+                MuxErr::Command {
+                    program: "zellij".to_owned(),
+                    args: "action list-panes".to_owned(),
+                    stderr: "€".repeat(200),
+                },
+                vec!["..."],
+                Vec::new(),
+                None,
+            ),
+            (
+                MuxErr::Command {
+                    program: "zellij".to_owned(),
+                    args: "--session rimz-room action list-panes --all".to_owned(),
+                    stderr: "failed".to_owned(),
+                },
+                vec!["zellij action list-panes ..."],
+                vec!["--session"],
+                None,
+            ),
+        ];
 
-        let rendered = err.to_string();
-
-        assert!(rendered.contains("zellij attach rimz-room ..."));
-        assert!(!rendered.contains("--default-mode"));
-        assert!(rendered.contains("one\ntwo\nthree\nfour\n..."));
-        assert!(matches!(err, MuxErr::Command { args: stored, .. } if stored == args));
-    }
-
-    #[test]
-    fn timeout_display_summarizes_args() {
-        let err = MuxErr::Timeout {
-            program: "zellij".to_owned(),
-            args: "attach --create rimz-room options --default-mode locked".to_owned(),
-            seconds: 8,
-        };
-
-        let rendered = err.to_string();
-
-        assert!(rendered.contains("zellij attach rimz-room ..."));
-        assert!(!rendered.contains("--default-mode"));
-    }
-
-    #[test]
-    fn command_display_truncates_stderr_on_char_boundaries() {
-        let err = MuxErr::Command {
-            program: "zellij".to_owned(),
-            args: "action list-panes".to_owned(),
-            stderr: "€".repeat(200),
-        };
-
-        let rendered = err.to_string();
-
-        assert!(rendered.contains("..."));
-    }
-
-    #[test]
-    fn command_display_skips_session_flag_value_in_summary() {
-        let err = MuxErr::Command {
-            program: "zellij".to_owned(),
-            args: "--session rimz-room action list-panes --all".to_owned(),
-            stderr: "failed".to_owned(),
-        };
-
-        let rendered = err.to_string();
-
-        assert!(rendered.contains("zellij action list-panes ..."));
+        for (err, expected, absent, stored_args) in cases {
+            let rendered = err.to_string();
+            for needle in expected {
+                assert!(rendered.contains(needle), "{rendered}");
+            }
+            for needle in absent {
+                assert!(!rendered.contains(needle), "{rendered}");
+            }
+            if let Some(stored_args) = stored_args {
+                assert!(matches!(err, MuxErr::Command { args, .. } if args == stored_args));
+            }
+        }
     }
 }

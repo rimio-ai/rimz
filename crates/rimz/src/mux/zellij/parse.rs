@@ -459,17 +459,14 @@ mod tests {
     }
 
     #[test]
-    fn session_not_found_detects_zellij_action_banner() {
+    fn session_not_found_detects_action_banner_and_rejects_real_output() {
         let banner = b"Session 'rimz-rimz-f89e49' not found. The following sessions are active:\n\
                        \x1b[32;1mrimz-project-123456\x1b[m [Created 6m ago]\n";
         assert!(is_session_not_found(banner));
         assert!(is_session_not_found(
             b"Session 'rimz-rimz-f89e49' not found. The following sessions are active:\n"
         ));
-    }
 
-    #[test]
-    fn session_not_found_rejects_real_action_output() {
         assert!(!is_session_not_found(b"[{\"id\":0}]"));
         assert!(!is_session_not_found(b"rimzd\nTab #2\n#start\n"));
         assert!(!is_session_not_found(b""));

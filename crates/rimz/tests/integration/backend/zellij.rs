@@ -49,6 +49,40 @@ fn tiled_column(panes: Vec<PaneCmd>) -> LayoutColumn {
     }
 }
 
+fn sidebar_opts(name: &str, cwd: &Path, stub: PathBuf, detected_cols: u16) -> SidebarPaneOptions {
+    let workspace_root = PathBuf::from(format!("/tmp/rimz-{name}"));
+    SidebarPaneOptions {
+        session_name: name.to_owned(),
+        workspace_id: WorkspaceId::from_project_root(&workspace_root),
+        project_root: cwd.to_path_buf(),
+        cwd: cwd.to_path_buf(),
+        birth_size: SidebarWidth::default().birth_size(Some(detected_cols)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    }
+}
+
+fn create_plain_background_session(xdg: &Path, name: &str, cwd: &Path, sleep: &str) {
+    let layout = cwd.join("plain.kdl");
+    std::fs::write(
+        &layout,
+        format!("layout {{\n    pane command=\"sleep\" {{\n        args \"{sleep}\"\n    }}\n}}\n"),
+    )
+    .expect("write plain layout");
+    let created = scoped_zellij(xdg)
+        .args(["attach", "--create-background", name, "options"])
+        .arg("--default-cwd")
+        .arg(cwd)
+        .arg("--default-layout")
+        .arg(&layout)
+        .bounded_status()
+        .expect("create plain session");
+    assert!(created.success(), "create-background failed for {name}");
+}
+
 /// Skip the test (return) if the host has no `zellij` binary on PATH.
 macro_rules! require_zellij {
     () => {
@@ -424,23 +458,9 @@ fn open_sidebar_births_native_layout_and_template() {
     let cwd = TempDir::new().expect("cwd tempdir");
 
     let (_stub_dir, stub) = sidebar_command_stub();
-    ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-test")),
-                project_root: cwd.path().to_path_buf(),
-                cwd: cwd.path().to_path_buf(),
-                birth_size: SidebarWidth::default().birth_size(Some(120)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_tabs: Vec::new(),
-                refresh_ms: None,
-            },
-            None,
-        )
-        .expect("open_sidebar");
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    let opts = sidebar_opts(&name, cwd.path(), stub, 120);
+    backend.open_sidebar(&opts, None).expect("open_sidebar");
 
     let panes = wait_for_pane_count(xdg.path(), &name, 2);
     assert!(
@@ -480,6 +500,18 @@ fn open_sidebar_births_native_layout_and_template() {
             "tab {tab} focuses the sidebar; focus must land on the right terminal",
         );
     }
+
+    let before_reopen = wait_for_pane_count(xdg.path(), &name, 4);
+    backend
+        .open_sidebar(&opts, None)
+        .expect("second open_sidebar");
+    let second = wait_for_pane_count(xdg.path(), &name, before_reopen.len());
+    assert_eq!(
+        second.len(),
+        before_reopen.len(),
+        "re-opening a live session must not add or drop panes: {second:?}",
+    );
+    assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
 }
 
 #[test]
@@ -496,21 +528,7 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
     let (_stub_dir, stub) = sidebar_command_stub();
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
     backend
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focuscmd")),
-                project_root: cwd.path().to_path_buf(),
-                cwd: cwd.path().to_path_buf(),
-                birth_size: SidebarWidth::default().birth_size(Some(200)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_tabs: Vec::new(),
-                refresh_ms: None,
-            },
-            None,
-        )
+        .open_sidebar(&sidebar_opts(&name, cwd.path(), stub, 200), None)
         .expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 
@@ -734,59 +752,6 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
     );
 }
 
-/// Re-running `open_sidebar` against a *live* session takes the no-op arm of the
-/// session-state branch: it neither errors nor injects a second sidebar, and the
-/// 30% layout is preserved. (The exited arm — delete then rebirth — cannot be
-/// driven headlessly: an EXITED-resurrectable session requires a prior attach +
-/// serialization. Its classifier is covered by the `session_state` unit test.)
-#[test]
-fn open_sidebar_on_live_session_is_idempotent() {
-    require_zellij!();
-
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("idem");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-    let cwd = TempDir::new().expect("cwd tempdir");
-    let (_stub_dir, stub) = sidebar_command_stub();
-    let opts = SidebarPaneOptions {
-        session_name: name.clone(),
-        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-idem")),
-        project_root: cwd.path().to_path_buf(),
-        cwd: cwd.path().to_path_buf(),
-        birth_size: SidebarWidth::default().birth_size(Some(120)),
-        rimz_bin: stub,
-        replace_existing: false,
-        config: rimz::config::MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
-
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    backend
-        .open_sidebar(&opts, None)
-        .expect("first open_sidebar");
-    let first = wait_for_pane_count(xdg.path(), &name, 2);
-    assert!(
-        first.len() >= 2,
-        "first birth should create a sidebar + terminal pane: {first:?}",
-    );
-
-    // Second call sees a live session and must leave it untouched.
-    backend
-        .open_sidebar(&opts, None)
-        .expect("second open_sidebar");
-    let second = wait_for_pane_count(xdg.path(), &name, 2);
-    assert_eq!(
-        second.len(),
-        first.len(),
-        "re-opening a live session must not add or drop panes: {second:?}",
-    );
-    assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
-}
-
 /// The pre-attach health gate: an absent room is born clean and RUNNING
 /// (`Reborn`), a probe of the resulting live room reports `Healthy`, and a second
 /// gate call leaves the working panes untouched (`Healthy`, no rebirth). This is
@@ -876,21 +841,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
 
     // Birth a live session with a plain, sidebar-less layout. The pane runs a
     // long sleep so the unattached background session stays alive deterministically.
-    let layout = cwd.path().join("plain.kdl");
-    std::fs::write(
-        &layout,
-        "layout {\n    pane command=\"sleep\" {\n        args \"60\"\n    }\n}\n",
-    )
-    .expect("write plain layout");
-    let created = scoped_zellij(xdg.path())
-        .args(["attach", "--create-background", &name, "options"])
-        .arg("--default-cwd")
-        .arg(cwd.path())
-        .arg("--default-layout")
-        .arg(&layout)
-        .bounded_status()
-        .expect("create plain session");
-    assert!(created.success(), "create-background failed for {name}");
+    create_plain_background_session(xdg.path(), &name, cwd.path(), "60");
     let plain = wait_for_pane_count(xdg.path(), &name, 1);
     assert!(
         !plain.is_empty(),
@@ -901,21 +852,7 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
     // rebirth one that carries the sidebar.
     let (_stub_dir, stub) = sidebar_command_stub();
     ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-nosb")),
-                project_root: cwd.path().to_path_buf(),
-                cwd: cwd.path().to_path_buf(),
-                birth_size: SidebarWidth::default().birth_size(Some(120)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_tabs: Vec::new(),
-                refresh_ms: None,
-            },
-            None,
-        )
+        .open_sidebar(&sidebar_opts(&name, cwd.path(), stub, 120), None)
         .expect("open_sidebar");
 
     let healed = wait_for_pane_count(xdg.path(), &name, 2);
@@ -945,21 +882,7 @@ fn split_pane_injects_env_vars() {
     let marker_file = cwd.path().join("rimz-env-marker");
 
     // Birth a live background session with one long-lived pane to split from.
-    let layout = cwd.path().join("plain.kdl");
-    std::fs::write(
-        &layout,
-        "layout {\n    pane command=\"sleep\" {\n        args \"60\"\n    }\n}\n",
-    )
-    .expect("write plain layout");
-    let created = scoped_zellij(xdg.path())
-        .args(["attach", "--create-background", &name, "options"])
-        .arg("--default-cwd")
-        .arg(cwd.path())
-        .arg("--default-layout")
-        .arg(&layout)
-        .bounded_status()
-        .expect("create session");
-    assert!(created.success(), "create-background failed for {name}");
+    create_plain_background_session(xdg.path(), &name, cwd.path(), "60");
     assert!(
         !wait_for_pane_count(xdg.path(), &name, 1).is_empty(),
         "session should have its working pane before the split",
@@ -1041,21 +964,7 @@ fn reconcile_defers_the_add_on_a_detached_session() {
     let cwd = TempDir::new().expect("cwd tempdir");
 
     // A detached background session with a working pane and no sidebar.
-    let layout = cwd.path().join("plain.kdl");
-    std::fs::write(
-        &layout,
-        "layout {\n    pane command=\"sleep\" {\n        args \"60\"\n    }\n}\n",
-    )
-    .expect("write plain layout");
-    let created = scoped_zellij(xdg.path())
-        .args(["attach", "--create-background", &name, "options"])
-        .arg("--default-cwd")
-        .arg(cwd.path())
-        .arg("--default-layout")
-        .arg(&layout)
-        .bounded_status()
-        .expect("create plain session");
-    assert!(created.success(), "create-background failed for {name}");
+    create_plain_background_session(xdg.path(), &name, cwd.path(), "60");
     let before = wait_for_pane_count(xdg.path(), &name, 1);
     assert!(
         !before.is_empty(),
@@ -1063,18 +972,7 @@ fn reconcile_defers_the_add_on_a_detached_session() {
     );
 
     let (_stub_dir, stub) = sidebar_command_stub();
-    let opts = SidebarPaneOptions {
-        session_name: name.clone(),
-        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-defer")),
-        project_root: cwd.path().to_path_buf(),
-        cwd: cwd.path().to_path_buf(),
-        birth_size: SidebarWidth::default().birth_size(Some(120)),
-        rimz_bin: stub,
-        replace_existing: false,
-        config: rimz::config::MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
+    let opts = sidebar_opts(&name, cwd.path(), stub, 120);
     // A freshly born --create-background session whose only pane is still
     // materializing is the case most prone to reconcile's transient-empty read,
     // so retry until reconcile actually observes the working pane.
@@ -1656,21 +1554,7 @@ fn reconcile_add_ends_docked_in_a_row_stacked_tab() {
     };
     let cwd = TempDir::new().expect("cwd tempdir");
 
-    let layout = cwd.path().join("plain.kdl");
-    std::fs::write(
-        &layout,
-        "layout {\n    pane command=\"sleep\" {\n        args \"600\"\n    }\n}\n",
-    )
-    .expect("write plain layout");
-    let created = scoped_zellij(xdg_dir.path())
-        .args(["attach", "--create-background", &name, "options"])
-        .arg("--default-cwd")
-        .arg(cwd.path())
-        .arg("--default-layout")
-        .arg(&layout)
-        .bounded_status()
-        .expect("create plain session");
-    assert!(created.success(), "create-background failed for {name}");
+    create_plain_background_session(xdg_dir.path(), &name, cwd.path(), "600");
     wait_for_pane_count(xdg_dir.path(), &name, 1);
 
     let _client = AttachedClient::attach(xdg_dir.path(), &name, 160, 60);
@@ -1846,6 +1730,16 @@ struct PaneGeometry {
     rows: u64,
 }
 
+fn pane_geometry(pane: &serde_json::Value) -> Option<PaneGeometry> {
+    Some(PaneGeometry {
+        id: pane.get("id")?.as_u64()?,
+        x: pane.get("pane_x")?.as_u64()?,
+        y: pane.get("pane_y")?.as_u64()?,
+        columns: pane.get("pane_columns")?.as_u64()?,
+        rows: pane.get("pane_rows")?.as_u64()?,
+    })
+}
+
 fn named_work_pane_geometry(
     xdg: &Path,
     session: &str,
@@ -1862,15 +1756,7 @@ fn named_work_pane_geometry(
             pane.get("tab_name").and_then(|value| value.as_str()) == Some(tab_name)
                 && pane.get("title").and_then(|value| value.as_str()) != Some("rimz-sidebar")
         })
-        .filter_map(|pane| {
-            Some(PaneGeometry {
-                id: pane.get("id")?.as_u64()?,
-                x: pane.get("pane_x")?.as_u64()?,
-                y: pane.get("pane_y")?.as_u64()?,
-                columns: pane.get("pane_columns")?.as_u64()?,
-                rows: pane.get("pane_rows")?.as_u64()?,
-            })
-        })
+        .filter_map(pane_geometry)
         .collect();
     work.sort_by_key(|pane| pane.x);
     Ok(work)
@@ -1892,15 +1778,7 @@ fn named_sidebar_pane_geometry(
             pane.get("tab_name").and_then(|value| value.as_str()) == Some(tab_name)
                 && pane.get("title").and_then(|value| value.as_str()) == Some("rimz-sidebar")
         })
-        .and_then(|pane| {
-            Some(PaneGeometry {
-                id: pane.get("id")?.as_u64()?,
-                x: pane.get("pane_x")?.as_u64()?,
-                y: pane.get("pane_y")?.as_u64()?,
-                columns: pane.get("pane_columns")?.as_u64()?,
-                rows: pane.get("pane_rows")?.as_u64()?,
-            })
-        }))
+        .and_then(pane_geometry))
 }
 
 fn named_compact_bar_pane_geometry(
@@ -1922,15 +1800,7 @@ fn named_compact_bar_pane_geometry(
                     .and_then(|value| value.as_str())
                     .is_some_and(|title| title.contains("compact-bar"))
         })
-        .and_then(|pane| {
-            Some(PaneGeometry {
-                id: pane.get("id")?.as_u64()?,
-                x: pane.get("pane_x")?.as_u64()?,
-                y: pane.get("pane_y")?.as_u64()?,
-                columns: pane.get("pane_columns")?.as_u64()?,
-                rows: pane.get("pane_rows")?.as_u64()?,
-            })
-        }))
+        .and_then(pane_geometry))
 }
 
 fn wait_for_named_sidebar_pane(xdg: &Path, session: &str, tab_name: &str) -> Option<PaneGeometry> {
@@ -2027,15 +1897,7 @@ fn work_pane_geometry(xdg: &Path, session: &str) -> Vec<PaneGeometry> {
         .filter(|pane| pane.get("title").and_then(|value| value.as_str()) != Some("rimz-sidebar"))
         .filter(|pane| pane.get("is_held").and_then(|value| value.as_bool()) != Some(true))
         .filter(|pane| pane.get("exited").and_then(|value| value.as_bool()) != Some(true))
-        .filter_map(|pane| {
-            Some(PaneGeometry {
-                id: pane.get("id")?.as_u64()?,
-                x: pane.get("pane_x")?.as_u64()?,
-                y: pane.get("pane_y")?.as_u64()?,
-                columns: pane.get("pane_columns")?.as_u64()?,
-                rows: pane.get("pane_rows")?.as_u64()?,
-            })
-        })
+        .filter_map(pane_geometry)
         .collect();
     work.sort_by_key(|pane| pane.id);
     work

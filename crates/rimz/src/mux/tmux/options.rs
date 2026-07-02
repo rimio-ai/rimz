@@ -270,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn after_new_window_hook_threads_refresh_override_and_birth_width() {
+    fn after_new_window_hook_threads_refresh_override_birth_width_and_options() {
         let opts = sidebar_opts(Some(75));
         let command = after_new_window_hook_set_cmd(&opts);
         let serve = sidebar_serve_command(&opts).join(" ");
@@ -290,23 +290,7 @@ mod tests {
                 ),
             ],
         );
-    }
 
-    #[test]
-    fn after_new_window_hook_cols_recovers_fixed_birth_width() {
-        let mut opts = sidebar_opts(None);
-        let width = SidebarWidth::default();
-        opts.birth_size = width.birth_size(Some(120));
-        let command = after_new_window_hook_set_cmd(&opts);
-
-        assert_eq!(
-            after_new_window_hook_cols_from_value(command.last().expect("hook body")),
-            Some(opts.birth_size.cols),
-        );
-    }
-
-    #[test]
-    fn after_new_window_hook_replays_configured_window_options() {
         let mut opts = sidebar_opts(None);
         opts.config.tmux.pane_border_status = Some(crate::config::TmuxPaneBorderStatus::Top);
         opts.config.tmux.pane_border_lines = Some(crate::config::TmuxPaneBorderLines::Heavy);
@@ -331,6 +315,19 @@ mod tests {
                     opts.birth_size.cols
                 ),
             ],
+        );
+    }
+
+    #[test]
+    fn after_new_window_hook_cols_recovers_fixed_birth_width() {
+        let mut opts = sidebar_opts(None);
+        let width = SidebarWidth::default();
+        opts.birth_size = width.birth_size(Some(120));
+        let command = after_new_window_hook_set_cmd(&opts);
+
+        assert_eq!(
+            after_new_window_hook_cols_from_value(command.last().expect("hook body")),
+            Some(opts.birth_size.cols),
         );
     }
 

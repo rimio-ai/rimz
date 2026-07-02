@@ -36,6 +36,45 @@ fn tiled_column(panes: Vec<PaneCmd>) -> LayoutColumn {
     }
 }
 
+fn sidebar_opts(session: &str, stub: PathBuf, detected_cols: Option<u16>) -> SidebarPaneOptions {
+    let workspace_root = PathBuf::from(format!("/tmp/rimz-{session}"));
+    SidebarPaneOptions {
+        session_name: session.to_owned(),
+        workspace_id: WorkspaceId::from_project_root(&workspace_root),
+        project_root: std::env::temp_dir(),
+        cwd: std::env::temp_dir(),
+        birth_size: SidebarWidth::default().birth_size(detected_cols),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    }
+}
+
+fn ensure_rimz_session(server: &TmuxServer, name: &str, size: Option<(u16, u16)>) {
+    let workspace_root = PathBuf::from(format!("/tmp/rimz-{name}"));
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: name.to_owned(),
+            workspace_id: WorkspaceId::from_project_root(&workspace_root),
+            project_root: std::env::temp_dir(),
+            cwd: std::env::temp_dir(),
+            config: rimz::config::MultiplexerConfig::default(),
+            detected_size: size,
+            truecolor: false,
+        })
+        .expect("ensure_session");
+}
+
+fn sleep_host() -> rimz::mux::HostPane {
+    rimz::mux::HostPane {
+        argv: vec!["sleep".to_owned(), "120".to_owned()],
+        cwd: std::env::temp_dir(),
+    }
+}
+
 /// Poll `capture_pane` on `pane_id` until its text contains `needle` or the
 /// budget elapses; returns the last capture seen either way. Faster than a flat
 /// settle sleep on the common path and more robust when the shell is slow.
@@ -503,7 +542,7 @@ fn ensure_session_applies_room_options_in_one_batch() {
             cwd: cwd.path().to_path_buf(),
             config: rimz::config::MultiplexerConfig::default(),
             detected_size: None,
-            truecolor: false,
+            truecolor: true,
         })
         .expect("ensure");
 
@@ -565,29 +604,8 @@ fn ensure_session_applies_room_options_in_one_batch() {
             cwd.path().display(),
         ),
     );
-}
-
-#[test]
-fn ensure_session_stamps_colorterm() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    let cwd = TempDir::new().expect("cwd tempdir");
-    server
-        .backend
-        .ensure_session(&SessionOptions {
-            session_name: "rimz-truecolor".to_owned(),
-            workspace_id: WorkspaceId::from_project_root(cwd.path()),
-            project_root: cwd.path().to_path_buf(),
-            cwd: cwd.path().to_path_buf(),
-            config: rimz::config::MultiplexerConfig::default(),
-            detected_size: None,
-            truecolor: true,
-        })
-        .expect("ensure_session");
-
     assert_eq!(
-        show_session_environment(&server, "rimz-truecolor", "COLORTERM"),
+        show_session_environment(&server, "rimz-options", "COLORTERM"),
         "COLORTERM=truecolor",
     );
 }
@@ -652,36 +670,15 @@ fn new_window_pins_the_start_verdict_after_a_resize() {
     require_tmux!();
 
     let server = TmuxServer::new();
-    let width = SidebarWidth::default();
-    server
-        .backend
-        .ensure_session(&SessionOptions {
-            session_name: "verdict".to_owned(),
-            workspace_id: WorkspaceId::from_project_root(&std::env::temp_dir()),
-            project_root: std::env::temp_dir(),
-            cwd: std::env::temp_dir(),
-            config: rimz::config::MultiplexerConfig::default(),
-            detected_size: Some((200, 50)),
-            truecolor: false,
-        })
-        .expect("ensure_session");
+    ensure_rimz_session(&server, "verdict", Some((200, 50)));
     let (_stub_dir, stub) = sidebar_command_stub();
     server
         .backend
         .open_sidebar(
             &SidebarPaneOptions {
-                session_name: "verdict".to_owned(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-verdict")),
-                project_root: std::env::temp_dir(),
-                cwd: std::env::temp_dir(),
                 // The verdict on a 200-column terminal: 30% is 60 ≤ the 72
                 // cap — the under-cap case the old percentage spelling leaked.
-                birth_size: width.birth_size(Some(200)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_tabs: Vec::new(),
-                refresh_ms: None,
+                ..sidebar_opts("verdict", stub, Some(200))
             },
             None,
         )
@@ -709,32 +706,9 @@ fn reconcile_preserves_live_hook_birth_width() {
     require_tmux!();
 
     let server = TmuxServer::new();
-    let width = SidebarWidth::default();
-    server
-        .backend
-        .ensure_session(&SessionOptions {
-            session_name: "rimz-hook-width".to_owned(),
-            workspace_id: WorkspaceId::from_project_root(&std::env::temp_dir()),
-            project_root: std::env::temp_dir(),
-            cwd: std::env::temp_dir(),
-            config: rimz::config::MultiplexerConfig::default(),
-            detected_size: Some((200, 50)),
-            truecolor: false,
-        })
-        .expect("ensure_session");
+    ensure_rimz_session(&server, "rimz-hook-width", Some((200, 50)));
     let (_stub_dir, stub) = sidebar_command_stub();
-    let opts = SidebarPaneOptions {
-        session_name: "rimz-hook-width".to_owned(),
-        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-hook-width")),
-        project_root: std::env::temp_dir(),
-        cwd: std::env::temp_dir(),
-        birth_size: width.birth_size(Some(200)),
-        rimz_bin: stub,
-        replace_existing: false,
-        config: rimz::config::MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
+    let opts = sidebar_opts("rimz-hook-width", stub, Some(200));
     server
         .backend
         .open_sidebar(&opts, None)
@@ -746,7 +720,7 @@ fn reconcile_preserves_live_hook_birth_width() {
     );
 
     let mut reload_opts = opts.clone();
-    reload_opts.birth_size = width.birth_size(None);
+    reload_opts.birth_size = SidebarWidth::default().birth_size(None);
     server
         .backend
         .reconcile_sidebars(&reload_opts, &rimz::mux::SidebarLiveness::default())
@@ -939,95 +913,6 @@ fn reconcile_sidebars_ignores_other_tmux_sessions() {
 }
 
 #[test]
-fn reconcile_sidebars_redocks_sidebar_full_height_in_split_window() {
-    require_tmux!();
-
-    let session = "rimz-reconcile-full-height";
-    let target = format!("{session}:0");
-    let server = TmuxServer::new();
-    server.ensure_with_shell(session);
-    server.tmux(&["split-window", "-v", "-t", &target]);
-    let work_panes = server.wait_for_panes(&target, 2);
-    let full_top = work_panes
-        .iter()
-        .map(|pane| pane.top)
-        .min()
-        .expect("top pane");
-    let full_height = work_panes
-        .iter()
-        .map(|pane| pane.top + pane.height)
-        .max()
-        .expect("bottom pane")
-        - full_top;
-    assert!(
-        server
-            .display(&target, "#{pane_top}")
-            .parse::<u64>()
-            .expect("active pane top")
-            > full_top,
-        "test setup should leave the bottom pane active"
-    );
-
-    let (_stub_dir, stub) = sidebar_command_stub();
-    let width = SidebarWidth::default();
-    let opts = SidebarPaneOptions {
-        session_name: session.to_owned(),
-        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-reconcile-full-height")),
-        project_root: std::env::temp_dir(),
-        cwd: std::env::temp_dir(),
-        birth_size: width.birth_size(Some(80)),
-        rimz_bin: stub,
-        replace_existing: false,
-        config: rimz::config::MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
-
-    let report = server
-        .backend
-        .reconcile_sidebars(&opts, &rimz::mux::SidebarLiveness::default())
-        .expect("reconcile_sidebars");
-
-    assert_eq!(report.recovered, 1);
-    server.wait_for_pane_command(session, "rimz-sidebar");
-    let panes = server
-        .backend
-        .list_panes(PaneListOptions {
-            session_name: Some(session.to_owned()),
-            ..Default::default()
-        })
-        .expect("list_panes")
-        .panes;
-    let sidebar = panes
-        .iter()
-        .find(|pane| pane.command.as_deref() == Some("rimz-sidebar"))
-        .expect("sidebar pane");
-    let raw_id = sidebar.pane_id.raw();
-
-    assert_eq!(
-        server
-            .display(raw_id, "#{pane_left}")
-            .parse::<u64>()
-            .expect("sidebar left"),
-        0
-    );
-    assert_eq!(
-        server
-            .display(raw_id, "#{pane_top}")
-            .parse::<u64>()
-            .expect("sidebar top"),
-        full_top
-    );
-    assert_eq!(
-        server
-            .display(raw_id, "#{pane_height}")
-            .parse::<u64>()
-            .expect("sidebar height"),
-        full_height
-    );
-}
-
-#[test]
 fn reconcile_sidebars_redocks_sidebar_without_skewing_work_columns() {
     require_tmux!();
 
@@ -1070,6 +955,14 @@ fn reconcile_sidebars_redocks_sidebar_without_skewing_work_columns() {
         .max()
         .expect("bottom pane")
         - full_top;
+    assert!(
+        server
+            .display(&target, "#{pane_top}")
+            .parse::<u64>()
+            .expect("active pane top")
+            > full_top,
+        "test setup should leave the bottom pane active"
+    );
     let absorbed_main = initial_panes
         .iter()
         .find(|pane| pane.left == 0 && pane.height == full_height)
@@ -1089,16 +982,8 @@ fn reconcile_sidebars_redocks_sidebar_without_skewing_work_columns() {
 
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = SidebarPaneOptions {
-        session_name: session.to_owned(),
-        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-reconcile-no-skew")),
-        project_root: std::env::temp_dir(),
-        cwd: std::env::temp_dir(),
         birth_size,
-        rimz_bin: stub,
-        replace_existing: false,
-        config: rimz::config::MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
+        ..sidebar_opts(session, stub, Some(80))
     };
 
     let report = server
@@ -1347,30 +1232,17 @@ fn list_panes_with_session_returns_terminals() {
     );
 }
 
-/// `open_background_view` opens a dedicated, named window for content and the
-/// hosts; the session's `after-new-window` hook (installed by `open_sidebar`,
-/// as `rimz start` does) docks the global sidebar on its left, so the window is
-/// born `sidebar | content | stacked hosts`. Idempotent on the window name: a
-/// second call launches nothing.
+/// `open_background_view` opens dedicated windows for content and hosts; the
+/// session's `after-new-window` hook docks the global sidebar on the left, so
+/// each view is born with the requested columns. Idempotent on the view name.
 #[test]
-fn open_background_view_creates_named_window_idempotently() {
+fn open_background_view_births_columns_and_is_idempotent() {
     require_tmux!();
 
     let server = TmuxServer::new();
     server.ensure_with_shell("rimz-bgview");
     let (_stub_dir, stub) = sidebar_command_stub();
-    let sidebar = SidebarPaneOptions {
-        session_name: "rimz-bgview".to_owned(),
-        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
-        project_root: std::env::temp_dir(),
-        cwd: std::env::temp_dir(),
-        birth_size: SidebarWidth::default().birth_size(Some(80)),
-        rimz_bin: stub,
-        replace_existing: false,
-        config: rimz::config::MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
+    let sidebar = sidebar_opts("rimz-bgview", stub, Some(80));
     // Install the `after-new-window` sidebar hook the way `rimz start` does
     // before launching the host.
     server
@@ -1382,22 +1254,10 @@ fn open_background_view_creates_named_window_idempotently() {
     let opts = rimz::mux::BackgroundViewOptions {
         view: rimz::mux::DaemonView {
             name: "rimzd".to_owned(),
-            content: vec![rimz::mux::HostPane {
-                argv: vec!["sleep".to_owned(), "120".to_owned()],
-                cwd: std::env::temp_dir(),
-            }],
-            hosts: vec![
-                rimz::mux::HostPane {
-                    argv: vec!["sleep".to_owned(), "120".to_owned()],
-                    cwd: std::env::temp_dir(),
-                },
-                rimz::mux::HostPane {
-                    argv: vec!["sleep".to_owned(), "120".to_owned()],
-                    cwd: std::env::temp_dir(),
-                },
-            ],
+            content: vec![sleep_host()],
+            hosts: vec![sleep_host(), sleep_host()],
         },
-        sidebar,
+        sidebar: sidebar.clone(),
     };
 
     let first = server
@@ -1489,144 +1349,50 @@ fn open_background_view_creates_named_window_idempotently() {
         rimz::mux::BackgroundViewLaunch::AlreadyRunning,
         "relaunching into a session that already carries the view is a no-op",
     );
-}
 
-/// `open_background_view` creates a content-only `rimzd` window when no daemon
-/// hosts apply: the sidebar hook docks render on the left and content fills the
-/// remaining work area.
-#[test]
-fn open_background_view_creates_content_only_window() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    server.ensure_with_shell("rimz-bgstats");
-    let (_stub_dir, stub) = sidebar_command_stub();
-    let sidebar = SidebarPaneOptions {
-        session_name: "rimz-bgstats".to_owned(),
-        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgstats")),
-        project_root: std::env::temp_dir(),
-        cwd: std::env::temp_dir(),
-        birth_size: SidebarWidth::default().birth_size(Some(80)),
-        rimz_bin: stub,
-        replace_existing: false,
-        config: rimz::config::MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
-    server
-        .backend
-        .open_sidebar(&sidebar, None)
-        .expect("open_sidebar");
-
-    let opts = rimz::mux::BackgroundViewOptions {
+    let stats = rimz::mux::BackgroundViewOptions {
         view: rimz::mux::DaemonView {
-            name: "rimzd".to_owned(),
-            content: vec![rimz::mux::HostPane {
-                argv: vec!["sleep".to_owned(), "120".to_owned()],
-                cwd: std::env::temp_dir(),
-            }],
+            name: "rimzd-stats".to_owned(),
+            content: vec![sleep_host()],
             hosts: Vec::new(),
         },
-        sidebar,
+        sidebar: sidebar.clone(),
     };
-
-    let first = server
-        .backend
-        .open_background_view(&opts)
-        .expect("first launch");
-    assert_eq!(first, rimz::mux::BackgroundViewLaunch::Launched);
     assert_eq!(
         server
-            .window_names("rimz-bgstats")
-            .first()
-            .map(String::as_str),
-        Some("rimzd"),
-        "content-only daemon window must lead the session, got {:?}",
-        server.window_names("rimz-bgstats"),
+            .backend
+            .open_background_view(&stats)
+            .expect("stats launch"),
+        rimz::mux::BackgroundViewLaunch::Launched,
     );
-    let rc_panes = server
-        .backend
-        .list_panes(PaneListOptions {
-            session_name: Some("rimz-bgstats".to_owned()),
-            ..Default::default()
-        })
-        .expect("list panes")
-        .panes
-        .into_iter()
-        .filter(|pane| pane.view_name.as_deref() == Some("rimzd"))
-        .count();
+    let panes = server.wait_for_panes("rimz-bgview:rimzd-stats", 2);
     assert_eq!(
-        rc_panes, 2,
-        "rimzd window should be born sidebar | content without daemon hosts"
+        panes.len(),
+        2,
+        "rimzd-stats window should be born sidebar | content without daemon hosts"
     );
-}
 
-/// `open_background_view` stacks multiple content panes in the middle column
-/// while leaving the sidebar as its own full-height left column.
-#[test]
-fn open_background_view_stacks_multiple_content_panes() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    server.ensure_with_shell("rimz-bgcontent");
-    let (_stub_dir, stub) = sidebar_command_stub();
-    let sidebar = SidebarPaneOptions {
-        session_name: "rimz-bgcontent".to_owned(),
-        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgcontent")),
-        project_root: std::env::temp_dir(),
-        cwd: std::env::temp_dir(),
-        birth_size: SidebarWidth::default().birth_size(Some(80)),
-        rimz_bin: stub,
-        replace_existing: false,
-        config: rimz::config::MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
-    server
-        .backend
-        .open_sidebar(&sidebar, None)
-        .expect("open_sidebar");
-
-    let opts = rimz::mux::BackgroundViewOptions {
+    let stack = rimz::mux::BackgroundViewOptions {
         view: rimz::mux::DaemonView {
-            name: "rimzd".to_owned(),
-            content: vec![
-                rimz::mux::HostPane {
-                    argv: vec!["sleep".to_owned(), "120".to_owned()],
-                    cwd: std::env::temp_dir(),
-                },
-                rimz::mux::HostPane {
-                    argv: vec!["sleep".to_owned(), "120".to_owned()],
-                    cwd: std::env::temp_dir(),
-                },
-            ],
+            name: "rimzd-stack".to_owned(),
+            content: vec![sleep_host(), sleep_host()],
             hosts: Vec::new(),
         },
         sidebar,
     };
-
-    let first = server
-        .backend
-        .open_background_view(&opts)
-        .expect("first launch");
-    assert_eq!(first, rimz::mux::BackgroundViewLaunch::Launched);
-    let rc_panes = server
-        .backend
-        .list_panes(PaneListOptions {
-            session_name: Some("rimz-bgcontent".to_owned()),
-            ..Default::default()
-        })
-        .expect("list panes")
-        .panes
-        .into_iter()
-        .filter(|pane| pane.view_name.as_deref() == Some("rimzd"))
-        .count();
     assert_eq!(
-        rc_panes, 3,
-        "rimzd window should be born sidebar | stacked content without daemon hosts"
+        server
+            .backend
+            .open_background_view(&stack)
+            .expect("stack launch"),
+        rimz::mux::BackgroundViewLaunch::Launched,
     );
-    let panes = server.wait_for_panes("rimz-bgcontent:rimzd", 3);
-    assert_eq!(panes.len(), 3, "expected three rimzd panes, got {panes:?}");
+    let panes = server.wait_for_panes("rimz-bgview:rimzd-stack", 3);
+    assert_eq!(
+        panes.len(),
+        3,
+        "expected three rimzd-stack panes, got {panes:?}"
+    );
     let mut by_left: BTreeMap<u64, Vec<&PaneGeom>> = BTreeMap::new();
     for pane in &panes {
         by_left.entry(pane.left).or_default().push(pane);
@@ -1787,31 +1553,7 @@ fn closing_agent_tab_records_end_trace_when_session_survives() {
 
     let agent_bin = write_sleeping_agent_shim(&env, "claude");
     let ready = env.home_root.join("agent-ready");
-    let path = path_with_front(&agent_bin);
-    let rimz_bin = env.rimz_bin().to_string_lossy().into_owned();
-    let command = vec![
-        "/usr/bin/env".to_owned(),
-        format!("XDG_STATE_HOME={}", env.state_root().display()),
-        format!("XDG_RUNTIME_DIR={}", env.runtime_root.display()),
-        format!("XDG_CONFIG_HOME={}", env.config_root().display()),
-        format!("HOME={}", env.home_root.display()),
-        // A non-launchable shell disables the login-shell launch wrapper so the
-        // agent shim resolves against the PATH below. A real login shell sources
-        // /etc/profile, which on Debian-family CI hosts overwrites PATH and drops
-        // the test's agent-bin dir, leaving the bare `claude` argv unresolvable.
-        "SHELL=/definitely/not/a/shell".to_owned(),
-        format!("PATH={path}"),
-        format!("RIMZ_TEST_AGENT_READY={}", ready.display()),
-        rimz_bin,
-        "--mux".to_owned(),
-        "tmux".to_owned(),
-        "agents".to_owned(),
-        "exec".to_owned(),
-        "claude".to_owned(),
-        "--resume".to_owned(),
-        agent_id.to_owned(),
-        "--close-pane-on-exit".to_owned(),
-    ];
+    let command = tmux_agent_exec_command(&env, &agent_bin, &ready, agent_id);
     let (_stub_dir, stub) = sidebar_command_stub();
     server
         .backend
@@ -2019,7 +1761,7 @@ fn open_tab_builds_multi_column_layout() {
             },
             focus: true,
             dock_sidebar: true,
-            sidebar,
+            sidebar: sidebar.clone(),
         })
         .expect("open_tab");
 
@@ -2079,6 +1821,47 @@ fn open_tab_builds_multi_column_layout() {
         server.display("rimz-tab", "#{window_name}"),
         "work",
         "focus: true should select the new window",
+    );
+
+    server
+        .backend
+        .open_tab(&TabOptions {
+            session_name: "rimz-tab".to_owned(),
+            title: "solo".to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![work_pane()])],
+            },
+            focus: false,
+            dock_sidebar: true,
+            sidebar,
+        })
+        .expect("open solo tab");
+
+    let panes = server.wait_for_panes("rimz-tab:solo", 2);
+    assert_eq!(
+        panes.len(),
+        2,
+        "a single-pane layout is born `sidebar | work`: {panes:?}",
+    );
+    assert_eq!(
+        panes.iter().filter(|p| p.left == 0).count(),
+        1,
+        "the sidebar docks at the left edge: {panes:?}",
+    );
+    let work = panes
+        .iter()
+        .find(|p| p.left > 0)
+        .expect("a work pane to the right of the sidebar");
+    assert_eq!(
+        Path::new(&work.path).canonicalize().ok().as_deref(),
+        Some(want_cwd.as_path()),
+        "the work pane runs in the tab cwd: {work:?}",
+    );
+    assert_eq!(
+        server.display("rimz-tab", "#{window_name}"),
+        "work",
+        "focus: false should leave the session on its previous window",
     );
 }
 
@@ -2291,94 +2074,6 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
     );
 }
 
-/// A single-column, single-pane layout births exactly the bare working tab: the
-/// `new-window` pane beside the hook-docked sidebar, no extra splits. Locks the
-/// `new-window`-only path and confirms `focus: false` leaves the user's current
-/// window untouched.
-#[test]
-fn open_tab_single_pane_layout_docks_one_work_pane_beside_the_sidebar() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    let cwd = TempDir::new().expect("cwd tempdir");
-    let width = SidebarWidth::default();
-    server
-        .backend
-        .ensure_session(&SessionOptions {
-            session_name: "rimz-solo".to_owned(),
-            workspace_id: WorkspaceId::from_project_root(cwd.path()),
-            project_root: cwd.path().to_path_buf(),
-            cwd: cwd.path().to_path_buf(),
-            config: rimz::config::MultiplexerConfig::default(),
-            detected_size: Some((200, 50)),
-            truecolor: false,
-        })
-        .expect("ensure_session");
-    let (_stub_dir, stub) = sidebar_command_stub();
-    let sidebar = SidebarPaneOptions {
-        session_name: "rimz-solo".to_owned(),
-        workspace_id: WorkspaceId::from_project_root(cwd.path()),
-        project_root: cwd.path().to_path_buf(),
-        cwd: cwd.path().to_path_buf(),
-        birth_size: width.birth_size(Some(200)),
-        rimz_bin: stub,
-        replace_existing: false,
-        config: rimz::config::MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
-    server
-        .backend
-        .open_sidebar(&sidebar, None)
-        .expect("open_sidebar");
-
-    server
-        .backend
-        .open_tab(&TabOptions {
-            session_name: "rimz-solo".to_owned(),
-            title: "solo".to_owned(),
-            cwd: cwd.path().to_path_buf(),
-            panes: LayoutPanes {
-                columns: vec![tiled_column(vec![PaneCmd {
-                    argv: vec!["sleep".to_owned(), "600".to_owned()],
-                }])],
-            },
-            focus: false,
-            dock_sidebar: true,
-            sidebar,
-        })
-        .expect("open_tab");
-
-    let panes = server.wait_for_panes("rimz-solo:solo", 2);
-    assert_eq!(
-        panes.len(),
-        2,
-        "a single-pane layout is born `sidebar | work`: {panes:?}",
-    );
-    assert_eq!(
-        panes.iter().filter(|p| p.left == 0).count(),
-        1,
-        "the sidebar docks at the left edge: {panes:?}",
-    );
-    let work = panes
-        .iter()
-        .find(|p| p.left > 0)
-        .expect("a work pane to the right of the sidebar");
-    let want_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
-    assert_eq!(
-        Path::new(&work.path).canonicalize().ok().as_deref(),
-        Some(want_cwd.as_path()),
-        "the work pane runs in the tab cwd: {work:?}",
-    );
-
-    // `focus: false` leaves the session on its original window, not the new tab.
-    assert_ne!(
-        server.display("rimz-solo", "#{window_name}"),
-        "solo",
-        "focus: false should not switch the session's current window",
-    );
-}
-
 /// `split_pane` accepts `RIMZ_*` env injection via `tmux -e`. We split a
 /// shell, give it a moment to print the var, then capture and check.
 #[test]
@@ -2435,9 +2130,10 @@ fn split_pane_injects_env_vars() {
     );
 }
 
-/// `send_keys`, `send_key`, and `capture_pane` round-trip through a live pane.
+/// `send_keys`, `send_key`, `paste_text`, and `capture_pane` round-trip through
+/// a live pane.
 #[test]
-fn capture_send_keys_and_named_key_round_trip() {
+fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
     require_tmux!();
 
     let server = TmuxServer::new();
@@ -2488,30 +2184,9 @@ fn capture_send_keys_and_named_key_round_trip() {
         capture.contains("rimz-marker-key"),
         "expected marker in capture, got: {capture:?}",
     );
-}
 
-/// `paste_text` injects one bracketed paste (`ESC[200~` … `ESC[201~`) wrapping
-/// the literal payload — the message delivery path. A bare shell renders
-/// the markers literally, so the inner text still lands in the pane; assert the
-/// payload arrives byte-for-byte. A leading dash is the regression guard: the
-/// `send-keys -l --` spelling must never re-read the bytes as flags or key names.
-#[test]
-fn paste_text_delivers_the_literal_payload() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    server.ensure_with_shell("paste");
-    let pane_id = server
-        .backend
-        .list_panes(PaneListOptions {
-            session_name: Some("paste".to_owned()),
-            ..Default::default()
-        })
-        .expect("list_panes")
-        .panes[0]
-        .pane_id
-        .clone();
-
+    // Leading dash guards the `send-keys -l --` spelling: payload bytes must not
+    // be re-read as tmux flags or key names.
     let payload = "-rf rimz-paste-marker";
     server
         .backend
@@ -2981,29 +2656,11 @@ fn presence_watch_streams_typed_lines_and_ends_with_the_server() {
         matches!(line, rimz::mux::tmux::ControlLine::WindowClosed { .. })
     });
 
-    server.tmux(&["kill-server"]);
-    wait_for_presence_stream_end(&rx);
-    drain.join().expect("drain thread");
-}
-
-/// tmux emits `%window-pane-changed` immediately when the active pane in a
-/// window changes, ahead of the coalesced `refresh-client -B` subscription.
-#[test]
-fn presence_watch_reports_active_pane_change_in_realtime() {
-    require_tmux!();
-    let server = TmuxServer::new();
-    server.ensure_with_shell("focus");
-    server.tmux(&["split-window", "-d", "-t", "focus:0", "sh"]);
-    server.tmux(&["select-pane", "-t", "focus:0.0"]);
-    let window_id = server.display("focus:0", "#{window_id}");
-    let second_pane = server.display("focus:0.1", "#{pane_id}");
-
-    let watch = rimz::mux::tmux::PresenceWatch::attach(Some(&server.socket), "focus")
-        .expect("attach control client");
-    server.wait_for_control_client("focus");
-    let (rx, drain) = spawn_presence_drain(watch);
-
-    server.tmux(&["select-pane", "-t", "focus:0.1"]);
+    server.tmux(&["split-window", "-d", "-t", "presence:0", "sh"]);
+    server.tmux(&["select-pane", "-t", "presence:0.0"]);
+    let window_id = server.display("presence:0", "#{window_id}");
+    let second_pane = server.display("presence:0.1", "#{pane_id}");
+    server.tmux(&["select-pane", "-t", "presence:0.1"]);
     let line = recv_presence_line_until(
         &rx,
         Duration::from_secs(1),

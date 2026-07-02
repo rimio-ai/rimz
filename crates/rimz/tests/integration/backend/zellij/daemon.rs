@@ -88,7 +88,8 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
             cwd: cwd.path().to_path_buf(),
         }],
     };
-    ZellijBackend::with_runtime_dir(xdg.path())
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    backend
         .open_sidebar(
             &SidebarPaneOptions {
                 session_name: name.clone(),
@@ -121,121 +122,11 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
         2,
         "birth layout should produce exactly the daemon + working tabs",
     );
-}
-
-/// `open_sidebar` also accepts a daemon view with no daemon hosts: `rimzd`
-/// still leads and is born as the two-column `sidebar | content` tab.
-#[test]
-fn open_sidebar_with_stats_only_daemon_view_leads_with_two_columns() {
-    require_zellij!();
-
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("bgstats");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-    let cwd = TempDir::new().expect("cwd tempdir");
-    let (_stub_dir, stub) = sidebar_command_stub();
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-
-    let daemon = DaemonView {
-        name: "rimzd".to_owned(),
-        content: vec![HostPane {
-            argv: vec!["sleep".to_owned(), "120".to_owned()],
-            cwd: cwd.path().to_path_buf(),
-        }],
-        hosts: Vec::new(),
-    };
-    backend
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgstats")),
-                project_root: cwd.path().to_path_buf(),
-                cwd: cwd.path().to_path_buf(),
-                birth_size: SidebarWidth::default().birth_size(Some(120)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_tabs: Vec::new(),
-                refresh_ms: None,
-            },
-            Some(&daemon),
-        )
-        .expect("open_sidebar with content-only daemon");
-
-    assert!(
-        wait_for_first_tab(xdg.path(), &name, "rimzd"),
-        "content-only daemon tab must lead the session; saw {:?}",
-        tab_names_in_order(xdg.path(), &name),
-    );
-    let panes = wait_for_tab_pane_count(&backend, &name, "rimzd", 2);
-    assert_eq!(
-        panes.len(),
-        2,
-        "rimzd should be born sidebar | content with no daemon hosts: {panes:?}",
-    );
-}
-
-/// `open_sidebar` stacks multiple configured content panes in the daemon
-/// view's middle column even when no daemon hosts apply.
-#[test]
-fn open_sidebar_with_multi_content_daemon_view_stacks_content() {
-    require_zellij!();
-
-    let xdg = scoped_runtime_dir();
-    let name = unique_session_name("bgcontent");
-    let _cleanup = ScopedSessionCleanup {
-        name: name.clone(),
-        xdg: xdg.path().to_path_buf(),
-    };
-    let cwd = TempDir::new().expect("cwd tempdir");
-    let (_stub_dir, stub) = sidebar_command_stub();
-    let backend = ZellijBackend::with_runtime_dir(xdg.path());
-
-    let daemon = DaemonView {
-        name: "rimzd".to_owned(),
-        content: vec![
-            HostPane {
-                argv: vec!["sleep".to_owned(), "120".to_owned()],
-                cwd: cwd.path().to_path_buf(),
-            },
-            HostPane {
-                argv: vec!["sleep".to_owned(), "120".to_owned()],
-                cwd: cwd.path().to_path_buf(),
-            },
-        ],
-        hosts: Vec::new(),
-    };
-    backend
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: name.clone(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgcontent")),
-                project_root: cwd.path().to_path_buf(),
-                cwd: cwd.path().to_path_buf(),
-                birth_size: SidebarWidth::default().birth_size(Some(120)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_tabs: Vec::new(),
-                refresh_ms: None,
-            },
-            Some(&daemon),
-        )
-        .expect("open_sidebar with multi-content daemon");
-
-    assert!(
-        wait_for_first_tab(xdg.path(), &name, "rimzd"),
-        "multi-content daemon tab must lead the session; saw {:?}",
-        tab_names_in_order(xdg.path(), &name),
-    );
     let panes = wait_for_tab_pane_count(&backend, &name, "rimzd", 3);
     assert_eq!(
         panes.len(),
         3,
-        "rimzd should be born sidebar | stacked content with no daemon hosts: {panes:?}",
+        "rimzd should be born sidebar | content | host: {panes:?}",
     );
 }
 

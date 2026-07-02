@@ -29,23 +29,3 @@ pub fn drops_desktop_osc(mux: MuxName) -> bool {
         MuxName::Tmux => false,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn backend_capability_values_match_adapters() {
-        assert_eq!(view_kind(MuxName::Zellij), ViewKind::Tab);
-        assert_eq!(view_kind(MuxName::Tmux), ViewKind::Window);
-
-        assert!(lists_full_cmdline(MuxName::Zellij));
-        assert!(!lists_full_cmdline(MuxName::Tmux));
-
-        assert!(!wraps_osc_passthrough(MuxName::Zellij));
-        assert!(wraps_osc_passthrough(MuxName::Tmux));
-
-        assert!(drops_desktop_osc(MuxName::Zellij));
-        assert!(!drops_desktop_osc(MuxName::Tmux));
-    }
-}

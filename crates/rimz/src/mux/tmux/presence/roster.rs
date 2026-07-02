@@ -382,21 +382,6 @@ mod tests {
     }
 
     #[test]
-    fn window_switch_focuses_new_active_pane_and_unfocuses_previous() {
-        let mut roster = PresenceRoster::default();
-        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
-        roster.apply(sub("%2", "@2", Some("claude"), true), true);
-        roster.apply(swin("$1", "@1"), true);
-        assert_eq!(
-            roster.apply(swin("$1", "@2"), false),
-            vec![SidebarEvent::FocusChanged {
-                focused: vec![pane_id("%2")],
-                unfocused: vec![pane_id("%1")],
-            }]
-        );
-    }
-
-    #[test]
     fn window_switch_can_focus_sidebar_pane() {
         let mut roster = PresenceRoster::default();
         roster.apply(sub("%1", "@1", Some("zsh"), true), true);

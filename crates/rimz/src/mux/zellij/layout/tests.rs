@@ -70,6 +70,24 @@ fn pane_header_before<'a>(layout: &'a str, needle: &str) -> &'a str {
     &layout[pane_at..args_at]
 }
 
+fn assert_work_area_template(layout: &str, compact_bars: usize, focused: usize) {
+    assert!(layout.contains("compact-bar"), "{layout}");
+    assert!(
+        layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
+        "{layout}",
+    );
+    assert!(layout.contains("tab max_panes=3"), "{layout}");
+    assert!(layout.contains("tab max_panes=4"), "{layout}");
+    assert_eq!(layout.matches("focus=true").count(), focused, "{layout}");
+    assert_eq!(
+        layout
+            .matches(r#"plugin location="zellij:compact-bar""#)
+            .count(),
+        compact_bars,
+        "every visible tab/template and swap template carries compact-bar:\n{layout}",
+    );
+}
+
 fn resume_tab(label: &str, panes: &[&[&str]], cwd: &str) -> ResumeTab {
     ResumeTab {
         label: label.to_owned(),
@@ -85,13 +103,7 @@ fn resume_tab(label: &str, panes: &[&[&str]], cwd: &str) -> ResumeTab {
 fn session_layout_renders_terminal_template_bar_swap_and_runtime_args() {
     let layout =
         render_session_layout(&sidebar_opts("rimz-contract", Some(50), None), None, &[]).unwrap();
-    assert!(layout.contains("compact-bar"), "{layout}");
-    assert!(
-        layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
-        "{layout}",
-    );
-    assert!(layout.contains("tab max_panes=3"), "{layout}");
-    assert!(layout.contains("tab max_panes=4"), "{layout}");
+    assert_work_area_template(&layout, 4, 3);
     assert!(layout.contains("pane focus=true"), "{layout}");
     assert!(layout.contains("tab focus=true"), "{layout}");
     assert!(!layout.contains("children"), "{layout}");
@@ -99,14 +111,6 @@ fn session_layout_renders_terminal_template_bar_swap_and_runtime_args() {
     assert!(layout.contains("start_suspended false"), "{layout}");
     assert!(!layout.contains("start_suspended true"), "{layout}");
     assert!(layout.contains(r#""--refresh-ms" "50""#), "{layout}");
-    assert_eq!(
-        layout
-            .matches(r#"plugin location="zellij:compact-bar""#)
-            .count(),
-        4,
-        "the new-tab template, the explicit birth tab, and both swap \
-             templates must carry the compact-bar plugin:\n{layout}",
-    );
 }
 
 #[test]
@@ -167,6 +171,7 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
         ),
     ]))
     .expect("render background view layout");
+    assert_work_area_template(&layout, 3, 1);
     assert!(layout.contains(r#"args "stats" "--refresh""#), "{layout}");
     assert!(
         !pane_header_before(&layout, r#"args "stats" "--refresh""#).contains("size="),
@@ -187,7 +192,6 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
         "daemon hosts stack in a right column at the sidebar birth width:\n{layout}",
     );
     assert!(layout.contains("pane focus=true"), "{layout}");
-    assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
     assert!(layout.contains("start_suspended false"), "{layout}");
     assert!(layout.contains("close_on_exit true"), "{layout}");
     assert!(
@@ -195,30 +199,16 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
         "{layout}"
     );
     assert!(layout.contains(r#""sidebar" "serve""#), "{layout}");
-    assert!(layout.contains("compact-bar"), "{layout}");
-    assert!(
-        layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
-        "{layout}"
-    );
-    assert!(layout.contains("tab max_panes=3"), "{layout}");
-    assert!(layout.contains("tab max_panes=4"), "{layout}");
     assert!(
         !layout.contains("tab max_panes=6"),
         "larger tabs should fall back to Zellij's focused split path:\n{layout}",
-    );
-    assert_eq!(
-        layout
-            .matches(r#"plugin location="zellij:compact-bar""#)
-            .count(),
-        3,
-        "the visible bar plus both swap templates must carry the \
-             compact-bar plugin:\n{layout}",
     );
     assert!(layout.contains(r#"cwd="/proj/worktree""#), "{layout}");
     assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
 
     let layout = render_background_view_layout(&background_view_opts(vec![]))
         .expect("render content-only background view layout");
+    assert_work_area_template(&layout, 3, 1);
     assert!(layout.contains(r#"args "stats" "--refresh""#), "{layout}");
     assert!(
         !layout.contains(r#"split_direction="horizontal""#),
@@ -233,16 +223,12 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
     let mut opts = background_view_opts(vec![]);
     opts.view.content.push(host(&["btop"], "/proj/worktree"));
     let layout = render_background_view_layout(&opts).expect("render multi-content layout");
+    assert_work_area_template(&layout, 3, 1);
     assert!(
         layout.contains(r#"pane split_direction="horizontal""#),
         "multiple content panes stack in the middle column:\n{layout}",
     );
     assert!(layout.contains(r#"command "btop""#), "{layout}");
-    assert_eq!(
-        layout.matches("focus=true").count(),
-        1,
-        "only the first content pane takes focus:\n{layout}",
-    );
 }
 
 #[test]
@@ -263,34 +249,20 @@ fn tab_layout_renders_columns_and_can_mirror_template_width() {
         sidebar,
     };
     let layout = render_tab_layout(&opts, None).expect("render tab layout");
+    assert_work_area_template(&layout, 3, 1);
     assert!(
         layout.contains(r#"pane size=72 name="rimz-sidebar" borderless=true"#),
         "custom tab layouts instantiate from a live client, so the \
              sidebar must pin the fixed max-cols verdict instead of \
-             re-evaluating a percentage against wide terminals:\n{layout}",
+            re-evaluating a percentage against wide terminals:\n{layout}",
     );
     assert!(
         !layout.contains(r#"size="30%""#),
         "custom tab layouts must not use detached percentage sizing:\n{layout}",
     );
-    assert!(layout.contains("compact-bar"), "{layout}");
-    assert!(
-        layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
-        "{layout}"
-    );
-    assert!(layout.contains("tab max_panes=3"), "{layout}");
-    assert!(layout.contains("tab max_panes=4"), "{layout}");
     assert!(
         !layout.contains("tab max_panes=6"),
         "larger tabs should fall back to Zellij's focused split path:\n{layout}",
-    );
-    assert_eq!(
-        layout
-            .matches(r#"plugin location="zellij:compact-bar""#)
-            .count(),
-        3,
-        "the visible bar plus both swap templates must carry the \
-             compact-bar plugin:\n{layout}",
     );
     assert!(layout.contains("pane size=72"), "{layout}");
     assert!(
@@ -332,6 +304,7 @@ fn tab_layout_renders_tiled_and_stacked_columns() {
 
     let layout = render_tab_layout(&opts, None).expect("render tab layout");
 
+    assert_work_area_template(&layout, 3, 1);
     assert!(
         layout.contains(r#"pane split_direction="horizontal""#),
         "tiled column should use horizontal split:\n{layout}",
@@ -417,6 +390,7 @@ fn session_layout_seeds_resumed_agents_and_focuses_working_when_empty() {
         resume_tab("#main", &[&["pi", "resume", "sess-3"]], "/proj/main"),
     ];
     let layout = render_session_layout(&opts, None, &resume).expect("render resume layout");
+    assert_work_area_template(&layout, 6, 5);
     assert!(layout.contains(r#"command "claude""#), "{layout}");
     assert!(layout.contains(r#"args "--resume" "sess-1""#), "{layout}");
     assert!(layout.contains(r#"command "codex""#), "{layout}");
@@ -439,28 +413,11 @@ fn session_layout_seeds_resumed_agents_and_focuses_working_when_empty() {
         "a bare working terminal tab remains:\n{layout}",
     );
     assert!(layout.contains("new_tab_template"), "{layout}");
-    assert!(
-        layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
-        "{layout}",
-    );
-    assert!(layout.contains("tab max_panes=3"), "{layout}");
-    assert!(layout.contains("tab max_panes=4"), "{layout}");
-    assert_eq!(
-        layout
-            .matches(r#"plugin location="zellij:compact-bar""#)
-            .count(),
-        6,
-        "the new-tab template, three explicit birth tabs, and both swap \
-             templates must carry the compact-bar plugin:\n{layout}",
-    );
     assert!(!layout.contains("children"), "{layout}");
 
     let layout = render_session_layout(&opts, None, &[]).expect("render layout");
+    assert_work_area_template(&layout, 4, 3);
     assert!(layout.contains("tab focus=true"), "{layout}");
-    assert!(
-        layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
-        "{layout}",
-    );
     assert!(
         !layout.contains("tab name="),
         "no daemon or agent tabs without a daemon or resume set:\n{layout}",
@@ -478,6 +435,7 @@ fn session_layout_leads_daemon_tab_with_three_column_daemon_view() {
     ]);
     let layout = render_session_layout(&bg.sidebar, Some(&daemon_view(bg.view.hosts.clone())), &[])
         .expect("render session layout with daemon");
+    assert_work_area_template(&layout, 5, 4);
     let daemon_at = layout.find(r#"tab name="rimzd""#).expect("daemon tab");
     let work_at = layout.find("tab focus=true").expect("working tab");
     assert!(
@@ -504,26 +462,12 @@ fn session_layout_leads_daemon_tab_with_three_column_daemon_view() {
         layout.contains(r#"name="rimz-sidebar" borderless=true"#),
         "{layout}"
     );
-    assert!(layout.contains("compact-bar"), "{layout}");
-    assert!(
-        layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
-        "{layout}",
-    );
-    assert!(layout.contains("tab max_panes=3"), "{layout}");
-    assert!(layout.contains("tab max_panes=4"), "{layout}");
-    assert_eq!(
-        layout
-            .matches(r#"plugin location="zellij:compact-bar""#)
-            .count(),
-        5,
-        "the new-tab template, daemon tab, working tab, and both swap \
-             templates must carry the compact-bar plugin:\n{layout}",
-    );
     assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
 
     let bg = background_view_opts(vec![]);
     let layout = render_session_layout(&bg.sidebar, Some(&daemon_view(vec![])), &[])
         .expect("render content-only daemon tab");
+    assert_work_area_template(&layout, 5, 4);
     assert!(layout.contains(r#"tab name="rimzd""#), "{layout}");
     assert!(layout.contains(r#"args "stats" "--refresh""#), "{layout}");
     assert!(

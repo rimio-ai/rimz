@@ -252,65 +252,75 @@ mod tests {
         assert!(PRESENCE_PLUGIN_MIN_ZELLIJ >= MIN_ZELLIJ_VERSION);
     }
     #[test]
-    fn presence_plugin_configuration_pins_workspace_and_rimz() {
-        let configuration = presence_plugin_configuration(&presence_opts(
-            "rimz-test",
-            "/home/user/.cargo/bin/rimz",
-        ));
-        assert_eq!(
-            configuration,
-            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
-        );
-    }
-
-    #[test]
-    fn presence_plugin_configuration_pins_mouse_options() {
-        let mut opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
-        opts.focus_follows_mouse = true;
-        opts.mouse_click_through = false;
-        assert_eq!(
-            presence_plugin_configuration(&opts),
-            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=true,mouse_click_through=false",
-        );
-    }
-
-    #[test]
-    fn presence_plugin_configuration_omits_inexpressible_fields() {
-        for weird in ["/tmp/a,b/rimz", "/tmp/a=b/rimz"] {
-            let configuration = presence_plugin_configuration(&presence_opts("rimz-test", weird));
-            assert_eq!(
-                configuration,
-                "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,focus_follows_mouse=false,mouse_click_through=true",
-                "{weird} must be omitted, not shipped mis-parsable",
-            );
+    fn presence_plugin_configuration_renders_expressible_fields() {
+        type PresenceOpts = crate::mux::PresencePluginOptions;
+        type MutatePresence = fn(&mut PresenceOpts);
+        struct Case {
+            session: &'static str,
+            rimz_bin: &'static str,
+            mutate: MutatePresence,
+            expected: &'static str,
         }
-        for weird in ["rimz,test", "rimz=test"] {
-            let configuration =
-                presence_plugin_configuration(&presence_opts(weird, "/home/user/.cargo/bin/rimz"));
-            assert_eq!(
-                configuration,
-                "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
-                "{weird} must be omitted, not shipped mis-parsable",
-            );
+
+        let cases = [
+            Case {
+                session: "rimz-test",
+                rimz_bin: "/home/user/.cargo/bin/rimz",
+                mutate: |_| {},
+                expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            },
+            Case {
+                session: "rimz-test",
+                rimz_bin: "/home/user/.cargo/bin/rimz",
+                mutate: |opts| {
+                    opts.focus_follows_mouse = true;
+                    opts.mouse_click_through = false;
+                },
+                expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=true,mouse_click_through=false",
+            },
+            Case {
+                session: "rimz-test",
+                rimz_bin: "/tmp/a,b/rimz",
+                mutate: |_| {},
+                expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,focus_follows_mouse=false,mouse_click_through=true",
+            },
+            Case {
+                session: "rimz-test",
+                rimz_bin: "/tmp/a=b/rimz",
+                mutate: |_| {},
+                expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,focus_follows_mouse=false,mouse_click_through=true",
+            },
+            Case {
+                session: "rimz,test",
+                rimz_bin: "/home/user/.cargo/bin/rimz",
+                mutate: |_| {},
+                expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            },
+            Case {
+                session: "rimz=test",
+                rimz_bin: "/home/user/.cargo/bin/rimz",
+                mutate: |_| {},
+                expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            },
+            Case {
+                session: "rimz-test",
+                rimz_bin: "/home/user/.cargo/bin/rimz",
+                mutate: |opts| opts.focus_key = Some("Alt+p".to_owned()),
+                expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true,focus_key=Alt+p",
+            },
+            Case {
+                session: "rimz-test",
+                rimz_bin: "/home/user/.cargo/bin/rimz",
+                mutate: |opts| opts.focus_key = Some("Alt=p".to_owned()),
+                expected: "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            },
+        ];
+
+        for case in cases {
+            let mut opts = presence_opts(case.session, case.rimz_bin);
+            (case.mutate)(&mut opts);
+            assert_eq!(presence_plugin_configuration(&opts), case.expected);
         }
-    }
-
-    #[test]
-    fn presence_plugin_configuration_appends_focus_key() {
-        let mut opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
-        opts.focus_key = Some("Alt+p".to_owned());
-        assert_eq!(
-            presence_plugin_configuration(&opts),
-            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true,focus_key=Alt+p",
-        );
-
-        // A chord carrying a plugin-config separator is dropped rather than
-        // shipped mis-parsable; the plugin keeps poll-only focus behaviour.
-        opts.focus_key = Some("Alt=p".to_owned());
-        assert_eq!(
-            presence_plugin_configuration(&opts),
-            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
-        );
     }
 
     #[test]

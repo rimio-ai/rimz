@@ -335,54 +335,79 @@ mod tests {
     use super::*;
 
     #[test]
-    fn control_line_classifies_subscription_values() {
-        assert_eq!(
-            classify_control_line(
-                "%subscription-changed rimz-presence $0 @1 1 %2 : %2\t@1\tclaude\t1\trimz"
+    fn control_line_classifies_tmux_events_and_skips_noise() {
+        let cases = vec![
+            (
+                "%subscription-changed rimz-presence $0 @1 1 %2 : %2\t@1\tclaude\t1\trimz",
+                ControlLine::Subscription {
+                    pane: "%2".to_owned(),
+                    window: "@1".to_owned(),
+                    command: Some("claude".to_owned()),
+                    active: true,
+                    title: Some("rimz".to_owned()),
+                },
             ),
-            ControlLine::Subscription {
-                pane: "%2".to_owned(),
-                window: "@1".to_owned(),
-                command: Some("claude".to_owned()),
-                active: true,
-                title: Some("rimz".to_owned()),
-            }
-        );
-        assert_eq!(
-            classify_control_line("%subscription-changed rimz-presence $0 @1 1 %2 : %2\t@1\t\t0\t"),
-            ControlLine::Subscription {
-                pane: "%2".to_owned(),
-                window: "@1".to_owned(),
-                command: None,
-                active: false,
-                title: None,
-            }
-        );
-    }
+            (
+                "%subscription-changed rimz-presence $0 @1 1 %2 : %2\t@1\t\t0\t",
+                ControlLine::Subscription {
+                    pane: "%2".to_owned(),
+                    window: "@1".to_owned(),
+                    command: None,
+                    active: false,
+                    title: None,
+                },
+            ),
+            ("%window-add @5", ControlLine::Nudge),
+            ("%unlinked-window-add @6", ControlLine::Nudge),
+            (
+                "%window-close @5",
+                ControlLine::WindowClosed {
+                    window: "@5".to_owned(),
+                },
+            ),
+            (
+                "%unlinked-window-close @6",
+                ControlLine::WindowClosed {
+                    window: "@6".to_owned(),
+                },
+            ),
+            ("%sessions-changed", ControlLine::Nudge),
+            (
+                "%session-window-changed $1 @2",
+                ControlLine::SessionWindowChanged {
+                    session: "$1".to_owned(),
+                    window: "@2".to_owned(),
+                },
+            ),
+            ("%session-window-changed $1", ControlLine::Ignore),
+            (
+                "%window-pane-changed @1 %2",
+                ControlLine::WindowPaneChanged {
+                    window: "@1".to_owned(),
+                    pane: "%2".to_owned(),
+                },
+            ),
+            ("%window-pane-changed @1", ControlLine::Ignore),
+            (
+                "%layout-change @1 b25d,208x60,0,0{104x60,0,0",
+                ControlLine::Nudge,
+            ),
+            ("%begin 1622 0 1", ControlLine::Ignore),
+            ("%end 1622 0 1", ControlLine::Ignore),
+            ("%error 1622 0 1", ControlLine::Ignore),
+            ("%output %1 aGVsbG8=", ControlLine::Ignore),
+            (
+                "%client-session-changed /dev/pts/3 $1 main",
+                ControlLine::Ignore,
+            ),
+            ("%pane-mode-changed %2", ControlLine::Ignore),
+            ("%window-renamed @1 build", ControlLine::Ignore),
+            ("", ControlLine::Ignore),
+        ];
 
-    #[test]
-    fn control_line_classifies_topology() {
-        assert_eq!(classify_control_line("%window-add @5"), ControlLine::Nudge);
-        assert_eq!(
-            classify_control_line("%unlinked-window-add @6"),
-            ControlLine::Nudge
-        );
-        assert_eq!(
-            classify_control_line("%window-close @5"),
-            ControlLine::WindowClosed {
-                window: "@5".to_owned()
-            }
-        );
-        assert_eq!(
-            classify_control_line("%unlinked-window-close @6"),
-            ControlLine::WindowClosed {
-                window: "@6".to_owned()
-            }
-        );
-        assert_eq!(
-            classify_control_line("%sessions-changed"),
-            ControlLine::Nudge
-        );
+        for (line, expected) in cases {
+            assert_eq!(classify_control_line(line), expected, "{line}");
+        }
     }
 
     #[test]
@@ -402,60 +427,6 @@ mod tests {
             ),
             Some(vec!["%3".to_owned(), "%4".to_owned(), "%5".to_owned()])
         );
-    }
-
-    #[test]
-    fn control_line_classifies_session_window_changed() {
-        assert_eq!(
-            classify_control_line("%session-window-changed $1 @2"),
-            ControlLine::SessionWindowChanged {
-                session: "$1".to_owned(),
-                window: "@2".to_owned(),
-            }
-        );
-        assert_eq!(
-            classify_control_line("%session-window-changed $1"),
-            ControlLine::Ignore
-        );
-    }
-
-    #[test]
-    fn control_line_classifies_window_pane_changed() {
-        assert_eq!(
-            classify_control_line("%window-pane-changed @1 %2"),
-            ControlLine::WindowPaneChanged {
-                window: "@1".to_owned(),
-                pane: "%2".to_owned(),
-            }
-        );
-        assert_eq!(
-            classify_control_line("%window-pane-changed @1"),
-            ControlLine::Ignore
-        );
-    }
-
-    #[test]
-    fn malformed_layout_change_falls_back_to_nudge() {
-        assert_eq!(
-            classify_control_line("%layout-change @1 b25d,208x60,0,0{104x60,0,0"),
-            ControlLine::Nudge
-        );
-    }
-
-    #[test]
-    fn control_line_skips_noise() {
-        for line in [
-            "%begin 1622 0 1",
-            "%end 1622 0 1",
-            "%error 1622 0 1",
-            "%output %1 aGVsbG8=",
-            "%client-session-changed /dev/pts/3 $1 main",
-            "%pane-mode-changed %2",
-            "%window-renamed @1 build",
-            "",
-        ] {
-            assert_eq!(classify_control_line(line), ControlLine::Ignore, "{line}");
-        }
     }
 
     #[test]

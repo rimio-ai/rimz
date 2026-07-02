@@ -97,7 +97,7 @@ esac
 
 #[cfg(unix)]
 #[test]
-fn list_panes_surfaces_session_not_found_banner() {
+fn commands_surface_session_not_found_banner() {
     use std::time::Duration;
 
     use crate::mux::MuxErr;
@@ -119,31 +119,10 @@ exit 0
     let err = backend
         .list_panes_bounded(Some("missing-room"), Duration::from_millis(200))
         .expect_err("banner should classify as session-not-found");
-
     assert!(
         matches!(err, MuxErr::SessionNotFound { ref session } if session == "missing-room"),
         "got: {err}",
     );
-}
-
-#[cfg(unix)]
-#[test]
-fn tab_names_surfaces_session_not_found_banner() {
-    use crate::mux::MuxErr;
-
-    let (_temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  printf 'zellij 0.44.3\n'
-  exit 0
-fi
-
-printf '\033[32;1mrimz-other\033[m [Created 6m ago]\n'
-printf "Session 'missing-room' not found. The following sessions are active:\n" >&2
-exit 0
-"#,
-    );
-    let backend = ZellijBackend::with_program_for_test(&shim);
 
     let err = backend
         .tab_names("missing-room")
@@ -271,6 +250,7 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
 fn zellij_options_render_configured_optionals() {
     let config = ZellijConfig {
         mouse_mode: Some(false),
+        auto_layout: false,
         pane_frames: Some(true),
         on_force_close: Some(crate::config::ZellijForceClose::Quit),
         scroll_buffer_size: Some(200_000),
@@ -288,6 +268,7 @@ fn zellij_options_render_configured_optionals() {
             .any(|pair| pair[0] == flag && pair[1] == value)
     };
     assert!(has("--mouse-mode", "false"));
+    assert!(has("--auto-layout", "false"));
     assert!(has("--pane-frames", "true"));
     assert!(has("--on-force-close", "quit"));
     assert!(has("--scroll-buffer-size", "200000"));
@@ -297,17 +278,4 @@ fn zellij_options_render_configured_optionals() {
     assert!(has("--copy-on-select", "false"));
     assert!(has("--support-kitty-keyboard-protocol", "false"));
     assert!(has("--osc8-hyperlinks", "false"));
-}
-
-#[test]
-fn zellij_options_render_auto_layout_opt_out() {
-    let config = ZellijConfig {
-        auto_layout: false,
-        ..ZellijConfig::default()
-    };
-    let args = zellij_options_args(&config, Some((0, 44, 3)));
-    assert!(
-        args.windows(2)
-            .any(|pair| pair[0] == "--auto-layout" && pair[1] == "false")
-    );
 }
