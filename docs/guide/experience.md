@@ -66,7 +66,7 @@ The gate answers the two fears before they are spoken.
 - Install is per-machine state: later runs go straight to the room, and `rimz doctor` reports per-agent status.
 - A committed project config is its own separate gate with its own diff ([trust.md](../internals/sidebar/trust.md)); a toy project never shows it.
 
-The authoritative wired set and config shape live in [agent.md → Hook install](../internals/agents/agent.md#hook-install--the-visible-security-step).
+The authoritative wired set and config shape live in [agent.md → Hook install](../internals/agents/agent.md#hook-install-the-visible-security-step).
 
 Backing out is the mirror of opting in, and the reader is told so right here: `rimz hooks uninstall` removes exactly what the gate added, the additive diff in reverse, and leaves the agents untouched. A tool you can cleanly remove is a tool worth trying.
 
