@@ -25,7 +25,6 @@ use crate::sidebar::fuse::fuse;
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL};
-use crate::sidebar_pane::osc;
 use crate::sidebar_pane::pets::{
     PetAssets, PetBody, PetPixelView, PetRenderCaps, PetViewFrame, PixelPainter,
     detect_pet_render_caps, effective_render_tier,

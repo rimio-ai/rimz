@@ -1,4 +1,5 @@
 use super::*;
+use crate::osc;
 
 /// One notification to render in this renderer's terminal: the desktop text, the
 /// owned panes it targets, whether the tab bell re-checks unread, and the

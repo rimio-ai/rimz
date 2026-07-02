@@ -310,23 +310,6 @@ fn span_width(span: &Span<'_>) -> usize {
     span.content.chars().count()
 }
 
-/// Center a single line within `width` by prepending padding. A line already
-/// at or past the width is returned unchanged. The line-level style survives
-/// the rebuild, so styled chrome stays styled through the helper.
-#[cfg(test)]
-pub(super) fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
-    let content_width = line.width();
-    let pad = width.saturating_sub(content_width) / 2;
-    if pad == 0 {
-        return line;
-    }
-    let style = line.style;
-    let mut spans = Vec::with_capacity(line.spans.len() + 1);
-    spans.push(Span::raw(" ".repeat(pad)));
-    spans.extend(line.spans);
-    Line::from(spans).style(style)
-}
-
 /// The `?` popup: a which-key style block with action glyphs and the status
 /// legend merged into the filter rows.
 pub(super) fn help_lines(

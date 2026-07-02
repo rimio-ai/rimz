@@ -29,8 +29,6 @@ mod theme;
 mod ui_state;
 
 use self::ansi::{infallible, write_buffer_line_ansi};
-#[cfg(test)]
-use self::chrome::{abbreviate_under, center_line};
 use self::chrome::{hairline_rule, help_lines};
 pub(crate) use self::compose::compose_lines;
 use self::compose::lead_unread;

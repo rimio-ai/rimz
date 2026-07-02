@@ -470,66 +470,6 @@ pub(crate) struct PetPixelRect {
 /// unmetered API-key account shows one `api` spend row. The bars share one start
 /// and one end column across every block, so the dashboard reads as one aligned
 /// grid.
-/// Bottom chrome — the tabs are its only hit targets, never a jump.
-#[cfg(test)]
-pub(in crate::sidebar_pane::render) fn provider_panel_lines(
-    theme: &Theme,
-    providers: &[SidebarProviderPanel],
-    active_kind: Option<&str>,
-    tabbed: bool,
-    width: usize,
-    zones: &BudgetBarConfig,
-    now: Timestamp,
-) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
-    let active_tab = active_kind.map(str::to_owned);
-    let (lines, hits, _) = dashboard_panel_lines(
-        theme,
-        providers,
-        active_tab.as_ref(),
-        tabbed,
-        None,
-        None,
-        false,
-        width,
-        zones,
-        now,
-    );
-    (lines, hits)
-}
-
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
-    theme: &Theme,
-    providers: &[SidebarProviderPanel],
-    active_tab: Option<&String>,
-    tabbed: bool,
-    fleet_tally: Option<&SpendTally>,
-    pet: Option<&PetView>,
-    pets_enabled: bool,
-    width: usize,
-    zones: &BudgetBarConfig,
-    now: Timestamp,
-) -> (
-    Vec<Line<'static>>,
-    Vec<ProviderTabHit>,
-    Option<PetPixelRect>,
-) {
-    dashboard_panel_lines_with_footer(
-        theme,
-        providers,
-        active_tab,
-        tabbed,
-        fleet_tally,
-        pet,
-        pets_enabled,
-        None,
-        width,
-        zones,
-        now,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
     theme: &Theme,

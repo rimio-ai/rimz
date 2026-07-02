@@ -11,13 +11,13 @@ use crate::{EventEnvelope, FeedItem, FeedStatus, SidebarSnapshot, Surface, Works
 use jiff::Timestamp;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use serde_json::json;
 use std::time::Duration;
 
+use super::chrome::abbreviate_under;
 use super::sections::{
-    dashboard_panel_lines, fleet_header_lines, fleet_ledger_lines, provider_panel_lines,
-    worktree_group_lines,
+    dashboard_panel_lines_with_footer, fleet_header_lines, fleet_ledger_lines, worktree_group_lines,
 };
 
 mod agent_card;
@@ -46,6 +46,45 @@ fn fixed_now() -> Timestamp {
     // Pin every test to one timestamp so the redaction filter has a
     // deterministic input to scrub.
     Timestamp::from_second(1_700_000_000).unwrap()
+}
+
+fn provider_panel_lines(
+    theme: &Theme,
+    providers: &[crate::SidebarProviderPanel],
+    active_kind: Option<&str>,
+    tabbed: bool,
+    width: usize,
+    zones: &crate::config::BudgetBarConfig,
+    now: Timestamp,
+) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
+    let active_tab = active_kind.map(str::to_owned);
+    let (lines, hits, _) = dashboard_panel_lines_with_footer(
+        theme,
+        providers,
+        active_tab.as_ref(),
+        tabbed,
+        None,
+        None,
+        false,
+        None,
+        width,
+        zones,
+        now,
+    );
+    (lines, hits)
+}
+
+fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
+    let content_width = line.width();
+    let pad = width.saturating_sub(content_width) / 2;
+    if pad == 0 {
+        return line;
+    }
+    let style = line.style;
+    let mut spans = Vec::with_capacity(line.spans.len() + 1);
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.extend(line.spans);
+    Line::from(spans).style(style)
 }
 
 fn snapshot_to_screen(snapshot: &SidebarSnapshot, width: u16, height: u16) -> String {

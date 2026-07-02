@@ -34,13 +34,8 @@ pub(super) use fleet::{fleet_header_lines, fleet_size};
 #[cfg(test)]
 pub(super) use process::proc_stats_spans;
 pub(crate) use provider::ProviderTabHit;
-#[cfg(test)]
-pub(super) use provider::dashboard_panel_lines;
-#[cfg(test)]
-pub(super) use provider::provider_panel_lines;
-pub(super) use provider::{
-    dashboard_panel_lines_with_footer, fleet_ledger_lines, fleet_total_lines,
-};
+pub(super) use provider::dashboard_panel_lines_with_footer;
+pub(super) use provider::{fleet_ledger_lines, fleet_total_lines};
 pub(super) use worktree::worktree_group_lines;
 
 /// Inner content width: the sidebar width less the one-cell left gutter and the
