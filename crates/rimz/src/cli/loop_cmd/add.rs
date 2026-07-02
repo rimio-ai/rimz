@@ -97,9 +97,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
         }
         _ => args.prompt,
     };
-    if !matches!(action, AddTaskAction::CheckOnly)
-        && prompt.is_none()
-        && args.prompt_file.is_none()
+    if !matches!(action, AddTaskAction::CheckOnly) && prompt.is_none() && args.prompt_file.is_none()
     {
         bail!(
             "loop task `{}` needs a prompt; pass --prompt or --prompt-file",
@@ -323,7 +321,6 @@ fn reject_check_only_agent_flags(args: &AddArgs) -> Result<()> {
         flags.join(", ")
     )
 }
-
 
 fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
     let deadline = args.until.as_deref().map(resolve_deadline).transpose()?;

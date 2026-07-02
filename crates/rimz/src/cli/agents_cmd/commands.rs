@@ -418,13 +418,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
         teams: _teams,
         mut layout,
         team_name: _team_name,
-    } = prepare_launch_layout(
-        &args,
-        &workspace,
-        &machine_config,
-        Some(mode),
-        None,
-    )?;
+    } = prepare_launch_layout(&args, &workspace, &machine_config, Some(mode), None)?;
     if let Some(limit) = args.max_turns {
         apply_supervised_turn_limit(&mut layout, limit)?;
     }
