@@ -21,8 +21,10 @@ pub(crate) use command::COMMAND_TIMEOUT;
 pub use command::CommandSpec;
 pub use focus_key::{FocusChord, FocusKeyBinding};
 pub use keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, UnknownKey};
+pub(crate) use reconcile::{
+    AddOutcome, ViewSidebars, execute_adds, execute_closes, plan_reconcile,
+};
 pub use reconcile::{SidebarLiveness, SidebarRecovery};
-pub(crate) use reconcile::{ViewSidebars, plan_reconcile};
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
 pub use width::{BirthSize, SidebarWidth, detect_terminal_size};
@@ -318,6 +320,27 @@ pub struct SidebarPaneOptions {
     pub refresh_ms: Option<u16>,
 }
 
+/// The `rimz sidebar serve` argv after the program name — the one spelling
+/// every spawn path uses (tmux split + after-new-window hook, Zellij new-pane,
+/// Zellij layout KDL). `recovery::is_sidebar_serve` matches leaked serve
+/// processes against this shape; keep them in lockstep.
+pub(crate) fn sidebar_serve_args(mux: MuxName, opts: &SidebarPaneOptions) -> Vec<String> {
+    let mut args = vec![
+        "sidebar".to_owned(),
+        "serve".to_owned(),
+        "--mux".to_owned(),
+        mux.as_str().to_owned(),
+        "--workspace-id".to_owned(),
+        opts.workspace_id.as_str().to_owned(),
+        "--session-name".to_owned(),
+        opts.session_name.clone(),
+    ];
+    if let Some(refresh_ms) = opts.refresh_ms {
+        args.extend(["--refresh-ms".to_owned(), refresh_ms.to_string()]);
+    }
+    args
+}
+
 /// One worktree channel the reborn session re-seeds: a fresh tab running every
 /// resumable agent from that worktree, restoring each conversation idle (no
 /// auto-prompt, no new token spend until the user types). Pure data — the
@@ -500,9 +523,6 @@ pub trait MuxBackend: Send + Sync {
         let _ = opts;
         Ok(ClientView::default())
     }
-    fn focused_client_panes(&self, opts: ClientFocusOptions) -> Result<Vec<PaneId>> {
-        self.client_view(opts).map(|view| view.viewed_panes)
-    }
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()>;
     /// Focus `pane`. Zellij pane ids are session-scoped, so callers outside a
     /// room pane pass `Some(session)`; in-pane callers may pass `None` and let
@@ -652,17 +672,12 @@ pub fn press_pane_key(pane: &PaneId, key: NamedKey) -> Result<()> {
 
 /// Run `spec` once for its version string and memoize it in `cache`.
 /// Backend version probes are trivial and want raw stdout even on a nonzero
-/// status, so they use `output()` directly rather than the bounded mux runner.
+/// status, so they use the raw-output path rather than the bounded mux runner.
 pub(super) fn memoized_version(cache: &OnceLock<String>, spec: &CommandSpec) -> Result<String> {
     if let Some(cached) = cache.get() {
         return Ok(cached.clone());
     }
-    let output = spec.to_command().output().map_err(|err| match err.kind() {
-        io::ErrorKind::NotFound => MuxErr::NotInstalled {
-            program: spec.program.clone(),
-        },
-        _ => MuxErr::Io(err),
-    })?;
+    let output = spec.output_raw()?;
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     Ok(cache.get_or_init(|| raw).clone())
 }

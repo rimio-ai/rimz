@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::mux::zellij::{SIDEBAR_PANE_NAME, ZellijPaneResolver};
+use crate::mux::zellij::ZellijPaneResolver;
+use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::sidebar::frame::PaneFrame;
 
 pub(in crate::sidebar::produce) fn backfill_zellij_pane_pids_from_proc(
@@ -71,7 +72,7 @@ pub(super) fn backfill_zellij_pane_pids(
         let Some(command) = pane.current.command.as_deref() else {
             continue;
         };
-        if command == SIDEBAR_PANE_NAME {
+        if command == SIDEBAR_CHROME_TITLE {
             continue;
         }
         if let Some(root) = resolver.resolve(command, pane.current.cwd.as_deref(), proc_cwd) {

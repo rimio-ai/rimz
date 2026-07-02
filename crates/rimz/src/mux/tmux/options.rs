@@ -4,33 +4,17 @@ use std::collections::HashMap;
 use std::num::NonZeroU16;
 
 use crate::config::{TmuxConfig, TmuxExtendedKeysFormat};
-use crate::mux::{SidebarPaneOptions, ViewSidebars};
-use crate::pane::PaneRef;
+use crate::ids::MuxName;
+use crate::mux::{SidebarPaneOptions, ViewSidebars, sidebar_serve_args};
+use crate::pane::{PaneRef, SIDEBAR_CHROME_TITLE};
 
 use super::TmuxBackend;
-
-/// Pane title the sidebar renderer sets through the terminal title escape. The
-/// host binary is now `rimz`, so tmux identifies chrome through this title
-/// instead of the foreground command name.
-pub(super) const SIDEBAR_PANE_TITLE: &str = "rimz-sidebar";
 
 /// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
 /// launch and in-place recovery so the two cannot drift.
 pub(super) fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
-    let mut command = vec![
-        opts.rimz_bin.to_string_lossy().into_owned(),
-        "sidebar".to_owned(),
-        "serve".to_owned(),
-        "--mux".to_owned(),
-        "tmux".to_owned(),
-        "--workspace-id".to_owned(),
-        opts.workspace_id.as_str().to_owned(),
-        "--session-name".to_owned(),
-        opts.session_name.clone(),
-    ];
-    if let Some(refresh_ms) = opts.refresh_ms {
-        command.extend(["--refresh-ms".to_owned(), refresh_ms.to_string()]);
-    }
+    let mut command = vec![opts.rimz_bin.to_string_lossy().into_owned()];
+    command.extend(sidebar_serve_args(MuxName::Tmux, opts));
     command
 }
 
@@ -92,7 +76,7 @@ impl TmuxBackend {
 }
 
 pub(super) fn is_tmux_sidebar(pane: &PaneRef) -> bool {
-    pane.command.as_deref() == Some(SIDEBAR_PANE_TITLE)
+    pane.command.as_deref() == Some(SIDEBAR_CHROME_TITLE)
 }
 
 /// Group a pane list into per-window [`ViewSidebars`] for the reconcile planner:
@@ -193,13 +177,13 @@ pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, St
 }
 
 /// `pane-border-format` Rimz writes when it owns `pane-border-status`: titled
-/// frames on work panes, and a blank border line on the `rimz-sidebar` pane so
+/// frames on work panes, and a blank border line on the sidebar chrome pane so
 /// it reads frameless. `#{p999: }` floods the sidebar's border row with spaces
 /// (truncated to pane width), overwriting the glyphs tmux would otherwise draw.
 fn sidebar_blanking_border_format() -> String {
     [
         "#{?#{==:#{pane_title},",
-        SIDEBAR_PANE_TITLE,
+        SIDEBAR_CHROME_TITLE,
         "},#{p999: }, #{pane_index} #{pane_current_command} }",
     ]
     .concat()
@@ -354,15 +338,15 @@ mod tests {
     fn views_with_sidebars_classifies_working_orphan_and_daemon_windows() {
         let mut host = tmux_pane("%5", "@2", "rimz");
         host.view_name = Some(crate::remote_control::VIEW_NAME.to_owned());
-        let mut foreign = tmux_pane("%6", "@9", SIDEBAR_PANE_TITLE);
+        let mut foreign = tmux_pane("%6", "@9", SIDEBAR_CHROME_TITLE);
         foreign.session_name = "other-room".to_owned();
         let panes = vec![
-            tmux_pane("%1", "@0", "sh"),               // working pane
-            tmux_pane("%2", "@0", SIDEBAR_PANE_TITLE), // its sidebar
-            tmux_pane("%3", "@0", SIDEBAR_PANE_TITLE), // a duplicate sidebar
-            tmux_pane("%4", "@1", SIDEBAR_PANE_TITLE), // a sidebar-only window
-            host,                                      // managed daemon host
-            foreign,                                   // another tmux session on the server
+            tmux_pane("%1", "@0", "sh"),                 // working pane
+            tmux_pane("%2", "@0", SIDEBAR_CHROME_TITLE), // its sidebar
+            tmux_pane("%3", "@0", SIDEBAR_CHROME_TITLE), // a duplicate sidebar
+            tmux_pane("%4", "@1", SIDEBAR_CHROME_TITLE), // a sidebar-only window
+            host,                                        // managed daemon host
+            foreign,                                     // another tmux session on the server
         ];
         let views = tmux_views_with_sidebars(&panes, "room");
         assert_eq!(views.len(), 3, "windows stay in first-seen order");

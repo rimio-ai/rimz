@@ -51,11 +51,6 @@ const MIN_MOUSE_CLICK_THROUGH_VERSION: (u32, u32, u32) = (0, 44, 0);
 /// switch that suppresses hover chrome while leaving other mouse handling alone.
 const MIN_MOUSE_HOVER_EFFECTS_VERSION: (u32, u32, u32) = (0, 44, 0);
 
-/// Pane name the sidebar layout assigns, and the title Zellij reports back for
-/// it. The sole source of truth for both rendering the layout and detecting
-/// whether a live session still carries its sidebar.
-pub const SIDEBAR_PANE_NAME: &str = "rimz-sidebar";
-
 /// Zellij's action client occasionally answers `list-panes` with an empty
 /// stdout and a success status when the session server is mid-tick — a known
 /// race that a short retry clears.
@@ -142,8 +137,13 @@ pub(super) fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
 /// `options` flags that forward a single click through the sidebar pane to the
 /// renderer, gated on `parsed >= MIN_MOUSE_CLICK_THROUGH_VERSION`.
 fn mouse_click_through_args(enabled: bool, parsed: Option<(u32, u32, u32)>) -> Vec<String> {
-    if enabled && parsed.is_some_and(|v| v >= MIN_MOUSE_CLICK_THROUGH_VERSION) {
-        vec!["--mouse-click-through".to_owned(), "true".to_owned()]
+    if enabled {
+        versioned_bool_arg(
+            "--mouse-click-through",
+            true,
+            parsed,
+            MIN_MOUSE_CLICK_THROUGH_VERSION,
+        )
     } else {
         Vec::new()
     }

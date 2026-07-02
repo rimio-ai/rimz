@@ -889,10 +889,11 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
         })
         .context("listing panes")?;
     let focused_pane = backend
-        .focused_client_panes(rimz::mux::ClientFocusOptions {
+        .client_view(rimz::mux::ClientFocusOptions {
             session_name: Some(session_name.clone()),
             ..Default::default()
         })
+        .map(|view| view.viewed_panes)
         .unwrap_or_default()
         .into_iter()
         .next()

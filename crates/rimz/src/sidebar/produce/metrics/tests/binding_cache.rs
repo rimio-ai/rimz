@@ -84,11 +84,7 @@ fn binding_misses_drive_the_walk_and_unbindable_panes_do_not() {
     pidded.pane_pid = Some(9);
     let mut inert = frame_from_panes(vec![
         pane("terminal_3", None, None),
-        pane(
-            "terminal_4",
-            Some(crate::mux::zellij::SIDEBAR_PANE_NAME),
-            None,
-        ),
+        pane("terminal_4", Some(crate::pane::SIDEBAR_CHROME_TITLE), None),
         pidded,
     ]);
     let due = all_sampleable_due(&inert);

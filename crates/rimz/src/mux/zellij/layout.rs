@@ -6,11 +6,12 @@
 use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 
-use super::SIDEBAR_PANE_NAME;
+use crate::ids::MuxName;
 use crate::mux::{
     BackgroundViewOptions, DaemonView, HostPane, MuxErr, PaneCmd, Result, ResumeTab,
-    SidebarPaneOptions, TabOptions,
+    SidebarPaneOptions, TabOptions, sidebar_serve_args,
 };
+use crate::pane::SIDEBAR_CHROME_TITLE;
 
 pub(super) struct TempLayoutFile {
     path: PathBuf,
@@ -73,8 +74,6 @@ fn sidebar_pane_kdl(
     fixed_cols: Option<NonZeroU16>,
 ) -> Result<String> {
     let rimz_bin = kdl_string(&opts.rimz_bin.to_string_lossy())?;
-    let workspace_id = kdl_string(opts.workspace_id.as_str())?;
-    let session_name = kdl_string(&opts.session_name)?;
     // The layout grammar spells a fixed size (bare integer, columns) or a
     // percentage (quoted string) — the launch path already resolved the width
     // verdict via `SidebarWidth::birth_size`, and `geometry` picks the
@@ -83,19 +82,20 @@ fn sidebar_pane_kdl(
         BirthGeometry::Attached => fixed_cols.unwrap_or(opts.birth_size.cols).to_string(),
         BirthGeometry::Detached => kdl_string(&format!("{}%", opts.birth_size.percent))?,
     };
-    let pane_name = kdl_string(SIDEBAR_PANE_NAME)?;
+    let pane_name = kdl_string(SIDEBAR_CHROME_TITLE)?;
     let cwd_attr = match cwd {
         Some(cwd) => format!(" cwd={}", kdl_string(&cwd.to_string_lossy())?),
         None => String::new(),
     };
-    let refresh_args = opts
-        .refresh_ms
-        .map(|ms| format!(r#" "--refresh-ms" "{ms}""#))
-        .unwrap_or_default();
+    let serve_args = sidebar_serve_args(MuxName::Zellij, opts)
+        .into_iter()
+        .map(|arg| kdl_string(&arg))
+        .collect::<Result<Vec<_>>>()?
+        .join(" ");
     Ok(format!(
         r#"pane size={size} name={pane_name} borderless=true{cwd_attr} {{
             command {rimz_bin}
-            args "sidebar" "serve" "--mux" "zellij" "--workspace-id" {workspace_id} "--session-name" {session_name}{refresh_args}
+            args {serve_args}
             start_suspended false
             close_on_exit true
         }}"#,

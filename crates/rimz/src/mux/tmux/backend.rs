@@ -1,6 +1,6 @@
 //! tmux [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use super::TmuxBackend;
 use super::options::{
@@ -10,11 +10,11 @@ use super::parse::{parse_client_view, parse_new_window_ids, parse_pane_line};
 use super::window::sanitize_window_name;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::{
-    BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
-    ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey,
-    PaneCapture, PaneListOptions, PaneListing, Result, SessionOptions, SidebarLiveness,
-    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions, ensure_pane_backend,
-    memoized_version,
+    AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
+    BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend,
+    MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionOptions,
+    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions,
+    ensure_pane_backend, execute_adds, execute_closes, memoized_version,
 };
 
 impl MuxBackend for TmuxBackend {
@@ -120,25 +120,16 @@ impl MuxBackend for TmuxBackend {
         // running`) on stderr when no server has been started yet. That is
         // an empty list of sessions, not an error condition; the Zellij
         // backend mirrors this shape (exit 0, empty stdout).
-        let output = self
-            .cmd()
-            .args(["list-sessions", "-F", "#{session_name}"])
-            .to_command()
-            .output()
-            .map_err(|err| match err.kind() {
-                std::io::ErrorKind::NotFound => MuxErr::NotInstalled {
-                    program: "tmux".to_owned(),
-                },
-                _ => MuxErr::Io(err),
-            })?;
+        let spec = self.cmd().args(["list-sessions", "-F", "#{session_name}"]);
+        let output = spec.output_raw()?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if stderr.contains("no server running") || stderr.contains("error connecting") {
                 return Ok(Vec::new());
             }
             return Err(MuxErr::Command {
-                program: "tmux".to_owned(),
-                args: "list-sessions -F #{session_name}".to_owned(),
+                program: spec.program.clone(),
+                args: spec.args.join(" "),
                 stderr: stderr.into_owned(),
             });
         }
@@ -389,43 +380,27 @@ impl MuxBackend for TmuxBackend {
         let views = tmux_views_with_sidebars(&panes.panes, &opts.session_name);
         let plan = super::super::plan_reconcile(&views, live);
         let mut report = SidebarRecovery::default();
-        let mut failed_stale_close_views = HashSet::new();
-        for pane in &plan.close {
-            match self.kill_pane(pane) {
-                Ok(()) => {
-                    if live.stale_panes.contains(pane) {
-                        report.stale_closed += 1;
-                    } else {
-                        report.closed += 1;
-                    }
-                }
-                Err(err) => {
-                    if let Some(view) = plan.stale_close_views.get(pane) {
-                        failed_stale_close_views.insert(view.clone());
-                    }
-                    tracing::warn!(
-                        session = %opts.session_name,
-                        pane = %pane.as_str(),
-                        tags.operation = "tmux.reconcile.close_stray",
-                        error = &err as &dyn std::error::Error,
-                        "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
-                    );
-                }
+        let failed_stale_close_views = execute_closes(&plan, live, &mut report, |pane| match self
+            .kill_pane(pane)
+        {
+            Ok(()) => true,
+            Err(err) => {
+                tracing::warn!(
+                    session = %opts.session_name,
+                    pane = %pane.as_str(),
+                    tags.operation = "tmux.reconcile.close_stray",
+                    error = &err as &dyn std::error::Error,
+                    "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
+                );
+                false
             }
-        }
-        for window in &plan.add {
-            if plan.restart_add.contains(window) && failed_stale_close_views.contains(window) {
-                report.failed += 1;
-                continue;
-            }
-            match self.add_sidebar_to_window(&opts, window) {
-                Ok(()) => {
-                    if plan.restart_add.contains(window) {
-                        report.restarted += 1;
-                    } else {
-                        report.recovered += 1;
-                    }
-                }
+        });
+        execute_adds(
+            &plan,
+            &failed_stale_close_views,
+            &mut report,
+            |window, _restart| match self.add_sidebar_to_window(&opts, window) {
+                Ok(()) => AddOutcome::Added,
                 Err(err) => {
                     tracing::warn!(
                         session = %opts.session_name,
@@ -434,10 +409,10 @@ impl MuxBackend for TmuxBackend {
                         error = &err as &dyn std::error::Error,
                         "sidebar reconcile: in-place add failed; leaving the window without a sidebar",
                     );
-                    report.failed += 1;
+                    AddOutcome::Failed
                 }
-            }
-        }
+            },
+        );
         Ok(report)
     }
 
@@ -485,79 +460,19 @@ impl MuxBackend for TmuxBackend {
         let (_window_id, first_content) = parse_new_window_ids(&output.stdout)?;
         let mut first_daemon_pane = None;
         if let Some((first, rest)) = opts.view.hosts.split_first() {
-            let mut split = vec![
-                "split-window".to_owned(),
-                "-d".to_owned(),
-                "-h".to_owned(),
-                "-P".to_owned(),
-                "-F".to_owned(),
-                "#{pane_id}".to_owned(),
-                "-t".to_owned(),
-                first_content.clone(),
-            ];
-            split.extend(["-l".to_owned(), opts.sidebar.birth_size.cols.to_string()]);
-            split.extend(["-c".to_owned(), first.cwd.to_string_lossy().into_owned()]);
-            let output = self.cmd().args(split).args(first.argv.clone()).run()?;
-            let first_daemon = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            if first_daemon.is_empty() {
-                return Err(MuxErr::Output {
-                    program: "tmux".to_owned(),
-                    reason: "split-window did not print a daemon pane id".to_owned(),
-                });
-            }
+            let size = opts.sidebar.birth_size.cols.to_string();
+            let first_daemon =
+                self.split_printed("-h", &first_content, Some(&size), &first.cwd, &first.argv)?;
             let mut previous = first_daemon.clone();
             for host in rest {
-                let output = self
-                    .cmd()
-                    .args([
-                        "split-window".to_owned(),
-                        "-d".to_owned(),
-                        "-v".to_owned(),
-                        "-P".to_owned(),
-                        "-F".to_owned(),
-                        "#{pane_id}".to_owned(),
-                        "-t".to_owned(),
-                        previous,
-                        "-c".to_owned(),
-                        host.cwd.to_string_lossy().into_owned(),
-                    ])
-                    .args(host.argv.clone())
-                    .run()?;
-                previous = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-                if previous.is_empty() {
-                    return Err(MuxErr::Output {
-                        program: "tmux".to_owned(),
-                        reason: "split-window did not print a daemon pane id".to_owned(),
-                    });
-                }
+                previous = self.split_printed("-v", &previous, None, &host.cwd, &host.argv)?;
             }
             first_daemon_pane = Some(first_daemon);
         }
         let mut previous_content = first_content.clone();
         for content in rest_content {
-            let output = self
-                .cmd()
-                .args([
-                    "split-window".to_owned(),
-                    "-d".to_owned(),
-                    "-v".to_owned(),
-                    "-P".to_owned(),
-                    "-F".to_owned(),
-                    "#{pane_id}".to_owned(),
-                    "-t".to_owned(),
-                    previous_content,
-                    "-c".to_owned(),
-                    content.cwd.to_string_lossy().into_owned(),
-                ])
-                .args(content.argv.clone())
-                .run()?;
-            previous_content = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            if previous_content.is_empty() {
-                return Err(MuxErr::Output {
-                    program: "tmux".to_owned(),
-                    reason: "split-window did not print a content pane id".to_owned(),
-                });
-            }
+            previous_content =
+                self.split_printed("-v", &previous_content, None, &content.cwd, &content.argv)?;
         }
         if let Some(first_daemon) = first_daemon_pane {
             if let Err(err) = self
@@ -637,7 +552,8 @@ impl MuxBackend for TmuxBackend {
             let mut column_anchors = vec![first_pane.clone()];
             let mut previous_in_column = first_pane.clone();
             for pane in first_column_rest {
-                previous_in_column = self.split_tab_pane(opts, "-v", &previous_in_column, pane)?;
+                previous_in_column =
+                    self.split_printed("-v", &previous_in_column, None, &opts.cwd, &pane.argv)?;
             }
             for column in rest_columns {
                 // tmux has no native stack, so stacked columns use tiled rows.
@@ -651,11 +567,11 @@ impl MuxBackend for TmuxBackend {
                     .last()
                     .cloned()
                     .unwrap_or_else(|| window_id.clone());
-                let new_column = self.split_tab_pane(opts, "-h", &target, top)?;
+                let new_column = self.split_printed("-h", &target, None, &opts.cwd, &top.argv)?;
                 column_anchors.push(new_column.clone());
                 let mut previous = new_column;
                 for row in rows {
-                    previous = self.split_tab_pane(opts, "-v", &previous, row)?;
+                    previous = self.split_printed("-v", &previous, None, &opts.cwd, &row.argv)?;
                 }
             }
             Ok(())

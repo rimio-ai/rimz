@@ -240,10 +240,13 @@ fn live_binding_inputs(
                 continue;
             }
         }
-        match backend.focused_client_panes(ClientFocusOptions {
-            session_name: Some(session_name.to_owned()),
-            command_timeout: Some(FOCUSED_PANE_BIND_TIMEOUT),
-        }) {
+        match backend
+            .client_view(ClientFocusOptions {
+                session_name: Some(session_name.to_owned()),
+                command_timeout: Some(FOCUSED_PANE_BIND_TIMEOUT),
+            })
+            .map(|view| view.viewed_panes)
+        {
             Ok(listed) => {
                 focus_probe_succeeded = true;
                 append_unique_panes(&mut focused, listed);

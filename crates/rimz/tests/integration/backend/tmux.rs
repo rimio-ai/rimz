@@ -2597,11 +2597,11 @@ fn headless_sends_work_with_no_client_and_presence_watch() {
     );
 }
 
-/// `focused_client_panes` reads each client's focused pane from `list-clients`.
+/// `client_view` reads each client's focused pane from `list-clients`.
 /// A detached session has no client, so it reports nothing; an attached client
 /// focuses the session's pane. Drives the hook-ingestion pane-recovery probe.
 #[test]
-fn focused_client_panes_tracks_the_attached_client() {
+fn client_view_tracks_the_attached_client() {
     require_tmux!();
 
     let server = TmuxServer::new();
@@ -2620,11 +2620,12 @@ fn focused_client_panes_tracks_the_attached_client() {
     // No client attached: list-clients is empty, so the focus set is too.
     let detached = server
         .backend
-        .focused_client_panes(ClientFocusOptions {
+        .client_view(ClientFocusOptions {
             session_name: Some("focus".to_owned()),
             ..Default::default()
         })
-        .expect("focused_client_panes detached");
+        .map(|view| view.viewed_panes)
+        .expect("client_view detached");
     assert!(
         detached.is_empty(),
         "a detached session focuses no client panes: {detached:?}",
@@ -2636,11 +2637,12 @@ fn focused_client_panes_tracks_the_attached_client() {
     let focused = loop {
         let panes = server
             .backend
-            .focused_client_panes(ClientFocusOptions {
+            .client_view(ClientFocusOptions {
                 session_name: Some("focus".to_owned()),
                 ..Default::default()
             })
-            .expect("focused_client_panes attached");
+            .map(|view| view.viewed_panes)
+            .expect("client_view attached");
         if !panes.is_empty() || Instant::now() >= deadline {
             break panes;
         }

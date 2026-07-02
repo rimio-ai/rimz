@@ -9,10 +9,10 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::SIDEBAR_PANE_NAME;
 use crate::ids::{MuxName, PaneId, ViewId, WorkspaceId};
 use crate::ledger::paths;
 use crate::mux::{PaneListing, ViewSidebars};
+use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::schema::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 
 /// Cleanliness of a live room after a successful pane inspection.
@@ -26,10 +26,10 @@ pub(super) enum SessionCleanliness {
     SuspendedCommandPane,
 }
 
-/// A live, non-plugin sidebar pane is one Zellij still titles with the layout's
-/// [`SIDEBAR_PANE_NAME`] — the same signal `classify_session_panes` trusts.
+/// A live, non-plugin sidebar pane is one Zellij still titles with the shared
+/// sidebar chrome title — the same signal `classify_session_panes` trusts.
 pub(super) fn is_sidebar_pane(pane: &RawPane) -> bool {
-    !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_PANE_NAME)
+    !pane.is_plugin && pane.title.as_deref() == Some(SIDEBAR_CHROME_TITLE)
 }
 
 /// Group a pane list into per-tab [`ViewSidebars`] for the reconcile planner:
@@ -69,6 +69,14 @@ pub(super) fn tabs_with_sidebars(panes: &[RawPane]) -> HashSet<String> {
         .filter(|view| !view.sidebar_panes.is_empty())
         .map(|view| view.view)
         .collect()
+}
+
+pub(super) fn leftmost_live_work_pane(panes: &[RawPane], tab_id: u64) -> Option<u64> {
+    panes
+        .iter()
+        .filter(|pane| pane.tab_id == tab_id && pane.is_live_terminal() && !is_sidebar_pane(pane))
+        .min_by_key(|pane| (pane.pane_x.unwrap_or(u64::MAX), pane.id))
+        .map(|pane| pane.id)
 }
 
 /// A daemon dashboard pane: any pane in the `rimzd` tab, or one whose spawn or
@@ -420,7 +428,7 @@ impl RawPane {
     /// process row. Otherwise the foreground command decides.
     pub(super) fn display_command(&self) -> Option<String> {
         if is_sidebar_pane(self) {
-            return Some(SIDEBAR_PANE_NAME.to_owned());
+            return Some(SIDEBAR_CHROME_TITLE.to_owned());
         }
         self.foreground_command().map(str::to_owned)
     }

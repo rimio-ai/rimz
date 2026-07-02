@@ -18,11 +18,11 @@ use super::raw_pane::{
 use super::sidebar::DockOutcome;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::{
-    BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
-    ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr,
-    NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionHealth, SessionOptions,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions,
-    ensure_pane_backend, memoized_version,
+    AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
+    BackgroundViewOptions, ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView,
+    MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionHealth,
+    SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions,
+    TabOptions, ensure_pane_backend, execute_adds, execute_closes, memoized_version,
 };
 use crate::pane::PaneRef;
 
@@ -49,10 +49,11 @@ struct FocusRestoreTarget {
 impl ZellijBackend {
     fn focus_restore_target(&self, session_name: &str) -> Option<FocusRestoreTarget> {
         let pane = self
-            .focused_client_panes(ClientFocusOptions {
+            .client_view(ClientFocusOptions {
                 session_name: Some(session_name.to_owned()),
                 command_timeout: None,
             })
+            .map(|view| view.viewed_panes)
             .ok()?
             .pop()?;
         let raw_id = parse_zellij_raw(&pane)?;
@@ -76,10 +77,13 @@ impl ZellijBackend {
                 .go_to_tab_id(session_name, restore.tab_id)
                 .and_then(|_| self.focus_pane(&restore.pane, Some(session_name)))
             {
-                Ok(()) => match self.focused_client_panes(ClientFocusOptions {
-                    session_name: Some(session_name.to_owned()),
-                    command_timeout: None,
-                }) {
+                Ok(()) => match self
+                    .client_view(ClientFocusOptions {
+                        session_name: Some(session_name.to_owned()),
+                        command_timeout: None,
+                    })
+                    .map(|view| view.viewed_panes)
+                {
                     Ok(focused) if focused.iter().any(|pane| pane == &restore.pane) => {
                         return Ok(());
                     }
@@ -508,14 +512,21 @@ impl MuxBackend for ZellijBackend {
         let mut report = SidebarRecovery::default();
         // Close duplicate / unresponsive sidebar panes first, so a view that lost
         // its only live sidebar reads as missing and gains exactly one fresh one.
-        let failed_stale_close_views = close_planned_sidebars(
-            self,
-            &opts.session_name,
-            &plan.close,
-            &live.stale_panes,
-            &plan.stale_close_views,
-            &mut report,
-        );
+        let failed_stale_close_views = execute_closes(&plan, live, &mut report, |pane| match self
+            .close_pane(&opts.session_name, pane)
+        {
+            Ok(()) => true,
+            Err(err) => {
+                tracing::warn!(
+                    session = %opts.session_name,
+                    pane = %pane.as_str(),
+                    tags.operation = "zellij.reconcile.close_stray",
+                    error = &err as &dyn std::error::Error,
+                    "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
+                );
+                false
+            }
+        });
         // In-place adds and geometry moves both need an attached client: a
         // detached session's screen thread drops the mount while the spawned
         // serve pair keeps running, so adding there only leaks (the closes
@@ -544,14 +555,48 @@ impl MuxBackend for ZellijBackend {
                 "sidebar reconcile: no attached client; deferring in-place adds and geometry repairs",
             );
         } else {
-            add_missing_sidebars(
-                self,
-                &opts,
-                &plan.add,
-                &plan.restart_add,
+            let mut tabs_with_sidebar = existing_sidebar_tabs(self, &opts.session_name, &plan.add);
+            execute_adds(
+                &plan,
                 &failed_stale_close_views,
-                &focused_in_tab,
                 &mut report,
+                |tab, _restart| {
+                    let Ok(tab_id) = tab.parse::<u64>() else {
+                        return AddOutcome::Failed;
+                    };
+                    let Some(occupied_tabs) = tabs_with_sidebar.as_mut() else {
+                        return AddOutcome::Failed;
+                    };
+                    if occupied_tabs.contains(tab) {
+                        tracing::warn!(
+                            session = %opts.session_name,
+                            tab = tab_id,
+                            tags.operation = "zellij.reconcile.add_skipped",
+                            "sidebar reconcile: add skipped because the tab still has a sidebar",
+                        );
+                        return AddOutcome::Failed;
+                    }
+                    match self.add_sidebar_to_tab(&opts, tab_id) {
+                        Ok(outcome) => {
+                            occupied_tabs.insert(tab_id.to_string());
+                            restore_tab_focus(self, &opts.session_name, tab_id, &focused_in_tab);
+                            match outcome {
+                                DockOutcome::Docked => AddOutcome::Added,
+                                DockOutcome::Misdocked => AddOutcome::AddedMisdocked,
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                session = %opts.session_name,
+                                tab = tab_id,
+                                tags.operation = "zellij.reconcile.add",
+                                error = &err as &dyn std::error::Error,
+                                "sidebar reconcile: in-place add failed; leaving the tab without a sidebar",
+                            );
+                            AddOutcome::Failed
+                        }
+                    }
+                },
             );
         }
         if let Some(own) = own_zellij_pane_id() {
@@ -794,81 +839,6 @@ fn rebuild_misdocked_sidebar(
     }
 }
 
-fn close_planned_sidebars(
-    backend: &ZellijBackend,
-    session_name: &str,
-    close: &[PaneId],
-    stale_panes: &HashSet<PaneId>,
-    stale_close_views: &HashMap<PaneId, String>,
-    report: &mut SidebarRecovery,
-) -> HashSet<String> {
-    let mut failed_stale_close_views = HashSet::new();
-    for pane in close {
-        match backend.close_pane(session_name, pane) {
-            Ok(()) => {
-                if stale_panes.contains(pane) {
-                    report.stale_closed += 1;
-                } else {
-                    report.closed += 1;
-                }
-            }
-            Err(err) => {
-                if let Some(view) = stale_close_views.get(pane) {
-                    failed_stale_close_views.insert(view.clone());
-                }
-                tracing::warn!(
-                    session = %session_name,
-                    pane = %pane.as_str(),
-                    tags.operation = "zellij.reconcile.close_stray",
-                    error = &err as &dyn std::error::Error,
-                    "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
-                );
-            }
-        }
-    }
-    failed_stale_close_views
-}
-
-fn add_missing_sidebars(
-    backend: &ZellijBackend,
-    opts: &SidebarPaneOptions,
-    add: &[String],
-    restart_add: &HashSet<String>,
-    failed_stale_close_views: &HashSet<String>,
-    focused_in_tab: &HashMap<u64, u64>,
-    report: &mut SidebarRecovery,
-) {
-    let mut tabs_with_sidebar = existing_sidebar_tabs(backend, &opts.session_name, add);
-    for tab in add {
-        let Ok(tab_id) = tab.parse::<u64>() else {
-            report.failed += 1;
-            continue;
-        };
-        let Some(occupied_tabs) = tabs_with_sidebar.as_mut() else {
-            report.failed += 1;
-            continue;
-        };
-        if restart_add.contains(tab) && failed_stale_close_views.contains(tab) {
-            report.failed += 1;
-            continue;
-        }
-        if occupied_tabs.contains(tab) {
-            warn_sidebar_add_skipped(&opts.session_name, tab_id);
-            report.failed += 1;
-            continue;
-        }
-        add_sidebar_to_tab(
-            backend,
-            opts,
-            tab_id,
-            restart_add.contains(tab),
-            focused_in_tab,
-            occupied_tabs,
-            report,
-        );
-    }
-}
-
 fn existing_sidebar_tabs(
     backend: &ZellijBackend,
     session_name: &str,
@@ -887,41 +857,6 @@ fn existing_sidebar_tabs(
                 "sidebar reconcile: cannot verify sidebar absence before add; skipping adds",
             );
             None
-        }
-    }
-}
-
-fn add_sidebar_to_tab(
-    backend: &ZellijBackend,
-    opts: &SidebarPaneOptions,
-    tab_id: u64,
-    restart: bool,
-    focused_in_tab: &HashMap<u64, u64>,
-    occupied_tabs: &mut HashSet<String>,
-    report: &mut SidebarRecovery,
-) {
-    match backend.add_sidebar_to_tab(opts, tab_id) {
-        Ok(outcome) => {
-            if restart {
-                report.restarted += 1;
-            } else {
-                report.recovered += 1;
-            }
-            if outcome == DockOutcome::Misdocked {
-                report.misdocked += 1;
-            }
-            occupied_tabs.insert(tab_id.to_string());
-            restore_tab_focus(backend, &opts.session_name, tab_id, focused_in_tab);
-        }
-        Err(err) => {
-            tracing::warn!(
-                session = %opts.session_name,
-                tab = tab_id,
-                tags.operation = "zellij.reconcile.add",
-                error = &err as &dyn std::error::Error,
-                "sidebar reconcile: in-place add failed; leaving the tab without a sidebar",
-            );
-            report.failed += 1;
         }
     }
 }
@@ -967,13 +902,4 @@ fn tab_focus_is(backend: &ZellijBackend, session_name: &str, tab_id: u64, raw_id
                 pane.is_terminal() && pane.tab_id == tab_id && pane.id == raw_id && pane.is_focused
             })
         })
-}
-
-fn warn_sidebar_add_skipped(session_name: &str, tab_id: u64) {
-    tracing::warn!(
-        session = %session_name,
-        tab = tab_id,
-        tags.operation = "zellij.reconcile.add_skipped",
-        "sidebar reconcile: add skipped because the tab still has a sidebar",
-    );
 }

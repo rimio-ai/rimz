@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::io::Read as _;
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
@@ -25,6 +26,7 @@ pub struct CommandSpec {
     pub program: String,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
+    pub cwd: Option<PathBuf>,
 }
 
 impl CommandSpec {
@@ -33,6 +35,7 @@ impl CommandSpec {
             program: program.into(),
             args: Vec::new(),
             env: BTreeMap::new(),
+            cwd: None,
         }
     }
 
@@ -55,11 +58,29 @@ impl CommandSpec {
         self
     }
 
+    pub fn cwd(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(dir.into());
+        self
+    }
+
     pub fn to_command(&self) -> Command {
         let mut command = Command::new(&self.program);
         command.args(&self.args);
         command.envs(&self.env);
+        if let Some(cwd) = &self.cwd {
+            command.current_dir(cwd);
+        }
         command
+    }
+
+    /// Run the command with raw exit status and captured output. Use this for
+    /// probes that need stdout even on nonzero exit (version probes, session
+    /// listing, the Zellij birth client); control verbs should use the bounded
+    /// runner.
+    pub fn output_raw(&self) -> Result<Output> {
+        self.to_command()
+            .output()
+            .map_err(|err| self.spawn_error(err))
     }
 
     /// Run the command to completion and capture its output, bounded by
@@ -112,12 +133,7 @@ impl CommandSpec {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|err| match err.kind() {
-                io::ErrorKind::NotFound => MuxErr::NotInstalled {
-                    program: self.program.clone(),
-                },
-                _ => MuxErr::Io(err),
-            })?;
+            .map_err(|err| self.spawn_error(err))?;
         let drain = |pipe: Option<Box<dyn io::Read + Send>>| {
             std::thread::spawn(move || {
                 let mut buf = Vec::new();
@@ -179,6 +195,15 @@ impl CommandSpec {
                     seconds: timeout.as_secs(),
                 })
             }
+        }
+    }
+
+    fn spawn_error(&self, err: io::Error) -> MuxErr {
+        match err.kind() {
+            io::ErrorKind::NotFound => MuxErr::NotInstalled {
+                program: self.program.clone(),
+            },
+            _ => MuxErr::Io(err),
         }
     }
 }

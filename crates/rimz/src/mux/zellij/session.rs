@@ -93,7 +93,7 @@ impl ZellijBackend {
     }
 
     /// Classify `name`'s live room from a bounded pane listing. A running
-    /// (non-held) `rimz-sidebar` pane plus no held command pane is clean. A held
+    /// live sidebar chrome pane plus no held command pane is clean. A held
     /// sidebar means Zellij is waiting on the user (no heartbeats); a held command
     /// pane is the resurrection fingerprint — Zellij brought a serialized room
     /// back with `start_suspended` panes. Either inspected condition makes the

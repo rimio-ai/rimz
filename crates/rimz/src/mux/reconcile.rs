@@ -86,6 +86,79 @@ pub(crate) struct ReconcilePlan {
     pub stale_close_views: HashMap<PaneId, String>,
 }
 
+/// Outcome of one sidebar add attempt, as the backend's add closure reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AddOutcome {
+    Added,
+    /// Added but the dock could not be verified (Zellij); counts the view as
+    /// recovered/restarted *and* increments `misdocked`.
+    AddedMisdocked,
+    /// Nothing was added (spawn failed, pre-add verification refused, …); the
+    /// closure has already logged why.
+    Failed,
+}
+
+/// Close every planned pane via `close`, count `stale_closed`/`closed`, and
+/// return views whose stale close failed so their restart adds can be refused.
+/// `close` owns its own failure logging and returns whether the close
+/// succeeded.
+pub(crate) fn execute_closes(
+    plan: &ReconcilePlan,
+    live: &SidebarLiveness,
+    report: &mut SidebarRecovery,
+    mut close: impl FnMut(&PaneId) -> bool,
+) -> HashSet<String> {
+    let mut failed_stale_close_views = HashSet::new();
+    for pane in &plan.close {
+        if close(pane) {
+            if live.stale_panes.contains(pane) {
+                report.stale_closed += 1;
+            } else {
+                report.closed += 1;
+            }
+        } else if let Some(view) = plan.stale_close_views.get(pane) {
+            failed_stale_close_views.insert(view.clone());
+        }
+    }
+    failed_stale_close_views
+}
+
+/// Run the add phase: per view, refuse a restart whose stale close failed
+/// (`failed`), else delegate to `add` and count restarted/recovered/misdocked/
+/// failed.
+pub(crate) fn execute_adds(
+    plan: &ReconcilePlan,
+    failed_stale_close_views: &HashSet<String>,
+    report: &mut SidebarRecovery,
+    mut add: impl FnMut(&str, bool) -> AddOutcome,
+) {
+    for view in &plan.add {
+        let restart = plan.restart_add.contains(view);
+        if restart && failed_stale_close_views.contains(view) {
+            report.failed += 1;
+            continue;
+        }
+        match add(view, restart) {
+            AddOutcome::Added => {
+                if restart {
+                    report.restarted += 1;
+                } else {
+                    report.recovered += 1;
+                }
+            }
+            AddOutcome::AddedMisdocked => {
+                if restart {
+                    report.restarted += 1;
+                } else {
+                    report.recovered += 1;
+                }
+                report.misdocked += 1;
+            }
+            AddOutcome::Failed => report.failed += 1,
+        }
+    }
+}
+
 /// Plan the reconcile for one session, view by view:
 /// - **Working or daemon view** — keep exactly one sidebar pane, close the
 ///   rest, and add one if none survived, so duplicates collapse to one and a
@@ -272,6 +345,75 @@ mod tests {
         assert_eq!(plan.close, panes(close), "{label}: close");
         assert_eq!(plan.add, strings(add), "{label}: add");
         plan
+    }
+
+    #[test]
+    fn executors_count_close_and_add_outcomes_in_order() {
+        let stale = pane("terminal_1");
+        let duplicate = pane("terminal_2");
+        let failed_stale = pane("terminal_3");
+        let plan = ReconcilePlan {
+            close: vec![stale.clone(), duplicate.clone(), failed_stale.clone()],
+            add: strings(&["blocked", "new", "bad", "misdock"]),
+            restart_add: strings(&["blocked", "misdock"]).into_iter().collect(),
+            stale_close_views: HashMap::from([
+                (stale.clone(), "stale".to_owned()),
+                (failed_stale.clone(), "blocked".to_owned()),
+            ]),
+        };
+        let live = SidebarLiveness {
+            stale_panes: [stale.clone(), failed_stale.clone()].into(),
+            ..SidebarLiveness::default()
+        };
+        let mut report = SidebarRecovery::default();
+        let mut calls = Vec::new();
+        let failed_stale_close_views = execute_closes(&plan, &live, &mut report, |closed| {
+            calls.push(format!("close:{}", closed.raw()));
+            closed != &failed_stale
+        });
+        execute_adds(
+            &plan,
+            &failed_stale_close_views,
+            &mut report,
+            |view, restart| {
+                calls.push(format!("add:{view}:{restart}"));
+                match view {
+                    "new" => AddOutcome::Added,
+                    "misdock" => AddOutcome::AddedMisdocked,
+                    "bad" => AddOutcome::Failed,
+                    other => panic!("unexpected add call for {other}"),
+                }
+            },
+        );
+
+        assert_eq!(
+            calls,
+            [
+                "close:terminal_1",
+                "close:terminal_2",
+                "close:terminal_3",
+                "add:new:false",
+                "add:bad:false",
+                "add:misdock:true",
+            ],
+            "failed stale close blocks the restart add and closes run before adds",
+        );
+        assert_eq!(
+            failed_stale_close_views,
+            HashSet::from(["blocked".to_owned()]),
+        );
+        assert_eq!(
+            report,
+            SidebarRecovery {
+                recovered: 1,
+                restarted: 1,
+                stale_closed: 1,
+                closed: 1,
+                failed: 2,
+                misdocked: 1,
+                ..SidebarRecovery::default()
+            },
+        );
     }
 
     #[test]

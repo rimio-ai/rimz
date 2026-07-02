@@ -537,4 +537,35 @@ mod tests {
         let other_session = "rimz sidebar serve --workspace-id ws_other --session-name rimz-other";
         assert!(!is_sidebar_serve(other_session, WS, SESSION));
     }
+
+    #[test]
+    fn sidebar_serve_args_match_recovery_process_detection() {
+        let root = PathBuf::from("/tmp/rimz-recovery-serve");
+        let width = crate::mux::SidebarWidth::default();
+        let opts = crate::mux::SidebarPaneOptions {
+            session_name: SESSION.to_owned(),
+            workspace_id: WorkspaceId::from_project_root(&root),
+            project_root: root.clone(),
+            cwd: root,
+            birth_size: width.birth_size(None),
+            rimz_bin: PathBuf::from("/usr/bin/rimz"),
+            replace_existing: false,
+            config: crate::config::MultiplexerConfig::default(),
+            resume_tabs: Vec::new(),
+            refresh_ms: Some(75),
+        };
+
+        for mux in [MuxName::Zellij, MuxName::Tmux] {
+            let mut cmdline = vec![opts.rimz_bin.to_string_lossy().into_owned()];
+            cmdline.extend(crate::mux::sidebar_serve_args(mux, &opts));
+            assert!(
+                is_sidebar_serve(
+                    &cmdline.join(" "),
+                    opts.workspace_id.as_str(),
+                    &opts.session_name,
+                ),
+                "{mux} serve argv should be detected as sidebar chrome",
+            );
+        }
+    }
 }

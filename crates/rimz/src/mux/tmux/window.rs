@@ -1,9 +1,10 @@
 //! tmux window, pane, and tab-layout command helpers.
 
 use std::collections::HashSet;
+use std::path::Path;
 
 use crate::ids::{MuxName, PaneId};
-use crate::mux::{MuxErr, PaneCmd, Result, SidebarPaneOptions, TabOptions, ensure_pane_backend};
+use crate::mux::{MuxErr, Result, SidebarPaneOptions, ensure_pane_backend};
 
 use super::TmuxBackend;
 use super::options::sidebar_serve_command;
@@ -489,29 +490,29 @@ impl TmuxBackend {
         }
     }
 
-    pub(super) fn split_tab_pane(
+    pub(super) fn split_printed(
         &self,
-        opts: &TabOptions,
         direction: &str,
         target: &str,
-        pane: &PaneCmd,
+        size: Option<&str>,
+        cwd: &Path,
+        argv: &[String],
     ) -> Result<String> {
-        let output = self
-            .cmd()
-            .args([
-                "split-window".to_owned(),
-                "-d".to_owned(),
-                direction.to_owned(),
-                "-P".to_owned(),
-                "-F".to_owned(),
-                "#{pane_id}".to_owned(),
-                "-t".to_owned(),
-                target.to_owned(),
-                "-c".to_owned(),
-                opts.cwd.to_string_lossy().into_owned(),
-            ])
-            .args(pane.argv.clone())
-            .run()?;
+        let mut args = vec![
+            "split-window".to_owned(),
+            "-d".to_owned(),
+            direction.to_owned(),
+            "-P".to_owned(),
+            "-F".to_owned(),
+            "#{pane_id}".to_owned(),
+            "-t".to_owned(),
+            target.to_owned(),
+        ];
+        if let Some(size) = size {
+            args.extend(["-l".to_owned(), size.to_owned()]);
+        }
+        args.extend(["-c".to_owned(), cwd.to_string_lossy().into_owned()]);
+        let output = self.cmd().args(args).args(argv.iter().cloned()).run()?;
         let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
         if pane_id.is_empty() {
             return Err(MuxErr::Output {

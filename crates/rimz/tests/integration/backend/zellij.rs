@@ -2460,11 +2460,12 @@ fn wait_for_focused_client_pane(
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let focused = backend
-            .focused_client_panes(ClientFocusOptions {
+            .client_view(ClientFocusOptions {
                 session_name: Some(session.to_owned()),
                 ..Default::default()
             })
-            .expect("focused_client_panes");
+            .map(|view| view.viewed_panes)
+            .expect("client_view");
         if focused.iter().any(|pane| pane == want) || Instant::now() >= deadline {
             return focused;
         }
@@ -3008,11 +3009,11 @@ fn paste_text_delivers_the_literal_payload() {
     );
 }
 
-/// `focused_client_panes` reads each client's focused pane from `list-clients`.
+/// `client_view` reads each client's focused pane from `list-clients`.
 /// A background session with no client focuses nothing; an attached client
 /// focuses its terminal pane. Drives the hook-ingestion pane-recovery probe.
 #[test]
-fn focused_client_panes_tracks_the_attached_client() {
+fn client_view_tracks_the_attached_client() {
     require_zellij!();
 
     let xdg = scoped_runtime_dir();
@@ -3045,11 +3046,12 @@ fn focused_client_panes_tracks_the_attached_client() {
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     let detached = loop {
         let panes = backend
-            .focused_client_panes(ClientFocusOptions {
+            .client_view(ClientFocusOptions {
                 session_name: Some(name.clone()),
                 ..Default::default()
             })
-            .expect("focused_client_panes detached");
+            .map(|view| view.viewed_panes)
+            .expect("client_view detached");
         if panes.is_empty() || Instant::now() >= deadline {
             break panes;
         }
@@ -3068,11 +3070,12 @@ fn focused_client_panes_tracks_the_attached_client() {
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     let focused = loop {
         let panes = backend
-            .focused_client_panes(ClientFocusOptions {
+            .client_view(ClientFocusOptions {
                 session_name: Some(name.clone()),
                 ..Default::default()
             })
-            .expect("focused_client_panes attached");
+            .map(|view| view.viewed_panes)
+            .expect("client_view attached");
         if !panes.is_empty() || Instant::now() >= deadline {
             break panes;
         }

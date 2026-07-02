@@ -1,9 +1,8 @@
 //! tmux command-output parsers.
 
-use super::options::SIDEBAR_PANE_TITLE;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::{ClientPresence, ClientView, MuxErr, Result};
-use crate::pane::PaneRef;
+use crate::pane::{PaneRef, SIDEBAR_CHROME_TITLE};
 
 /// Parse one tab-separated `list-panes -F` row into a [`PaneRef`]. Returns
 /// `None` for a row missing the three load-bearing leading columns (session,
@@ -33,9 +32,9 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
         is_floating: false,
         command: if cols
             .get(8)
-            .is_some_and(|value| value.trim() == SIDEBAR_PANE_TITLE)
+            .is_some_and(|value| value.trim() == SIDEBAR_CHROME_TITLE)
         {
-            Some(SIDEBAR_PANE_TITLE.to_owned())
+            Some(SIDEBAR_CHROME_TITLE.to_owned())
         } else {
             trimmed_nonempty(3)
         },

@@ -10,6 +10,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{AgentKind, AgentSessionId, PaneId, ViewKind};
 
+/// Pane title/name that marks Rimz's own sidebar renderer — the one chrome
+/// classification key. The renderer sets it (terminal title escape), the
+/// Zellij layout names its pane with it, and the tmux/Zellij/ledger
+/// classifiers all match against it.
+pub const SIDEBAR_CHROME_TITLE: &str = "rimz-sidebar";
+
 /// Runtime owner class for records that should appear in live views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -198,7 +204,7 @@ mod tests {
             }
         }
 
-        assert!(pane(Some("rimz-sidebar")).is_rimz_sidebar());
+        assert!(pane(Some(SIDEBAR_CHROME_TITLE)).is_rimz_sidebar());
         assert!(!pane(Some("codex")).is_rimz_sidebar());
         assert!(!pane(Some("zsh")).is_rimz_sidebar());
         assert!(!pane(None).is_rimz_sidebar());

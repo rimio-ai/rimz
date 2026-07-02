@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ids::{MuxName, PaneId};
+use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::schema::sidebar_event::SidebarEvent;
 
-use super::super::options::SIDEBAR_PANE_TITLE;
 use super::ControlLine;
 
 #[derive(Default)]
@@ -56,7 +56,7 @@ impl PresenceRoster {
     ) -> Vec<SidebarEvent> {
         let is_sidebar = title
             .as_deref()
-            .is_some_and(|value| value.trim() == SIDEBAR_PANE_TITLE);
+            .is_some_and(|value| value.trim() == SIDEBAR_CHROME_TITLE);
         let suppress_overlay = is_sidebar || title.is_none() && command.as_deref() == Some("rimz");
         let old = self.panes.get(&pane).cloned();
         let mut events = Vec::new();
@@ -285,7 +285,7 @@ mod tests {
             window: window.to_owned(),
             command: Some("rimz".to_owned()),
             active,
-            title: Some(SIDEBAR_PANE_TITLE.to_owned()),
+            title: Some(SIDEBAR_CHROME_TITLE.to_owned()),
         }
     }
 

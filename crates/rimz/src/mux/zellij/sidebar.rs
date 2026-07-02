@@ -10,17 +10,18 @@ use super::parse::{
     strip_ansi,
 };
 use super::raw_pane::{
-    SidebarDock, is_sidebar_pane, mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id,
-    repairable_nested_work_pane_ids, sidebar_dock_verdict, sidebar_width_off_spec,
+    SidebarDock, is_sidebar_pane, leftmost_live_work_pane, mounted_sidebar_pane, parse_new_pane_id,
+    parse_terminal_id, repairable_nested_work_pane_ids, sidebar_dock_verdict,
+    sidebar_width_off_spec,
 };
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
-    MOUNT_POLL_STEP, MOUNT_POLL_TIMEOUT, SIDEBAR_LAYOUT_TIMEOUT, SIDEBAR_PANE_NAME,
-    STACK_PANES_MIN_ZELLIJ, TAB_NAMES_ATTEMPTS, TAB_NAMES_RETRY_DELAY, ZellijBackend,
-    parse_version,
+    MOUNT_POLL_STEP, MOUNT_POLL_TIMEOUT, SIDEBAR_LAYOUT_TIMEOUT, STACK_PANES_MIN_ZELLIJ,
+    TAB_NAMES_ATTEMPTS, TAB_NAMES_RETRY_DELAY, ZellijBackend, parse_version,
 };
 use crate::ids::{MuxName, PaneId};
-use crate::mux::{DaemonView, MuxBackend, MuxErr, Result, SidebarPaneOptions};
+use crate::mux::{DaemonView, MuxBackend, MuxErr, Result, SidebarPaneOptions, sidebar_serve_args};
+use crate::pane::SIDEBAR_CHROME_TITLE;
 
 const ADD_DOCK_ATTEMPTS: u32 = 2;
 const DOCK_VERIFY_SETTLE: Duration = Duration::from_millis(100);
@@ -42,7 +43,7 @@ pub(super) enum DockOutcome {
 }
 
 impl ZellijBackend {
-    /// Create the background session from a layout that puts the `rimz-sidebar`
+    /// Create the background session from a layout that puts the sidebar chrome
     /// pane on the left and focuses the user's terminal on the right. The
     /// layout carries the new-tab template, so new tabs are born with a sidebar
     /// too. The sidebar pane is `close_on_exit`, so when its own process exits
@@ -92,14 +93,7 @@ impl ZellijBackend {
             spec = spec.env(key, value);
         }
         let spawn = || -> Result<bool> {
-            let mut command = spec.to_command();
-            command.current_dir(&opts.cwd);
-            let output = command.output().map_err(|err| match err.kind() {
-                std::io::ErrorKind::NotFound => MuxErr::NotInstalled {
-                    program: spec.program.clone(),
-                },
-                _ => MuxErr::Io(err),
-            })?;
+            let output = spec.clone().cwd(opts.cwd.clone()).output_raw()?;
             if output.status.success() {
                 return Ok(true);
             }
@@ -288,14 +282,7 @@ impl ZellijBackend {
         let Ok(panes) = self.list_panes_with_session(Some(session)) else {
             return;
         };
-        let Some(raw_id) = panes
-            .iter()
-            .filter(|pane| {
-                pane.tab_id == tab_id && pane.is_live_terminal() && !is_sidebar_pane(pane)
-            })
-            .min_by_key(|pane| (pane.pane_x.unwrap_or(u64::MAX), pane.id))
-            .map(|pane| pane.id)
-        else {
+        let Some(raw_id) = leftmost_live_work_pane(&panes, tab_id) else {
             return;
         };
         let _ = self.focus_terminal(session, raw_id);
@@ -321,14 +308,7 @@ impl ZellijBackend {
             }
             let mut acted = false;
             for tab_id in stranded_tabs {
-                if let Some(raw_id) = panes
-                    .iter()
-                    .filter(|pane| {
-                        pane.tab_id == tab_id && pane.is_live_terminal() && !is_sidebar_pane(pane)
-                    })
-                    .min_by_key(|pane| (pane.pane_x.unwrap_or(u64::MAX), pane.id))
-                    .map(|pane| pane.id)
-                {
+                if let Some(raw_id) = leftmost_live_work_pane(&panes, tab_id) {
                     let _ = self.focus_terminal(session, raw_id);
                     acted = true;
                 }
@@ -554,30 +534,24 @@ impl ZellijBackend {
         opts: &SidebarPaneOptions,
         tab_id: u64,
     ) -> Result<Option<String>> {
-        let args: Vec<String> = vec![
+        let mut args = vec![
             "new-pane".to_owned(),
             "--direction".to_owned(),
             "right".to_owned(),
             "--tab-id".to_owned(),
             tab_id.to_string(),
             "--name".to_owned(),
-            SIDEBAR_PANE_NAME.to_owned(),
+            SIDEBAR_CHROME_TITLE.to_owned(),
             "--borderless".to_owned(),
             "true".to_owned(),
             "--close-on-exit".to_owned(),
             "--cwd".to_owned(),
             opts.cwd.to_string_lossy().into_owned(),
             "--".to_owned(),
-            opts.rimz_bin.to_string_lossy().into_owned(),
-            "sidebar".to_owned(),
-            "serve".to_owned(),
-            "--mux".to_owned(),
-            "zellij".to_owned(),
-            "--workspace-id".to_owned(),
-            opts.workspace_id.as_str().to_owned(),
-            "--session-name".to_owned(),
-            opts.session_name.clone(),
         ];
+        let mut command = vec![opts.rimz_bin.to_string_lossy().into_owned()];
+        command.extend(sidebar_serve_args(MuxName::Zellij, opts));
+        args.extend(command);
         let output = self.zellij_action(&opts.session_name).args(args).run()?;
         Ok(parse_new_pane_id(&String::from_utf8_lossy(&output.stdout)))
     }
@@ -655,7 +629,7 @@ impl ZellijBackend {
     /// until Zellij has demonstrably parsed it. Returns `true` once that signal
     /// appears, `false` if the [`SIDEBAR_LAYOUT_TIMEOUT`] ceiling elapses first.
     ///
-    /// The predicate gates on *our* `rimz-sidebar` pane (a default/fallback
+    /// The predicate gates on *our* sidebar chrome pane (a default/fallback
     /// birth carries none) counted with the same `is_live_terminal` filter
     /// `list_panes` applies, so "materialized" here provably implies the
     /// caller's next `list_panes` returns the two panes — no held/exited pane

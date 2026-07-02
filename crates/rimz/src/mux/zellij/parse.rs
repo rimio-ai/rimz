@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 
-use super::SIDEBAR_PANE_NAME;
 use crate::ids::{MuxName, PaneId};
+use crate::pane::SIDEBAR_CHROME_TITLE;
 
 /// Whether `list-panes` stdout is the transient empty race rather than a real
 /// answer. Zellij spells "zero panes" as `[]`, so empty (or whitespace-only)
@@ -108,7 +108,7 @@ fn sidebar_cols_from_template_tokens(tokens: &[KdlToken]) -> Option<NonZeroU16> 
                 continue;
             };
             match (key, value) {
-                ("name", KdlTokenKind::String(value)) if value == SIDEBAR_PANE_NAME => {
+                ("name", KdlTokenKind::String(value)) if value == SIDEBAR_CHROME_TITLE => {
                     name_is_sidebar = true;
                 }
                 ("size", KdlTokenKind::Number(value)) => {

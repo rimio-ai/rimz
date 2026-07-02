@@ -74,7 +74,6 @@ pub use demo::{serve_fixture, serve_gallery};
 pub use health::Health;
 pub use state::{RenderState, compute_next_state};
 
-const SIDEBAR_TERMINAL_TITLE: &str = "rimz-sidebar";
 thread_local! {
     static PRODUCE_PANIC_DIAGNOSTIC_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
 }
@@ -456,7 +455,7 @@ fn close_self_closing_view_floating_panes(config: &ServeConfig) {
 
 fn set_terminal_title() -> io::Result<()> {
     let mut stdout = io::stdout();
-    write!(stdout, "\x1b]2;{SIDEBAR_TERMINAL_TITLE}\x07")?;
+    write!(stdout, "\x1b]2;{}\x07", crate::pane::SIDEBAR_CHROME_TITLE)?;
     stdout.flush()
 }
 
