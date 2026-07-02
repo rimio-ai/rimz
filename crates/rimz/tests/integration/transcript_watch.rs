@@ -1,12 +1,12 @@
 //! The transcript-watch trigger → refresh wiring: a simulated rollout-write
 //! event drives the same stat-gated refresh the producer tick uses
-//! (`rimz::sidebar::enrich::refresh_codex_transcript_context`), merging fresh
+//! (`rimz::sidebar::refresh::refresh_codex_transcript_context`), merging fresh
 //! tokens into the session's context sidecar. The OS watcher itself is not
 //! driven end-to-end — platform event semantics vary — so this asserts the
 //! refresh the watcher's flush invokes, against real sidecar and rollout files.
 
 use rimz::ledger::agent_context::{self, empty_context, new_record};
-use rimz::sidebar::enrich::refresh_codex_transcript_context;
+use rimz::sidebar::refresh::refresh_codex_transcript_context;
 
 use crate::common::Harness;
 

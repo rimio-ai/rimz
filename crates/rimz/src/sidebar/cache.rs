@@ -75,17 +75,6 @@ pub fn snapshot_cache_is_fresh(
     fresh && new_enough
 }
 
-/// Age of the producer's published same-session frame at `now_ms`, in
-/// milliseconds — the fork gate reads this to skip a fork while the frame is
-/// younger than one data tick. `None` when no same-session frame exists yet
-/// (cold start, or a session-handoff mismatch), which the gate reads as "no
-/// usable frame: produce". The age saturates, so a clock that ran backwards
-/// reads as fresh (age 0) rather than forcing a fork.
-pub fn published_frame_age_ms(runtime: &RuntimePaths, session: &str, now_ms: u64) -> Option<u64> {
-    published_frame_produced_at_ms(runtime, session)
-        .map(|produced_at_ms| now_ms.saturating_sub(produced_at_ms))
-}
-
 /// The producer timestamp of the published same-session pane frame. `None`
 /// when no usable same-session frame exists.
 pub fn published_frame_produced_at_ms(runtime: &RuntimePaths, session: &str) -> Option<u64> {

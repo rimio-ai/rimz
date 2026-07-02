@@ -1,9 +1,9 @@
 use super::*;
 use crate::ids::WorkspaceId;
 use crate::ledger::atomic;
-use crate::sidebar::enrich::PrStateCache;
 use crate::sidebar::frame::assemble_frame;
-use crate::sidebar::produce::git::{DiffStats, DiffStatsCacheEntry, WorktreeRootsCache};
+use crate::sidebar::refresh::PrStateCache;
+use crate::sidebar::refresh::git_stats::{DiffStats, DiffStatsCacheEntry, WorktreeRootsCache};
 use crate::sidebar::test_support::pane;
 use crate::sidebar::timing::{
     DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL, PR_STATE_RETRY_TTL, PR_STATE_TTL,
@@ -137,45 +137,6 @@ fn forced_pane_freshness_uses_observed_topology_time() {
     assert!(
         !snapshot_cache_is_fresh(&frame, now, Some(now - 1_000), EVENT_PANE_TTL),
         "a frame freshly republished from stale topology must not satisfy a post-event floor"
-    );
-}
-
-#[test]
-fn published_frame_age_is_session_scoped_and_saturating() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-
-    let produced_at_ms = 1_700_000_000_000;
-    let cache = assemble_frame(Vec::new(), produced_at_ms, "rimz-test");
-    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &cache).unwrap();
-
-    assert_eq!(
-        published_frame_age_ms(&runtime, "rimz-test", produced_at_ms + 1_500),
-        Some(1_500)
-    );
-    // A clock that ran backwards saturates to age 0 rather than wrapping huge
-    // and forcing a needless fork.
-    assert_eq!(
-        published_frame_age_ms(&runtime, "rimz-test", produced_at_ms - 1),
-        Some(0)
-    );
-    // A frame stamped for another session never matches: the fork gate reads
-    // `None` as "no usable frame", which is the election's job to fill.
-    assert_eq!(
-        published_frame_age_ms(&runtime, "other-session", produced_at_ms),
-        None
-    );
-
-    // No published frame at all -> `None` (the cold start).
-    let empty = tempfile::tempdir().unwrap();
-    let empty_rt =
-        RuntimePaths::under(WorkspaceId::from_project_root(empty.path()), empty.path()).unwrap();
-    empty_rt.ensure_dirs().unwrap();
-    assert_eq!(
-        published_frame_age_ms(&empty_rt, "rimz-test", produced_at_ms),
-        None
     );
 }
 

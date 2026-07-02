@@ -176,7 +176,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         now_ms,
         &crate::agents::spending::Spending::default(),
     );
-    let accounts = crate::sidebar::enrich::AccountsCache {
+    let accounts = crate::sidebar::refresh::AccountsCache {
         refreshed_at_ms: now_ms,
         accounts: Default::default(),
         ok: true,

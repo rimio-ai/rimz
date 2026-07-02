@@ -21,9 +21,6 @@
 pub(crate) mod git;
 mod metrics;
 mod panes;
-pub(crate) mod spending;
-
-pub use git::read_diff_stats_cache;
 
 use std::{
     collections::BTreeMap,
@@ -98,8 +95,8 @@ pub(crate) fn publish_test_pane_frame(
 /// enrichments. Inline `Refresh` publishes every shared cache consumers read;
 /// live `Project` publishes pane/root truth and projects the cache refresher's
 /// heavy lanes. `Err` on pane-discovery failure (or an unreadable ledger) —
-/// the caller owns the fallback: the serve loop degrades to its held frame, the
-/// CLI inspection call warns and emits [`produce_rollup_snapshot`].
+/// the caller owns the fallback: the serve loop degrades to its held frame, and
+/// CLI inspection can fall back to a frameless refreshed rollup.
 pub fn produce_snapshot(
     cursor: &mut RollupCursor,
     state: &StatePaths,
@@ -230,31 +227,6 @@ fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<SidebarSnapshot> {
     Ok(snapshot)
 }
 
-/// The producer enrichments over the bare rollup, with no pane frame — the
-/// inspection arm for a call with no live session, no detectable mux, or a
-/// failed pane discovery. Sidecar folds and published caches still project;
-/// rendered groups stay empty because no pane frame admitted cards.
-pub fn produce_rollup_snapshot(
-    cursor: &mut RollupCursor,
-    state: &StatePaths,
-    runtime: &RuntimePaths,
-    exclude: Option<&PaneId>,
-    min_pane_cache_ms: Option<u64>,
-) -> Result<SidebarSnapshot> {
-    let snapshot = rollup_snapshot(state, cursor)?;
-    Ok(enrich_producing_projecting(
-        snapshot,
-        None,
-        ProducerEnrich {
-            runtime,
-            messages_dir: &state.messages_dir,
-            exclude,
-            min_pane_cache_ms,
-            diag: None,
-        },
-    ))
-}
-
 pub fn produce_rollup_snapshot_with_refresh(
     cursor: &mut RollupCursor,
     state: &StatePaths,
@@ -291,7 +263,7 @@ pub fn refresh_producer_caches(
     let config = crate::config::MachineConfig::load().unwrap_or_default();
     let _ = refresh_heavy_lanes(
         &base,
-        &base,
+        &base.agents,
         &state.messages_dir,
         runtime,
         &config,
@@ -414,7 +386,7 @@ fn enrich_with_refresh(
     // should trigger a fresh `thread/loaded/list` read.
     let refreshed = refresh_heavy_lanes(
         &folded,
-        &snapshot,
+        &snapshot.agents,
         opts.messages_dir,
         opts.runtime,
         &config,

@@ -3,16 +3,14 @@ use crate::agents::SessionOrigin;
 use crate::agents::{AgentState, AgentStatus, TurnPhase};
 use crate::ledger::atomic;
 use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
-use crate::sidebar::enrich::AccountsCache;
-use crate::sidebar::produce::git::{
+use crate::sidebar::refresh::AccountsCache;
+use crate::sidebar::refresh::git_stats::{
     DiffStatsCacheEntry, focused_worktree_paths, hot_worktree_paths, needed_worktree_paths,
 };
-use crate::sidebar::refresh::{
-    CodexDaemonReap, daemon_reap_due, read_codex_daemon_reap, write_codex_daemon_reap,
-};
+use crate::sidebar::refresh::{CodexDaemonReap, read_codex_daemon_reap, write_codex_daemon_reap};
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
+use crate::sidebar::timing::GIT_ACTIVITY_WINDOW;
 use crate::sidebar::timing::unix_now_ms;
-use crate::sidebar::timing::{CODEX_DAEMON_REAP_TTL, GIT_ACTIVITY_WINDOW};
 use jiff::SignedDuration;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -578,30 +576,6 @@ fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
         None,
     );
     assert_eq!(snapshot.agents.len(), 1, "absent cache reaps nothing");
-}
-
-#[test]
-fn daemon_reap_due_tracks_cache_ttl() {
-    let ttl_ms = CODEX_DAEMON_REAP_TTL.as_millis() as u64;
-    let now_ms = ttl_ms * 2 + 10;
-
-    assert!(daemon_reap_due(&None, now_ms));
-    assert!(!daemon_reap_due(
-        &Some(CodexDaemonReap {
-            produced_at_ms: now_ms.saturating_sub(ttl_ms),
-            daemon_pids: BTreeSet::new(),
-            loaded: None,
-        }),
-        now_ms
-    ));
-    assert!(daemon_reap_due(
-        &Some(CodexDaemonReap {
-            produced_at_ms: now_ms.saturating_sub(ttl_ms).saturating_sub(1),
-            daemon_pids: BTreeSet::new(),
-            loaded: None,
-        }),
-        now_ms
-    ));
 }
 
 #[test]

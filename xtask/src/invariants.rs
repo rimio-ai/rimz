@@ -38,6 +38,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_sidebar_renderer_boundaries(root, &files)?;
     ensure_spend_parser_boundaries(root, &files)?;
     ensure_sidebar_library_boundaries(root, &files)?;
+    ensure_sidebar_enrich_projection_only(root, &files)?;
     ensure_sidebar_event_log_reads_through_rollup(root, &files)?;
     ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
     ensure_diag_writes_stay_in_diag(root, &files)?;
@@ -151,6 +152,27 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         )?;
     }
     Ok(())
+}
+
+fn ensure_sidebar_enrich_projection_only(root: &Path, files: &[PathBuf]) -> Result<()> {
+    for needle in [
+        concat!("Command", "::", "new"),
+        concat!("std", "::", "process"),
+        "child_process",
+    ] {
+        ensure_no_match(
+            files,
+            needle,
+            |path| !is_sidebar_enrich_source(root, path),
+            "sidebar enrich is projection-only: subprocess lanes live in crates/rimz/src/sidebar/refresh/",
+        )?;
+    }
+    Ok(())
+}
+
+fn is_sidebar_enrich_source(root: &Path, path: &Path) -> bool {
+    path == root.join("crates/rimz/src/sidebar/enrich.rs")
+        || path.starts_with(root.join("crates/rimz/src/sidebar/enrich"))
 }
 
 fn ensure_sidebar_event_log_reads_through_rollup(root: &Path, files: &[PathBuf]) -> Result<()> {

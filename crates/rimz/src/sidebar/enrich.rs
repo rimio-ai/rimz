@@ -1,8 +1,8 @@
-//! Shared sidebar enrichment fold over a ledger rollup and an optional pane frame.
+//! Shared sidebar projection fold over a ledger rollup and optional pane frame.
 //!
-//! One ordered spine serves both producer and consumer reads. Heavy producer
-//! work runs in `sidebar::refresh`; this fold projects either supplied lane
-//! values or the producer's published runtime caches.
+//! One ordered spine serves both producer and consumer reads. It projects lane
+//! caches and sidecars; it forks no subprocess and writes nothing except the
+//! producing-gated live-spend baseline sidecar.
 
 use std::collections::{BTreeMap, HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
@@ -28,39 +28,19 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use super::frame::{PaneFrame, PaneMetrics};
-use super::refresh::read_codex_daemon_reap;
+use super::refresh::accounts::{cached_accounts_for_snapshot, read_accounts_cache};
+use super::refresh::credits::apply_credits_cache;
+use super::refresh::daemon_reap::read_codex_daemon_reap;
+use super::refresh::git_stats::{
+    DiffStatsCache, DiffStatsCacheEntry, read_diff_stats_cache, worktree_group_path,
+};
+use super::refresh::live_spend::{apply_live_today_spend, refresh_live_spend_baselines};
+use super::refresh::pr::{PrStateCache, read_pr_state_cache};
+use super::refresh::rate_limits::apply_rate_limit_cache;
 use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 
-mod accounts;
-mod codex_refresh;
-mod credits;
-mod forge;
-mod live_spend;
-mod rate_limits;
 #[cfg(test)]
 mod tests;
-mod usage_refresh;
-
-pub use codex_refresh::refresh_codex_transcript_context;
-pub(crate) use credits::apply_credits_cache;
-pub use credits::{
-    CreditsCache, ProviderCreditsEntry, merge_provider_credits,
-    merge_provider_credits_entry_if_due, provider_credits_entry_fresh,
-};
-pub use live_spend::{apply_live_today_spend, live_row_costs};
-pub(crate) use rate_limits::apply_rate_limit_cache;
-pub use rate_limits::merge_account_rate_limits;
-pub use usage_refresh::merge_oauth_usage_if_due;
-
-use crate::sidebar::produce::git::worktree_group_path;
-use crate::sidebar::produce::git::{DiffStatsCache, DiffStatsCacheEntry, read_diff_stats_cache};
-pub use accounts::AccountsCache;
-pub(crate) use accounts::{cached_accounts_for_snapshot, produce_accounts, read_accounts_cache};
-pub(crate) use codex_refresh::refresh_codex_sessions;
-pub use forge::PrStateCache;
-pub(crate) use forge::{produce_pr_states, read_pr_state_cache};
-use live_spend::refresh_live_spend_baselines;
-pub(crate) use usage_refresh::refresh_account_usage;
 
 /// The repo's worktree checkout roots the producer last published, read-only
 /// (no `git worktree list` fork). A consumer reuses whatever the elder cached,
@@ -314,6 +294,7 @@ pub fn enrich(
         runtime,
         crate::sidebar::timing::unix_now_ms(),
     );
+    let diff_cache = read_diff_stats_cache(&runtime.diff_stats_path());
 
     // The room's enumerated group roots — a repo room's worktree checkouts, so
     // one parked outside the project root still earns its own pod instead of
@@ -323,7 +304,13 @@ pub fn enrich(
     if let Some(roots) = opts.fresh_roots.take() {
         snapshot = snapshot.with_worktree_roots(roots);
     } else if snapshot.project_root.is_some() {
-        snapshot = snapshot.with_worktree_roots(cached_worktree_roots(runtime));
+        snapshot = snapshot.with_worktree_roots(
+            diff_cache
+                .worktrees
+                .as_ref()
+                .map(|cache| cache.roots.clone())
+                .unwrap_or_default(),
+        );
     }
     // The repo's durable worktree home, resolved purely from the project root
     // plus the `[agents.worktree] dir` template — independent of `git worktree list`,
@@ -463,7 +450,6 @@ pub fn enrich(
     let lanes = opts.lanes;
     let (mut folded, spending_caches) =
         fold_machine_config(snapshot, runtime, machine_config, lanes);
-    let diff_cache = read_diff_stats_cache(&runtime.diff_stats_path());
     project_diff_stats(&mut folded, &diff_cache);
     if let Some(lanes) = lanes {
         project_pr_state_map(&mut folded, &lanes.pr_states);

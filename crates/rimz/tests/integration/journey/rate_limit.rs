@@ -5,7 +5,7 @@ use rimz::agents::RateLimitsCache;
 use rimz::agents::context::WindowSource;
 use rimz::agents::{AgentAccount, AgentRateLimits, RateLimitWindow};
 use rimz::ids::MuxName;
-use rimz::sidebar::enrich::AccountsCache;
+use rimz::sidebar::refresh::AccountsCache;
 use rimz::sidebar::timing::unix_now_ms;
 use serde_json::json;
 

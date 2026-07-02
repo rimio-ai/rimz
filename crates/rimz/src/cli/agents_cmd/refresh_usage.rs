@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 
 use rimz::ids::WorkspaceId;
-use rimz::sidebar::enrich::merge_oauth_usage_if_due;
+use rimz::sidebar::refresh::merge_oauth_usage_if_due;
 use rimz::{RuntimePaths, agents};
 
 use crate::cli::GlobalFlags;
@@ -69,11 +69,11 @@ fn refresh_codex(runtime: &RuntimePaths) -> bool {
     let app_windows_missing = enrichment.context.rate_limits.is_none();
     let app_credits_missing = enrichment.extra_credits.is_none();
     if let Some(extra_credits) = enrichment.extra_credits.clone() {
-        rimz::sidebar::enrich::merge_provider_credits(runtime, "codex", Some(extra_credits));
+        rimz::sidebar::refresh::merge_provider_credits(runtime, "codex", Some(extra_credits));
         wrote = true;
     }
     if let Some(rate_limits) = enrichment.context.rate_limits.clone() {
-        rimz::sidebar::enrich::merge_account_rate_limits(runtime, "codex", rate_limits);
+        rimz::sidebar::refresh::merge_account_rate_limits(runtime, "codex", rate_limits);
         wrote = true;
     }
     if app_windows_missing || app_credits_missing {

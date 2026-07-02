@@ -119,7 +119,7 @@ fn watch_while_elected(
                 return Ok(());
             }
             for target in due_refreshes(&pending, &roster) {
-                crate::sidebar::enrich::refresh_codex_transcript_context(
+                crate::sidebar::refresh::refresh_codex_transcript_context(
                     runtime,
                     &target.session_id,
                     target.model_hint.as_deref(),

@@ -227,7 +227,7 @@ impl<'a> RoomHarness<'a> {
         self.env.publish_provider_spending(spending);
     }
 
-    pub fn publish_accounts(&self, accounts: &rimz::sidebar::enrich::AccountsCache) {
+    pub fn publish_accounts(&self, accounts: &rimz::sidebar::refresh::AccountsCache) {
         self.env.publish_accounts(accounts);
     }
 

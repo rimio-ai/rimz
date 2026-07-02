@@ -64,7 +64,7 @@ impl Harness {
             now_ms,
             &rimz::agents::spending::Spending::default(),
         );
-        let accounts = rimz::sidebar::enrich::AccountsCache {
+        let accounts = rimz::sidebar::refresh::AccountsCache {
             refreshed_at_ms: now_ms,
             accounts: Default::default(),
             ok: false,

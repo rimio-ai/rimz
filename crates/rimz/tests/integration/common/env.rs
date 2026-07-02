@@ -590,7 +590,7 @@ impl Env {
         );
     }
 
-    pub fn publish_accounts(&self, accounts: &rimz::sidebar::enrich::AccountsCache) {
+    pub fn publish_accounts(&self, accounts: &rimz::sidebar::refresh::AccountsCache) {
         rimz::ledger::atomic::write_temp_then_rename_cache(
             &self.runtime_paths().shared_accounts_path(),
             accounts,

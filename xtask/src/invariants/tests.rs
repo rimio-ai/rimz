@@ -129,6 +129,32 @@ fn sidebar_event_log_reads_must_route_through_rollup() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn sidebar_enrich_stays_projection_only() {
+    let root = temp_repo_root("sidebar-enrich-projection-only");
+    let bad = root.join("crates/rimz/src/sidebar/enrich/bad.rs");
+    let refresh = root.join("crates/rimz/src/sidebar/refresh/usage.rs");
+    for path in [&bad, &refresh] {
+        std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
+    }
+    std::fs::write(&bad, "fn f() { std::process::Command::new(\"git\"); }\n")
+        .expect("write bad source");
+    std::fs::write(
+        &refresh,
+        "fn f() { std::process::Command::new(\"rimz\"); }\n",
+    )
+    .expect("write refresh source");
+
+    let err =
+        ensure_sidebar_enrich_projection_only(&root, &[bad.clone(), refresh.clone()]).unwrap_err();
+    assert!(err.to_string().contains("projection-only"));
+    assert!(err.to_string().contains(&bad.display().to_string()));
+    assert!(!err.to_string().contains(&refresh.display().to_string()));
+
+    ensure_sidebar_enrich_projection_only(&root, &[refresh]).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
 fn temp_repo_root(label: &str) -> PathBuf {
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

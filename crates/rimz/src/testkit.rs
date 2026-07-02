@@ -15,8 +15,8 @@ pub mod fleet {
     use crate::ledger::{StatePaths, event_log};
     use crate::pane::PaneRef;
     use crate::schema::event::EventEnvelope;
-    use crate::sidebar::enrich::AccountsCache;
     use crate::sidebar::produce::ProduceOptions;
+    use crate::sidebar::refresh::AccountsCache;
     use crate::{RuntimePaths, agents, sidebar};
 
     use std::io;
