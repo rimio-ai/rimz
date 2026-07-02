@@ -326,7 +326,7 @@ fn pixel_shift_clear_uses_fresh_rect_from_draw() {
         "draw computes the fresh pixel rect after the stale pre-draw state"
     );
     assert!(
-        output.contains("\u{1b}[J") || output.contains("\u{1b}[K"),
+        output.contains("\u{1b}[2J") || output.contains("\u{1b}[J") || output.contains("\u{1b}[K"),
         "stale rect must trigger a full terminal clear after the fresh draw"
     );
 }

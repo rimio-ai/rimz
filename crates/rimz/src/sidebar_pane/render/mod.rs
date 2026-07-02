@@ -54,7 +54,7 @@ use crate::config::AnimationSpec;
 use crate::config::GlyphRole;
 use crate::sidebar_pane::pets::PetAction;
 use crate::{ProcessState, SidebarRow, SidebarSnapshot};
-use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
+use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend};
 use ratatui::layout::Rect;
 use ratatui::text::Text;
 use ratatui::widgets::{Clear, Paragraph, Wrap};
@@ -528,7 +528,7 @@ pub fn render_fixed<W: Write>(
     let backend = CrosstermBackend::new(writer);
     let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
     let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport })?;
-    terminal.clear()?;
+    Backend::clear_region(terminal.backend_mut(), ClearType::All)?;
     draw_to_terminal(&mut terminal, snapshot, alert)?;
     Ok(())
 }

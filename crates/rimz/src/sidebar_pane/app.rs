@@ -32,7 +32,7 @@ use crate::sidebar_pane::pets::{
 };
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{ClearType, CrosstermBackend};
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use tracing::{debug, warn};
 
@@ -563,7 +563,10 @@ fn draw_frame_and_paint_pet_pixel<W: Write>(
     // recovery must run after one draw. A pre-draw check only sees the previous
     // frame's rect and misses the steady same-pet layout shift.
     if pixel_painter.needs_full_redraw(paintable_pet_pixel(ui, pet_assets)) {
-        terminal.clear()?;
+        ratatui::backend::Backend::clear_region(terminal.backend_mut(), ClearType::All)?;
+        // The terminal contents are gone, so make ratatui diff against an empty
+        // previous buffer on the redraw without querying the real cursor.
+        terminal.swap_buffers();
         render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
     }
     paint_pet_pixel(ui, pet_assets, pixel_painter, terminal)

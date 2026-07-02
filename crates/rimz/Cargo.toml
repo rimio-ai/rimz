@@ -119,7 +119,6 @@ anstyle.workspace = true
 clap.workspace = true
 colorchoice.workspace = true
 crc32fast.workspace = true
-fs4.workspace = true
 glob.workspace = true
 hex.workspace = true
 image-webp.workspace = true

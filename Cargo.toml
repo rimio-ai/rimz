@@ -79,6 +79,7 @@ unicode-width = "0.2"
 # the config install gate. It is already in the tree transitively via `insta`;
 # making it direct lets the user-visible security diff use the library rather
 # than a hand-rolled approximation.
+# Held on 2.x because `insta` still requires `similar ^2`; bump with insta to avoid a duplicate tree entry.
 similar = "2"
 
 # HTTP — pricing refresh: the runtime LiteLLM/models.dev fetch and the
@@ -110,7 +111,6 @@ sentry = { version = "0.48", default-features = false, features = [
 sentry-tracing = "0.48"
 
 # Filesystem and locking
-fs4 = { version = "1", features = ["sync"] }
 tempfile = "3"
 # Worktree seeding — `.worktreeinclude` lists glob patterns whose matches are
 # copied from the checkout into a freshly created worktree. `glob` expands a
@@ -144,6 +144,7 @@ crc32fast = "1"
 
 # OS integration (cfg(unix))
 nix = { version = "0.31", features = ["feature", "fs", "process", "signal", "socket", "user"] }
+# Held on 0.3 because `crossterm` 0.29 (via ratatui) requires `^0.3.17`; bump when that line moves.
 signal-hook = "0.3"
 
 # Process detection

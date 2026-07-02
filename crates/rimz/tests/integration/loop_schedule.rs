@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use fs4::FileExt;
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
@@ -1020,7 +1019,7 @@ fn loop_run_overlapped_records_skip_and_keeps_task_state() {
         .truncate(false)
         .open(&lock_path)
         .expect("open lock");
-    FileExt::try_lock(&lock_file).expect("hold loop run lock");
+    lock_file.try_lock().expect("hold loop run lock");
 
     let run = env
         .rimz()
@@ -1062,7 +1061,7 @@ fn loop_run_overlapped_records_skip_and_keeps_task_state() {
         stdout.contains("overlapped"),
         "show should display overlapped record: {stdout}"
     );
-    FileExt::unlock(&lock_file).expect("unlock loop run lock");
+    lock_file.unlock().expect("unlock loop run lock");
 }
 
 #[test]

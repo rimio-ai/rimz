@@ -72,7 +72,7 @@ fn snapshot_to_screen_with_alert_and_ui(
     let backend = CrosstermBackend::new(&mut bytes);
     let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
     let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
-    terminal.clear().unwrap();
+    Backend::clear_region(terminal.backend_mut(), ClearType::All).unwrap();
     let mut ui = ui.clone();
     draw_to_terminal_with_ui(&mut terminal, snapshot, alert, &mut ui).unwrap();
     drop(terminal);

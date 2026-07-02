@@ -15,14 +15,12 @@
 //! value with carry-forward vs a multi-key, per-entry-TTL map). Only the
 //! election is common, so only the election lives here.
 //!
-//! Pure `fs4`/`std`: it imports no ledger-writer module, so it is safe to call
+//! Pure `std`: it imports no ledger-writer module, so it is safe to call
 //! from any subtree (including the sidebar's read-only import graph) and is
 //! unit-testable off the hot files.
 
 use std::path::Path;
 use std::time::Duration;
-
-use fs4::FileExt;
 
 /// Outcome of contending for the single-flight lock.
 pub enum Coalesced<T> {
@@ -51,7 +49,7 @@ pub struct ProducerGuard {
 impl Drop for ProducerGuard {
     fn drop(&mut self) {
         // Best-effort: a failed unlock only defers release to fd close.
-        let _ = FileExt::unlock(&self.file);
+        let _ = self.file.unlock();
     }
 }
 
@@ -80,7 +78,7 @@ pub fn coalesce<T>(
         // call): just produce, uncached.
         return Coalesced::ProduceLocal;
     };
-    match FileExt::try_lock(&file) {
+    match file.try_lock() {
         // We are the single producer. A peer may have published between our
         // miss and acquiring the lock, so re-check before doing the work.
         Ok(()) => match fresh() {

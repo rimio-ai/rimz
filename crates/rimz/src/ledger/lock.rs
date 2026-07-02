@@ -8,8 +8,6 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use fs4::FileExt;
-
 #[derive(Debug, thiserror::Error)]
 pub enum LockErr {
     #[error("could not open workspace lock {path}: {source}")]
@@ -68,7 +66,7 @@ impl Drop for WorkspaceLock {
     fn drop(&mut self) {
         // Best-effort unlock; failure here is unrecoverable and would only
         // mean the lock is released on process exit instead.
-        let _ = FileExt::unlock(&self.file);
+        let _ = self.file.unlock();
     }
 }
 

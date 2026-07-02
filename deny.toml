@@ -38,7 +38,7 @@ multiple-versions = "warn"
 wildcards = "deny"
 deny = [
     # Unmaintained / superseded — keep this list short and explained.
-    { name = "fs2", reason = "unmaintained; use fs4 instead" },
+    { name = "fs2", reason = "unmaintained; use std `File` locking instead" },
 ]
 skip = [
     # The `ring` crypto backend reached via `ureq`/`rustls` pins older support

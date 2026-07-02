@@ -7,7 +7,6 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use fs4::FileExt;
 use jiff::Timestamp;
 
 use crate::agents::shortest_window_running;
@@ -28,7 +27,7 @@ pub struct RunLockGuard {
 
 impl Drop for RunLockGuard {
     fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.file);
+        let _ = self.file.unlock();
     }
 }
 
@@ -46,9 +45,9 @@ pub fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<Option<RunLockG
         .truncate(false)
         .open(&path)
         .with_context(|| format!("opening loop run lock `{}`", path.display()))?;
-    match FileExt::try_lock(&file) {
+    match file.try_lock() {
         Ok(()) => Ok(Some(RunLockGuard { file })),
-        Err(fs4::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
         Err(err) => Err(std::io::Error::from(err))
             .with_context(|| format!("locking loop run lock `{}`", path.display())),
     }
