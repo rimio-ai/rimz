@@ -118,7 +118,7 @@ fn non_empty(text: &str) -> Option<&str> {
     (!text.is_empty()).then_some(text)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ChatEntry {
     pub from: String,
     #[serde(skip_serializing_if = "Option::is_none")]
