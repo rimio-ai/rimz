@@ -138,7 +138,7 @@ const TRACE_PANE: &str = "terminal_3";
 
 fn register_idle_channel_agent(env: &Env, session_id: &str, channel: &str) {
     let payload = json!({
-        "hook_event_name": "Stop",
+        "hook_event_name": "SessionStart",
         "session_id": session_id,
         "worktree_path": env.project_root.display().to_string(),
     })

@@ -369,6 +369,7 @@ mod tests {
             turn_started_at: None,
             compacting_since: None,
             compaction_count: 0,
+            last_compact_command_tokens: None,
             last_seen: observed_at,
             last_activity: observed_at,
             registered_at: Some(observed_at),

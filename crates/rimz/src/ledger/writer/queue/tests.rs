@@ -515,6 +515,7 @@ fn agent() -> AgentState {
         turn_started_at: None,
         compacting_since: None,
         compaction_count: 0,
+        last_compact_command_tokens: None,
         last_seen: now,
         last_activity: now,
         registered_at: Some(now),

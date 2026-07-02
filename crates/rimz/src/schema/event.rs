@@ -246,6 +246,7 @@ pub struct EventEnvelope {
     pub event_id: EventId,
     pub workspace_id: WorkspaceId,
     pub session_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mux: Option<MuxName>,
     pub source: String,
     pub source_kind: String,

@@ -191,6 +191,7 @@ pub struct WorkspaceRewriteOutcome {
 pub struct EventLogRotationOutcome {
     pub rotation: event_log::RotationOutcome,
     pub pruned: event_log::PruneOutcome,
+    pub terminal_pruned: event_log::PruneOutcome,
     pub carryover_agents: usize,
 }
 
@@ -296,10 +297,10 @@ impl Ledger {
         scope: runtime::RuntimeScope,
     ) -> Result<runtime::RuntimeProjection> {
         let items = feed_store::list(&self.inner.paths.feed_dir)?;
-        let events = event_log::read_all(&self.inner.paths.events_log)?;
-        let (_, agents, _) = snapshot::catch_up_rollup(&self.inner.paths)?;
+        let (cache, agents, _) = snapshot::catch_up_rollup(&self.inner.paths)?;
+        let ended = cache.tombstones.into_iter().collect();
         Ok(runtime::RuntimeProjection::from_parts(
-            items, events, agents, scope,
+            items, ended, agents, scope,
         ))
     }
 
@@ -329,5 +330,80 @@ impl Ledger {
     /// torn records at `warn`.
     pub fn read_events(&self) -> Result<Vec<EventEnvelope>> {
         Ok(event_log::read_all(&self.inner.paths.events_log)?)
+    }
+
+    /// Return a frame-aligned active-log offset for incremental wait polls.
+    pub fn wait_fold_base(&self) -> Result<u64> {
+        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+        match std::fs::metadata(&self.inner.paths.events_log) {
+            Ok(meta) => Ok(meta.len()),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(0),
+            Err(source) => Err(LedgerErr::Io {
+                path: self.inner.paths.events_log.clone(),
+                source,
+            }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::AgentLifecycleObservation;
+    use crate::agents::lifecycle::LifecycleSignal;
+
+    fn lifecycle(workspace_id: &WorkspaceId, index: usize) -> EventEnvelope {
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(format!("agent-{index}"))),
+            LifecycleSignal::Registered,
+        );
+        observation.agent_name = Some(format!("agent-{index}"));
+        EventEnvelope::agent_lifecycle(
+            workspace_id.clone(),
+            "session",
+            "claude",
+            "SessionStart",
+            &observation,
+        )
+    }
+
+    #[test]
+    fn runtime_projection_uses_the_rollup_cache_not_the_full_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        runtime.ensure_dirs().unwrap();
+        for index in 0..16 {
+            event_log::append(&paths.events_log, &lifecycle(&workspace_id, index)).unwrap();
+        }
+        let log_len = std::fs::metadata(&paths.events_log).unwrap().len();
+        snapshot::rebuild(&paths).unwrap();
+        let ledger = Ledger::open(paths.clone(), runtime).unwrap();
+
+        let warm_before = event_log::testkit::bytes_read();
+        let projection = ledger
+            .runtime_projection(RuntimeScope::Audit)
+            .expect("projection");
+        let warm_bytes = event_log::testkit::bytes_read() - warm_before;
+        assert_eq!(projection.agents.len(), 16);
+        assert_eq!(
+            warm_bytes, 0,
+            "fresh rollup cache avoids rereading the {log_len}-byte history"
+        );
+
+        event_log::append(&paths.events_log, &lifecycle(&workspace_id, 16)).unwrap();
+        let appended = std::fs::metadata(&paths.events_log).unwrap().len() - log_len;
+        let delta_before = event_log::testkit::bytes_read();
+        let projection = ledger
+            .runtime_projection(RuntimeScope::Audit)
+            .expect("projection after append");
+        let delta_bytes = event_log::testkit::bytes_read() - delta_before;
+        assert_eq!(projection.agents.len(), 17);
+        assert_eq!(
+            delta_bytes, appended,
+            "runtime projection folds only the appended frame"
+        );
     }
 }

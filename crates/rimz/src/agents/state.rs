@@ -620,6 +620,12 @@ pub struct AgentState {
     /// compaction. Display-only.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compaction_count: u32,
+    /// Occupied-context-token reading for the latest smart-compact command this
+    /// agent received. The send path suppresses duplicate `/compact` sends while
+    /// the carried-forward gauge still equals this baseline, without rescanning
+    /// old message events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_compact_command_tokens: Option<u64>,
     pub last_seen: Timestamp,
     pub last_activity: Timestamp,
     /// When this session first entered the rollup — the timestamp of its
@@ -736,6 +742,42 @@ impl AgentState {
                 .map(f64::from),
         }
     }
+
+    pub(crate) fn backfill_rotation_enrichment_from(&mut self, base: &Self) {
+        if self.transcript_path.is_none() {
+            self.transcript_path = base.transcript_path.clone();
+        }
+        if self.worktree_path.is_none() {
+            self.worktree_path = base.worktree_path.clone();
+        }
+        if self.worktree_branch.is_none() {
+            self.worktree_branch = base.worktree_branch.clone();
+        }
+        if self.role.is_none() {
+            self.role = base.role.clone();
+        }
+        if self.team.is_none() {
+            self.team = base.team.clone();
+        }
+        if self.channel.is_none() {
+            self.channel = base.channel.clone();
+        }
+        if self.profile.is_none() {
+            self.profile = base.profile.clone();
+        }
+        if self.model.is_none() {
+            self.model = base.model.clone();
+        }
+        if self.effort.is_none() {
+            self.effort = base.effort.clone();
+        }
+        if self.context_window.is_none() {
+            self.context_window = base.context_window;
+        }
+        if self.last_compact_command_tokens.is_none() {
+            self.last_compact_command_tokens = base.last_compact_command_tokens;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -838,6 +880,7 @@ mod tests {
             turn_started_at: None,
             compacting_since: None,
             compaction_count: 0,
+            last_compact_command_tokens: None,
             last_seen: at,
             last_activity: at,
             registered_at: Some(at),

@@ -6,8 +6,9 @@
 
 use crate::agents::AgentState;
 use crate::feed::{FeedItem, Surface};
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
-use crate::schema::event::EventEnvelope;
+use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeScope {
@@ -18,26 +19,26 @@ pub enum RuntimeScope {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RuntimeProjection {
     pub items: Vec<FeedItem>,
-    pub events: Vec<EventEnvelope>,
+    pub ended: BTreeSet<(AgentKind, AgentSessionId)>,
     pub agents: Vec<AgentState>,
 }
 
 impl RuntimeProjection {
     pub fn from_parts(
         items: Vec<FeedItem>,
-        events: Vec<EventEnvelope>,
+        ended: BTreeSet<(AgentKind, AgentSessionId)>,
         agents: Vec<AgentState>,
         scope: RuntimeScope,
     ) -> Self {
         match scope {
             RuntimeScope::Audit => Self {
                 items,
-                events,
+                ended,
                 agents,
             },
             RuntimeScope::Runtime => Self {
                 items: items.into_iter().filter(item_is_runtime_visible).collect(),
-                events,
+                ended,
                 agents: agents
                     .into_iter()
                     .filter(agent_is_runtime_visible)
@@ -171,6 +172,7 @@ mod tests {
             turn_started_at: None,
             compacting_since: None,
             compaction_count: 0,
+            last_compact_command_tokens: None,
             last_seen: Timestamp::UNIX_EPOCH,
             last_activity: Timestamp::UNIX_EPOCH,
             registered_at: Some(Timestamp::UNIX_EPOCH),
@@ -222,7 +224,7 @@ mod tests {
                     )),
                 ),
             ],
-            Vec::new(),
+            BTreeSet::new(),
             Vec::new(),
             RuntimeScope::Runtime,
         );
@@ -234,7 +236,7 @@ mod tests {
 
         let audit = RuntimeProjection::from_parts(
             vec![item(Surface::Script, None)],
-            Vec::new(),
+            BTreeSet::new(),
             Vec::new(),
             RuntimeScope::Audit,
         );
@@ -252,8 +254,12 @@ mod tests {
             None,
         ))));
 
-        let projection =
-            RuntimeProjection::from_parts(Vec::new(), Vec::new(), agents, RuntimeScope::Runtime);
+        let projection = RuntimeProjection::from_parts(
+            Vec::new(),
+            BTreeSet::new(),
+            agents,
+            RuntimeScope::Runtime,
+        );
 
         assert_eq!(
             projection.agents.len(),

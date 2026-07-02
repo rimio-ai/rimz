@@ -32,6 +32,43 @@ fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
 }
 
 #[test]
+fn live_winner_backfills_trimmed_carryover_enrichment() {
+    let mut carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
+    carried.transcript_path = Some("/tmp/transcript.jsonl".into());
+    carried.worktree_path = Some("/repo".into());
+    carried.worktree_branch = Some("main".into());
+    carried.role = Some("coder".into());
+    carried.team = Some("pcr".into());
+    carried.channel = Some("event-log".into());
+    carried.profile = Some("claude-coder".into());
+    carried.model = Some("opus".into());
+    carried.effort = Some("high".into());
+    carried.context_window = Some(200_000);
+    carried.last_compact_command_tokens = Some(180_000);
+    let live = agent("claude", "agent-1", AgentStatus::Running, 2_000);
+
+    let merged = merge_agent_rollups(std::slice::from_ref(&carried), std::slice::from_ref(&live));
+
+    assert_eq!(merged.len(), 1);
+    let agent = &merged[0];
+    assert_eq!(agent.status, AgentStatus::Running);
+    assert_eq!(agent.transcript_path, carried.transcript_path);
+    assert_eq!(agent.worktree_path, carried.worktree_path);
+    assert_eq!(agent.worktree_branch, carried.worktree_branch);
+    assert_eq!(agent.role, carried.role);
+    assert_eq!(agent.team, carried.team);
+    assert_eq!(agent.channel, carried.channel);
+    assert_eq!(agent.profile, carried.profile);
+    assert_eq!(agent.model, carried.model);
+    assert_eq!(agent.effort, carried.effort);
+    assert_eq!(agent.context_window, carried.context_window);
+    assert_eq!(
+        agent.last_compact_command_tokens,
+        carried.last_compact_command_tokens
+    );
+}
+
+#[test]
 fn carryover_session_end_tombstones_older_agent_state() {
     let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
     let carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);

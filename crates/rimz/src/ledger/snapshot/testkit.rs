@@ -179,6 +179,7 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         turn_started_at: None,
         compacting_since: None,
         compaction_count: 0,
+        last_compact_command_tokens: None,
         last_seen: timestamp,
         last_activity: timestamp,
         registered_at: Some(timestamp),

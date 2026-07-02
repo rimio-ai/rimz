@@ -414,6 +414,7 @@ fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {
         turn_started_at: None,
         compacting_since: None,
         compaction_count: 0,
+        last_compact_command_tokens: None,
         last_seen: jiff::Timestamp::UNIX_EPOCH,
         last_activity: jiff::Timestamp::UNIX_EPOCH,
         registered_at: Some(jiff::Timestamp::UNIX_EPOCH),

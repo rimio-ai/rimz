@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::project::{
     AgentIdentityState, FoldEvent, backfill_agent_identities, decode_events,
-    reduce_agent_states_seeded_with_identity,
+    reduce_agent_states_seeded_with_identity, stamp_compact_commands_in_agents,
 };
 use super::{Result, SnapshotErr};
 use crate::agents::AgentState;
@@ -120,22 +120,15 @@ pub(super) fn merge_agent_rollups_with_tombstones(
         match map.get(&key) {
             Some(existing) if existing.last_seen > entry.last_seen => {}
             _ => {
-                map.insert(key, entry.clone());
+                let mut merged = entry.clone();
+                if let Some(existing) = map.get(&key) {
+                    merged.backfill_rotation_enrichment_from(existing);
+                }
+                map.insert(key, merged);
             }
         }
     }
     map.into_values().collect()
-}
-
-/// The `(kind, agent_id)` set whose sessions ended in `events` — an `Ended`
-/// lifecycle signal. Exposed so resume-on-rebirth can drop a cleanly-ended
-/// agent from the audit rollup (which, unlike the carryover merge, keeps a
-/// within-log `SessionEnd` row), never re-spawning a session the user closed.
-pub fn agent_tombstones_for_events(
-    events: &[EventEnvelope],
-) -> BTreeSet<(AgentKind, AgentSessionId)> {
-    let events = decode_events(events);
-    agent_tombstones_for_decoded_events(&events)
 }
 
 fn agent_tombstones_for_decoded_events(
@@ -161,7 +154,7 @@ fn agent_tombstones_for_decoded_events(
 
 /// Bump when [`RollupCache`]'s shape changes — a mismatched cache reads as
 /// absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 9;
+const ROLLUP_CACHE_VERSION: u32 = 10;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map and this generation's tombstones, stamped
@@ -291,6 +284,7 @@ fn catch_up_from(
         };
     let (delta, end) = event_log::read_from_offset(&paths.events_log, start)?;
     let decoded_delta = decode_events(&delta);
+    stamp_compact_commands_in_agents(&mut carryover.agents, &decoded_delta);
     saw_session_rebirth |= events_have_rebirth(&decoded_delta);
     let (map, mut agent_identity) =
         reduce_agent_states_seeded_with_identity(seed, identity, &decoded_delta);

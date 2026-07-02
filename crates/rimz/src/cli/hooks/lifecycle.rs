@@ -354,6 +354,10 @@ fn event_lifecycle_observation(
     trimmed.transcript_path = None;
     trimmed.worktree_path = None;
     trimmed.worktree_branch = None;
+    trimmed.role = None;
+    trimmed.team = None;
+    trimmed.channel = None;
+    trimmed.profile = None;
     // Lazy adapters can first recover their pane binding on TurnStarted, so the
     // reducer needs every event pane stamp that focus recovery supplies.
     Cow::Owned(trimmed)
@@ -1364,6 +1368,10 @@ mod tests {
         observation.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
         observation.worktree_path = Some("/tmp/project".to_owned());
         observation.worktree_branch = Some("feature".to_owned());
+        observation.role = Some("coder".to_owned());
+        observation.team = Some("pcr".to_owned());
+        observation.channel = Some("event-log".to_owned());
+        observation.profile = Some("claude-coder".to_owned());
         observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
 
         let identity = event_lifecycle_observation(&observation);
@@ -1380,6 +1388,10 @@ mod tests {
         assert!(trimmed.transcript_path.is_none());
         assert!(trimmed.worktree_path.is_none());
         assert!(trimmed.worktree_branch.is_none());
+        assert!(trimmed.role.is_none());
+        assert!(trimmed.team.is_none());
+        assert!(trimmed.channel.is_none());
+        assert!(trimmed.profile.is_none());
         assert_eq!(trimmed.pane_id.as_ref().map(PaneId::raw), Some("%1"));
         assert_eq!(
             observation.transcript_path.as_deref(),
@@ -1770,6 +1782,7 @@ mod tests {
             turn_started_at: None,
             compacting_since: None,
             compaction_count: 0,
+            last_compact_command_tokens: None,
             last_seen: now,
             last_activity: now,
             registered_at: Some(now),

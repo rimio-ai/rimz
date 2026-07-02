@@ -46,11 +46,12 @@ fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Res
     let (cache, merged_agents, resume_outcomes) = snapshot::catch_up_rollup(paths)?;
     let live_agents = runtime::RuntimeProjection::from_parts(
         Vec::new(),
-        Vec::new(),
+        cache.tombstones.iter().cloned().collect(),
         merged_agents,
         runtime::RuntimeScope::Runtime,
     )
     .agents;
+    let live_agents = prune_old_dead_agents(live_agents, event_log::DEFAULT_RETENTION);
     let carryover_agents = live_agents.len();
     snapshot::write_carryover(
         &paths.agents_carryover,
@@ -61,6 +62,23 @@ fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Res
         },
     )?;
     Ok((true, carryover_agents))
+}
+
+fn prune_old_dead_agents(
+    agents: Vec<crate::agents::AgentState>,
+    older_than: Duration,
+) -> Vec<crate::agents::AgentState> {
+    let cutoff = jiff::Timestamp::now() - older_than;
+    agents
+        .into_iter()
+        .filter(|agent| {
+            agent.last_seen >= cutoff
+                || agent
+                    .runtime_owner
+                    .as_ref()
+                    .is_some_and(runtime::owner_is_live)
+        })
+        .collect()
 }
 
 impl Ledger {
@@ -358,14 +376,37 @@ impl Ledger {
             } else {
                 event_log::PruneOutcome::default()
             };
+            let terminal_pruned = feed_store::prune_terminal(
+                &self.inner.paths.feed_dir,
+                archive_older_than.unwrap_or(event_log::DEFAULT_RETENTION),
+            )?;
 
             EventLogRotationOutcome {
                 rotation,
                 pruned,
+                terminal_pruned,
                 carryover_agents,
             }
         };
         Ok(outcome)
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub fn prune_carryover(&self, older_than: Duration) -> Result<usize> {
+        let removed = {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
+            let mut carryover = snapshot::read_carryover(&self.inner.paths.agents_carryover)?;
+            let before = carryover.agents.len();
+            carryover.agents = prune_old_dead_agents(carryover.agents, older_than);
+            let removed = before.saturating_sub(carryover.agents.len());
+            if removed > 0 {
+                snapshot::write_carryover(&self.inner.paths.agents_carryover, &carryover)?;
+                snapshot::rebuild(&self.inner.paths)?;
+            }
+            removed
+        };
+        Ok(removed)
     }
 
     /// Truncate the event log at its first invalid frame and republish the
@@ -663,6 +704,41 @@ mod tests {
     }
 
     #[test]
+    fn prune_carryover_drops_old_agents_without_live_owner() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+        let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime paths");
+        let ledger = Ledger::open(paths.clone(), runtime).expect("open ledger");
+        let mut old = agent_state("claude", "old", Some("lucid-atlas"));
+        old.last_seen = jiff::Timestamp::now() - Duration::from_secs(30 * 86_400);
+        old.last_activity = old.last_seen;
+        let fresh = agent_state("claude", "fresh", Some("solid-lumen"));
+        snapshot::write_carryover(
+            &paths.agents_carryover,
+            &snapshot::EventCarryover {
+                agents: vec![old, fresh],
+                agent_identity: Default::default(),
+                resume_outcomes: Vec::new(),
+            },
+        )
+        .expect("write carryover");
+
+        let removed = ledger
+            .prune_carryover(Duration::from_secs(14 * 86_400))
+            .expect("prune carryover");
+
+        assert_eq!(removed, 1);
+        let carryover = snapshot::read_carryover(&paths.agents_carryover).expect("read carryover");
+        let ids: Vec<&str> = carryover
+            .agents
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["fresh"]);
+    }
+
+    #[test]
     fn rotation_carryover_drops_consumed_launch_tombstones() {
         let dir = tempfile::tempdir().expect("tempdir");
         let workspace_id = WorkspaceId::from_project_root(dir.path());
@@ -828,6 +904,7 @@ mod tests {
             turn_started_at: None,
             compacting_since: None,
             compaction_count: 0,
+            last_compact_command_tokens: None,
             last_seen: now,
             last_activity: now,
             registered_at: Some(now),

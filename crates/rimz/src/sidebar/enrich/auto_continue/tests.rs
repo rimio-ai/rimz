@@ -119,6 +119,7 @@ fn agent(activity: i64) -> AgentState {
         turn_started_at: None,
         compacting_since: None,
         compaction_count: 0,
+        last_compact_command_tokens: None,
         last_seen: ts(activity),
         last_activity: ts(activity),
         registered_at: Some(ts(activity)),

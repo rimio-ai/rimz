@@ -80,9 +80,9 @@ impl ResumePlan {
 /// Plan the resume seeds for one reborn session from the durable agent rollup.
 ///
 /// `agents` is the audit rollup (dead-process agents intact); `ended` is the
-/// `(kind, agent_id)` set the user closed cleanly
-/// ([`crate::ledger::snapshot::agent_tombstones_for_events`]); `max` caps the
-/// auto-launched panes; `worktree_exists` decides whether a candidate's worktree
+/// `(kind, agent_id)` set the user closed cleanly from
+/// [`crate::RuntimeProjection::ended`]; `max` caps the auto-launched panes;
+/// `worktree_exists` decides whether a candidate's worktree
 /// is still on disk (production passes `|p| p.is_dir()`); `rimz_bin` is the
 /// `rimz` executable each pane's wrapper argv names (production passes
 /// `std::env::current_exe()`).
@@ -406,6 +406,7 @@ mod tests {
             turn_started_at: None,
             compacting_since: None,
             compaction_count: 0,
+            last_compact_command_tokens: None,
             last_seen: when,
             last_activity: when,
             registered_at: Some(when),

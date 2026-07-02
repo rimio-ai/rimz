@@ -3,6 +3,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::feed::{FeedItem, FeedStatus, Surface};
 use crate::ids::{RequestId, ResolverId};
@@ -96,6 +97,13 @@ pub fn list_pending(feed_dir: &Path) -> Result<Vec<FeedItem>> {
     let mut items = pending_terminal::list_pending_raw::<FeedItem>(feed_dir)?;
     items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
     Ok(items)
+}
+
+pub fn prune_terminal(
+    feed_dir: &Path,
+    older_than: Duration,
+) -> Result<crate::ledger::event_log::PruneOutcome> {
+    Ok(pending_terminal::prune_terminal(feed_dir, older_than)?)
 }
 
 #[cfg(test)]

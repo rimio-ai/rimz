@@ -14,6 +14,7 @@ use clap::Args;
 use rimz::agents::AgentState;
 use rimz::feed::pending_ask_for;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, WorkspaceId};
+use rimz::ledger::event_log;
 use rimz::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
     delivery_window_from_env,
@@ -408,26 +409,7 @@ fn already_compacted_at(
     if live {
         return true;
     }
-    ledger
-        .read_events()
-        .map(|events| {
-            events.into_iter().any(|event| {
-                let EventKind::Message { payload, .. } = event.kind() else {
-                    return false;
-                };
-                payload.body == MessageBody::Command
-                    && matches!(
-                        payload.status,
-                        MessageStatus::Sent | MessageStatus::Delivered
-                    )
-                    && payload.compacted_context_tokens == Some(used)
-                    && payload.kind == agent.kind
-                    && (payload.agent_id == agent.agent_id
-                        || (agent.name.is_some()
-                            && payload.agent_name.as_deref() == agent.name.as_deref()))
-            })
-        })
-        .unwrap_or(false)
+    agent.last_compact_command_tokens == Some(used)
 }
 
 /// The rollup session behind a bound pane target. A lazy pane carries no session,
@@ -447,6 +429,7 @@ pub(crate) fn wait_for_message_until(
     ledger: &rimz::Ledger,
     message_id: &MessageId,
     session_name: &str,
+    mut base: u64,
     deadline: Instant,
 ) -> Result<MessageStatus> {
     const POLL: Duration = Duration::from_millis(500);
@@ -464,7 +447,8 @@ pub(crate) fn wait_for_message_until(
                     .map(|message| message.status)
                     .unwrap_or(MessageStatus::TimedOut));
             }
-        } else if let Some(status) = latest_terminal_message_status(ledger, message_id)? {
+        } else if let Some(status) = latest_terminal_message_status(ledger, message_id, &mut base)?
+        {
             return Ok(status);
         }
         if Instant::now() >= deadline {
@@ -478,9 +462,21 @@ pub(crate) fn wait_for_message_until(
 fn latest_terminal_message_status(
     ledger: &rimz::Ledger,
     message_id: &MessageId,
+    base: &mut u64,
 ) -> Result<Option<MessageStatus>> {
     let mut latest = None;
-    for event in ledger.read_events()? {
+    let path = &ledger.paths().events_log;
+    let log_len = match std::fs::metadata(path) {
+        Ok(meta) => meta.len(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
+    };
+    if log_len < *base {
+        *base = 0;
+    }
+    let (events, end) = event_log::read_from_offset(path, *base)?;
+    *base = end;
+    for event in events {
         let EventKind::Message { payload, .. } = event.kind() else {
             continue;
         };
@@ -547,6 +543,111 @@ fn unescape(raw: &str) -> String {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    use jiff::Timestamp;
+    use rimz::agents::{AgentStatus, TurnPhase};
+    use rimz::ledger::{RuntimePaths, StatePaths};
+    use rimz::schema::event::{EventEnvelope, MessageEventMethod};
+
+    fn agent() -> AgentState {
+        let now = Timestamp::now();
+        AgentState {
+            agent_id: AgentSessionId::from("sess-a"),
+            kind: AgentKind::new_unchecked("claude"),
+            name: Some("lucid-atlas".to_owned()),
+            kind_ordinal: Some(1),
+            profile: None,
+            role: None,
+            team: None,
+            channel: None,
+            status: AgentStatus::Idle,
+            phase: TurnPhase::Idle,
+            pane: None,
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            description: None,
+            transcript_path: None,
+            origin: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_compact_command_tokens: None,
+            last_seen: now,
+            last_activity: now,
+            registered_at: Some(now),
+        }
+    }
+
+    fn delivered_message_event(message: &mut MessageRecord) -> EventEnvelope {
+        message.status = MessageStatus::Delivered;
+        EventEnvelope::message_event(message, "session", MessageEventMethod::Delivered, None)
+    }
+
+    #[test]
+    fn terminal_message_poll_reads_only_appended_bytes_after_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        runtime.ensure_dirs().unwrap();
+        let ledger = rimz::Ledger::open(paths.clone(), runtime).unwrap();
+        let agent = agent();
+        let mut old = MessageRecord::new(
+            workspace_id.clone(),
+            &agent,
+            "old".to_owned(),
+            true,
+            DeliveryGate::Any,
+        );
+        event_log::append(&paths.events_log, &delivered_message_event(&mut old)).unwrap();
+        let mut base = ledger.wait_fold_base().unwrap();
+
+        let before = event_log::testkit::bytes_read();
+        assert_eq!(
+            latest_terminal_message_status(&ledger, &old.message_id, &mut base).unwrap(),
+            None
+        );
+        assert_eq!(event_log::testkit::bytes_read() - before, 0);
+
+        let mut message = MessageRecord::new(
+            workspace_id,
+            &agent,
+            "new".to_owned(),
+            true,
+            DeliveryGate::Any,
+        );
+        event_log::append(&paths.events_log, &delivered_message_event(&mut message)).unwrap();
+        let log_len = std::fs::metadata(&paths.events_log).unwrap().len();
+        let appended = log_len - base;
+        let before = event_log::testkit::bytes_read();
+
+        assert_eq!(
+            latest_terminal_message_status(&ledger, &message.message_id, &mut base).unwrap(),
+            Some(MessageStatus::Delivered)
+        );
+        assert_eq!(event_log::testkit::bytes_read() - before, appended);
+        assert_eq!(base, log_len);
+    }
 
     #[test]
     fn pacer_sleeps_after_first_tick() {

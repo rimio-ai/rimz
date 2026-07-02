@@ -2819,9 +2819,11 @@ fn wait_for_agent_tombstone(env: &Env, agent_id: &str) {
     let key = (AgentKind::new_unchecked("claude"), agent_id.into());
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        let events = env.read_events();
-        let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&events);
-        if ended.contains(&key) {
+        let projection = env
+            .ledger()
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .expect("audit projection");
+        if projection.ended.contains(&key) {
             return;
         }
         thread::sleep(Duration::from_millis(25));
@@ -2834,10 +2836,9 @@ fn plan_from_env(env: &Env) -> rimz::resume::ResumePlan {
         .ledger()
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("audit projection");
-    let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
     rimz::resume::plan_resume(
         &projection.agents,
-        &ended,
+        &projection.ended,
         rimz::resume::DEFAULT_RESUME_MAX,
         |path| path.is_dir(),
         &env.rimz_bin(),

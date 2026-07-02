@@ -72,8 +72,12 @@ fn assemble_snapshot(
     // Apply the same runtime liveness expel the live read does, so the
     // persisted `latest.json` matches what a reader would have projected —
     // never resurrecting a dead-pid agent or an ownerless-script ask.
-    let projection =
-        RuntimeProjection::from_parts(items, Vec::new(), agents, RuntimeScope::Runtime);
+    let projection = RuntimeProjection::from_parts(
+        items,
+        std::collections::BTreeSet::new(),
+        agents,
+        RuntimeScope::Runtime,
+    );
     let mut snapshot = SidebarSnapshot::build_with_agents(
         paths.workspace_id.clone(),
         projection.items,

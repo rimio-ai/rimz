@@ -277,6 +277,11 @@ fn steer_message(
         force,
         pacer: send::Pacer::new(message_interval_from_env()),
     };
+    let wait = if let Some(timeout) = wait {
+        Some((timeout, ledger.wait_fold_base()?))
+    } else {
+        None
+    };
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut compacted = Vec::new();
     for target in &targets {
@@ -791,6 +796,11 @@ fn add_message(
     let mut kinds_seen = std::collections::BTreeSet::new();
     let mut compacted = Vec::new();
     let mut outputs = Vec::new();
+    let wait_base = if spec.wait.is_some() {
+        Some(ledger.wait_fold_base()?)
+    } else {
+        None
+    };
     for target in &targets {
         let handle = handle_for_target(&snapshot, target);
         let mut park = spec.not_before.is_some()
@@ -913,6 +923,7 @@ fn add_message(
                 &ledger,
                 &output.message_id,
                 &workspace.session_name,
+                wait_base.unwrap_or(0),
                 deadline,
             )?;
             if status != MessageStatus::Delivered {
@@ -1171,7 +1182,7 @@ fn render_add_output(output: &AddOutput, status: MessageStatus, waited: bool) ->
 fn report_steer(
     ledger: &rimz::Ledger,
     session_name: &str,
-    wait: Option<Duration>,
+    wait: Option<(Duration, u64)>,
     target: &str,
     total: usize,
     outcomes: &[send::Outcome],
@@ -1200,14 +1211,19 @@ fn report_steer(
             _ => None,
         })
         .collect::<Vec<_>>();
-    if let Some(timeout) = wait {
+    if let Some((timeout, wait_base)) = wait {
         let mut failed = false;
         let deadline = std::time::Instant::now() + timeout;
         for outcome in outcomes {
             if let send::Outcome::Sent { label, message_id } = outcome {
                 print_compacted_if_needed(label, compacted);
-                let status =
-                    send::wait_for_message_until(ledger, message_id, session_name, deadline)?;
+                let status = send::wait_for_message_until(
+                    ledger,
+                    message_id,
+                    session_name,
+                    wait_base,
+                    deadline,
+                )?;
                 if status != MessageStatus::Delivered {
                     failed = true;
                 }
@@ -1843,6 +1859,7 @@ mod tests {
             turn_started_at: None,
             compacting_since: None,
             compaction_count: 0,
+            last_compact_command_tokens: None,
             last_seen: timestamp,
             last_activity: timestamp,
             registered_at: Some(timestamp),

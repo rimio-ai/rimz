@@ -61,6 +61,53 @@ fn delta_fold_is_o_new_bytes() {
     assert_eq!(agents.len(), FLEET, "the fold still lands the merged view");
 }
 
+#[test]
+fn runtime_projection_uses_persisted_rollup_delta() {
+    let h = Harness::new();
+    let paths = h.ledger.paths();
+    seed_fleet_ledger(paths, FLEET, HISTORY_EVENTS).expect("seed event");
+    h.ledger
+        .append_event(&registered_lifecycle(&paths.workspace_id, 0))
+        .expect("publish rollup");
+    let log_len = std::fs::metadata(&paths.events_log)
+        .expect("log meta")
+        .len();
+
+    let warm_before = bytes_read();
+    let projection = h
+        .ledger
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("runtime projection");
+    let warm_bytes = bytes_read() - warm_before;
+    assert_eq!(projection.agents.len(), FLEET);
+    assert_eq!(
+        warm_bytes, 0,
+        "a fresh persisted rollup keeps runtime projection off the {log_len}-byte history"
+    );
+
+    event_log::append(
+        &paths.events_log,
+        &registered_lifecycle(&paths.workspace_id, HISTORY_EVENTS % FLEET),
+    )
+    .expect("append one");
+    let appended = std::fs::metadata(&paths.events_log)
+        .expect("log meta")
+        .len()
+        - log_len;
+
+    let delta_before = bytes_read();
+    let projection = h
+        .ledger
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("runtime projection after append");
+    let delta_bytes = bytes_read() - delta_before;
+    assert_eq!(projection.agents.len(), FLEET);
+    assert_eq!(
+        delta_bytes, appended,
+        "runtime projection reads exactly the appended frame after its persisted base"
+    );
+}
+
 /// The full produce pipeline inherits the cursor contract end to end: a
 /// second [`rimz::sidebar::produce::produce_snapshot`] on one cursor reads
 /// exactly the bytes appended since the first — the elder fetch worker's

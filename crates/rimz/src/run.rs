@@ -815,6 +815,7 @@ mod tests {
             turn_started_at: None,
             compacting_since: None,
             compaction_count: 0,
+            last_compact_command_tokens: None,
             last_seen: Timestamp::UNIX_EPOCH,
             last_activity: Timestamp::UNIX_EPOCH,
             registered_at: Some(Timestamp::UNIX_EPOCH),

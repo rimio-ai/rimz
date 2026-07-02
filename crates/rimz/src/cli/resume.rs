@@ -205,11 +205,10 @@ fn plan_agent_resume_at(
 ) -> Result<rimz::resume::ResumePlan> {
     let ledger = Ledger::open(paths.clone(), runtime.clone())?;
     let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
-    let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
     let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
     let plan = rimz::resume::plan_resume(
         &projection.agents,
-        &ended,
+        &projection.ended,
         resume_cfg.max,
         |path| path.is_dir(),
         &rimz_bin,

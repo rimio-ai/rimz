@@ -15,7 +15,7 @@ use rimz::{Ledger, RuntimePaths, StatePaths};
 
 const MIB: u64 = 1024 * 1024;
 pub(crate) const DEFAULT_EVENT_LOG_ROTATE_BYTES: u64 = 64 * MIB;
-const DEFAULT_EVENT_LOG_ARCHIVE_RETENTION: &str = "14d";
+const DEFAULT_EVENT_LOG_ARCHIVE_RETENTION: &str = rimz::ledger::event_log::DEFAULT_RETENTION_ARG;
 
 #[derive(Debug, Args)]
 pub struct WorkspaceArgs {

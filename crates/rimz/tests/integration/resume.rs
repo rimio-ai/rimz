@@ -71,10 +71,9 @@ fn plan_from_rollup(h: &Harness) -> rimz::resume::ResumePlan {
         .ledger
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("audit projection");
-    let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
     rimz::resume::plan_resume(
         &projection.agents,
-        &ended,
+        &projection.ended,
         rimz::resume::DEFAULT_RESUME_MAX,
         |_| true,
         Path::new("/bin/rimz"),
@@ -336,10 +335,9 @@ fn missing_worktree_candidate_is_tombstoned_not_reported() {
         .ledger
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("audit projection");
-    let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
     let plan = rimz::resume::plan_resume(
         &projection.agents,
-        &ended,
+        &projection.ended,
         rimz::resume::DEFAULT_RESUME_MAX,
         |_| false,
         Path::new("/bin/rimz"),

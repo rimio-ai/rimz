@@ -12,8 +12,11 @@ use crate::agents::AgentLifecycleObservation;
 use crate::agents::lifecycle::{self, Transition};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::message::{MessageBody, MessageStatus};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
-use crate::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, EventKind};
+use crate::schema::event::{
+    AgentLaunchPayload, AgentLaunchState, EventEnvelope, EventKind, MessageEventPayload,
+};
 
 /// How many user prompts a session's rollup keeps (`AgentState::recent_prompts`,
 /// newest last). The events are durable, so the cap bounds only the projected
@@ -122,6 +125,18 @@ pub(super) fn backfill_agent_identities(
     allocator.state()
 }
 
+pub(super) fn stamp_compact_commands_in_agents(
+    agents: &mut [AgentState],
+    events: &[FoldEvent<'_>],
+) {
+    for event in events {
+        let EventKind::Message { payload, .. } = &event.kind else {
+            continue;
+        };
+        stamp_compact_command_in_agents(agents, payload);
+    }
+}
+
 fn has_card_identity(agent: &AgentState) -> bool {
     agent.name.as_deref().is_some_and(usable_name) && agent.kind_ordinal.is_some()
 }
@@ -175,7 +190,10 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                 continue;
             }
             EventKind::AgentLifecycle(payload) => payload,
-            EventKind::Message { .. } => continue,
+            EventKind::Message { payload, .. } => {
+                stamp_compact_command(&mut map, payload);
+                continue;
+            }
             EventKind::Other {
                 method: "agent.lifecycle",
                 ..
@@ -347,6 +365,63 @@ fn reduce_agent_launch(
     let card_identity = identity.assign_launch(kind, &payload.agent_id, payload, prior);
     let state = assemble_launch_state(kind, event, payload, prior, card_identity);
     map.insert(key, state);
+}
+
+fn stamp_compact_command(
+    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    payload: &MessageEventPayload,
+) {
+    let Some(tokens) = compact_command_tokens(payload) else {
+        return;
+    };
+    let key = (payload.kind.clone(), payload.agent_id.clone());
+    if let Some(agent) = map.get_mut(&key) {
+        agent.last_compact_command_tokens = Some(tokens);
+        return;
+    }
+    let Some(agent_name) = payload.agent_name.as_deref() else {
+        return;
+    };
+    if let Some(agent) = map
+        .values_mut()
+        .find(|agent| agent.kind == payload.kind && agent.name.as_deref() == Some(agent_name))
+    {
+        agent.last_compact_command_tokens = Some(tokens);
+    }
+}
+
+fn stamp_compact_command_in_agents(agents: &mut [AgentState], payload: &MessageEventPayload) {
+    let Some(tokens) = compact_command_tokens(payload) else {
+        return;
+    };
+    if let Some(agent) = agents
+        .iter_mut()
+        .find(|agent| agent.kind == payload.kind && agent.agent_id == payload.agent_id)
+    {
+        agent.last_compact_command_tokens = Some(tokens);
+        return;
+    }
+    let Some(agent_name) = payload.agent_name.as_deref() else {
+        return;
+    };
+    if let Some(agent) = agents
+        .iter_mut()
+        .find(|agent| agent.kind == payload.kind && agent.name.as_deref() == Some(agent_name))
+    {
+        agent.last_compact_command_tokens = Some(tokens);
+    }
+}
+
+fn compact_command_tokens(payload: &MessageEventPayload) -> Option<u64> {
+    if payload.body != MessageBody::Command
+        || !matches!(
+            payload.status,
+            MessageStatus::Sent | MessageStatus::Delivered
+        )
+    {
+        return None;
+    }
+    payload.compacted_context_tokens
 }
 
 #[derive(Default)]
@@ -728,6 +803,9 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         turn_started_at: lifecycle.turn_started_at,
         compacting_since: lifecycle.compacting_since,
         compaction_count: lifecycle.compaction_count,
+        last_compact_command_tokens: input
+            .prior
+            .and_then(|state| state.last_compact_command_tokens),
         last_seen: input.event.timestamp,
         last_activity: input.event.timestamp,
         registered_at: lifecycle.registered_at,
@@ -842,6 +920,7 @@ fn assemble_launch_state(
         turn_started_at: Some(event.timestamp),
         compacting_since: None,
         compaction_count: prior.map_or(0, |state| state.compaction_count),
+        last_compact_command_tokens: prior.and_then(|state| state.last_compact_command_tokens),
         last_seen: event.timestamp,
         last_activity: event.timestamp,
         registered_at: prior.and_then(|state| state.registered_at),
