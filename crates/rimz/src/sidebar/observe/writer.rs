@@ -6,9 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Instant;
 
-use crate::diag::{DiagSink, Limiter};
 use crate::diag::record::DiagEvent;
-use jiff::Timestamp;
+use crate::diag::{DiagSink, Limiter};
 use crate::ids::SidebarInstanceId;
 use crate::ledger::paths::RuntimePaths;
 use crate::sidebar::cache::read_snapshot_cache;
@@ -17,6 +16,7 @@ use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{
     OBSERVE_COOLDOWN, OBSERVE_CROSSCHECK_TTL, OBSERVE_DEADPID_CONFIRMATIONS,
 };
+use jiff::Timestamp;
 
 use super::{AnomalyDraft, AnomalyKind, ObserveMsg, ObserveRole, RosterSig, cap_vec};
 

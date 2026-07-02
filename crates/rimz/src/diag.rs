@@ -352,8 +352,8 @@ fn rotated_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::{MuxName, PaneId, WorkspaceId};
     use crate::diag::record::FrameRejectReason;
+    use crate::ids::{MuxName, PaneId, WorkspaceId};
 
     fn sink(dir: &Path) -> DiagSink {
         DiagSink::under(

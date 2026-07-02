@@ -821,23 +821,21 @@ fn mark_read(globals: &GlobalFlags, target: String, worktree: Option<String>) ->
     }
     let diag = diag_for_workspace(&resolved.workspace);
     for row in cleared {
-        diag.trace_notify(
-            rimz::diag::notify::NotifyTraceEvent::UnreadCleared {
-                row_id: row.id.clone(),
-                label: Some(rimz::sidebar::unread::row_label(row)),
-                agent_kind: Some(AgentKind::new_unchecked(row.name.clone())),
-                agent_id: Some(AgentSessionId::from(row.id.clone())),
-                worktree: row
-                    .worktree_branch
-                    .clone()
-                    .or_else(|| row.worktree_path.clone()),
-                pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
-                cause: rimz::sidebar::unread::UnreadClearCause::MarkRead
-                    .as_str()
-                    .to_owned(),
-                cleared_at_ms: Some(now_ms),
-            },
-        );
+        diag.trace_notify(rimz::diag::notify::NotifyTraceEvent::UnreadCleared {
+            row_id: row.id.clone(),
+            label: Some(rimz::sidebar::unread::row_label(row)),
+            agent_kind: Some(AgentKind::new_unchecked(row.name.clone())),
+            agent_id: Some(AgentSessionId::from(row.id.clone())),
+            worktree: row
+                .worktree_branch
+                .clone()
+                .or_else(|| row.worktree_path.clone()),
+            pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
+            cause: rimz::sidebar::unread::UnreadClearCause::MarkRead
+                .as_str()
+                .to_owned(),
+            cleared_at_ms: Some(now_ms),
+        });
     }
     wake_sidebars(&resolved.runtime);
     emit_hidden_count("Marked read", resolved.rows.len())

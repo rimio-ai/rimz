@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
+use crate::diag::record::{DiagEvent, GroupIdentity};
 use crate::ids::PaneId;
-use crate::schema::diag::{DiagEvent, GroupIdentity};
 use crate::{SidebarSnapshot, WorkspaceId};
 use jiff::Timestamp;
 
