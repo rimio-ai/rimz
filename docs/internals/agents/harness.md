@@ -1,6 +1,6 @@
 # The agent harness
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent *model* — the rollup, state machine, turn phase, liveness, and adapter boundary — is [agent.md](./agent.md); the message system and its channel lanes are [message.md](./message.md); Git worktree backing is [worktree.md](./worktree.md); the user-facing commands are [cli/agents.md](../../reference/cli/agents.md). This doc owns the machinery between them: spawning the fleet, addressing it, the supervised runs automation drives, and the cleanup that reclaims its panes.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent *model* — the rollup, state machine, turn phase, liveness, and adapter boundary — is [agent.md](./agent.md); the message system and its channel lanes are [message.md](./message.md); Git worktree backing is [worktree.md](./worktree.md); the user-facing commands are [cli/agents.md](../../reference/cli/agents.md). This doc owns the machinery between them: spawning the fleet, addressing it, the supervised runs automation drives, the scheduled loop tasks that drive those runs on a clock, and the cleanup that reclaims its panes.
 
 One agent in one thread is a conversation; tens of agents across a dozen worktrees is a team. The harness runs that team. It spawns agents into panes, reaches any one by name, drives it live or leaves it a task for when it is free, and reclaims its pane when it exits — the same machinery whether a human, a cron job, a CI gate, or a PR hook is doing the driving.
 
@@ -89,7 +89,7 @@ The message system — send modes, the durable message record, delivery gates an
 
 ## Supervised runs
 
-When a cron job, CI gate, PR hook, or script needs to drive one member and read its result, it uses a supervised run. `rimz agents <spec> <prompt> -p` opens one interactive agent pane (splitting the current tab by default, a new tab only with `--new-tab` or outside a room), waits for the agent's root turn to end, prints the result, and exits with a script-friendly code: `0` completed, `1` failed, `124` timed out, `130` canceled. Automation drives one agent turn without attaching to the room; an in-room caller sees the transient pane beside the current one. Supervised runs require installed and trusted hooks, because hooks are the completion signal ([agent.md → Hook install](./agent.md#hook-install--the-visible-security-step)). Loop tasks ride this path ([loop.md](./loop.md)).
+When a cron job, CI gate, PR hook, or script needs to drive one member and read its result, it uses a supervised run. `rimz agents <spec> <prompt> -p` opens one interactive agent pane (splitting the current tab by default, a new tab only with `--new-tab` or outside a room), waits for the agent's root turn to end, prints the result, and exits with a script-friendly code: `0` completed, `1` failed, `124` timed out, `130` canceled. Automation drives one agent turn without attaching to the room; an in-room caller sees the transient pane beside the current one. Supervised runs require installed and trusted hooks, because hooks are the completion signal ([agent.md → Hook install](./agent.md#hook-install--the-visible-security-step)). Rimz's built-in scheduler drives this same path on a clock ([Scheduled turns](#scheduled-turns-loop)).
 
 **Run records and completion.** A run record is written under `runs/<run_id>.json` before the pane opens, the launched wrapper exports `RIMZ_RUN_ID`, and lifecycle hooks fold matching root-session observations into it. The wrapper also records its own normalized pane id, so cleanup can close the launched pane without waiting for the snapshot to bind the session. The first root `TurnEnded` completes the run `completed` or `failed`; a session `Ended` before a turn result marks it failed; `rimz agents stop <run-id>` marks an active run `canceled`; subagent events and same-kind descendants with a different session id are ignored, so a child completion never finishes the parent. If the wrapper observes the agent process exit and no terminal hook lands after a short grace, it writes `failed` and wakes the waiter — process death is the liveness backstop, and pane exit is never read as success.
 
@@ -102,6 +102,66 @@ When a cron job, CI gate, PR hook, or script needs to drive one member and read 
 **Posture and launch params are adapter-owned.** A run chooses `auto` (default), `--ask`, or `--yolo`, and `--model` / `--effort` / `--system-prompt-file` / `--append-system-prompt-file` render through each adapter's `render_preset` — the one place per-agent native launch flags are built. An adapter with no native flag for a param refuses the launch, naming the unsupported flag, rather than dropping the intent (supervised `--max-turns` renders through a separate per-adapter turn-limit hook). The provider-specific mappings live in the adapter docs.
 
 **Durability and inspection.** Run records are cold-path durable state, written with temp-file-plus-rename through the ledger atomic helpers and retained until an operator removes state. `rimz agents show <run-id>` reads the retained records and attaches live card context while the run is active; live fields stay out of the durable record, so clearing and agent drift create no extra locked writes.
+
+## Scheduled turns (loop)
+
+`rimz loop` runs a turn on a clock. The room's elected sidebar elder — the producer node ([state.md → The node model](../sidebar/state.md#the-node-model)) — keeps time while a room for the task's project is open, and on its data tick fires `rimz loop run <name>` for every task that has come due. A task drives one of three actions: `spec` spawns one transient supervised pane down the [supervised-run](#supervised-runs) path, `bind` delivers a prompt to one live agent through the [message](./message.md) path, and `check` runs a shell command that either stands alone or guards one of the other two. Everything below is what the elder and the hidden `rimz loop run` do underneath; the command surface — flags, synopses, examples — is [cli/agents.md → Schedule turns with loop](../../reference/cli/agents.md#schedule-turns-with-loop).
+
+A `spec` task names exactly one agent cell: a built-in kind, a profile, or an adapter-supported virtual cell such as `claude-auto`, `codex-yolo`, or `claude-ping`. Teams, multi-cell layouts, and command cells are rejected at add time, because a scheduled task owns one supervised pane.
+
+### Schedule forms
+
+`rimz loop add` validates the task, runs hook preflight when it carries an agent action, and makes it live immediately while a room for its project is open. Durable recurring definitions live in per-machine `loop.toml`; Rimz-generated ephemerals live in state (below). A task carries one firing shape:
+
+- **Calendar** — `at = "07:00"` with an optional `days` mask (`daily`, `weekdays`, `weekends`, a range like `mon-fri`, or a list `mon,wed,fri`). Wall-clock evaluation uses the configured `timezone`, falling back to the system zone when unset.
+- **Interval** — `every = "15m"`, `2h`, or `1d`. The elder fires at the exact interval measured from the last arm or fire.
+- **Raw cron** — `cron = "*/15 * * * *"`, matched by an in-process five-field matcher over minute, hour, day-of-month, month, and day-of-week in the configured `timezone`.
+- **One-shot** — `once = true` on a calendar or cron schedule. `rimz loop add --in 30m` resolves to an `at` time in the configured `timezone` and implies `once`.
+- **Poll-until** — `every = "2m"` with `check`, `on`, an agent action, and `deadline`. `rimz loop add --until 30m` stores the resolved absolute deadline in instance state.
+
+An ephemeral task — a one-shot, or any task with a `deadline` — removes its own state row before the supervised run or delivery. A one-shot removed pre-fire that then fails to launch is not retried. A poll-until task also removes itself when its check fires the agent action, and expires without delivery once its `deadline` passes.
+
+### Elder firing
+
+The elder keeps a per-room `loop-fire.json` map of task name to last-fire `Timestamp` under the workspace runtime dir. First sight arms a task by recording `now` and does not fire; the next matching occurrence fires. A fire records `now` before spawning the detached helper, so a hot sub-interval tick cannot spawn the same occurrence twice.
+
+Arming stamps the first-sight time, and that stamp sets the firing edge each schedule reads. A calendar task fires at the first tick at or after its wall-clock time on a matching day, at most once that day — so a tick a few seconds late still fires it, but a task first seen *after* its time today waits for the next matching day. A cron task fires only on a tick whose minute matches, so a room opened past a matching minute waits for the next match. An interval task fires once the measured elapsed time crosses the interval.
+
+Each room fires only tasks whose normalized `root` maps to its `WorkspaceId`. `rimz loop add` writes a canonical absolute root; a hand-edited `~` or relative root is expanded and canonicalized before the ownership check, display, and execution.
+
+The elder spawns `rimz loop run <name>` with fresh null stdio. That hidden runner resolves the recorded root, runs any `check` first, applies agent hook preflight only when the guard fires, and then launches the supervised pane or messages the pinned session.
+
+Self-paced loops are ordinary one-shots. An agent schedules its next wake with `--in <delay>` at the end of the current wake; the instance row is removed before delivery, so the agent creates the next one only while it still has work. The pending wake stays visible in `rimz loop list` without editing `loop.toml`.
+
+### Script checks
+
+`check = "<shell>"` runs through `sh -c` at the task's project root before any agent action. `on = "fail"` — the default — wakes on a non-zero exit or a timeout; `on = "success"` wakes on a zero exit. `timeout = "5m"` bounds the check, falling back to five minutes when unset.
+
+A check-only task is a scheduled command with no agent action: it logs `completed`, `failed`, or `timed out` and keeps recurring unless it is ephemeral. A guarded task logs `skipped` when the command exits with the non-firing polarity; when the guard fires, Rimz appends the command, its exit status, and the capped combined output to the base prompt before spawning or delivering.
+
+Two patterns fall out of the guard. The watchdog runs a command on a schedule and wakes an agent on failure (`every = "15m"`, `check = "cargo test"`, `on = "fail"`, `spec = "codex"`). The trigger-when-green polls until a command succeeds, then delivers (`every = "2m"`, `check = "gh run watch --exit-status"`, `on = "success"`, `bind = ...`, `deadline = ...`). A poll-until instance stops in one of two cases: the first matching check result fires the agent action, or the `deadline` passes and the run logs `expired`.
+
+Script checks are per-machine user automation, like a personal crontab. `loop.toml` lives outside the repository and outside the project trust hash, so a clone cannot supply a check command; project trust hashes only the executable fields of `.rimz/config.toml` ([trust.md](../sidebar/trust.md)).
+
+### Delivering to a live instance
+
+`bind` pins a schedule to one exact agent session. `rimz loop add <name> --bind @<handle> ...` resolves the address against the live rollup at add time, records a `bind` sub-table of `kind`, `session`, and `handle`, and rejects `spec` and supervised-run flags because delivery opens no pane.
+
+On fire, the runner resolves the recorded `root`, confirms the pinned root session still exists, and sends the prompt through the same [message](./message.md) path as `rimz message`, gated `done`. An idle agent receives it immediately; a running agent parks it for its next `done` turn boundary; a missing session is skipped and the schedule removed, because that exact conversation cannot return. `rimz gc` runs the same liveness check and reaps bind schedules whose pinned session has left the rollup — a safety sweep for tasks that never fired successfully after the agent exited.
+
+### Window-priming pings
+
+A task whose `spec` is a `<kind>-ping` virtual cell starts a provider's budget window at a time you choose. It defaults `prompt = "ping"` and lowest effort unless configured otherwise, and the virtual cell supplies the adapter's ping arguments. The window is account-scoped, shared by every session of a provider kind ([provider.md → Window fusion](./provider.md#window-fusion)), so one ping per provider primes the whole account. Before spawning the turn, the runner reads the shared rate-limit cache and skips when the shortest window is already counting down. The read is best-effort: an unknown or cold cache falls through to the ping, since missing a window-start defeats the feature while an occasional extra token is cheap.
+
+### State and code
+
+Durable definitions live in `~/.config/rimz/loop.toml` under `[tasks.*]`. Machine-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` with the same task shape; `is_ephemeral = once || deadline.is_some()` routes a task between the two on add and drives removal-on-fire. Per-room arm/fire stamps live in runtime `loop-fire.json`, and user-global run history lives in state `loop-runs.log.jsonl`.
+
+- [`schedule.rs`](../../../crates/rimz/src/schedule.rs) — pure parsing, descriptions, and due evaluation.
+- [`cli/loop_cmd.rs`](../../../crates/rimz/src/cli/loop_cmd.rs) — config and state editing, the `list` surface, and the hidden `run` runner, including check execution and prompt augmentation.
+- [`loop_instances.rs`](../../../crates/rimz/src/loop_instances.rs) — the ephemeral state store.
+- [`loop_fire.rs`](../../../crates/rimz/src/loop_fire.rs) — elder firing and the `loop-fire.json` state.
+- [`loop_run_log.rs`](../../../crates/rimz/src/loop_run_log.rs) — result history, including `check_skipped` and `expired`.
 
 ## Cleanup
 
