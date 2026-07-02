@@ -622,6 +622,28 @@ mod tests {
             .receivable_now(&ask_snapshot, &[], DeliveryGate::Done, true, timestamp)
         );
 
+        let future = MessageRecord::new(
+            workspace_id(),
+            &idle,
+            "future".to_owned(),
+            true,
+            DeliveryGate::Done,
+        )
+        .with_not_before(Some(timestamp + jiff::SignedDuration::from_secs(60)));
+        assert!(
+            QueueTarget {
+                pane: Some(&pane),
+                agent: Some(&idle),
+            }
+            .receivable_now(
+                &idle_snapshot,
+                &[future],
+                DeliveryGate::Done,
+                false,
+                timestamp
+            )
+        );
+
         let older = MessageRecord::new(
             workspace_id(),
             &idle,

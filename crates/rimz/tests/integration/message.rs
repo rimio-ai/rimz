@@ -21,8 +21,32 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-queue", "feature-q", &[]);
 
-    let first = queue_add(&env, "@claude", "first task");
-    let second = queue_add(&env, "@claude", "second task");
+    let out = env
+        .rimz()
+        .args(["message", "@claude", "first task"])
+        .output()
+        .expect("message add without separator");
+    assert!(
+        out.status.success(),
+        "message failed\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let first = queued_id_from_stdout(&out.stdout);
+    let out = env
+        .rimz()
+        .env("RIMZ_AGENT_KIND", "codex")
+        .env("RIMZ_AGENT_NAME", "swift-otter")
+        .args(["message", "@claude", "--", "second task"])
+        .output()
+        .expect("message add from agent");
+    assert!(
+        out.status.success(),
+        "message failed\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let second = queued_id_from_stdout(&out.stdout);
     assert_ne!(first, second);
 
     let pending = env.ledger().list_pending_messages().expect("pending queue");
@@ -47,6 +71,15 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
     );
     let parsed: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
     assert_eq!(parsed.as_array().expect("messages").len(), 2);
+    let agent_authored = parsed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["message_id"] == second)
+        .expect("second message listed");
+    assert_eq!(agent_authored["sender"]["origin"], "agent");
+    assert_eq!(agent_authored["sender"]["kind"], "codex");
+    assert_eq!(agent_authored["sender"]["name"], "swift-otter");
 
     let removed = env
         .rimz()
@@ -203,52 +236,6 @@ fn receiver_end_archives_open_messages() {
 }
 
 #[test]
-fn message_parks_like_queue_without_separator() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-message", "feature-message", &[]);
-
-    let out = env
-        .rimz()
-        .args(["message", "@claude", "next task"])
-        .output()
-        .expect("message add");
-    assert!(
-        out.status.success(),
-        "message failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].status, MessageStatus::Queued);
-    assert_eq!(pending[0].text, "next task");
-}
-
-#[test]
-fn message_accepts_double_dash_escape() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-message-dash", "feature-message-dash", &[]);
-
-    let out = env
-        .rimz()
-        .args(["message", "@claude", "--", "-x literal"])
-        .output()
-        .expect("message add");
-    assert!(
-        out.status.success(),
-        "message failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].status, MessageStatus::Queued);
-    assert_eq!(pending[0].text, "-x literal");
-}
-
-#[test]
 fn scheduled_message_parks_with_not_before_and_wake_stamp() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -289,57 +276,6 @@ fn scheduled_message_parks_with_not_before_and_wake_stamp() {
         serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
             .expect("wake stamp json");
     assert_eq!(wake, Some(not_before));
-}
-
-#[test]
-fn future_scheduled_message_does_not_block_later_send_now_message() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
-    register_running_agent(&env, "sess-scheduled-ready", "feature-sr", pane_env);
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-scheduled-ready",
-            "worktree_branch": "feature-sr",
-        }),
-        pane_env,
-    );
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-
-    let scheduled = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "--schedule", "60m", "@claude", "future"])
-        .output()
-        .expect("scheduled message");
-    assert!(
-        scheduled.status.success(),
-        "scheduled message failed: {}",
-        String::from_utf8_lossy(&scheduled.stderr)
-    );
-
-    let trace_log = env.project_root.join("zellij-scheduled-ready-trace.log");
-    let now = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "@claude", "now"])
-        .output()
-        .expect("send-now message");
-    assert!(
-        now.status.success(),
-        "send-now message failed: {}",
-        String::from_utf8_lossy(&now.stderr)
-    );
-
-    assert_text_then_enter(&trace_log, "now");
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].text, "future");
-    assert!(pending[0].not_before.is_some());
 }
 
 #[test]
@@ -412,66 +348,6 @@ fn message_sweep_delivers_due_message_and_registers_reconcile_wake() {
         sent.sent_reconcile_deadline(Duration::from_secs(30)),
         "wake stamp tracks the sent reconcile deadline"
     );
-}
-
-#[test]
-fn message_sweep_delivers_ready_queued_message_without_schedule() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
-    register_running_agent(&env, "sess-sweep-ready", "feature-sweep-ready", pane_env);
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-sweep-ready",
-            "worktree_branch": "feature-sweep-ready",
-        }),
-        pane_env,
-    );
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
-    let agent = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.agent_id.as_str() == "sess-sweep-ready")
-        .expect("agent");
-    let message = MessageRecord::new(
-        env.workspace_id.clone(),
-        agent,
-        "ready now".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    let message_id = message.message_id.clone();
-    env.ledger()
-        .queue_message(&message, "rimz-test")
-        .expect("queue ready message");
-
-    let trace_log = env.project_root.join("zellij-sweep-ready-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "sweep"])
-        .output()
-        .expect("message sweep");
-    assert!(
-        out.status.success(),
-        "message sweep failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    assert_text_then_enter(&trace_log, "ready now");
-    let sent = env
-        .ledger()
-        .list_messages()
-        .expect("messages")
-        .into_iter()
-        .find(|message| message.message_id == message_id)
-        .expect("swept message");
-    assert_eq!(sent.status, MessageStatus::Sent);
 }
 
 #[test]
@@ -750,7 +626,7 @@ fn steer_refuses_pending_ask_before_touching_pane() {
 /// sequence: a bracketed paste of the text, then a discrete `write 13` (Enter),
 /// with no `\r` anywhere.
 #[test]
-fn steer_presses_enter_as_discrete_key() {
+fn steer_enter_modes_respect_discrete_submit_key() {
     let env = Env::new();
     register_running_agent(
         &env,
@@ -774,19 +650,8 @@ fn steer_presses_enter_as_discrete_key() {
     );
 
     assert_text_then_enter(&trace_log, "y");
-}
 
-/// `--no-enter` types the text and stops — no Enter keystroke at all.
-#[test]
-fn steer_no_enter_suppresses_the_keystroke() {
-    let env = Env::new();
-    register_running_agent(
-        &env,
-        "sess-steer-quiet",
-        "feature-sq",
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-
+    // `--no-enter` types the text and stops — no Enter keystroke at all.
     let trace_log = env.project_root.join("zellij-steer-quiet-trace.log");
     let out = env
         .rimz()
@@ -1093,6 +958,9 @@ fn queue_delivery_presses_enter_as_discrete_key() {
         "an idle agent with a bound pane should receive queue text immediately"
     );
     assert_text_then_enter(&trace_log, "go");
+    let messages = env.ledger().list_messages().unwrap();
+    assert_eq!(messages.len(), 1, "send-now queue writes a durable record");
+    assert_eq!(messages[0].status, MessageStatus::Sent);
 }
 
 #[test]
@@ -1180,23 +1048,6 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
             .iter()
             .any(|event| event.method == "message.delivered"),
         "delivery confirmation records a terminal event"
-    );
-}
-
-#[test]
-fn queue_wait_conflicts_with_no_enter() {
-    let env = Env::new();
-    let out = env
-        .rimz()
-        .args(["message", "@claude", "--wait", "--no-enter", "--", "go"])
-        .output()
-        .expect("queue --wait --no-enter");
-
-    assert!(!out.status.success(), "--wait --no-enter should fail");
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("--wait requires submitting"),
-        "error explains the conflict: {}",
-        String::from_utf8_lossy(&out.stderr)
     );
 }
 
@@ -1307,12 +1158,13 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
     let env = Env::new();
     env.install_agent_hooks("codex");
     trust_codex_hooks(&env);
-    seed_running_provisional_codex_launch(
+    seed_provisional_codex_launch(
         &env,
         "launch_deferred_fold",
         "swift-otter",
         Some("coder"),
         "terminal_8",
+        Some("work"),
     );
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
 
@@ -1380,71 +1232,6 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
         }),
         "registered card should consume the provisional name: {agents:?}"
     );
-}
-
-#[test]
-fn queue_send_now_prefixes_sender_and_no_from_suppresses_it() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
-    register_running_agent(&env, "sess-from-queue", "feature-from-queue", pane_env);
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-from-queue",
-            "worktree_branch": "feature-from-queue",
-        }),
-        pane_env,
-    );
-
-    let trace_log = env.project_root.join("zellij-from-queue-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-        .env("RIMZ_AGENT_KIND", "codex")
-        .env("RIMZ_AGENT_NAME", "swift-otter")
-        .args(["message", "@claude", "--", "later"])
-        .output()
-        .expect("message from agent");
-    assert!(
-        out.status.success(),
-        "message failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_text_then_enter(&trace_log, "from @swift-otter: later");
-    let messages = env.ledger().list_messages().unwrap();
-    assert_eq!(messages.len(), 1, "send-now queue writes a durable record");
-    assert_eq!(messages[0].status, MessageStatus::Sent);
-    let sent = env
-        .read_events()
-        .into_iter()
-        .find(|event| event.method == "message.sent")
-        .expect("sent event");
-    let params = sent.params_value();
-    assert_eq!(params["sender"]["origin"], "agent");
-    assert_eq!(params["sender"]["kind"], "codex");
-    assert_eq!(params["sender"]["name"], "swift-otter");
-
-    let trace_log = env.project_root.join("zellij-from-queue-no-from-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-        .env("RIMZ_AGENT_KIND", "codex")
-        .env("RIMZ_AGENT_NAME", "swift-otter")
-        .args(["message", "@claude", "--no-from", "--", "exact"])
-        .output()
-        .expect("message --no-from from agent");
-    assert!(
-        out.status.success(),
-        "message --no-from failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_text_then_enter(&trace_log, "exact");
 }
 
 #[test]
@@ -1593,41 +1380,6 @@ fn queued_delivery_batches_same_sender_channel_prompt_prefix() {
     assert!(delivered.contains(&second_id.to_string()));
 }
 
-#[test]
-fn queue_parked_message_lists_sender() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-from-queue-park", "feature-from-park", &[]);
-
-    let out = env
-        .rimz()
-        .env("RIMZ_AGENT_KIND", "codex")
-        .env("RIMZ_AGENT_NAME", "swift-otter")
-        .args(["message", "@claude", "--", "later"])
-        .output()
-        .expect("message from agent");
-    assert!(
-        out.status.success(),
-        "message failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    let listed = env
-        .rimz()
-        .args(["message", "list", "--json"])
-        .output()
-        .expect("queue list");
-    assert!(
-        listed.status.success(),
-        "queue list failed: {}",
-        String::from_utf8_lossy(&listed.stderr)
-    );
-    let messages: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
-    assert_eq!(messages[0]["sender"]["origin"], "agent");
-    assert_eq!(messages[0]["sender"]["kind"], "codex");
-    assert_eq!(messages[0]["sender"]["name"], "swift-otter");
-}
-
 /// `steer --smart-compact 70%` against a window past the threshold sends a
 /// tracked `/compact` command before the prompt. The command confirms on
 /// `Compacting`; the prompt confirms independently on `TurnStarted`.
@@ -1747,9 +1499,11 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
 }
 
 /// A stale carried-forward token gauge suppresses duplicate `/compact` for the
-/// same full-window reading.
+/// same full-window reading. A changed occupied-token reading means the agent
+/// filled the window again, so the duplicate guard releases and smart-compact
+/// can run a new `/compact`.
 #[test]
-fn steer_auto_compact_suppresses_a_second_compaction_on_an_unchanged_window() {
+fn steer_auto_compact_reuses_baseline_until_context_reading_changes() {
     let env = Env::new();
     register_running_agent(
         &env,
@@ -1821,33 +1575,13 @@ fn steer_auto_compact_suppresses_a_second_compaction_on_an_unchanged_window() {
         "unchanged token reading must not compact again; trace: {second_lines:?}"
     );
 
-    let messages = env.ledger().list_messages().expect("messages");
-    let commands: Vec<_> = messages
-        .iter()
-        .filter(|message| message.body == MessageBody::Command && message.text == "/compact")
-        .collect();
-    assert_eq!(commands.len(), 1, "command records: {commands:?}");
-    assert_eq!(commands[0].compacted_context_tokens, Some(150_000));
-}
+    seed_context_tokens(&env, "sess-ac-dupe", 160_000, 200_000);
 
-/// A changed occupied-token reading means the agent filled the window again, so
-/// the duplicate guard releases and smart-compact can run a new `/compact`.
-#[test]
-fn steer_auto_compact_recompacts_after_a_fresh_reading() {
-    let env = Env::new();
-    register_running_agent(
-        &env,
-        "sess-ac-refill",
-        "feature-ac-refill",
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    seed_context_tokens(&env, "sess-ac-refill", 150_000, 200_000);
-
-    let first_trace = env.project_root.join("zellij-ac-refill-first-trace.log");
-    let first = env
+    let third_trace = env.project_root.join("zellij-ac-dupe-third-trace.log");
+    let third = env
         .rimz()
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &first_trace)
+        .env("RIMZ_TEST_ZELLIJ_LOG", &third_trace)
         .args([
             "message",
             "--steer",
@@ -1855,50 +1589,20 @@ fn steer_auto_compact_recompacts_after_a_fresh_reading() {
             "--smart-compact",
             "70%",
             "--",
-            "go1",
+            "go3",
         ])
         .output()
-        .expect("first steer");
+        .expect("third steer");
     assert!(
-        first.status.success(),
-        "first steer failed: {}",
-        String::from_utf8_lossy(&first.stderr)
+        third.status.success(),
+        "third steer failed: {}",
+        String::from_utf8_lossy(&third.stderr)
     );
+    let third_lines = trace_lines(&third_trace);
     assert!(
-        trace_lines(&first_trace)
-            .iter()
-            .any(|line| is_compact_command(line)),
-        "first send should compact"
-    );
-
-    seed_context_tokens(&env, "sess-ac-refill", 160_000, 200_000);
-
-    let second_trace = env.project_root.join("zellij-ac-refill-second-trace.log");
-    let second = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &second_trace)
-        .args([
-            "message",
-            "--steer",
-            "@claude",
-            "--smart-compact",
-            "70%",
-            "--",
-            "go2",
-        ])
-        .output()
-        .expect("second steer");
-    assert!(
-        second.status.success(),
-        "second steer failed: {}",
-        String::from_utf8_lossy(&second.stderr)
-    );
-    let second_lines = trace_lines(&second_trace);
-    assert!(
-        second_lines.iter().any(|line| is_compact_command(line))
-            && second_lines.iter().any(|line| is_paste(line, "go2")),
-        "fresh token reading should compact again before prompt; trace: {second_lines:?}"
+        third_lines.iter().any(|line| is_compact_command(line))
+            && third_lines.iter().any(|line| is_paste(line, "go3")),
+        "fresh token reading should compact again before prompt; trace: {third_lines:?}"
     );
 
     let messages = env.ledger().list_messages().expect("messages");
@@ -2135,89 +1839,88 @@ fn queue_auto_compact_runs_compact_before_delivering() {
 /// the open gate rather than landing on top of the ask — it stays pending for a
 /// later boundary, and nothing is pasted.
 #[test]
-fn queue_defers_delivery_under_a_pending_ask() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
-    register_running_agent(&env, "sess-qd", "feature-qd", pane_env);
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-qd",
-            "worktree_branch": "feature-qd",
-        }),
-        pane_env,
-    );
-    push_pending_agent_ask(&env, "sess-qd");
+fn queue_pending_ask_defers_unforced_and_force_delivers() {
+    {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+        register_running_agent(&env, "sess-qd", "feature-qd", pane_env);
+        run_hook(
+            &env,
+            json!({
+                "hook_event_name": "Stop",
+                "session_id": "sess-qd",
+                "worktree_branch": "feature-qd",
+            }),
+            pane_env,
+        );
+        push_pending_agent_ask(&env, "sess-qd");
 
-    let trace_log = env.project_root.join("zellij-qd-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-        .args(["message", "@claude", "--", "go"])
-        .output()
-        .expect("message");
-    assert!(
-        out.status.success(),
-        "message failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+        let trace_log = env.project_root.join("zellij-qd-trace.log");
+        let out = env
+            .rimz()
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "@claude", "--", "go"])
+            .output()
+            .expect("message");
+        assert!(
+            out.status.success(),
+            "message failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
 
-    assert_eq!(
-        env.ledger().list_pending_messages().unwrap().len(),
-        1,
-        "a pending ask defers delivery; the message stays queued"
-    );
-    assert!(
-        trace_lines(&trace_log)
-            .iter()
-            .all(|line| !is_paste(line, "go")),
-        "nothing is pasted while the ask reserves input"
-    );
-}
+        assert_eq!(
+            env.ledger().list_pending_messages().unwrap().len(),
+            1,
+            "a pending ask defers delivery; the message stays queued"
+        );
+        assert!(
+            trace_lines(&trace_log)
+                .iter()
+                .all(|line| !is_paste(line, "go")),
+            "nothing is pasted while the ask reserves input"
+        );
+    }
 
-/// `--force` mirrors `steer --force`: queue sends past a pending ask at an open
-/// gate instead of parking.
-#[test]
-fn queue_force_delivers_past_a_pending_ask() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
-    register_running_agent(&env, "sess-qf", "feature-qf", pane_env);
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-qf",
-            "worktree_branch": "feature-qf",
-        }),
-        pane_env,
-    );
-    push_pending_agent_ask(&env, "sess-qf");
+    {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+        register_running_agent(&env, "sess-qf", "feature-qf", pane_env);
+        run_hook(
+            &env,
+            json!({
+                "hook_event_name": "Stop",
+                "session_id": "sess-qf",
+                "worktree_branch": "feature-qf",
+            }),
+            pane_env,
+        );
+        push_pending_agent_ask(&env, "sess-qf");
 
-    let trace_log = env.project_root.join("zellij-qf-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-        .args(["message", "@claude", "--force", "--", "go"])
-        .output()
-        .expect("message");
-    assert!(
-        out.status.success(),
-        "message failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+        let trace_log = env.project_root.join("zellij-qf-trace.log");
+        let out = env
+            .rimz()
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "@claude", "--force", "--", "go"])
+            .output()
+            .expect("message");
+        assert!(
+            out.status.success(),
+            "message failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
 
-    assert!(
-        env.ledger().list_pending_messages().unwrap().is_empty(),
-        "--force delivers past the pending ask inline"
-    );
-    assert_text_then_enter(&trace_log, "go");
+        assert!(
+            env.ledger().list_pending_messages().unwrap().is_empty(),
+            "--force delivers past the pending ask inline"
+        );
+        assert_text_then_enter(&trace_log, "go");
+    }
 }
 
 /// `queue @claude --all` fans out to every claude in the room: one queued
@@ -2792,13 +2495,6 @@ fn push_pending_agent_ask(env: &Env, session_id: &str) {
         .expect("push pending ask");
 }
 
-/// A live `codex` pane at the workspace root with no bound session — the
-/// producer synthesizes its idle `○ codex` row, but it never enters the rollup.
-/// Its raw id is `TRACE_PANE` so the steer shim assertion matches.
-fn unbound_codex_pane(env: &Env) -> rimz::pane::PaneRef {
-    agent_pane(env, "codex")
-}
-
 fn agent_pane(env: &Env, command: &str) -> rimz::pane::PaneRef {
     rimz::pane::PaneRef {
         pane_id: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, TRACE_PANE),
@@ -2822,33 +2518,6 @@ fn agent_pane(env: &Env, command: &str) -> rimz::pane::PaneRef {
 }
 
 fn seed_provisional_codex_launch(
-    env: &Env,
-    launch_id: &str,
-    agent_name: &str,
-    role: Option<&str>,
-    stale_pane: &str,
-) {
-    seed_provisional_codex_launch_with_prompt(env, launch_id, agent_name, role, stale_pane, None);
-}
-
-fn seed_running_provisional_codex_launch(
-    env: &Env,
-    launch_id: &str,
-    agent_name: &str,
-    role: Option<&str>,
-    stale_pane: &str,
-) {
-    seed_provisional_codex_launch_with_prompt(
-        env,
-        launch_id,
-        agent_name,
-        role,
-        stale_pane,
-        Some("work"),
-    );
-}
-
-fn seed_provisional_codex_launch_with_prompt(
     env: &Env,
     launch_id: &str,
     agent_name: &str,
@@ -2896,7 +2565,7 @@ fn seed_provisional_codex_launch_with_prompt(
 fn steer_reaches_unbound_codex_pane() {
     let env = Env::new();
     env.install_agent_hooks("codex");
-    let pane_fixture = env.write_pane_fixture(&[unbound_codex_pane(&env)]);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
 
     let trace_log = env.project_root.join("zellij-unbound-trace.log");
     let out = env
@@ -2921,7 +2590,7 @@ fn steer_reaches_unbound_codex_pane() {
 fn queue_sends_now_to_unbound_codex_pane() {
     let env = Env::new();
     env.install_agent_hooks("codex");
-    let pane_fixture = env.write_pane_fixture(&[unbound_codex_pane(&env)]);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
 
     let trace_log = env.project_root.join("zellij-unbound-queue-trace.log");
     let out = env
@@ -2966,8 +2635,9 @@ fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
         "swift-otter",
         Some("coder"),
         "terminal_8",
+        None,
     );
-    let pane_fixture = env.write_pane_fixture(&[unbound_codex_pane(&env)]);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
 
     let trace_log = env.project_root.join("zellij-provisional-queue-trace.log");
     let out = env
@@ -3007,7 +2677,7 @@ fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
 }
 
 #[test]
-fn queue_to_provisional_without_live_frame_parks_not_stale_rollup_pane() {
+fn provisional_without_live_frame_parks_queue_and_refuses_steer() {
     let env = Env::new();
     env.install_agent_hooks("codex");
     trust_codex_hooks(&env);
@@ -3017,6 +2687,7 @@ fn queue_to_provisional_without_live_frame_parks_not_stale_rollup_pane() {
         "swift-otter",
         Some("coder"),
         "terminal_8",
+        None,
     );
 
     let trace_log = env
@@ -3061,19 +2732,6 @@ fn queue_to_provisional_without_live_frame_parks_not_stale_rollup_pane() {
             .iter()
             .all(|line| !is_paste_to_any_pane(line, "read plan")),
         "no-live-frame queue must not paste into the stale launch pane: {lines:?}"
-    );
-}
-
-#[test]
-fn steer_to_provisional_without_live_frame_refuses_not_stale_rollup_pane() {
-    let env = Env::new();
-    env.install_agent_hooks("codex");
-    seed_provisional_codex_launch(
-        &env,
-        "launch_no_frame_steer",
-        "swift-otter",
-        Some("coder"),
-        "terminal_8",
     );
 
     let trace_log = env

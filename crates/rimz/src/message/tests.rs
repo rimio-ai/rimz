@@ -4,7 +4,7 @@ use jiff::Timestamp;
 
 use super::*;
 use crate::agents::{AgentState, AgentStatus};
-use crate::ids::{AgentKind, AgentSessionId, MessageId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
 fn gates_open_only_on_resting_statuses() {
@@ -119,129 +119,118 @@ fn auto_compact_parses_percent_and_token_forms() {
 }
 
 #[test]
-fn auto_compact_triggers_only_once_fill_is_reached() {
+fn auto_compact_triggers_from_supported_context_readings() {
     let mut a = agent("s1", None);
     // An unknown fill is not a full window.
     assert!(!AutoCompact::Percent(70).triggered(&a));
     assert!(!AutoCompact::Tokens(1).triggered(&a));
+
     // The percent threshold reads the carried gauge.
     a.context_pct = Some(75);
     assert!(AutoCompact::Percent(70).triggered(&a));
     assert!(AutoCompact::Percent(75).triggered(&a));
     assert!(!AutoCompact::Percent(76).triggered(&a));
+
     // The token threshold reads the per-call split fallback.
     a.cache_read_input_tokens = Some(100_000);
     a.fresh_input_tokens = Some(20_000);
     assert!(AutoCompact::Tokens(120_000).triggered(&a));
     assert!(!AutoCompact::Tokens(120_001).triggered(&a));
+
+    // A transcript-derived session reports only a running total — no rich
+    // context blob and no per-call split. The percent gauge already scales
+    // off that total, so the token threshold must read it too rather than
+    // silently never firing.
+    let mut carried = agent("s2", None);
+    carried.total_tokens = Some(120_000);
+    carried.context_window = Some(200_000);
+    assert!(AutoCompact::Tokens(100_000).triggered(&carried));
+    assert!(AutoCompact::Tokens(120_000).triggered(&carried));
+    assert!(!AutoCompact::Tokens(120_001).triggered(&carried));
 }
 
 #[test]
-fn auto_compact_round_trips_through_a_message_record() {
-    let message = MessageRecord::new(
+fn record_optional_fields_default_and_round_trip() {
+    let mut record = MessageRecord::new(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         &agent("s1", None),
         "next".to_owned(),
         true,
         DeliveryGate::Done,
     )
+    .with_channel(Some("docs".to_owned()))
+    .with_sender(MessageSender::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        name: Some("lucid-atlas".to_owned()),
+        profile: Some("planner".to_owned()),
+        role: Some("coder".to_owned()),
+        channel: Some("main".to_owned()),
+    })
+    .with_body(MessageBody::Command)
+    .with_force(true)
+    .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
+    .with_not_before(Some(Timestamp::now() + jiff::SignedDuration::from_secs(60)))
     .with_auto_compact(Some(AutoCompact::Percent(70)));
-    let json = serde_json::to_string(&message).unwrap();
-    let back: MessageRecord = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.auto_compact, Some(AutoCompact::Percent(70)));
-}
+    record.retry_after = Some(Timestamp::now() + jiff::SignedDuration::from_secs(30));
+    record.compacted_context_tokens = Some(150_000);
+    record.batch_id = Some(message_id(1));
+    record.unconfirmed_sends = 2;
 
-#[test]
-fn batch_id_defaults_absent_and_round_trips_when_set() {
-    let mut message = MessageRecord::new(
+    let json = serde_json::to_string(&record).unwrap();
+    let back: MessageRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, record);
+
+    let fresh = MessageRecord::new(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         &agent("s1", None),
         "next".to_owned(),
         true,
         DeliveryGate::Done,
     );
-    assert_eq!(message.batch_id, None);
+    assert_eq!(fresh.channel, None);
+    assert_eq!(fresh.sender, MessageSender::Human);
+    assert_eq!(fresh.body, MessageBody::Prompt);
+    assert!(!fresh.force);
+    assert_eq!(fresh.pane_id, None);
+    assert_eq!(fresh.not_before, None);
+    assert_eq!(fresh.retry_after, None);
+    assert_eq!(fresh.auto_compact, None);
+    assert_eq!(fresh.compacted_context_tokens, None);
+    assert_eq!(fresh.batch_id, None);
+    assert_eq!(fresh.unconfirmed_sends, 0);
 
-    message.batch_id = Some(message_id(1));
-    let json = serde_json::to_string(&message).unwrap();
-    let back: MessageRecord = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.batch_id, Some(message_id(1)));
-
-    let mut legacy = serde_json::to_value(&back).unwrap();
-    legacy.as_object_mut().unwrap().remove("batch_id");
-    let back: MessageRecord = serde_json::from_value(legacy).unwrap();
-    assert_eq!(back.batch_id, None);
-}
-
-#[test]
-fn not_before_defaults_ready_and_round_trips_when_set() {
-    let base = MessageRecord::new(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &agent("s1", None),
-        "next".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    let now = Timestamp::now();
-    assert_eq!(base.not_before, None);
-    assert!(base.is_ready(now));
-
-    let scheduled_at = now + jiff::SignedDuration::from_secs(60);
-    let scheduled = base.with_not_before(Some(scheduled_at));
-    assert!(!scheduled.is_ready(now));
-    assert!(scheduled.is_ready(scheduled_at));
-    let json = serde_json::to_string(&scheduled).unwrap();
-    let back: MessageRecord = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.not_before, Some(scheduled_at));
-    let mut legacy = serde_json::to_value(&back).unwrap();
-    legacy.as_object_mut().unwrap().remove("not_before");
-    let back: MessageRecord = serde_json::from_value(legacy).unwrap();
-    assert_eq!(back.not_before, None);
-}
-
-#[test]
-fn retry_after_defaults_absent_and_round_trips_when_set() {
-    let mut message = MessageRecord::new(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &agent("s1", None),
-        "next".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    let retry_at = Timestamp::now() + jiff::SignedDuration::from_secs(30);
-    assert_eq!(message.retry_after, None);
-
-    message.retry_after = Some(retry_at);
-    let json = serde_json::to_string(&message).unwrap();
-    let back: MessageRecord = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.retry_after, Some(retry_at));
-
-    let mut legacy = serde_json::to_value(&back).unwrap();
-    legacy.as_object_mut().unwrap().remove("retry_after");
-    let back: MessageRecord = serde_json::from_value(legacy).unwrap();
-    assert_eq!(back.retry_after, None);
-}
-
-#[test]
-fn unconfirmed_sends_defaults_absent_and_round_trips_when_set() {
-    let mut message = MessageRecord::new(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &agent("s1", None),
-        "next".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    assert_eq!(message.unconfirmed_sends, 0);
-
-    message.unconfirmed_sends = 2;
-    let json = serde_json::to_string(&message).unwrap();
-    let back: MessageRecord = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.unconfirmed_sends, 2);
-
-    let mut legacy = serde_json::to_value(&back).unwrap();
-    legacy.as_object_mut().unwrap().remove("unconfirmed_sends");
-    let back: MessageRecord = serde_json::from_value(legacy).unwrap();
-    assert_eq!(back.unconfirmed_sends, 0);
+    let encoded = serde_json::to_value(&record).unwrap();
+    for key in [
+        "channel",
+        "sender",
+        "body",
+        "force",
+        "pane_id",
+        "not_before",
+        "retry_after",
+        "auto_compact",
+        "compacted_context_tokens",
+        "batch_id",
+        "unconfirmed_sends",
+    ] {
+        let mut legacy = encoded.clone();
+        legacy.as_object_mut().unwrap().remove(key);
+        let back: MessageRecord = serde_json::from_value(legacy).unwrap();
+        match key {
+            "channel" => assert_eq!(back.channel, None),
+            "sender" => assert_eq!(back.sender, MessageSender::Human),
+            "body" => assert_eq!(back.body, MessageBody::Prompt),
+            "force" => assert!(!back.force),
+            "pane_id" => assert_eq!(back.pane_id, None),
+            "not_before" => assert_eq!(back.not_before, None),
+            "retry_after" => assert_eq!(back.retry_after, None),
+            "auto_compact" => assert_eq!(back.auto_compact, None),
+            "compacted_context_tokens" => assert_eq!(back.compacted_context_tokens, None),
+            "batch_id" => assert_eq!(back.batch_id, None),
+            "unconfirmed_sends" => assert_eq!(back.unconfirmed_sends, 0),
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[test]
@@ -324,97 +313,6 @@ fn wake_deadline_arms_queued_and_sent_records() {
 }
 
 #[test]
-fn message_body_defaults_to_prompt_and_command_round_trips() {
-    let base = MessageRecord::new(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &agent("s1", None),
-        "next".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    assert_eq!(base.body, MessageBody::Prompt);
-    let command = base.with_body(MessageBody::Command);
-    let json = serde_json::to_string(&command).unwrap();
-    let back: MessageRecord = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.body, MessageBody::Command);
-    let mut legacy = serde_json::to_value(&back).unwrap();
-    legacy.as_object_mut().unwrap().remove("body");
-    let back: MessageRecord = serde_json::from_value(legacy).unwrap();
-    assert_eq!(back.body, MessageBody::Prompt);
-}
-
-#[test]
-fn force_defaults_off_and_round_trips_when_set() {
-    let base = MessageRecord::new(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &agent("s1", None),
-        "next".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    assert!(
-        !base.force,
-        "a fresh record never forces past a pending ask"
-    );
-    let forced = base.with_force(true);
-    let json = serde_json::to_string(&forced).unwrap();
-    let back: MessageRecord = serde_json::from_str(&json).unwrap();
-    assert!(back.force);
-    // A record written before the field existed reads as not-forced.
-    let legacy = json.replace(",\"force\":true", "");
-    let back: MessageRecord = serde_json::from_str(&legacy).unwrap();
-    assert!(!back.force);
-}
-
-#[test]
-fn sender_defaults_to_human_and_agent_round_trips() {
-    let base = MessageRecord::new(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &agent("s1", None),
-        "next".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    assert_eq!(base.sender, MessageSender::Human);
-    let agent_sender = MessageSender::Agent {
-        kind: AgentKind::new_unchecked("claude"),
-        name: Some("lucid-atlas".to_owned()),
-        profile: Some("planner".to_owned()),
-        role: None,
-        channel: Some("main".to_owned()),
-    };
-    let attributed = base.with_sender(agent_sender.clone());
-    let json = serde_json::to_string(&attributed).unwrap();
-    let back: MessageRecord = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.sender, agent_sender);
-    // A record written before sender attribution reads as human-authored.
-    let mut legacy = serde_json::to_value(&attributed).unwrap();
-    legacy.as_object_mut().unwrap().remove("sender");
-    let back: MessageRecord = serde_json::from_value(legacy).unwrap();
-    assert_eq!(back.sender, MessageSender::Human);
-}
-
-#[test]
-fn channel_defaults_absent_and_round_trips_when_set() {
-    let base = MessageRecord::new(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &agent("s1", None),
-        "next".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    assert_eq!(base.channel, None);
-    let scoped = base.with_channel(Some("docs".to_owned()));
-    let json = serde_json::to_string(&scoped).unwrap();
-    let back: MessageRecord = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.channel.as_deref(), Some("docs"));
-    let mut legacy = serde_json::to_value(&back).unwrap();
-    legacy.as_object_mut().unwrap().remove("channel");
-    let back: MessageRecord = serde_json::from_value(legacy).unwrap();
-    assert_eq!(back.channel, None);
-}
-
-#[test]
 fn sender_render_names_human_and_agent_address() {
     assert_eq!(MessageSender::Human.render(), "you");
     assert_eq!(
@@ -439,20 +337,6 @@ fn sender_render_names_human_and_agent_address() {
         .render(),
         "@codex"
     );
-}
-
-#[test]
-fn auto_compact_tokens_threshold_reads_the_carried_total() {
-    // A transcript-derived session reports only a running total — no rich
-    // context blob and no per-call split. The percent gauge already scales
-    // off that total, so the token threshold must read it too rather than
-    // silently never firing.
-    let mut a = agent("s1", None);
-    a.total_tokens = Some(120_000);
-    a.context_window = Some(200_000);
-    assert!(AutoCompact::Tokens(100_000).triggered(&a));
-    assert!(AutoCompact::Tokens(120_000).triggered(&a));
-    assert!(!AutoCompact::Tokens(120_001).triggered(&a));
 }
 
 #[test]
