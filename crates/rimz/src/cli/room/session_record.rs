@@ -173,10 +173,13 @@ fn freshest_matching_sidebar_heartbeat(
     runtime_root: &Path,
 ) -> Option<SystemTime> {
     let runtime = RuntimePaths::under(record.workspace_id.clone(), runtime_root).ok()?;
-    let entries = std::fs::read_dir(&runtime.heartbeat_dir).ok()?;
-    entries
-        .flatten()
-        .filter_map(|entry| matching_sidebar_heartbeat_mtime(session, record, &entry.path()))
+    let heartbeats =
+        rimz::sidebar::heartbeat::read_current_heartbeats(&runtime.heartbeat_dir).ok()?;
+    heartbeats
+        .into_iter()
+        .filter_map(|(path, heartbeat)| {
+            matching_sidebar_heartbeat_mtime(session, record, &path, &heartbeat)
+        })
         .max()
 }
 
@@ -184,10 +187,8 @@ fn matching_sidebar_heartbeat_mtime(
     session: &str,
     record: &WorkspaceRecord,
     path: &Path,
+    heartbeat: &rimz::sidebar::heartbeat::SidebarHeartbeat,
 ) -> Option<SystemTime> {
-    if !rimz::sidebar::heartbeat::SidebarHeartbeat::is_heartbeat_file(path) {
-        return None;
-    }
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
     let fresh = match SystemTime::now().duration_since(modified) {
         Ok(age) => age <= rimz::sidebar::timing::SIDEBAR_HEARTBEAT_TTL,
@@ -196,10 +197,7 @@ fn matching_sidebar_heartbeat_mtime(
     if !fresh {
         return None;
     }
-    let heartbeat = rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(path).ok()?;
-    (heartbeat.protocol_version == rimz::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION
-        && heartbeat.session_name == session
-        && heartbeat.workspace_id == record.workspace_id)
+    (heartbeat.session_name == session && heartbeat.workspace_id == record.workspace_id)
         .then_some(modified)
 }
 

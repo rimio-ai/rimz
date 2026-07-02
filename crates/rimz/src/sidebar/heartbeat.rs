@@ -1,9 +1,12 @@
 //! Liveness heartbeat written by each sidebar renderer.
 
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 
@@ -78,6 +81,51 @@ impl SidebarHeartbeat {
         let bytes = std::fs::read(path)?;
         serde_json::from_slice(&bytes).map_err(std::io::Error::other)
     }
+}
+
+/// Walk a heartbeat directory, decode every sidebar heartbeat file, and keep
+/// only current-protocol records. Freshness deliberately stays with callers:
+/// launch, election, and reload check mtime TTL; wakeup fanout checks
+/// `last_seen` plus a TOCTOU re-stat; session records compare mtimes.
+pub fn read_current_heartbeats(dir: &Path) -> io::Result<Vec<(PathBuf, SidebarHeartbeat)>> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+
+    let mut heartbeats = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                debug!(path = %dir.display(), error = %err, "sidebar heartbeat dir entry unreadable");
+                continue;
+            }
+        };
+        let path = entry.path();
+        if !SidebarHeartbeat::is_heartbeat_file(&path) {
+            continue;
+        }
+        let heartbeat = match SidebarHeartbeat::read_from(&path) {
+            Ok(heartbeat) => heartbeat,
+            Err(err) => {
+                debug!(path = %path.display(), error = %err, "sidebar heartbeat unreadable");
+                continue;
+            }
+        };
+        if heartbeat.protocol_version != SIDEBAR_PROTOCOL_VERSION {
+            debug!(
+                path = %path.display(),
+                protocol = heartbeat.protocol_version,
+                expected = SIDEBAR_PROTOCOL_VERSION,
+                "sidebar heartbeat unsupported protocol version"
+            );
+            continue;
+        }
+        heartbeats.push((path, heartbeat));
+    }
+    Ok(heartbeats)
 }
 
 #[cfg(test)]

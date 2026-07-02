@@ -255,26 +255,13 @@ fn duplicate_sidebar_session_groups(
 fn fresh_sidebar_heartbeats_for_doctor(
     runtime: &RuntimePaths,
 ) -> std::io::Result<Vec<rimz::sidebar::heartbeat::SidebarHeartbeat>> {
-    let entries = match fs::read_dir(&runtime.heartbeat_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err),
-    };
+    let current = rimz::sidebar::heartbeat::read_current_heartbeats(&runtime.heartbeat_dir)?;
     let mut heartbeats = Vec::new();
-    for entry in entries {
-        let path = entry?.path();
-        if !rimz::sidebar::heartbeat::SidebarHeartbeat::is_heartbeat_file(&path)
-            || !heartbeat_mtime_is_fresh(&path)
-        {
+    for (path, heartbeat) in current {
+        if !heartbeat_mtime_is_fresh(&path) {
             continue;
         }
-        let heartbeat = match rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(&path) {
-            Ok(heartbeat) => heartbeat,
-            Err(_) => continue,
-        };
-        if heartbeat.protocol_version != rimz::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION
-            || heartbeat.workspace_id != runtime.workspace_id
-        {
+        if heartbeat.workspace_id != runtime.workspace_id {
             continue;
         }
         heartbeats.push(heartbeat);

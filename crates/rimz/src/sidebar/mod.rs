@@ -42,7 +42,7 @@ use crate::ledger::RuntimePaths;
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
 use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
-use crate::sidebar::heartbeat::{SIDEBAR_PROTOCOL_VERSION, SidebarHeartbeat};
+use crate::sidebar::heartbeat::{SidebarHeartbeat, read_current_heartbeats};
 use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
 
 /// Launch-lock poll cadence: the producer holds the election lock while the
@@ -106,36 +106,19 @@ pub fn write_heartbeat(
 /// liveness set: a stale mtime, unreadable JSON, or mismatched protocol is
 /// skipped (so an old-build sidebar drops out and reload replaces it).
 pub(crate) fn fresh_sidebar_heartbeats(rt: &RuntimePaths) -> Vec<SidebarHeartbeat> {
-    let entries = match fs::read_dir(&rt.heartbeat_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+    let heartbeats = match read_current_heartbeats(&rt.heartbeat_dir) {
+        Ok(heartbeats) => heartbeats,
         Err(err) => {
             debug!(path = %rt.heartbeat_dir.display(), error = %err, "sidebar heartbeat dir unreadable");
             return Vec::new();
         }
     };
 
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !SidebarHeartbeat::is_heartbeat_file(&path) {
-            continue;
-        }
-        if !mtime_within_ttl(&path) {
-            continue;
-        }
-        let heartbeat = match SidebarHeartbeat::read_from(&path) {
-            Ok(heartbeat) => heartbeat,
-            Err(err) => {
-                debug!(path = %path.display(), error = %err, "sidebar heartbeat unreadable");
-                continue;
-            }
-        };
-        if heartbeat.protocol_version == SIDEBAR_PROTOCOL_VERSION {
-            out.push(heartbeat);
-        }
-    }
-    out
+    heartbeats
+        .into_iter()
+        .filter(|(path, _)| mtime_within_ttl(path))
+        .map(|(_, heartbeat)| heartbeat)
+        .collect()
 }
 
 fn fresh_sidebar_instances(rt: &RuntimePaths) -> Vec<SidebarInstanceId> {
@@ -382,6 +365,7 @@ mod tests {
 
     use super::*;
     use crate::ids::{MuxName, SidebarInstanceId, WorkspaceId};
+    use crate::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION;
 
     struct Harness {
         _dir: TempDir,

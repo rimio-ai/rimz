@@ -32,8 +32,7 @@ use crate::harness::run::RunRecord;
 use crate::ledger::RuntimePaths;
 use crate::ledger::event::{EventEnvelope, EventKind};
 use crate::sidebar::events::{RELOAD_CONTROL_WORD, SidebarEvent, SidebarEventEnvelope};
-use crate::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION;
-use crate::sidebar::heartbeat::SidebarHeartbeat;
+use crate::sidebar::heartbeat::{SidebarHeartbeat, read_current_heartbeats};
 pub use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
 
 #[derive(Debug, thiserror::Error)]
@@ -196,45 +195,18 @@ pub fn wake_sidebars_pane_frame_published(rt: &RuntimePaths) -> Result<usize> {
     broadcast_sidebar_event(rt, None, SidebarEvent::PaneFramePublished)
 }
 
-/// Walk the runtime heartbeat dir and return every sidebar heartbeat that is
-/// readable, on the current protocol, and fresh (including a TOCTOU re-stat
-/// just before return). Both the ledger wakeup fanout and `reload` share this
-/// so the freshness contract lives in one place.
+/// Apply the wakeup fanout freshness filter over the shared sidebar heartbeat
+/// discovery walk, including a TOCTOU re-stat just before return.
 fn collect_fresh_sidebars(rt: &RuntimePaths) -> Result<Vec<SidebarHeartbeat>> {
-    let entries = match fs::read_dir(&rt.heartbeat_dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(source) => {
-            return Err(WakeupErr::ReadDir {
-                path: rt.heartbeat_dir.clone(),
-                source,
-            });
-        }
-    };
+    let heartbeats =
+        read_current_heartbeats(&rt.heartbeat_dir).map_err(|source| WakeupErr::ReadDir {
+            path: rt.heartbeat_dir.clone(),
+            source,
+        })?;
 
     let now = Timestamp::now();
     let mut fresh = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !SidebarHeartbeat::is_heartbeat_file(&path) {
-            continue;
-        }
-        let hb = match SidebarHeartbeat::read_from(&path) {
-            Ok(hb) => hb,
-            Err(e) => {
-                debug!(?path, error = %e, "wakeup: skipping unreadable sidebar heartbeat");
-                continue;
-            }
-        };
-        if hb.protocol_version != SIDEBAR_PROTOCOL_VERSION {
-            debug!(
-                ?path,
-                protocol = hb.protocol_version,
-                expected = SIDEBAR_PROTOCOL_VERSION,
-                "wakeup: skipping sidebar heartbeat with unsupported protocol version"
-            );
-            continue;
-        }
+    for (path, hb) in heartbeats {
         let age_seconds = now.duration_since(hb.last_seen).as_secs();
         if age_seconds.is_negative()
             || Duration::from_secs(age_seconds as u64) > SIDEBAR_HEARTBEAT_TTL
