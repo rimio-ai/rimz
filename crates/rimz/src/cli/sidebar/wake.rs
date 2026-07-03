@@ -47,7 +47,8 @@ pub(super) fn wake_event(
         WakeReason::PaneOpened => Some(match pane_id {
             Some(pane_id) => SidebarEvent::PaneOpened {
                 pane_id: zellij_pane(pane_id),
-                command: command_from_args(command_args),
+                command: command_from_args(command_args)
+                    .filter(|command| !command_is_launch_chrome(command)),
             },
             None => SidebarEvent::PanesChanged,
         }),
@@ -139,6 +140,10 @@ pub(crate) fn rimz_cli_program() -> PathBuf {
 mod tests {
     use super::*;
 
+    fn zellij_pane(raw: &str) -> rimz::ids::PaneId {
+        rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, raw)
+    }
+
     #[test]
     fn launch_chrome_is_agents_launch_not_agents_subcommand() {
         assert!(command_is_launch_chrome(
@@ -147,7 +152,46 @@ mod tests {
         assert!(command_is_launch_chrome(
             "/home/me/.cargo/bin/rimz agents claude --worktree"
         ));
+        assert!(command_is_launch_chrome(
+            "/home/me/.cargo/bin/rimz agents claude,codex --worktree=quality-pass"
+        ));
+        assert!(!command_is_launch_chrome("cargo build"));
         assert!(!command_is_launch_chrome("rimz agents exec codex"));
         assert!(!command_is_launch_chrome("rimz agents wait swift-otter"));
+        assert!(!command_is_launch_chrome("rimz agents list"));
+        assert!(!command_is_launch_chrome("rimz agents ls"));
+        assert!(!command_is_launch_chrome("rimz agents show swift-otter"));
+        assert!(!command_is_launch_chrome("rimz agents focus swift-otter"));
+        assert!(!command_is_launch_chrome("rimz agents stop swift-otter"));
+    }
+
+    #[test]
+    fn pane_opened_strips_launch_chrome_command() {
+        assert_eq!(
+            wake_event(
+                WakeReason::PaneOpened,
+                Some("terminal_7"),
+                &["rimz agents claude,codex --worktree=quality-pass".to_owned()],
+                &[],
+                &[],
+            ),
+            Some(SidebarEvent::PaneOpened {
+                pane_id: zellij_pane("terminal_7"),
+                command: None,
+            }),
+        );
+        assert_eq!(
+            wake_event(
+                WakeReason::PaneOpened,
+                Some("terminal_8"),
+                &["codex".to_owned()],
+                &[],
+                &[],
+            ),
+            Some(SidebarEvent::PaneOpened {
+                pane_id: zellij_pane("terminal_8"),
+                command: Some("codex".to_owned()),
+            }),
+        );
     }
 }

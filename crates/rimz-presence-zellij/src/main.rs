@@ -5,74 +5,17 @@
 //! targets build a stub so `--workspace` builds, lints, and the policy unit
 //! tests run without the wasm toolchain.
 
-#[cfg(any(test, target_family = "wasm"))]
-use rimz_presence_zellij::policy;
-
-#[cfg(any(test, target_family = "wasm"))]
-#[derive(Default)]
-struct RuntimeReconfigure<'a> {
-    plugin_id: Option<u32>,
-    focus_key: Option<&'a str>,
-    focus_follows_mouse: Option<bool>,
-    mouse_click_through: Option<bool>,
-}
-
-#[cfg(any(test, target_family = "wasm"))]
-fn parse_configuration_bool(value: Option<&str>) -> Option<bool> {
-    match value {
-        Some("true") => Some(true),
-        Some("false") => Some(false),
-        _ => None,
-    }
-}
-
-#[cfg(any(test, target_family = "wasm"))]
-fn runtime_reconfigure_kdl(config: &RuntimeReconfigure<'_>) -> Option<String> {
-    let mut kdl = String::new();
-    if let Some(value) = config.focus_follows_mouse {
-        push_bool_option_kdl(&mut kdl, "focus_follows_mouse", value);
-    }
-    if let Some(value) = config.mouse_click_through {
-        push_bool_option_kdl(&mut kdl, "mouse_click_through", value);
-    }
-    if let Some(keybinds) = focus_keybind_kdl(config) {
-        kdl.push_str(&keybinds);
-    }
-    (!kdl.is_empty()).then_some(kdl)
-}
-
-#[cfg(any(test, target_family = "wasm"))]
-fn push_bool_option_kdl(kdl: &mut String, key: &str, value: bool) {
-    kdl.push_str(key);
-    kdl.push(' ');
-    kdl.push_str(bool_kdl(value));
-    kdl.push('\n');
-}
-
-#[cfg(any(test, target_family = "wasm"))]
-fn focus_keybind_kdl(config: &RuntimeReconfigure<'_>) -> Option<String> {
-    let chord = config.focus_key.and_then(policy::FocusChord::parse)?;
-    let plugin_id = config.plugin_id?;
-    Some(policy::focus_keybind_kdl(chord, plugin_id))
-}
-
-#[cfg(any(test, target_family = "wasm"))]
-fn bool_kdl(value: bool) -> &'static str {
-    if value { "true" } else { "false" }
-}
-
 #[cfg(target_family = "wasm")]
 mod shell {
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use rimz_presence_zellij::policy::{
-        self, CorrectionAction, FOCUS_SIDEBAR_PIPE, FocusCorrection, FocusPatch, FocusResolution,
+        self, CorrectionAction, FocusCorrection, FocusPatch, FocusResolution,
         ForegroundCommandUpdate, PaneFields, Poke, PokePolicy, RawStablePaneFields, TimerGate,
     };
+    use rimz_presence_zellij::wire::{self, FOCUS_SIDEBAR_PIPE};
     use zellij_tile::prelude::*;
-
-    use super::{RuntimeReconfigure, parse_configuration_bool, runtime_reconfigure_kdl};
 
     #[derive(Default)]
     pub struct State {
@@ -127,10 +70,10 @@ mod shell {
             self.rimz_bin = configuration.get("rimz_bin").cloned();
             self.plugin_id = Some(get_plugin_ids().plugin_id);
             self.focus_key = configuration.get("focus_key").cloned();
-            self.focus_follows_mouse = parse_configuration_bool(
+            self.focus_follows_mouse = wire::parse_configuration_bool(
                 configuration.get("focus_follows_mouse").map(String::as_str),
             );
-            self.mouse_click_through = parse_configuration_bool(
+            self.mouse_click_through = wire::parse_configuration_bool(
                 configuration.get("mouse_click_through").map(String::as_str),
             );
             let permissions = vec![
@@ -195,29 +138,50 @@ mod shell {
                         // Poke every opened pane — `fold`, not `any`, so a manifest
                         // carrying two new panes emits both card-create events.
                         let emitted_open = opened.iter().fold(false, |emitted, pane| {
-                            self.poke_pane_opened(pane, now) || emitted
+                            let command = pane
+                                .pane_command
+                                .as_ref()
+                                .or(pane.terminal_command.as_ref())
+                                .filter(|command| !command.is_empty())
+                                .cloned();
+                            self.run_wake(
+                                wire::WakeRequest::PaneOpened {
+                                    pane_id: pane.id,
+                                    command,
+                                },
+                                now,
+                            ) || emitted
                         });
                         match focus_patch {
-                            Some(patch) if self.poke_focus_changed(&patch, now) => {
-                                let hash = policy::manifest_hash(&self.tabs, self.active_tab);
-                                if let Some(policy) = self.policy.as_mut() {
-                                    policy.accept_manifest(hash);
-                                    policy.on_optimistic_signal(now);
+                            Some(patch) => {
+                                if self.run_wake(wire::WakeRequest::FocusChanged { patch }, now) {
+                                    let hash = policy::manifest_hash(&self.tabs);
+                                    if let Some(policy) = self.policy.as_mut() {
+                                        policy.accept_manifest(hash);
+                                        policy.on_optimistic_signal(now);
+                                    }
+                                } else if emitted_open {
+                                    let hash = policy::manifest_hash(&self.tabs);
+                                    if let Some(policy) = self.policy.as_mut() {
+                                        policy.accept_manifest(hash);
+                                    }
+                                } else {
+                                    self.fold(now);
                                 }
                             }
-                            _ if emitted_open => {
-                                let hash = policy::manifest_hash(&self.tabs, self.active_tab);
+                            None if emitted_open => {
+                                let hash = policy::manifest_hash(&self.tabs);
                                 if let Some(policy) = self.policy.as_mut() {
                                     policy.accept_manifest(hash);
                                 }
                             }
-                            _ => self.fold(now),
+                            None => self.fold(now),
                         }
                         self.resolve_focus_correction(now, true);
                         self.active_focused_pane = policy::resolved_focused_pane_id(
                             &self.tabs,
                             self.active_tab,
-                            Some(&self.focus_resolution),
+                            &self.focus_resolution,
                         );
                     }
                 }
@@ -228,7 +192,7 @@ mod shell {
                         policy::resolved_focused_pane_id(
                             &self.tabs,
                             previous_active,
-                            Some(&self.focus_resolution),
+                            &self.focus_resolution,
                         )
                     });
                     let next_active = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
@@ -237,9 +201,9 @@ mod shell {
                     self.active_focused_pane = policy::resolved_focused_pane_id(
                         &self.tabs,
                         self.active_tab,
-                        Some(&self.focus_resolution),
+                        &self.focus_resolution,
                     );
-                    self.focus_correction.on_active_tab_change_with_focus(
+                    self.focus_correction.on_active_tab_change(
                         previous_active,
                         next_active,
                         previous_focused_pane,
@@ -249,12 +213,18 @@ mod shell {
                 Event::CommandChanged(pane_id, command, is_foreground, _) => {
                     match policy::foreground_command_update(&command, is_foreground) {
                         ForegroundCommandUpdate::Remember(command_text) => {
-                            self.remember_foreground_command(&pane_id, command_text);
+                            self.set_foreground_command(&pane_id, Some(command_text));
                             if let Some(id) = self.optimistic_command_poke_pane(&pane_id, now)
-                                && self.poke_command_changed(&pane_id, &command, now)
+                                && self.run_wake(
+                                    wire::WakeRequest::CommandChanged {
+                                        pane_id: id,
+                                        args: command,
+                                    },
+                                    now,
+                                )
                             {
                                 if let Some(policy) = self.policy.as_mut() {
-                                    let hash = policy::manifest_hash(&self.tabs, self.active_tab);
+                                    let hash = policy::manifest_hash(&self.tabs);
                                     policy.accept_manifest(hash);
                                     policy.accept_optimistic_pane_poke(id, now);
                                 }
@@ -263,13 +233,17 @@ mod shell {
                             }
                         }
                         ForegroundCommandUpdate::Forget => {
-                            self.forget_foreground_command(&pane_id);
+                            self.set_foreground_command(&pane_id, None);
                             self.signal_change(now);
                         }
                     }
                 }
                 Event::PaneClosed(pane_id) => {
                     self.mark_granted(now);
+                    let closed_terminal = match &pane_id {
+                        PaneId::Terminal(id) => Some(*id),
+                        PaneId::Plugin(_) => None,
+                    };
                     self.remove_pane(&pane_id);
                     if let PaneId::Terminal(id) = pane_id {
                         self.focus_resolution.remove_pane(id);
@@ -277,12 +251,14 @@ mod shell {
                     self.active_focused_pane = policy::resolved_focused_pane_id(
                         &self.tabs,
                         self.active_tab,
-                        Some(&self.focus_resolution),
+                        &self.focus_resolution,
                     );
-                    if !self.poke_pane_closed(&pane_id, now) {
+                    if !closed_terminal.is_some_and(|pane_id| {
+                        self.run_wake(wire::WakeRequest::PaneClosed { pane_id }, now)
+                    }) {
                         self.signal_change(now);
                     } else {
-                        let hash = policy::manifest_hash(&self.tabs, self.active_tab);
+                        let hash = policy::manifest_hash(&self.tabs);
                         if let Some(policy) = self.policy.as_mut() {
                             policy.accept_manifest(hash);
                         }
@@ -367,7 +343,7 @@ mod shell {
 
         /// Fold the current projected shape into the policy.
         fn fold(&mut self, now: u64) {
-            let hash = policy::manifest_hash(&self.tabs, self.active_tab);
+            let hash = policy::manifest_hash(&self.tabs);
             if let Some(policy) = self.policy.as_mut() {
                 policy.on_manifest(hash, now);
             }
@@ -376,15 +352,15 @@ mod shell {
         /// Resolve a switched-tab focus classification and publish the exact
         /// overlay the renderer needs before the next producer pull.
         fn resolve_focus_correction(&mut self, now: u64, manifest_fresh: bool) {
-            match self.focus_correction.resolve_with_resolution(
+            match self.focus_correction.resolve(
                 &self.tabs,
                 self.active_tab,
-                Some(&self.focus_resolution),
+                &self.focus_resolution,
                 manifest_fresh,
                 now,
             ) {
                 CorrectionAction::StrandedSidebar(pane_id) => {
-                    self.poke_focus_stranded(pane_id, now);
+                    self.run_wake(wire::WakeRequest::FocusStranded { pane_id }, now);
                 }
                 CorrectionAction::FocusWorkingPane { focused, unfocused } => {
                     let mut patch = vec![FocusPatch {
@@ -397,8 +373,8 @@ mod shell {
                             is_focused: false,
                         });
                     }
-                    if self.poke_focus_changed(&patch, now) {
-                        let hash = policy::manifest_hash(&self.tabs, self.active_tab);
+                    if self.run_wake(wire::WakeRequest::FocusChanged { patch }, now) {
+                        let hash = policy::manifest_hash(&self.tabs);
                         if let Some(policy) = self.policy.as_mut() {
                             policy.accept_manifest(hash);
                             policy.on_optimistic_signal(now);
@@ -434,46 +410,51 @@ mod shell {
             }
         }
 
-        /// One fixed argv per poke — the whole host-side surface of this
-        /// plugin. Fire-and-forget: a failed wake means no stamp, and the
-        /// producer degrades to poll mode on its own.
+        /// Dispatch a policy poke through the wire argv builder. Fire-and-forget:
+        /// a failed wake means no stamp, and the producer degrades to poll mode
+        /// on its own.
         fn poke(&self, poke: Poke, now: u64) {
             if !self.granted {
                 return;
             }
-            let reason = match poke {
-                Poke::Changed => "panes-changed",
-                Poke::Alive => "alive",
+            let request = match poke {
+                Poke::Changed => wire::WakeRequest::Changed,
+                Poke::Alive => wire::WakeRequest::Alive(wire::PluginTelemetry {
+                    mem_pages: wasm_pages(),
+                    uptime_ms: now.saturating_sub(self.loaded_at_ms),
+                    commands_completed: self.commands_completed,
+                    zellij_version: get_zellij_version(),
+                }),
             };
-            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
-            let mut argv = vec![
-                program.to_owned(),
-                "sidebar".to_owned(),
-                "wake".to_owned(),
-                "--reason".to_owned(),
-                reason.to_owned(),
-            ];
-            if let Some(workspace_id) = self.workspace_id.as_deref() {
-                argv.push("--workspace-id".to_owned());
-                argv.push(workspace_id.to_owned());
+            self.run_wake(request, now);
+        }
+
+        fn wake_context(&self) -> wire::WakeContext<'_> {
+            wire::WakeContext {
+                rimz_bin: self.rimz_bin.as_deref(),
+                workspace_id: self.workspace_id.as_deref(),
+                session_name: self.session_name.as_deref(),
             }
-            if poke == Poke::Alive {
-                argv.push("--plugin-mem-pages".to_owned());
-                argv.push(wasm_pages().to_string());
-                argv.push("--plugin-uptime-ms".to_owned());
-                argv.push(now.saturating_sub(self.loaded_at_ms).to_string());
-                argv.push("--plugin-commands".to_owned());
-                argv.push(self.commands_completed.to_string());
-                argv.push("--plugin-zellij-version".to_owned());
-                argv.push(get_zellij_version());
-                if let Some(session_name) = self.session_name.as_deref() {
-                    argv.push("--session-name".to_owned());
-                    argv.push(session_name.to_owned());
-                }
+        }
+
+        fn run_wake(&self, request: wire::WakeRequest, now: u64) -> bool {
+            if !self.granted {
+                return false;
             }
-            self.append_topology_arg(&mut argv, now);
+            let topology = wire::topology_json(
+                self.session_name.as_deref(),
+                now,
+                &self.tabs,
+                &self.foreground,
+                &self.focus_resolution,
+            );
+            let Some(argv) = wire::wake_argv(&self.wake_context(), request, topology.as_deref())
+            else {
+                return false;
+            };
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             run_command(&refs, BTreeMap::new());
+            true
         }
 
         /// Apply rimz-owned runtime config in one `reconfigure(..., false)`:
@@ -485,13 +466,13 @@ mod shell {
         /// that leaves birth-time options and any hand-written keybind as the
         /// fallback.
         fn apply_runtime_reconfigure(&self) {
-            let config = RuntimeReconfigure {
+            let config = wire::RuntimeReconfigure {
                 plugin_id: self.plugin_id,
                 focus_key: self.focus_key.as_deref(),
                 focus_follows_mouse: self.focus_follows_mouse,
                 mouse_click_through: self.mouse_click_through,
             };
-            if let Some(kdl) = runtime_reconfigure_kdl(&config) {
+            if let Some(kdl) = wire::runtime_reconfigure_kdl(&config) {
                 reconfigure(kdl, false);
             }
         }
@@ -504,64 +485,26 @@ mod shell {
             if !self.granted {
                 return;
             }
-            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
-            let mut argv = vec![
-                program.to_owned(),
-                "sidebar".to_owned(),
-                "focus".to_owned(),
-                "--toggle".to_owned(),
-            ];
-            if let Some(session_name) = self.session_name.as_deref() {
-                argv.push("--session-name".to_owned());
-                argv.push(session_name.to_owned());
-            }
-            argv.push("--mux".to_owned());
-            argv.push("zellij".to_owned());
+            let argv = wire::focus_sidebar_argv(&self.wake_context());
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             run_command(&refs, BTreeMap::new());
         }
 
-        fn append_topology_arg(&self, argv: &mut Vec<String>, now: u64) {
-            let Some(session_name) = self.session_name.as_deref() else {
-                return;
-            };
-            let Some(payload) = policy::published_topology_payload_with_focus(
-                session_name,
-                now,
-                Some(&self.tabs),
-                &self.foreground,
-                Some(&self.focus_resolution),
-            ) else {
-                return;
-            };
-            let Ok(json) = serde_json::to_string(&payload) else {
-                return;
-            };
-            argv.push("--topology".to_owned());
-            argv.push(json);
-        }
-
-        fn remember_foreground_command(&mut self, pane_id: &PaneId, command: String) {
+        fn set_foreground_command(&mut self, pane_id: &PaneId, command: Option<String>) {
             let PaneId::Terminal(id) = pane_id else {
                 return;
             };
-            self.foreground.insert(*id, command.clone());
-            for pane in self.tabs.values_mut().flatten() {
-                if !pane.is_plugin && pane.id == *id {
-                    pane.pane_command = Some(command);
-                    return;
+            match command.as_ref() {
+                Some(command) => {
+                    self.foreground.insert(*id, command.clone());
+                }
+                None => {
+                    self.foreground.remove(id);
                 }
             }
-        }
-
-        fn forget_foreground_command(&mut self, pane_id: &PaneId) {
-            let PaneId::Terminal(id) = pane_id else {
-                return;
-            };
-            self.foreground.remove(id);
             for pane in self.tabs.values_mut().flatten() {
                 if !pane.is_plugin && pane.id == *id {
-                    pane.pane_command = None;
+                    pane.pane_command = command;
                     return;
                 }
             }
@@ -589,193 +532,6 @@ mod shell {
                     policy.forget_pane(id);
                 }
             }
-        }
-
-        /// Publish an optimistic command patch for a terminal pane already
-        /// known to the native sidebar cache. Returns false when the exact-cache
-        /// shortcut is unavailable, so the caller can fall back to a normal
-        /// `panes-changed` poke.
-        fn poke_command_changed(&self, pane_id: &PaneId, command: &[String], now: u64) -> bool {
-            if !self.granted || command.is_empty() {
-                return false;
-            }
-            let PaneId::Terminal(_) = pane_id else {
-                return false;
-            };
-            let Some(session_name) = self.session_name.as_deref() else {
-                return false;
-            };
-            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
-            let mut argv = vec![
-                program.to_owned(),
-                "sidebar".to_owned(),
-                "wake".to_owned(),
-                "--reason".to_owned(),
-                "command-changed".to_owned(),
-                "--session-name".to_owned(),
-                session_name.to_owned(),
-                "--pane-id".to_owned(),
-                pane_id.to_string(),
-            ];
-            if let Some(workspace_id) = self.workspace_id.as_deref() {
-                argv.push("--workspace-id".to_owned());
-                argv.push(workspace_id.to_owned());
-            }
-            let mut pushed_command_arg = false;
-            for arg in command {
-                if !arg.is_empty() {
-                    argv.push("--command-arg".to_owned());
-                    argv.push(arg.clone());
-                    pushed_command_arg = true;
-                }
-            }
-            if !pushed_command_arg {
-                return false;
-            }
-            self.append_topology_arg(&mut argv, now);
-            let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-            run_command(&refs, BTreeMap::new());
-            true
-        }
-
-        fn poke_pane_opened(&self, pane: &PaneFields, now: u64) -> bool {
-            if !self.granted || !pane.is_card_pane() {
-                return false;
-            }
-            let Some(session_name) = self.session_name.as_deref() else {
-                return false;
-            };
-            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
-            let mut argv = vec![
-                program.to_owned(),
-                "sidebar".to_owned(),
-                "wake".to_owned(),
-                "--reason".to_owned(),
-                "pane-opened".to_owned(),
-                "--session-name".to_owned(),
-                session_name.to_owned(),
-                "--pane-id".to_owned(),
-                format!("terminal_{}", pane.id),
-            ];
-            if let Some(workspace_id) = self.workspace_id.as_deref() {
-                argv.push("--workspace-id".to_owned());
-                argv.push(workspace_id.to_owned());
-            }
-            if let Some(command) = pane
-                .pane_command
-                .as_ref()
-                .or(pane.terminal_command.as_ref())
-                .filter(|command| !command.is_empty())
-            {
-                argv.push("--command-arg".to_owned());
-                argv.push(command.clone());
-            }
-            self.append_topology_arg(&mut argv, now);
-            let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-            run_command(&refs, BTreeMap::new());
-            true
-        }
-
-        fn poke_pane_closed(&self, pane_id: &PaneId, now: u64) -> bool {
-            if !self.granted {
-                return false;
-            }
-            let PaneId::Terminal(_) = pane_id else {
-                return false;
-            };
-            let Some(session_name) = self.session_name.as_deref() else {
-                return false;
-            };
-            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
-            let mut argv = vec![
-                program.to_owned(),
-                "sidebar".to_owned(),
-                "wake".to_owned(),
-                "--reason".to_owned(),
-                "pane-closed".to_owned(),
-                "--session-name".to_owned(),
-                session_name.to_owned(),
-                "--pane-id".to_owned(),
-                pane_id.to_string(),
-            ];
-            if let Some(workspace_id) = self.workspace_id.as_deref() {
-                argv.push("--workspace-id".to_owned());
-                argv.push(workspace_id.to_owned());
-            }
-            self.append_topology_arg(&mut argv, now);
-            let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-            run_command(&refs, BTreeMap::new());
-            true
-        }
-
-        fn poke_focus_stranded(&self, pane_id: u32, now: u64) {
-            if !self.granted {
-                return;
-            }
-            let Some(session_name) = self.session_name.as_deref() else {
-                return;
-            };
-            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
-            let mut argv = vec![
-                program.to_owned(),
-                "sidebar".to_owned(),
-                "wake".to_owned(),
-                "--reason".to_owned(),
-                "focus-stranded".to_owned(),
-                "--session-name".to_owned(),
-                session_name.to_owned(),
-                "--pane-id".to_owned(),
-                format!("terminal_{pane_id}"),
-            ];
-            if let Some(workspace_id) = self.workspace_id.as_deref() {
-                argv.push("--workspace-id".to_owned());
-                argv.push(workspace_id.to_owned());
-            }
-            self.append_topology_arg(&mut argv, now);
-            let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-            run_command(&refs, BTreeMap::new());
-        }
-
-        /// Publish an optimistic focus patch for panes already known to the
-        /// native sidebar cache. Returns false when the exact-cache shortcut is
-        /// unavailable, so the caller can fall back to a normal `panes-changed`
-        /// poke.
-        fn poke_focus_changed(&self, patch: &[FocusPatch], now: u64) -> bool {
-            if !self.granted || patch.is_empty() {
-                return false;
-            }
-            let Some(session_name) = self.session_name.as_deref() else {
-                return false;
-            };
-            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
-            let mut argv = vec![
-                program.to_owned(),
-                "sidebar".to_owned(),
-                "wake".to_owned(),
-                "--reason".to_owned(),
-                "focus-changed".to_owned(),
-                "--session-name".to_owned(),
-                session_name.to_owned(),
-            ];
-            if let Some(workspace_id) = self.workspace_id.as_deref() {
-                argv.push("--workspace-id".to_owned());
-                argv.push(workspace_id.to_owned());
-            }
-            for pane in patch {
-                argv.push(
-                    if pane.is_focused {
-                        "--focused-pane-id"
-                    } else {
-                        "--unfocused-pane-id"
-                    }
-                    .to_owned(),
-                );
-                argv.push(format!("terminal_{}", pane.id));
-            }
-            self.append_topology_arg(&mut argv, now);
-            let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-            run_command(&refs, BTreeMap::new());
-            true
         }
     }
 
@@ -875,68 +631,3 @@ zellij_tile::register_plugin!(shell::State);
 /// Host-target stub: the plugin entrypoint exists only on wasm.
 #[cfg(not(target_family = "wasm"))]
 fn main() {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_boolean_load_configuration() {
-        assert_eq!(parse_configuration_bool(Some("true")), Some(true));
-        assert_eq!(parse_configuration_bool(Some("false")), Some(false));
-        assert_eq!(parse_configuration_bool(Some("TRUE")), None);
-        assert_eq!(parse_configuration_bool(None), None);
-    }
-
-    #[test]
-    fn runtime_reconfigure_kdl_emits_mouse_options_without_focus_key() {
-        let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
-            focus_follows_mouse: Some(false),
-            mouse_click_through: Some(true),
-            ..RuntimeReconfigure::default()
-        })
-        .expect("mouse options produce a reconfigure payload");
-
-        assert_eq!(kdl, "focus_follows_mouse false\nmouse_click_through true\n");
-    }
-
-    #[test]
-    fn runtime_reconfigure_kdl_combines_mouse_options_and_focus_keybind() {
-        let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
-            plugin_id: Some(42),
-            focus_key: Some("Alt+p"),
-            focus_follows_mouse: Some(false),
-            mouse_click_through: Some(true),
-        })
-        .expect("focus key and mouse options produce a reconfigure payload");
-
-        assert!(
-            kdl.starts_with("focus_follows_mouse false\nmouse_click_through true\nkeybinds {\n")
-        );
-        assert!(kdl.contains("bind \"Alt p\""));
-        assert!(kdl.contains("name \"rimz:focus_sidebar\""));
-        assert_eq!(kdl.matches("MessagePluginId 42").count(), 2);
-        assert!(!kdl.contains("MessagePlugin \""));
-        assert!(!kdl.contains("plugin_url"));
-    }
-
-    #[test]
-    fn runtime_reconfigure_kdl_skips_empty_payload() {
-        assert!(runtime_reconfigure_kdl(&RuntimeReconfigure::default()).is_none());
-        assert!(
-            runtime_reconfigure_kdl(&RuntimeReconfigure {
-                plugin_id: Some(42),
-                focus_key: Some("off"),
-                ..RuntimeReconfigure::default()
-            })
-            .is_none()
-        );
-        assert!(
-            runtime_reconfigure_kdl(&RuntimeReconfigure {
-                focus_key: Some("Alt+p"),
-                ..RuntimeReconfigure::default()
-            })
-            .is_none()
-        );
-    }
-}

@@ -62,19 +62,25 @@ fn focused(mut pane: PaneFields) -> PaneFields {
     pane
 }
 
+fn resolution_with(tab: usize, pane: u32) -> FocusResolution {
+    FocusResolution {
+        resolved: BTreeMap::from([(tab, pane)]),
+    }
+}
+
 // --- manifest_hash: the projected stable subset folds; the rest does not ---
 
 #[test]
 fn identical_manifests_hash_equal() {
-    let a = manifest_hash(&tabs(vec![pane(1), pane(2)]), Some(0));
-    let b = manifest_hash(&tabs(vec![pane(1), pane(2)]), Some(0));
+    let a = manifest_hash(&tabs(vec![pane(1), pane(2)]));
+    let b = manifest_hash(&tabs(vec![pane(1), pane(2)]));
     assert_eq!(a, b);
 }
 
 #[test]
 fn every_stable_field_changes_the_hash() {
     type Mutate = fn(&mut PaneFields);
-    let base = manifest_hash(&tabs(vec![pane(1)]), Some(0));
+    let base = manifest_hash(&tabs(vec![pane(1)]));
     let cases: &[(&str, Mutate)] = &[
         ("focus", |p| p.is_focused = true),
         ("terminal_command", |p| {
@@ -95,24 +101,21 @@ fn every_stable_field_changes_the_hash() {
         mutate(&mut changed);
         assert_ne!(
             base,
-            manifest_hash(&tabs(vec![changed]), Some(0)),
+            manifest_hash(&tabs(vec![changed])),
             "{field} must fold into the roster hash",
         );
     }
     // Opening or closing a pane changes the set of folded ids.
     assert_ne!(
         base,
-        manifest_hash(&tabs(vec![pane(1), pane(2)]), Some(0)),
+        manifest_hash(&tabs(vec![pane(1), pane(2)])),
         "pane count must fold into the roster hash",
     );
 }
 
 #[test]
-fn excluded_fields_and_navigation_hold_the_hash() {
-    let base = manifest_hash(&tabs(vec![pane(1)]), Some(0));
-
-    // The active tab is navigation, not roster shape.
-    assert_eq!(base, manifest_hash(&tabs(vec![pane(1)]), Some(1)));
+fn excluded_fields_hold_the_hash() {
+    let base = manifest_hash(&tabs(vec![pane(1)]));
 
     // Titles mutate per output line and the foreground command publishes
     // through CommandChanged; neither belongs in the roster hash.
@@ -120,7 +123,7 @@ fn excluded_fields_and_navigation_hold_the_hash() {
     renamed.title = "line-mutated agent title".to_owned();
     assert_eq!(
         base,
-        manifest_hash(&tabs(vec![renamed]), Some(0)),
+        manifest_hash(&tabs(vec![renamed])),
         "title is excluded by projection",
     );
 
@@ -128,7 +131,7 @@ fn excluded_fields_and_navigation_hold_the_hash() {
     foreground.pane_command = Some("codex".to_owned());
     assert_eq!(
         base,
-        manifest_hash(&tabs(vec![foreground]), Some(0)),
+        manifest_hash(&tabs(vec![foreground])),
         "pane_command is excluded by projection",
     );
 }
@@ -423,12 +426,24 @@ fn topology_payload_serializes_projected_fields() {
 #[test]
 fn published_payload_requires_a_live_roster() {
     assert_eq!(
-        published_topology_payload("rimz-test", 42, None, &BTreeMap::new()),
+        published_topology_payload(
+            "rimz-test",
+            42,
+            None,
+            &BTreeMap::new(),
+            &FocusResolution::default()
+        ),
         None,
         "bootstrap pokes omit --topology until PaneUpdate supplies a live roster",
     );
     assert_eq!(
-        published_topology_payload("rimz-test", 42, Some(&BTreeMap::new()), &BTreeMap::new()),
+        published_topology_payload(
+            "rimz-test",
+            42,
+            Some(&BTreeMap::new()),
+            &BTreeMap::new(),
+            &FocusResolution::default()
+        ),
         None,
         "an empty live roster falls back to list-panes instead of publishing emptiness",
     );
@@ -446,8 +461,14 @@ fn published_payload_over_a_merged_room_keeps_every_tab() {
     // A partial manifest carrying only tab 0 must not drop tabs 1 and 2.
     let merged = merged_room(&previous, &tabs_by_index(vec![(0, vec![resized.clone()])]));
 
-    let payload = published_topology_payload("rimz-test", 42, Some(&merged), &BTreeMap::new())
-        .expect("merged roster publishes");
+    let payload = published_topology_payload(
+        "rimz-test",
+        42,
+        Some(&merged),
+        &BTreeMap::new(),
+        &FocusResolution::default(),
+    )
+    .expect("merged roster publishes");
 
     assert_eq!(
         payload.panes[0], resized,
@@ -475,8 +496,14 @@ fn foreground_overlay_reaches_the_payload_without_replacing_the_spawn() {
         ..pane(7)
     }]);
 
-    let payload = published_topology_payload("rimz-test", 42, Some(&roster), &foreground)
-        .expect("live roster publishes");
+    let payload = published_topology_payload(
+        "rimz-test",
+        42,
+        Some(&roster),
+        &foreground,
+        &FocusResolution::default(),
+    )
+    .expect("live roster publishes");
 
     assert_eq!(payload.panes[0].pane_command.as_deref(), Some("codex"));
     assert_eq!(
@@ -488,57 +515,7 @@ fn foreground_overlay_reaches_the_payload_without_replacing_the_spawn() {
     assert_eq!(json["panes"][0]["pane_command"], "codex");
 }
 
-#[test]
-fn launch_chrome_never_reaches_the_payload() {
-    let launch = "rimz agents claude,codex --worktree=quality-pass";
-    let foreground = BTreeMap::from([(7, launch.to_owned())]);
-    let roster = tabs(vec![PaneFields {
-        id: 7,
-        pane_command: Some(launch.to_owned()),
-        terminal_command: Some("zsh".to_owned()),
-        ..pane(7)
-    }]);
-
-    let payload = published_topology_payload("rimz-test", 42, Some(&roster), &foreground)
-        .expect("live roster publishes");
-
-    assert_eq!(
-        payload.panes[0].pane_command, None,
-        "launch chrome is scrubbed from both the foreground map and a stale pane_command",
-    );
-    assert_eq!(payload.panes[0].terminal_command.as_deref(), Some("zsh"));
-}
-
 // --- foreground command tracking: classify events, retain across rebuilds ---
-
-#[test]
-fn launch_chrome_classifier_scopes_to_agents_launches() {
-    assert!(command_args_are_launch_chrome(&[
-        "rimz".to_owned(),
-        "agents".to_owned(),
-        "claude,codex".to_owned(),
-        "--worktree=quality-pass".to_owned(),
-    ]));
-    assert!(command_args_are_launch_chrome(&[
-        "/home/me/.cargo/bin/rimz agents claude,codex --worktree=quality-pass".to_owned(),
-    ]));
-    assert!(!command_args_are_launch_chrome(&[
-        "rimz".to_owned(),
-        "agents".to_owned(),
-        "exec".to_owned(),
-        "codex".to_owned(),
-    ]));
-    assert!(!command_args_are_launch_chrome(&[
-        "rimz".to_owned(),
-        "agents".to_owned(),
-        "wait".to_owned(),
-        "swift-otter".to_owned(),
-    ]));
-    assert!(!command_args_are_launch_chrome(&[
-        "cargo".to_owned(),
-        "build".to_owned(),
-    ]));
-}
 
 #[test]
 fn foreground_command_update_remembers_real_work_and_forgets_the_rest() {
@@ -565,8 +542,8 @@ fn foreground_command_update_remembers_real_work_and_forgets_the_rest() {
     );
     assert_eq!(
         foreground_command_update(&["rimz agents claude,codex".to_owned()], true),
-        ForegroundCommandUpdate::Forget,
-        "launch chrome clears instead of publishing as foreground work",
+        ForegroundCommandUpdate::Remember("rimz agents claude,codex".to_owned()),
+        "launch chrome is retained here; the host wake path owns scrubbing",
     );
 }
 
@@ -798,19 +775,31 @@ fn opened_card_panes_over_a_merged_partial_manifest() {
 fn stranded_sidebar_pane_classifies_the_active_tab() {
     // Sidebar holds focus while a live working sibling exists: stranded.
     assert_eq!(
-        stranded_sidebar_pane(&tabs(vec![focused(sidebar_pane(1)), pane(2)]), Some(0)),
+        stranded_sidebar_pane(
+            &tabs(vec![focused(sidebar_pane(1)), pane(2)]),
+            Some(0),
+            &resolution_with(0, 1)
+        ),
         Some(1),
     );
     // Work holds focus: nothing to correct.
     assert_eq!(
-        stranded_sidebar_pane(&tabs(vec![sidebar_pane(1), focused(pane(2))]), Some(0)),
+        stranded_sidebar_pane(
+            &tabs(vec![sidebar_pane(1), focused(pane(2))]),
+            Some(0),
+            &resolution_with(0, 2)
+        ),
         None,
     );
     // Sidebar holds focus but the only sibling is held, not live work.
     let mut held = pane(2);
     held.is_held = true;
     assert_eq!(
-        stranded_sidebar_pane(&tabs(vec![focused(sidebar_pane(1)), held]), Some(0)),
+        stranded_sidebar_pane(
+            &tabs(vec![focused(sidebar_pane(1)), held]),
+            Some(0),
+            &resolution_with(0, 1)
+        ),
         None,
     );
 }
@@ -820,11 +809,17 @@ fn stranded_sidebar_pane_classifies_the_active_tab() {
 #[test]
 fn focus_correction_does_not_arm_on_load() {
     let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(None, Some(0), 10);
+    correction.on_active_tab_change(None, Some(0), None, 10);
 
     assert_eq!(correction.next_deadline(), None);
     assert_eq!(
-        correction.resolve(&tabs(vec![pane(1)]), Some(0), true, 10),
+        correction.resolve(
+            &tabs(vec![pane(1)]),
+            Some(0),
+            &FocusResolution::default(),
+            true,
+            10
+        ),
         CorrectionAction::Wait,
     );
 }
@@ -832,7 +827,7 @@ fn focus_correction_does_not_arm_on_load() {
 #[test]
 fn focus_correction_broadcasts_when_a_fresh_switch_lands_on_work() {
     let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
 
     let manifest = tabs_by_index(vec![
         (0, vec![pane(1)]),
@@ -840,7 +835,7 @@ fn focus_correction_broadcasts_when_a_fresh_switch_lands_on_work() {
     ]);
 
     assert_eq!(
-        correction.resolve(&manifest, Some(1), true, 1_001),
+        correction.resolve(&manifest, Some(1), &FocusResolution::default(), true, 1_001),
         CorrectionAction::FocusWorkingPane {
             focused: 11,
             unfocused: None,
@@ -853,7 +848,7 @@ fn focus_correction_broadcasts_when_a_fresh_switch_lands_on_work() {
 #[test]
 fn focus_correction_broadcasts_the_previous_focused_pane_on_work_switch() {
     let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change_with_focus(Some(0), Some(1), Some(2), 1_000);
+    correction.on_active_tab_change(Some(0), Some(1), Some(2), 1_000);
 
     let manifest = tabs_by_index(vec![
         (0, vec![focused(pane(2))]),
@@ -861,7 +856,7 @@ fn focus_correction_broadcasts_the_previous_focused_pane_on_work_switch() {
     ]);
 
     assert_eq!(
-        correction.resolve(&manifest, Some(1), true, 1_001),
+        correction.resolve(&manifest, Some(1), &FocusResolution::default(), true, 1_001),
         CorrectionAction::FocusWorkingPane {
             focused: 11,
             unfocused: Some(2),
@@ -872,7 +867,7 @@ fn focus_correction_broadcasts_the_previous_focused_pane_on_work_switch() {
 #[test]
 fn focus_correction_broadcasts_a_stranded_sidebar_at_the_deadline() {
     let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
 
     let manifest = tabs_by_index(vec![
         (0, vec![pane(1)]),
@@ -880,11 +875,23 @@ fn focus_correction_broadcasts_a_stranded_sidebar_at_the_deadline() {
     ]);
 
     assert_eq!(
-        correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS - 1),
+        correction.resolve(
+            &manifest,
+            Some(1),
+            &resolution_with(1, 10),
+            false,
+            1_000 + FOCUS_SETTLE_MS - 1
+        ),
         CorrectionAction::Wait,
     );
     assert_eq!(
-        correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS),
+        correction.resolve(
+            &manifest,
+            Some(1),
+            &resolution_with(1, 10),
+            false,
+            1_000 + FOCUS_SETTLE_MS
+        ),
         CorrectionAction::StrandedSidebar(10),
     );
     assert_eq!(correction.next_deadline(), None);
@@ -893,17 +900,23 @@ fn focus_correction_broadcasts_a_stranded_sidebar_at_the_deadline() {
 #[test]
 fn focus_correction_waits_out_the_window_on_a_fresh_sidebar_manifest() {
     let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
 
     let manifest = tabs_by_index(vec![(1, vec![focused(sidebar_pane(10)), pane(11)])]);
 
     assert_eq!(
-        correction.resolve(&manifest, Some(1), true, 1_001),
+        correction.resolve(&manifest, Some(1), &resolution_with(1, 10), true, 1_001),
         CorrectionAction::Wait,
         "a fresh manifest still showing sidebar focus may predate an explicit jump's focus mark",
     );
     assert_eq!(
-        correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS),
+        correction.resolve(
+            &manifest,
+            Some(1),
+            &resolution_with(1, 10),
+            false,
+            1_000 + FOCUS_SETTLE_MS
+        ),
         CorrectionAction::StrandedSidebar(10),
     );
 }
@@ -911,8 +924,8 @@ fn focus_correction_waits_out_the_window_on_a_fresh_sidebar_manifest() {
 #[test]
 fn focus_correction_retargets_to_the_latest_switch() {
     let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), 1_000);
-    correction.on_active_tab_change(Some(1), Some(2), 1_050);
+    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
+    correction.on_active_tab_change(Some(1), Some(2), None, 1_050);
 
     assert_eq!(correction.next_deadline(), Some(1_050 + FOCUS_SETTLE_MS));
 
@@ -922,7 +935,13 @@ fn focus_correction_retargets_to_the_latest_switch() {
     ]);
 
     assert_eq!(
-        correction.resolve(&manifest, Some(2), false, 1_050 + FOCUS_SETTLE_MS),
+        correction.resolve(
+            &manifest,
+            Some(2),
+            &resolution_with(2, 20),
+            false,
+            1_050 + FOCUS_SETTLE_MS
+        ),
         CorrectionAction::StrandedSidebar(20),
     );
 }
@@ -930,12 +949,13 @@ fn focus_correction_retargets_to_the_latest_switch() {
 #[test]
 fn focus_correction_clears_when_the_target_tab_closes() {
     let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
 
     assert_eq!(
         correction.resolve(
             &tabs_by_index(vec![(0, vec![pane(1)])]),
             Some(1),
+            &FocusResolution::default(),
             false,
             1_250
         ),
@@ -947,14 +967,20 @@ fn focus_correction_clears_when_the_target_tab_closes() {
 #[test]
 fn focus_correction_does_not_broadcast_without_live_work() {
     let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
 
     let mut held_work = pane(11);
     held_work.is_held = true;
     let manifest = tabs_by_index(vec![(1, vec![focused(sidebar_pane(10)), held_work])]);
 
     assert_eq!(
-        correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS),
+        correction.resolve(
+            &manifest,
+            Some(1),
+            &resolution_with(1, 10),
+            false,
+            1_000 + FOCUS_SETTLE_MS
+        ),
         CorrectionAction::Clear,
     );
 }
@@ -962,14 +988,14 @@ fn focus_correction_does_not_broadcast_without_live_work() {
 #[test]
 fn focus_correction_clears_when_target_focus_is_not_work() {
     let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), 1_000);
+    correction.on_active_tab_change(Some(0), Some(1), None, 1_000);
 
     let mut floating = focused(pane(11));
     floating.is_floating = true;
     let manifest = tabs_by_index(vec![(1, vec![sidebar_pane(10), floating])]);
 
     assert_eq!(
-        correction.resolve(&manifest, Some(1), true, 1_001),
+        correction.resolve(&manifest, Some(1), &FocusResolution::default(), true, 1_001),
         CorrectionAction::Clear,
     );
     assert_eq!(correction.next_deadline(), None);
@@ -978,12 +1004,12 @@ fn focus_correction_clears_when_target_focus_is_not_work() {
 #[test]
 fn focus_correction_clears_on_a_tab_renumber_under_the_same_pane() {
     let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change_with_focus(Some(2), Some(1), Some(42), 1_000);
+    correction.on_active_tab_change(Some(2), Some(1), Some(42), 1_000);
 
     let manifest = tabs_by_index(vec![(1, vec![focused(sidebar_pane(42)), pane(43)])]);
 
     assert_eq!(
-        correction.resolve(&manifest, Some(1), true, 1_001),
+        correction.resolve(&manifest, Some(1), &FocusResolution::default(), true, 1_001),
         CorrectionAction::Clear,
         "the same focused pane under a new tab position is a renumber, not navigation",
     );
@@ -1219,75 +1245,4 @@ fn timer_gate_collapses_a_superseded_chain() {
         !gate.should_arm(120_000),
         "a stale fire arms no duplicate chain",
     );
-}
-
-#[test]
-fn focus_chord_parses_alt_and_ctrl_with_separators() {
-    assert_eq!(
-        FocusChord::parse("Alt+p"),
-        Some(FocusChord {
-            modifier: ChordModifier::Alt,
-            key: 'p',
-        }),
-    );
-    // `-` is an accepted separator, the modifier is case-insensitive, and the
-    // aliases match the host grammar.
-    assert_eq!(
-        FocusChord::parse("ctrl-S"),
-        Some(FocusChord {
-            modifier: ChordModifier::Ctrl,
-            key: 'S',
-        }),
-    );
-    assert_eq!(
-        FocusChord::parse("  m+j  "),
-        Some(FocusChord {
-            modifier: ChordModifier::Alt,
-            key: 'j',
-        }),
-    );
-}
-
-#[test]
-fn focus_chord_rejects_malformed_shapes() {
-    // No separator, unknown modifier, multi-char key, and a non-graphic key
-    // all skip the bind rather than register something broken.
-    assert_eq!(FocusChord::parse("p"), None);
-    assert_eq!(FocusChord::parse("super+p"), None);
-    assert_eq!(FocusChord::parse("alt+pp"), None);
-    assert_eq!(FocusChord::parse("alt+ "), None);
-    assert_eq!(FocusChord::parse(""), None);
-}
-
-#[test]
-fn focus_keybind_kdl_targets_plugin_id_in_normal_and_locked_modes() {
-    let kdl = focus_keybind_kdl(
-        FocusChord {
-            modifier: ChordModifier::Alt,
-            key: 'p',
-        },
-        42,
-    );
-
-    assert_eq!(kdl.matches("bind \"Alt p\"").count(), 2);
-    assert_eq!(kdl.matches("MessagePluginId 42").count(), 2);
-    assert_eq!(kdl.matches("name \"rimz:focus_sidebar\"").count(), 2);
-    assert!(kdl.contains("normal {"));
-    assert!(kdl.contains("locked {"));
-    assert!(!kdl.contains("MessagePlugin \""));
-    assert!(!kdl.contains("plugin_url"));
-}
-
-#[test]
-fn focus_keybind_kdl_formats_ctrl_chords() {
-    let kdl = focus_keybind_kdl(
-        FocusChord {
-            modifier: ChordModifier::Ctrl,
-            key: 's',
-        },
-        7,
-    );
-
-    assert_eq!(kdl.matches("bind \"Ctrl s\"").count(), 2);
-    assert!(kdl.contains("MessagePluginId 7"));
 }

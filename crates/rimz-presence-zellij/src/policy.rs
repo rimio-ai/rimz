@@ -1,99 +1,13 @@
-//! The plugin's pure core: the stable-field manifest hash, poke policy, and
-//! focus-stranding classifier. Time is injected as Unix milliseconds and no
-//! `zellij-tile` type appears, so this module compiles and unit-tests on the
-//! host target; `main.rs` is the thin wasm shell that projects Zellij events
-//! into it.
+//! The plugin's pure decision core: the stable-field manifest hash, poke
+//! policy, foreground overlay, and focus-stranding classifier. Time is injected
+//! as Unix milliseconds and no `zellij-tile` type appears, so this module
+//! compiles and unit-tests on the host target; `main.rs` is the thin wasm shell
+//! that projects Zellij events into it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use serde::Serialize;
-
-/// The pipe message name the focus-sidebar keybind sends to this plugin. The
-/// chord (rimz-injected or a documented `config.kdl` bind) pipes this name, and
-/// the plugin runs `rimz sidebar focus --toggle` — reaching the sidebar from any
-/// pane, since a Zellij keybind cannot focus a pane by id on its own.
-pub const FOCUS_SIDEBAR_PIPE: &str = "rimz:focus_sidebar";
-
-/// The modifier half of a focus-key chord.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChordModifier {
-    Alt,
-    Ctrl,
-}
-
-/// A focus-key chord such as `Alt+p`, parsed from the rimz-injected
-/// `focus_key` load configuration so the wasm shell can bind it. The grammar
-/// matches the host's tmux binding (`rimz::mux::FocusChord`); it lives here too
-/// because the plugin cannot depend on the rimz crate, and the wasm shell maps
-/// the result onto a `KeyWithModifier` the host targets cannot name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FocusChord {
-    pub modifier: ChordModifier,
-    pub key: char,
-}
-
-impl FocusChord {
-    /// Parse a `Mod+key` (or `Mod-key`) chord. The modifier is case-insensitive
-    /// (`alt`/`meta`/`m` or `ctrl`/`control`/`c`); the key is one printable
-    /// ASCII character. Any other shape returns `None` so the caller skips the
-    /// bind rather than register a broken one.
-    pub fn parse(raw: &str) -> Option<Self> {
-        let (modifier, key) = raw.trim().split_once(['+', '-'])?;
-        let modifier = match modifier.trim().to_ascii_lowercase().as_str() {
-            "alt" | "meta" | "m" => ChordModifier::Alt,
-            "ctrl" | "control" | "c" => ChordModifier::Ctrl,
-            _ => return None,
-        };
-        let mut chars = key.trim().chars();
-        let key = chars.next()?;
-        if chars.next().is_some() || !key.is_ascii_graphic() {
-            return None;
-        }
-        Some(Self { modifier, key })
-    }
-}
-
-/// Runtime keybind KDL binding `chord` to a pipe that targets this plugin
-/// instance by id, in normal and locked modes. Binding by `plugin_id`
-/// (`MessagePluginId`) reaches the exact loaded instance; a url+configuration
-/// bind would also have to match the instance's initial cwd, which a keypress
-/// from another pane does not.
-pub fn focus_keybind_kdl(chord: FocusChord, plugin_id: u32) -> String {
-    let key = kdl_string(&focus_key_label(chord));
-    let pipe = kdl_string(FOCUS_SIDEBAR_PIPE);
-    let bind = format!(
-        "bind {key} {{\n            MessagePluginId {plugin_id} {{\n                name {pipe}\n            }}\n        }}"
-    );
-    format!(
-        "keybinds {{\n    normal {{\n        {bind}\n    }}\n    locked {{\n        {bind}\n    }}\n}}\n"
-    )
-}
-
-fn focus_key_label(chord: FocusChord) -> String {
-    let modifier = match chord.modifier {
-        ChordModifier::Alt => "Alt",
-        ChordModifier::Ctrl => "Ctrl",
-    };
-    format!("{modifier} {}", chord.key)
-}
-
-fn kdl_string(value: &str) -> String {
-    let mut quoted = String::with_capacity(value.len() + 2);
-    quoted.push('"');
-    for ch in value.chars() {
-        match ch {
-            '\\' => quoted.push_str("\\\\"),
-            '"' => quoted.push_str("\\\""),
-            '\n' => quoted.push_str("\\n"),
-            '\r' => quoted.push_str("\\r"),
-            '\t' => quoted.push_str("\\t"),
-            _ => quoted.push(ch),
-        }
-    }
-    quoted.push('"');
-    quoted
-}
 
 /// Floor between two `panes-changed` pokes — caps host forks under
 /// pathological manifest churn. A change that lands inside the floor is
@@ -171,7 +85,6 @@ pub struct RawStablePaneFields<'a> {
 }
 
 impl<'a> RawStablePaneFields<'a> {
-    #[cfg(test)]
     fn from_projected(pane: &'a PaneFields) -> Self {
         Self {
             id: pane.id,
@@ -235,22 +148,12 @@ impl TopologyPayload {
     }
 }
 
-#[cfg(test)]
 pub fn published_topology_payload(
     session_name: impl Into<String>,
     produced_at_ms: u64,
     tabs: Option<&BTreeMap<usize, Vec<PaneFields>>>,
     foreground: &BTreeMap<u32, String>,
-) -> Option<TopologyPayload> {
-    published_topology_payload_with_focus(session_name, produced_at_ms, tabs, foreground, None)
-}
-
-pub fn published_topology_payload_with_focus(
-    session_name: impl Into<String>,
-    produced_at_ms: u64,
-    tabs: Option<&BTreeMap<usize, Vec<PaneFields>>>,
-    foreground: &BTreeMap<u32, String>,
-    focus_resolution: Option<&FocusResolution>,
+    focus_resolution: &FocusResolution,
 ) -> Option<TopologyPayload> {
     let mut tabs = tabs?.clone();
     if tabs.is_empty() {
@@ -261,9 +164,7 @@ pub fn published_topology_payload_with_focus(
         session_name,
         produced_at_ms,
         &tabs,
-        focus_resolution
-            .map(FocusResolution::active_panes_payload)
-            .unwrap_or_default(),
+        focus_resolution.active_panes_payload(),
     ))
 }
 
@@ -288,31 +189,12 @@ impl PaneFields {
 /// sidebar's row roster and selection baseline change only when the per-pane
 /// fields change. The value only ever compares against the previous hash in
 /// this process, so no cross-version stability is needed.
-pub fn manifest_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>, _active_tab: Option<usize>) -> u64 {
-    let mut hasher = std::hash::DefaultHasher::new();
-    for (tab, panes) in tabs {
-        tab.hash(&mut hasher);
-        for pane in panes {
-            hash_stable_pane_fields(
-                &mut hasher,
-                &RawStablePaneFields {
-                    id: pane.id,
-                    is_plugin: pane.is_plugin,
-                    is_focused: pane.is_focused,
-                    is_suppressed: pane.is_suppressed,
-                    is_floating: pane.is_floating,
-                    exited: pane.exited,
-                    is_held: pane.is_held,
-                    tab_position: pane.tab_position,
-                    tab_name: pane.tab_name.as_deref(),
-                    pane_x: pane.pane_x,
-                    pane_columns: pane.pane_columns,
-                    terminal_command: pane.terminal_command.as_deref(),
-                },
-            );
-        }
-    }
-    hasher.finish()
+pub fn manifest_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>) -> u64 {
+    raw_stable_hash(tabs.iter().flat_map(|(tab, panes)| {
+        panes
+            .iter()
+            .map(move |pane| (*tab, RawStablePaneFields::from_projected(pane)))
+    }))
 }
 
 /// Fold raw stable pane fields without allocating projected [`PaneFields`].
@@ -633,10 +515,6 @@ pub fn joined_foreground_command(command: &[String]) -> Option<String> {
     (!joined.is_empty()).then_some(joined)
 }
 
-pub fn command_args_are_launch_chrome(command: &[String]) -> bool {
-    joined_foreground_command(command).is_some_and(|command| foreground_is_launch_chrome(&command))
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForegroundCommandUpdate {
     Remember(String),
@@ -645,13 +523,13 @@ pub enum ForegroundCommandUpdate {
 
 /// Project one Zellij `CommandChanged` event into the retained foreground map.
 /// A non-foreground or empty foreground event means the previous foreground
-/// tenant ended; a real foreground command replaces it, unless it is Rimz launch
-/// chrome, which should never leak into the pane roster.
+/// tenant ended; any real foreground command replaces it. Launch-chrome
+/// scrubbing lives in the host wake path.
 pub fn foreground_command_update(
     command: &[String],
     is_foreground: bool,
 ) -> ForegroundCommandUpdate {
-    if !is_foreground || command_args_are_launch_chrome(command) {
+    if !is_foreground {
         return ForegroundCommandUpdate::Forget;
     }
     match joined_foreground_command(command) {
@@ -668,75 +546,27 @@ pub fn apply_foreground_commands(
         if pane.is_plugin {
             continue;
         }
-        if pane
-            .pane_command
-            .as_deref()
-            .is_some_and(foreground_is_launch_chrome)
-        {
-            pane.pane_command = None;
-        }
-        if let Some(command) = foreground
-            .get(&pane.id)
-            .filter(|command| !foreground_is_launch_chrome(command))
-        {
+        if let Some(command) = foreground.get(&pane.id) {
             pane.pane_command = Some(command.clone());
         }
     }
-}
-
-fn foreground_is_launch_chrome(command: &str) -> bool {
-    let mut tokens = command.split_whitespace().filter(|token| !token.is_empty());
-    let Some(program) = tokens.next() else {
-        return false;
-    };
-    if program_basename(program) != "rimz" || tokens.next() != Some("agents") {
-        return false;
-    }
-    let Some(spec_or_command) = tokens.next() else {
-        return false;
-    };
-    !matches!(
-        spec_or_command,
-        "list" | "ls" | "show" | "focus" | "wait" | "stop" | "exec"
-    )
-}
-
-fn program_basename(program: &str) -> &str {
-    std::path::Path::new(program)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or(program)
 }
 
 /// The focused sidebar pane after switching to `active_tab`, if Zellij restored
 /// the tab's focus to the sidebar while a live working sibling exists. `None`
 /// means the tab is already on work, has no sidebar focus, or has no live
 /// working pane.
-#[cfg(test)]
 pub fn stranded_sidebar_pane(
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
     active_tab: Option<usize>,
-) -> Option<u32> {
-    stranded_sidebar_pane_with_resolution(tabs, active_tab, None)
-}
-
-pub fn stranded_sidebar_pane_with_resolution(
-    tabs: &BTreeMap<usize, Vec<PaneFields>>,
-    active_tab: Option<usize>,
-    focus_resolution: Option<&FocusResolution>,
+    focus_resolution: &FocusResolution,
 ) -> Option<u32> {
     let active_tab = active_tab?;
     let panes = tabs.get(&active_tab)?;
-    let focused = match focus_resolution {
-        Some(resolution) => {
-            let focused_id = resolution.focused_pane_id(Some(active_tab))?;
-            panes
-                .iter()
-                .find(|pane| pane.id == focused_id && pane.is_live_terminal())?
-        }
-        None => focused_pane(tabs, Some(active_tab))?,
-    };
+    let focused_id = focus_resolution.focused_pane_id(Some(active_tab))?;
+    let focused = panes
+        .iter()
+        .find(|pane| pane.id == focused_id && pane.is_live_terminal())?;
     if !focused.is_sidebar() {
         return None;
     }
@@ -749,7 +579,7 @@ pub fn stranded_sidebar_pane_with_resolution(
 pub fn resolved_focused_pane_id(
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
     active_tab: Option<usize>,
-    focus_resolution: Option<&FocusResolution>,
+    focus_resolution: &FocusResolution,
 ) -> Option<u32> {
     resolved_focused_pane(tabs, active_tab, focus_resolution).map(|pane| pane.id)
 }
@@ -757,12 +587,11 @@ pub fn resolved_focused_pane_id(
 fn resolved_focused_pane<'a>(
     tabs: &'a BTreeMap<usize, Vec<PaneFields>>,
     active_tab: Option<usize>,
-    focus_resolution: Option<&FocusResolution>,
+    focus_resolution: &FocusResolution,
 ) -> Option<&'a PaneFields> {
     let active_tab = active_tab?;
     let panes = tabs.get(&active_tab)?;
-    if let Some(resolved) =
-        focus_resolution.and_then(|resolution| resolution.focused_pane_id(Some(active_tab)))
+    if let Some(resolved) = focus_resolution.focused_pane_id(Some(active_tab))
         && let Some(pane) = panes
             .iter()
             .find(|pane| pane.id == resolved && pane.is_live_terminal())
@@ -770,13 +599,6 @@ fn resolved_focused_pane<'a>(
         return Some(pane);
     }
     panes.iter().find(|pane| pane.is_focused)
-}
-
-fn focused_pane(
-    tabs: &BTreeMap<usize, Vec<PaneFields>>,
-    active_tab: Option<usize>,
-) -> Option<&PaneFields> {
-    tabs.get(&active_tab?)?.iter().find(|pane| pane.is_focused)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -813,20 +635,7 @@ pub struct FocusCorrection {
 impl FocusCorrection {
     /// Fold an active-tab observation. Loading the plugin (`None -> Some`) is a
     /// baseline, not navigation; only real tab switches arm classification.
-    #[cfg(test)]
     pub fn on_active_tab_change(
-        &mut self,
-        previous_active: Option<usize>,
-        next_active: Option<usize>,
-        now_ms: u64,
-    ) {
-        self.on_active_tab_change_with_focus(previous_active, next_active, None, now_ms);
-    }
-
-    /// Fold an active-tab observation with the pane that was focused in the
-    /// previous active tab. If the new active tab reports the same focused pane,
-    /// Zellij renumbered tab positions rather than moving the user.
-    pub fn on_active_tab_change_with_focus(
         &mut self,
         previous_active: Option<usize>,
         next_active: Option<usize>,
@@ -850,22 +659,11 @@ impl FocusCorrection {
     /// Resolve the pending classification. A fresh manifest is authoritative
     /// immediately; a stale manifest is consulted only after the settle
     /// deadline, giving cross-tab explicit jumps time to land their focus mark.
-    #[cfg(test)]
     pub fn resolve(
         &mut self,
         tabs: &BTreeMap<usize, Vec<PaneFields>>,
         active_tab: Option<usize>,
-        manifest_fresh: bool,
-        now_ms: u64,
-    ) -> CorrectionAction {
-        self.resolve_with_resolution(tabs, active_tab, None, manifest_fresh, now_ms)
-    }
-
-    pub fn resolve_with_resolution(
-        &mut self,
-        tabs: &BTreeMap<usize, Vec<PaneFields>>,
-        active_tab: Option<usize>,
-        focus_resolution: Option<&FocusResolution>,
+        focus_resolution: &FocusResolution,
         manifest_fresh: bool,
         now_ms: u64,
     ) -> CorrectionAction {
@@ -886,7 +684,7 @@ impl FocusCorrection {
             self.pending = None;
             return CorrectionAction::Clear;
         }
-        match stranded_sidebar_pane_with_resolution(tabs, Some(pending.tab), focus_resolution) {
+        match stranded_sidebar_pane(tabs, Some(pending.tab), focus_resolution) {
             Some(_) if now_ms < pending.deadline => CorrectionAction::Wait,
             Some(pane_id) => {
                 self.pending = None;
