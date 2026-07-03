@@ -15,7 +15,6 @@ use crate::config::MachineConfig;
 use crate::{RuntimePaths, SidebarSnapshot, WorktreePrState};
 
 pub mod accounts;
-pub mod codex;
 pub mod credits;
 pub mod daemon_reap;
 mod git_refs;
@@ -23,11 +22,11 @@ pub mod git_stats;
 pub mod live_spend;
 pub mod pr;
 pub mod rate_limits;
+pub mod sessions;
 pub mod spending;
 pub mod usage;
 
 pub use accounts::AccountsCache;
-pub use codex::refresh_codex_transcript_context;
 pub use credits::{
     CreditsCache, ProviderCreditsEntry, merge_provider_credits,
     merge_provider_credits_entry_if_due, provider_credits_entry_fresh,
@@ -36,14 +35,15 @@ pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap, write_codex_daemo
 pub use live_spend::{apply_live_today_spend, live_row_costs};
 pub use pr::PrStateCache;
 pub use rate_limits::merge_account_rate_limits;
+pub use sessions::refresh_session_transcript_context;
 pub use usage::merge_oauth_usage_if_due;
 
 use self::accounts::produce_accounts;
-use self::codex::refresh_codex_sessions;
 use self::daemon_reap::refresh_codex_daemon_reap_cache;
 use self::git_stats::refresh_diff_stats_for;
 use self::pr::produce_pr_states;
 use self::rate_limits::apply_rate_limit_cache;
+use self::sessions::refresh_live_sessions;
 use self::usage::refresh_account_usage;
 use super::enrich::{fold_machine_config_with, read_auto_continue_resume_messages};
 use super::timing::unix_now_ms;
@@ -90,7 +90,7 @@ pub fn refresh_heavy_lanes(
     );
     apply_rate_limit_cache(&mut panels, runtime, true);
 
-    refresh_codex_sessions(base, runtime);
+    refresh_live_sessions(base, runtime);
     refresh_account_usage(base, runtime);
     let resume_messages = read_auto_continue_resume_messages(
         Some(state_messages_dir),

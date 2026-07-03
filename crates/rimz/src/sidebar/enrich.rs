@@ -736,7 +736,7 @@ pub(crate) fn fold_machine_config_with(
     let mut remote_control_flags: BTreeMap<String, bool> = BTreeMap::new();
     for adapter in crate::agents::ADAPTERS {
         let descriptor = adapter.descriptor();
-        let config_toggle = remote_control_toggle(descriptor.kind, &config.remote_control);
+        let config_toggle = config.remote_control.enabled_for(descriptor.kind);
         let pane_auto = descriptor.capabilities.remote_control.pane_sessions
             && adapter
                 .remote_control_status(accounts.get(descriptor.kind))
@@ -745,14 +745,6 @@ pub(crate) fn fold_machine_config_with(
     }
 
     snapshot.with_provider_aggregates(&accounts, &remote_control_flags, provider_spending)
-}
-
-fn remote_control_toggle(kind: &str, config: &crate::config::RemoteControlConfig) -> bool {
-    match kind {
-        "claude" => config.claude,
-        "codex" => config.codex,
-        _ => false,
-    }
 }
 
 /// Stamp [`SidebarRow::context_severity`] on every agent row from the

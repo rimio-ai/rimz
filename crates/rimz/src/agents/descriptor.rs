@@ -279,6 +279,9 @@ pub struct Capabilities {
     /// transcript tail, such as account windows, official model labels, PR
     /// metadata, or agent version.
     pub rich_context: bool,
+    /// Local transcript/rollout tail is a live context source refreshable
+    /// outside hooks. Drives producer ticks and renderer transcript watches.
+    pub transcript_tail_context: bool,
     /// Surfaces per-session token/context usage into the agent row.
     pub context_usage: bool,
     /// Surfaces provider spend from transcripts, account usage, or session
@@ -293,10 +296,29 @@ pub struct Capabilities {
     /// binds such a session to its pane by cwd and synthesizes an idle row
     /// for a wired-but-unbound pane.
     pub registers_lazily: bool,
+    /// Sessions route hooks through a per-user daemon that outlives any one
+    /// conversation, so a new session may succeed another in the same pane
+    /// before the reaper clears the stamp.
+    pub daemon_hooked_sessions: bool,
     /// Rimz can install a hook configuration the agent actually executes.
     pub hook_install: bool,
+    /// How this provider's realtime usage channel interacts with the uniform
+    /// OAuth account-usage driver.
+    pub realtime_usage: RealtimeUsageChannel,
     /// Remote-control surfaces the provider can host.
     pub remote_control: RemoteControlCapability,
+}
+
+/// How a provider's realtime usage channel interacts with the uniform OAuth
+/// account-usage driver.
+#[derive(Clone, Copy, Debug)]
+pub struct RealtimeUsageChannel {
+    /// A live root session's realtime channel already covers the
+    /// account-scoped fetch, so the driver skips this kind while one is live.
+    pub covers_account_while_live: bool,
+    /// A content-fresh realtime windows reading owns the included-budget
+    /// windows, so the OAuth merge defers to it.
+    pub windows_defer_to_fresh_realtime: bool,
 }
 
 /// Static remote-control capability. Dynamic "enabled on this machine" state
@@ -411,20 +433,60 @@ mod tests {
         assert!(claude.capabilities.remote_control.pane_sessions);
         assert!(claude.capabilities.remote_control.background_sessions);
         assert!(claude.capabilities.rich_context);
+        assert!(!claude.capabilities.transcript_tail_context);
+        assert!(!claude.capabilities.daemon_hooked_sessions);
+        assert!(!claude.capabilities.realtime_usage.covers_account_while_live);
+        assert!(
+            claude
+                .capabilities
+                .realtime_usage
+                .windows_defer_to_fresh_realtime
+        );
 
         let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
         assert!(codex.capabilities.remote_control.pane_sessions);
         assert!(codex.capabilities.remote_control.background_sessions);
         assert!(codex.capabilities.rich_context);
+        assert!(codex.capabilities.transcript_tail_context);
+        assert!(codex.capabilities.daemon_hooked_sessions);
+        assert!(codex.capabilities.realtime_usage.covers_account_while_live);
+        assert!(
+            !codex
+                .capabilities
+                .realtime_usage
+                .windows_defer_to_fresh_realtime
+        );
 
         let pi = crate::agents::registry::descriptor_by_kind("pi").unwrap();
         assert!(!pi.capabilities.remote_control.pane_sessions);
         assert!(!pi.capabilities.remote_control.background_sessions);
         assert!(!pi.capabilities.rich_context);
+        assert!(!pi.capabilities.transcript_tail_context);
+        assert!(!pi.capabilities.daemon_hooked_sessions);
+        assert!(!pi.capabilities.realtime_usage.covers_account_while_live);
+        assert!(
+            !pi.capabilities
+                .realtime_usage
+                .windows_defer_to_fresh_realtime
+        );
 
         let opencode = crate::agents::registry::descriptor_by_kind("opencode").unwrap();
         assert!(!opencode.capabilities.remote_control.pane_sessions);
         assert!(!opencode.capabilities.remote_control.background_sessions);
         assert!(opencode.capabilities.rich_context);
+        assert!(!opencode.capabilities.transcript_tail_context);
+        assert!(!opencode.capabilities.daemon_hooked_sessions);
+        assert!(
+            !opencode
+                .capabilities
+                .realtime_usage
+                .covers_account_while_live
+        );
+        assert!(
+            !opencode
+                .capabilities
+                .realtime_usage
+                .windows_defer_to_fresh_realtime
+        );
     }
 }

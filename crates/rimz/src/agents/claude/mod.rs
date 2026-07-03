@@ -54,7 +54,7 @@ use super::RemoteControlStatus;
 use super::StatusLineChange;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
+    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
 use super::hook_types::{BackgroundTask, SessionSource};
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
@@ -105,6 +105,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking_feed: true,
         native_ask_ui: true,
         rich_context: true,
+        transcript_tail_context: false,
         context_usage: true,
         account_spend: true,
         subagents: true,
@@ -113,7 +114,12 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // session is not idle-synthesized. Read-time cwd recovery still
         // rebinds a live pane after a mux rebirth clears the stamp.
         registers_lazily: false,
+        daemon_hooked_sessions: false,
         hook_install: true,
+        realtime_usage: RealtimeUsageChannel {
+            covers_account_while_live: false,
+            windows_defer_to_fresh_realtime: true,
+        },
         remote_control: RemoteControlCapability {
             pane_sessions: true,
             background_sessions: true,

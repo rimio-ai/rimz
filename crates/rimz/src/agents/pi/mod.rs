@@ -47,7 +47,7 @@ use super::context::{
 };
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
+    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::managed_source::ManagedSource;
@@ -99,12 +99,18 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // posing a question pi would not have asked.
         native_ask_ui: false,
         rich_context: false,
+        transcript_tail_context: false,
         context_usage: true,
         account_spend: true,
         subagents: false,
         background_tasks: false,
         registers_lazily: false,
+        daemon_hooked_sessions: false,
         hook_install: true,
+        realtime_usage: RealtimeUsageChannel {
+            covers_account_while_live: false,
+            windows_defer_to_fresh_realtime: false,
+        },
         remote_control: RemoteControlCapability {
             pane_sessions: false,
             background_sessions: false,

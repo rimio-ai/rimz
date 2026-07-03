@@ -160,7 +160,7 @@ pub fn merge_local_context(
     }
     record.context.effort = refresh.effort;
     let mut refresh_tokens = refresh.tokens;
-    preserve_established_tokens(kind, prior_tokens.as_ref(), &mut refresh_tokens);
+    preserve_established_tokens(prior_tokens.as_ref(), &mut refresh_tokens);
     record.context.tokens = refresh_tokens;
     preserve_cached_context_window(
         kind,
@@ -306,7 +306,6 @@ fn merge_observed_cost(
 }
 
 fn preserve_established_tokens(
-    kind: &str,
     prior: Option<&AgentTokenUsage>,
     refresh: &mut Option<AgentTokenUsage>,
 ) {
@@ -315,7 +314,7 @@ fn preserve_established_tokens(
     };
     match refresh {
         None => *refresh = Some(prior.clone()),
-        Some(tokens) if should_preserve_tokens(kind, tokens) => *tokens = prior.clone(),
+        Some(tokens) if should_preserve_tokens(tokens) => *tokens = prior.clone(),
         Some(_) => {}
     }
 }
@@ -328,16 +327,16 @@ fn established_token_usage(tokens: &AgentTokenUsage) -> bool {
             .is_some_and(|usage| !usage.is_zero())
 }
 
-fn should_preserve_tokens(kind: &str, refresh: &AgentTokenUsage) -> bool {
-    kind == "codex" && inferred_fresh_codex_tokens(refresh)
+fn should_preserve_tokens(refresh: &AgentTokenUsage) -> bool {
+    inferred_fresh_tokens(refresh)
 }
 
-fn inferred_fresh_codex_tokens(tokens: &AgentTokenUsage) -> bool {
+fn inferred_fresh_tokens(tokens: &AgentTokenUsage) -> bool {
     // A fresh rollout tail (no `token_count` event yet) carries an all-zero
-    // current usage and no percentage. Codex no longer bakes a percentage, so
-    // the zeroed `current_usage` under an absent percentage is the fresh
-    // sentinel — recognise it and keep the prior established record rather than
-    // overwriting real context with zeros and a default window.
+    // current usage and no percentage. The zeroed `current_usage` under an
+    // absent percentage is the fresh sentinel — recognise it and keep the prior
+    // established record rather than overwriting real context with zeros and a
+    // default window.
     tokens.used_percentage.is_none()
         && tokens
             .current_usage

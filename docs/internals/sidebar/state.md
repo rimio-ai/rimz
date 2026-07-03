@@ -122,7 +122,7 @@ The table names staleness-budget semantics; exact values and rationale live as n
 | `/proc` metrics | `METRICS_FOCUSED_SAMPLE_TTL` viewed; `METRICS_BACKGROUND_SAMPLE_TTL` background | Child pids plus per-row CPU, memory, IO, and process-state figures |
 | Spending walk | `SPENDING_TTL` | Provider dashboard, fleet ledger, and the floor under the live cockpit spend |
 | Accounts | `ACCOUNTS_TTL` success; `ACCOUNTS_RETRY_TTL` failure | Provider dashboard login, plan, and account state |
-| Codex rate limits | `CODEX_RATE_LIMIT_REFRESH_INTERVAL` | Provider dashboard budget windows |
+| Live-session context | `SESSION_REFRESH_INTERVAL` | Provider dashboard budget windows and session sidecars |
 | Account credits | `CREDITS_TTL` success; `CREDITS_RETRY_TTL` failure | Provider dashboard paid/extra usage row |
 | Remote link stats | `LINK_STATS_STALE`, expiring at `LINK_STATS_EXPIRE` | Footer link badge for `rimz remote connect` rooms |
 

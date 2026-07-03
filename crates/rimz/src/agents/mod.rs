@@ -60,7 +60,7 @@ pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe};
 pub use descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
+    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
 pub(crate) use identity::{
     RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
@@ -292,9 +292,18 @@ pub struct HookUninstallReport {
     pub existed: bool,
 }
 
-/// Context for [`AgentAdapter::post_lifecycle_refresh`]: the session and
-/// workspace a lifecycle event just landed for, plus the model hint its
-/// observation resolved.
+/// Trigger path for adapter-owned enrichment refreshes.
+#[derive(Clone, Copy, Debug)]
+pub enum RefreshTrigger<'a> {
+    /// Native event name on the hook path.
+    Hook(&'a str),
+    /// Sidebar producer periodic pass over live root sessions.
+    Tick,
+}
+
+/// Context for [`AgentAdapter::context_refresh_spawn`]: the session and
+/// workspace to refresh, plus the model hint its latest observation resolved.
+/// On [`RefreshTrigger::Tick`], callers pass `server_url: None`.
 pub struct LifecycleRefreshCtx<'a> {
     pub agent_id: &'a str,
     pub workspace_id: &'a str,
@@ -317,9 +326,9 @@ fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 
-/// Context for [`AgentAdapter::local_context_refresh`]: the session that just
-/// proved progress, its current model hint, and the transcript gate state from
-/// the latest sidecar.
+/// Context for [`AgentAdapter::local_context_refresh`]: the session to refresh,
+/// its current model hint, and the transcript gate state from the latest
+/// sidecar.
 pub struct LocalContextRefreshCtx<'a> {
     pub agent_id: &'a str,
     pub model_hint: Option<&'a str>,
@@ -352,6 +361,12 @@ pub struct LocalContextRefresh {
 pub struct RefreshSpawn {
     /// Arguments to the `rimz` binary itself.
     pub args: Vec<String>,
+}
+
+/// Account usage read from a provider-owned realtime account channel.
+pub struct RealtimeAccountUsage {
+    pub rate_limits: Option<AgentRateLimits>,
+    pub extra_credits: Option<ExtraCredits>,
 }
 
 /// Dynamic remote-control state read from the agent's own machine-local
@@ -549,15 +564,14 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
-    /// A detached `rimz` helper to spawn after this lifecycle event is
-    /// recorded — the out-of-band enrichment lane (Codex refreshes its
-    /// app-server context on turn boundaries). The CLI spawns it with fresh,
+    /// A detached `rimz` helper to spawn after a lifecycle event or producer
+    /// tick — the out-of-band enrichment lane. The caller spawns it with fresh,
     /// fully-nulled stdio and never waits, so it adds no latency to the
     /// agent's turn. Display-only enrichment, never correctness. Defaults to
     /// `None` for an agent with no out-of-band refresh.
-    fn post_lifecycle_refresh(
+    fn context_refresh_spawn(
         &self,
-        _event_name: &str,
+        _trigger: RefreshTrigger<'_>,
         _ctx: &LifecycleRefreshCtx<'_>,
     ) -> Option<RefreshSpawn> {
         None
@@ -565,13 +579,14 @@ pub trait AgentAdapter: Send + Sync {
 
     /// A cheap, synchronous local enrichment read to run inline after a
     /// progress-proving hook event. This is for bounded file reads that are
-    /// lighter than the ledger write already performed by the hook; network,
-    /// subprocess, broker, or app-server work belongs in
-    /// [`post_lifecycle_refresh`](Self::post_lifecycle_refresh). The adapter
-    /// returns mapped fields only and never writes the sidecar itself.
+    /// lighter than the ledger write already performed by the hook or cheap
+    /// enough for a producer tick; network, subprocess, broker, or app-server
+    /// work belongs in [`context_refresh_spawn`](Self::context_refresh_spawn).
+    /// The adapter returns mapped fields only and never writes the sidecar
+    /// itself.
     fn local_context_refresh(
         &self,
-        _event_name: &str,
+        _trigger: RefreshTrigger<'_>,
         _ctx: &LocalContextRefreshCtx<'_>,
     ) -> Option<LocalContextRefresh> {
         None
@@ -597,6 +612,17 @@ pub trait AgentAdapter: Send + Sync {
     /// [`OauthUsageProbe::Unsupported`] for an agent with no OAuth usage surface.
     fn probe_oauth_usage(&self) -> OauthUsageProbe {
         OauthUsageProbe::Unsupported
+    }
+
+    /// Probe the provider's own realtime account channel while idle.
+    /// Producer-only, best-effort, and read-only: no ledger writes happen in the
+    /// adapter, and the caller owns every cache merge. `RuntimePaths` lets the
+    /// adapter locate its local sockets.
+    fn probe_realtime_account_usage(
+        &self,
+        _runtime: &crate::RuntimePaths,
+    ) -> Option<RealtimeAccountUsage> {
+        None
     }
 
     /// Dynamic remote-control state from this provider's own settings and

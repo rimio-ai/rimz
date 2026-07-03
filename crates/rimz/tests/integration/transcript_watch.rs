@@ -1,12 +1,12 @@
 //! The transcript-watch trigger → refresh wiring: a simulated rollout-write
 //! event drives the same stat-gated refresh the producer tick uses
-//! (`rimz::sidebar::refresh::refresh_codex_transcript_context`), merging fresh
+//! (`rimz::sidebar::refresh::refresh_session_transcript_context`), merging fresh
 //! tokens into the session's context sidecar. The OS watcher itself is not
 //! driven end-to-end — platform event semantics vary — so this asserts the
 //! refresh the watcher's flush invokes, against real sidecar and rollout files.
 
 use rimz::ledger::agent_context::{self, empty_context, new_record};
-use rimz::sidebar::refresh::refresh_codex_transcript_context;
+use rimz::sidebar::refresh::refresh_session_transcript_context;
 
 use crate::common::Harness;
 
@@ -55,7 +55,7 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
     drop(file);
 
     // The watcher's debounce flush invokes exactly this refresh per session.
-    refresh_codex_transcript_context(runtime, SESSION_ID, Some("gpt-5"));
+    refresh_session_transcript_context(runtime, "codex", SESSION_ID, Some("gpt-5"));
 
     let merged = agent_context::read_one(runtime, "codex", SESSION_ID).expect("merged sidecar");
     let tokens = merged.context.tokens.as_ref().expect("tokens merged");
@@ -77,7 +77,7 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
     // A redundant trigger — the same watcher event firing again with no new
     // write — is a stat-gated no-op: the sidecar bytes do not change.
     let before = std::fs::read(runtime.agent_context_path("codex", SESSION_ID)).expect("sidecar");
-    refresh_codex_transcript_context(runtime, SESSION_ID, Some("gpt-5"));
+    refresh_session_transcript_context(runtime, "codex", SESSION_ID, Some("gpt-5"));
     let after = std::fs::read(runtime.agent_context_path("codex", SESSION_ID)).expect("sidecar");
     assert_eq!(before, after, "unchanged rollout tail refreshes nothing");
 }

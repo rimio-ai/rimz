@@ -1,16 +1,13 @@
-//! Codex rollout fast path: refresh the context sidecar the moment the
+//! Transcript-tail fast path: refresh the context sidecar the moment a watched
 //! transcript grows.
 //!
-//! Codex's tokens/cost reach the sidecar through hook pushes after progress
-//! events plus the producer's stat-gated tick backstop
-//! (`crate::sidebar::enrich`), so a long generation between tool calls goes
-//! quiet until the next hook fires. The elected producer watches each live
-//! root Codex session's rollout JSONL with a filesystem watcher and runs the
-//! *same* stat-gated refresh on the write, so the token meter and `$` move
-//! mid-turn. Latency only, never truth: the refresh is idempotent behind its
-//! transcript-stat gate, the tick backstop stays unconditional, and a watcher
-//! that fails to start (or a platform that drops events) degrades to exactly
-//! the cadence the room had before this thread existed.
+//! Adapters that declare transcript-tail context reach the sidecar through hook
+//! pushes after progress events plus the producer's stat-gated tick backstop.
+//! The elected producer watches each live root session's transcript with a
+//! filesystem watcher and runs the same stat-gated refresh on writes, so meters
+//! move mid-turn. Latency only, never truth: the refresh is idempotent behind
+//! its transcript-stat gate, the tick backstop stays unconditional, and a
+//! watcher that fails to start degrades to the producer cadence.
 //!
 //! One watcher per workspace: only the eldest live instance (the same
 //! election as the produce path) registers paths; the rest sleep on the
@@ -41,10 +38,11 @@ const ROSTER_RESCAN: Duration = Duration::from_secs(5);
 /// refresh per session, bounding refresh rate during fast token streams.
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
-/// One watched rollout file: the session it belongs to and the model hint its
+/// One watched transcript file: the session it belongs to and the model hint its
 /// sidecar last carried, threaded into the refresh for cost pricing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WatchTarget {
+    kind: String,
     session_id: String,
     model_hint: Option<String>,
 }
@@ -69,7 +67,7 @@ fn watch_loop(runtime: &RuntimePaths, instance_id: &SidebarInstanceId) {
     }
 }
 
-/// Own the watcher while elected: register live Codex rollout paths, coalesce
+/// Own the watcher while elected: register live transcript paths, coalesce
 /// fs events behind [`DEBOUNCE`], and run the stat-gated sidecar refresh per
 /// flushed session. Returns on demotion (dropping the watcher and its OS
 /// watches) or on a dead event channel (the outer loop respawns with backoff).
@@ -119,8 +117,9 @@ fn watch_while_elected(
                 return Ok(());
             }
             for target in due_refreshes(&pending, &roster) {
-                crate::sidebar::refresh::refresh_codex_transcript_context(
+                crate::sidebar::refresh::refresh_session_transcript_context(
                     runtime,
+                    &target.kind,
                     &target.session_id,
                     target.model_hint.as_deref(),
                 );
@@ -139,7 +138,7 @@ fn reconcile_roster(
     watcher: &mut notify::RecommendedWatcher,
     roster: &mut BTreeMap<PathBuf, WatchTarget>,
 ) {
-    let live = codex_transcript_targets(&crate::ledger::agent_context::read_all(runtime));
+    let live = transcript_targets(&crate::ledger::agent_context::read_all(runtime));
     roster.retain(|path, _| {
         if live.contains_key(path) {
             return true;
@@ -167,16 +166,20 @@ fn reconcile_roster(
     }
 }
 
-/// The rollout paths worth watching: every live Codex sidecar that names its
-/// transcript. Pure over the records so the roster policy is testable without
-/// a watcher or a runtime dir.
-fn codex_transcript_targets(records: &[AgentContextRecord]) -> BTreeMap<PathBuf, WatchTarget> {
+/// The transcript paths worth watching: every sidecar for an adapter that
+/// declares transcript-tail context and names its transcript. Pure over the
+/// records so the roster policy is testable without a watcher or a runtime dir.
+fn transcript_targets(records: &[AgentContextRecord]) -> BTreeMap<PathBuf, WatchTarget> {
     records
         .iter()
-        .filter(|record| record.kind == "codex")
+        .filter(|record| {
+            crate::agents::descriptor_by_kind(record.kind.as_str())
+                .is_some_and(|descriptor| descriptor.capabilities.transcript_tail_context)
+        })
         .filter_map(|record| {
             let path = PathBuf::from(record.transcript_path.as_deref()?);
             let target = WatchTarget {
+                kind: record.kind.as_str().to_owned(),
                 session_id: record.agent_id.as_str().to_owned(),
                 model_hint: record.context.model_id.clone(),
             };
@@ -197,7 +200,7 @@ fn due_refreshes(
     pending
         .iter()
         .filter_map(|path| roster.get(path))
-        .filter(|target| seen.insert(target.session_id.clone()))
+        .filter(|target| seen.insert((target.kind.clone(), target.session_id.clone())))
         .cloned()
         .collect()
 }
@@ -216,50 +219,60 @@ mod tests {
         empty_context(kind, jiff::Timestamp::UNIX_EPOCH)
     }
 
-    fn target(session_id: &str) -> WatchTarget {
+    fn target(kind: &str, session_id: &str) -> WatchTarget {
         WatchTarget {
+            kind: kind.to_owned(),
             session_id: session_id.to_owned(),
             model_hint: None,
         }
     }
 
-    fn roster(entries: &[(&str, &str)]) -> BTreeMap<PathBuf, WatchTarget> {
+    fn roster(entries: &[(&str, &str, &str)]) -> BTreeMap<PathBuf, WatchTarget> {
         entries
             .iter()
-            .map(|(path, session)| (PathBuf::from(path), target(session)))
+            .map(|(path, kind, session)| (PathBuf::from(path), target(kind, session)))
             .collect()
     }
 
     #[test]
     fn many_events_for_one_path_flush_one_refresh() {
-        let roster = roster(&[("/t/a.jsonl", "sess-a")]);
+        let roster = roster(&[("/t/a.jsonl", "codex", "sess-a")]);
         let pending: BTreeSet<PathBuf> = [PathBuf::from("/t/a.jsonl")].into();
-        assert_eq!(due_refreshes(&pending, &roster), vec![target("sess-a")]);
+        assert_eq!(
+            due_refreshes(&pending, &roster),
+            vec![target("codex", "sess-a")]
+        );
     }
 
     #[test]
     fn two_paths_one_session_dedupe_to_one_refresh() {
-        let roster = roster(&[("/t/a.jsonl", "sess-a"), ("/t/a2.jsonl", "sess-a")]);
+        let roster = roster(&[
+            ("/t/a.jsonl", "codex", "sess-a"),
+            ("/t/a2.jsonl", "codex", "sess-a"),
+        ]);
         let pending: BTreeSet<PathBuf> =
             [PathBuf::from("/t/a.jsonl"), PathBuf::from("/t/a2.jsonl")].into();
-        assert_eq!(due_refreshes(&pending, &roster), vec![target("sess-a")]);
+        assert_eq!(
+            due_refreshes(&pending, &roster),
+            vec![target("codex", "sess-a")]
+        );
     }
 
     #[test]
     fn unrostered_path_refreshes_nothing() {
-        let roster = roster(&[("/t/a.jsonl", "sess-a")]);
+        let roster = roster(&[("/t/a.jsonl", "codex", "sess-a")]);
         let pending: BTreeSet<PathBuf> = [PathBuf::from("/t/gone.jsonl")].into();
         assert!(due_refreshes(&pending, &roster).is_empty());
     }
 
     #[test]
     fn empty_pending_refreshes_nothing() {
-        let roster = roster(&[("/t/a.jsonl", "sess-a")]);
+        let roster = roster(&[("/t/a.jsonl", "codex", "sess-a")]);
         assert!(due_refreshes(&BTreeSet::new(), &roster).is_empty());
     }
 
     #[test]
-    fn targets_keep_codex_records_that_name_a_transcript() {
+    fn targets_keep_capable_records_that_name_a_transcript() {
         let mut with_path = new_record("codex", "sess-a", context("codex"));
         with_path.transcript_path = Some("/t/a.jsonl".to_owned());
         with_path.context.model_id = Some("gpt-5.5-codex".to_owned());
@@ -267,12 +280,13 @@ mod tests {
         let mut claude = new_record("claude", "sess-c", context("claude"));
         claude.transcript_path = Some("/t/c.jsonl".to_owned());
 
-        let targets = codex_transcript_targets(&[with_path, pathless, claude]);
+        let targets = transcript_targets(&[with_path, pathless, claude]);
         assert_eq!(
             targets,
             BTreeMap::from([(
                 PathBuf::from("/t/a.jsonl"),
                 WatchTarget {
+                    kind: "codex".to_owned(),
                     session_id: "sess-a".to_owned(),
                     model_hint: Some("gpt-5.5-codex".to_owned()),
                 }

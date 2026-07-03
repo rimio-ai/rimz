@@ -5,16 +5,18 @@
 //! quota surface through
 //! [`AgentAdapter::probe_oauth_usage`](rimz::agents::AgentAdapter::probe_oauth_usage),
 //! single-flighted and folded into the shared `credits.json`/`rate_limits.json`
-//! caches. Codex additionally polls its app-server first (its realtime channel,
-//! pollable while idle) and falls back to OAuth only for the fields the
-//! app-server did not return. Best-effort and quiet: every provider-side failure
-//! exits successfully with the shared cache recording the retry state.
+//! caches. An adapter may expose a pollable realtime account channel; the helper
+//! reads it first and falls back to OAuth only for fields it did not return.
+//! Best-effort and quiet: every provider-side failure exits successfully with
+//! the shared cache recording the retry state.
 
 use anyhow::{Context, Result};
 use clap::Args;
 
 use rimz::ids::WorkspaceId;
-use rimz::sidebar::refresh::merge_oauth_usage_if_due;
+use rimz::sidebar::refresh::{
+    merge_account_rate_limits, merge_oauth_usage_if_due, merge_provider_credits,
+};
 use rimz::{RuntimePaths, agents};
 
 use crate::cli::GlobalFlags;
@@ -43,41 +45,39 @@ pub(super) fn run_refresh_usage(args: RefreshUsageArgs, _globals: &GlobalFlags) 
         return Ok(());
     }
 
-    let wrote = match args.kind.as_str() {
-        "codex" => refresh_codex(&runtime),
-        kind => merge_oauth_usage_if_due(&runtime, kind, args.merge_windows),
-    };
+    let wrote = refresh_usage(&runtime, &args.kind, args.merge_windows);
     if wrote {
         let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
     }
     Ok(())
 }
 
-/// Codex's realtime channel is its app-server, pollable while idle: read it
-/// first, then fall back to the OAuth channel only for the fields it did not
-/// return. Mirrors the live-session refresh's app-server-first precedence so the
-/// idle and active dashboards agree.
-fn refresh_codex(runtime: &RuntimePaths) -> bool {
-    let broker_socket = runtime.codex_app_server_socket_path();
-    let Some(enrichment) =
-        agents::codex::refresh_app_server_enrichment(None, None, Some(&broker_socket))
-    else {
-        // App-server unreachable: the OAuth channel owns both windows and credits.
-        return merge_oauth_usage_if_due(runtime, "codex", true);
+fn refresh_usage(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> bool {
+    let Some(adapter) = agents::find_adapter(kind) else {
+        return false;
+    };
+    let Some(usage) = adapter.probe_realtime_account_usage(runtime) else {
+        let fallback_merge_windows = merge_windows
+            || adapter
+                .descriptor()
+                .capabilities
+                .realtime_usage
+                .covers_account_while_live;
+        return merge_oauth_usage_if_due(runtime, kind, fallback_merge_windows);
     };
     let mut wrote = false;
-    let app_windows_missing = enrichment.context.rate_limits.is_none();
-    let app_credits_missing = enrichment.extra_credits.is_none();
-    if let Some(extra_credits) = enrichment.extra_credits.clone() {
-        rimz::sidebar::refresh::merge_provider_credits(runtime, "codex", Some(extra_credits));
+    let windows_missing = usage.rate_limits.is_none();
+    let credits_missing = usage.extra_credits.is_none();
+    if let Some(extra_credits) = usage.extra_credits {
+        merge_provider_credits(runtime, kind, Some(extra_credits));
         wrote = true;
     }
-    if let Some(rate_limits) = enrichment.context.rate_limits.clone() {
-        rimz::sidebar::refresh::merge_account_rate_limits(runtime, "codex", rate_limits);
+    if let Some(rate_limits) = usage.rate_limits {
+        merge_account_rate_limits(runtime, kind, rate_limits);
         wrote = true;
     }
-    if app_windows_missing || app_credits_missing {
-        wrote |= merge_oauth_usage_if_due(runtime, "codex", app_windows_missing);
+    if windows_missing || credits_missing {
+        wrote |= merge_oauth_usage_if_due(runtime, kind, windows_missing);
     }
     wrote
 }

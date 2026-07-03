@@ -68,7 +68,9 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
         model_hint,
         server_url: payload.get("server_url").and_then(Value::as_str),
     };
-    if let Some(spawn) = agent.post_lifecycle_refresh(event_name, &refresh_ctx) {
+    if let Some(spawn) =
+        agent.context_refresh_spawn(rimz::agents::RefreshTrigger::Hook(event_name), &refresh_ctx)
+    {
         spawn_refresh_detached(&spawn);
     }
 }
@@ -169,7 +171,8 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
             .as_ref()
             .and_then(|record| record.transcript_stat.as_ref()),
     };
-    let mut refresh = agent.local_context_refresh(event_name, &refresh_ctx);
+    let mut refresh =
+        agent.local_context_refresh(rimz::agents::RefreshTrigger::Hook(event_name), &refresh_ctx);
     supplement_realtime_cost(
         agent,
         context_agent_id,

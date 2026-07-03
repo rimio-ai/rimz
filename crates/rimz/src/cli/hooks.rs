@@ -128,7 +128,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     // `refresh-context` cold-spawns such a server to read realtime context; it
     // is not a user session, but Codex still fires its configured lifecycle
     // hooks (e.g. `SessionStart`) on startup. Processing one here would call
-    // `post_lifecycle_refresh`, spawn another `refresh-context`, cold-spawn
+    // `context_refresh_spawn`, spawn another `refresh-context`, cold-spawn
     // another app-server, and recurse without bound. The marker rides the
     // server's env into this hook child; a neutral no-op (empty stdout) breaks
     // the loop. See `rimz::agents::codex::ENV_INTERNAL_APP_SERVER`.

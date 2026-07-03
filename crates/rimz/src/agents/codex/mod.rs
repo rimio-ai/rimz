@@ -69,7 +69,7 @@ pub use self::transcript::{refresh_transcript_context, session_origin};
 use super::context::AgentContext;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
+    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
 use super::hook_types::SessionSource;
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
@@ -78,10 +78,11 @@ use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
     ExtraCredits, HookInstallPreview, HookInstallReport, HookUninstallReport, LifecycleRefreshCtx,
-    LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, Result, RootIdentity,
-    SubagentIdentity, TranscriptMessage, TranscriptRole, choice_is_allow, classify_agent_hook,
-    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    LocalContextRefresh, LocalContextRefreshCtx, RealtimeAccountUsage, RefreshSpawn,
+    RefreshTrigger, Result, RootIdentity, SubagentIdentity, TranscriptMessage, TranscriptRole,
+    choice_is_allow, classify_agent_hook, non_empty_trimmed, optional_payload_string,
+    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
+    stop_payload_errored,
 };
 use crate::chat::AskQuestion;
 use crate::feed::{FeedItem, FeedKind, Resolution};
@@ -111,7 +112,7 @@ const DEFAULT_MODEL: &str = "gpt-5.5-codex";
 /// configured lifecycle hooks (e.g. `SessionStart`) when it starts. Those hook
 /// children inherit this marker, and `rimz hooks feed` no-ops on it — which
 /// breaks the `refresh-context → cold-spawn app-server → SessionStart hook →
-/// post_lifecycle_refresh → refresh-context` recursion that would otherwise
+/// context_refresh_spawn → refresh-context` recursion that would otherwise
 /// spawn unboundedly. Empty value means unset.
 pub const ENV_INTERNAL_APP_SERVER: &str = "RIMZ_CODEX_INTERNAL_APP_SERVER";
 
@@ -187,6 +188,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking_feed: true,
         native_ask_ui: true,
         rich_context: true,
+        transcript_tail_context: true,
         context_usage: true,
         account_spend: true,
         subagents: true,
@@ -199,7 +201,12 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // its pane by cwd and renders a wired-but-unprompted `codex` pane as
         // an idle agent.
         registers_lazily: true,
+        daemon_hooked_sessions: true,
         hook_install: true,
+        realtime_usage: RealtimeUsageChannel {
+            covers_account_while_live: true,
+            windows_defer_to_fresh_realtime: false,
+        },
         remote_control: RemoteControlCapability {
             pane_sessions: true,
             background_sessions: true,
@@ -819,12 +826,14 @@ impl AgentAdapter for CodexAdapter {
     /// current. Per-tool events are excluded — an app-server spawn per tool call
     /// is too frequent. Local transcript usage has its own stat-gated inline
     /// refresh below.
-    fn post_lifecycle_refresh(
+    fn context_refresh_spawn(
         &self,
-        event_name: &str,
+        trigger: RefreshTrigger<'_>,
         ctx: &LifecycleRefreshCtx<'_>,
     ) -> Option<RefreshSpawn> {
-        if !matches!(event_name, "SessionStart" | "UserPromptSubmit" | "Stop") {
+        if let RefreshTrigger::Hook(event_name) = trigger
+            && !matches!(event_name, "SessionStart" | "UserPromptSubmit" | "Stop")
+        {
             return None;
         }
         let mut args = vec![
@@ -843,13 +852,15 @@ impl AgentAdapter for CodexAdapter {
 
     fn local_context_refresh(
         &self,
-        event_name: &str,
+        trigger: RefreshTrigger<'_>,
         ctx: &LocalContextRefreshCtx<'_>,
     ) -> Option<LocalContextRefresh> {
-        if !matches!(
-            event_name,
-            "SessionStart" | "UserPromptSubmit" | "PostToolUse" | "Stop"
-        ) {
+        if let RefreshTrigger::Hook(event_name) = trigger
+            && !matches!(
+                event_name,
+                "SessionStart" | "UserPromptSubmit" | "PostToolUse" | "Stop"
+            )
+        {
             return None;
         }
         refresh_transcript_context(
@@ -859,6 +870,17 @@ impl AgentAdapter for CodexAdapter {
             ctx.prior_transcript_path,
             ctx.prior_transcript_stat,
         )
+    }
+
+    fn probe_realtime_account_usage(
+        &self,
+        runtime: &crate::RuntimePaths,
+    ) -> Option<RealtimeAccountUsage> {
+        refresh_app_server_enrichment(None, None, Some(&runtime.codex_app_server_socket_path()))
+            .map(|enrichment| RealtimeAccountUsage {
+                rate_limits: enrichment.context.rate_limits,
+                extra_credits: enrichment.extra_credits,
+            })
     }
 
     fn transcript_files(&self) -> Vec<PathBuf> {

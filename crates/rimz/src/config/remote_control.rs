@@ -21,3 +21,13 @@ pub struct RemoteControlConfig {
     /// socket.
     pub codex: bool,
 }
+
+impl RemoteControlConfig {
+    pub fn enabled_for(&self, kind: &str) -> bool {
+        match kind {
+            "claude" => self.claude,
+            "codex" => self.codex,
+            _ => false,
+        }
+    }
+}

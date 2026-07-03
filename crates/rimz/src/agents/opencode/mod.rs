@@ -22,15 +22,15 @@ use serde_json::{Value, json};
 
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
+    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::managed_source::ManagedSource;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, RefreshSpawn, Result,
-    SubagentIdentity, choice_is_allow, classify_agent_hook, resolve_subagent_identity,
+    HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, RefreshSpawn, RefreshTrigger,
+    Result, SubagentIdentity, choice_is_allow, classify_agent_hook, resolve_subagent_identity,
     sanitize_user_prompt,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
@@ -58,12 +58,18 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking_feed: true,
         native_ask_ui: true,
         rich_context: true,
+        transcript_tail_context: false,
         context_usage: true,
         account_spend: true,
         subagents: true,
         background_tasks: false,
         registers_lazily: true,
+        daemon_hooked_sessions: false,
         hook_install: true,
+        realtime_usage: RealtimeUsageChannel {
+            covers_account_while_live: false,
+            windows_defer_to_fresh_realtime: false,
+        },
         remote_control: RemoteControlCapability {
             pane_sessions: false,
             background_sessions: false,
@@ -492,11 +498,14 @@ impl AgentAdapter for OpencodeAdapter {
         )
     }
 
-    fn post_lifecycle_refresh(
+    fn context_refresh_spawn(
         &self,
-        event_name: &str,
+        trigger: RefreshTrigger<'_>,
         ctx: &LifecycleRefreshCtx<'_>,
     ) -> Option<RefreshSpawn> {
+        let RefreshTrigger::Hook(event_name) = trigger else {
+            return None;
+        };
         if !matches!(
             event_name,
             "session_created" | "chat_message" | "session_idle" | "session_error"

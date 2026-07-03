@@ -18,10 +18,10 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use crate::RuntimePaths;
 use crate::agents::OauthUsageProbe;
 use crate::sidebar::timing::CREDITS_TTL;
 use crate::sidebar::timing::unix_now_ms;
-use crate::{RuntimePaths, SidebarProviderPanel};
 
 use super::credits::{ProviderCreditsEntry, merge_provider_credits_entry_if_due};
 use super::{SidebarSnapshot, merge_account_rate_limits};
@@ -39,11 +39,15 @@ pub(crate) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &Runtim
             continue;
         }
         let kind = panel.kind.as_str();
-        // Codex's live root session refreshes its app-server windows on turn
-        // boundaries (`codex.rs`), so an account-scoped fetch here would
-        // double-hit the app-server. The uniform driver covers codex only while
-        // it is idle; every other kind has no such session-scoped path.
-        if kind == "codex" && has_live_root_session(snapshot, "codex") {
+        let Some(descriptor) = crate::agents::descriptor_by_kind(kind) else {
+            continue;
+        };
+        if descriptor
+            .capabilities
+            .realtime_usage
+            .covers_account_while_live
+            && has_live_root_session(snapshot, kind)
+        {
             continue;
         }
         if super::credits::provider_credits_entry_fresh(runtime, kind) {
@@ -52,7 +56,7 @@ pub(crate) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &Runtim
         if !usage_probe_due(runtime, kind) {
             continue;
         }
-        spawn_usage_refresh(runtime, kind, merge_windows_hint(snapshot, panel));
+        spawn_usage_refresh(runtime, kind, merge_windows_hint(snapshot, kind));
     }
 }
 
@@ -95,22 +99,25 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
 /// this kind. Claude defers to a fresh live statusline (its realtime channel);
 /// pi/opencode own their windows through OAuth, and codex decides inside its
 /// handler arm (app-server first), so every non-claude kind merges.
-fn merge_windows_hint(snapshot: &SidebarSnapshot, panel: &SidebarProviderPanel) -> bool {
-    match panel.kind.as_str() {
-        "claude" => !has_fresh_claude_statusline_windows(snapshot),
-        _ => true,
-    }
+fn merge_windows_hint(snapshot: &SidebarSnapshot, kind: &str) -> bool {
+    !crate::agents::descriptor_by_kind(kind).is_some_and(|descriptor| {
+        descriptor
+            .capabilities
+            .realtime_usage
+            .windows_defer_to_fresh_realtime
+            && has_fresh_realtime_windows(snapshot, kind)
+    })
 }
 
-/// Whether a live, content-fresh Claude statusline reading already carries this
+/// Whether a live, content-fresh realtime reading already carries this
 /// frame's windows, so the authoritative OAuth merge can skip them (the credits
-/// read still runs). An idle session re-emits a days-old payload with a fresh
-/// capture stamp, so the capture stamp alone would wrongly shadow truth — the
-/// reading's shortest window's passed reset gives the stale payload away.
-fn has_fresh_claude_statusline_windows(snapshot: &SidebarSnapshot) -> bool {
+/// read still runs). An idle session may re-emit a days-old payload with a
+/// fresh capture stamp, so the capture stamp alone would wrongly shadow truth —
+/// the reading's shortest window's passed reset gives the stale payload away.
+fn has_fresh_realtime_windows(snapshot: &SidebarSnapshot, kind: &str) -> bool {
     let now = snapshot.now;
     snapshot.agents.iter().any(|agent| {
-        if agent.kind != "claude" || agent.parent_agent_id.is_some() {
+        if agent.kind.as_str() != kind || agent.parent_agent_id.is_some() {
             return false;
         }
         let Some(context) = agent.context.as_ref() else {
@@ -237,10 +244,12 @@ mod tests {
     }
 
     #[test]
-    fn claude_windows_merge_only_defers_to_recent_statusline_windows() {
+    fn realtime_windows_merge_only_defers_to_recent_statusline_windows() {
         let now = Timestamp::now();
         let fresh = snapshot_with_agent(statusline_agent("fresh", now));
-        assert!(has_fresh_claude_statusline_windows(&fresh));
+        assert!(has_fresh_realtime_windows(&fresh, "claude"));
+        assert!(!merge_windows_hint(&fresh, "claude"));
+        assert!(merge_windows_hint(&fresh, "codex"));
 
         let stale_at = now
             .checked_sub(jiff::SignedDuration::from_secs(
@@ -248,13 +257,15 @@ mod tests {
             ))
             .unwrap();
         let stale = snapshot_with_agent(statusline_agent("stale", stale_at));
-        assert!(!has_fresh_claude_statusline_windows(&stale));
+        assert!(!has_fresh_realtime_windows(&stale, "claude"));
+        assert!(merge_windows_hint(&stale, "claude"));
 
         let mut no_windows = statusline_agent("none", now);
         no_windows.context.as_mut().unwrap().rate_limits = None;
-        assert!(!has_fresh_claude_statusline_windows(&snapshot_with_agent(
-            no_windows
-        )));
+        assert!(!has_fresh_realtime_windows(
+            &snapshot_with_agent(no_windows),
+            "claude"
+        ));
 
         // The idle-session trap: a fresh capture stamp over a stale payload. The
         // 5h window already reset (so the content is stale) even though
@@ -277,7 +288,7 @@ mod tests {
             ],
         });
         assert!(
-            !has_fresh_claude_statusline_windows(&snapshot_with_agent(content_stale)),
+            !has_fresh_realtime_windows(&snapshot_with_agent(content_stale), "claude"),
             "a fresh capture stamp can't rescue a payload whose 5h window already reset"
         );
     }

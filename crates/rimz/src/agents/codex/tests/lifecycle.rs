@@ -321,7 +321,7 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
         server_url: None,
     };
     let spawn = CodexAdapter
-        .post_lifecycle_refresh("Stop", &ctx)
+        .context_refresh_spawn(crate::agents::RefreshTrigger::Hook("Stop"), &ctx)
         .expect("Stop refreshes");
     assert_eq!(
         spawn.args,
@@ -336,13 +336,17 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
             "gpt-5",
         ]
     );
+    let tick_spawn = CodexAdapter
+        .context_refresh_spawn(crate::agents::RefreshTrigger::Tick, &ctx)
+        .expect("producer tick refreshes");
+    assert_eq!(tick_spawn.args, spawn.args);
     let bare = crate::agents::LifecycleRefreshCtx {
         model_hint: None,
         ..ctx
     };
     assert!(
         !CodexAdapter
-            .post_lifecycle_refresh("SessionStart", &bare)
+            .context_refresh_spawn(crate::agents::RefreshTrigger::Hook("SessionStart"), &bare)
             .unwrap()
             .args
             .iter()
@@ -350,7 +354,9 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
     );
     for event in ["PreToolUse", "PostToolUse", "SubagentStop", "Notification"] {
         assert!(
-            CodexAdapter.post_lifecycle_refresh(event, &ctx).is_none(),
+            CodexAdapter
+                .context_refresh_spawn(crate::agents::RefreshTrigger::Hook(event), &ctx)
+                .is_none(),
             "{event}"
         );
     }
@@ -375,7 +381,7 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
         prior_transcript_stat: None,
     };
     let refresh = CodexAdapter
-        .local_context_refresh("PostToolUse", &ctx)
+        .local_context_refresh(crate::agents::RefreshTrigger::Hook("PostToolUse"), &ctx)
         .expect("PostToolUse reads local transcript context");
     // The refresh carries the window and current-usage breakdown; the gauge
     // derives the percentage (500 of 1000 = 50%) downstream rather than baking
@@ -389,12 +395,15 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
     );
     assert!(
         CodexAdapter
-            .local_context_refresh("PreToolUse", &ctx)
+            .local_context_refresh(crate::agents::RefreshTrigger::Hook("PreToolUse"), &ctx)
             .is_none()
     );
     assert!(
         CodexAdapter
-            .local_context_refresh("PermissionRequest", &ctx)
+            .local_context_refresh(
+                crate::agents::RefreshTrigger::Hook("PermissionRequest"),
+                &ctx
+            )
             .is_none()
     );
 

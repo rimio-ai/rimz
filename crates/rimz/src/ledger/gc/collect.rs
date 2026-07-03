@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::ids::{SidebarInstanceId, WorkspaceId};
 use crate::sidebar::heartbeat::SidebarHeartbeat;
-use crate::sidebar::timing::{CODEX_PROBE_MARKER_PREFIX, CODEX_PROBE_MARKER_TTL};
+use crate::sidebar::timing::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
 
 use super::{GcErr, GcReport, Result};
 
@@ -111,8 +111,8 @@ fn collect_stale_sidecars(dir: &Path, older_than: Duration, report: &mut GcRepor
 
 /// Reap stale provider probe-throttle markers in the runtime `shared/` dir.
 ///
-/// Live sessions re-touch these stamps within their throttle interval. Codex
-/// per-session stamps have a shorter dead-session TTL; other bounded probes use
+/// Live sessions re-touch these stamps within their throttle interval. Session
+/// context stamps have a shorter dead-session TTL; other bounded probes use
 /// `older_than`.
 fn collect_stale_probe_markers(
     shared_dir: &Path,
@@ -146,8 +146,8 @@ fn collect_stale_probe_markers(
             continue;
         };
         let path = entry.path();
-        let threshold = if name.starts_with(CODEX_PROBE_MARKER_PREFIX) {
-            older_than.min(CODEX_PROBE_MARKER_TTL)
+        let threshold = if name.starts_with(SESSION_PROBE_MARKER_PREFIX) {
+            older_than.min(SESSION_PROBE_MARKER_TTL)
         } else {
             older_than
         };
@@ -581,9 +581,9 @@ mod tests {
         let shared = temp.path().join("rimz").join("shared");
         fs::create_dir_all(&shared).unwrap();
         let nonce = "00000000000000000000000000000000";
-        let stale_codex = shared.join(format!("{CODEX_PROBE_MARKER_PREFIX}{nonce}"));
-        let recent_codex = shared.join(format!(
-            "{CODEX_PROBE_MARKER_PREFIX}11111111111111111111111111111111"
+        let stale_session = shared.join(format!("{SESSION_PROBE_MARKER_PREFIX}{nonce}"));
+        let recent_session = shared.join(format!(
+            "{SESSION_PROBE_MARKER_PREFIX}11111111111111111111111111111111"
         ));
         let stale_usage = shared.join("usage-probe.opencode");
         let recent_usage = shared.join("usage-probe.codex");
@@ -592,8 +592,8 @@ mod tests {
         let lock = shared.join("accounts.lock");
         let trace = shared.join("rate_limits_trace.jsonl");
         for path in [
-            &stale_codex,
-            &recent_codex,
+            &stale_session,
+            &recent_session,
             &stale_usage,
             &recent_usage,
             &fresh,
@@ -604,11 +604,11 @@ mod tests {
             fs::write(path, b"probe").unwrap();
         }
         let old = SystemTime::now() - Duration::from_secs(7200);
-        for path in [&stale_codex, &stale_usage, &accounts, &lock, &trace] {
+        for path in [&stale_session, &stale_usage, &accounts, &lock, &trace] {
             fs::File::open(path).unwrap().set_modified(old).unwrap();
         }
-        let recently_dead = SystemTime::now() - (CODEX_PROBE_MARKER_TTL + Duration::from_secs(1));
-        for path in [&recent_codex, &recent_usage] {
+        let recently_dead = SystemTime::now() - (SESSION_PROBE_MARKER_TTL + Duration::from_secs(1));
+        for path in [&recent_session, &recent_usage] {
             fs::File::open(path)
                 .unwrap()
                 .set_modified(recently_dead)
@@ -619,8 +619,8 @@ mod tests {
             collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600)).unwrap();
 
         assert_eq!(report.probe_markers_removed, 3);
-        assert!(!stale_codex.exists());
-        assert!(!recent_codex.exists());
+        assert!(!stale_session.exists());
+        assert!(!recent_session.exists());
         assert!(!stale_usage.exists());
         assert!(recent_usage.exists());
         assert!(fresh.exists());

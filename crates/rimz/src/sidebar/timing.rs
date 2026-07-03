@@ -195,19 +195,19 @@ pub const SPENDING_TTL: Duration = Duration::from_secs(15);
 /// before falling back to an incremental local walk.
 pub const SPENDING_STALE_GRACE: Duration = Duration::from_secs(90);
 
-/// Minimum gap between out-of-band Codex rate-limit refreshes for one target
-/// (active session sidecar or idle account cache). The producer checks every
-/// data tick, but budget windows move on the scale of minutes.
-pub const CODEX_RATE_LIMIT_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+/// Minimum gap between out-of-band session context refreshes for one target.
+/// The producer checks every data tick, but budget windows move on the scale of
+/// minutes.
+pub const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Reap grace for the per-session Codex app-server throttle stamp. A live
-/// session re-touches its stamp within [`CODEX_RATE_LIMIT_REFRESH_INTERVAL`]
-/// plus the producer fold cadence, so a stamp older than this is dead.
-pub const CODEX_PROBE_MARKER_TTL: Duration = Duration::from_secs(5 * 60);
+/// Reap grace for the per-session context-refresh throttle stamp. A live
+/// session re-touches its stamp within [`SESSION_REFRESH_INTERVAL`] plus the
+/// producer fold cadence, so a stamp older than this is dead.
+pub const SESSION_PROBE_MARKER_TTL: Duration = Duration::from_secs(5 * 60);
 
-/// Runtime `shared/` filename prefix for per-session Codex app-server throttle
+/// Runtime `shared/` filename prefix for per-session context-refresh throttle
 /// stamps.
-pub const CODEX_PROBE_MARKER_PREFIX: &str = "rate-limit-probe.codex.";
+pub const SESSION_PROBE_MARKER_PREFIX: &str = "session-context-probe.";
 
 /// Minimum gap between Codex daemon ghost-reap probes. A failed daemon proxy
 /// attempt can burn the full 2s app-server proxy deadline, so success and

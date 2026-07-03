@@ -28,7 +28,7 @@ pub(super) fn select_focused_pane_binding(
     prior_agents: &[PriorAgentPane<'_>],
     panes: &[PaneRef],
     client_focus: Option<&[PaneId]>,
-    allow_occupied_codex_pane: bool,
+    allow_occupied_daemon_pane: bool,
 ) -> FocusedPaneBindingSelection {
     let mut candidate_records = panes
         .iter()
@@ -36,11 +36,11 @@ pub(super) fn select_focused_pane_binding(
         .collect::<Vec<_>>();
     let mut candidates = selectable_binding_candidates(panes, &candidate_records, false);
     if candidates.is_empty()
-        && allow_occupied_codex_pane
-        && codex_session_can_share_occupied_pane(kind, agent_id, prior_agents)
+        && allow_occupied_daemon_pane
+        && daemon_session_can_share_occupied_pane(kind, agent_id, prior_agents)
     {
-        candidates = selectable_occupied_codex_candidates(panes, &candidate_records, client_focus);
-        allow_occupied_codex_candidates(&mut candidate_records, &candidates);
+        candidates = selectable_occupied_daemon_candidates(panes, &candidate_records, client_focus);
+        allow_occupied_daemon_candidates(&mut candidate_records, &candidates);
     }
     let candidate_count = candidates.len();
     if candidates.is_empty() {
@@ -108,7 +108,7 @@ pub(super) fn select_focused_pane_binding(
     }
 }
 
-fn selectable_occupied_codex_candidates<'a>(
+fn selectable_occupied_daemon_candidates<'a>(
     panes: &'a [PaneRef],
     records: &[BindingCandidateRecord],
     client_focus: Option<&[PaneId]>,
@@ -133,41 +133,42 @@ fn pane_is_focus_evidence(pane: &PaneRef, client_focus: Option<&[PaneId]>) -> bo
 fn selectable_binding_candidates<'a>(
     panes: &'a [PaneRef],
     records: &[BindingCandidateRecord],
-    allow_occupied_codex_pane: bool,
+    allow_occupied_daemon_pane: bool,
 ) -> Vec<&'a PaneRef> {
     panes
         .iter()
         .zip(records.iter())
         .filter_map(|(pane, record)| {
-            binding_candidate_selectable(record, allow_occupied_codex_pane).then_some(pane)
+            binding_candidate_selectable(record, allow_occupied_daemon_pane).then_some(pane)
         })
         .collect()
 }
 
 fn binding_candidate_selectable(
     record: &BindingCandidateRecord,
-    allow_occupied_codex_pane: bool,
+    allow_occupied_daemon_pane: bool,
 ) -> bool {
     record.reject_reasons.is_empty()
-        || allow_occupied_codex_pane
+        || allow_occupied_daemon_pane
             && record
                 .reject_reasons
                 .iter()
                 .all(|reason| matches!(reason, BindingRejectReason::StampedToOther { .. }))
 }
 
-fn codex_session_can_share_occupied_pane(
+fn daemon_session_can_share_occupied_pane(
     kind: &str,
     agent_id: &str,
     prior_agents: &[PriorAgentPane<'_>],
 ) -> bool {
-    kind == "codex"
+    rimz::agents::descriptor_by_kind(kind)
+        .is_some_and(|descriptor| descriptor.capabilities.daemon_hooked_sessions)
         && !prior_agents
             .iter()
             .any(|agent| agent.kind == kind && agent.agent_id == agent_id)
 }
 
-fn allow_occupied_codex_candidates(
+fn allow_occupied_daemon_candidates(
     records: &mut [BindingCandidateRecord],
     candidates: &[&PaneRef],
 ) {

@@ -122,6 +122,15 @@ fn capability_honesty() {
                 "{kind} declares no native ask UI but classifies native ask feed kinds"
             );
         }
+
+        if capabilities.realtime_usage.covers_account_while_live
+            || capabilities.realtime_usage.windows_defer_to_fresh_realtime
+        {
+            assert!(
+                capabilities.rich_context,
+                "{kind} realtime account-usage channel requires rich_context"
+            );
+        }
     }
 }
 

@@ -519,7 +519,7 @@ fn focus_recovery_cases() -> Vec<Case> {
 }
 
 #[test]
-fn occupied_pane_fallback_stays_codex_and_first_event_only() {
+fn occupied_pane_fallback_stays_daemon_hooked_and_first_event_only() {
     let epoch = jiff::Timestamp::UNIX_EPOCH;
     let occupied_pane_id = id("terminal_30");
 
@@ -643,7 +643,7 @@ fn occupied_pane_fallback_stays_codex_and_first_event_only() {
     );
     assert_eq!(
         selected.pane_id, None,
-        "non-Codex recovery keeps the one-owner pane stamp rule"
+        "non-daemon-hooked recovery keeps the one-owner pane stamp rule"
     );
     assert_eq!(selected.candidate_count, 0);
 }

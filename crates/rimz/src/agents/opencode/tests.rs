@@ -207,7 +207,7 @@ fn opencode_context_refreshes_are_bounded_to_turn_events_with_server_url() {
         "session_error",
     ] {
         let spawn = OpencodeAdapter
-            .post_lifecycle_refresh(event, &ctx)
+            .context_refresh_spawn(crate::agents::RefreshTrigger::Hook(event), &ctx)
             .unwrap_or_else(|| panic!("{event} refreshes"));
         assert_eq!(
             spawn.args,
@@ -235,7 +235,7 @@ fn opencode_context_refreshes_are_bounded_to_turn_events_with_server_url() {
     };
     assert!(
         !OpencodeAdapter
-            .post_lifecycle_refresh("session_idle", &bare)
+            .context_refresh_spawn(crate::agents::RefreshTrigger::Hook("session_idle"), &bare)
             .unwrap()
             .args
             .iter()
@@ -249,13 +249,21 @@ fn opencode_context_refreshes_are_bounded_to_turn_events_with_server_url() {
     };
     assert!(
         OpencodeAdapter
-            .post_lifecycle_refresh("session_idle", &missing_url)
+            .context_refresh_spawn(
+                crate::agents::RefreshTrigger::Hook("session_idle"),
+                &missing_url
+            )
+            .is_none()
+    );
+    assert!(
+        OpencodeAdapter
+            .context_refresh_spawn(crate::agents::RefreshTrigger::Tick, &ctx)
             .is_none()
     );
     for event in ["tool_after", "session_compacting", "session_compacted"] {
         assert!(
             OpencodeAdapter
-                .post_lifecycle_refresh(event, &ctx)
+                .context_refresh_spawn(crate::agents::RefreshTrigger::Hook(event), &ctx)
                 .is_none(),
             "{event}"
         );
