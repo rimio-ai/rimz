@@ -259,7 +259,16 @@ fn probe_github(worktree: &Path, branch: &str) -> ProbeState {
 
 fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
     let repo = forge::remote_repo_slug(remote);
-    let mut list_args = vec!["pr", "list", "--state", "all", "--output", "json"];
+    let mut list_args = vec![
+        "pr",
+        "list",
+        "--state",
+        "all",
+        "--output",
+        "json",
+        "--fields",
+        "index,state,head",
+    ];
     if let Some(repo) = repo.as_deref() {
         list_args.extend_from_slice(&["--repo", repo]);
     }
