@@ -71,8 +71,9 @@ pub(super) fn attention_score(
 }
 
 /// Recover the stamped time factor for derived team-state scoring. Integer
-/// division loses at most one milli-step, which is below the pane-order
-/// tiebreak's resolution and keeps presentation sorting pure over stamped rows.
+/// division can lose several milli-steps on low-weight statuses; that drift stays
+/// below the status-weight spacing, and keeps presentation sorting pure over
+/// stamped rows.
 pub(super) fn recovered_time_factor_milli(status: Option<AgentStatus>, score: u32) -> u32 {
     let weight = status_weight_opt(status);
     if weight == 0 {

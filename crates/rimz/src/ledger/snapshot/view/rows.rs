@@ -6,8 +6,6 @@ use crate::feed::{FeedItem, FeedStatus, ResolverStepState, Surface};
 use crate::ledger::snapshot::row::{AgentCard, RowCard, SidebarResolverState, SidebarRow};
 use crate::pane::PaneRef;
 
-use super::score;
-
 pub(in crate::ledger::snapshot) fn row_from_agent(
     agent: &AgentState,
     now: Timestamp,
@@ -17,7 +15,6 @@ pub(in crate::ledger::snapshot) fn row_from_agent(
     // subagents and its account's rate-limit budget (stall → `failed`,
     // spent-budget → `paused`); a pending ask folds `waiting` on upstream.
     // The rollup in `snapshot.agents` always keeps the true status.
-    let age_secs = score::age_secs(now, agent.last_activity);
     SidebarRow {
         id: agent.agent_id.to_string(),
         name: agent.kind.to_string(),
@@ -26,14 +23,9 @@ pub(in crate::ledger::snapshot) fn row_from_agent(
         worktree_branch: agent.worktree_branch.clone(),
         channel: agent.channel.clone(),
         unread: false,
-        inactive: age_secs > crate::agents::DEFAULT_INACTIVE_AFTER_SECS,
-        archived: age_secs > crate::agents::DEFAULT_ARCHIVE_AFTER_SECS,
-        attention_score: score::attention_score(
-            Some(agent.status),
-            age_secs,
-            crate::agents::DEFAULT_INACTIVE_AFTER_SECS,
-            crate::agents::DEFAULT_ARCHIVE_AFTER_SECS,
-        ),
+        inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: agent.last_activity,
         card: RowCard::Agent(Box::new(AgentCard {
             status: agent.status,
@@ -107,12 +99,7 @@ pub(super) fn row_from_standalone_item(item: &FeedItem, pane: &PaneRef) -> Sideb
         unread: false,
         inactive: false,
         archived: false,
-        attention_score: score::attention_score(
-            Some(AgentStatus::Waiting),
-            0,
-            crate::agents::DEFAULT_INACTIVE_AFTER_SECS,
-            crate::agents::DEFAULT_ARCHIVE_AFTER_SECS,
-        ),
+        attention_score: 0,
         last_activity: item.updated_at,
         card: RowCard::Agent(Box::new(AgentCard {
             status: AgentStatus::Waiting,

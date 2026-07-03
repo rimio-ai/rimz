@@ -687,7 +687,11 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         status_counts: Vec::new(),
         rows: agents
             .iter()
-            .map(|agent| row_from_agent(agent, epoch()))
+            .map(|agent| {
+                let mut row = row_from_agent(agent, epoch());
+                stamp_default_attention(&mut row);
+                row
+            })
             .collect(),
         hidden_count: 0,
         diff_added: None,
@@ -717,6 +721,18 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         .collect::<Vec<_>>();
 
     assert_eq!(row_order, listing_order);
+}
+
+fn stamp_default_attention(row: &mut SidebarRow) {
+    let age_secs = super::super::super::score::age_secs(epoch(), row.last_activity);
+    row.inactive = !row.is_process() && age_secs > crate::agents::DEFAULT_INACTIVE_AFTER_SECS;
+    row.archived = !row.is_process() && age_secs > crate::agents::DEFAULT_ARCHIVE_AFTER_SECS;
+    row.attention_score = super::super::super::score::attention_score(
+        row.status(),
+        age_secs,
+        crate::agents::DEFAULT_INACTIVE_AFTER_SECS,
+        crate::agents::DEFAULT_ARCHIVE_AFTER_SECS,
+    );
 }
 
 fn row_mut<'a>(snapshot: &'a mut SidebarSnapshot, id: &str) -> &'a mut SidebarRow {
