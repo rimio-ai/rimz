@@ -449,6 +449,25 @@ pub(super) fn run_placement(force_new_tab: bool, has_ambient_pane: bool) -> RunP
 }
 
 pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Option<RunRecord>> {
+    let output_format = args.output_format.unwrap_or_default();
+    let record = run_supervised(args, globals)?;
+    let Some(record_ref) = record.as_ref() else {
+        return Ok(record);
+    };
+    match output_format {
+        OutputFormat::Text => {
+            let mut stdout = render::out();
+            let mut stderr = render::err();
+            supervised::output::print_run_output(record_ref, &mut stdout, &mut stderr)?
+        }
+        OutputFormat::Json => supervised::output::print_json(record_ref)?,
+        // stream-json already emitted its events as the run progressed.
+        OutputFormat::StreamJson => {}
+    }
+    Ok(record)
+}
+
+pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<Option<RunRecord>> {
     if args.json {
         bail!("on `-p`, choose output with `--output-format json` (`--json` is for `list`)");
     }
@@ -710,16 +729,6 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
             &workspace.session_name,
             &record,
         );
-    }
-    match output_format {
-        OutputFormat::Text => {
-            let mut stdout = std::io::stdout().lock();
-            let mut stderr = std::io::stderr().lock();
-            supervised::output::print_run_output(&record, &mut stdout, &mut stderr)?
-        }
-        OutputFormat::Json => supervised::output::print_json(&record)?,
-        // stream-json already emitted its events as the run progressed.
-        OutputFormat::StreamJson => {}
     }
     drop(socket_guard);
     Ok(Some(record))

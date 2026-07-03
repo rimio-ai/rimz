@@ -539,9 +539,12 @@ fn kind_override_flows_into_children_and_virtual_cells_override_mode() {
         vec![
             "--append".to_owned(),
             "--effort".to_owned(),
-            "low".to_owned(),
-            "ping".to_owned(),
+            "low".to_owned()
         ]
+    );
+    assert!(
+        !args.iter().any(|arg| arg == PING_PROMPT),
+        "ping prompt stays out of cell args"
     );
 }
 
@@ -608,7 +611,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             .rows[0],
         Cell::Agent {
             kind: AgentKind::new_unchecked("claude"),
-            args: vec!["--effort".to_owned(), "low".to_owned(), "ping".to_owned()],
+            args: vec!["--effort".to_owned(), "low".to_owned()],
             mode: None,
             system_prompt_file: None,
             append_system_prompt_file: None,
@@ -617,6 +620,22 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             model: None,
             effort: None,
         }
+    );
+    let Cell::Agent { args, .. } = parse_layout_spec("codex-ping", &no_profiles(), &no_commands())
+        .expect("codex-ping")
+        .columns[0]
+        .rows[0]
+        .clone()
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        args,
+        vec!["-c".to_owned(), "model_reasoning_effort=low".to_owned()]
+    );
+    assert!(
+        !args.iter().any(|arg| arg == PING_PROMPT),
+        "codex ping prompt stays out of cell args"
     );
     assert!(matches!(
         parse_layout_spec("pi-yolo", &no_profiles(), &no_commands()),

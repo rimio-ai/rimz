@@ -96,7 +96,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
         AddTaskAction::Spawn { is_ping: true, .. }
             if args.prompt.is_none() && args.prompt_file.is_none() =>
         {
-            Some("ping".to_owned())
+            Some(agents_spec::PING_PROMPT.to_owned())
         }
         _ => args.prompt,
     };

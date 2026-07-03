@@ -502,18 +502,20 @@ fn loop_show_displays_shadowed_error_and_run_tail() {
     let stdout = loop_ok(&env, &["loop", "show", "forensics"]);
 
     assert!(stdout.contains("last run detail (failed"), "{stdout}");
-    assert!(stdout.contains("output tail:"), "{stdout}");
+    assert!(stdout.contains("  ✗ output tail:"), "{stdout}");
     assert!(
-        stdout.contains("agent startup failed\nmissing binary"),
+        stdout.contains("    agent startup failed\n    missing binary"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("transcript: /tmp/rimz-transcript.jsonl"),
+        stdout.contains("  transcript: /tmp/rimz-transcript.jsonl"),
         "{stdout}"
     );
     assert!(stdout.contains("last failure detail (error"), "{stdout}");
     assert!(
-        stdout.contains("reading system-prompt-file `/missing.md`\ncaused by: not found"),
+        stdout.contains(
+            "  ✗ error:\n    reading system-prompt-file `/missing.md`\n    caused by: not found"
+        ),
         "{stdout}"
     );
 }

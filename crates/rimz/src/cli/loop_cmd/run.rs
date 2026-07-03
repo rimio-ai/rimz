@@ -11,6 +11,7 @@ struct RunOutcome {
     check: Option<CheckRecord>,
     run_id: Option<String>,
     transcript_path: Option<String>,
+    failure_tail: Option<String>,
     last_message: Option<String>,
     target: Option<String>,
     exit_code: Option<i32>,
@@ -29,6 +30,7 @@ impl RunOutcome {
             check: None,
             run_id: None,
             transcript_path: None,
+            failure_tail: None,
             last_message: None,
             target: None,
             exit_code: None,
@@ -244,6 +246,7 @@ fn execute_task(
             run.check = check_detail;
             run.run_id = Some(record.run_id.to_string());
             run.transcript_path = record.transcript_path;
+            run.failure_tail = record.failure_tail;
             run.last_message = record.last_message;
             run.exit_code = Some(status.exit_code());
             Ok(run)
@@ -368,36 +371,97 @@ fn write_run_summary(
     duration_ms: u64,
     outcome: &RunOutcome,
 ) -> std::io::Result<()> {
-    write!(out, "loop `{name}`: {}", outcome.result.label())?;
-    if let Some(exit) = outcome
-        .exit_code
-        .or_else(|| outcome.check.as_ref().and_then(|check| check.code))
-    {
-        write!(out, " (exit {exit})")?;
-    } else if outcome.check.as_ref().is_some_and(|check| check.timed_out) {
-        write!(out, " (timeout)")?;
-    }
-    writeln!(out, " in {}", render::format_duration_ms(duration_ms))?;
-    if let Some(check) = &outcome.check
-        && !check.output.trim().is_empty()
-    {
-        writeln!(
-            out,
-            "{}",
-            tail_output(check.output.as_bytes(), CHECK_SUMMARY_OUTPUT_CAP).trim_end()
-        )?;
-    }
+    let result_style = super::render::loop_result_style(outcome.result);
+    let exit_label = outcome_exit_label(outcome);
     if matches!(
         outcome.result,
         LoopRunResult::Failed | LoopRunResult::TimedOut
     ) {
+        let mut label = outcome.result.label().to_owned();
+        if let Some(exit_label) = exit_label.as_deref() {
+            label.push(' ');
+            label.push_str(exit_label);
+        }
+        write!(
+            out,
+            "loop `{name}`: {}",
+            ui::paint(result_style.bold(), &label)
+        )?;
+        writeln!(out, " in {}", render::format_duration_ms(duration_ms))?;
+        if let Some(tail) = outcome_failure_tail(outcome) {
+            write_failure_tail(out, &tail)?;
+        }
         if let Some(run_id) = outcome.run_id.as_deref() {
-            writeln!(out, "run: {run_id}")?;
+            writeln!(
+                out,
+                "{}",
+                ui::paint(ui::palette::MUTED, &format!("  run: {run_id}"))
+            )?;
         }
         if let Some(transcript) = outcome.transcript_path.as_deref() {
-            writeln!(out, "transcript: {transcript}")?;
+            writeln!(
+                out,
+                "{}",
+                ui::paint(ui::palette::MUTED, &format!("  transcript: {transcript}"))
+            )?;
         }
-        writeln!(out, "see: rimz loop show {name}")?;
+        writeln!(
+            out,
+            "{}",
+            ui::paint(ui::palette::MUTED, &format!("  see: rimz loop show {name}"))
+        )?;
+    } else {
+        write!(
+            out,
+            "loop `{name}`: {}",
+            ui::paint(result_style, outcome.result.label())
+        )?;
+        if let Some(exit_label) = exit_label.as_deref() {
+            write!(out, " {exit_label}")?;
+        }
+        writeln!(out, " in {}", render::format_duration_ms(duration_ms))?;
+    }
+    Ok(())
+}
+
+fn outcome_exit_label(outcome: &RunOutcome) -> Option<String> {
+    if let Some(exit) = outcome
+        .exit_code
+        .or_else(|| outcome.check.as_ref().and_then(|check| check.code))
+    {
+        Some(format!("(exit {exit})"))
+    } else if outcome.check.as_ref().is_some_and(|check| check.timed_out) {
+        Some("(timeout)".to_owned())
+    } else {
+        None
+    }
+}
+
+fn outcome_failure_tail(outcome: &RunOutcome) -> Option<String> {
+    if let Some(tail) = outcome
+        .failure_tail
+        .as_deref()
+        .filter(|tail| !tail.trim().is_empty())
+    {
+        return Some(tail.trim_end().to_owned());
+    }
+    let check = outcome.check.as_ref()?;
+    if !check.timed_out && check.code == Some(0) {
+        return None;
+    }
+    let tail = tail_output(check.output.as_bytes(), CHECK_SUMMARY_OUTPUT_CAP);
+    let tail = tail.trim_end();
+    (!tail.trim().is_empty()).then(|| tail.to_owned())
+}
+
+fn write_failure_tail(out: &mut impl Write, tail: &str) -> std::io::Result<()> {
+    for (idx, line) in tail.trim_end().lines().enumerate() {
+        let rendered = if idx == 0 {
+            ui::paint(ui::palette::ALARM, &format!("  ✗ {line}"))
+        } else {
+            ui::paint(ui::palette::FAINT, &format!("    {line}"))
+        };
+        writeln!(out, "{rendered}")?;
     }
     Ok(())
 }
@@ -457,12 +521,16 @@ mod tests {
         outcome.exit_code = Some(1);
         outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
         outcome.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
+        outcome.failure_tail = Some("error: boom\nUsage: codex [OPTIONS] [PROMPT]".to_owned());
         let mut out = Vec::new();
 
         write_run_summary(&mut out, "wake", 1_900, &outcome).unwrap();
 
-        let out = String::from_utf8(out).unwrap();
+        let raw = String::from_utf8(out).unwrap();
+        assert!(raw.contains(&ui::paint(ui::palette::ALARM.bold(), "failed (exit 1)")));
+        let out = anstream::adapter::strip_str(&raw).to_string();
         assert!(out.contains("loop `wake`: failed (exit 1) in 1.9s"));
+        assert!(out.contains("  ✗ error: boom\n    Usage: codex [OPTIONS] [PROMPT]"));
         assert!(out.contains("run: run_0123456789abcdef01234567"));
         assert!(out.contains("transcript: /tmp/transcript.jsonl"));
         assert!(out.contains("see: rimz loop show wake"));

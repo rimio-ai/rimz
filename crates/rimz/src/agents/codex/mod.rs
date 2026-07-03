@@ -489,7 +489,6 @@ impl AgentAdapter for CodexAdapter {
         Some(vec![
             "-c".to_owned(),
             "model_reasoning_effort=low".to_owned(),
-            "ping".to_owned(),
         ])
     }
 

@@ -443,11 +443,7 @@ impl AgentAdapter for ClaudeAdapter {
     }
 
     fn ping_args(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "--effort".to_owned(),
-            "low".to_owned(),
-            "ping".to_owned(),
-        ])
+        Some(vec!["--effort".to_owned(), "low".to_owned()])
     }
 
     fn compact_command(&self) -> Option<&'static str> {

@@ -36,7 +36,9 @@ use auto_continue::{AutoContinueArgs, run_auto_continue};
 pub(crate) use commands::render_agents_table;
 #[cfg(test)]
 use commands::{RunPlacement, run_placement, run_stop_should_cancel};
-use commands::{focus_agent, list_agents, run_print, show_agent, stop_agent, wait_agent};
+use commands::{
+    focus_agent, list_agents, run_print, run_supervised, show_agent, stop_agent, wait_agent,
+};
 use exec::run_exec;
 use launch::*;
 use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
@@ -282,7 +284,7 @@ struct ExecArgs {
     extra_args: Vec<String>,
 }
 
-pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
+pub fn run(mut args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args),
@@ -315,6 +317,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         reject_launch_flags_without_spec(&args)?;
         return list_agents(args.json, false, args.worktree, globals);
     }
+    default_virtual_ping_prompt(&mut args);
     if args.print {
         return match run_print(args, globals) {
             Ok(Some(record)) => std::process::exit(record.status.exit_code()),
@@ -328,6 +331,18 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         );
     }
     launch_layout(args, globals, true)
+}
+
+fn default_virtual_ping_prompt(args: &mut AgentsArgs) {
+    if args.prompt.is_none()
+        && args
+            .spec
+            .as_deref()
+            .is_some_and(rimz::harness::spec::virtual_ping_shape)
+        && args.input_format.unwrap_or_default() != InputFormat::StreamJson
+    {
+        args.prompt = Some(rimz::harness::spec::PING_PROMPT.to_owned());
+    }
 }
 
 fn exit_print_usage_error(err: anyhow::Error) -> ! {
@@ -436,7 +451,7 @@ pub(crate) fn run_blocking_task(
     args: AgentsArgs,
     globals: &GlobalFlags,
 ) -> Result<Option<RunRecord>> {
-    run_print(args, globals)
+    run_supervised(args, globals)
 }
 
 /// Launch a missing agent for `message --create`. A *type* handle — a kind

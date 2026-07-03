@@ -260,7 +260,17 @@ fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
 }
 
 fn loop_result_cell(result: LoopRunResult, count: usize) -> ui::Cell {
-    let style = match result {
+    let style = loop_result_style(result);
+    let label = if count > 1 {
+        format!("{} x{count}", result.label())
+    } else {
+        result.label().to_owned()
+    };
+    ui::cell(label).fg(style)
+}
+
+pub(super) fn loop_result_style(result: LoopRunResult) -> anstyle::Style {
+    match result {
         LoopRunResult::Completed | LoopRunResult::Delivered => ui::palette::GOOD,
         LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::Errored => {
             ui::palette::ALARM
@@ -271,13 +281,7 @@ fn loop_result_cell(result: LoopRunResult, count: usize) -> ui::Cell {
         | LoopRunResult::Overlapped
         | LoopRunResult::SkippedWindow => ui::palette::WARN,
         LoopRunResult::CheckSkipped => ui::palette::MUTED,
-    };
-    let label = if count > 1 {
-        format!("{} x{count}", result.label())
-    } else {
-        result.label().to_owned()
-    };
-    ui::cell(label).fg(style)
+    }
 }
 
 pub(super) fn format_duration_ms(ms: u64) -> String {
@@ -389,8 +393,9 @@ fn render_record_detail(
 ) -> std::io::Result<()> {
     writeln!(
         out,
-        "{title} ({}, {}, {})",
-        record.result.label(),
+        "{} ({}, {}, {})",
+        ui::paint(anstyle::Style::new().bold(), title),
+        ui::paint(loop_result_style(record.result), record.result.label()),
         ui::rel_age(record.at, now),
         record.mode.map_or("legacy", LoopRunMode::label)
     )?;
@@ -403,11 +408,15 @@ fn render_record_detail(
                 .map(|code| format!("exit {code}"))
                 .unwrap_or_else(|| "signal".to_owned())
         };
-        writeln!(out, "last run output ({status}):")?;
-        if check.output.trim().is_empty() {
-            writeln!(out, "-")?;
+        if check.timed_out || check.code != Some(0) {
+            write_alarm_block(out, &format!("last run output ({status})"), &check.output)?;
         } else {
-            writeln!(out, "{}", check.output.trim_end())?;
+            writeln!(out, "last run output ({status}):")?;
+            if check.output.trim().is_empty() {
+                writeln!(out, "-")?;
+            } else {
+                writeln!(out, "{}", check.output.trim_end())?;
+            }
         }
     }
     let run_record = record
@@ -415,8 +424,7 @@ fn render_record_detail(
         .as_deref()
         .and_then(|run_id| run_record_for(entry, run_id));
     if let Some(error) = &record.error {
-        writeln!(out, "error:")?;
-        writeln!(out, "{error}")?;
+        write_alarm_block(out, "error", error)?;
     }
     if let Some(last_message) = record.last_message.as_ref().or_else(|| {
         run_record
@@ -427,21 +435,53 @@ fn render_record_detail(
         writeln!(out, "{last_message}")?;
     }
     if let Some(run_id) = &record.run_id {
-        writeln!(out, "run: {run_id}")?;
+        writeln!(
+            out,
+            "{}",
+            ui::paint(ui::palette::MUTED, &format!("  run: {run_id}"))
+        )?;
         if let Some(tail) = run_record
             .as_ref()
             .and_then(|record| record.failure_tail.as_deref())
             .filter(|tail| !tail.trim().is_empty())
         {
-            writeln!(out, "output tail:")?;
-            writeln!(out, "{tail}")?;
+            write_alarm_block(out, "output tail", tail)?;
         }
         if let Some(transcript) = run_record
             .as_ref()
             .and_then(|record| record.transcript_path.as_deref())
         {
-            writeln!(out, "transcript: {transcript}")?;
+            writeln!(
+                out,
+                "{}",
+                ui::paint(ui::palette::MUTED, &format!("  transcript: {transcript}"))
+            )?;
         }
+    }
+    Ok(())
+}
+
+fn write_alarm_block(out: &mut impl Write, label: &str, body: &str) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{}",
+        ui::paint(ui::palette::ALARM, &format!("  ✗ {label}:"))
+    )?;
+    write_alarm_body(out, body)
+}
+
+fn write_alarm_body(out: &mut impl Write, body: &str) -> std::io::Result<()> {
+    let body = body.trim_end();
+    if body.trim().is_empty() {
+        return writeln!(out, "    {}", ui::paint(ui::palette::FAINT, "-"));
+    }
+    for (idx, line) in body.lines().enumerate() {
+        let style = if idx == 0 {
+            ui::palette::ALARM
+        } else {
+            ui::palette::FAINT
+        };
+        writeln!(out, "    {}", ui::paint(style, line))?;
     }
     Ok(())
 }
@@ -576,9 +616,43 @@ mod tests {
         )
         .unwrap();
 
-        let out = String::from_utf8(out).unwrap();
+        let raw = String::from_utf8(out).unwrap();
+        assert!(raw.contains(&ui::paint(ui::palette::ALARM, "error")));
+        let out = anstream::adapter::strip_str(&raw).to_string();
         assert!(out.contains("last failure detail (error, "));
         assert!(out.contains(", manual)"));
-        assert!(out.contains("outer error\ninner detail"));
+        assert!(out.contains("  ✗ error:\n    outer error\n    inner detail"));
+    }
+
+    #[test]
+    fn render_record_detail_marks_failed_check_output() {
+        let mut detail = record(20, LoopRunResult::Failed);
+        detail.check = Some(CheckRecord {
+            code: Some(2),
+            timed_out: false,
+            output: "first line\nsecond line".to_owned(),
+        });
+        let entry = TaskEntry {
+            root: PathBuf::from("/tmp/rimz-run"),
+            ..TaskEntry::default()
+        };
+        let mut out = Vec::new();
+
+        render_record_detail(
+            &mut out,
+            &entry,
+            &detail,
+            "last failure detail",
+            Timestamp::from_second(30).expect("timestamp"),
+        )
+        .unwrap();
+
+        let raw = String::from_utf8(out).unwrap();
+        assert!(raw.contains(&ui::paint(
+            ui::palette::ALARM,
+            "  ✗ last run output (exit 2):"
+        )));
+        let out = anstream::adapter::strip_str(&raw).to_string();
+        assert!(out.contains("  ✗ last run output (exit 2):\n    first line\n    second line"));
     }
 }

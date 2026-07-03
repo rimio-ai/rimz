@@ -3,6 +3,8 @@ use std::io::Write;
 use anyhow::Result;
 use rimz::harness::run::{RunLiveStatus, RunRecord, RunStatus};
 
+use crate::cli::render;
+
 pub(crate) fn print_run_output(
     record: &RunRecord,
     out: &mut impl Write,
@@ -25,7 +27,10 @@ pub(crate) fn print_run_output(
         writeln!(
             err,
             "rimz: run {} (exit {})",
-            status_label(record.status),
+            render::paint(
+                render::status::run(record.status),
+                status_label(record.status)
+            ),
             record.status.exit_code()
         )?;
         if let Some(tail) = record
@@ -33,10 +38,14 @@ pub(crate) fn print_run_output(
             .as_deref()
             .filter(|tail| !tail.trim().is_empty())
         {
-            writeln!(err, "{tail}")?;
+            writeln!(err, "{}", render::paint(render::palette::FAINT, tail))?;
         }
         if let Some(transcript) = record.transcript_path.as_deref() {
-            writeln!(err, "transcript: {transcript}")?;
+            writeln!(
+                err,
+                "{}",
+                render::paint(render::palette::MUTED, &format!("transcript: {transcript}"))
+            )?;
         }
     }
     Ok(())
@@ -121,7 +130,12 @@ mod tests {
         print_run_output(&record, &mut out, &mut err).unwrap();
 
         assert!(out.is_empty());
-        let err = String::from_utf8(err).unwrap();
+        let raw = String::from_utf8(err).unwrap();
+        assert!(raw.contains(&render::paint(
+            render::status::run(RunStatus::Failed),
+            "failed"
+        )));
+        let err = anstream::adapter::strip_str(&raw).to_string();
         assert!(err.contains("rimz: run failed (exit 1)"));
         assert!(err.contains("agent died\nfatal error"));
         assert!(err.contains("transcript: /tmp/transcript.jsonl"));
