@@ -96,9 +96,8 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
 }
 
 /// Whether the OAuth windows the API-query channel returns should be merged for
-/// this kind. Claude defers to a fresh live statusline (its realtime channel);
-/// pi/opencode own their windows through OAuth, and codex decides inside its
-/// handler arm (app-server first), so every non-claude kind merges.
+/// this kind. Kinds with fresh realtime windows defer through their descriptor
+/// flag; every other kind merges OAuth windows here.
 fn merge_windows_hint(snapshot: &SidebarSnapshot, kind: &str) -> bool {
     !crate::agents::descriptor_by_kind(kind).is_some_and(|descriptor| {
         descriptor
