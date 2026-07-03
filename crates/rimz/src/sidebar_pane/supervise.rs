@@ -8,7 +8,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -350,7 +350,7 @@ fn spawn_test_stray_if_requested() {
     let Some(path) = env::var_os(TEST_STRAY_PID_FILE_ENV).filter(|value| !value.is_empty()) else {
         return;
     };
-    let path = PathBuf::from(path);
+    let path = std::path::PathBuf::from(path);
     let result = Command::new("/bin/sh")
         .arg("-c")
         .arg("exit 0")
