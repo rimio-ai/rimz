@@ -1,11 +1,14 @@
 use crate::agents::AgentStatus;
+use crate::config::ThemeConfig;
 use crate::diag::record::GateRule;
 use crate::ids::PaneId;
 use crate::sidebar_pane::pets::PetView;
 use jiff::Timestamp;
 use ratatui::layout::Rect;
+use std::rc::Rc;
 
 use super::sections::{MakeUpHit, ProviderTabHit};
+use super::theme::Theme;
 use super::{CostRolls, ScrollbarFade, TallyAnim};
 
 #[derive(Clone, Debug, Default)]
@@ -16,6 +19,7 @@ pub struct UiState {
     /// animation tick. The renderer derives the running-agent spin frame from
     /// it; freshness gating (per row) keeps a quiet agent frozen.
     pub animation_phase: u64,
+    pub(crate) theme_cache: Option<(ThemeConfig, Rc<Theme>)>,
     /// The cockpit spend's count-up state — one stepped roll for today's `$`.
     /// Folded forward on each data refresh (`TallyAnim::observe`) and read by the
     /// renderer at `animation_phase`; the serve loop keeps the fast tick alive
@@ -142,6 +146,19 @@ pub struct UiState {
     /// holding behind the last good frame. It is display-only evidence for the
     /// bottom chrome; the durable record is `gate_hold`/`gate_release`.
     pub(crate) gate_notice: Option<GateNotice>,
+}
+
+impl UiState {
+    pub(crate) fn theme(&mut self, config: &ThemeConfig) -> Rc<Theme> {
+        if let Some((cached_config, theme)) = &self.theme_cache
+            && cached_config == config
+        {
+            return Rc::clone(theme);
+        }
+        let theme = Rc::new(Theme::for_sidebar(config));
+        self.theme_cache = Some((config.clone(), Rc::clone(&theme)));
+        theme
+    }
 }
 
 /// The manual dashboard-tab pick: the provider kind to show, plus the

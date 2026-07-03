@@ -96,14 +96,15 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
 /// stores on `UiState`. Width/height are wide and tall enough that nothing
 /// the tests probe is clipped.
 fn line_map_for(snapshot: &SidebarSnapshot, selected: usize) -> Vec<Option<usize>> {
-    let ui = UiState {
+    let mut ui = UiState {
         selected_index: selected,
         help_visible: false,
         animation_phase: 0,
         line_map: Vec::new(),
         ..Default::default()
     };
-    render::compose_lines(snapshot, None, &ui, 54, 64).line_map
+    let theme = ui.theme(&snapshot.theme);
+    render::compose_lines(snapshot, None, &ui, theme.as_ref(), 54, 64).line_map
 }
 
 /// The screen row a content-line index maps to: borderless, the body fills

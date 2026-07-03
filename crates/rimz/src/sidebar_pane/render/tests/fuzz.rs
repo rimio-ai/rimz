@@ -41,7 +41,8 @@ proptest! {
             ..Default::default()
         };
 
-        let composed = compose_lines(&snapshot, None, &ui, width, height);
+        let theme = Theme::for_sidebar(&snapshot.theme);
+        let composed = compose_lines(&snapshot, None, &ui, &theme, width, height);
         prop_assert_eq!(composed.line_map.len(), composed.lines.len());
 
         if width > 0 && height > 0 {

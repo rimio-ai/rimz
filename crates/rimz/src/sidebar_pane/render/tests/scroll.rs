@@ -230,10 +230,11 @@ fn focus_group_reveal_falls_back_to_card_follow_for_external_group() {
         scroll_offset: 99,
         ..Default::default()
     };
-    let following = compose_lines(&snapshot, None, &following_ui, 38, 21).scroll_offset;
+    let theme = Theme::for_sidebar(&snapshot.theme);
+    let following = compose_lines(&snapshot, None, &following_ui, &theme, 38, 21).scroll_offset;
 
     following_ui.focus_group_reveal = true;
-    let revealed = compose_lines(&snapshot, None, &following_ui, 38, 21).scroll_offset;
+    let revealed = compose_lines(&snapshot, None, &following_ui, &theme, 38, 21).scroll_offset;
 
     assert_eq!(
         revealed, following,

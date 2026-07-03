@@ -138,7 +138,8 @@ fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
     // gutter — is what the synthetic-hit test above takes on faith; the real
     // composed frame proves each hit's footprint covers exactly the bucket it
     // filters by, zero buckets emitting none.
-    let composed = render::compose_lines(&snapshot, None, &ui, 54, 64);
+    let theme = ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
     let texts: Vec<String> = composed
         .lines
         .iter()
@@ -236,11 +237,12 @@ fn make_up_filter_narrows_ordinals_in_lockstep_with_the_line_map() {
     assert_eq!(row_index_of_pane(&snapshot, filter, &running), None);
     assert_eq!(row_index_of_pane(&snapshot, None, &failed), Some(2));
 
-    let ui = UiState {
+    let mut ui = UiState {
         make_up_filter: filter,
         ..Default::default()
     };
-    let map = render::compose_lines(&snapshot, None, &ui, 54, 64).line_map;
+    let theme = ui.theme(&snapshot.theme);
+    let map = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64).line_map;
     let mut ordinals: Vec<usize> = map.iter().flatten().copied().collect();
     ordinals.dedup();
     assert_eq!(

@@ -55,6 +55,7 @@ pub(crate) fn compose_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
     ui: &UiState,
+    theme: &Theme,
     width: u16,
     height: u16,
 ) -> ComposedFrame {
@@ -62,20 +63,19 @@ pub(crate) fn compose_lines(
     // the cached `NO_COLOR` reading plus the palette the producer resolved from
     // `[theme]` onto the snapshot — so a re-themed config lands with the next
     // snapshot, identically on every renderer of the workspace.
-    let theme = Theme::for_sidebar(&snapshot.theme);
     let cells = usize::from(width.max(1));
     // The whole sidebar sits inside a one-cell frame: chrome is built to the inner
     // width and opened with a blank gutter, reserving the trailing right rail —
     // the same frame the cards carry (see `with_gutter`).
     let inner = content_width(cells);
-    let (mut lines, mut map, mut make_up_hits) = top_lines(snapshot, ui, cells, &theme);
-    let (scroll, scroll_map) = scroll_lines(snapshot, ui, cells, &theme);
+    let (mut lines, mut map, mut make_up_hits) = top_lines(snapshot, ui, cells, theme);
+    let (scroll, scroll_map) = scroll_lines(snapshot, ui, cells, theme);
 
     // The tab hits arrive from the bottom chrome relative to its own lines;
     // they are translated to absolute screen coordinates once the block's final
     // position is known, below.
     let (bottom, mut tab_hits, mut pet_pixel_rect) =
-        build_bottom_chrome(snapshot, alert, &theme, inner, ui);
+        build_bottom_chrome(snapshot, alert, theme, inner, ui);
 
     let height = usize::from(height);
     let bottom_height = bottom
@@ -132,7 +132,7 @@ pub(crate) fn compose_lines(
         // their breathing row. Structural in the row map — the click scrolls to
         // the top via `banner_line`, not a row jump.
         let at = top_base_len - 1;
-        lines.insert(at, pad_chrome(unread_banner_line(&theme, status, count)));
+        lines.insert(at, pad_chrome(unread_banner_line(theme, status, count)));
         map.insert(at, None);
         banner_line = Some(at);
     }
@@ -179,7 +179,7 @@ pub(crate) fn compose_lines(
         lines.push(if overflow && show_bar {
             with_scrollbar(
                 line,
-                &theme,
+                theme,
                 cells,
                 index - offset,
                 offset,

@@ -12,7 +12,7 @@ pub(super) struct PanelGlyphs {
 }
 
 pub(super) fn resolve_panel_glyphs(theme: &ThemeConfig) -> PanelGlyphs {
-    let glyph = |role| rimz::sidebar_pane::render::theme_glyph(theme, role);
+    let glyph = rimz::sidebar_pane::render::theme_glyphs(theme);
     PanelGlyphs {
         sessions: glyph(GlyphRole::CockpitSessions),
         total: glyph(GlyphRole::TokensTotal),

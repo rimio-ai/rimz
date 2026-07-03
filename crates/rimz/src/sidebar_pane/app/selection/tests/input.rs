@@ -484,7 +484,9 @@ fn the_unread_snap_overrides_selection_follow_to_the_top() {
         selected_index: 9,
         ..Default::default()
     };
-    let following = render::compose_lines(&snapshot, None, &ui, 40, 15).scroll_offset;
+    let theme = ui.theme(&snapshot.theme);
+    let following =
+        render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 40, 15).scroll_offset;
     assert!(
         following > 0,
         "following the bottom selection scrolls down off the top-ranked unread",
@@ -493,7 +495,7 @@ fn the_unread_snap_overrides_selection_follow_to_the_top() {
     // Arming the snap returns the viewport to the top to reveal the lead, even
     // though the selection still sits at the bottom — unread outranks selection.
     ui.unread_focus = Some("agent-lead".to_owned());
-    let snapped = render::compose_lines(&snapshot, None, &ui, 40, 15).scroll_offset;
+    let snapped = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 40, 15).scroll_offset;
     assert_eq!(
         snapped, 0,
         "the unread snap outranks selection-follow and reaches the top",

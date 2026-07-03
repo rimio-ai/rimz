@@ -281,7 +281,8 @@ fn render_provider_dashboard_pixel_pet_rect_is_absolute_in_composed_frame() {
         ..Default::default()
     };
 
-    let frame = compose_lines(&snapshot, None, &ui, 54, 34);
+    let theme = Theme::for_sidebar(&snapshot.theme);
+    let frame = compose_lines(&snapshot, None, &ui, &theme, 54, 34);
     let texts = line_texts(&frame.lines);
     let rail = texts
         .iter()
@@ -684,19 +685,15 @@ fn render_scroll_keeps_gap_above_provider_dashboard() {
     let mut snapshot = overflowing_fleet();
     snapshot.providers = two_provider_panels();
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
-    let frame = compose_lines(
-        &snapshot,
-        None,
-        &UiState {
-            scroll_offset: 6,
-            manual_scroll: Some(ManualScroll {
-                selection_at_start: None,
-            }),
-            ..Default::default()
-        },
-        54,
-        23,
-    );
+    let theme = Theme::for_sidebar(&snapshot.theme);
+    let ui = UiState {
+        scroll_offset: 6,
+        manual_scroll: Some(ManualScroll {
+            selection_at_start: None,
+        }),
+        ..Default::default()
+    };
+    let frame = compose_lines(&snapshot, None, &ui, &theme, 54, 23);
     let lines = line_texts(&frame.lines);
     let rendered = lines.join("\n");
     let rail = lines

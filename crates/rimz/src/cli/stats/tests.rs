@@ -588,10 +588,8 @@ fn modern_theme_flips_stats_token_glyphs_to_nerd_font() {
         ..Default::default()
     };
 
-    assert_ne!(
-        rimz::sidebar_pane::render::theme_glyph(&theme, GlyphRole::TokensTotal),
-        "◇"
-    );
+    let glyph = rimz::sidebar_pane::render::theme_glyphs(&theme);
+    assert_ne!(glyph(GlyphRole::TokensTotal), "◇");
 }
 
 #[test]

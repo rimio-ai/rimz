@@ -76,11 +76,13 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
     draw_with_ui(frame, snapshot, alert, &mut UiState::default());
 }
 
-/// Resolve the glyph for `role` under `theme`'s glyph set, so non-sidebar
-/// surfaces honor the same `[theme] style` / `[theme.glyphs]` config the sidebar
-/// reads.
-pub fn theme_glyph(theme: &crate::config::ThemeConfig, role: crate::config::GlyphRole) -> String {
-    theme::GlyphSet::from_theme(theme).glyph(role).to_owned()
+/// Resolve the glyph set under `theme`, so non-sidebar surfaces honor the same
+/// `[theme] style` / `[theme.glyphs]` config the sidebar reads.
+pub fn theme_glyphs(
+    theme: &crate::config::ThemeConfig,
+) -> impl Fn(crate::config::GlyphRole) -> String {
+    let glyphs = theme::GlyphSet::from_theme(theme);
+    move |role| glyphs.glyph(role).to_owned()
 }
 
 pub fn draw_with_ui(
@@ -107,7 +109,8 @@ fn draw_into(
     // The composed maps and the resolved scroll offset are byproducts of the
     // draw: store them so the mouse hit-test and the next frame's viewport read
     // the geometry of the frame the user is actually looking at.
-    let composed = compose_lines(snapshot, alert, ui, area.width, area.height);
+    let theme = ui.theme(&snapshot.theme);
+    let composed = compose_lines(snapshot, alert, ui, theme.as_ref(), area.width, area.height);
     let bottom_height = composed.bottom_height;
     ui.line_map = composed.line_map;
     ui.tab_hits = composed.tab_hits;
@@ -127,10 +130,9 @@ fn draw_into(
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
     if ui.help_visible {
-        let theme = Theme::for_sidebar(&snapshot.theme);
         draw_help_overlay(
             frame,
-            &theme,
+            theme.as_ref(),
             snapshot.sidebar.focus_key_label(),
             area,
             bottom_height,
@@ -203,10 +205,10 @@ fn draw_gallery(frame: &mut Frame<'_>, columns: &mut [GalleryColumn<'_>]) {
     for (column, column_area) in columns.iter_mut().zip(column_areas) {
         draw_into(frame, column.snapshot, None, column.ui, column_area);
     }
-    let Some(first) = columns.first() else {
+    let Some(first) = columns.first_mut() else {
         return;
     };
-    let theme = Theme::for_sidebar(&first.snapshot.theme);
+    let theme = first.ui.theme(&first.snapshot.theme);
     let style = theme.rule();
     let delimiter = theme.glyph(GlyphRole::ChromeBoxVertical).to_owned();
     let buffer = frame.buffer_mut();
@@ -384,8 +386,8 @@ pub(crate) fn dashboard_present(snapshot: &SidebarSnapshot, alert_active: bool) 
     !alert_active && (!snapshot.providers.is_empty() || snapshot.theme.pets.enabled)
 }
 
-pub(crate) fn pet_body_enabled(snapshot: &SidebarSnapshot) -> bool {
-    Theme::for_sidebar(&snapshot.theme).pet_body_enabled()
+pub(crate) fn pet_body_enabled(_snapshot: &SidebarSnapshot) -> bool {
+    !crate::tui::no_color()
 }
 
 pub(crate) fn pet_motion_enabled(snapshot: &SidebarSnapshot, action: PetAction) -> bool {

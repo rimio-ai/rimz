@@ -899,7 +899,8 @@ fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
         }),
         ..UiState::default()
     };
-    let composed = compose_lines(&snapshot, None, &ui, 54, 20);
+    let theme = Theme::for_sidebar(&snapshot.theme);
+    let composed = compose_lines(&snapshot, None, &ui, &theme, 54, 20);
     let banner = composed
         .banner_line
         .expect("the unread banner renders once the lead scrolls out of view");
@@ -912,7 +913,8 @@ fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
         "banner is structural; its click is handled through banner_line",
     );
 
-    let composed = compose_lines(&snapshot, None, &UiState::default(), 54, 20);
+    let default_ui = UiState::default();
+    let composed = compose_lines(&snapshot, None, &default_ui, &theme, 54, 20);
     assert_eq!(
         composed.banner_line, None,
         "lead visible at the top makes the banner redundant",
@@ -925,7 +927,10 @@ fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
         "no banner text while the lead is already visible",
     );
 
-    let composed = compose_lines(&overflowing_fleet(), None, &UiState::default(), 54, 20);
+    let overflow = overflowing_fleet();
+    let overflow_theme = Theme::for_sidebar(&overflow.theme);
+    let default_ui = UiState::default();
+    let composed = compose_lines(&overflow, None, &default_ui, &overflow_theme, 54, 20);
     assert_eq!(
         composed.banner_line, None,
         "no banner without an actionable unread",
