@@ -358,8 +358,6 @@ impl Default for SpendingWalker {
 
 // ── Spending computation ──────────────────────────────────────────────────────
 
-// ── Spending computation ──────────────────────────────────────────────────────
-
 pub fn discover_spending_files() -> Vec<(&'static dyn AgentAdapter, PathBuf)> {
     #[cfg(test)]
     if let Some(files) = DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| slot.borrow().clone()) {
