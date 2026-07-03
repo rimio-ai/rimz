@@ -90,6 +90,35 @@ pub fn forge_cli_for_remote(remote_url: &str) -> Option<ForgeCli> {
     }
 }
 
+/// Extract the `owner/repo` slug from a git remote URL.
+pub fn remote_repo_slug(remote_url: &str) -> Option<String> {
+    let trimmed = remote_url.trim();
+    let had_scheme = trimmed.contains("://");
+    let without_scheme = trimmed
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(trimmed);
+    let after_userinfo = without_scheme
+        .rsplit_once('@')
+        .map(|(_, rest)| rest)
+        .unwrap_or(without_scheme);
+    let path = if had_scheme {
+        let (authority, path) = after_userinfo.split_once('/')?;
+        (!authority.is_empty()).then_some(path)?
+    } else if let Some((host, path)) = after_userinfo.split_once(':') {
+        (!host.is_empty()).then_some(path)?
+    } else {
+        let (host, path) = after_userinfo.split_once('/')?;
+        (!host.is_empty()).then_some(path)?
+    };
+    let path = path.trim_matches('/');
+    let slug = path.strip_suffix(".git").unwrap_or(path);
+    let mut segments = slug.split('/');
+    let owner = segments.next()?;
+    let repo = segments.next()?;
+    (!owner.is_empty() && !repo.is_empty() && segments.next().is_none()).then(|| slug.to_owned())
+}
+
 impl Forge {
     pub fn pr_refspec(self, number: u64) -> String {
         match self {
@@ -365,6 +394,34 @@ mod tests {
             "https://example.test/org/repo.git",
         ] {
             assert_eq!(forge_cli_for_remote(remote), None, "{remote}");
+        }
+    }
+
+    #[test]
+    fn extracts_remote_repo_slug() {
+        for (remote, slug) in [
+            ("git@gitea-ssh.***REMOVED***:rimio/rimz.git", "rimio/rimz"),
+            ("https://gitea.***REMOVED***/rimio/rimz.git", "rimio/rimz"),
+            ("ssh://git@host:2222/owner/repo.git", "owner/repo"),
+            ("git@host:owner/repo", "owner/repo"),
+            ("https://host/owner/repo/", "owner/repo"),
+        ] {
+            assert_eq!(remote_repo_slug(remote), Some(slug.to_owned()), "{remote}");
+        }
+    }
+
+    #[test]
+    fn rejects_remote_repo_slug_without_owner_repo_path() {
+        for remote in [
+            "",
+            "git@gitea-ssh.***REMOVED***",
+            "not-a-remote",
+            "/tmp/repo",
+            "https://host/repo.git",
+            "https:///owner/repo.git",
+            "git@host:owner/team/repo.git",
+        ] {
+            assert_eq!(remote_repo_slug(remote), None, "{remote}");
         }
     }
 

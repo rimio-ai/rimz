@@ -221,7 +221,7 @@ fn probe_worktree_state(worktree: &Path) -> ProbeState {
     };
     match cli {
         ForgeCli::Gh => probe_github(worktree, &branch),
-        ForgeCli::Tea => probe_tea(worktree, &branch),
+        ForgeCli::Tea => probe_tea(worktree, &branch, &remote),
     }
 }
 
@@ -257,12 +257,13 @@ fn probe_github(worktree: &Path, branch: &str) -> ProbeState {
     }
 }
 
-fn probe_tea(worktree: &Path, branch: &str) -> ProbeState {
-    let Some(output) = command_stdout(
-        worktree,
-        "tea",
-        &["pr", "list", "--state", "all", "--output", "json"],
-    ) else {
+fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
+    let repo = forge::remote_repo_slug(remote);
+    let mut list_args = vec!["pr", "list", "--state", "all", "--output", "json"];
+    if let Some(repo) = repo.as_deref() {
+        list_args.extend_from_slice(&["--repo", repo]);
+    }
+    let Some(output) = command_stdout(worktree, "tea", &list_args) else {
         return ProbeState {
             state: None,
             ok: false,
@@ -286,11 +287,12 @@ fn probe_tea(worktree: &Path, branch: &str) -> ProbeState {
     };
     if candidate.state == WorktreePrState::Closed {
         let number = candidate.number.to_string();
-        if let Some(output) = command_stdout(
-            worktree,
-            "tea",
-            &["pr", number.as_str(), "--output", "json"],
-        ) && let Ok(Some(WorktreePrState::Merged)) = forge::parse_tea_pr_detail_json(&output)
+        let mut detail_args = vec!["pr", number.as_str(), "--output", "json"];
+        if let Some(repo) = repo.as_deref() {
+            detail_args.extend_from_slice(&["--repo", repo]);
+        }
+        if let Some(output) = command_stdout(worktree, "tea", &detail_args)
+            && let Ok(Some(WorktreePrState::Merged)) = forge::parse_tea_pr_detail_json(&output)
         {
             return ProbeState {
                 state: Some(WorktreePrState::Merged),
