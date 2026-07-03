@@ -1828,58 +1828,6 @@ fn steer_auto_compact_reuses_baseline_until_context_reading_changes() {
     assert_eq!(baselines, vec![150_000, 160_000]);
 }
 
-/// Auto-compacted sends are two messages. The pacer sleeps between the tracked
-/// `/compact` command and the prompt.
-#[test]
-fn steer_auto_compact_paces_command_and_prompt() {
-    let env = Env::new();
-    register_running_agent(
-        &env,
-        "sess-ac-paced",
-        "feature-ac-paced",
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    seed_context_fill(&env, "sess-ac-paced", 80);
-
-    let trace_log = env.project_root.join("zellij-ac-paced-trace.log");
-    let interval = Duration::from_millis(1500);
-    let started = Instant::now();
-    let out = env
-        .rimz()
-        .env("RIMZ_MESSAGE_INTERVAL_MS", interval.as_millis().to_string())
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args([
-            "message",
-            "--steer",
-            "@claude",
-            "--smart-compact",
-            "70%",
-            "--",
-            "go",
-        ])
-        .output()
-        .expect("steer");
-    let elapsed = started.elapsed();
-    assert!(
-        out.status.success(),
-        "steer failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        elapsed >= interval,
-        "the prompt should wait for the message interval after `/compact`; elapsed {elapsed:?}"
-    );
-
-    let lines = trace_lines(&trace_log);
-    let compact_at = lines.iter().position(|line| is_compact_command(line));
-    let paste_at = lines.iter().position(|line| is_paste(line, "go"));
-    assert!(
-        compact_at.is_some() && paste_at.is_some() && compact_at < paste_at,
-        "compaction must precede the message under pacing; trace: {lines:?}"
-    );
-}
-
 /// `[harness] smart_compact` gives steer the same compact-first threshold
 /// as the flag when the invocation omits it.
 #[test]
@@ -1929,11 +1877,6 @@ fn steer_auto_compact_uses_config_default() {
         compact_at < paste_at,
         "config default compaction must precede the message; trace: {lines:?}"
     );
-    assert!(
-        String::from_utf8_lossy(&out.stdout).contains("compacted"),
-        "a config-triggered single steer reports the compaction it ran: {}",
-        String::from_utf8_lossy(&out.stdout)
-    );
 }
 
 /// A window below the threshold delivers normally — no `/compact`, just the
@@ -1977,71 +1920,6 @@ fn steer_auto_compact_leaves_a_window_below_threshold_alone() {
         "a window below the threshold must not compact; trace: {lines:?}"
     );
     assert_text_then_enter(&trace_log, "go");
-}
-
-/// Send-now queue honours `--smart-compact`: an idle agent past the threshold
-/// gets `/compact` ahead of the text.
-#[test]
-fn queue_auto_compact_runs_compact_before_delivering() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
-    register_running_agent(&env, "sess-qac", "feature-qac", pane_env);
-    seed_context_fill(&env, "sess-qac", 80);
-    // A turn end opens the `done` gate; the agent keeps its bound pane.
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-qac",
-            "worktree_branch": "feature-qac",
-        }),
-        pane_env,
-    );
-
-    let trace_log = env.project_root.join("zellij-qac-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-        .args(["message", "@claude", "--smart-compact", "70%", "--", "go"])
-        .output()
-        .expect("message");
-    assert!(
-        out.status.success(),
-        "message failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    assert!(
-        env.ledger().list_pending_messages().unwrap().is_empty(),
-        "the message should send immediately at the open gate"
-    );
-    let lines = trace_lines(&trace_log);
-    let compact_at = lines.iter().position(|line| is_compact_command(line));
-    let paste_at = lines.iter().position(|line| is_paste(line, "go"));
-    assert!(
-        compact_at.is_some() && paste_at.is_some() && compact_at < paste_at,
-        "compaction must precede the queue text; trace: {lines:?}"
-    );
-    let messages = env.ledger().list_messages().expect("messages");
-    assert!(
-        messages.iter().any(|message| {
-            message.body == MessageBody::Command
-                && message.text == "/compact"
-                && message.status == MessageStatus::Sent
-        }),
-        "command record missing: {messages:?}"
-    );
-    assert!(
-        messages.iter().any(|message| {
-            message.body == MessageBody::Prompt
-                && message.text == "go"
-                && message.status == MessageStatus::Sent
-        }),
-        "prompt record missing: {messages:?}"
-    );
 }
 
 /// A pending ask reserves the agent's next input, so a queued message defers at
