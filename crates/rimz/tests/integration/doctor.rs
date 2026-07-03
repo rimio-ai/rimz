@@ -12,6 +12,7 @@ use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use serde_json::Value;
 
 use crate::common::Env;
+use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -260,6 +261,113 @@ fn doctor_human_report_renders_titled_sections() {
 }
 
 #[test]
+fn doctor_reports_duplicate_mux_binaries() {
+    let env = Env::new();
+    let first_dir = stub_mux_version(&env, "mux-one", "zellij", "--version", "zellij 0.44.3-a");
+    let second_dir = stub_mux_version(&env, "mux-two", "zellij", "--version", "zellij 0.44.3-b");
+    let path = path_with_only(&[first_dir.clone(), second_dir.clone()]);
+
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", &path)
+            .output()
+            .expect("spawn doctor"),
+    );
+    let mux = &report["mux"]["ready"];
+    assert_eq!(mux["name"], "zellij");
+    assert_eq!(
+        mux["binaries"]["active"]["path"],
+        first_dir.join("zellij").display().to_string()
+    );
+    assert_eq!(mux["binaries"]["active"]["version"], "zellij 0.44.3-a");
+    let duplicates = mux["binaries"]["duplicates"]
+        .as_array()
+        .expect("duplicates");
+    assert_eq!(duplicates.len(), 1, "{duplicates:?}");
+    assert_eq!(
+        duplicates[0]["path"],
+        second_dir.join("zellij").display().to_string()
+    );
+    assert_eq!(duplicates[0]["version"], "zellij 0.44.3-b");
+
+    let output = env
+        .rimz()
+        .arg("doctor")
+        .env("PATH", &path)
+        .output()
+        .expect("spawn doctor");
+    assert!(
+        output.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+    assert!(
+        stdout.contains("multiple zellij binaries on PATH"),
+        "human report names duplicate mux binaries:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_reports_zellij_server_log_excerpt() {
+    let env = Env::new();
+    let stub_dir = stub_mux_version(&env, "mux-bin", "zellij", "--version", "zellij 0.44.3");
+    let tmp = env.home_root.join("tmp");
+    let uid = nix::unistd::Uid::current().as_raw();
+    let log_path = tmp
+        .join(format!("zellij-{uid}"))
+        .join("zellij-log")
+        .join("zellij.log");
+    std::fs::create_dir_all(log_path.parent().expect("log parent")).expect("mkdir log dir");
+    std::fs::write(
+        &log_path,
+        "INFO boot\nWARN first warning\nINFO WARN mid-line ignored\nERROR failed\nPanic occured: boom\n",
+    )
+    .expect("write zellij log");
+
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", path_with_only(std::slice::from_ref(&stub_dir)))
+            .env("TMPDIR", &tmp)
+            .output()
+            .expect("spawn doctor"),
+    );
+    let log = &report["mux"]["ready"]["log"];
+    assert_eq!(log["state"], "ready");
+    assert_eq!(log["path"], log_path.display().to_string());
+    assert_eq!(log["matched"], 3);
+    let entries = log["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    assert_eq!(entries[0]["severity"], "warn");
+    assert_eq!(entries[0]["line"], "WARN first warning");
+    assert_eq!(entries[1]["severity"], "error");
+    assert_eq!(entries[1]["line"], "ERROR failed");
+    assert_eq!(entries[2]["severity"], "panic");
+    assert_eq!(entries[2]["line"], "Panic occured: boom");
+
+    std::fs::write(&log_path, "INFO boot\nINFO WARN still ignored\n").expect("rewrite zellij log");
+    let clean = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .env("PATH", path_with_only(&[stub_dir]))
+            .env("TMPDIR", &tmp)
+            .output()
+            .expect("spawn doctor"),
+    );
+    assert_eq!(clean["mux"]["ready"]["log"]["state"], "ready");
+    assert_eq!(clean["mux"]["ready"]["log"]["matched"], 0);
+    assert_eq!(
+        clean["mux"]["ready"]["log"]["entries"]
+            .as_array()
+            .expect("entries")
+            .len(),
+        0
+    );
+}
+
+#[test]
 fn doctor_json_surfaces_stuck_and_failed_messages() {
     let env = Env::new();
     inject_lifecycle(
@@ -449,9 +557,36 @@ fn stub_claude_version(env: &Env, version: &str) -> PathBuf {
     dir
 }
 
+fn stub_mux_version(
+    env: &Env,
+    dir_name: &str,
+    program: &str,
+    version_arg: &str,
+    version: &str,
+) -> PathBuf {
+    let dir = env.home_root.join(dir_name);
+    std::fs::create_dir_all(&dir).expect("mkdir mux bin");
+    let path = dir.join(program);
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nif [ \"${{1:-}}\" = \"{version_arg}\" ]; then printf '%s\\n' '{version}'; exit 0; fi\nexit 0\n"
+        ),
+    )
+    .expect("write mux stub");
+    let mut perms = std::fs::metadata(&path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).expect("chmod mux stub");
+    dir
+}
+
 fn path_with_stub_first(stub_dir: &Path) -> String {
     let current = std::env::var_os("PATH").unwrap_or_default();
     format!("{}:{}", stub_dir.display(), current.to_string_lossy())
+}
+
+fn path_with_only(dirs: &[PathBuf]) -> OsString {
+    std::env::join_paths(dirs).expect("join PATH")
 }
 
 #[test]

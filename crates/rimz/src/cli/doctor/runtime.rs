@@ -7,12 +7,15 @@ use rimz::RuntimePaths;
 use rimz::config::{ColorDepth, MachineConfig, ThemeMode};
 use rimz::ids::MuxName;
 use rimz::mux::{
-    MuxBackend, SessionHealth,
+    MuxBackend, SessionHealth, binaries, logtail,
     tmux::{self as tmux_mod, MIN_TMUX_VERSION},
     zellij::{self as zellij_mod, MIN_ZELLIJ_VERSION},
 };
 
 use super::model;
+
+const MUX_LOG_WINDOW_BYTES: u64 = 256 * 1024;
+const MUX_LOG_ENTRY_CAP: usize = 10;
 
 pub(super) fn collect_terminal() -> model::Terminal {
     let theme_mode = MachineConfig::load()
@@ -93,10 +96,14 @@ pub(super) fn collect_mux(
         MuxName::Zellij => model::Capabilities::Zellij(collect_zellij_capabilities()),
         MuxName::Tmux => model::Capabilities::Tmux(collect_tmux_capabilities()),
     };
+    let binaries = collect_mux_binaries(mux);
+    let log = collect_mux_log(mux);
     let mut report = model::Mux {
         name: mux,
         version,
         capabilities,
+        binaries,
+        log,
         zellij_socket: None,
         socket: None,
         session_health: None,
@@ -115,6 +122,90 @@ pub(super) fn collect_mux(
         report.presence = Some(collect_presence(ws, mux));
     }
     model::Probe::Ready(report)
+}
+
+fn collect_mux_binaries(mux: MuxName) -> model::MuxBinaries {
+    let scan = binaries::scan(mux);
+    let mut installs = scan.installs.into_iter();
+    let active = installs.next().map(binary_row);
+    let duplicates = installs.map(binary_row).collect();
+    let server_mismatches = scan
+        .servers
+        .into_iter()
+        .filter(|server| !server.matches_active)
+        .map(|server| model::ServerMismatchRow {
+            pid: server.pid,
+            exe: server.exe.display().to_string(),
+            deleted: server.deleted,
+        })
+        .collect();
+    model::MuxBinaries {
+        active,
+        duplicates,
+        server_mismatches,
+    }
+}
+
+fn binary_row(install: binaries::BinaryInstall) -> model::MuxBinaryRow {
+    model::MuxBinaryRow {
+        path: install.path.display().to_string(),
+        version: install.version,
+    }
+}
+
+fn collect_mux_log(mux: MuxName) -> model::MuxLog {
+    match mux {
+        MuxName::Zellij => {
+            let path = zellij_mod::log_file();
+            match path.try_exists() {
+                Ok(true) => scan_mux_log(path, zellij_mod::classify_log_line),
+                Ok(false) => model::MuxLog::Missing {
+                    path: path.display().to_string(),
+                },
+                Err(err) => model::MuxLog::Unavailable {
+                    error: format!("{}: {err}", path.display()),
+                },
+            }
+        }
+        MuxName::Tmux => match tmux_mod::server_log_file() {
+            Some(path) => scan_mux_log(path, tmux_mod::classify_log_line),
+            None => model::MuxLog::Disabled {
+                hint: "server logging off (start tmux with `-v` to enable)".to_owned(),
+            },
+        },
+    }
+}
+
+fn scan_mux_log(
+    path: std::path::PathBuf,
+    classify: fn(&str) -> Option<logtail::LogSeverity>,
+) -> model::MuxLog {
+    match logtail::scan_tail(&path, MUX_LOG_WINDOW_BYTES, MUX_LOG_ENTRY_CAP, classify) {
+        Ok(scan) => model::MuxLog::Ready {
+            path: path.display().to_string(),
+            size_bytes: scan.size_bytes,
+            matched: scan.matched,
+            entries: scan
+                .entries
+                .into_iter()
+                .map(|entry| model::MuxLogEntry {
+                    severity: severity_label(entry.severity).to_owned(),
+                    line: entry.line,
+                })
+                .collect(),
+        },
+        Err(err) => model::MuxLog::Unavailable {
+            error: format!("{}: {err}", path.display()),
+        },
+    }
+}
+
+fn severity_label(severity: logtail::LogSeverity) -> &'static str {
+    match severity {
+        logtail::LogSeverity::Warn => "warn",
+        logtail::LogSeverity::Error => "error",
+        logtail::LogSeverity::Panic => "panic",
+    }
 }
 
 fn collect_session_health(

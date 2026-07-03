@@ -124,6 +124,24 @@ pub fn capabilities() -> Result<ZellijCapabilities> {
     })
 }
 
+pub fn log_file() -> PathBuf {
+    env::temp_dir()
+        .join(format!("zellij-{}", nix::unistd::Uid::current().as_raw()))
+        .join("zellij-log")
+        .join("zellij.log")
+}
+
+pub fn classify_log_line(line: &str) -> Option<super::logtail::LogSeverity> {
+    if line.starts_with("Panic occured") || line.starts_with("Panic occurred") {
+        return Some(super::logtail::LogSeverity::Panic);
+    }
+    match line.split_whitespace().next() {
+        Some("ERROR") => Some(super::logtail::LogSeverity::Error),
+        Some("WARN") => Some(super::logtail::LogSeverity::Warn),
+        _ => None,
+    }
+}
+
 /// Parse `"zellij 0.41.2"` (and tolerant of leading/trailing whitespace).
 /// Returns None when the shape is unexpected so `doctor` can render the raw
 /// string verbatim.

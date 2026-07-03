@@ -100,6 +100,8 @@ pub(super) struct Mux {
     pub(super) name: MuxName,
     pub(super) version: Version,
     pub(super) capabilities: Capabilities,
+    pub(super) binaries: MuxBinaries,
+    pub(super) log: MuxLog,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) zellij_socket: Option<ZellijSocket>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -110,6 +112,52 @@ pub(super) struct Mux {
     pub(super) duplicate_sessions: Option<Probe<DuplicateSessions>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) presence: Option<Presence>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct MuxBinaries {
+    pub(super) active: Option<MuxBinaryRow>,
+    pub(super) duplicates: Vec<MuxBinaryRow>,
+    pub(super) server_mismatches: Vec<ServerMismatchRow>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct MuxBinaryRow {
+    pub(super) path: String,
+    pub(super) version: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct ServerMismatchRow {
+    pub(super) pid: u32,
+    pub(super) exe: String,
+    pub(super) deleted: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(super) enum MuxLog {
+    Ready {
+        path: String,
+        size_bytes: u64,
+        matched: usize,
+        entries: Vec<MuxLogEntry>,
+    },
+    Missing {
+        path: String,
+    },
+    Disabled {
+        hint: String,
+    },
+    Unavailable {
+        error: String,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct MuxLogEntry {
+    pub(super) severity: String,
+    pub(super) line: String,
 }
 
 #[derive(Debug, Serialize)]

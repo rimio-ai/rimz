@@ -5,10 +5,12 @@
 //! only inside the adapter — see [`crate::ids::PaneId`] for the normalized
 //! form that travels everywhere else.
 
+pub mod binaries;
 mod capabilities;
 mod command;
 mod focus_key;
 mod keys;
+pub mod logtail;
 mod reconcile;
 pub mod recovery;
 mod selection;

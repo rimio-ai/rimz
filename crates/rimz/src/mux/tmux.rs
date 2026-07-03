@@ -46,6 +46,27 @@ pub fn default_server_socket_path() -> PathBuf {
     default_server_socket_path_from(&tmpdir, nix::unistd::Uid::current().as_raw())
 }
 
+pub fn server_log_file() -> Option<PathBuf> {
+    let own_uid = crate::proc::own_uid()?;
+    let mut procs = crate::proc::list_processes();
+    procs.sort_by_key(|process| process.pid);
+    procs
+        .into_iter()
+        .filter(|process| process.real_uid == own_uid)
+        .filter(|process| super::binaries::is_tmux_server_cmdline(&process.cmdline))
+        .find_map(|process| {
+            let path =
+                crate::proc::cwd(process.pid)?.join(format!("tmux-server-{}.log", process.pid));
+            path.is_file().then_some(path)
+        })
+}
+
+pub fn classify_log_line(line: &str) -> Option<super::logtail::LogSeverity> {
+    let lower = line.to_ascii_lowercase();
+    (lower.contains("error") || lower.contains("fatal"))
+        .then_some(super::logtail::LogSeverity::Error)
+}
+
 fn default_server_socket_path_from(tmpdir: &Path, uid: u32) -> PathBuf {
     tmpdir.join(format!("tmux-{uid}")).join("default")
 }

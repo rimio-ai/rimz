@@ -25,6 +25,21 @@ fn version_parser_and_floor_hold() {
 }
 
 #[test]
+fn log_classifier_matches_error_and_fatal_mentions() {
+    use crate::mux::logtail::LogSeverity;
+
+    assert_eq!(
+        classify_log_line("server error: client lost"),
+        Some(LogSeverity::Error)
+    );
+    assert_eq!(
+        classify_log_line("fatal: control socket closed"),
+        Some(LogSeverity::Error)
+    );
+    assert_eq!(classify_log_line("normal redraw"), None);
+}
+
+#[test]
 fn tmux_soft_newline_bindings_follow_extended_key_format() {
     let csi_u = crate::config::TmuxConfig {
         extended_keys_format: crate::config::TmuxExtendedKeysFormat::CsiU,

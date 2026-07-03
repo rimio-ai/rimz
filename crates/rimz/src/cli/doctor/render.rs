@@ -17,8 +17,8 @@ use rimz::trust::TrustState;
 
 use super::model::{
     AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorReport, HookStatus, Host, LoopTasks,
-    MessageProblemRow, Messages, Mux, Presence, Probe, RemoteControl, SessionHealth, Storage,
-    Terminal, Trust, Version, Workspace,
+    MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, Presence, Probe, RemoteControl,
+    SessionHealth, Storage, Terminal, Trust, Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -306,6 +306,26 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
             verdict(tally, Health::Warn, format!("unavailable ({error})")),
         ),
     }
+    match &mux.binaries.active {
+        Some(active) => kv.push("binary", cell(binary_label(active)).fg(palette::BODY)),
+        None => kv.push("binary", verdict(tally, Health::Warn, "not found on PATH")),
+    }
+    match &mux.log {
+        MuxLog::Ready {
+            path, size_bytes, ..
+        } => kv.push(
+            "log",
+            cell(format!("{path} ({})", fmt_bytes(*size_bytes))).fg(palette::BODY),
+        ),
+        MuxLog::Missing { path } => {
+            kv.push("log", cell(format!("none yet ({path})")).fg(palette::FAINT))
+        }
+        MuxLog::Disabled { hint } => kv.push("log", cell(hint.as_str()).fg(palette::FAINT)),
+        MuxLog::Unavailable { error } => kv.push(
+            "log",
+            verdict(tally, Health::Warn, format!("unavailable ({error})")),
+        ),
+    }
     if let Some(socket) = &mux.socket {
         kv.push("socket", cell(socket.as_str()).fg(palette::BODY));
     }
@@ -363,6 +383,9 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     }
     kv.render(w)?;
 
+    render_mux_binary_notes(w, mux, tally)?;
+    render_mux_log_notes(w, &mux.log, tally)?;
+
     if let Some(Probe::Ready(dup)) = &mux.duplicate_sessions {
         if dup.groups.is_empty() {
             note(tally, w, Health::Ok, "duplicate sessions: none")?;
@@ -405,6 +428,88 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
             w,
             Health::Warn,
             &format!("duplicate sessions: unavailable ({error})"),
+        )?;
+    }
+    Ok(())
+}
+
+fn binary_label(row: &MuxBinaryRow) -> String {
+    match &row.version {
+        Some(version) => format!("{} — {version}", row.path),
+        None => row.path.clone(),
+    }
+}
+
+fn render_mux_binary_notes(w: &mut impl Write, mux: &Mux, tally: &mut Tally) -> io::Result<()> {
+    if !mux.binaries.duplicates.is_empty() {
+        note(
+            tally,
+            w,
+            Health::Warn,
+            &format!(
+                "multiple {} binaries on PATH — clients and servers can mismatch; keep one, remove or shadow the rest",
+                mux.name
+            ),
+        )?;
+        if let Some(active) = &mux.binaries.active {
+            writeln!(
+                w,
+                "      {}",
+                paint(palette::BODY, &format!("* {}", binary_label(active)))
+            )?;
+        }
+        for install in &mux.binaries.duplicates {
+            writeln!(
+                w,
+                "      {}",
+                paint(palette::BODY, &format!("  {}", binary_label(install)))
+            )?;
+        }
+    }
+    for server in &mux.binaries.server_mismatches {
+        let deleted = if server.deleted { " (deleted)" } else { "" };
+        note(
+            tally,
+            w,
+            Health::Warn,
+            &format!(
+                "running {} server (pid {}) uses {}{} — restart its sessions on the PATH binary",
+                mux.name, server.pid, server.exe, deleted
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+fn render_mux_log_notes(w: &mut impl Write, log: &MuxLog, tally: &mut Tally) -> io::Result<()> {
+    let MuxLog::Ready {
+        matched, entries, ..
+    } = log
+    else {
+        return Ok(());
+    };
+    if *matched == 0 {
+        return note(tally, w, Health::Ok, "log: no recent warnings or errors");
+    }
+    note(
+        tally,
+        w,
+        Health::Warn,
+        &format!("{matched} warn/error lines in the last 256 KiB"),
+    )?;
+    for entry in entries {
+        let health = if entry.severity == "warn" {
+            Health::Warn
+        } else {
+            Health::Alarm
+        };
+        writeln!(
+            w,
+            "      {}",
+            paint(
+                style_of(health),
+                &format!("{}: {}", entry.severity, entry.line)
+            )
         )?;
     }
     Ok(())
@@ -912,8 +1017,8 @@ fn age_ms_short(now_ms: u64, then_ms: u64) -> String {
 mod tests {
     use super::*;
     use crate::cli::doctor::model::{
-        HookRow, Host, LoopTaskRow, MessageProblemRow, OpenCounts, RemoteAgent, StorageRootView,
-        TmuxCaps,
+        HookRow, Host, LoopTaskRow, MessageProblemRow, MuxBinaries, OpenCounts, RemoteAgent,
+        StorageRootView, TmuxCaps,
     };
     use rimz::ids::MuxName;
 
@@ -1099,6 +1204,17 @@ mod tests {
                 min_version: (3, 5, 0),
                 popup_supported: true,
             })),
+            binaries: MuxBinaries {
+                active: Some(MuxBinaryRow {
+                    path: "/usr/bin/tmux".to_owned(),
+                    version: Some("tmux 3.5".to_owned()),
+                }),
+                duplicates: Vec::new(),
+                server_mismatches: Vec::new(),
+            },
+            log: MuxLog::Disabled {
+                hint: "server logging off (start tmux with `-v` to enable)".to_owned(),
+            },
             zellij_socket: None,
             socket: Some("/tmp/tmux-1001/default".to_owned()),
             session_health: None,

@@ -324,6 +324,29 @@ fn version_parser_and_floor_hold() {
 }
 
 #[test]
+fn log_classifier_matches_leading_levels_and_panics_only() {
+    use crate::mux::logtail::LogSeverity;
+
+    assert_eq!(
+        classify_log_line("ERROR failed to decode"),
+        Some(LogSeverity::Error)
+    );
+    assert_eq!(
+        classify_log_line("WARN slow client"),
+        Some(LogSeverity::Warn)
+    );
+    assert_eq!(
+        classify_log_line("Panic occured: over 1000 consecutive unknown messages"),
+        Some(LogSeverity::Panic)
+    );
+    assert_eq!(
+        classify_log_line("INFO later WARN text is not a level"),
+        None
+    );
+    assert_eq!(classify_log_line("WARNING is not WARN token"), None);
+}
+
+#[test]
 fn version_serves_the_memoized_probe() {
     let backend = ZellijBackend::default();
     backend

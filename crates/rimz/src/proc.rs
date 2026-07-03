@@ -202,6 +202,29 @@ pub fn cwd(pid: u32) -> Option<std::path::PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
+/// The executable backing `pid` from `/proc/<pid>/exe`. Linux appends
+/// ` (deleted)` when the inode has been unlinked; return the stripped path plus
+/// that flag so callers can name a stale running binary without treating the
+/// suffix as part of the filesystem path. Non-Linux, or an unreadable link,
+/// yields `None`.
+#[cfg(target_os = "linux")]
+pub fn exe_path(pid: u32) -> Option<(std::path::PathBuf, bool)> {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    const DELETED: &[u8] = b" (deleted)";
+
+    let path = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    let bytes = path.as_os_str().as_bytes();
+    let Some(stripped) = bytes.strip_suffix(DELETED) else {
+        return Some((path, false));
+    };
+    Some((
+        std::path::PathBuf::from(OsString::from_vec(stripped.to_vec())),
+        true,
+    ))
+}
+
 /// The real uid this process runs as, read from its own `/proc` status. The
 /// sidebar's pane-pid backfill matches a session's Zellij server by uid so a
 /// same-named session of another user is never walked. `None` on a non-Linux
@@ -233,6 +256,11 @@ pub fn user_name(_uid: u32) -> Option<String> {
 
 #[cfg(not(target_os = "linux"))]
 pub fn cwd(_pid: u32) -> Option<std::path::PathBuf> {
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn exe_path(_pid: u32) -> Option<(std::path::PathBuf, bool)> {
     None
 }
 
