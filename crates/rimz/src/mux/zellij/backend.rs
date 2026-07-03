@@ -489,6 +489,14 @@ impl MuxBackend for ZellijBackend {
         })
     }
 
+    fn session_accepts_agent_close(&self, name: &str) -> bool {
+        matches!(self.session_state(name), SessionState::Live)
+            && matches!(
+                self.session_cleanliness(name),
+                Ok(SessionCleanliness::Clean | SessionCleanliness::MissingSidebar)
+            )
+    }
+
     fn ensure_clean_session(
         &self,
         opts: &SidebarPaneOptions,

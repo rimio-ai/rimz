@@ -124,8 +124,8 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .map(|context| context.session_name.as_str())
         .unwrap_or(&workspace.session_name);
     let abrupt = outcome.signaled || cleanup_signal_received();
-    let session_healthy_now = !abrupt || session_is_healthy(globals, session_name);
-    let deliberate = close_is_deliberate(abrupt, session_healthy_now);
+    let session_accepts_close = !abrupt || session_accepts_agent_close(globals, session_name);
+    let deliberate = close_is_deliberate(abrupt, session_accepts_close);
     if deliberate && should_record_end_trace(&args) {
         record_own_agent_end_trace(&workspace, &args);
     } else if !deliberate && should_record_end_trace(&args) {
@@ -160,10 +160,10 @@ pub(super) fn should_record_end_trace(args: &ExecArgs) -> bool {
 }
 
 /// Non-abrupt exits are deliberate. Abrupt exits are deliberate only while the
-/// mux session is still healthy; if the mux is gone or wedged, keep the agent
-/// recoverable.
-pub(super) fn close_is_deliberate(abrupt: bool, session_healthy: bool) -> bool {
-    !abrupt || session_healthy
+/// mux session still accepts live pane closes; if the mux is gone or wedged,
+/// keep the agent recoverable.
+pub(super) fn close_is_deliberate(abrupt: bool, session_accepts_close: bool) -> bool {
+    !abrupt || session_accepts_close
 }
 
 fn enter_worktree(path: &Path) -> Result<PathBuf> {
@@ -747,12 +747,12 @@ fn signal_child(pid: u32, signal: ChildSignal) {
 #[cfg(not(unix))]
 fn signal_child(_pid: u32, _signal: ChildSignal) {}
 
-fn session_is_healthy(globals: &GlobalFlags, session_name: &str) -> bool {
+fn session_accepts_agent_close(globals: &GlobalFlags, session_name: &str) -> bool {
     let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
         return false;
     };
     let backend = rimz::mux::backend_for(mux);
-    crate::cli::room::session_is_healthy_live(backend.as_ref(), session_name)
+    backend.session_accepts_agent_close(session_name)
 }
 
 fn close_own_pane(globals: &GlobalFlags, session_name: &str) {

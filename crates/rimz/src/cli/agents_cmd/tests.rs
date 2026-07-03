@@ -1146,17 +1146,17 @@ mod pane_exec {
     }
 
     #[test]
-    fn close_is_deliberate_keeps_only_unhealthy_abrupt_exits_recoverable() {
-        for (abrupt, session_healthy, expected) in [
+    fn close_is_deliberate_keeps_only_unaccepted_abrupt_exits_recoverable() {
+        for (abrupt, session_accepts_close, expected) in [
             (false, false, true),
             (false, true, true),
             (true, true, true),
             (true, false, false),
         ] {
             assert_eq!(
-                close_is_deliberate(abrupt, session_healthy),
+                close_is_deliberate(abrupt, session_accepts_close),
                 expected,
-                "abrupt={abrupt}, session_healthy={session_healthy}"
+                "abrupt={abrupt}, session_accepts_close={session_accepts_close}"
             );
         }
     }

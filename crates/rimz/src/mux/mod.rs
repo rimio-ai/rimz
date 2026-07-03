@@ -569,6 +569,17 @@ pub trait MuxBackend: Send + Sync {
         let _ = name;
         Ok(SessionHealth::Healthy)
     }
+    /// Whether an abrupt agent-wrapper exit should be treated as a pane/tab
+    /// close inside a still-live session. This is intentionally narrower than
+    /// [`Self::probe_session_health`]: a room with missing sidebar chrome is
+    /// not clean enough for attach, but an agent pane close inside it is still
+    /// deliberate. A wedged or resurrected session returns false so the wrapper
+    /// preserves the agent for recovery.
+    fn session_accepts_agent_close(&self, name: &str) -> bool {
+        self.list_sessions()
+            .map(|sessions| sessions.iter().any(|session| session == name))
+            .unwrap_or(false)
+    }
     /// Guarantee the next [`Self::attach_command`] lands on a clean, running
     /// room. Probe `opts.session_name`; a clean live room is left untouched
     /// ([`SessionHealth::Healthy`]); an absent, exited, or inspected-stale one is
