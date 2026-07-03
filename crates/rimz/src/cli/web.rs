@@ -3,6 +3,7 @@
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -10,7 +11,7 @@ use clap::{Args, Subcommand};
 use super::{GlobalFlags, machine_config};
 use crate::cli::room::{self, MissingSessionReport};
 use rimz::ids::MuxName;
-use rimz::mux::CommandSpec;
+use rimz::mux::{CommandSpec, PaneListOptions};
 use rimz::web::{
     ParsedWebStatus, WebOpenPayload, WebServerStatus, WebStartOptions, WebStatusPayload,
     WebTokenCommand, ZellijWebEndpoint, effective_base_url, endpoint_from_status_base,
@@ -156,6 +157,7 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         let workspace = room::ensure_workspace_room_for_web(&path, globals)?;
         (workspace.session_name, workspace.workspace_id)
     };
+    ensure_session_addressable_for_web(&session, &workspace_id)?;
     let config = machine_config();
     let payload = web_payload(
         &session,
@@ -182,6 +184,33 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         open_browser_best_effort(&payload.url);
     }
     Ok(())
+}
+
+fn ensure_session_addressable_for_web(
+    session: &str,
+    workspace_id: &rimz::ids::WorkspaceId,
+) -> Result<()> {
+    let backend = rimz::mux::backend_for(MuxName::Zellij);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match backend.list_panes(PaneListOptions {
+            session_name: Some(session.to_owned()),
+            workspace_id: Some(workspace_id.clone()),
+            command_timeout: Some(Duration::from_secs(2)),
+            ..PaneListOptions::default()
+        }) {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                let detail = err.to_string();
+                if Instant::now() >= deadline {
+                    bail!(
+                        "Zellij session `{session}` is not addressable after web preparation: {detail}. Run `rimz reset` from the workspace, then retry `rimz web open`."
+                    );
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {

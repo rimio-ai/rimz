@@ -29,7 +29,8 @@ pub(super) fn is_session_not_found(stream: &[u8]) -> bool {
     };
     let clean = strip_ansi(first);
     let clean = clean.trim_start();
-    clean.starts_with("Session '") && clean.contains("' not found")
+    (clean.starts_with("Session '") && clean.contains("' not found"))
+        || clean == "There is no active session!"
 }
 
 /// Fold zellij's nonzero-exit "Session '<name>' not found" answer into the
@@ -483,6 +484,7 @@ mod tests {
         assert!(is_session_not_found(
             b"Session 'rimz-rimz-f89e49' not found. The following sessions are active:\n"
         ));
+        assert!(is_session_not_found(b"There is no active session!\n"));
 
         assert!(!is_session_not_found(b"[{\"id\":0}]"));
         assert!(!is_session_not_found(b"rimzd\nTab #2\n#start\n"));

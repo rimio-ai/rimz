@@ -60,6 +60,10 @@ fn web_open_json_keeps_autostart_banner_off_stdout() {
         .env("RIMZ_ZELLIJ_BIN", zellij_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &log)
         .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 0s ago]\n", workspace.session_name),
+        )
+        .env(
             "RIMZ_TEST_ZELLIJ_WEB_STATUS_AFTER_START",
             "Web server online with version: 0.44.3. Checked: http://127.0.0.1:8082\n",
         )
@@ -118,6 +122,50 @@ fn web_open_json_keeps_autostart_banner_off_stdout() {
     assert!(
         log.contains("\t--name\trimz:share_session\t--\tshare"),
         "web open should request runtime web sharing through the presence plugin: {log}"
+    );
+}
+
+#[test]
+fn web_open_refuses_url_when_prepared_session_is_not_addressable() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let log = env.project_root.join("zellij-web-open-dead-session.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "web", "open", "--session"])
+        .arg(&workspace.session_name)
+        .args(["--print", "--json"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 0s ago]\n", workspace.session_name),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_WEB_STATUS_AFTER_START",
+            "Web server online with version: 0.44.3. Checked: http://127.0.0.1:8082\n",
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            materialized_room_panes_json(),
+        )
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES_FAIL_AFTER", "4")
+        .bounded_output()
+        .expect("run rimz web open");
+
+    assert!(!output.status.success(), "dead session should fail fast");
+    assert!(
+        output.stdout.is_empty(),
+        "stdout must not contain a stale URL: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not addressable after web preparation")
+            || stderr.contains("Run `rimz reset` to rebuild it cleanly"),
+        "stderr should explain the failed Zellij session check or reset path: {stderr}"
     );
 }
 

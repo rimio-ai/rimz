@@ -29,6 +29,10 @@ fn main() {
     }
 
     if cli.first().is_some_and(|arg| arg == "list-sessions") {
+        if let Ok(output) = env::var("RIMZ_TEST_ZELLIJ_LIST_SESSIONS") {
+            write_stdout_raw(&output);
+            return;
+        }
         write_stderr("No active zellij sessions found.");
         std::process::exit(1);
     }
@@ -81,6 +85,12 @@ fn main() {
         .windows(2)
         .any(|window| window[0] == "action" && window[1] == "list-panes")
     {
+        if let Ok(fail_after) = env::var("RIMZ_TEST_ZELLIJ_LIST_PANES_FAIL_AFTER")
+            && command_count(&log_path, "action\tlist-panes") > fail_after.parse().unwrap_or(0)
+        {
+            write_stdout("There is no active session!");
+            return;
+        }
         if let Ok(output) = env::var("RIMZ_TEST_ZELLIJ_LIST_PANES") {
             write_stdout_raw(&output);
         }
@@ -108,9 +118,13 @@ fn web_status_output(log_path: &Path) -> String {
 }
 
 fn command_seen(log_path: &Path, needle: &str) -> bool {
+    command_count(log_path, needle) > 0
+}
+
+fn command_count(log_path: &Path, needle: &str) -> usize {
     std::fs::read_to_string(log_path)
-        .map(|log| log.lines().any(|line| line.contains(needle)))
-        .unwrap_or(false)
+        .map(|log| log.lines().filter(|line| line.contains(needle)).count())
+        .unwrap_or(0)
 }
 
 fn write_stdout(line: &str) {
