@@ -485,8 +485,10 @@ impl LoopState {
                     sent_at_ms,
                     now_ms,
                 ) {
-                    spawn_pane_focus(target.clone(), &config.session_name);
-                    self.record_focus_intent(config, target, anim_start, diag)?;
+                    // Match sidebar jumps: broadcast the intent before the mux
+                    // switch so peer tabs repaint while still hidden.
+                    self.record_focus_intent(config, target.clone(), anim_start, diag)?;
+                    spawn_pane_focus(target, &config.session_name);
                 }
             }
             // An overlay event fuses into the in-memory state and paints this
@@ -639,12 +641,14 @@ impl LoopState {
             order_hold::arm_order_hold(&mut self.ui, jiff::Timestamp::now().as_millisecond());
         }
         if let Some(pane) = applied.focused {
-            // A jump fires the one-way focus command at the resolved pane. The
-            // intent event updates the session register and repaints this turn;
-            // the producer pull verifies it on the next wakeup.
+            // A jump writes the scroll anchor, then broadcasts the focus intent
+            // so peer tabs adopt the anchor offset and repaint while still
+            // hidden. The mux focus switch fires last, so the destination tab
+            // is already at the synced offset when it becomes visible. The
+            // producer pull verifies the optimistic focus on the next wakeup.
             self.record_focus_anchor(&pane);
-            spawn_pane_focus(pane.clone(), &config.session_name);
-            self.record_focus_intent(config, pane, anim_start, diag)?;
+            self.record_focus_intent(config, pane.clone(), anim_start, diag)?;
+            spawn_pane_focus(pane, &config.session_name);
         }
         if let Some(row_id) = applied.mark_read {
             self.mark_row_read(config, fetch, &row_id, diag);
