@@ -1,5 +1,6 @@
 //! Queued-message delivery, sweeping, and wake-cache maintenance.
 
+use std::fs::File;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -143,6 +144,10 @@ pub fn deliver_one(
 }
 
 pub fn sweep(workspace: &ResolvedWorkspace, ledger: &Ledger, mux: Option<MuxName>) -> Result<()> {
+    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+    let Some(_guard) = try_start_sweep(&runtime)? else {
+        return Ok(());
+    };
     let now = Timestamp::now();
     let delivery_window = delivery_window_from_env();
     ledger.reconcile_stale_sent_messages(
@@ -172,6 +177,35 @@ pub fn sweep(workspace: &ResolvedWorkspace, ledger: &Ledger, mux: Option<MuxName
     }
     register_message_wake(workspace, ledger)?;
     Ok(())
+}
+
+struct SweepRunGuard {
+    file: File,
+}
+
+impl Drop for SweepRunGuard {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+fn try_start_sweep(runtime: &RuntimePaths) -> Result<Option<SweepRunGuard>> {
+    let path = runtime.root.join("message-sweep.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|source| DeliverErr::Io {
+            path: path.clone(),
+            source,
+        })?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(SweepRunGuard { file })),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(source)) => Err(DeliverErr::Io { path, source }),
+    }
 }
 
 struct DeliveryCandidate {
@@ -338,5 +372,29 @@ mod tests {
         });
 
         assert!(is_mux_timeout(&err));
+    }
+
+    #[test]
+    fn sweep_guard_is_single_flight() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = RuntimePaths::under(
+            crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/message-sweep")),
+            dir.path(),
+        )
+        .expect("runtime");
+        runtime.ensure_dirs().expect("runtime dirs");
+
+        let first = try_start_sweep(&runtime)
+            .expect("first guard")
+            .expect("first guard starts");
+        assert!(
+            try_start_sweep(&runtime).expect("second guard").is_none(),
+            "a running sweep keeps later helpers from entering delivery"
+        );
+        drop(first);
+        assert!(
+            try_start_sweep(&runtime).expect("third guard").is_some(),
+            "the sweep lock releases when the helper exits"
+        );
     }
 }

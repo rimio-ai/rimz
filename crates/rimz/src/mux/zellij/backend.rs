@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use super::ZellijBackend;
 use super::layout::{TempLayoutFile, render_background_view_layout, render_tab_layout};
 use super::parse::{
-    SessionState, live_session_name_from_line, parse_focused_client_panes,
-    parse_focused_terminal_client_ids, trim_capture,
+    SessionState, is_session_not_found, is_transient_empty, live_session_name_from_line,
+    parse_focused_client_panes, parse_focused_terminal_client_ids, trim_capture,
 };
 use super::raw_pane::{
     RawPane, SessionCleanliness, SidebarDock, floating_panes_in_anchor_view, is_sidebar_pane,
@@ -25,6 +25,7 @@ use crate::mux::{
     TabOptions, ensure_pane_backend, execute_adds, execute_closes, memoized_version,
 };
 use crate::pane::PaneRef;
+use serde::Deserialize;
 
 /// Prefix `command` with an `env KEY=VALUE …` shim so a freshly split Zellij
 /// pane inherits the requested vars; Zellij's `new-pane` has no env flag of its
@@ -44,6 +45,13 @@ fn env_prefixed(env: &BTreeMap<String, String>, command: Vec<String>) -> Vec<Str
 struct FocusRestoreTarget {
     pane: PaneId,
     tab_id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTab {
+    name: String,
+    #[serde(default)]
+    selectable_tiled_panes_count: u64,
 }
 
 impl ZellijBackend {
@@ -109,8 +117,10 @@ impl ZellijBackend {
 
     fn run_new_tab_confirmed(&self, session: &str, args: &[String], tab_name: &str) -> Result<()> {
         let before = self.named_tab_count(session, tab_name)?;
+        let before_materialized = self.named_materialized_tab_count(session, tab_name)?;
         for attempt in 0..super::NEW_TAB_ATTEMPTS {
             if attempt > 0 && self.named_tab_count(session, tab_name)? > before {
+                self.wait_for_named_tab_materialized(session, tab_name, before_materialized)?;
                 return Ok(());
             }
             self.zellij_action(session)
@@ -119,6 +129,7 @@ impl ZellijBackend {
             let deadline = Instant::now() + super::NEW_TAB_CONFIRM_WINDOW;
             loop {
                 if self.named_tab_count(session, tab_name)? > before {
+                    self.wait_for_named_tab_materialized(session, tab_name, before_materialized)?;
                     return Ok(());
                 }
                 if Instant::now() >= deadline {
@@ -142,6 +153,72 @@ impl ZellijBackend {
             .iter()
             .filter(|name| name.as_str() == tab_name)
             .count())
+    }
+
+    fn wait_for_named_tab_materialized(
+        &self,
+        session: &str,
+        tab_name: &str,
+        before_materialized: usize,
+    ) -> Result<()> {
+        let deadline = Instant::now() + super::NEW_TAB_MATERIALIZE_WINDOW;
+        loop {
+            let last_count = self.named_materialized_tab_count(session, tab_name)?;
+            if last_count > before_materialized {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(MuxErr::Output {
+                    program: "zellij".to_owned(),
+                    reason: format!(
+                        "new-tab '{tab_name}' appeared but its layout panes did not materialize; \
+                         materialized named tabs stayed at {last_count}"
+                    ),
+                });
+            }
+            std::thread::sleep(super::NEW_TAB_MATERIALIZE_STEP);
+        }
+    }
+
+    fn named_materialized_tab_count(&self, session: &str, tab_name: &str) -> Result<usize> {
+        Ok(self
+            .list_tabs(session)?
+            .into_iter()
+            .filter(|tab| tab.name == tab_name && tab.selectable_tiled_panes_count > 0)
+            .count())
+    }
+
+    fn list_tabs(&self, session: &str) -> Result<Vec<RawTab>> {
+        for attempt in 0..super::TAB_NAMES_ATTEMPTS {
+            if attempt > 0 {
+                std::thread::sleep(super::TAB_NAMES_RETRY_DELAY);
+            }
+            let output = self
+                .zellij_action(session)
+                .args(["list-tabs", "--json", "--panes"])
+                .run()?;
+            if is_session_not_found(&output.stdout) || is_session_not_found(&output.stderr) {
+                return Err(MuxErr::SessionNotFound {
+                    session: session.to_owned(),
+                });
+            }
+            if is_transient_empty(&output.stdout) {
+                continue;
+            }
+            return serde_json::from_slice::<Vec<RawTab>>(&output.stdout).map_err(|e| {
+                MuxErr::Output {
+                    program: "zellij".to_owned(),
+                    reason: format!("parsing list-tabs JSON: {e}"),
+                }
+            });
+        }
+        Err(MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!(
+                "list-tabs returned no output after {} attempts",
+                super::TAB_NAMES_ATTEMPTS
+            ),
+        })
     }
 }
 

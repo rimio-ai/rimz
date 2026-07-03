@@ -472,8 +472,9 @@ fn annotate_elevated_agents(
 ///
 /// Fast path: a fresh same-session cache is read back with no mux work. Slow
 /// path: a non-blocking `try_lock` elects one producer; losers poll briefly for
-/// its write, then fall back to producing locally so a wedged producer never
-/// strands them.
+/// its write, then hold a usable prior frame before producing locally. That
+/// keeps a wedged mux client from turning every sidebar into its own
+/// `list-panes` fork.
 pub(super) fn cached_panes_or_produce(
     runtime: &crate::RuntimePaths,
     mux: MuxName,
@@ -611,11 +612,19 @@ pub(super) fn cached_panes_or_produce(
         fresh,
     ) {
         Coalesced::Shared(cache) => Ok(cache),
-        // The producer wedged past the wait: produce locally rather than block.
-        // The raced-read repair still applies — without it a dropped command/cwd
-        // on this one path folds the anonymous row the winner path guards against.
+        // The producer wedged past the wait. Prefer any usable prior frame over
+        // a second mux fork: Zellij can stall every `list-panes` client when the
+        // session contains an empty half-born tab, and a local stampede makes
+        // the server less responsive. Without a prior, produce locally so a
+        // cold room still has a chance to recover.
         Coalesced::ProduceLocal => {
             let prior = read_snapshot_cache(&cache_path, session);
+            if let Some(prior) = prior
+                .clone()
+                .and_then(|prior| publishable_prior(prior, own_pane, diag))
+            {
+                return Ok(prior);
+            }
             let frame = produce_candidate(false, min_pane_cache_ms)?;
             let frame = confirm_and_carry(
                 frame,

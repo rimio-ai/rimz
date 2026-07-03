@@ -737,3 +737,42 @@ fn metrics_only_refresh_preserves_the_pane_frame_timestamp() {
         "metrics refresh samples /proc and writes its own cache"
     );
 }
+
+#[test]
+fn wedged_snapshot_producer_serves_prior_without_local_mux_fork() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = crate::RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/wedged-producer")),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+
+    let prior = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &prior).unwrap();
+    let lock_path = runtime.root.join("snapshot.lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    lock.try_lock().unwrap();
+
+    let held = cached_panes_or_produce(
+        &runtime,
+        crate::ids::MuxName::Zellij,
+        "s",
+        Some(unix_now_ms()),
+        None,
+        &crate::diag::DiagSink::disabled(),
+    )
+    .expect("stale prior should be held while producer is wedged");
+
+    assert_eq!(
+        held.to_pane_refs(),
+        prior.to_pane_refs(),
+        "a lock loser should not start another Zellij list-panes client when a prior frame is usable"
+    );
+}

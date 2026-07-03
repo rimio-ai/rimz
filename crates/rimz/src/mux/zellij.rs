@@ -72,6 +72,11 @@ const TAB_NAMES_RETRY_DELAY: Duration = Duration::from_millis(50);
 const NEW_TAB_ATTEMPTS: u32 = 3;
 const NEW_TAB_CONFIRM_WINDOW: Duration = Duration::from_millis(750);
 const NEW_TAB_CONFIRM_STEP: Duration = Duration::from_millis(50);
+/// Zellij can publish a `new-tab --layout --name` name before its screen worker
+/// has parsed the layout file and mounted panes. Keep the temp layout file
+/// alive until the tab reports at least one selectable tiled pane.
+const NEW_TAB_MATERIALIZE_WINDOW: Duration = Duration::from_secs(10);
+const NEW_TAB_MATERIALIZE_STEP: Duration = Duration::from_millis(50);
 /// A freshly opened background tab can report present before client focus has
 /// accepted the return action. Confirm the attached client's pane before
 /// handing control back to the caller.

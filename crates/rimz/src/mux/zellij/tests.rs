@@ -134,6 +134,132 @@ exit 0
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn new_tab_confirmation_waits_for_layout_panes() {
+    use crate::config::MultiplexerConfig;
+    use crate::ids::WorkspaceId;
+    use crate::mux::{
+        LayoutColumn, LayoutPanes, PaneCmd, SidebarPaneOptions, SidebarWidth, TabOptions,
+    };
+
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+log="$dir/zellij.log"
+tab="$dir/tab-created"
+layout_ref="$dir/layout-path"
+list_count="$dir/list-tabs-count"
+printf '%s\n' "$*" >> "$log"
+
+if [ "$1" = "--version" ]; then
+  printf 'zellij 0.44.3\n'
+  exit 0
+fi
+
+case " $* " in
+  *" action dump-layout "*)
+    printf 'layout {\n}\n'
+    exit 0
+    ;;
+  *" action query-tab-names "*)
+    printf 'main\n'
+    if [ -f "$tab" ]; then
+      printf 'work\n'
+    fi
+    exit 0
+    ;;
+  *" action new-tab "*)
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "--layout" ]; then
+        shift
+        printf '%s' "$1" > "$layout_ref"
+      fi
+      shift
+    done
+    : > "$tab"
+    exit 0
+    ;;
+  *" action list-tabs "*)
+    count=$(cat "$list_count" 2>/dev/null || printf '0')
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$list_count"
+    printf '[{"name":"main","selectable_tiled_panes_count":1}'
+    if [ -f "$tab" ]; then
+      panes=0
+      layout=$(cat "$layout_ref" 2>/dev/null || true)
+      if [ "$count" -ge 3 ]; then
+        if [ -n "$layout" ] && [ -f "$layout" ]; then
+          panes=2
+        else
+          printf '%s\n' 'layout-missing-before-materialized' >> "$log"
+        fi
+      fi
+      printf ',{"name":"work","selectable_tiled_panes_count":%s}' "$panes"
+    fi
+    printf ']\n'
+    exit 0
+    ;;
+esac
+"#,
+    );
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    let sidebar = SidebarPaneOptions {
+        session_name: "rimz-test".to_owned(),
+        workspace_id: WorkspaceId::from_project_root(&project_root),
+        project_root: project_root.clone(),
+        cwd: project_root.clone(),
+        birth_size: SidebarWidth::default().birth_size(Some(120)),
+        rimz_bin: std::path::PathBuf::from("rimz"),
+        replace_existing: false,
+        config: MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+
+    let backend = ZellijBackend::with_program_for_test(&shim);
+    backend
+        .open_tab(&TabOptions {
+            session_name: "rimz-test".to_owned(),
+            title: "work".to_owned(),
+            cwd: project_root,
+            panes: LayoutPanes {
+                columns: vec![LayoutColumn {
+                    panes: vec![PaneCmd {
+                        argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    }],
+                    stacked: false,
+                }],
+            },
+            focus: true,
+            dock_sidebar: true,
+            sidebar,
+        })
+        .expect("open tab");
+
+    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
+    let materialize_polls = log
+        .lines()
+        .filter(|line| line.contains("action list-tabs --json --panes"))
+        .count();
+    assert!(
+        materialize_polls >= 3,
+        "new-tab confirmation must wait for pane materialization, got log:\n{log}",
+    );
+    assert!(
+        !log.contains("layout-missing-before-materialized"),
+        "the temp layout file must stay alive until panes materialize:\n{log}",
+    );
+    assert_eq!(
+        log.lines()
+            .filter(|line| line.contains("action new-tab "))
+            .count(),
+        1,
+        "materialization polling should not create duplicate tabs:\n{log}",
+    );
+}
+
 #[test]
 fn version_parser_and_floor_hold() {
     assert_eq!(parse_version("zellij 0.41.2"), Some((0, 41, 2)));
