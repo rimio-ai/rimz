@@ -59,19 +59,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn append_writes_jsonl_record() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = log(dir.path());
-        log.append(&serde_json::json!({ "pages": 42 }));
-
-        let bytes = std::fs::read_to_string(log.path()).unwrap();
-        assert_eq!(bytes, "{\"pages\":42}\n");
-    }
-
-    #[test]
     fn sample_derives_bytes_from_wasm_pages() {
         let sample = PluginPresenceSample::new(1, None, 42, 1_000, 5, None);
 
         assert_eq!(sample.bytes, 42 * WASM_PAGE_BYTES);
+        assert_eq!(
+            PluginPresenceSample::new(1, None, u64::MAX, 1_000, 5, None).bytes,
+            u64::MAX
+        );
     }
 }

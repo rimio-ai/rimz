@@ -169,8 +169,11 @@ mod tests {
         append_rotating_jsonl(&path, cap, &serde_json::json!({ "n": 1 })).unwrap();
         append_rotating_jsonl(&path, cap, &serde_json::json!({ "n": 2 })).unwrap();
 
-        assert!(path.exists());
-        assert!(dir.path().join("binding.log.1.jsonl").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("binding.log.1.jsonl")).unwrap(),
+            "{\"n\":1}\n"
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "{\"n\":2}\n");
     }
 
     #[test]

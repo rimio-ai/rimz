@@ -353,15 +353,43 @@ fn rotated_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::diag::record::FrameRejectReason;
-    use crate::ids::{MuxName, PaneId, WorkspaceId};
+    use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
+
+    fn workspace_id() -> WorkspaceId {
+        WorkspaceId::from_project_root(Path::new("/repo"))
+    }
 
     fn sink(dir: &Path) -> DiagSink {
-        DiagSink::under(
-            dir.to_path_buf(),
-            WorkspaceId::from_project_root(Path::new("/repo")),
-            "s",
-            None,
-        )
+        DiagSink::under(dir.to_path_buf(), workspace_id(), "s", None)
+    }
+
+    fn sink_with_instance(dir: &Path, instance_id: SidebarInstanceId) -> DiagSink {
+        DiagSink::under(dir.to_path_buf(), workspace_id(), "s", Some(instance_id))
+    }
+
+    fn frame_rejected(prior_pane_count: usize) -> DiagEvent {
+        DiagEvent::FrameRejected {
+            reason: FrameRejectReason::Empty,
+            prior_pane_count,
+            fresh_pane_count: 0,
+            frames_ref: None,
+        }
+    }
+
+    fn diag_records(sink: &DiagSink) -> Vec<DiagEnvelope> {
+        std::fs::read_to_string(sink.log_path().unwrap())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    fn notify_records(dir: &Path) -> Vec<NotifyTraceEnvelope> {
+        std::fs::read_to_string(notify::log(dir).path())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
     }
 
     #[test]
@@ -375,6 +403,10 @@ mod tests {
             },
             1_000,
         );
+        sink.emit_unlimited(DiagEvent::RendererPanic {
+            message: "boom".to_owned(),
+            backtrace: None,
+        });
         sink.trace_notify_at_ms(
             NotifyTraceEvent::BellRing {
                 notification_kind: "waiting".to_owned(),
@@ -393,135 +425,43 @@ mod tests {
     }
 
     #[test]
-    fn rate_limit_suppresses_identical_events_but_allows_distinct() {
+    fn rate_limit_uses_identity_key_and_flushes_suppressed_count() {
         let dir = tempfile::tempdir().unwrap();
         let sink = sink(dir.path());
-        sink.emit_at_ms(
-            DiagEvent::FrameRejected {
-                reason: FrameRejectReason::Empty,
-                prior_pane_count: 1,
-                fresh_pane_count: 0,
-                frames_ref: None,
-            },
-            1_000,
-        );
-        sink.emit_at_ms(
-            DiagEvent::FrameRejected {
-                reason: FrameRejectReason::Empty,
-                prior_pane_count: 2,
-                fresh_pane_count: 0,
-                frames_ref: None,
-            },
-            1_001,
-        );
-        sink.emit_at_ms(
-            DiagEvent::DuplicatePaneId {
-                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
-            },
-            1_002,
-        );
 
-        let text = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
-        assert_eq!(text.lines().count(), 2);
-    }
-
-    #[test]
-    fn rate_limit_reopens_after_window() {
-        let dir = tempfile::tempdir().unwrap();
-        let sink = sink(dir.path());
-        for at_ms in [1_000, 1_001, 31_001] {
-            sink.emit_at_ms(
-                DiagEvent::FrameRejected {
-                    reason: FrameRejectReason::Empty,
-                    prior_pane_count: 1,
-                    fresh_pane_count: 0,
-                    frames_ref: None,
-                },
-                at_ms,
-            );
-        }
-
-        let text = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
-        assert_eq!(
-            text.lines().count(),
-            2,
-            "the same identity emits again once the thirty-second window has elapsed"
-        );
-    }
-
-    #[test]
-    fn rate_limit_flushes_suppressed_count_after_window() {
-        let dir = tempfile::tempdir().unwrap();
-        let sink = sink(dir.path());
-        for at_ms in [1_000, 1_001, 1_002, 31_003] {
-            sink.emit_at_ms(
-                DiagEvent::FrameRejected {
-                    reason: FrameRejectReason::Empty,
-                    prior_pane_count: 1,
-                    fresh_pane_count: 0,
-                    frames_ref: None,
-                },
-                at_ms,
-            );
-        }
-
-        let text = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
-        let records = text
-            .lines()
-            .map(|line| serde_json::from_str::<DiagEnvelope>(line).unwrap())
-            .collect::<Vec<_>>();
-
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].suppressed_since_last, 0);
-        assert_eq!(records[1].suppressed_since_last, 2);
-    }
-
-    #[test]
-    fn rate_limit_keeps_suppressed_count_across_foreign_emit() {
-        let dir = tempfile::tempdir().unwrap();
-        let sink = sink(dir.path());
-        sink.emit_at_ms(
-            DiagEvent::FrameRejected {
-                reason: FrameRejectReason::Empty,
-                prior_pane_count: 1,
-                fresh_pane_count: 0,
-                frames_ref: None,
-            },
-            1_000,
-        );
-        sink.emit_at_ms(
-            DiagEvent::FrameRejected {
-                reason: FrameRejectReason::Empty,
-                prior_pane_count: 1,
-                fresh_pane_count: 0,
-                frames_ref: None,
-            },
-            15_000,
-        );
+        sink.emit_at_ms(frame_rejected(1), 1_000);
+        sink.emit_at_ms(frame_rejected(2), 15_000);
         sink.emit_at_ms(
             DiagEvent::DuplicatePaneId {
                 pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
             },
             32_000,
         );
-        sink.emit_at_ms(
-            DiagEvent::FrameRejected {
-                reason: FrameRejectReason::Empty,
-                prior_pane_count: 1,
-                fresh_pane_count: 0,
-                frames_ref: None,
-            },
-            33_000,
-        );
+        sink.emit_at_ms(frame_rejected(1), 33_000);
 
-        let text = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
-        let records = text
-            .lines()
-            .map(|line| serde_json::from_str::<DiagEnvelope>(line).unwrap())
-            .collect::<Vec<_>>();
-
+        let records = diag_records(&sink);
         assert_eq!(records.len(), 3);
+        assert_eq!(records[0].suppressed_since_last, 0);
+        match &records[0].event {
+            DiagEvent::FrameRejected {
+                prior_pane_count, ..
+            } => assert_eq!(*prior_pane_count, 1),
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert_eq!(records[1].suppressed_since_last, 0);
+        assert_eq!(
+            records[1].event,
+            DiagEvent::DuplicatePaneId {
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
+            }
+        );
         assert_eq!(records[2].suppressed_since_last, 1);
+        match &records[2].event {
+            DiagEvent::FrameRejected {
+                prior_pane_count, ..
+            } => assert_eq!(*prior_pane_count, 1),
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[test]
@@ -535,51 +475,99 @@ mod tests {
             });
         }
 
-        let text = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
-        assert_eq!(text.lines().count(), 2);
+        let records = diag_records(&sink);
+        assert_eq!(records.len(), 2);
+        assert!(
+            records
+                .iter()
+                .all(|record| matches!(record.event, DiagEvent::RendererPanic { .. }))
+        );
     }
 
     #[test]
-    fn frame_ring_keeps_last_eight() {
+    fn trace_notify_writes_unlimited_envelopes() {
         let dir = tempfile::tempdir().unwrap();
-        let sink = sink(dir.path());
-        for i in 0..10 {
-            sink.capture_frame_pair("drop", &i, &(i + 1), i);
+        let instance_id = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
+        let sink = sink_with_instance(dir.path(), instance_id.clone());
+        let event = NotifyTraceEvent::BellRing {
+            notification_kind: "success".to_owned(),
+            fired: true,
+            recheck_unread: true,
+            panes: Vec::new(),
+            suppressed: None,
+        };
+
+        sink.trace_notify_at_ms(event.clone(), 1_000);
+        sink.trace_notify_at_ms(event.clone(), 1_001);
+
+        let records = notify_records(dir.path());
+        assert_eq!(records.len(), 2);
+        for (index, record) in records.iter().enumerate() {
+            assert_eq!(record.v, notify::NOTIFY_TRACE_SCHEMA_VERSION);
+            assert_eq!(record.build.as_deref(), crate::build_id::current());
+            assert!(record.build.is_some());
+            assert_eq!(record.workspace_id, workspace_id());
+            assert_eq!(record.session_name, "s");
+            assert_eq!(record.instance_id.as_ref(), Some(&instance_id));
+            assert_eq!(record.at_ms, 1_000 + index as u64);
+            assert_eq!(record.event, event);
         }
-
-        let count = std::fs::read_dir(dir.path().join(DIAG_FRAMES_DIR))
-            .unwrap()
-            .count();
-        assert_eq!(count, DIAG_FRAME_RING);
     }
 
     #[test]
-    fn frame_capture_names_do_not_collide_within_one_millisecond() {
+    fn frame_capture_writes_unique_private_ring() {
         let dir = tempfile::tempdir().unwrap();
-        let sink = sink(dir.path());
-        let first = sink.capture_frame_pair("drop", &1, &2, 42).unwrap();
-        let second = sink.capture_frame_pair("drop", &3, &4, 42).unwrap();
+        let capture_sink = sink(dir.path());
+        let first = capture_sink.capture_frame_pair("drop", &1, &2, 42).unwrap();
+        let second = capture_sink.capture_frame_pair("drop", &3, &4, 42).unwrap();
+        let frames_dir = dir.path().join(DIAG_FRAMES_DIR);
 
         assert_ne!(first, second);
-        assert!(dir.path().join(DIAG_FRAMES_DIR).join(first).exists());
-        assert!(dir.path().join(DIAG_FRAMES_DIR).join(second).exists());
-    }
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(frames_dir.join(&first)).unwrap()
+            )
+            .unwrap(),
+            serde_json::json!({ "prior": 1, "offending": 2 })
+        );
+        assert!(frames_dir.join(second).exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
 
-    #[test]
-    fn frame_ring_prunes_by_numeric_timestamp() {
-        let dir = tempfile::tempdir().unwrap();
-        let sink = sink(dir.path());
-        for i in 0..10 {
-            sink.capture_frame_pair("drop", &i, &(i + 1), i);
+            assert_eq!(
+                std::fs::metadata(&frames_dir).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
         }
 
-        let mut kept = std::fs::read_dir(dir.path().join(DIAG_FRAMES_DIR))
+        let ring_dir = tempfile::tempdir().unwrap();
+        let ring_sink = sink(ring_dir.path());
+        for i in 0..10 {
+            ring_sink.capture_frame_pair("drop", &i, &(i + 1), i);
+        }
+
+        let frames = std::fs::read_dir(ring_dir.path().join(DIAG_FRAMES_DIR))
             .unwrap()
             .filter_map(Result::ok)
-            .map(|entry| frame_capture_sort_key(&entry.path()).0)
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        assert_eq!(frames.len(), DIAG_FRAME_RING);
+
+        let mut kept = frames
+            .iter()
+            .map(|path| frame_capture_sort_key(path).0)
             .collect::<Vec<_>>();
         kept.sort_unstable();
 
         assert_eq!(kept, (2..10).collect::<Vec<_>>());
+        for path in frames {
+            let at_ms = frame_capture_sort_key(&path).0;
+            let value: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+
+            assert_eq!(value["prior"], at_ms);
+            assert_eq!(value["offending"], at_ms + 1);
+        }
     }
 }

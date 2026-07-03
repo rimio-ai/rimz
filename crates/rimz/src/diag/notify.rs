@@ -147,51 +147,72 @@ pub fn log(state_root: &Path) -> JsonlLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ids::MuxName;
 
     #[test]
-    fn append_writes_jsonl_record() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = log(dir.path());
-        log.append(&serde_json::json!({ "event": "bell_ring" }));
+    fn trace_events_keep_wire_shape() {
+        let rows = [
+            (
+                NotifyTraceEvent::NotificationEmitted {
+                    notification_kind: "waiting".to_owned(),
+                    agents: vec![TraceAgent {
+                        kind: AgentKind::new_unchecked("claude"),
+                        agent_id: AgentSessionId::from("claude-1"),
+                        label: "api".to_owned(),
+                        pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
+                        new_status: Some("waiting".to_owned()),
+                    }],
+                    panes: vec![PaneId::from_parts(MuxName::Tmux, "%1")],
+                    unread_count: Some(1),
+                },
+                r#"{"kind":"notification_emitted","notification_kind":"waiting","agents":[{"kind":"claude","agent_id":"claude-1","label":"api","pane_id":"zellij:terminal_1","new_status":"waiting"}],"panes":["tmux:%1"],"unread_count":1}"#,
+            ),
+            (
+                NotifyTraceEvent::BellRing {
+                    notification_kind: "success".to_owned(),
+                    fired: true,
+                    recheck_unread: true,
+                    panes: Vec::new(),
+                    suppressed: None,
+                },
+                r#"{"kind":"bell_ring","notification_kind":"success","fired":true,"recheck_unread":true}"#,
+            ),
+            (
+                NotifyTraceEvent::UnreadMarked {
+                    row_id: "claude-1".to_owned(),
+                    label: None,
+                    agent_kind: None,
+                    agent_id: None,
+                    worktree: None,
+                    pane_id: None,
+                    status: "waiting".to_owned(),
+                    episode_ms: 7,
+                },
+                r#"{"kind":"unread_marked","row_id":"claude-1","status":"waiting","episode_ms":7}"#,
+            ),
+            (
+                NotifyTraceEvent::UnreadCleared {
+                    row_id: "claude-1".to_owned(),
+                    label: Some("api".to_owned()),
+                    agent_kind: Some(AgentKind::new_unchecked("claude")),
+                    agent_id: Some(AgentSessionId::from("claude-1")),
+                    worktree: Some("main".to_owned()),
+                    pane_id: Some(PaneId::from_parts(MuxName::Tmux, "%1")),
+                    cause: "tab_view".to_owned(),
+                    cleared_at_ms: Some(42),
+                },
+                r#"{"kind":"unread_cleared","row_id":"claude-1","label":"api","agent_kind":"claude","agent_id":"claude-1","worktree":"main","pane_id":"tmux:%1","cause":"tab_view","cleared_at_ms":42}"#,
+            ),
+        ];
 
-        let bytes = std::fs::read_to_string(log.path()).unwrap();
-        assert_eq!(bytes, "{\"event\":\"bell_ring\"}\n");
-    }
+        for (event, expected) in rows {
+            let json = serde_json::to_string(&event).unwrap();
 
-    #[test]
-    fn unread_cleared_round_trips() {
-        let event = NotifyTraceEvent::UnreadCleared {
-            row_id: "claude-1".to_owned(),
-            label: Some("api".to_owned()),
-            agent_kind: Some(AgentKind::new_unchecked("claude")),
-            agent_id: Some(AgentSessionId::from("claude-1")),
-            worktree: Some("main".to_owned()),
-            pane_id: Some(PaneId::from_parts(crate::ids::MuxName::Tmux, "%1")),
-            cause: "tab_view".to_owned(),
-            cleared_at_ms: Some(42),
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        assert_eq!(
-            json,
-            r#"{"kind":"unread_cleared","row_id":"claude-1","label":"api","agent_kind":"claude","agent_id":"claude-1","worktree":"main","pane_id":"tmux:%1","cause":"tab_view","cleared_at_ms":42}"#
-        );
-        let back: NotifyTraceEvent = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, event);
-    }
-
-    #[test]
-    fn bell_ring_omits_absent_suppressed() {
-        let event = NotifyTraceEvent::BellRing {
-            notification_kind: "success".to_owned(),
-            fired: true,
-            recheck_unread: true,
-            panes: Vec::new(),
-            suppressed: None,
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        assert_eq!(
-            json,
-            r#"{"kind":"bell_ring","notification_kind":"success","fired":true,"recheck_unread":true}"#
-        );
+            assert_eq!(json, expected);
+            assert_eq!(
+                serde_json::from_str::<NotifyTraceEvent>(&json).unwrap(),
+                event
+            );
+        }
     }
 }

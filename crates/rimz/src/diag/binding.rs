@@ -20,23 +20,3 @@ fn path(runtime: &RuntimePaths) -> PathBuf {
 pub fn log(runtime: &RuntimePaths) -> JsonlLog {
     JsonlLog::new(path(runtime), BINDING_LOG_MAX_BYTES)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::ids::WorkspaceId;
-
-    #[test]
-    fn append_writes_jsonl_record() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
-            .expect("runtime");
-
-        let log = log(&runtime);
-        log.append(&serde_json::json!({ "event": "selected" }));
-
-        let bytes = std::fs::read_to_string(log.path()).unwrap();
-        assert_eq!(bytes, "{\"event\":\"selected\"}\n");
-    }
-}
