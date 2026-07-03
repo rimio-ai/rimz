@@ -73,11 +73,13 @@ pub(super) fn tabs_with_sidebars(panes: &[RawPane]) -> HashSet<String> {
 }
 
 pub(super) fn docked_sidebar_cols(panes: &[RawPane]) -> Option<NonZeroU16> {
+    let excluded = HashSet::new();
     let mut widths: BTreeMap<NonZeroU16, (usize, u64)> = BTreeMap::new();
-    for pane in panes
-        .iter()
-        .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane) && pane.pane_x == Some(0))
-    {
+    for pane in panes.iter().filter(|pane| {
+        pane.is_live_terminal()
+            && is_sidebar_pane(pane)
+            && sidebar_dock_verdict(pane, panes, &excluded) == Some(SidebarDock::Docked)
+    }) {
         let Some(cols) = pane
             .pane_columns
             .and_then(|cols| u16::try_from(cols).ok())

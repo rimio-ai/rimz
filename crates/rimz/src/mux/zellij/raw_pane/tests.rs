@@ -214,6 +214,10 @@ fn docked_sidebar_cols_filters_non_live_or_non_docked_panes() {
           {"id": 5, "is_plugin": false, "tab_id": 4, "title": "rimz-sidebar",
            "pane_x": 0, "pane_columns": 70000},
           {"id": 6, "is_plugin": false, "tab_id": 5, "title": "zsh",
+           "pane_x": 0, "pane_columns": 72},
+          {"id": 7, "is_plugin": false, "tab_id": 6, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 72},
+          {"id": 8, "is_plugin": false, "tab_id": 6, "title": "zsh",
            "pane_x": 0, "pane_columns": 72}
         ]"#;
     let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
