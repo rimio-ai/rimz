@@ -616,7 +616,7 @@ pub trait AgentAdapter: Send + Sync {
 
     /// Every transcript/rollout JSONL this agent has on disk, fleet-wide — the
     /// discovery walk for the full-history spending pass
-    /// ([`spending::compute_spending`]). Distinct from the bounded tail read in
+    /// ([`spending::SpendingWalker`]). Distinct from the bounded tail read in
     /// [`observe_lifecycle`](Self::observe_lifecycle): this walks the whole
     /// history for spend. Defaults to none for an agent with no transcript
     /// surface.

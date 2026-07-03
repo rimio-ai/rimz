@@ -19,6 +19,119 @@ fn opencode_adapter() -> &'static dyn AgentAdapter {
     &crate::agents::OpencodeAdapter
 }
 
+fn compute_spending(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &mut SpendingDiskCache,
+    prices: &PriceBook,
+    now_secs: u64,
+) -> Spending {
+    compute_spending_with_origins(files, cache, prices, now_secs, &HashMap::new())
+}
+
+fn compute_spending_with_origins(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &mut SpendingDiskCache,
+    prices: &PriceBook,
+    now_secs: u64,
+    origin_overrides: &HashMap<PathBuf, PathBuf>,
+) -> Spending {
+    let spec = HeadlineSpec::default();
+    compute_spending_with_origins_and_scope(
+        files,
+        cache,
+        prices,
+        now_secs,
+        origin_overrides,
+        None,
+        &spec,
+    )
+    .0
+}
+
+fn compute_spending_with_origins_and_scope(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &mut SpendingDiskCache,
+    prices: &PriceBook,
+    now_secs: u64,
+    origin_overrides: &HashMap<PathBuf, PathBuf>,
+    scope: Option<&SpendScope>,
+    spec: &HeadlineSpec,
+) -> (Spending, SpendTally) {
+    let mut tick = |_: &SpendingDiskCache, _: SpendProgress| {};
+    let mut on_jobs_scheduled = |_: &WalkStats| {};
+    let mut stats = WalkStats::default();
+    refresh_spending_cache(
+        files,
+        cache,
+        prices,
+        now_secs,
+        origin_overrides,
+        &mut stats,
+        &mut RefreshCallbacks {
+            on_jobs_scheduled: &mut on_jobs_scheduled,
+            tick: &mut tick,
+        },
+    );
+    let counted = dedup_cached_entries(files, cache).into_counted();
+    let aggregate = aggregate_counted_rollups(files, cache, &counted, scope, now_secs, spec, false);
+    (aggregate.spending, aggregate.workspace_tally)
+}
+
+fn aggregate_spending(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    counted: &[impl CountedPayload],
+    now_secs: u64,
+    spec: &HeadlineSpec,
+) -> Spending {
+    aggregate_counted_rollups(files, cache, counted, None, now_secs, spec, false).spending
+}
+
+fn compute_daily_spend(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+) -> BTreeMap<i64, DaySpend> {
+    let counted = dedup_cached_entries(files, cache).into_counted();
+    aggregate_counted_rollups(
+        files,
+        cache,
+        &counted,
+        None,
+        NOW_SECS,
+        &HeadlineSpec::default(),
+        true,
+    )
+    .days
+}
+
+fn compute_model_breakdown(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    now_secs: u64,
+) -> BTreeMap<String, SpendTally> {
+    let counted = dedup_cached_entries(files, cache).into_counted();
+    aggregate_counted_rollups(
+        files,
+        cache,
+        &counted,
+        None,
+        now_secs,
+        &HeadlineSpec::default(),
+        true,
+    )
+    .models
+}
+
+fn compute_scoped_tally(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    scope: &SpendScope,
+    now_secs: u64,
+    spec: &HeadlineSpec,
+) -> SpendTally {
+    compute_scoped_spending(files, cache, scope, now_secs, spec).tally
+}
+
 fn compute_total(files: &[PathBuf], cache: &mut SpendingDiskCache) -> SpendTally {
     let tagged: Vec<(&'static dyn AgentAdapter, PathBuf)> = files
         .iter()

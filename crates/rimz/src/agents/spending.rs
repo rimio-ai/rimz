@@ -1,22 +1,16 @@
 //! JSONL-based spending aggregation over agent transcript history.
 //!
 //! Per-provider typed parsers live in each adapter's `spend.rs`; this module
-//! owns the on-disk cache types and the [`compute_spending`] aggregation loop
-//! with a parallel streaming cold parse, store-time chunk dedup, periodic
-//! checkpoint/partial-publish observers, mtime-based old-file skips, and
-//! cross-file Claude dedup. Discovery and parsing dispatch through the
-//! adapter ([`AgentAdapter::transcript_files`] /
+//! discovers transcript stores, refreshes the shared cursor cache through
+//! [`SpendingWalker`], aggregates account-global and workspace-scoped windows,
+//! and publishes stamped provider/workspace caches. Discovery and parsing
+//! dispatch through the adapter ([`AgentAdapter::transcript_files`] /
 //! [`AgentAdapter::parse_spend`]): a dollar-logging provider (Claude's legacy
 //! `costUSD`, Pi) reads its figures verbatim, a token-only provider (Codex,
 //! current Claude) multiplies counts through the
 //! [`PriceBook`](super::pricing) — either way every file yields
 //! [`CachedEntry`] values with one per-file origin and buckets under its
 //! adapter's kind.
-//!
-//! [`compute_spending`] returns a [`Spending`]: one fleet-wide headline / 7d /
-//! 30d / 365d [`SpendTally`] plus a per-provider breakdown, so the fleet ledger
-//! and each dashboard panel read account-global piles. The cockpit reads a
-//! workspace-scoped [`SpendTally`] derived from the same cached entries.
 
 use std::cell::Cell;
 #[cfg(test)]
@@ -224,74 +218,13 @@ pub struct WalkStats {
 }
 
 /// One UTC day's deduplicated, account-global spend and token total — a cell of
-/// the [`compute_daily_spend`] contribution heatmap.
+/// the published contribution heatmap.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DaySpend {
     pub usd: f64,
     /// `input` (cache-write folded in) + `output` + `cache_read`, matching
     /// `rimz stats`'s cache-inclusive `◇` token total.
     pub tokens: u64,
-}
-
-/// Bucket the full spend history by UTC day (days since the Unix epoch),
-/// account-global, for the token-usage heatmap. Reuses the same cross-file
-/// Claude `(message_id, request_id)` dedup and sidechain-replay suppression as
-/// the trailing-window tally, folding cache-read into each day's token bucket
-/// for the `rimz stats` heatmap. Pure over an already-refreshed cache — the
-/// caller owns the walk that fills it.
-pub fn compute_daily_spend(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
-    cache: &SpendingDiskCache,
-) -> BTreeMap<i64, DaySpend> {
-    let counted = dedup_cached_entries(files, cache).into_counted();
-    compute_daily_spend_from_counted(&counted)
-}
-
-fn compute_daily_spend_from_counted(counted: &[impl CountedPayload]) -> BTreeMap<i64, DaySpend> {
-    let mut by_day: BTreeMap<i64, DaySpend> = BTreeMap::new();
-    for counted in counted {
-        let entry = counted.entry();
-        let day = (entry.ts_secs / 86_400) as i64;
-        let cell = by_day.entry(day).or_default();
-        cell.usd += entry.cost_usd;
-        cell.tokens += entry.input + entry.cache_write + entry.output + entry.cache_read;
-    }
-    by_day
-}
-
-/// Bucket the spend history by model id and trailing window, account-global,
-/// reusing the same
-/// cross-file Claude dedup and sidechain-replay suppression as
-/// [`compute_daily_spend`] so a model's tokens agree with the provider windows.
-/// An entry whose transcript named no model buckets under the empty key, which
-/// the caller folds into an "Other" row. Pure over an already-refreshed cache;
-/// session counts and the configured headline window are intentionally empty.
-pub fn compute_model_breakdown(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
-    cache: &SpendingDiskCache,
-    now_secs: u64,
-) -> BTreeMap<String, SpendTally> {
-    let counted = dedup_cached_entries(files, cache).into_counted();
-    compute_model_breakdown_from_counted(&counted, now_secs)
-}
-
-fn compute_model_breakdown_from_counted(
-    counted: &[impl CountedPayload],
-    now_secs: u64,
-) -> BTreeMap<String, SpendTally> {
-    let mut by_model: BTreeMap<String, SpendTally> = BTreeMap::new();
-    for counted in counted {
-        let entry = counted.entry();
-        accum(
-            by_model
-                .entry(entry.model.clone().unwrap_or_default())
-                .or_default(),
-            entry,
-            now_secs,
-            u64::MAX,
-        );
-    }
-    by_model
 }
 
 /// Bumped whenever the cached parse shape *or values* change, so an upgrade
@@ -441,7 +374,7 @@ pub struct SpendParse {
 /// `message_id` and `request_id` are present for Claude entries and absent for
 /// Codex and Pi entries. `thread_id` is present when the provider's durable
 /// transcript store exposes a native session id. `is_sidechain` drives the
-/// sidechain-replay suppression logic in `compute_spending`.
+/// sidechain-replay suppression logic in the spending walk.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CachedEntry {
     /// Unix timestamp (seconds) the entry was recorded, parsed from the JSONL
@@ -844,100 +777,6 @@ pub fn session_cost_usd(
     })
 }
 
-/// Compute the fleet and per-provider default headline / 7d / 30d / 365d spend
-/// and token tally for the given adapter-tagged JSONL files, pricing token-only
-/// providers (Codex) through `prices`.
-///
-/// IO is O(delta), not O(history): an unchanged file (same mtime and length)
-/// is a pure cache hit, a grown file parses only its appended suffix from the
-/// stored [`SpendCursor`], and only a truncated/rotated or rewritten-in-place
-/// file re-parses cold. Sets `cache.dirty = true` when any entry was updated;
-/// finished sessions have stable stats and are permanently served from cache
-/// after the first parse.
-///
-/// ### Cross-file Claude deduplication
-///
-/// When a Claude session spawns subagents, the btw tool replays the parent
-/// message into the subagent file with the full reconstructed context (50k+
-/// cache-read tokens) and a `costUSD` that would double-count the turn if
-/// summed naively.  Dedup by `(message.id, requestId)` across all files
-/// prevents this: if `message.id` M appears as both `isSidechain:false`
-/// (main-chain entry) and `isSidechain:true` (sidechain replay), the sidechain
-/// entry is suppressed.  Only Claude entries carry message IDs; Codex and Pi
-/// entries are ID-free and bucket directly under their file's tagged provider.
-pub fn compute_spending(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
-    cache: &mut SpendingDiskCache,
-    prices: &PriceBook,
-    now_secs: u64,
-) -> Spending {
-    compute_spending_with_origins(files, cache, prices, now_secs, &HashMap::new())
-}
-
-/// Compute fleet spending, applying trusted transcript-path → origin overrides
-/// before aggregation. The overrides are currently used for Codex rollout files,
-/// whose path does not encode the workspace; Claude and Pi parsers stamp their
-/// own origins from transcript contents.
-pub fn compute_spending_with_origins(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
-    cache: &mut SpendingDiskCache,
-    prices: &PriceBook,
-    now_secs: u64,
-    origin_overrides: &HashMap<PathBuf, PathBuf>,
-) -> Spending {
-    let spec = HeadlineSpec::default();
-    compute_spending_with_origins_and_scope(
-        files,
-        cache,
-        prices,
-        now_secs,
-        origin_overrides,
-        None,
-        &spec,
-    )
-    .0
-}
-
-/// Compute account-global spending and, when `scope` is present, the cockpit's
-/// workspace-scoped tally from the same refreshed cache and the same dedup pass.
-pub fn compute_spending_with_origins_and_scope(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
-    cache: &mut SpendingDiskCache,
-    prices: &PriceBook,
-    now_secs: u64,
-    origin_overrides: &HashMap<PathBuf, PathBuf>,
-    scope: Option<&SpendScope>,
-    spec: &HeadlineSpec,
-) -> (Spending, SpendTally) {
-    let mut tick = |_: &SpendingDiskCache, _: SpendProgress| {};
-    let mut on_jobs_scheduled = |_: &WalkStats| {};
-    let mut stats = WalkStats::default();
-    refresh_spending_cache(
-        files,
-        cache,
-        prices,
-        now_secs,
-        origin_overrides,
-        &mut stats,
-        &mut RefreshCallbacks {
-            on_jobs_scheduled: &mut on_jobs_scheduled,
-            tick: &mut tick,
-        },
-    );
-
-    // Second pass: aggregate with cross-file Claude deduplication.
-    //
-    // Claude entries carry message IDs and dedup on exact_key = (message_id,
-    // request_id); msg_has_non_sidechain tracks whether each message_id has a
-    // main-chain entry anywhere across all files, so sidechain replays can be
-    // suppressed.  ID-free entries (Codex, Pi) carry their file's provider so
-    // they bucket under the right kind.
-    let counted = dedup_cached_entries(files, cache).into_counted();
-    let aggregate = aggregate_counted_rollups(files, cache, &counted, scope, now_secs, spec, false);
-
-    (aggregate.spending, aggregate.workspace_tally)
-}
-
 pub(crate) fn aggregate_walk_publish(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
@@ -1283,17 +1122,6 @@ fn aggregate_counted_rollups(
     }
 }
 
-#[cfg(test)]
-fn aggregate_spending(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
-    cache: &SpendingDiskCache,
-    counted: &[impl CountedPayload],
-    now_secs: u64,
-    spec: &HeadlineSpec,
-) -> Spending {
-    aggregate_counted_rollups(files, cache, counted, None, now_secs, spec, false).spending
-}
-
 struct CountedCutoffs {
     uniform: Option<u64>,
     total: u64,
@@ -1501,18 +1329,6 @@ impl SpendScope {
         }
         self.roots.iter().any(|root| origin.starts_with(root))
     }
-}
-
-/// Compute the cockpit's workspace-scoped tally from an already-refreshed
-/// spending cache. Unknown-origin files are skipped.
-pub fn compute_scoped_tally(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
-    cache: &SpendingDiskCache,
-    scope: &SpendScope,
-    now_secs: u64,
-    spec: &HeadlineSpec,
-) -> SpendTally {
-    compute_scoped_spending(files, cache, scope, now_secs, spec).tally
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -2467,7 +2283,7 @@ pub fn reconcile_workspace_carry(
 // ── Date utilities ────────────────────────────────────────────────────────────
 
 /// The wall clock as Unix seconds — the `now_secs` a caller captures once and
-/// threads into [`compute_spending`], which stays pure over it.
+/// threads through one spending walk.
 pub fn unix_secs_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

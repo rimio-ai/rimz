@@ -23,7 +23,7 @@
 //! fields carry `:null` (rejected by the upstream TypeScript/Zod schema).
 //! Entries are returned raw — all `(message.id, requestId)` dedup, including
 //! the btw/subagent sidechain-replay suppression, lives in one place,
-//! `spending::compute_spending`, so an incremental suffix parse never has to
+//! the spending walk, so an incremental suffix parse never has to
 //! see the lines before its resume point.
 
 use std::collections::BTreeMap;
@@ -222,7 +222,7 @@ fn consume_digits(bytes: &[u8], i: &mut usize) -> bool {
 /// `(message.id, requestId)` rule — the retry-write duplicate, the btw tool
 /// replaying a parent message into the subagent file with inflated context
 /// tokens — is applied once, over all files and cache generations, in
-/// `spending::compute_spending`. A suffix parse therefore never needs the
+/// the spending walk. A suffix parse therefore never needs the
 /// lines before its resume point.
 pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> SpendParse {
     let Some((content, next_offset)) = read_spend_lines(path, from_offset) else {
@@ -524,7 +524,7 @@ mod tests {
     #[test]
     fn parse_is_raw_and_dedup_lives_downstream() {
         // All (msg, req) dedup and sidechain suppression live in
-        // `spending::compute_spending`, so an incremental suffix parse never has
+        // the spending walk, so an incremental suffix parse never has
         // to see earlier lines; the raw parse keeps every copy.
         let dir = TempDir::new().unwrap();
 

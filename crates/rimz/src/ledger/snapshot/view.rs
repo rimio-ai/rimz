@@ -235,7 +235,7 @@ pub struct SidebarSnapshot {
     /// every workspace.
     /// Attached by the sidebar enrichment spine
     /// (`sidebar::enrich::enrich`) from the producer's fleet spending walk
-    /// (`sidebar::produce`, via [`crate::agents::spending::compute_spending`]);
+    /// (`sidebar::produce`, via [`crate::agents::spending::SpendingWalker`]);
     /// `None` until the cache is seeded (the first producer tick after startup)
     /// or when nothing has been recorded. The fleet ledger reads the trailing
     /// `week` and `month` rows; provider dashboard panels read the per-provider
