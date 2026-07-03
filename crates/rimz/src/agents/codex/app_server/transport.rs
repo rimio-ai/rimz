@@ -165,9 +165,7 @@ fn map_ws_err(err: tungstenite::Error) -> AppServerErr {
 fn map_ws_handshake_err(err: HandshakeError<ClientHandshake<UnixStream>>) -> AppServerErr {
     match err {
         HandshakeError::Failure(err) => map_ws_err(err),
-        HandshakeError::Interrupted(_) => {
-            AppServerErr::Protocol("codex app-server websocket handshake interrupted".to_owned())
-        }
+        HandshakeError::Interrupted(_) => AppServerErr::Timeout,
     }
 }
 
@@ -276,12 +274,22 @@ impl WsTransport {
     }
 
     fn from_stream(stream: UnixStream, total: Duration) -> Result<Self, AppServerErr> {
+        if total.is_zero() {
+            return Err(AppServerErr::Timeout);
+        }
+        let deadline = Instant::now() + total;
+        stream
+            .set_read_timeout(Some(total))
+            .map_err(AppServerErr::Io)?;
+        stream
+            .set_write_timeout(Some(total))
+            .map_err(AppServerErr::Io)?;
         let (ws, _response) =
             tungstenite::client("ws://localhost/", stream).map_err(map_ws_handshake_err)?;
         Ok(Self {
             ws,
             next_id: 1,
-            deadline: Instant::now() + total,
+            deadline,
         })
     }
 
@@ -387,6 +395,25 @@ mod tests {
             json!({"ok": true})
         );
         transport.notify("initialized", json!({})).unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn ws_transport_handshake_timeout_maps_to_timeout() {
+        use std::io::Read;
+
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            let mut buf = [0u8; 512];
+            let _ = server.read(&mut buf);
+            thread::sleep(Duration::from_millis(80));
+        });
+
+        let err = match WsTransport::from_stream(client, Duration::from_millis(20)) {
+            Ok(_) => panic!("stalled handshake unexpectedly succeeded"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, AppServerErr::Timeout));
         handle.join().unwrap();
     }
 
