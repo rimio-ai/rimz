@@ -107,12 +107,7 @@ pub(crate) enum MergeAction {
 #[derive(Debug)]
 pub(crate) struct SkippedKey {
     pub(crate) key: String,
-    pub(crate) reason: SkipReason,
-}
-
-#[derive(Debug)]
-pub(crate) enum SkipReason {
-    Invalid(String),
+    pub(crate) reason: String,
 }
 
 pub(crate) fn merge_default_config() -> Result<MergeReport> {
@@ -150,7 +145,7 @@ fn merge_one(path: &Path, template: &str) -> Result<FileMergeOutcome> {
             action: MergeAction::Wrote,
             skipped: vec![SkippedKey {
                 key: "<file>".to_owned(),
-                reason: SkipReason::Invalid("unparseable; rewritten from template".to_owned()),
+                reason: "unparseable; rewritten from template".to_owned(),
             }],
         });
     };
@@ -349,7 +344,7 @@ fn apply_merge_keys(
         if !progressed {
             skipped.extend(next.into_iter().map(|(key, err)| SkippedKey {
                 key: key.logical.join("."),
-                reason: SkipReason::Invalid(err),
+                reason: err,
             }));
             break;
         }

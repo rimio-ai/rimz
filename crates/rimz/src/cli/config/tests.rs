@@ -328,7 +328,7 @@ fn merge_key_oracle_accepts_sentry_and_rejects_bogus_keys() {
     );
     assert_eq!(skipped.len(), 1);
     assert_eq!(skipped[0].key, "notifications.nope");
-    assert!(matches!(&skipped[0].reason, SkipReason::Invalid(_)));
+    assert!(skipped[0].reason.contains("unknown config key"));
 }
 
 #[test]
