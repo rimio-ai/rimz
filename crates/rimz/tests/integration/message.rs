@@ -666,6 +666,13 @@ fn steer_refuses_pending_ask_before_touching_pane() {
         stderr.contains("has pending ask") && stderr.contains("--force"),
         "unexpected stderr: {stderr}"
     );
+    assert!(
+        env.ledger()
+            .list_pending_messages()
+            .expect("pending queue")
+            .is_empty(),
+        "a refused steer must not leave a deliverable record"
+    );
 }
 
 #[test]
@@ -1654,6 +1661,50 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
             .all(|message| message.message_id != prompt_id),
         "delivered prompt self-cleans from the live queue"
     );
+}
+
+#[test]
+fn steer_auto_compact_write_failure_keeps_only_prompt_queued() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-ac-fail",
+        "feature-ac-fail",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_context_fill(&env, "sess-ac-fail", 80);
+
+    let trace_log = env.project_root.join("zellij-ac-fail-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_TEST_ZELLIJ_MODE", "fail-write")
+        .args([
+            "message",
+            "--steer",
+            "@claude",
+            "--smart-compact",
+            "70%",
+            "--",
+            "go",
+        ])
+        .output()
+        .expect("steer");
+    assert!(
+        out.status.success(),
+        "steer should queue the prompt on mux failure\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].text, "go");
+    assert_eq!(pending[0].body, MessageBody::Prompt);
+    assert_eq!(pending[0].status, MessageStatus::Queued);
+    assert!(pending[0].last_error.is_some(), "send error is recorded");
 }
 
 /// A stale carried-forward token gauge suppresses duplicate `/compact` for the

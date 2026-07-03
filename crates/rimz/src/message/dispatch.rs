@@ -608,8 +608,8 @@ pub fn steer_for_targets(
                 message_id,
                 request_id,
             } => {
-                ctx.ledger.record_message_delivery_failure(
-                    &message_id,
+                ctx.ledger.record_send_error(
+                    &message,
                     &format!("pending ask {request_id} reserves input"),
                     &ctx.workspace.session_name,
                 )?;

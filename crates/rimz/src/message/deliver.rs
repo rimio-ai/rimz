@@ -14,7 +14,6 @@ use crate::message::{
     max_delivery_attempts_from_env, message_interval_from_env, queue_batch_tail, queue_head,
     queue_head_for_message,
 };
-use crate::mux::MuxErr;
 use crate::workspace::ResolvedWorkspace;
 use crate::{Ledger, PaneAgent, RuntimePaths, SidebarSnapshot};
 
@@ -325,20 +324,6 @@ pub fn message_recorded_as_sent(ledger: &Ledger, message_id: &MessageId) -> Resu
         .any(|message| message.message_id == *message_id && message.status == MessageStatus::Sent))
 }
 
-pub fn is_mux_timeout(err: &(dyn std::error::Error + 'static)) -> bool {
-    let mut cause = Some(err);
-    while let Some(current) = cause {
-        if current
-            .downcast_ref::<MuxErr>()
-            .is_some_and(|err| matches!(err, MuxErr::Timeout { .. }))
-        {
-            return true;
-        }
-        cause = current.source();
-    }
-    false
-}
-
 pub(crate) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join(crate::message::MESSAGE_WAKE_FILE)
 }
@@ -346,33 +331,6 @@ pub(crate) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("sending prompt")]
-    struct WrappedMuxTimeout(#[source] MuxErr);
-
-    #[test]
-    fn mux_timeout_detection_walks_error_context() {
-        let err = WrappedMuxTimeout(MuxErr::Timeout {
-            program: "tmux".to_owned(),
-            args: "send-keys %1".to_owned(),
-            seconds: 30,
-        });
-
-        assert!(is_mux_timeout(&err));
-        assert!(!is_mux_timeout(&std::io::Error::other("ordinary failure")));
-    }
-
-    #[test]
-    fn mux_timeout_detection_sees_send_error_mux_source() {
-        let err = send::SendErr::from(MuxErr::Timeout {
-            program: "tmux".to_owned(),
-            args: "send-keys %1".to_owned(),
-            seconds: 30,
-        });
-
-        assert!(is_mux_timeout(&err));
-    }
 
     #[test]
     fn sweep_guard_is_single_flight() {

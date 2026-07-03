@@ -158,11 +158,7 @@ pub fn send_batch_to_live_pane(
                 });
             }
             Err(err) => {
-                ledger.record_message_delivery_failure(
-                    &command.message_id,
-                    &err.to_string(),
-                    &workspace.session_name,
-                )?;
+                ledger.record_send_error(&command, &err.to_string(), &workspace.session_name)?;
                 return Err(err);
             }
         }
