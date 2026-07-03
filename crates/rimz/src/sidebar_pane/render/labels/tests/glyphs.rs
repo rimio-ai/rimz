@@ -580,10 +580,7 @@ fn animations_cycle_and_wrap() {
 }
 
 #[test]
-fn loading_dots_stay_static_while_attention_blink_paces_with_age() {
-    // The loading ellipsis never animates — one constant frame at any phase.
-    assert_eq!(loading_dots(24), "...");
-
+fn attention_blink_paces_with_age() {
     let tempo = crate::sidebar_pane::render::animation::breath_tempo;
     assert!(tempo(5 * 60) > tempo(25 * 60));
     assert!(tempo(25 * 60) > tempo(50 * 60));

@@ -136,6 +136,8 @@ pub(super) fn agent_lead_cell(
 /// stepped [`CostRolls`] roll as a turn lands, with the shared settle brighten.
 /// The window token is the model's context window (`258k`, `1m`) — the
 /// context-sidecar reading first, the row's carried/default fallback second.
+/// It rides only non-idle cards; idle cards keep model and effort but drop the
+/// window until work starts.
 /// The whole capability cluster rides behind a resolved model: with none named,
 /// effort and window tokens drop too (a bare `272k` names nothing). Capability
 /// tokens then degrade by width tier: L2 carries model + effort + window, L1
@@ -211,7 +213,9 @@ pub(super) fn agent_identity_line(
         // not a status signal — but tints by size class (`window_style`) so
         // the magnitude reads at a glance; the context-meter severity ramp
         // keeps the loud color slot.
-        if let Some(window) = display_context_window(row) {
+        if status != AgentStatus::Idle
+            && let Some(window) = display_context_window(row)
+        {
             left.push(Span::styled(" · ", theme.muted()));
             left.push(Span::styled(
                 window_short(window),

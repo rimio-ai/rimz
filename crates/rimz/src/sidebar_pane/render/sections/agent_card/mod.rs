@@ -20,8 +20,8 @@ use crate::sidebar_pane::render::labels::{
     CardAttention, CardEmphasis, activity_age_style, agent_glyph, agent_lead_style_with_attention,
     agent_role_style_at, compacting_glyph, compacting_head_style, context_breakdown_spans,
     context_compaction_spans, context_gauge_spans, context_total_spans, elapsed_glyph, emphasize,
-    loading_dots, resolver_glyph, resolver_style, severity_heat_amount, severity_heat_color,
-    subagent_glyph, subagent_head_style, token_total_glyph, unread_run_spans, window_style,
+    resolver_glyph, resolver_style, severity_heat_amount, severity_heat_color, subagent_glyph,
+    subagent_head_style, token_total_glyph, unread_run_spans, window_style,
 };
 use crate::sidebar_pane::render::layout::ellipsize;
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -43,8 +43,7 @@ const NAME_MAX: usize = 12;
 
 /// A just-started agent: idle, sitting on the `Some(0)` baseline context gauge
 /// with no real usage or spend history behind it yet. Its 0% bar and zeroed stat
-/// lines are noise, so the card collapses to identity + description (+ the
-/// last-activity age).
+/// lines are noise, so the card rests at identity plus any real description.
 fn idle_unstarted(row: &SidebarRow) -> bool {
     matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
         && gauge_percent(row).unwrap_or(0) == 0
@@ -124,22 +123,25 @@ pub(super) fn row_lines(
             match row.status().unwrap_or(AgentStatus::Idle) {
                 AgentStatus::Idle => {}
                 AgentStatus::Running | AgentStatus::Waiting => {
-                    inner.push(description_line(theme, row, cw, attention, animation_phase));
+                    inner.push(description_line(theme, row, cw, attention));
                     if let Some(line) = gauge_line(theme, row, bands, cw) {
                         inner.push(line);
                     }
                 }
                 AgentStatus::Paused | AgentStatus::Success | AgentStatus::Failed => {
-                    inner.push(description_line(theme, row, cw, attention, animation_phase));
+                    inner.push(description_line(theme, row, cw, attention));
                 }
             }
         } else {
-            inner.push(description_line(theme, row, cw, attention, animation_phase));
+            if !awaiting_first_prompt(row) {
+                inner.push(description_line(theme, row, cw, attention));
+            }
             // A just-started idle agent sits on the 0% baseline gauge with no
-            // history behind it, so it rests at identity + description alone.
-            // Once an agent has real context, spend, or compaction history, the
-            // bar and the context line — the per-card `▤ · ◌ ◍ ↘ ↗` breakdown
-            // with the clock-fill last-activity age — join the resting card.
+            // history behind it, so it rests at identity plus any real
+            // description. Once an agent has real context, spend, or
+            // compaction history, the bar and the context line — the per-card
+            // `▤ · ◌ ◍ ↘ ↗` breakdown with the clock-fill last-activity age —
+            // join the resting card.
             if !idle_unstarted(row) {
                 if let Some(line) = gauge_line(theme, row, bands, cw) {
                     inner.push(line);

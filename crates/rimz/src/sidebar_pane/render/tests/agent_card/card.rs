@@ -83,7 +83,7 @@ fn render_agent_capability_uses_descriptor_default_window() {
     let mut codex = agent(
         "codex-1",
         "codex",
-        AgentStatus::Idle,
+        AgentStatus::Running,
         Some("/repo/main"),
         Some("main"),
         Some("resting"),
@@ -99,6 +99,77 @@ fn render_agent_capability_uses_descriptor_default_window() {
     assert!(
         rendered.contains("GPT 5.5 Codex · 272k"),
         "the identity line falls back to the Codex descriptor window:\n{rendered}"
+    );
+}
+
+#[test]
+fn blank_idle_agent_renders_single_line() {
+    let idle = agent(
+        "idle-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let theme = Theme::fixed(true);
+    let card_lines = line_texts(&group_lines(&snapshot, &theme, usize::MAX))
+        .into_iter()
+        .skip(1)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        card_lines.len(),
+        1,
+        "blank idle card renders identity only:\n{}",
+        card_lines.join("\n")
+    );
+    assert!(
+        card_lines[0].contains("claude"),
+        "identity line carries the agent name:\n{}",
+        card_lines.join("\n")
+    );
+    assert!(
+        !card_lines[0].contains("...") && !card_lines[0].contains('—'),
+        "blank idle card carries no placeholder description:\n{}",
+        card_lines.join("\n")
+    );
+}
+
+#[test]
+fn idle_agent_omits_window_token() {
+    let mk = |status| {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            status,
+            Some("/repo/main"),
+            Some("main"),
+            Some("resting"),
+        );
+        claude.model = Some("Opus".to_owned());
+        claude.context_window = Some(200_000);
+        claude
+    };
+    let theme = Theme::fixed(true);
+
+    let idle = snapshot_with(Vec::new(), vec![mk(AgentStatus::Idle)]);
+    let idle_rendered = line_texts(&group_lines(&idle, &theme, usize::MAX)).join("\n");
+    assert!(
+        idle_rendered.contains("Opus"),
+        "idle agent still renders the model:\n{idle_rendered}"
+    );
+    assert!(
+        !idle_rendered.contains("200k"),
+        "idle agent drops the window token:\n{idle_rendered}"
+    );
+
+    let running = snapshot_with(Vec::new(), vec![mk(AgentStatus::Running)]);
+    let running_rendered = line_texts(&group_lines(&running, &theme, usize::MAX)).join("\n");
+    assert!(
+        running_rendered.contains("Opus · 200k"),
+        "non-idle agent keeps the window token:\n{running_rendered}"
     );
 }
 

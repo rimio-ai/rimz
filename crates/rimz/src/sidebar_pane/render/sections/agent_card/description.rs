@@ -4,20 +4,19 @@ use super::*;
 /// context metadata wins first; for Codex that is app-server `preview`, then
 /// thread `name`. Named sessions and live task/prompt fallbacks keep the row
 /// labelled when richer metadata is absent. An idle agent with nothing to show
-/// yet paints the static loading-dots cue instead; any other empty description
-/// falls to an em dash. A turn that died on a provider API error takes the line
-/// over the fall-through — the soft upstream error text (`turn_error_label`,
-/// quoted verbatim) is the row's most important fact while the `!` escalation
-/// holds, and the fall-through returns once it clears. The row emphasis that
-/// drives the glyph and name also drives the description: unread actionable
-/// rows and unread results blink, rows worth a look or selected rows read at
-/// full body weight, and calm unselected rows soften.
+/// yet contributes no line; any non-idle empty description falls to an em dash.
+/// A turn that died on a provider API error takes the line over the
+/// fall-through — the soft upstream error text (`turn_error_label`, quoted
+/// verbatim) is the row's most important fact while the `!` escalation holds,
+/// and the fall-through returns once it clears. The row emphasis that drives
+/// the glyph and name also drives the description: unread actionable rows and
+/// unread results blink, rows worth a look or selected rows read at full body
+/// weight, and calm unselected rows soften.
 pub(super) fn description_line(
     theme: &Theme,
     row: &SidebarRow,
     width: usize,
     attention: CardAttention,
-    animation_phase: u64,
 ) -> Line<'static> {
     // The shared unread treatment, on a concrete body tone so the description
     // lifts in unison with the lead glyph and the name. Shimmer flows one span
@@ -52,10 +51,6 @@ pub(super) fn description_line(
     } else {
         match descriptor(row).and_then(single_line_description) {
             Some(text) => left.extend(body_spans(&text, false)),
-            None if shows_loading_dots(row) => left.push(Span::styled(
-                loading_dots(animation_phase).to_owned(),
-                theme.muted(),
-            )),
             None => left.push(Span::raw("—".to_owned())),
         }
     }
@@ -77,7 +72,7 @@ pub(super) fn description_line(
 /// order is thread preview → thread name. The activity-bound `task` clears on
 /// idle, so the persisted prompt keeps an unnamed session labelled past its
 /// turn until it earns richer metadata. `None` when the session has nothing to
-/// show — the caller paints the idle loading-dots or an em dash.
+/// show — the caller skips blank idle cards or paints an em dash.
 pub(super) fn descriptor(row: &SidebarRow) -> Option<&str> {
     // The producer sanitizes prompt/task before they reach the row; this is a
     // last-ditch backstop so a harness control turn (`<task-notification>…`)
@@ -133,10 +128,8 @@ fn single_line_description(value: &str) -> Option<String> {
     (!out.is_empty()).then_some(out)
 }
 
-/// Whether an agent row paints the idle loading-dots cue in place of a
-/// description — an idle agent with nothing to show yet (no preview, session
-/// name, task, or prompt), the "waiting for your first prompt" state.
-pub(super) fn shows_loading_dots(row: &SidebarRow) -> bool {
+/// An idle agent with nothing to describe yet — waiting for its first prompt.
+pub(super) fn awaiting_first_prompt(row: &SidebarRow) -> bool {
     row.is_agent()
         && matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
         && descriptor(row).is_none()

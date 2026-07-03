@@ -33,16 +33,6 @@ fn status_glyph_role(status: AgentStatus) -> GlyphRole {
     }
 }
 
-/// Idle, waiting-for-a-prompt: a static `...` placeholder that stands in for the
-/// em-dash on a just-started agent with nothing to describe yet.
-const LOADING_DOTS: &str = "...";
-
-/// The idle loading-dots cue. The phase argument is accepted so the card render
-/// path stays aligned with the other glyph helpers, but idle agents stay still.
-pub(in crate::sidebar_pane::render) fn loading_dots(_animation_phase: u64) -> &'static str {
-    LOADING_DOTS
-}
-
 /// The age clock's Nerd Font faces: the `circle_slice` series fills one eighth
 /// per 7.5-minute step, so the icon tracks elapsed time twice as finely as the
 /// four-quarter Unicode clock. No eighth-circle glyph exists in Unicode, so that
