@@ -4,9 +4,11 @@
 //! per-machine `[sentry]` config. When on, [`init`] returns a guard the binary
 //! holds for the process lifetime — it flushes pending events on drop, which
 //! covers the short-lived hook subprocesses — and [`sentry_tracing_layer`]
-//! bridges the `tracing` subscriber so every Rimz `warn!`/`error!`, including
-//! the agent turn-error warning under the `rimz::agent::turn_error` target,
-//! becomes a Sentry event (warning / error level mirrors the tracing level).
+//! bridges the `tracing` subscriber so Rimz `warn!`/`error!`, including the
+//! agent turn-error warning under the `rimz::agent::turn_error` target, becomes
+//! a Sentry event (warning / error level mirrors the tracing level). Warnings
+//! under [`SIDEBAR_HEALTH_TARGET`] stay local because the durable diagnostics
+//! log already carries those sidebar refresh episodes.
 //!
 //! Events arrive with debug context: [`set_command_scope`] tags the scope with
 //! the running command, build id, and (when a process serves one) the agent and
@@ -34,7 +36,7 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::registry::LookupSpan;
 
-use super::{BREADCRUMB_TARGET, ScopeFacts};
+use super::{BREADCRUMB_TARGET, SIDEBAR_HEALTH_TARGET, ScopeFacts};
 use crate::config::MachineConfig;
 use crate::workspace::ENV_WORKSPACE_ID;
 
@@ -321,10 +323,13 @@ fn event_filter(metadata: &Metadata<'_>) -> EventFilter {
 }
 
 /// `warn!`/`error!` map to Sentry events (the event level mirrors the tracing
-/// level); an `info!` on [`BREADCRUMB_TARGET`] maps to a breadcrumb; everything
-/// else is ignored, so an unmarked `info!` never carries its fields off-box.
+/// level), except sidebar health warnings under [`SIDEBAR_HEALTH_TARGET`] which
+/// are already durable local diagnostics; an `info!` on [`BREADCRUMB_TARGET`]
+/// maps to a breadcrumb; everything else is ignored, so an unmarked `info!`
+/// never carries its fields off-box.
 fn classify(level: Level, target: &str) -> EventFilter {
     match level {
+        Level::ERROR | Level::WARN if target == SIDEBAR_HEALTH_TARGET => EventFilter::Ignore,
         Level::ERROR | Level::WARN => EventFilter::Event,
         Level::INFO if target == BREADCRUMB_TARGET => EventFilter::Breadcrumb,
         _ => EventFilter::Ignore,
@@ -437,6 +442,8 @@ mod tests {
         // WARN/ERROR are events regardless of target.
         assert!(classify(Level::ERROR, "rimz::anything").contains(EventFilter::Event));
         assert!(classify(Level::WARN, "rimz::anything").contains(EventFilter::Event));
+        assert!(classify(Level::ERROR, SIDEBAR_HEALTH_TARGET).is_empty());
+        assert!(classify(Level::WARN, SIDEBAR_HEALTH_TARGET).is_empty());
         // INFO is a breadcrumb only on the dedicated trail target.
         let trail = classify(Level::INFO, BREADCRUMB_TARGET);
         assert!(trail.contains(EventFilter::Breadcrumb));

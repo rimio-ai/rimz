@@ -14,6 +14,8 @@ use super::state::{
     row_id_of_pane, session_focus_baseline, set_rows_unread,
 };
 use super::*;
+use crate::diag::record::RendererExitCause;
+use crate::observability::SIDEBAR_HEALTH_TARGET;
 use crate::sidebar::read_marks::{ReadMarkStore, write_manual_read_marks};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pets::PetRenderCaps;
@@ -126,6 +128,7 @@ pub(super) struct LoopState {
     last_heartbeat: Option<Instant>,
     prev_width: Option<u16>,
     pub(super) should_exit: bool,
+    pub(super) exit_cause: Option<RendererExitCause>,
     pub(super) tab_emptied: bool,
     pub(super) reload_requested: bool,
 }
@@ -214,6 +217,7 @@ impl LoopState {
             last_heartbeat: None,
             prev_width: initial_width,
             should_exit: false,
+            exit_cause: None,
             tab_emptied: false,
             reload_requested: false,
         }
@@ -228,7 +232,8 @@ impl LoopState {
             .is_some_and(render::Alert::is_active);
         let watched = self.watched();
         let animating = is_animating(&self.current, &self.ui, phase, alert_active);
-        let active = (watched && animating) || (self.dirty && self.dirty_paintable(watched));
+        let active = !self.self_close.confirming_empty()
+            && ((watched && animating) || (self.dirty && self.dirty_paintable(watched)));
         let mut timeout = if active {
             self.next_frame
                 .saturating_duration_since(Instant::now())
@@ -389,6 +394,7 @@ impl LoopState {
             }
             if !self.should_exit
                 && !rejected
+                && !self.self_close.confirming_empty()
                 && (fresh_pane_frame
                     || self
                         .paint_hold
@@ -827,10 +833,17 @@ impl LoopState {
 
         // Self-close watchdog: if no resize or presence event fired, ask the
         // normal snapshot path to refresh so the snapshot's own-view count can
-        // close a lone sidebar.
+        // close a lone sidebar. Once a zero-sibling verdict is pending, force a
+        // non-skippable fold so consumers do not sit behind the unchanged memo
+        // for the full backstop window before the confirm timer can close them.
         if self.last_self_close_check.elapsed() >= SELF_CLOSE_WATCHDOG {
             self.last_self_close_check = Instant::now();
-            fetch.request(FetchRequest::default(), false);
+            let request = if self.self_close.confirming_empty() {
+                FetchRequest::producer_fresh_panes()
+            } else {
+                FetchRequest::default()
+            };
+            fetch.request(request, false);
         }
         if self
             .ui
@@ -899,6 +912,7 @@ impl LoopState {
         });
         let paintable = (active && watched) || (self.dirty && self.dirty_paintable(watched));
         if !self.should_exit
+            && !self.self_close.confirming_empty()
             && !paint_blocked
             && ((paintable && now >= self.next_frame) || background)
         {
@@ -1031,7 +1045,7 @@ impl LoopState {
             .as_ref()
             .filter(|alert| alert.is_active())
         {
-            warn!(reason = %alert.reason, "sidebar refresh degraded");
+            warn!(target: SIDEBAR_HEALTH_TARGET, reason = %alert.reason, "sidebar refresh degraded");
         }
         *last_snapshot = state.last_snapshot;
         *health = state.health;
@@ -1149,6 +1163,7 @@ impl LoopState {
         // sidebar against the live panes.
         if degraded_too_long(health, Timestamp::now()) {
             warn!(
+                target: SIDEBAR_HEALTH_TARGET,
                 session = %config.session_name,
                 reason = health.alert.as_ref().map(|alert| alert.reason.as_str()),
                 "sidebar degraded too long; exiting so the pane closes and reload/attach can rebuild it",
@@ -1167,6 +1182,7 @@ impl LoopState {
         if self_close_decision(
             self_close,
             current.own_view.as_ref().map(|view| view.sibling_count),
+            Instant::now(),
         ) {
             debug!(
                 session = %config.session_name,
@@ -1194,6 +1210,13 @@ impl LoopState {
     ) -> Result<bool> {
         let applied = self.apply_fetch_outcome(config, outcome, anim_start, diag)?;
         self.should_exit = applied.should_exit;
+        if applied.should_exit {
+            self.exit_cause = Some(if applied.tab_emptied {
+                RendererExitCause::SelfCloseEmptyTab
+            } else {
+                RendererExitCause::DegradedGaveUp
+            });
+        }
         self.tab_emptied |= applied.tab_emptied;
         self.apply_focus_anchor();
         self.observe_commit();

@@ -765,6 +765,9 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
             let excerpt = stderr_excerpt.lines().last().unwrap_or(stderr_excerpt);
             format!("render worker died by {reason}: {excerpt}")
         }
+        DiagEvent::RendererExit { cause } => {
+            format!("renderer exited cleanly: {}", cause.as_str())
+        }
         DiagEvent::FrameAnomaly {
             anomaly,
             suppressed_since_last,

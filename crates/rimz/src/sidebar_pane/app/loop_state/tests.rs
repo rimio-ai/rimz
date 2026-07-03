@@ -358,6 +358,51 @@ fn maintenance_requests_releasing_fetch_when_order_hold_expires() {
 }
 
 #[test]
+fn self_close_watchdog_bypasses_unchanged_skip_while_empty_confirming() {
+    let ws = workspace();
+    let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
+    let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
+    let socket_path = sidebar_socket_path(&runtime, &SidebarInstanceId::new());
+    let (_dir, mut state) = loop_state(&ws);
+    let config = serve_config(&ws);
+    let (mut fetch, request_rx) = fetch_dispatcher();
+    let mut empty = agent_snapshot(&ws);
+    empty.own_view = Some(crate::SidebarOwnView {
+        sibling_count: 0,
+        working_pane_ids: Vec::new(),
+        own_view_is_daemon: false,
+    });
+    fold_snapshot(&mut state, &config, &mut fetch, empty, true);
+    assert!(state.self_close.confirming_empty());
+    state.last_heartbeat = Some(Instant::now());
+    state.last_self_close_check = Instant::now() - SELF_CLOSE_WATCHDOG;
+    let (_result_tx, result_rx) = std::sync::mpsc::channel();
+
+    state
+        .run_maintenance(
+            &mut fetch,
+            MaintenanceContext {
+                config: &config,
+                runtime: &runtime,
+                socket_path: &socket_path,
+                result_rx: &result_rx,
+                anim_start: Instant::now(),
+                diag: &crate::diag::DiagSink::disabled(),
+                tick: Duration::from_secs(60),
+            },
+        )
+        .expect("maintenance requests self-close fold");
+
+    assert!(
+        request_rx
+            .try_recv()
+            .expect("self-close watchdog fetch")
+            .is_producer_fresh_panes(),
+        "pending empty confirmation must bypass the unchanged consumer memo"
+    );
+}
+
+#[test]
 fn frame_timing_suspends_unwatched_animation() {
     let ws = workspace();
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
@@ -1134,6 +1179,46 @@ fn paint_path_does_not_arm_resize_hold_without_grow() {
     assert!(
         !state.paint_hold.is_engaged(),
         "shrink paint does not arm the hold"
+    );
+}
+
+#[test]
+fn empty_confirmation_suppresses_widened_paint_until_verdict() {
+    let ws = workspace();
+    let (_dir, mut state) = loop_state(&ws);
+    let config = serve_config(&ws);
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+    state.current = agent_snapshot(&ws);
+    state.paint_hold.engage(Instant::now(), 100);
+
+    let mut empty = agent_snapshot_observed(&ws, 200);
+    empty.own_view = Some(crate::SidebarOwnView {
+        sibling_count: 0,
+        working_pane_ids: Vec::new(),
+        own_view_is_daemon: false,
+    });
+    fold_snapshot(&mut state, &config, &mut fetch, empty, true);
+
+    assert!(
+        state.self_close.confirming_empty(),
+        "zero siblings starts the confirm window"
+    );
+    assert!(
+        state.paint_hold.is_engaged(),
+        "fresh zero-sibling verdict must not release the grow hold"
+    );
+    assert!(
+        !frame_active(&state),
+        "empty confirmation suppresses active paint cadence"
+    );
+
+    let mut terminal = fixed_terminal();
+    state
+        .paint_frame_if_due(&mut terminal, Instant::now(), true)
+        .expect("paint attempt");
+    assert!(
+        state.dirty,
+        "empty confirmation suppresses full-width paint instead of clearing dirty"
     );
 }
 

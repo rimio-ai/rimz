@@ -17,6 +17,7 @@ use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
+use crate::diag::record::DiagEvent;
 use crate::ids::PaneId;
 use crate::ledger::paths::PathErr;
 use crate::sidebar::events::EventStore;
@@ -314,6 +315,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     }
     if state.tab_emptied {
         close_self_closing_view_floating_panes(&config);
+    }
+    if !state.reload_requested
+        && let Some(cause) = state.exit_cause
+    {
+        diag.emit_unlimited(DiagEvent::RendererExit { cause });
     }
     state.clear_pixel(&mut terminal);
     if state.reload_requested {

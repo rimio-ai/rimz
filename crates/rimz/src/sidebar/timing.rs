@@ -39,6 +39,12 @@ pub const UNWATCHED_FOLD_CLAMP: Duration = Duration::from_secs(1);
 /// burst holds one stable list and it tidies once you settle.
 pub const REORDER_HOLD: Duration = Duration::from_secs(5);
 
+/// How long the sidebar's own view must report zero working siblings before
+/// the renderer exits and lets its pane close. The producer already repairs
+/// brief mux under-counts, but this receiver-side confirmation protects startup
+/// resurrection and any remaining single-frame pane-list flap.
+pub const SELF_CLOSE_EMPTY_CONFIRM: Duration = Duration::from_secs(5);
+
 /// How long a jump scroll anchor stays applicable. Long enough for the
 /// destination tab to refold and adopt the focus after the jump's
 /// `FocusChanged` broadcast; an older anchor is a stale jump and is ignored.

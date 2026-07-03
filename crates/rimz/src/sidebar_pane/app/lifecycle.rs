@@ -7,9 +7,10 @@ use std::time::Instant;
 /// shares a tab/view with the user's working pane(s); when the last of them
 /// exits, the sidebar is alone and has no reason to stay.
 ///
-/// Startup gets one empty observation before close: during session birth the
-/// sidebar can run before Zellij materializes the terminal sibling, but a tab
-/// born permanently sidebar-only must still clean itself up.
+/// A zero-sibling read must persist for the confirm window before close. During
+/// session birth or resurrection the sidebar can run before Zellij materializes
+/// sibling panes, and under load a mux can briefly under-report panes; a tab
+/// born permanently sidebar-only still cleans itself up once the window elapses.
 ///
 /// `sibling_count` is `None` when the count could not be determined (the
 /// snapshot carries no `own_view` — no mux pane env var, so no
@@ -18,8 +19,9 @@ use std::time::Instant;
 pub(super) fn self_close_decision(
     state: &mut SelfCloseState,
     sibling_count: Option<usize>,
+    now: Instant,
 ) -> bool {
-    state.should_close(sibling_count)
+    state.should_close(sibling_count, now)
 }
 
 /// A resize that grows the pane width is the necessary precondition for the
@@ -34,28 +36,29 @@ pub(super) fn resize_grew(prev: Option<u16>, new: u16) -> bool {
 #[derive(Debug, Default)]
 pub(super) struct SelfCloseState {
     pub(super) seen_sibling: bool,
-    pub(super) empty_startup_observations: u8,
+    empty_since: Option<Instant>,
 }
 
 impl SelfCloseState {
-    fn should_close(&mut self, sibling_count: Option<usize>) -> bool {
+    pub(super) fn confirming_empty(&self) -> bool {
+        self.empty_since.is_some()
+    }
+
+    fn should_close(&mut self, sibling_count: Option<usize>, now: Instant) -> bool {
         match sibling_count {
-            Some(0) if self.seen_sibling => true,
             Some(0) => {
-                self.empty_startup_observations = self.empty_startup_observations.saturating_add(1);
-                self.empty_startup_observations >= EMPTY_STARTUP_OBSERVATIONS_BEFORE_CLOSE
+                let empty_since = *self.empty_since.get_or_insert(now);
+                now.duration_since(empty_since) >= SELF_CLOSE_EMPTY_CONFIRM
             }
             Some(_) => {
                 self.seen_sibling = true;
-                self.empty_startup_observations = 0;
+                self.empty_since = None;
                 false
             }
             None => false,
         }
     }
 }
-
-const EMPTY_STARTUP_OBSERVATIONS_BEFORE_CLOSE: u8 = 2;
 
 /// Bounded paint hold armed by a pane-width grow. It waits for a pane-frame
 /// observation stamped after the grow before painting at the new size, with a
@@ -100,7 +103,9 @@ impl PaintHold {
     }
 }
 
-pub(super) use crate::sidebar::timing::{RESIZE_PAINT_HOLD_CEILING, SELF_CLOSE_WATCHDOG};
+pub(super) use crate::sidebar::timing::{
+    RESIZE_PAINT_HOLD_CEILING, SELF_CLOSE_EMPTY_CONFIRM, SELF_CLOSE_WATCHDOG,
+};
 
 #[cfg(test)]
 mod tests;
