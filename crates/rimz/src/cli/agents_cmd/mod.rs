@@ -92,6 +92,27 @@ pub struct AgentsArgs {
     /// Create or reuse a Rimz-owned worktree from a pull request number or URL.
     #[arg(long = "from-pr", value_name = "PR", value_parser = parse_pr, conflicts_with = "channel")]
     from_pr: Option<rimz::forge::PrTarget>,
+    /// Resume the newest prior cohort matching SPEC.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "prompt",
+            "worktree",
+            "channel",
+            "from_pr",
+            "name",
+            "description",
+            "model",
+            "effort",
+            "ask",
+            "yolo",
+            "system_prompt_file",
+            "append_system_prompt_file",
+            "print",
+            "passthrough"
+        ]
+    )]
+    resume: bool,
     /// Durable name for a single launched agent.
     #[arg(long, short = 'n')]
     name: Option<String>,
@@ -335,6 +356,7 @@ pub fn run(mut args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
 
 fn default_virtual_ping_prompt(args: &mut AgentsArgs) {
     if args.prompt.is_none()
+        && !args.resume
         && args
             .spec
             .as_deref()
@@ -369,6 +391,7 @@ impl AgentsArgs {
             worktree,
             channel,
             from_pr: None,
+            resume: false,
             name: None,
             bg: false,
             new_pane: false,
@@ -404,6 +427,7 @@ impl AgentsArgs {
             worktree: task.worktree,
             channel: None,
             from_pr: None,
+            resume: false,
             name: None,
             bg: false,
             new_pane: false,

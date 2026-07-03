@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::AgentState;
 use crate::agents::find_adapter;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ledger::runtime::AgentLiveness;
 use crate::mux::ResumeTab;
 
 /// The default ceiling on agents auto-resumed into one reborn session, so a
@@ -55,6 +56,41 @@ pub struct ResumePlan {
     /// Candidates whose worktree disappeared; the caller records these as
     /// durable end traces so they leave the next resume candidate set.
     pub tombstone: Vec<(AgentKind, AgentSessionId)>,
+}
+
+/// One cell in an explicit cohort resume spec, reduced to the matching fields
+/// the planner needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CohortCell {
+    pub kind: AgentKind,
+    pub role: Option<String>,
+}
+
+/// One agent cell's explicit-resume seed.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CohortSeed {
+    /// Resume a prior provider-native session, replaying its launch identity.
+    Resume(Box<AgentState>),
+    /// Launch a fresh pane for a cell missing resumable history.
+    Fresh,
+}
+
+/// Explicit `rimz agents <spec> --resume` plan, parallel to the layout's agent
+/// cells.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CohortResumePlan {
+    pub seeds: Vec<CohortSeed>,
+    pub cwd: Option<PathBuf>,
+    pub channel: Option<String>,
+    pub fresh: Vec<String>,
+    pub launch_group: Option<String>,
+}
+
+/// Why explicit cohort resume cannot proceed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CohortResumeErr {
+    NothingToResume { spec: String },
+    MembersStillLive { labels: Vec<String> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -205,6 +241,285 @@ pub fn plan_resume(
     plan
 }
 
+/// Plan one explicit cohort relaunch from the durable agent rollup.
+///
+/// `cells` is the launch layout's agent cells in display order. `team` is the
+/// named-team spec, when the launch resolved one. The caller supplies liveness
+/// and worktree existence so the matching rules stay pure and testable.
+pub fn plan_cohort_resume(
+    agents: &[AgentState],
+    ended: &BTreeSet<(AgentKind, AgentSessionId)>,
+    liveness: impl Fn(&AgentState) -> AgentLiveness,
+    cells: &[CohortCell],
+    team: Option<&str>,
+    worktree_exists: impl Fn(&Path) -> bool,
+) -> Result<CohortResumePlan, CohortResumeErr> {
+    let spec = cohort_spec_label(cells, team);
+    let candidates = cohort_candidates(agents, ended, worktree_exists);
+    let matches = match (team, cells.len()) {
+        (Some(team), _) => match_team_cohort(&candidates, cells, team),
+        (None, 1) => match_single_cohort(&candidates, &cells[0]),
+        (None, _) => match_inline_cohort(&candidates, cells),
+    };
+
+    let matched_any = matches.iter().any(Option::is_some);
+    if !matched_any {
+        return Err(CohortResumeErr::NothingToResume { spec });
+    }
+
+    let live = matches
+        .iter()
+        .flatten()
+        .copied()
+        .filter(|agent| matches!(liveness(agent), AgentLiveness::Live { .. }))
+        .map(cohort_agent_label)
+        .collect::<Vec<_>>();
+    if !live.is_empty() {
+        return Err(CohortResumeErr::MembersStillLive { labels: live });
+    }
+
+    let newest = matches
+        .iter()
+        .flatten()
+        .copied()
+        .min_by(cohort_newest_cmp)
+        .expect("matched_any guarantees one matched member");
+    let cwd = agent_worktree(newest);
+    let channel = newest
+        .channel
+        .as_deref()
+        .filter(|channel| !channel.is_empty())
+        .map(ToOwned::to_owned);
+    let launch_group = newest
+        .launch_group
+        .as_deref()
+        .filter(|group| !group.is_empty())
+        .map(ToOwned::to_owned);
+
+    let mut seeds = Vec::with_capacity(cells.len());
+    let mut fresh = Vec::new();
+    for (index, cell) in cells.iter().enumerate() {
+        let matched = matches[index];
+        let seed = match matched {
+            Some(agent) if supports_agent_resume(agent) => {
+                CohortSeed::Resume(Box::new(agent.clone()))
+            }
+            Some(agent) => {
+                fresh.push(cohort_fresh_label_for_agent(agent));
+                CohortSeed::Fresh
+            }
+            None => {
+                let label = cwd
+                    .as_deref()
+                    .map(|cwd| build_label(cell.kind.as_str(), channel.as_deref(), None, cwd))
+                    .unwrap_or_else(|| cell.kind.as_str().to_owned());
+                fresh.push(label);
+                CohortSeed::Fresh
+            }
+        };
+        seeds.push(seed);
+    }
+
+    Ok(CohortResumePlan {
+        seeds,
+        cwd,
+        channel,
+        fresh,
+        launch_group,
+    })
+}
+
+fn cohort_spec_label(cells: &[CohortCell], team: Option<&str>) -> String {
+    if let Some(team) = team {
+        return team.to_owned();
+    }
+    let kinds = cells
+        .iter()
+        .map(|cell| cell.kind.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    if kinds.is_empty() {
+        "<empty>".to_owned()
+    } else {
+        kinds
+    }
+}
+
+fn cohort_candidates<'a>(
+    agents: &'a [AgentState],
+    ended: &BTreeSet<(AgentKind, AgentSessionId)>,
+    worktree_exists: impl Fn(&Path) -> bool,
+) -> Vec<&'a AgentState> {
+    let mut candidates = agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| !agent.agent_id.is_empty())
+        .filter(|agent| !ended.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+        .filter(|agent| agent_worktree(agent).is_some_and(|path| worktree_exists(&path)))
+        .collect::<Vec<_>>();
+    candidates.sort_by(cohort_newest_cmp);
+    candidates
+}
+
+fn match_team_cohort<'a>(
+    candidates: &[&'a AgentState],
+    cells: &[CohortCell],
+    team: &str,
+) -> Vec<Option<&'a AgentState>> {
+    let pool = candidates
+        .iter()
+        .copied()
+        .filter(|agent| agent.team.as_deref() == Some(team))
+        .collect::<Vec<_>>();
+    let mut claimed = BTreeSet::new();
+    let mut matches = Vec::with_capacity(cells.len());
+    for cell in cells {
+        let agent = if let Some(role) = cell.role.as_deref() {
+            pool.iter().copied().find(|agent| {
+                !claimed.contains(&agent.agent_id) && agent.role.as_deref() == Some(role)
+            })
+        } else {
+            pool.iter()
+                .copied()
+                .find(|agent| !claimed.contains(&agent.agent_id) && agent.kind == cell.kind)
+        };
+        if let Some(agent) = agent {
+            claimed.insert(agent.agent_id.clone());
+        }
+        matches.push(agent);
+    }
+    matches
+}
+
+fn match_single_cohort<'a>(
+    candidates: &[&'a AgentState],
+    cell: &CohortCell,
+) -> Vec<Option<&'a AgentState>> {
+    vec![
+        candidates
+            .iter()
+            .copied()
+            .find(|agent| agent.kind == cell.kind),
+    ]
+}
+
+fn match_inline_cohort<'a>(
+    candidates: &[&'a AgentState],
+    cells: &[CohortCell],
+) -> Vec<Option<&'a AgentState>> {
+    let mut groups: BTreeMap<&str, Vec<&'a AgentState>> = BTreeMap::new();
+    for agent in candidates {
+        if let Some(group) = agent
+            .launch_group
+            .as_deref()
+            .filter(|group| !group.is_empty())
+        {
+            groups.entry(group).or_default().push(*agent);
+        }
+    }
+    let mut groups = groups.into_values().collect::<Vec<_>>();
+    groups.sort_by(|a, b| {
+        let newest_a = a
+            .iter()
+            .copied()
+            .min_by(cohort_newest_cmp)
+            .expect("group is non-empty");
+        let newest_b = b
+            .iter()
+            .copied()
+            .min_by(cohort_newest_cmp)
+            .expect("group is non-empty");
+        cohort_newest_cmp(&newest_a, &newest_b)
+    });
+
+    for group in groups {
+        let matches = map_inline_group_to_cells(&group, cells);
+        if matches.iter().any(Option::is_some) {
+            return matches;
+        }
+    }
+    vec![None; cells.len()]
+}
+
+fn map_inline_group_to_cells<'a>(
+    group: &[&'a AgentState],
+    cells: &[CohortCell],
+) -> Vec<Option<&'a AgentState>> {
+    let mut matches = vec![None; cells.len()];
+    let mut claimed = BTreeSet::new();
+
+    for agent in group {
+        let Some(ordinal) = agent
+            .launch_ordinal
+            .and_then(|ordinal| usize::try_from(ordinal).ok())
+        else {
+            continue;
+        };
+        if ordinal >= cells.len() || matches[ordinal].is_some() {
+            continue;
+        }
+        matches[ordinal] = Some(*agent);
+        claimed.insert(agent.agent_id.clone());
+    }
+
+    for agent in group {
+        if claimed.contains(&agent.agent_id) {
+            continue;
+        }
+        let Some(index) = cells
+            .iter()
+            .enumerate()
+            .find(|(index, cell)| matches[*index].is_none() && cell.kind == agent.kind)
+            .map(|(index, _)| index)
+        else {
+            continue;
+        };
+        matches[index] = Some(*agent);
+        claimed.insert(agent.agent_id.clone());
+    }
+
+    matches
+}
+
+fn supports_agent_resume(agent: &AgentState) -> bool {
+    let Some(cwd) = agent_worktree(agent) else {
+        return false;
+    };
+    find_adapter(&agent.kind)
+        .is_some_and(|adapter| adapter.resume_command(&agent.agent_id, &cwd).is_some())
+}
+
+fn cohort_newest_cmp(a: &&AgentState, b: &&AgentState) -> std::cmp::Ordering {
+    b.last_activity
+        .cmp(&a.last_activity)
+        .then_with(|| a.agent_id.cmp(&b.agent_id))
+}
+
+fn agent_worktree(agent: &AgentState) -> Option<PathBuf> {
+    agent
+        .worktree_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+}
+
+fn cohort_agent_label(agent: &AgentState) -> String {
+    match agent.name.as_deref().filter(|name| !name.is_empty()) {
+        Some(name) => format!("{}:{} ({})", agent.kind.as_str(), name, agent.agent_id),
+        None => format!("{}:{}", agent.kind.as_str(), agent.agent_id),
+    }
+}
+
+fn cohort_fresh_label_for_agent(agent: &AgentState) -> String {
+    let cwd = agent_worktree(agent).unwrap_or_default();
+    build_label(
+        agent.kind.as_str(),
+        agent.channel.as_deref(),
+        agent.worktree_branch.as_deref(),
+        &cwd,
+    )
+}
+
 fn resume_tab_identity(channel: Option<&str>, cwd: &Path) -> ResumeTabIdentity {
     match channel.filter(|channel| !channel.is_empty()) {
         Some(channel) => ResumeTabIdentity::Channel(channel.to_owned()),
@@ -260,7 +575,9 @@ fn unique_label(base: &str, used: &mut HashSet<String>) -> String {
     unreachable!("unbounded ordinal search always yields a fresh label")
 }
 
-fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
+/// Wrapper argv for resuming one prior provider-native session with its durable
+/// Rimz launch identity.
+pub fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
     crate::harness::launch::exec_argv(
         rimz_bin,
         &crate::harness::launch::ExecInvocation {
@@ -330,398 +647,4 @@ pub fn channel_label(channel: Option<&str>, worktree: &Path) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::agents::AgentStatus;
-    use crate::ids::{MuxName, PaneId};
-    use crate::pane::PaneRef;
-    use jiff::Timestamp;
-
-    fn pane(raw: &str) -> PaneRef {
-        PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
-            session_name: String::new(),
-            view_id: None,
-            view_kind: None,
-            view_name: None,
-            is_focused: false,
-            is_floating: false,
-            command: None,
-            spawn_command: None,
-            cwd: None,
-            pane_pid: None,
-            pane_process_start: None,
-            hosted_agent_kind: None,
-            hosted_agent_process_start: None,
-            resumed_session_id: None,
-            elevated_agent: None,
-            first_seen_at_ms: None,
-        }
-    }
-
-    /// A root agent bound to a pane, active `secs_ago` seconds back.
-    fn agent(
-        kind: &str,
-        id: &str,
-        worktree: &str,
-        branch: Option<&str>,
-        secs_ago: i64,
-    ) -> AgentState {
-        let when = Timestamp::now() - std::time::Duration::from_secs(secs_ago.max(0) as u64);
-        let mut agent = crate::sidebar::test_support::root_agent(kind, id, None);
-        agent.name = None;
-        agent.kind_ordinal = None;
-        agent.status = AgentStatus::Idle;
-        agent.pane = Some(pane(&format!("terminal_{id}")));
-        agent.worktree_path = Some(worktree.to_owned());
-        agent.worktree_branch = branch.map(ToOwned::to_owned);
-        agent.last_seen = when;
-        agent.last_activity = when;
-        agent.registered_at = Some(when);
-        agent
-    }
-
-    /// As [`agent`], but stamped on an explicit pane id so a test can model two
-    /// sessions sharing one pane (a relaunch in place) rather than the default
-    /// one-pane-per-id.
-    fn agent_on_pane(
-        kind: &str,
-        id: &str,
-        worktree: &str,
-        branch: Option<&str>,
-        secs_ago: i64,
-        pane_raw: &str,
-    ) -> AgentState {
-        let mut agent = agent(kind, id, worktree, branch, secs_ago);
-        agent.pane = Some(pane(pane_raw));
-        agent
-    }
-
-    fn no_ended() -> BTreeSet<(AgentKind, AgentSessionId)> {
-        BTreeSet::new()
-    }
-
-    fn exec_resume(kind: &str, id: &str) -> Vec<String> {
-        vec![
-            "/bin/rimz".to_owned(),
-            "agents".to_owned(),
-            "exec".to_owned(),
-            kind.to_owned(),
-            "--resume".to_owned(),
-            id.to_owned(),
-            "--close-pane-on-exit".to_owned(),
-        ]
-    }
-
-    #[test]
-    fn resumes_root_agents_most_recent_first() {
-        let agents = vec![
-            agent("codex", "c1", "/code/query-engine", Some("main"), 30),
-            agent(
-                "claude",
-                "a1",
-                "/code/qe-feature",
-                Some("feature-migration"),
-                5,
-            ),
-        ];
-        let plan = plan_resume(
-            &agents,
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-        assert!(plan.skipped.is_empty());
-        assert_eq!(plan.tabs.len(), 2);
-        // Most-recently-active leads (the focus target).
-        assert_eq!(plan.tabs[0].label, "#qe-feature");
-        // Wrapper argv: the pane funnels through `rimz agents exec`, which
-        // injects launch env before spawning the adapter's resume argv.
-        assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "a1")]);
-        assert_eq!(plan.tabs[0].cwd, PathBuf::from("/code/qe-feature"));
-        assert_eq!(plan.tabs[1].label, "#query-engine");
-        assert_eq!(plan.tabs[1].panes, vec![exec_resume("codex", "c1")]);
-    }
-
-    #[test]
-    fn disambiguates_reborn_tabs_with_the_same_basename() {
-        let agents = vec![
-            agent("claude", "a1", "/work/repoA/main", None, 5),
-            agent("codex", "c1", "/work/repoB/main", None, 9),
-        ];
-        let plan = plan_resume(
-            &agents,
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-
-        assert_eq!(plan.tabs.len(), 2);
-        assert_eq!(plan.tabs[0].cwd, PathBuf::from("/work/repoA/main"));
-        assert_eq!(plan.tabs[0].label, "#repoA/main");
-        assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "a1")]);
-        assert_eq!(plan.tabs[1].cwd, PathBuf::from("/work/repoB/main"));
-        assert_eq!(plan.tabs[1].label, "#repoB/main");
-        assert_eq!(plan.tabs[1].panes, vec![exec_resume("codex", "c1")]);
-    }
-
-    #[test]
-    fn resume_command_replays_launch_identity() {
-        // A reborn agent re-stamps its durable launch identity, so it answers
-        // to `@<profile>` and `@<role>` again after a mux rebirth.
-        let mut agent = agent("claude", "a1", "/code/qe", Some("main"), 1);
-        agent.name = Some("swift-otter".to_owned());
-        agent.profile = Some("claude-planner".to_owned());
-        agent.role = Some("planner".to_owned());
-        agent.team = Some("pcr".to_owned());
-        agent.launch_group = Some("launch_group_1".to_owned());
-        agent.launch_ordinal = Some(2);
-        assert_eq!(
-            resume_command(Path::new("/bin/rimz"), &agent),
-            vec![
-                "/bin/rimz",
-                "agents",
-                "exec",
-                "claude",
-                "--resume",
-                "a1",
-                "--agent-name",
-                "swift-otter",
-                "--agent-profile",
-                "claude-planner",
-                "--agent-role",
-                "planner",
-                "--agent-team",
-                "pcr",
-                "--launch-group",
-                "launch_group_1",
-                "--launch-ordinal",
-                "2",
-                "--close-pane-on-exit",
-            ]
-        );
-    }
-
-    #[test]
-    fn filters_subagents_paneless_and_ended_candidates() {
-        let mut child = agent("claude", "kid", "/code/query-engine", Some("main"), 1);
-        child.parent_agent_id = Some("parent".into());
-        // A `None` pane is both a subagent/ghost with no presence and the shape
-        // a rebirth boundary leaves behind for an agent that was not live in the
-        // dying incarnation — neither is resumed.
-        let mut paneless = agent("claude", "paneless", "/code/query-engine", Some("main"), 1);
-        paneless.pane = None;
-        let ended: BTreeSet<(AgentKind, AgentSessionId)> =
-            [(AgentKind::new_unchecked("claude"), "ended".into())]
-                .into_iter()
-                .collect();
-        let plan = plan_resume(
-            &[
-                child,
-                paneless,
-                agent("claude", "ended", "/code/query-engine", Some("main"), 1),
-            ],
-            &ended,
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-        assert!(plan.is_empty());
-        assert!(plan.skipped.is_empty());
-    }
-
-    #[test]
-    fn tombstones_a_missing_worktree() {
-        let agents = vec![agent("claude", "a1", "/code/gone", Some("dead-branch"), 1)];
-        let plan = plan_resume(
-            &agents,
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| false,
-            Path::new("/bin/rimz"),
-        );
-        assert!(plan.tabs.is_empty());
-        assert!(plan.skipped.is_empty());
-        assert_eq!(
-            plan.tombstone,
-            vec![(AgentKind::new_unchecked("claude"), "a1".into())]
-        );
-    }
-
-    #[test]
-    fn dedups_a_relaunched_agent_keeping_the_newest() {
-        // A relaunch in place re-uses the same pane id; the older stamp is
-        // superseded by the newest, exactly as the live sidebar binds the pane.
-        let agents = vec![
-            agent_on_pane(
-                "claude",
-                "old",
-                "/code/query-engine",
-                Some("main"),
-                60,
-                "terminal_4",
-            ),
-            agent_on_pane(
-                "claude",
-                "new",
-                "/code/query-engine",
-                Some("main"),
-                2,
-                "terminal_4",
-            ),
-        ];
-        let plan = plan_resume(
-            &agents,
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-        assert_eq!(plan.tabs.len(), 1);
-        assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "new")]);
-        // The superseded relaunch is dropped silently, not reported as a skip.
-        assert!(plan.skipped.is_empty());
-    }
-
-    #[test]
-    fn collapses_a_relaunch_that_changed_branch_on_one_pane() {
-        // Same pane, a branch checkout between the two sessions. The pane is the
-        // identity, so the differing branch must not leak a second resume pane —
-        // the `(kind, worktree, branch)` key used to double this.
-        let agents = vec![
-            agent_on_pane(
-                "claude",
-                "old",
-                "/code/query-engine",
-                Some("main"),
-                60,
-                "terminal_4",
-            ),
-            agent_on_pane(
-                "claude",
-                "new",
-                "/code/query-engine",
-                Some("feature"),
-                2,
-                "terminal_4",
-            ),
-        ];
-        let plan = plan_resume(
-            &agents,
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-        assert_eq!(plan.tabs.len(), 1);
-        assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "new")]);
-    }
-
-    #[test]
-    fn keeps_two_same_kind_agents_in_one_worktree() {
-        // Two Claude sessions running side by side in one worktree — distinct
-        // panes, so each is its own live agent. The `(kind, worktree, branch)`
-        // key used to collapse them to one; pane identity keeps both.
-        let agents = vec![
-            agent_on_pane(
-                "claude",
-                "a1",
-                "/code/query-engine",
-                Some("main"),
-                5,
-                "terminal_4",
-            ),
-            agent_on_pane(
-                "claude",
-                "a2",
-                "/code/query-engine",
-                Some("main"),
-                9,
-                "terminal_5",
-            ),
-            agent("codex", "c1", "/code/query-engine", Some("main"), 12),
-        ];
-        let plan = plan_resume(
-            &agents,
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-        assert_eq!(plan.tabs.len(), 1);
-        assert_eq!(plan.tabs[0].label, "#query-engine");
-        // Freshest leads within the tab; all same-worktree sessions are resumed.
-        assert_eq!(
-            plan.tabs[0].panes,
-            vec![
-                exec_resume("claude", "a1"),
-                exec_resume("claude", "a2"),
-                exec_resume("codex", "c1")
-            ]
-        );
-    }
-
-    #[test]
-    fn caps_and_reports_the_overflow() {
-        let agents = vec![
-            agent("claude", "a1", "/code/wt-1", Some("b1"), 5),
-            agent("claude", "a2", "/code/wt-2", Some("b2"), 10),
-        ];
-        let plan = plan_resume(&agents, &no_ended(), 1, |_| true, Path::new("/bin/rimz"));
-        assert_eq!(plan.tabs.len(), 1);
-        // The freshest survives the cap; the older overflows.
-        assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "a1")]);
-        assert_eq!(plan.skipped.len(), 1);
-        assert_eq!(plan.skipped[0].reason, ResumeSkipReason::OverCap);
-    }
-
-    #[test]
-    fn labels_fall_back_to_the_worktree_dir_without_a_branch() {
-        let agents = vec![agent("codex", "c1", "/code/query-engine", None, 1)];
-        let plan = plan_resume(
-            &agents,
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-        assert_eq!(plan.tabs[0].label, "#query-engine");
-        assert_eq!(
-            build_label("codex", None, None, Path::new("/code/query-engine")),
-            "codex:query-engine"
-        );
-    }
-
-    #[test]
-    fn named_channel_groups_by_explicit_channel_and_replays_identity() {
-        let mut design = agent("codex", "c1", "/code/query-engine", Some("main"), 1);
-        design.channel = Some("design".to_owned());
-        let plan = plan_resume(
-            &[design],
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-
-        assert_eq!(plan.tabs[0].label, "#design");
-        assert_eq!(
-            build_label(
-                "codex",
-                Some("design"),
-                Some("main"),
-                Path::new("/code/query-engine")
-            ),
-            "codex:design"
-        );
-        assert!(
-            plan.tabs[0].panes[0].windows(2).any(|pair| {
-                pair[0].as_str() == "--agent-channel" && pair[1].as_str() == "design"
-            }),
-            "resume argv re-stamps the named channel: {:?}",
-            plan.tabs[0].panes[0]
-        );
-    }
-}
+mod tests;

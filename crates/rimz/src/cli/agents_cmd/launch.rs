@@ -37,6 +37,19 @@ pub(super) fn launch_layout(
         .map(|column| column.rows.len())
         .sum::<usize>()
         == 1;
+    if args.resume {
+        return launch_resume_layout(
+            args,
+            globals,
+            allow_in_place,
+            &workspace,
+            &machine_config,
+            &teams,
+            layout,
+            team_name,
+            single_cell,
+        );
+    }
     let worktree_launch = args.worktree.is_some() || args.from_pr.is_some();
     let channel_launch = args.channel.is_some();
     let placement = apply_in_place_downgrade(
@@ -128,6 +141,7 @@ pub(super) fn launch_layout(
             in_place,
             team: team_name.as_deref(),
             channel: args.channel.as_deref(),
+            resume_seeds: None,
         },
         &launch_identities,
     )?;
@@ -195,6 +209,248 @@ pub(super) fn launch_layout(
         return Err(err).context(what);
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_resume_layout(
+    args: AgentsArgs,
+    globals: &GlobalFlags,
+    allow_in_place: bool,
+    workspace: &rimz::ResolvedWorkspace,
+    machine_config: &rimz::config::MachineConfig,
+    teams: &rimz::config::TeamsConfig,
+    layout: LayoutSpec,
+    team_name: Option<String>,
+    single_cell: bool,
+) -> Result<()> {
+    let ledger = open_ledger(workspace)?;
+    let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let cells = cohort_cells(&layout);
+    let spec = args.spec.as_deref().unwrap_or("<spec>");
+    let plan = rimz::harness::resume::plan_cohort_resume(
+        &projection.agents,
+        &projection.ended,
+        rimz::ledger::runtime::agent_liveness,
+        &cells,
+        team_name.as_deref(),
+        |path| path.is_dir(),
+    )
+    .map_err(|err| cohort_resume_error(err, spec))?;
+    let cwd = plan
+        .cwd
+        .clone()
+        .context("cohort resume matched no working directory")?;
+    let channel = plan.channel.clone();
+    let scoped_resume =
+        channel.is_some() || (cwd != workspace.project_root && cwd != workspace.worktree_root);
+    let placement = if single_cell {
+        apply_in_place_downgrade(
+            resolve_placement(
+                args.new_tab,
+                args.new_pane,
+                machine_config.agents.placement,
+                scoped_resume,
+                single_cell,
+                rimz::mux::ambient_pane_id().is_some(),
+            )?,
+            args.bg,
+            allow_in_place,
+        )
+    } else {
+        Placement::NewTab
+    };
+    let in_place = placement == Placement::SamePane;
+    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+    let backend = rimz::mux::backend_for(mux);
+    agents_launch::ensure_live_session(backend.as_ref(), &workspace.session_name)?;
+    record_workspace(workspace)?;
+
+    let launch_requests = fresh_resume_launch_requests(
+        &layout,
+        &plan,
+        team_name.as_deref(),
+        team_name
+            .as_deref()
+            .and_then(|name| teams.0.get(name))
+            .map(|team| team.roles.as_slice()),
+        channel.as_deref(),
+    )?;
+    let launch_identities = ledger.append_agent_launches_allocating(
+        &launch_requests,
+        &AgentLaunchAppend {
+            workspace_id: workspace.workspace_id.clone(),
+            session_name: workspace.session_name.clone(),
+            cwd: cwd.clone(),
+            worktree_name: None,
+            channel: channel.clone(),
+            prompt: None,
+            description: None,
+            state: rimz::ledger::event::AgentLaunchState::Starting,
+            pane_id: None,
+        },
+    )?;
+
+    let mux_config = rimz::config::MultiplexerConfig::from(machine_config);
+    let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
+    let title = channel.as_deref().map_or_else(
+        || rimz::harness::spec::default_tab_title(&layout, &cwd, None, team_name.as_deref()),
+        |channel| format!("#{channel}"),
+    );
+    let room = RoomTarget {
+        workspace_id: &workspace.workspace_id,
+        project_root: &workspace.project_root,
+        session_name: &workspace.session_name,
+        cwd: &cwd,
+        mux_config: &mux_config,
+        width,
+        detected_size: None,
+        refresh_ms: None,
+    };
+    let sidebar = build_sidebar_opts(&room, Vec::new())?;
+    let panes = layout_panes_with_names(
+        &layout,
+        LayoutPaneParams {
+            cwd: &cwd,
+            prompt: None,
+            cleanup_worktree: false,
+            in_place,
+            team: team_name.as_deref(),
+            channel: channel.as_deref(),
+            resume_seeds: Some(&plan.seeds),
+        },
+        &launch_identities,
+    )?;
+    let (open_result, what): (Result<()>, &str) = match placement {
+        Placement::NewTab => (
+            backend
+                .open_tab(&TabOptions {
+                    session_name: workspace.session_name.clone(),
+                    title,
+                    cwd: cwd.clone(),
+                    panes,
+                    focus: !args.bg,
+                    dock_sidebar: true,
+                    sidebar,
+                })
+                .map_err(Into::into),
+            "opening agent tab",
+        ),
+        Placement::NewPane => (
+            backend
+                .split_pane(SplitPaneOptions {
+                    target_pane_id: own_pane_id(mux),
+                    cwd: Some(cwd.to_string_lossy().into_owned()),
+                    command: Some(single_pane_argv(&panes)?),
+                    env: agents_launch::launch_identity_env(workspace, channel.as_deref(), false),
+                    focus: !args.bg,
+                })
+                .map_err(Into::into),
+            "splitting the agent into a new pane",
+        ),
+        Placement::SamePane => {
+            report_cohort_resume(&plan);
+            let argv = single_pane_argv(&panes)?;
+            let err = exec_wrapper_in_place(
+                &argv,
+                agents_launch::launch_identity_env(workspace, channel.as_deref(), false),
+                &cwd,
+            );
+            (Err(err), "running the agent in the current pane")
+        }
+    };
+    if let Err(err) = open_result {
+        let _ = append_launch_events(
+            &ledger,
+            workspace,
+            &launch_identities,
+            LaunchEventParams {
+                cwd: &cwd,
+                worktree_name: None,
+                channel: channel.as_deref(),
+                prompt: None,
+                state: rimz::ledger::event::AgentLaunchState::Failed,
+                pane_id: None,
+            },
+        );
+        return Err(err).context(what);
+    }
+    report_cohort_resume(&plan);
+    Ok(())
+}
+
+fn cohort_cells(layout: &LayoutSpec) -> Vec<rimz::harness::resume::CohortCell> {
+    layout
+        .agent_cells()
+        .filter_map(|cell| match cell {
+            Cell::Agent { kind, role, .. } => Some(rimz::harness::resume::CohortCell {
+                kind: kind.clone(),
+                role: role.clone(),
+            }),
+            Cell::Command { .. } => None,
+        })
+        .collect()
+}
+
+fn cohort_resume_error(err: rimz::harness::resume::CohortResumeErr, spec: &str) -> anyhow::Error {
+    match err {
+        rimz::harness::resume::CohortResumeErr::NothingToResume { .. } => {
+            anyhow::anyhow!("nothing to resume for `{spec}`; launch without `--resume`")
+        }
+        rimz::harness::resume::CohortResumeErr::MembersStillLive { labels } => {
+            anyhow::anyhow!(
+                "cannot resume `{spec}`; still live: {}; close them first or drop `--resume`",
+                labels.join(", ")
+            )
+        }
+    }
+}
+
+fn fresh_resume_launch_requests(
+    layout: &LayoutSpec,
+    plan: &rimz::harness::resume::CohortResumePlan,
+    team: Option<&str>,
+    team_roles: Option<&[rimz::config::RoleBinding]>,
+    channel: Option<&str>,
+) -> Result<Vec<AgentLaunchRequest>> {
+    let mut requests = launch_identity_requests(layout, None, None, team, team_roles, channel)?;
+    if team.is_none() {
+        for request in &mut requests {
+            if request.launch_group.is_some()
+                && let Some(group) = plan.launch_group.as_ref()
+            {
+                request.launch_group = Some(group.clone());
+            }
+        }
+    }
+    Ok(requests
+        .into_iter()
+        .zip(plan.seeds.iter())
+        .filter_map(|(request, seed)| {
+            matches!(seed, rimz::harness::resume::CohortSeed::Fresh).then_some(request)
+        })
+        .collect())
+}
+
+fn report_cohort_resume(plan: &rimz::harness::resume::CohortResumePlan) {
+    let mut fresh = plan.fresh.iter();
+    for seed in &plan.seeds {
+        match seed {
+            rimz::harness::resume::CohortSeed::Resume(agent) => {
+                let name = agent.name.as_deref().unwrap_or("unnamed");
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "resumed {}:{} ({})",
+                    agent.kind.as_str(),
+                    name,
+                    agent.agent_id
+                );
+            }
+            rimz::harness::resume::CohortSeed::Fresh => {
+                let label = fresh.next().map_or("agent", String::as_str);
+                let _ = writeln!(std::io::stderr(), "started fresh {label}");
+            }
+        }
+    }
 }
 
 pub(super) struct PreparedLaunch {
@@ -465,6 +721,7 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         || args.bg
         || args.new_pane
         || args.new_tab
+        || args.resume
         || args.ask
         || args.yolo
         || args.print
@@ -907,6 +1164,7 @@ pub(super) fn layout_panes_with_names(
 ) -> Result<LayoutPanes> {
     let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
     let mut agent_index = 0usize;
+    let mut launch_index = 0usize;
     let columns = layout
         .columns
         .iter()
@@ -915,12 +1173,32 @@ pub(super) fn layout_panes_with_names(
                 .rows
                 .iter()
                 .map(|cell| {
-                    let launch = if matches!(cell, Cell::Agent { .. }) {
-                        let launch = launch_identities.get(agent_index);
+                    let (resume_seed, launch) = if matches!(cell, Cell::Agent { .. }) {
+                        let resume_seed = params
+                            .resume_seeds
+                            .map(|seeds| {
+                                seeds.get(agent_index).with_context(|| {
+                                    format!("resume plan missing seed for agent cell {agent_index}")
+                                })
+                            })
+                            .transpose()?;
+                        let resumes = matches!(
+                            resume_seed,
+                            Some(rimz::harness::resume::CohortSeed::Resume(_))
+                        );
+                        let launch = if resumes {
+                            None
+                        } else {
+                            let Some(launch) = launch_identities.get(launch_index) else {
+                                bail!("launch plan missing identity for agent cell {agent_index}");
+                            };
+                            launch_index = launch_index.saturating_add(1);
+                            Some(launch)
+                        };
                         agent_index = agent_index.saturating_add(1);
-                        launch
+                        (resume_seed, launch)
                     } else {
-                        None
+                        (None, None)
                     };
                     pane_cmd_with_name(
                         cell,
@@ -933,6 +1211,7 @@ pub(super) fn layout_panes_with_names(
                             team: params.team,
                             channel: params.channel,
                             launch,
+                            resume_seed,
                         },
                     )
                 })
@@ -954,6 +1233,7 @@ pub(super) struct LayoutPaneParams<'a> {
     pub in_place: bool,
     pub team: Option<&'a str>,
     pub channel: Option<&'a str>,
+    pub resume_seeds: Option<&'a [rimz::harness::resume::CohortSeed]>,
 }
 
 pub(super) struct PaneCmdOptions<'a> {
@@ -965,6 +1245,7 @@ pub(super) struct PaneCmdOptions<'a> {
     pub team: Option<&'a str>,
     pub channel: Option<&'a str>,
     pub launch: Option<&'a LaunchIdentity>,
+    pub resume_seed: Option<&'a rimz::harness::resume::CohortSeed>,
 }
 
 pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<PaneCmd> {
@@ -982,6 +1263,11 @@ pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Re
             effort,
             ..
         } => {
+            if let Some(rimz::harness::resume::CohortSeed::Resume(agent)) = options.resume_seed {
+                return Ok(PaneCmd {
+                    argv: rimz::harness::resume::resume_command(options.rimz_bin, agent),
+                });
+            }
             if let Some(launch) = options.launch {
                 validate_agent_name(&launch.name)?;
             }

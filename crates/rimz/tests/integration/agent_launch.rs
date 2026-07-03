@@ -185,6 +185,20 @@ fn invalid_new_pane_refuses_an_agents_launch_before_side_effects() {
 
 #[cfg(unix)]
 #[test]
+fn resume_with_empty_ledger_refuses_before_mux_probe() {
+    let env = Env::new();
+
+    env.rimz()
+        .args(["agents", "claude", "--resume"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "nothing to resume for `claude`; launch without `--resume`",
+        ));
+}
+
+#[cfg(unix)]
+#[test]
 fn prompt_with_shell_metacharacters_stays_one_argument() {
     let env = Env::new();
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);

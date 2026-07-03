@@ -222,6 +222,10 @@ mod parse {
             .expect("parse print json");
         assert!(parsed.args.print);
         assert!(parsed.args.json);
+
+        let parsed = AgentsHarness::try_parse_from(["rimz", "pcr", "--resume"])
+            .expect("parse cohort resume");
+        assert!(parsed.args.resume);
     }
 
     #[test]
@@ -262,6 +266,26 @@ mod parse {
             &["rimz", "wait", "codex", "--from-start"],
             &["rimz", "wait", "codex", "--stream", "--json"],
             &["rimz", "claude", "--new-pane", "--new-tab"],
+            &["rimz", "claude", "hi", "--resume"],
+            &["rimz", "claude", "--resume", "--worktree=docs"],
+            &["rimz", "claude", "--resume", "--channel=design"],
+            &["rimz", "claude", "--resume", "--from-pr", "1"],
+            &["rimz", "claude", "--resume", "--name", "swift-otter"],
+            &["rimz", "claude", "--resume", "--description", "work"],
+            &["rimz", "claude", "--resume", "--model", "opus"],
+            &["rimz", "claude", "--resume", "--effort", "high"],
+            &["rimz", "claude", "--resume", "--ask"],
+            &["rimz", "claude", "--resume", "--yolo"],
+            &["rimz", "claude", "--resume", "--system-prompt-file", "/x"],
+            &[
+                "rimz",
+                "claude",
+                "--resume",
+                "--append-system-prompt-file",
+                "/x",
+            ],
+            &["rimz", "claude", "--resume", "-p"],
+            &["rimz", "claude", "--resume", "--", "--debug"],
         ] {
             assert!(
                 AgentsHarness::try_parse_from(argv.iter().copied()).is_err(),
@@ -278,6 +302,7 @@ mod parse {
             (&["rimz", "--", "term"], "missing agent spec"),
             (&["rimz", "--model", "opus"], "require an agent spec"),
             (&["rimz", "--new-pane"], "require an agent spec"),
+            (&["rimz", "--resume"], "require an agent spec"),
             (&["rimz", "-p", "--max-turns", "3"], "require an agent spec"),
         ] {
             let parsed = AgentsHarness::try_parse_from(argv.iter().copied()).expect("parse flag");
@@ -1079,6 +1104,7 @@ mod pane_exec {
                 team: Some("pcr"),
                 channel: Some("design"),
                 launch: Some(&launch),
+                resume_seed: None,
             },
         )
         .expect("pane command");
@@ -1111,6 +1137,7 @@ mod pane_exec {
                     team: Some("pcr"),
                     channel: None,
                     launch: Some(&launch),
+                    resume_seed: None,
                 },
             )
             .expect("pane command without close");
@@ -1119,6 +1146,71 @@ mod pane_exec {
                 "{pane:?}"
             );
         }
+    }
+
+    #[test]
+    fn pane_command_resume_replays_prior_identity_without_launch_preset() {
+        let cell = Cell::Agent {
+            kind: AgentKind::new_unchecked("claude"),
+            args: vec!["--ignored".to_owned()],
+            mode: None,
+            system_prompt_file: None,
+            append_system_prompt_file: None,
+            profile: Some("new-profile".to_owned()),
+            role: Some("new-role".to_owned()),
+            model: Some("new-model".to_owned()),
+            effort: Some("new-effort".to_owned()),
+        };
+        let mut agent = agent_with_status(
+            "sess-1",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            0,
+        );
+        agent.name = Some("swift-otter".to_owned());
+        agent.profile = Some("prior-profile".to_owned());
+        agent.role = Some("prior-role".to_owned());
+        agent.team = Some("pcr".to_owned());
+        agent.launch_group = Some("launch_group_1".to_owned());
+        agent.launch_ordinal = Some(1);
+        agent.channel = Some("design".to_owned());
+        agent.model = Some("old-model".to_owned());
+        agent.effort = Some("old-effort".to_owned());
+        let seed = rimz::harness::resume::CohortSeed::Resume(Box::new(agent));
+
+        let pane = pane_cmd_with_name(
+            &cell,
+            PaneCmdOptions {
+                rimz_bin: Path::new("/usr/bin/rimz"),
+                cwd: Path::new("/tmp/project"),
+                prompt: Some("ignored prompt"),
+                cleanup_worktree: false,
+                in_place: false,
+                team: Some("new-team"),
+                channel: Some("new-channel"),
+                launch: None,
+                resume_seed: Some(&seed),
+            },
+        )
+        .expect("resume pane command");
+
+        for (flag, value) in [
+            ("--resume", "sess-1"),
+            ("--agent-name", "swift-otter"),
+            ("--agent-profile", "prior-profile"),
+            ("--agent-role", "prior-role"),
+            ("--agent-team", "pcr"),
+            ("--launch-group", "launch_group_1"),
+            ("--launch-ordinal", "1"),
+            ("--agent-channel", "design"),
+        ] {
+            assert_arg_pair(&pane.argv, flag, value);
+        }
+        assert!(pane.argv.iter().any(|arg| arg == "--close-pane-on-exit"));
+        assert!(!pane.argv.iter().any(|arg| matches!(
+            arg.as_str(),
+            "--agent-model" | "--agent-effort" | "--prompt"
+        )));
     }
 
     #[test]
@@ -1579,6 +1671,12 @@ mod automation {
         .args;
         default_virtual_ping_prompt(&mut stream_json);
         assert!(stream_json.prompt.is_none());
+
+        let mut resume = AgentsHarness::try_parse_from(["rimz", "codex-ping", "--resume"])
+            .expect("parse resume ping")
+            .args;
+        default_virtual_ping_prompt(&mut resume);
+        assert!(resume.prompt.is_none());
     }
 }
 

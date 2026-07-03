@@ -62,11 +62,16 @@ rimz agents claude,codex --worktree=cli-docs "Review the CLI docs."
 rimz agents codex --from-pr 42 "Review this pull request."
 rimz agents 'vim,codex+term' "Review the CLI docs."  # a raw command cell beside an agent
 rimz agents pcr.planner                              # re-add one role of team pcr
+rimz agents pcr --resume                             # reopen the newest closed pcr cohort
+rimz agents claude,codex --resume                    # reopen the newest matching inline cohort
+rimz agents claude --resume                          # resume the freshest closed Claude session
 rimz agents claude --worktree "Take one approach."   # parallel attempts, each in its own fresh worktree
 rimz agents claude --worktree "Take another approach."
 ```
 
 The spec is a named [team](../configuration.md#agent-profiles-commands-and-teams), one declared role of a team as `<team>.<role>`, or an inline grammar: **commas split columns, plus signs tile rows, slashes stack rows** as a Zellij stack while tmux tiles them, and each cell is `term`, an agent kind, a virtual `<kind>-<mode>` cell, a configured profile, or a configured command. Use `rimz agents <team>.<role>` to re-add one role of a running or stopped team with the same role handle and team channel. The built-in `peer` team is the roleless `claude,codex`. The full grammar and how cells compile to panes are in [harness.md → The layout IR](../../internals/agents/harness.md#the-layout-ir).
+
+`--resume` relaunches the newest prior cohort matching the same spec: a team resumes by team name and role, an inline multi-agent spec resumes by the saved launch group and cell order, and a single kind resumes the freshest closed root session of that kind. Cells with no resumable prior member launch fresh in the matched cohort's cwd and channel, while a matched member that is still live refuses the command so the room does not duplicate the same address. Resume takes identity, cwd, and channel from the ledger, so it conflicts with `PROMPT`, `--worktree`, `--from-pr`, `--channel`, `--name`, `--description`, `--model`, `--effort`, `--ask`, `--yolo`, `-p`, system-prompt flags, and passthrough args after `--`.
 
 Permission-mode cells exist where the adapter supports them: `-auto`, `-ask`, `-plan`, and `-yolo` (so `claude-plan` passes plan mode while `codex-plan` has none and keeps the default posture), and `-ping` opens the agent at lowest effort with a `"ping"` prompt to keep the provider window warm. The built-in set is `claude-{auto,ask,plan,yolo,ping}`, `codex-{auto,ask,plan,yolo,ping}`, and `pi-{ask,plan}`. On the command line, `--ask` keeps native prompts and `--yolo` passes the adapter's bypass flags; with neither, each provider keeps its own prompting. A second positional that is itself a known cell is rejected with a `rimz agents a,b` hint, so the old space-separated fan-out never silently becomes a prompt.
 
