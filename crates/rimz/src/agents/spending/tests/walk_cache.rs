@@ -199,6 +199,50 @@ fn cold_parse_skip_ignores_new_files_outside_widest_window() {
 }
 
 #[test]
+fn unknown_model_chase_filters_sentinels_and_stale_records() {
+    assert!(!is_priceable_model_name("<synthetic>"));
+    assert!(!is_priceable_model_name("   "));
+    assert!(is_priceable_model_name("claude-new"));
+
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let model = "new-claude-pricing-test-model";
+    let file = write_jsonl(
+        dir.path(),
+        "chat.jsonl",
+        &[&format!(
+            r#"{{"timestamp":"{today}T15:00:00.000Z","requestId":"req-1","message":{{"id":"msg-1","model":"{model}","usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#
+        )],
+    );
+    let mut cache = SpendingDiskCache::default();
+    let spending = compute_spending(
+        &[(claude_adapter(), file.clone())],
+        &mut cache,
+        &PriceBook::from_litellm_json("{}"),
+        NOW_SECS,
+    );
+    assert_eq!(spending.total.headline.tokens, 150);
+    assert_eq!(
+        recorded_unknown_models(&[(claude_adapter(), file.clone())], &cache, NOW_SECS),
+        std::collections::BTreeSet::from([model.to_owned()])
+    );
+
+    cache
+        .files
+        .get_mut(&file.to_string_lossy().into_owned())
+        .unwrap()
+        .unknown_models
+        .insert(
+            "stale-model".to_owned(),
+            NOW_SECS.saturating_sub(WIDEST_SPEND_WINDOW_SECS),
+        );
+    assert_eq!(
+        recorded_unknown_models(&[(claude_adapter(), file)], &cache, NOW_SECS),
+        std::collections::BTreeSet::from([model.to_owned()])
+    );
+}
+
+#[test]
 fn spending_walk_observer_checkpoints_on_first_interval() {
     struct CaptureObserver {
         cache_path: PathBuf,
