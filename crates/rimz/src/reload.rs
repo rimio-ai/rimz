@@ -6,8 +6,8 @@
 //! and reconciles live sessions concurrently in place — one live sidebar per
 //! working view, running the current binary — closing duplicate or unresponsive
 //! sidebar panes and reaping orphaned sidebar processes whose pane is gone. Held
-//! `rimz stats --refresh`
-//! dashboards are signalled to re-exec in place before workspace enumeration, so
+//! `rimz stats --refresh` dashboards are signalled to re-exec in place before
+//! workspace enumeration, so
 //! standalone dashboards reload even when no rooms exist. `rimz reload` is the
 //! convergence path for moving long-lived sidebars and stats dashboards onto a
 //! freshly-installed build. A workspace whose session is gone has its stale
