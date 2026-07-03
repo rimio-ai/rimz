@@ -1151,20 +1151,28 @@ fn runtime_projection(
         .agent_process_start
         .clone()
         .or_else(|| prior.and_then(|p| p.agent_process_start.clone()));
-    let runtime_owner = observation
-        .runtime_owner
-        .clone()
-        .or_else(|| {
-            agent_pid.map(|pid| {
-                RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    agent_id.to_string(),
-                    pid,
-                    agent_process_start.clone(),
-                )
-            })
+    let event_owner = observation.runtime_owner.clone().or_else(|| {
+        observation.agent_pid.map(|pid| {
+            RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                agent_id.to_string(),
+                pid,
+                observation.agent_process_start.clone(),
+            )
         })
-        .or_else(|| prior.and_then(|p| p.runtime_owner.clone()));
+    });
+    let prior_owner = prior.and_then(|p| p.runtime_owner.clone());
+    let runtime_owner = match (event_owner, prior_owner) {
+        (Some(event), Some(prior))
+            if event.kind == RuntimeOwnerKind::Daemon
+                && prior.kind == RuntimeOwnerKind::Agent
+                && prior.subject_id == agent_id.as_str() =>
+        {
+            Some(prior)
+        }
+        (Some(event), _) => Some(event),
+        (None, prior) => prior,
+    };
     RuntimeProjection {
         agent_pid,
         agent_process_start,
@@ -1249,11 +1257,23 @@ fn pane_projection(
     observation: &AgentLifecycleObservation,
     prior: Option<&AgentState>,
 ) -> Option<PaneRef> {
-    observation
-        .pane_id
+    let observation_pane = observation
+        .pane_stamp
         .clone()
-        .map(PaneRef::from_id)
-        .or_else(|| prior.and_then(|p| p.pane.clone()))
+        .or_else(|| observation.pane_id.clone().map(PaneRef::from_id));
+    match (observation_pane, prior.and_then(|p| p.pane.clone())) {
+        (Some(observed), Some(prior))
+            if observed.pane_id == prior.pane_id && !pane_stamp_is_enriched(&observed) =>
+        {
+            Some(prior)
+        }
+        (Some(observed), _) => Some(observed),
+        (None, prior) => prior,
+    }
+}
+
+fn pane_stamp_is_enriched(pane: &PaneRef) -> bool {
+    pane.pane_pid.is_some()
 }
 
 fn non_empty_string(value: Option<&str>) -> Option<String> {

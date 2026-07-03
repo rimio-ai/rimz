@@ -66,6 +66,22 @@ fn daemon_session_reap_handles_loaded_set_edges() {
             expected: vec!["t-standalone"],
         },
         Case {
+            label: "daemon owner kind is authoritative for new records",
+            daemon_pids: vec![7],
+            loaded: Some(Vec::new()),
+            agents: {
+                let mut daemon = daemon_codex("t-gone", "/repo/b", 99);
+                daemon.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Daemon,
+                    "t-gone",
+                    99,
+                    None,
+                ));
+                vec![daemon]
+            },
+            expected: Vec::new(),
+        },
+        Case {
             label: "subagents and other kinds are not daemon-mode codex",
             daemon_pids: vec![7],
             loaded: Some(Vec::new()),

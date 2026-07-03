@@ -87,7 +87,12 @@ pub(super) fn payload_context_agent_id(payload: &Value) -> Option<&str> {
 fn agent_runtime_owner(source: &str, payload: &Value) -> Option<rimz::RuntimeOwner> {
     let subject_id = payload_agent_id(payload)?;
     let pid = hook_agent_pid(source)?;
-    Some(process_owner(RuntimeOwnerKind::Agent, subject_id, pid))
+    let kind = if rimz::remote_control::pid_is_codex_daemon(pid) {
+        RuntimeOwnerKind::Daemon
+    } else {
+        RuntimeOwnerKind::Agent
+    };
+    Some(process_owner(kind, subject_id, pid))
 }
 
 pub(super) fn attach_resolver_chain(item: &mut FeedItem, fresh: &[AllowlistEntry]) {

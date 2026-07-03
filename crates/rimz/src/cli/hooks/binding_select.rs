@@ -45,6 +45,7 @@ pub(super) fn select_focused_pane_binding(
     let candidate_count = candidates.len();
     if candidates.is_empty() {
         return FocusedPaneBindingSelection {
+            pane: None,
             pane_id: None,
             candidate_count,
             method: BindingSelectionMethod::None,
@@ -54,6 +55,7 @@ pub(super) fn select_focused_pane_binding(
 
     if candidates.len() == 1 {
         return FocusedPaneBindingSelection {
+            pane: Some(candidates[0].clone()),
             pane_id: Some(candidates[0].pane_id.clone()),
             candidate_count,
             method: BindingSelectionMethod::SingleCandidate,
@@ -61,7 +63,7 @@ pub(super) fn select_focused_pane_binding(
         };
     }
 
-    let (pane_id, method) = if let Some(client_focus) = client_focus {
+    let (pane, method) = if let Some(client_focus) = client_focus {
         let focused_panes: Vec<&PaneRef> = candidates
             .iter()
             .copied()
@@ -73,7 +75,7 @@ pub(super) fn select_focused_pane_binding(
             &focused_panes,
             BindingRejectReason::NotInClientFocus,
         );
-        let selected = unique_pane_id(focused_panes.iter().copied());
+        let selected = unique_pane(focused_panes.iter().copied());
         if selected.is_none() && focused_panes.len() > 1 {
             annotate_ambiguous(&mut candidate_records, &focused_panes);
         }
@@ -90,13 +92,15 @@ pub(super) fn select_focused_pane_binding(
             &focused_panes,
             BindingRejectReason::NotTabFocused,
         );
-        let selected = unique_pane_id(focused_panes.iter().copied());
+        let selected = unique_pane(focused_panes.iter().copied());
         if selected.is_none() && focused_panes.len() > 1 {
             annotate_ambiguous(&mut candidate_records, &focused_panes);
         }
         (selected, BindingSelectionMethod::TabFocus)
     };
+    let pane_id = pane.as_ref().map(|pane| pane.pane_id.clone());
     FocusedPaneBindingSelection {
+        pane,
         pane_id,
         candidate_count,
         method,
@@ -182,6 +186,7 @@ fn allow_occupied_codex_candidates(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct FocusedPaneBindingSelection {
+    pub(super) pane: Option<PaneRef>,
     pub(super) pane_id: Option<PaneId>,
     pub(super) candidate_count: usize,
     pub(super) method: BindingSelectionMethod,
@@ -345,7 +350,9 @@ pub(super) fn session_already_stamped(
         .any(|agent| agent.kind == kind && agent.agent_id == agent_id && agent.pane_id.is_some())
 }
 
-fn unique_pane_id<'a>(mut panes: impl Iterator<Item = &'a PaneRef>) -> Option<PaneId> {
-    let first = panes.next()?.pane_id.clone();
-    panes.all(|pane| pane.pane_id == first).then_some(first)
+fn unique_pane<'a>(mut panes: impl Iterator<Item = &'a PaneRef>) -> Option<PaneRef> {
+    let first = panes.next()?;
+    panes
+        .all(|pane| pane.pane_id == first.pane_id)
+        .then(|| first.clone())
 }

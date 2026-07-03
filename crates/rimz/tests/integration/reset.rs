@@ -341,6 +341,7 @@ fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
         fresh_input_tokens: None,
         output_tokens: None,
         pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
+        pane_stamp: None,
         parent_agent_id: None,
     }
 }

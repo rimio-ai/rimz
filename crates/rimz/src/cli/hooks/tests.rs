@@ -385,6 +385,23 @@ fn focused_pane_recovery_selects_or_rejects_by_focus_and_stamp_state() {
     }
 }
 
+#[test]
+fn recovered_binding_stamps_full_pane_and_reowns_to_pane_process() {
+    let mut observation = root_observation();
+    let mut pane = candidate("terminal_30", true);
+    pane.view_id = Some("tab_4".to_owned());
+    pane.cwd = Some("/repo/main".to_owned());
+    pane.pane_pid = Some(std::process::id());
+
+    super::binding::apply_recovered_pane_binding(&mut observation, "sess-1", pane.clone());
+
+    assert_eq!(observation.pane_id.as_ref(), Some(&pane.pane_id));
+    assert_eq!(observation.pane_stamp.as_ref(), Some(&pane));
+    let owner = observation.runtime_owner.as_ref().expect("runtime owner");
+    assert_eq!(owner.kind, rimz::pane::RuntimeOwnerKind::Agent);
+    assert_eq!(owner.pid, std::process::id());
+}
+
 fn focus_recovery_cases() -> Vec<Case> {
     let epoch = jiff::Timestamp::UNIX_EPOCH;
     let later = jiff::Timestamp::from_second(60).unwrap();

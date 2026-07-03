@@ -102,6 +102,13 @@ pub fn owner_is_live(owner: &RuntimeOwner) -> bool {
 
 pub fn agent_liveness(agent: &AgentState) -> AgentLiveness {
     if let Some(owner) = &agent.runtime_owner {
+        if owner.kind == RuntimeOwnerKind::Daemon {
+            return if owner_is_live(owner) {
+                AgentLiveness::Unknown
+            } else {
+                AgentLiveness::Dead
+            };
+        }
         return if owner_is_live(owner) {
             AgentLiveness::Live { pid: owner.pid }
         } else {
@@ -135,8 +142,16 @@ fn process_is_live(pid: u32, expected_start: Option<&str>) -> bool {
         Ok(stat) => stat,
         Err(_) => return false,
     };
+    linux_process_stat_is_live(&stat, expected_start)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_stat_is_live(stat: &str, expected_start: Option<&str>) -> bool {
+    if matches!(linux_process_state_from_stat(stat), Some("Z" | "X")) {
+        return false;
+    }
     match expected_start {
-        Some(expected) => linux_process_start_from_stat(&stat) == Some(expected),
+        Some(expected) => linux_process_start_from_stat(stat) == Some(expected),
         None => true,
     }
 }
@@ -150,6 +165,12 @@ fn process_is_live(_pid: u32, _expected_start: Option<&str>) -> bool {
 fn linux_process_start_from_stat(stat: &str) -> Option<&str> {
     let after_comm = stat.rsplit_once(") ")?.1;
     after_comm.split_whitespace().nth(19)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_state_from_stat(stat: &str) -> Option<&str> {
+    let after_comm = stat.rsplit_once(") ")?.1;
+    after_comm.split_whitespace().next()
 }
 
 #[cfg(test)]
@@ -315,6 +336,12 @@ mod tests {
     }
 
     #[test]
+    fn agent_liveness_daemon_owner_abstains_while_process_lives() {
+        let owner = current_process_owner(RuntimeOwnerKind::Daemon, "sess-daemon");
+        assert_eq!(agent_liveness(&agent(Some(owner))), AgentLiveness::Unknown);
+    }
+
+    #[test]
     fn agent_liveness_reports_unknown_without_process_identity() {
         assert_eq!(agent_liveness(&agent(None)), AgentLiveness::Unknown);
     }
@@ -343,5 +370,19 @@ mod tests {
         state.agent_pid = Some(std::process::id());
         state.agent_process_start = Some("definitely-not-this-process".to_owned());
         assert_eq!(agent_liveness(&state), AgentLiveness::Dead);
+
+        let daemon = RuntimeOwner::new(RuntimeOwnerKind::Daemon, "sess-daemon", u32::MAX, None);
+        assert_eq!(agent_liveness(&agent(Some(daemon))), AgentLiveness::Dead);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_process_stat_liveness_rejects_zombies() {
+        let running = "123 (codex) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 12345";
+        let zombie = "123 (codex) Z 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 12345";
+
+        assert_eq!(linux_process_state_from_stat(zombie), Some("Z"));
+        assert!(linux_process_stat_is_live(running, Some("12345")));
+        assert!(!linux_process_stat_is_live(zombie, Some("12345")));
     }
 }

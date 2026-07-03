@@ -62,6 +62,44 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
             expected: vec!["pidful", "recent"],
         },
         Case {
+            label: "daemon-owned stale session is pidless but pane owner survives",
+            agents: {
+                let mut stale_daemon = agent("codex", "stale-daemon", AgentStatus::Idle, 0)
+                    .worktree("/repo/stale-daemon")
+                    .active_ago(GHOST_SESSION_TTL_SECS + 60);
+                stale_daemon.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Daemon,
+                    "stale-daemon",
+                    77,
+                    None,
+                ));
+                stale_daemon.agent_pid = Some(77);
+                let mut recent_daemon = agent("codex", "recent-daemon", AgentStatus::Idle, 0)
+                    .worktree("/repo/recent-daemon")
+                    .active_ago(60);
+                recent_daemon.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Daemon,
+                    "recent-daemon",
+                    77,
+                    None,
+                ));
+                recent_daemon.agent_pid = Some(77);
+                let mut pane_owner = agent("codex", "pane-owner", AgentStatus::Idle, 0)
+                    .worktree("/repo/pane-owner")
+                    .in_pane("%9")
+                    .active_ago(GHOST_SESSION_TTL_SECS * 10);
+                pane_owner.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "pane-owner",
+                    88,
+                    None,
+                ));
+                pane_owner.agent_pid = Some(77);
+                vec![stale_daemon, recent_daemon, pane_owner]
+            },
+            expected: vec!["pane-owner", "recent-daemon"],
+        },
+        Case {
             label: "paneless same path and branch collapses to newest",
             agents: vec![
                 agent("codex", "older", AgentStatus::Idle, 0)

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ids::{AgentSessionId, PaneId};
-use crate::pane::RuntimeOwner;
+use crate::pane::{PaneRef, RuntimeOwner};
 
 use super::optional_payload_string;
 use super::{AgentTurnError, lifecycle::LifecycleSignal};
@@ -96,7 +96,7 @@ pub struct AgentLifecycleObservation {
     pub agent_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_process_start: Option<String>,
-    #[serde(default, skip_serializing)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_owner: Option<RuntimeOwner>,
     /// Optional absolute worktree path observed from the agent payload or
     /// filled by the CLI from the current Rimz workspace.
@@ -162,6 +162,11 @@ pub struct AgentLifecycleObservation {
     /// pane when two agents of the same kind share one worktree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
+    /// Full pane identity observed from the live pane frame when the hook can
+    /// resolve it. This durable stamp lets runtime liveness key daemon-routed
+    /// sessions to the in-pane process rather than the shared daemon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_stamp: Option<PaneRef>,
     /// The root session id this observation's agent is a *child* of, set only
     /// on `SubagentStart`/`SubagentStop` (the payload `session_id`, which both
     /// adapters report as the parent for a subagent event). `None` for root
@@ -196,6 +201,7 @@ impl AgentLifecycleObservation {
             fresh_input_tokens: None,
             output_tokens: None,
             pane_id: None,
+            pane_stamp: None,
             parent_agent_id: None,
         }
     }

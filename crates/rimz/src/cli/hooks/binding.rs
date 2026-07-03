@@ -4,6 +4,29 @@ use super::binding_select::{
 };
 use super::*;
 
+pub(super) fn enrich_pane_stamp_from_cache(
+    workspace: &ResolvedWorkspace,
+    ledger: &Ledger,
+    observation: &mut AgentLifecycleObservation,
+) {
+    if observation.pane_stamp.is_some() || !observation.signal.establishes_identity() {
+        return;
+    }
+    let Some(pane_id) = observation.pane_id.as_ref() else {
+        return;
+    };
+    let Some(frame) = rimz::sidebar::cache::read_snapshot_cache(
+        &ledger.runtime_paths().pane_frame_path(),
+        &workspace.session_name,
+    ) else {
+        return;
+    };
+    observation.pane_stamp = frame
+        .to_pane_refs()
+        .into_iter()
+        .find(|pane| pane.pane_id == *pane_id);
+}
+
 pub(super) fn recover_focused_pane_binding(
     kind: &str,
     registers_lazily: bool,
@@ -24,13 +47,19 @@ pub(super) fn recover_focused_pane_binding(
     ) {
         return;
     }
-    let Some(agent_id) = observation.agent_id.as_deref().filter(|id| !id.is_empty()) else {
+    let Some(agent_id) = observation
+        .agent_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned)
+    else {
         return;
     };
     let Some(worktree_path) = observation
         .worktree_path
         .as_deref()
         .filter(|path| !path.is_empty())
+        .map(ToOwned::to_owned)
     else {
         return;
     };
@@ -40,7 +69,7 @@ pub(super) fn recover_focused_pane_binding(
         Err(err) => {
             debug!(
                 agent = kind,
-                agent_id,
+                agent_id = agent_id.as_str(),
                 error = %err,
                 "lifecycle: skipped focused pane recovery because the prior rollup was unreadable",
             );
@@ -48,7 +77,7 @@ pub(super) fn recover_focused_pane_binding(
         }
     };
     let prior = prior_agent_panes(&snapshot.agents);
-    if session_already_stamped(kind, agent_id, &prior) {
+    if session_already_stamped(kind, &agent_id, &prior) {
         return;
     }
 
@@ -57,15 +86,15 @@ pub(super) fn recover_focused_pane_binding(
         &workspace.session_name,
         ledger.runtime_paths(),
         kind,
-        agent_id,
+        &agent_id,
     ) else {
         log_binding_recovery(
             ledger,
             BindingRecoveryLog::new(
                 kind,
-                agent_id,
+                &agent_id,
                 observation,
-                worktree_path,
+                &worktree_path,
                 BindingRecoveryOutcome::NoInputs,
             ),
         );
@@ -73,8 +102,8 @@ pub(super) fn recover_focused_pane_binding(
     };
     let selection = select_focused_pane_binding(
         kind,
-        agent_id,
-        worktree_path,
+        &agent_id,
+        &worktree_path,
         &prior,
         &inputs.panes,
         inputs.client_focus.as_deref(),
@@ -91,28 +120,45 @@ pub(super) fn recover_focused_pane_binding(
     };
     log_binding_recovery(
         ledger,
-        BindingRecoveryLog::new(kind, agent_id, observation, worktree_path, outcome)
+        BindingRecoveryLog::new(kind, &agent_id, observation, &worktree_path, outcome)
             .with_probes(inputs.probes)
             .with_candidates(selection.candidates.clone()),
     );
-    if let Some(pane_id) = selection.pane_id {
+    if let Some(pane) = selection.pane {
+        let pane_id = pane.pane_id.clone();
         debug!(
             agent = kind,
-            agent_id,
+            agent_id = agent_id.as_str(),
             pane = %pane_id,
             "lifecycle: recovered daemon-routed pane binding from live focus",
         );
-        observation.pane_id = Some(pane_id);
+        apply_recovered_pane_binding(observation, &agent_id, pane);
     } else {
         warn!(
             target: "rimz::agent::binding",
             kind,
-            agent_id,
-            cwd = worktree_path,
+            agent_id = agent_id.as_str(),
+            cwd = worktree_path.as_str(),
             candidate_count = selection.candidate_count,
             "daemon-routed lifecycle event exhausted focused pane binding candidates",
         );
     }
+}
+
+pub(super) fn apply_recovered_pane_binding(
+    observation: &mut AgentLifecycleObservation,
+    agent_id: &str,
+    pane: PaneRef,
+) {
+    if let Some(pane_pid) = pane.pane_pid {
+        observation.runtime_owner = Some(process_owner(
+            RuntimeOwnerKind::Agent,
+            agent_id.to_owned(),
+            pane_pid,
+        ));
+    }
+    observation.pane_id = Some(pane.pane_id.clone());
+    observation.pane_stamp = Some(pane);
 }
 
 fn log_binding_recovery(ledger: &Ledger, record: BindingRecoveryLog) {

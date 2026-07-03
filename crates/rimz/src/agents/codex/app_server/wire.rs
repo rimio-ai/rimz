@@ -124,25 +124,34 @@ pub(super) struct ThreadSummary {
 }
 
 /// Extract the loaded thread ids from a `thread/loaded/list` result, trusting only
-/// recognized shapes. The documented response is a flat list of ids; accept it
-/// under any of the likely keys (or as a bare array), and tolerate id-bearing
-/// objects. A response carrying none of these is **untrusted** — return an error
-/// so the daemon-liveness caller keeps every session rather than reaping against a
-/// shape it could not read (the fix plan's "do not mass-reap when the response
-/// cannot be trusted").
-pub(super) fn parse_loaded_threads(result: &Value) -> Result<Vec<String>, AppServerErr> {
-    const ID_LIST_KEYS: [&str; 4] = ["threadIds", "threads", "loadedThreadIds", "ids"];
+/// recognized shapes. The current response carries ids under `data` with an
+/// optional `nextCursor`; older Codex builds used `threadIds`-style fields or a
+/// bare array. A response carrying none of these is **untrusted** — return an
+/// error so the daemon-liveness caller keeps every session rather than reaping
+/// against a shape it could not read.
+pub(super) fn parse_loaded_threads(
+    result: &Value,
+) -> Result<(Vec<String>, Option<String>), AppServerErr> {
+    const ID_LIST_KEYS: [&str; 5] = ["data", "threadIds", "threads", "loadedThreadIds", "ids"];
     for key in ID_LIST_KEYS {
         if let Some(array) = result.get(key).and_then(Value::as_array) {
-            return ids_from_array(array);
+            return Ok((ids_from_array(array)?, next_cursor(result)));
         }
     }
     if let Some(array) = result.as_array() {
-        return ids_from_array(array);
+        return Ok((ids_from_array(array)?, None));
     }
     Err(AppServerErr::Protocol(
         "thread/loaded/list: no recognized thread-id field".to_owned(),
     ))
+}
+
+fn next_cursor(result: &Value) -> Option<String> {
+    result
+        .get("nextCursor")
+        .and_then(Value::as_str)
+        .filter(|cursor| !cursor.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// Map a recognized id array to its ids. An empty array is a trusted "zero

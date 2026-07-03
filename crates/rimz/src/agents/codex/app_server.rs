@@ -74,6 +74,7 @@ const PROXY_PROBE_DEADLINE: Duration = Duration::from_secs(2);
 /// Override for the daemon control socket. A path re-uses that daemon via
 /// `proxy`; an empty value forces the cold-spawn path (tests, opt-out).
 const CODEX_APP_SERVER_SOCK_ENV: &str = "RIMZ_CODEX_APP_SERVER_SOCK";
+const LOADED_THREADS_MAX_PAGES: usize = 16;
 
 pub(crate) struct CodexAppServer<T: JsonRpcTransport> {
     transport: T,
@@ -397,7 +398,23 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
     /// empty set, so a wire-shape drift degrades to keep-all rather than mass-reap.
     /// Assumes [`Self::handshake`] already ran.
     pub(crate) fn loaded_threads(&mut self) -> Result<Vec<String>, AppServerErr> {
-        let result = self.transport.request("thread/loaded/list", Value::Null)?;
-        parse_loaded_threads(&result)
+        let mut loaded = Vec::new();
+        let mut cursor = None;
+        for _ in 0..LOADED_THREADS_MAX_PAGES {
+            let params = cursor
+                .as_ref()
+                .map(|cursor| json!({ "cursor": cursor }))
+                .unwrap_or_else(|| json!({}));
+            let result = self.transport.request("thread/loaded/list", params)?;
+            let (mut ids, next_cursor) = parse_loaded_threads(&result)?;
+            loaded.append(&mut ids);
+            let Some(next) = next_cursor else {
+                return Ok(loaded);
+            };
+            cursor = Some(next);
+        }
+        Err(AppServerErr::Protocol(format!(
+            "thread/loaded/list: exceeded {LOADED_THREADS_MAX_PAGES} pages"
+        )))
     }
 }

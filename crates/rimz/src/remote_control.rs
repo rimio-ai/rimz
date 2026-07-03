@@ -548,6 +548,11 @@ pub fn codex_daemon_pids() -> std::collections::BTreeSet<u32> {
         .collect()
 }
 
+/// Whether `pid` is the per-user Codex app-server daemon.
+pub fn pid_is_codex_daemon(pid: u32) -> bool {
+    crate::proc::cmdline(pid).is_some_and(|cmdline| is_codex_daemon_cmdline(&cmdline))
+}
+
 /// Whether a command line runs the Codex daemon: the `codex` binary on its
 /// `app-server` or `remote-control` surface. Mirrors [`pane_is_host`]'s markers,
 /// narrowed to the `codex` binary so an unrelated process that merely mentions a

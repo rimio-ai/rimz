@@ -99,3 +99,68 @@ fn stamped_start(workspace: &WorkspaceId, agent_id: &str, pane: &str) -> EventEn
         }),
     )
 }
+
+#[test]
+fn lifecycle_pane_stamp_carries_full_anchor_and_survives_bare_id_events() {
+    let mut stamp = crate::pane::PaneRef::from_id(PaneId::parse("tmux:%7").expect("pane id"));
+    stamp.session_name = "session".to_owned();
+    stamp.view_id = Some("@3".to_owned());
+    stamp.cwd = Some("/repo/main".to_owned());
+    stamp.pane_pid = Some(42);
+    stamp.pane_process_start = Some(Timestamp::from_second(1_750_000_001).unwrap());
+
+    let mut start = crate::agents::AgentLifecycleObservation::new(
+        Some("sess-1".into()),
+        crate::agents::lifecycle::LifecycleSignal::Registered,
+    );
+    start.pane_id = Some(stamp.pane_id.clone());
+    start.pane_stamp = Some(stamp);
+    let start =
+        EventEnvelope::agent_lifecycle(workspace(), "session", "codex", "SessionStart", &start);
+    let prompt = raw_lifecycle(
+        "codex",
+        serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "sess-1",
+            "signal": { "signal": "turn_started" },
+            "pane_id": "tmux:%7",
+        }),
+    );
+
+    let agents = reduce_agent_states(&[start, prompt]);
+    let pane = agents[0].pane.as_ref().expect("pane anchor");
+    assert_eq!(pane.pane_id.raw(), "%7");
+    assert_eq!(pane.view_id.as_deref(), Some("@3"));
+    assert_eq!(pane.cwd.as_deref(), Some("/repo/main"));
+    assert_eq!(pane.pane_pid, Some(42));
+    assert!(
+        pane.pane_process_start.is_some(),
+        "later bare pane_id event must not downgrade an enriched stamp"
+    );
+}
+
+#[test]
+fn later_daemon_owner_does_not_clobber_pane_process_owner() {
+    let owner_event = |kind: &str, pid: u32| {
+        raw_lifecycle(
+            "codex",
+            serde_json::json!({
+                "event_name": "SessionStart",
+                "agent_id": "sess-1",
+                "signal": { "signal": "registered" },
+                "agent_pid": pid,
+                "runtime_owner": {
+                    "kind": kind,
+                    "subject_id": "sess-1",
+                    "pid": pid,
+                },
+            }),
+        )
+    };
+
+    let agents = reduce_agent_states(&[owner_event("agent", 42), owner_event("daemon", 77)]);
+
+    let owner = agents[0].runtime_owner.as_ref().expect("runtime owner");
+    assert_eq!(owner.kind, crate::pane::RuntimeOwnerKind::Agent);
+    assert_eq!(owner.pid, 42);
+}

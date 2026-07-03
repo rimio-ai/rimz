@@ -8,8 +8,10 @@ use super::*;
 
 struct CannedTransport {
     results: HashMap<&'static str, Value>,
+    sequences: HashMap<&'static str, Vec<Value>>,
     errors: HashSet<&'static str>,
     calls: Vec<String>,
+    params: Vec<Value>,
 }
 
 impl CannedTransport {
@@ -26,13 +28,20 @@ impl CannedTransport {
         );
         Self {
             results,
+            sequences: HashMap::new(),
             errors: HashSet::new(),
             calls: Vec::new(),
+            params: Vec::new(),
         }
     }
 
     fn with(mut self, method: &'static str, result: Value) -> Self {
         self.results.insert(method, result);
+        self
+    }
+
+    fn with_sequence(mut self, method: &'static str, results: Vec<Value>) -> Self {
+        self.sequences.insert(method, results);
         self
     }
 
@@ -43,13 +52,19 @@ impl CannedTransport {
 }
 
 impl JsonRpcTransport for CannedTransport {
-    fn request(&mut self, method: &str, _params: Value) -> Result<Value, AppServerErr> {
+    fn request(&mut self, method: &str, params: Value) -> Result<Value, AppServerErr> {
         self.calls.push(method.to_owned());
+        self.params.push(params);
         if self.errors.contains(method) {
             return Err(AppServerErr::JsonRpc {
                 code: -32000,
                 message: "boom".to_owned(),
             });
+        }
+        if let Some(results) = self.sequences.get_mut(method)
+            && !results.is_empty()
+        {
+            return Ok(results.remove(0));
         }
         Ok(self.results.get(method).cloned().unwrap_or(Value::Null))
     }
@@ -387,7 +402,7 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
 #[test]
 fn loaded_thread_parser_accepts_known_shapes_and_errors_on_drift() {
     let transport =
-        CannedTransport::new().with("thread/loaded/list", json!({ "threadIds": ["t-1", "t-2"] }));
+        CannedTransport::new().with("thread/loaded/list", json!({ "data": ["t-1", "t-2"] }));
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
     assert_eq!(client.loaded_threads().unwrap(), ["t-1", "t-2"]);
@@ -398,8 +413,10 @@ fn loaded_thread_parser_accepts_known_shapes_and_errors_on_drift() {
             .iter()
             .any(|c| c == "thread/loaded/list")
     );
+    assert_eq!(client.transport.params[1], json!({}));
 
     for (payload, expected) in [
+        (json!({ "data": ["a", "b"] }), vec!["a", "b"]),
         (json!({ "threadIds": ["a", "b"] }), vec!["a", "b"]),
         (json!({ "threads": ["a"] }), vec!["a"]),
         (
@@ -408,12 +425,20 @@ fn loaded_thread_parser_accepts_known_shapes_and_errors_on_drift() {
         ),
         (json!(["a", "b"]), vec!["a", "b"]),
     ] {
-        assert_eq!(parse_loaded_threads(&payload).unwrap(), expected);
+        assert_eq!(parse_loaded_threads(&payload).unwrap().0, expected);
     }
     assert!(
-        parse_loaded_threads(&json!({ "threadIds": [] }))
+        parse_loaded_threads(&json!({ "data": [], "nextCursor": null }))
             .unwrap()
+            .0
             .is_empty()
+    );
+    assert_eq!(
+        parse_loaded_threads(&json!({ "data": ["a"], "nextCursor": "next" }))
+            .unwrap()
+            .1
+            .as_deref(),
+        Some("next")
     );
 
     for payload in [
@@ -426,6 +451,23 @@ fn loaded_thread_parser_accepts_known_shapes_and_errors_on_drift() {
     ] {
         assert!(parse_loaded_threads(&payload).is_err(), "{payload}");
     }
+}
+
+#[test]
+fn loaded_threads_follows_next_cursor_pages() {
+    let transport = CannedTransport::new().with_sequence(
+        "thread/loaded/list",
+        vec![
+            json!({ "data": ["a"], "nextCursor": "page-2" }),
+            json!({ "data": ["b"], "nextCursor": null }),
+        ],
+    );
+    let mut client = CodexAppServer::new(transport);
+    client.handshake().unwrap();
+
+    assert_eq!(client.loaded_threads().unwrap(), ["a", "b"]);
+    assert_eq!(client.transport.params[1], json!({}));
+    assert_eq!(client.transport.params[2], json!({ "cursor": "page-2" }));
 }
 
 fn assert_spawn(attempt: &ConnectAttempt, args: &[&str], deadline: Duration) {

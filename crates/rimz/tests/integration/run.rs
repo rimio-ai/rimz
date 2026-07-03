@@ -358,6 +358,7 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         fresh_input_tokens: None,
         output_tokens: None,
         pane_id: None,
+        pane_stamp: None,
         parent_agent_id: None,
     };
     ledger

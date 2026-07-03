@@ -161,6 +161,7 @@ pub mod fleet {
             fresh_input_tokens: None,
             output_tokens: None,
             pane_id: None,
+            pane_stamp: None,
             parent_agent_id: None,
         }
     }

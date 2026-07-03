@@ -9,7 +9,7 @@ use crate::ledger::snapshot::panes::{agent_owner_pid, is_daemon_mode_codex};
 use crate::ledger::snapshot::process::{
     command_is_sidebar_chrome, pane_agent_kind, pane_worktree_path,
 };
-use crate::pane::PaneRef;
+use crate::pane::{PaneRef, RuntimeOwnerKind};
 use crate::remote_control;
 
 use super::SidebarSnapshot;
@@ -209,7 +209,11 @@ impl SidebarSnapshot {
 pub(super) const GHOST_SESSION_TTL_SECS: i64 = 3 * 60 * 60;
 
 fn agent_is_pidless(agent: &AgentState) -> bool {
-    agent.runtime_owner.is_none() && agent.agent_pid.is_none()
+    match agent.runtime_owner.as_ref().map(|owner| owner.kind) {
+        Some(RuntimeOwnerKind::Agent | RuntimeOwnerKind::Script) => false,
+        Some(RuntimeOwnerKind::Daemon) => true,
+        None => agent.agent_pid.is_none(),
+    }
 }
 
 fn session_age_secs(now: Timestamp, agent: &AgentState) -> i64 {

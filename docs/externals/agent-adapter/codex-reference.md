@@ -167,11 +167,11 @@ The [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) c
 **`thread/loaded/list`** → the thread ids the app-server currently holds in memory; the daemon-mode liveness signal Rimz reaps ghost sessions against ([sidebar.md → Presence model](../../internals/sidebar/sidebar.md#presence-model)).
 
 ```jsonc
-// result — a flat list of loaded thread ids
-{ "threadIds": ["string", …] }
+// result — v2/ThreadLoadedListResponse.json from `codex app-server generate-json-schema`
+{ "data": ["string", …], "nextCursor": "string | null" }
 ```
 
-The reaper queries the per-user daemon **specifically** (never a cold-spawn, whose empty set would mass-reap) and trusts only a recognized id-list shape: a response with no id field is treated as unknown, not zero, so a wire-shape drift keeps every session. The set is loaded-in-memory, not attached-pane, so it is a liveness improvement, not a perfect pane signal.
+The reaper queries the per-user daemon **specifically** (never a cold-spawn, whose empty set would mass-reap), sends `{}` as params, follows `nextCursor`, and trusts only a recognized id-list shape: a response with no id field is treated as unknown, not zero, so a wire-shape drift keeps every session. Rimz still accepts the older `threadIds`, `threads`, `loadedThreadIds`, `ids`, and bare-array shapes for compatibility. The set is loaded-in-memory, not attached-pane, so it is a liveness improvement, not a perfect pane signal.
 
 **`initialize`** → handshake; the response `userAgent` carries the Codex version.
 

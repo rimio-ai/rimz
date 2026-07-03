@@ -21,6 +21,7 @@ pub const SIDEBAR_CHROME_TITLE: &str = "rimz-sidebar";
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeOwnerKind {
     Agent,
+    Daemon,
     Script,
 }
 
@@ -28,6 +29,7 @@ impl RuntimeOwnerKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Agent => "agent",
+            Self::Daemon => "daemon",
             Self::Script => "script",
         }
     }

@@ -33,6 +33,7 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
         fresh_input_tokens: None,
         output_tokens: None,
         pane_id: None,
+        pane_stamp: None,
         parent_agent_id: None,
     };
     let envelope = EventEnvelope::agent_lifecycle(

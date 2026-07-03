@@ -16,6 +16,7 @@ pub(super) fn list_agents(
     let context_records = rimz::ledger::agent_context::read_all(&runtime);
 
     let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    apply_cached_daemon_reap(&mut snapshot, &runtime);
     // Group by the room's worktree checkouts the way the sidebar does: a
     // worktree parked outside the project root still earns its own pod. The
     // cached enumeration is read-only and best-effort, matching the sidebar's
@@ -104,10 +105,9 @@ pub(super) fn show_agent(
     // Fold the rich statusline context so the shown card — and the `--json`
     // payload — carries the real token window, not the carried-forward
     // `context_pct`.
-    let snapshot = ledger
-        .snapshot_cached()
-        .context("reading agent snapshot")?
-        .with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+    let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    apply_cached_daemon_reap(&mut snapshot, &runtime);
+    let snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
     let agent_result = crate::cli::resolve_agent_one(
         &snapshot,
         &reference,
@@ -234,7 +234,10 @@ pub(super) fn show_agent(
     kv.push("model", render::cell(model_label(agent)).dash());
     kv.push("context", context_cell(agent));
     kv.push("worktree", render::cell(worktree_label(agent)).dash());
-    kv.push("pane", render::cell(pane_label(agent)).dash());
+    push_pane_anchor(&mut kv, agent);
+    if let Some(registered_at) = agent.registered_at {
+        kv.push("registered_at", render::cell(registered_at.to_string()));
+    }
     kv.render(&mut render::out())?;
     if let Some(run) = run.or_else(|| newest_run_for_agent(&ledger, agent).ok().flatten()) {
         print_run_line(&run)?;
@@ -252,6 +255,12 @@ pub(super) fn show_agent(
         write!(out, "{}", capture.raw_text)?;
     }
     Ok(())
+}
+
+fn apply_cached_daemon_reap(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::RuntimePaths) {
+    if let Some(cache) = rimz::sidebar::refresh::read_codex_daemon_reap(runtime) {
+        snapshot.drop_dead_daemon_sessions(&cache.daemon_pids, cache.loaded.as_ref());
+    }
 }
 
 fn resolve_audit_agent(
@@ -975,12 +984,24 @@ fn worktree_label(agent: &AgentState) -> String {
     rimz::harness::target::agent_channel(agent).unwrap_or_else(|| "-".to_owned())
 }
 
-fn pane_label(agent: &AgentState) -> String {
-    agent
-        .pane
-        .as_ref()
-        .map(|pane| pane.pane_id.to_string())
-        .unwrap_or_else(|| "-".to_owned())
+fn push_pane_anchor(kv: &mut render::KeyVals, agent: &AgentState) {
+    let Some(pane) = agent.pane.as_ref() else {
+        kv.push("pane", render::cell("-").dash());
+        return;
+    };
+    kv.push("pane", render::cell(pane.pane_id.to_string()));
+    if let Some(view_id) = pane.view_id.as_deref() {
+        kv.push("tab", render::cell(view_id));
+    }
+    if let Some(cwd) = pane.cwd.as_deref() {
+        kv.push("pane_cwd", render::cell(cwd));
+    }
+    if let Some(pid) = pane.pane_pid {
+        kv.push("pane_pid", render::cell(pid.to_string()));
+    }
+    if let Some(start) = pane.pane_process_start {
+        kv.push("pane_process_start", render::cell(start.to_string()));
+    }
 }
 
 #[cfg(test)]

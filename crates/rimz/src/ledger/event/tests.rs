@@ -51,6 +51,7 @@ fn lifecycle_observation() -> AgentLifecycleObservation {
         fresh_input_tokens: Some(2_000),
         output_tokens: Some(1_000),
         pane_id: Some(PaneId::from_parts(MuxName::Tmux, "%1")),
+        pane_stamp: None,
         parent_agent_id: Some(AgentSessionId::from("parent-1")),
     }
 }
@@ -95,6 +96,12 @@ fn agent_lifecycle_constructor_serializes_compact_wire_shape() {
             },
             "agent_pid": 42,
             "agent_process_start": "12345",
+            "runtime_owner": {
+                "kind": "agent",
+                "subject_id": "sess-1",
+                "pid": 42,
+                "process_start": "12345",
+            },
             "worktree_path": "/tmp/project",
             "worktree_branch": "main",
             "task": "Review",
@@ -125,10 +132,8 @@ fn agent_lifecycle_constructor_serializes_compact_wire_shape() {
         panic!("agent.lifecycle decodes to its typed kind");
     };
     let payload = *payload;
-    let mut expected_observation = observation;
-    expected_observation.runtime_owner = None;
     assert_eq!(payload.event_name.as_deref(), Some("Stop"));
-    assert_eq!(payload.observation, expected_observation);
+    assert_eq!(payload.observation, observation);
 }
 
 #[test]
@@ -172,6 +177,7 @@ fn agent_lifecycle_constructor_omits_absent_fields() {
         "fresh_input_tokens",
         "output_tokens",
         "pane_id",
+        "pane_stamp",
         "parent_agent_id",
     ] {
         let params = params_value(&event);
@@ -236,6 +242,7 @@ fn old_shape_agent_lifecycle_params_still_decode() {
     );
     assert_eq!(payload.observation.launch.role, None);
     assert_eq!(payload.observation.pane_id, None);
+    assert_eq!(payload.observation.pane_stamp, None);
 }
 
 #[test]

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::process::pane_agent_kind;
 use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::pane::PaneRef;
+use crate::pane::{PaneRef, RuntimeOwnerKind};
 
 mod lazy;
 
@@ -67,6 +67,13 @@ pub struct SidebarOwnView {
 pub(super) fn is_daemon_mode_codex(agent: &AgentState, daemon_pids: &BTreeSet<u32>) -> bool {
     if agent.kind != "codex" || agent.pane.is_some() || agent.parent_agent_id.is_some() {
         return false;
+    }
+    if agent
+        .runtime_owner
+        .as_ref()
+        .is_some_and(|owner| owner.kind == RuntimeOwnerKind::Daemon)
+    {
+        return true;
     }
     agent_owner_pid(agent).is_some_and(|pid| daemon_pids.contains(&pid))
 }

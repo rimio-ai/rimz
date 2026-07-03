@@ -44,6 +44,7 @@ pub(super) fn record_lifecycle_observation(
         if observation.worktree_branch.is_none() {
             observation.worktree_branch = workspace.worktree_branch.clone();
         }
+        enrich_pane_stamp_from_cache(workspace, ledger, &mut observation);
         recover_focused_pane_binding(
             agent.descriptor().kind,
             agent.descriptor().capabilities.registers_lazily,

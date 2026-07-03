@@ -54,7 +54,7 @@ mod proctree;
 #[cfg(test)]
 mod tests;
 
-use binding::recover_focused_pane_binding;
+use binding::{enrich_pane_stamp_from_cache, recover_focused_pane_binding};
 use bridge::handle_blocking_feed;
 use feed_item::{payload_agent_id, payload_context_agent_id, spawn_refresh_detached};
 use install::{run_install, run_uninstall};

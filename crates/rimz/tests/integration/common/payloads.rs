@@ -59,6 +59,7 @@ fn registered_observation(agent_id: &str) -> AgentLifecycleObservation {
         fresh_input_tokens: None,
         output_tokens: None,
         pane_id: None,
+        pane_stamp: None,
         parent_agent_id: None,
     }
 }
