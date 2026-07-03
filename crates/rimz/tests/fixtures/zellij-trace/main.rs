@@ -8,9 +8,11 @@
 use std::env;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
+use std::path::Path;
 
 fn main() {
     let log_path = env::var_os("RIMZ_TEST_ZELLIJ_LOG").expect("RIMZ_TEST_ZELLIJ_LOG unset");
+    let log_path = std::path::PathBuf::from(log_path);
     let args = env::args().collect::<Vec<_>>();
     let line = args.join("\t");
     let mut file = OpenOptions::new()
@@ -38,9 +40,7 @@ fn main() {
                 return;
             }
             Some("--status") => {
-                let status = env::var("RIMZ_TEST_ZELLIJ_WEB_STATUS").unwrap_or_else(|_| {
-                    "Web server is offline, checked: http://127.0.0.1:8082".to_owned()
-                });
+                let status = web_status_output(&log_path);
                 write_stdout_raw(&status);
                 return;
             }
@@ -55,7 +55,14 @@ fn main() {
             | Some("--create-token")
             | Some("--create-read-only-token")
             | Some("--revoke-token")
-            | Some("--revoke-all-tokens") => return,
+            | Some("--revoke-all-tokens") => {
+                if cli.get(1).is_some_and(|arg| arg == "--start")
+                    && let Ok(stdout) = env::var("RIMZ_TEST_ZELLIJ_WEB_START_STDOUT")
+                {
+                    write_stdout_raw(&stdout);
+                }
+                return;
+            }
             _ => {}
         }
     }
@@ -78,6 +85,22 @@ fn main() {
         write_stderr("failed to bind socket: File name too long");
         std::process::exit(5);
     }
+}
+
+fn web_status_output(log_path: &Path) -> String {
+    if command_seen(log_path, "web\t--start")
+        && let Ok(after_start) = env::var("RIMZ_TEST_ZELLIJ_WEB_STATUS_AFTER_START")
+    {
+        return after_start;
+    }
+    env::var("RIMZ_TEST_ZELLIJ_WEB_STATUS")
+        .unwrap_or_else(|_| "Web server is offline, checked: http://127.0.0.1:8082".to_owned())
+}
+
+fn command_seen(log_path: &Path, needle: &str) -> bool {
+    std::fs::read_to_string(log_path)
+        .map(|log| log.lines().any(|line| line.contains(needle)))
+        .unwrap_or(false)
 }
 
 fn write_stdout(line: &str) {

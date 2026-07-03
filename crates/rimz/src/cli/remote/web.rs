@@ -136,7 +136,7 @@ fn supervise_tunnel(
             .to_command()
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::null())
             .spawn()
         {
             Ok(child) => child,

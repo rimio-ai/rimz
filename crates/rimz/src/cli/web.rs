@@ -162,6 +162,7 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         config.web.zellij.base_url.as_deref(),
         StartPolicy {
             may_start: config.web.zellij.auto_start && !args.no_start,
+            require_online: true,
         },
     )?;
     if args.json {
@@ -199,7 +200,10 @@ fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
     let payload = web_payload(
         &session,
         config.web.zellij.base_url.as_deref(),
-        StartPolicy { may_start: false },
+        StartPolicy {
+            may_start: false,
+            require_online: false,
+        },
     )?;
     if args.json {
         print_json(&payload)
@@ -227,6 +231,7 @@ fn status(args: WebStatusArgs) -> Result<()> {
 #[derive(Clone, Copy)]
 struct StartPolicy {
     may_start: bool,
+    require_online: bool,
 }
 
 fn web_payload(
@@ -236,18 +241,19 @@ fn web_payload(
 ) -> Result<WebOpenPayload> {
     let mut status = read_web_status()?;
     if !status.online {
-        if !start.may_start {
+        if start.may_start {
+            run_captured_to_stderr(web_start_spec(&WebStartOptions {
+                daemonize: true,
+                ..WebStartOptions::default()
+            }))?;
+            status = read_web_status()?;
+            if !status.online {
+                bail!("Zellij web server did not report online after start");
+            }
+        } else if start.require_online {
             bail!(
                 "Zellij web server is offline; run `rimz web start --daemonize` or omit `--no-start`"
             );
-        }
-        run_inherited(web_start_spec(&WebStartOptions {
-            daemonize: true,
-            ..WebStartOptions::default()
-        }))?;
-        status = read_web_status()?;
-        if !status.online {
-            bail!("Zellij web server did not report online after start");
         }
     }
     let status_base_url = status.base_url.as_deref();
@@ -338,6 +344,27 @@ fn run_inherited(spec: CommandSpec) -> Result<()> {
         .with_context(|| format!("running `{}`", command_display(&spec)))?;
     if !status.success() {
         bail!("command `{}` exited with {status}", command_display(&spec));
+    }
+    Ok(())
+}
+
+fn run_captured_to_stderr(spec: CommandSpec) -> Result<()> {
+    let output = spec
+        .output_raw()
+        .with_context(|| format!("running `{}`", command_display(&spec)))?;
+    let mut stderr = std::io::stderr().lock();
+    if !output.stdout.is_empty() {
+        stderr.write_all(&output.stdout)?;
+    }
+    if !output.stderr.is_empty() {
+        stderr.write_all(&output.stderr)?;
+    }
+    if !output.status.success() {
+        bail!(
+            "command `{}` exited with {}",
+            command_display(&spec),
+            output.status
+        );
     }
     Ok(())
 }
