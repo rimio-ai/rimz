@@ -752,7 +752,8 @@ fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
         root.join("docs"),
         root.join("xtask"),
     ];
-    let agents_show_command = "crates/rimz/src/cli/agents_cmd/commands.rs";
+    let agents_show_command = root.join("crates/rimz/src/cli/agents_cmd/commands.rs");
+    let run_failure_capture = root.join("crates/rimz/src/cli/agents_cmd/supervised/pane.rs");
     for needle in [
         concat!("capture", "_pane("),
         concat!("send", "_keys("),
@@ -777,9 +778,18 @@ fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
                 // `rimz agents show --capture` is an explicit user-facing pane
                 // read, wired to the same primitive as `rimz pane capture`.
                 if needle == concat!("capture", "_pane(")
-                    && path.to_string_lossy().ends_with(agents_show_command)
+                    && path == agents_show_command.as_path()
                     && idx > 0
                     && lines[idx - 1].trim() == "// rimz-invariant: explicit-agent-show-capture"
+                {
+                    continue;
+                }
+                // Supervised runs explicitly capture their own transient pane
+                // tail before cleanup when a run fails.
+                if needle == concat!("capture", "_pane(")
+                    && path == run_failure_capture.as_path()
+                    && idx > 0
+                    && lines[idx - 1].trim() == "// rimz-invariant: run-failure-capture"
                 {
                     continue;
                 }

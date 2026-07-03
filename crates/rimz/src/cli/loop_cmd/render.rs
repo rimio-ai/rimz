@@ -201,13 +201,14 @@ pub(super) fn show(args: ShowArgs) -> Result<()> {
     }
     table.render(&mut out)?;
 
-    if let Some(detail) = records
-        .iter()
-        .rev()
-        .find(|record| record_has_detail(record))
-    {
+    let (detail_idx, failure_idx) = detail_indices(&records);
+    if let Some(detail) = detail_idx.and_then(|idx| records.get(idx)) {
         writeln!(out)?;
-        render_record_detail(&mut out, &entry, detail)?;
+        render_record_detail(&mut out, &entry, detail, "last run detail", now)?;
+    }
+    if let Some(failure) = failure_idx.and_then(|idx| records.get(idx)) {
+        writeln!(out)?;
+        render_record_detail(&mut out, &entry, failure, "last failure detail", now)?;
     }
     Ok(())
 }
@@ -359,12 +360,40 @@ fn record_has_detail(record: &LoopRunRecord) -> bool {
         || record.run_id.is_some()
 }
 
+fn record_is_failure(record: &LoopRunRecord) -> bool {
+    matches!(
+        record.result,
+        LoopRunResult::Errored | LoopRunResult::Failed | LoopRunResult::TimedOut
+    )
+}
+
+fn detail_indices(records: &[LoopRunRecord]) -> (Option<usize>, Option<usize>) {
+    let detail_idx = records.iter().rposition(record_has_detail);
+    let failure_idx = records
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(idx, record)| {
+            Some(*idx) != detail_idx && record_is_failure(record) && record_has_detail(record)
+        })
+        .map(|(idx, _record)| idx);
+    (detail_idx, failure_idx)
+}
+
 fn render_record_detail(
     out: &mut impl Write,
     entry: &TaskEntry,
     record: &LoopRunRecord,
+    title: &str,
+    now: Timestamp,
 ) -> std::io::Result<()> {
-    writeln!(out, "last run detail")?;
+    writeln!(
+        out,
+        "{title} ({}, {}, {})",
+        record.result.label(),
+        ui::rel_age(record.at, now),
+        record.mode.map_or("legacy", LoopRunMode::label)
+    )?;
     if let Some(check) = &record.check {
         let status = if check.timed_out {
             "timeout".to_owned()
@@ -381,33 +410,50 @@ fn render_record_detail(
             writeln!(out, "{}", check.output.trim_end())?;
         }
     }
+    let run_record = record
+        .run_id
+        .as_deref()
+        .and_then(|run_id| run_record_for(entry, run_id));
     if let Some(error) = &record.error {
         writeln!(out, "error:")?;
         writeln!(out, "{error}")?;
     }
-    if let Some(last_message) = &record.last_message {
+    if let Some(last_message) = record.last_message.as_ref().or_else(|| {
+        run_record
+            .as_ref()
+            .and_then(|record| record.last_message.as_ref())
+    }) {
         writeln!(out, "last message:")?;
         writeln!(out, "{last_message}")?;
     }
     if let Some(run_id) = &record.run_id {
         writeln!(out, "run: {run_id}")?;
-        if let Some(transcript) = transcript_path_for_record(entry, run_id) {
+        if let Some(tail) = run_record
+            .as_ref()
+            .and_then(|record| record.failure_tail.as_deref())
+            .filter(|tail| !tail.trim().is_empty())
+        {
+            writeln!(out, "output tail:")?;
+            writeln!(out, "{tail}")?;
+        }
+        if let Some(transcript) = run_record
+            .as_ref()
+            .and_then(|record| record.transcript_path.as_deref())
+        {
             writeln!(out, "transcript: {transcript}")?;
         }
     }
     Ok(())
 }
 
-fn transcript_path_for_record(entry: &TaskEntry, run_id: &str) -> Option<String> {
+fn run_record_for(entry: &TaskEntry, run_id: &str) -> Option<rimz::harness::run::RunRecord> {
     let run_id = rimz::RunId::parse(run_id).ok()?;
     let paths = StatePaths::under(
         WorkspaceId::from_project_root(&entry.resolved_root()),
         &state_home(),
     )
     .ok()?;
-    rimz::harness::run::load(&paths, &run_id)
-        .ok()
-        .and_then(|record| record.transcript_path)
+    rimz::harness::run::load(&paths, &run_id).ok()
 }
 
 #[cfg(test)]
@@ -497,5 +543,42 @@ mod tests {
         assert_eq!(rows[0].key.note.as_deref(), Some("boom"));
         assert_eq!(rows[1].count, 1);
         assert_eq!(rows[1].key.note.as_deref(), Some("different"));
+    }
+
+    #[test]
+    fn detail_indices_include_prior_failure_when_latest_detail_shadows_it() {
+        let mut error = record(10, LoopRunResult::Errored);
+        error.error = Some("reading prompt-file\nmissing".to_owned());
+        let mut failed = record(20, LoopRunResult::Failed);
+        failed.run_id = Some("run_0123456789abcdef01234567".to_owned());
+        let records = vec![error, failed];
+
+        assert_eq!(detail_indices(&records), (Some(1), Some(0)));
+    }
+
+    #[test]
+    fn render_record_detail_titles_status_age_and_mode() {
+        let mut detail = record(20, LoopRunResult::Errored);
+        detail.mode = Some(LoopRunMode::Manual);
+        detail.error = Some("outer error\ninner detail".to_owned());
+        let entry = TaskEntry {
+            root: PathBuf::from("/tmp/rimz-run"),
+            ..TaskEntry::default()
+        };
+        let mut out = Vec::new();
+
+        render_record_detail(
+            &mut out,
+            &entry,
+            &detail,
+            "last failure detail",
+            Timestamp::from_second(30).expect("timestamp"),
+        )
+        .unwrap();
+
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("last failure detail (error, "));
+        assert!(out.contains(", manual)"));
+        assert!(out.contains("outer error\ninner detail"));
     }
 }

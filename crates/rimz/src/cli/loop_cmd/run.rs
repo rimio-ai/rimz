@@ -10,6 +10,7 @@ struct RunOutcome {
     result: LoopRunResult,
     check: Option<CheckRecord>,
     run_id: Option<String>,
+    transcript_path: Option<String>,
     last_message: Option<String>,
     target: Option<String>,
     exit_code: Option<i32>,
@@ -27,6 +28,7 @@ impl RunOutcome {
             result,
             check: None,
             run_id: None,
+            transcript_path: None,
             last_message: None,
             target: None,
             exit_code: None,
@@ -34,7 +36,12 @@ impl RunOutcome {
     }
 }
 
-pub(super) fn run_one(name: &str, mode: LoopRunMode, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn run_one(
+    name: &str,
+    mode: LoopRunMode,
+    keep: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
     let (entry, source) = instances::load_entry(name)
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     let started = Instant::now();
@@ -65,7 +72,7 @@ pub(super) fn run_one(name: &str, mode: LoopRunMode, globals: &GlobalFlags) -> R
             return Err(err);
         }
     };
-    match execute_task(name, &entry, source, mode, globals) {
+    match execute_task(name, &entry, source, mode, keep, globals) {
         Ok(outcome) => {
             let duration_ms = elapsed_ms(started);
             let record = loop_record(name, mode, duration_ms, &outcome);
@@ -106,6 +113,7 @@ fn execute_task(
     entry: &TaskEntry,
     source: TaskSource,
     mode: LoopRunMode,
+    keep: bool,
     globals: &GlobalFlags,
 ) -> Result<RunOutcome> {
     let action = task_action(name, entry)?;
@@ -227,6 +235,7 @@ fn execute_task(
         effort,
         system_prompt_file,
         timeout,
+        keep,
     });
     match crate::cli::agents_cmd::run_blocking_task(args, &run_globals) {
         Ok(Some(record)) => {
@@ -234,6 +243,7 @@ fn execute_task(
             let mut run = RunOutcome::new(status.into());
             run.check = check_detail;
             run.run_id = Some(record.run_id.to_string());
+            run.transcript_path = record.transcript_path;
             run.last_message = record.last_message;
             run.exit_code = Some(status.exit_code());
             Ok(run)
@@ -348,6 +358,16 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 fn print_run_summary(name: &str, duration_ms: u64, outcome: &RunOutcome) -> Result<()> {
     let mut out = ui::out();
+    write_run_summary(&mut out, name, duration_ms, outcome)?;
+    Ok(())
+}
+
+fn write_run_summary(
+    out: &mut impl Write,
+    name: &str,
+    duration_ms: u64,
+    outcome: &RunOutcome,
+) -> std::io::Result<()> {
     write!(out, "loop `{name}`: {}", outcome.result.label())?;
     if let Some(exit) = outcome
         .exit_code
@@ -366,6 +386,18 @@ fn print_run_summary(name: &str, duration_ms: u64, outcome: &RunOutcome) -> Resu
             "{}",
             tail_output(check.output.as_bytes(), CHECK_SUMMARY_OUTPUT_CAP).trim_end()
         )?;
+    }
+    if matches!(
+        outcome.result,
+        LoopRunResult::Failed | LoopRunResult::TimedOut
+    ) {
+        if let Some(run_id) = outcome.run_id.as_deref() {
+            writeln!(out, "run: {run_id}")?;
+        }
+        if let Some(transcript) = outcome.transcript_path.as_deref() {
+            writeln!(out, "transcript: {transcript}")?;
+        }
+        writeln!(out, "see: rimz loop show {name}")?;
     }
     Ok(())
 }
@@ -413,4 +445,26 @@ pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
         }
     }
     Ok(reaped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_summary_links_run_transcript_and_loop_show() {
+        let mut outcome = RunOutcome::new(LoopRunResult::Failed);
+        outcome.exit_code = Some(1);
+        outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
+        outcome.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
+        let mut out = Vec::new();
+
+        write_run_summary(&mut out, "wake", 1_900, &outcome).unwrap();
+
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("loop `wake`: failed (exit 1) in 1.9s"));
+        assert!(out.contains("run: run_0123456789abcdef01234567"));
+        assert!(out.contains("transcript: /tmp/transcript.jsonl"));
+        assert!(out.contains("see: rimz loop show wake"));
+    }
 }

@@ -1313,7 +1313,13 @@ mod runs {
             session_name: "rimz-test".to_owned(),
         };
 
-        fail_run_if_child_exited_first(&context, Duration::ZERO);
+        let globals = GlobalFlags {
+            mux: None,
+            root: None,
+            color: crate::cli::ColorWhen::Auto,
+        };
+
+        fail_run_if_child_exited_first(&context, &globals, Duration::ZERO);
 
         let failed = rimz::harness::run::load(&paths, &run_id).expect("load failed run");
         assert_eq!(failed.status, RunStatus::Failed);
@@ -1403,6 +1409,7 @@ mod automation {
             effort: Some("low".to_owned()),
             system_prompt_file: None,
             timeout: None,
+            keep: false,
         });
         assert_eq!(
             args.spec.as_deref(),
@@ -1436,9 +1443,24 @@ mod automation {
                 effort: None,
                 system_prompt_file: None,
                 timeout: None,
+                keep: true,
             })
             .worktree,
             None
+        );
+        assert!(
+            AgentsArgs::for_task(TaskRunArgs {
+                spec: "codex".to_owned(),
+                prompt: Some("check status".to_owned()),
+                worktree: None,
+                mode: None,
+                effort: None,
+                system_prompt_file: None,
+                timeout: None,
+                keep: true,
+            })
+            .keep,
+            "manual loop fire can keep the transient pane"
         );
     }
 }

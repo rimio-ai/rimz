@@ -8,8 +8,10 @@ use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
 use rimz::config::{CheckOn, TaskEntry, TaskTarget, Tasks};
+use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::schedule::instances;
 use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
+use rimz::ids::AgentKind;
 use rimz::message::MessageStatus;
 
 use crate::common::Env;
@@ -436,6 +438,83 @@ fn loop_run_error_records_and_show_displays_message() {
     assert!(
         stdout.contains("error") && stdout.contains("reading prompt-file"),
         "show should display stored error: {stdout}"
+    );
+}
+
+#[test]
+fn loop_show_displays_shadowed_error_and_run_tail() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.forensics]\n\
+             check = \"true\"\n\
+             root = \"{}\"\n\
+             every = \"15m\"\n",
+            env.project_root.display()
+        ),
+    );
+    let paths = rimz::StatePaths::under(env.workspace_id.clone(), &env.state_root()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut run_record = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        env.project_root.clone(),
+    );
+    run_record.status = RunStatus::Failed;
+    run_record.failure_tail = Some("agent startup failed\nmissing binary".to_owned());
+    run_record.transcript_path = Some("/tmp/rimz-transcript.jsonl".to_owned());
+    rimz::harness::run::create(&paths, &run_record).unwrap();
+    write_loop_run_records(
+        &env,
+        &[
+            LoopRunRecord {
+                task: "forensics".to_owned(),
+                at: Timestamp::from_second(10).expect("timestamp"),
+                result: LoopRunResult::Errored,
+                mode: Some(rimz::harness::schedule::run_log::LoopRunMode::Manual),
+                duration_ms: Some(42),
+                error: Some(
+                    "reading system-prompt-file `/missing.md`\ncaused by: not found".to_owned(),
+                ),
+                check: None,
+                run_id: None,
+                last_message: None,
+                target: None,
+            },
+            LoopRunRecord {
+                task: "forensics".to_owned(),
+                at: Timestamp::from_second(20).expect("timestamp"),
+                result: LoopRunResult::Failed,
+                mode: Some(rimz::harness::schedule::run_log::LoopRunMode::Manual),
+                duration_ms: Some(50),
+                error: None,
+                check: None,
+                run_id: Some(run_record.run_id.to_string()),
+                last_message: None,
+                target: None,
+            },
+        ],
+    );
+
+    let stdout = loop_ok(&env, &["loop", "show", "forensics"]);
+
+    assert!(stdout.contains("last run detail (failed"), "{stdout}");
+    assert!(stdout.contains("output tail:"), "{stdout}");
+    assert!(
+        stdout.contains("agent startup failed\nmissing binary"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("transcript: /tmp/rimz-transcript.jsonl"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("last failure detail (error"), "{stdout}");
+    assert!(
+        stdout.contains("reading system-prompt-file `/missing.md`\ncaused by: not found"),
+        "{stdout}"
     );
 }
 
@@ -1074,6 +1153,17 @@ fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
     text.lines()
         .map(|line| serde_json::from_str(line).expect("loop run record"))
         .collect()
+}
+
+fn write_loop_run_records(env: &Env, records: &[LoopRunRecord]) {
+    let path = run_log::log_path(&env.state_root());
+    std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
+    let mut text = String::new();
+    for record in records {
+        text.push_str(&serde_json::to_string(record).expect("loop record json"));
+        text.push('\n');
+    }
+    std::fs::write(path, text).expect("write loop run records");
 }
 
 fn read_loop_instances(env: &Env) -> Tasks {

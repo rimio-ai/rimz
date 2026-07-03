@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::agents::{AgentLifecycleObservation, LifecycleSignal, TurnPhase};
 use crate::agents::{AgentState, AgentStatus};
 use crate::feed::{FeedItem, Surface};
+use crate::harness::schedule::runner::tail_output;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, RunId, WorkspaceId};
 use crate::ledger::lock::WorkspaceLock;
 use crate::ledger::run_store::{self, RunStoreErr};
@@ -50,6 +51,7 @@ pub const ENV_AGENT_EFFORT: &str = "RIMZ_AGENT_EFFORT";
 /// agent launch so `cargo xtask` can route recognized cargo commands through
 /// `rtk`. Read by xtask, never by rimz itself.
 pub const ENV_RTK: &str = "RIMZ_RTK";
+const FAILURE_TAIL_CAP: usize = 4 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -118,6 +120,8 @@ pub struct RunRecord {
     pub pane_id: Option<PaneId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_tail: Option<String>,
     pub status: RunStatus,
     pub permission_mode: PermissionMode,
     pub prompt: String,
@@ -147,6 +151,7 @@ impl RunRecord {
             agent_name: None,
             pane_id: None,
             transcript_path: None,
+            failure_tail: None,
             status: RunStatus::Pending,
             permission_mode,
             prompt,
@@ -197,6 +202,23 @@ pub fn record_pane(paths: &StatePaths, run_id: &RunId, pane_id: PaneId) -> Resul
         return Ok(record);
     }
     record.pane_id = Some(pane_id);
+    record.updated_at = Timestamp::now();
+    run_store::write(&paths.runs_dir, &record)?;
+    Ok(record)
+}
+
+pub fn record_failure_tail(paths: &StatePaths, run_id: &RunId, tail: &str) -> Result<RunRecord> {
+    let tail = tail.trim_end();
+    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let mut record = load(paths, run_id)?;
+    if record.failure_tail.is_some() || tail.trim().is_empty() {
+        return Ok(record);
+    }
+    record.failure_tail = Some(
+        tail_output(tail.as_bytes(), FAILURE_TAIL_CAP)
+            .trim_end()
+            .to_owned(),
+    );
     record.updated_at = Timestamp::now();
     run_store::write(&paths.runs_dir, &record)?;
     Ok(record)
@@ -699,6 +721,47 @@ mod tests {
             load(&paths, &record.run_id).unwrap().pane_id.as_ref(),
             Some(&pane_id)
         );
+    }
+
+    #[test]
+    fn record_failure_tail_persists_first_non_empty_tail() {
+        let (_dir, paths, record) = setup();
+
+        let stored = record_failure_tail(&paths, &record.run_id, "first\n\n").unwrap();
+        assert_eq!(stored.failure_tail.as_deref(), Some("first"));
+
+        let unchanged = record_failure_tail(&paths, &record.run_id, "second").unwrap();
+        assert_eq!(unchanged.failure_tail.as_deref(), Some("first"));
+        assert_eq!(
+            load(&paths, &record.run_id)
+                .unwrap()
+                .failure_tail
+                .as_deref(),
+            Some("first")
+        );
+    }
+
+    #[test]
+    fn record_failure_tail_ignores_empty_tail() {
+        let (_dir, paths, record) = setup();
+
+        let stored = record_failure_tail(&paths, &record.run_id, " \n\t").unwrap();
+
+        assert_eq!(stored.failure_tail, None);
+        assert_eq!(load(&paths, &record.run_id).unwrap().failure_tail, None);
+    }
+
+    #[test]
+    fn record_failure_tail_caps_stored_tail() {
+        let (_dir, paths, record) = setup();
+        let tail = format!("{}{}", "a".repeat(FAILURE_TAIL_CAP), "b".repeat(20));
+
+        let stored = record_failure_tail(&paths, &record.run_id, &tail).unwrap();
+
+        let stored = stored.failure_tail.expect("tail");
+        assert_eq!(stored.len(), FAILURE_TAIL_CAP);
+        assert!(stored.starts_with('a'));
+        assert!(stored.ends_with('b'));
     }
 
     fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {

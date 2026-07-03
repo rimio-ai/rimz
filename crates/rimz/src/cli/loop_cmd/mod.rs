@@ -79,7 +79,7 @@ enum LoopSubcmd {
     /// Show one task's schedule, next fire, and recent run forensics.
     Show(ShowArgs),
     /// Fire one task now in the foreground for testing; one-shots and schedules stay put.
-    Fire(NameArgs),
+    Fire(FireArgs),
     /// Run one task now. The sidebar elder calls this; humans rarely do.
     #[command(hide = true)]
     Run(NameArgs),
@@ -157,6 +157,14 @@ struct NameArgs {
 }
 
 #[derive(Debug, Args)]
+struct FireArgs {
+    name: String,
+    /// Leave the transient run pane open for inspection.
+    #[arg(long)]
+    keep: bool,
+}
+
+#[derive(Debug, Args)]
 struct RenameArgs {
     name: String,
     new_name: String,
@@ -177,8 +185,12 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::Rename(args) => add::rename(&args.name, &args.new_name),
         LoopSubcmd::List => render::list(),
         LoopSubcmd::Show(args) => render::show(args),
-        LoopSubcmd::Fire(args) => run_tasks::run_one(&args.name, LoopRunMode::Manual, globals),
-        LoopSubcmd::Run(args) => run_tasks::run_one(&args.name, LoopRunMode::Scheduled, globals),
+        LoopSubcmd::Fire(args) => {
+            run_tasks::run_one(&args.name, LoopRunMode::Manual, args.keep, globals)
+        }
+        LoopSubcmd::Run(args) => {
+            run_tasks::run_one(&args.name, LoopRunMode::Scheduled, false, globals)
+        }
     }
 }
 

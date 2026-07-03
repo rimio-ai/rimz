@@ -57,6 +57,30 @@ pub(crate) fn close_run_pane(
     }
 }
 
+pub(crate) fn capture_failure_tail(
+    backend: &dyn rimz::mux::MuxBackend,
+    pane_id: &PaneId,
+) -> Option<String> {
+    // rimz-invariant: run-failure-capture
+    let capture = match backend.capture_pane(pane_id, None, false) {
+        Ok(capture) => capture,
+        Err(err) => {
+            tracing::debug!(
+                pane = %pane_id,
+                error = %err,
+                "run failure pane capture unavailable",
+            );
+            return None;
+        }
+    };
+    let tail = capture.raw_text.trim_end();
+    if tail.trim().is_empty() {
+        None
+    } else {
+        Some(tail.to_owned())
+    }
+}
+
 pub(crate) fn close_stopped_run_pane_after_grace(
     backend: &dyn rimz::mux::MuxBackend,
     ledger: &rimz::Ledger,

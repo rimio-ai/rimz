@@ -112,7 +112,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let outcome = supervise_child(child, monitor).context("supervising agent process")?;
     if let Some(context) = run_context.as_ref() {
-        fail_run_if_child_exited_first(context, RUN_EXIT_TERMINAL_GRACE);
+        fail_run_if_child_exited_first(context, globals, RUN_EXIT_TERMINAL_GRACE);
     }
     let startup_failure = !outcome.status.success()
         && launch_identity
@@ -707,10 +707,15 @@ fn launch_is_still_provisional(
     }
 }
 
-pub(super) fn fail_run_if_child_exited_first(context: &RunExecContext, terminal_grace: Duration) {
+pub(super) fn fail_run_if_child_exited_first(
+    context: &RunExecContext,
+    globals: &GlobalFlags,
+    terminal_grace: Duration,
+) {
     if wait_for_terminal_run(context, terminal_grace) {
         return;
     }
+    record_own_run_failure_tail(context, globals);
     fail_run_if_nonterminal(
         context,
         "agent process exited before supervised run reached a terminal state",
@@ -751,6 +756,29 @@ fn fail_run_if_nonterminal(context: &RunExecContext, reason: &'static str) {
             reason,
             "could not inspect supervised run",
         ),
+    }
+}
+
+fn record_own_run_failure_tail(context: &RunExecContext, globals: &GlobalFlags) {
+    let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
+        return;
+    };
+    let Some(own) = own_pane_id(mux) else {
+        return;
+    };
+    let backend = rimz::mux::backend_for(mux);
+    let Some(tail) = supervised::pane::capture_failure_tail(backend.as_ref(), &own) else {
+        return;
+    };
+    if let Err(err) =
+        rimz::harness::run::record_failure_tail(&context.paths, &context.run_id, &tail)
+    {
+        tracing::debug!(
+            run_id = %context.run_id,
+            pane = %own,
+            error = %err,
+            "could not record supervised run failure pane tail",
+        );
     }
 }
 

@@ -155,6 +155,37 @@ fn sidebar_enrich_stays_projection_only() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn pane_auto_use_invariant_allows_marked_run_failure_capture_only() {
+    let root = temp_repo_root("pane-capture-boundary");
+    let allowed = root.join("crates/rimz/src/cli/agents_cmd/supervised/pane.rs");
+    let bad = root.join("crates/rimz/src/cli/agents_cmd/supervised/bad.rs");
+    for path in [&allowed, &bad] {
+        std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
+    }
+    std::fs::write(
+        &allowed,
+        concat!(
+            "fn f(backend: &dyn MuxBackend, pane: &PaneId) {\n",
+            "    // rimz-invariant: run-failure-capture\n",
+            "    backend.capture_pane(pane, None, false);\n",
+            "}\n",
+        ),
+    )
+    .expect("write allowed source");
+    std::fs::write(
+        &bad,
+        "fn f(backend: &dyn MuxBackend, pane: &PaneId) { backend.capture_pane(pane, None, false); }\n",
+    )
+    .expect("write bad source");
+
+    ensure_no_core_pane_auto_use(&root, std::slice::from_ref(&allowed)).unwrap();
+    let err = ensure_no_core_pane_auto_use(&root, &[bad.clone(), allowed]).unwrap_err();
+    assert!(err.to_string().contains("capture"));
+    assert!(err.to_string().contains(&bad.display().to_string()));
+    let _ = std::fs::remove_dir_all(root);
+}
+
 fn temp_repo_root(label: &str) -> PathBuf {
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

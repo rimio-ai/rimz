@@ -684,7 +684,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
         workspace_id: workspace.workspace_id.clone(),
         run_id: run_id.clone(),
     };
-    let record = if output_format == OutputFormat::StreamJson {
+    let mut record = if output_format == OutputFormat::StreamJson {
         supervised::stream::stream_blocking_run(
             sock,
             expected,
@@ -697,6 +697,12 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
         let outcome = supervised::wait_for_run(sock, expected, args.timeout)?;
         supervised::terminal_record_after_wait(ledger.paths(), &run_id, outcome)?
     };
+    record = record_failure_tail_before_cleanup(
+        backend.as_ref(),
+        &ledger,
+        &workspace.session_name,
+        record,
+    );
     if !args.keep {
         supervised::pane::close_run_pane(
             backend.as_ref(),
@@ -706,13 +712,46 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
         );
     }
     match output_format {
-        OutputFormat::Text => supervised::output::print_run_output(&record)?,
+        OutputFormat::Text => {
+            let mut stdout = std::io::stdout().lock();
+            let mut stderr = std::io::stderr().lock();
+            supervised::output::print_run_output(&record, &mut stdout, &mut stderr)?
+        }
         OutputFormat::Json => supervised::output::print_json(&record)?,
         // stream-json already emitted its events as the run progressed.
         OutputFormat::StreamJson => {}
     }
     drop(socket_guard);
     Ok(Some(record))
+}
+
+fn record_failure_tail_before_cleanup(
+    backend: &dyn rimz::mux::MuxBackend,
+    ledger: &rimz::Ledger,
+    session_name: &str,
+    record: RunRecord,
+) -> RunRecord {
+    if record.status == RunStatus::Completed || record.failure_tail.is_some() {
+        return record;
+    }
+    let Some(pane) = supervised::pane::resolve_run_pane(ledger, session_name, &record) else {
+        return record;
+    };
+    let Some(tail) = supervised::pane::capture_failure_tail(backend, &pane.pane_id) else {
+        return record;
+    };
+    match rimz::harness::run::record_failure_tail(ledger.paths(), &record.run_id, &tail) {
+        Ok(record) => record,
+        Err(err) => {
+            tracing::debug!(
+                run_id = %record.run_id,
+                pane = %pane.pane_id,
+                error = %err,
+                "could not record supervised run failure pane tail",
+            );
+            record
+        }
+    }
 }
 
 /// Resolve the supervised prompt from text input or, for `--input-format

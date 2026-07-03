@@ -401,7 +401,7 @@ impl AgentsArgs {
             effort: task.effort,
             print: true,
             timeout: task.timeout,
-            keep: false,
+            keep: task.keep,
             detach: false,
             json: false,
             output_format: None,
@@ -420,6 +420,7 @@ pub(crate) struct TaskRunArgs {
     pub(crate) effort: Option<String>,
     pub(crate) system_prompt_file: Option<PathBuf>,
     pub(crate) timeout: Option<Duration>,
+    pub(crate) keep: bool,
 }
 
 fn parse_pr(raw: &str) -> std::result::Result<rimz::forge::PrTarget, String> {
