@@ -29,9 +29,10 @@ pub const BACKGROUND_PAINT_MIN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// How long the interactive sidebar keeps its last row/group order after a
 /// jump, tab-switch, or browse before re-sorting to live rank. Long enough to
-/// cover the glance to the sidebar as you land; each interaction re-arms it, so
-/// a rapid triage burst holds one stable list and it tidies once you settle.
-pub const REORDER_HOLD: Duration = Duration::from_millis(2500);
+/// read the card you landed on, not just glance at it, so a watched row holds
+/// still while you take it in; each interaction re-arms it, so a rapid triage
+/// burst holds one stable list and it tidies once you settle.
+pub const REORDER_HOLD: Duration = Duration::from_secs(5);
 
 /// How long a jump scroll anchor stays applicable. Long enough for the
 /// destination tab to refold and adopt the focus after the jump's
