@@ -7,10 +7,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
 
 use rimz::ids::{AgentKind, AgentSessionId, WorkspaceId};
-use rimz::ledger::event::{SessionDeathAgent, SessionDeathCause};
+use rimz::ledger::event::{LastDeathMarker, SessionDeathAgent, SessionDeathCause};
 use rimz::{Ledger, RuntimePaths, StatePaths};
 
 use super::resume::reboot_since_last_birth;
@@ -21,13 +20,6 @@ const CRASH_ARCHIVE_RETENTION: usize = 5;
 pub(super) struct BirthRecovery {
     pub(super) recover_agents: bool,
     pub(super) death: Option<LastDeathMarker>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct LastDeathMarker {
-    pub cause: SessionDeathCause,
-    pub lost_agents: Vec<SessionDeathAgent>,
-    pub at: Timestamp,
 }
 
 struct AuditState {

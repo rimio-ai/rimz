@@ -96,6 +96,13 @@ pub struct SessionDeathPayload {
     pub lost_agents: Vec<SessionDeathAgent>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastDeathMarker {
+    pub cause: SessionDeathCause,
+    pub lost_agents: Vec<SessionDeathAgent>,
+    pub at: Timestamp,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageEventMethod {
     Queued,

@@ -16,13 +16,13 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use clap::Args;
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tracing::warn;
 
 use super::GlobalFlags;
 use crate::cli::render;
 use rimz::ids::MuxName;
-use rimz::ledger::event::{SessionDeathAgent, SessionDeathCause};
+use rimz::ledger::event::LastDeathMarker;
 use rimz::ledger::paths::workspaces_dir;
 
 /// Workspaces idle longer than this are hidden from the default view; `--all`
@@ -48,13 +48,6 @@ struct WorkspaceRow {
     running_on: Option<String>,
     last_activity: Option<String>,
     last_death: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct LastDeathMarker {
-    cause: SessionDeathCause,
-    lost_agents: Vec<SessionDeathAgent>,
-    at: Timestamp,
 }
 
 pub fn run(args: ListArgs, _globals: &GlobalFlags) -> Result<()> {
