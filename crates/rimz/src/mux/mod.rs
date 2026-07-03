@@ -197,6 +197,9 @@ pub struct PaneListing {
     /// live mux pane read. A topology hit skips the expensive pane-list command;
     /// the producer may still sample the cheaper per-client focus probe.
     pub served_from_topology: bool,
+    /// Focus resolved by a backend push source that already owns the full
+    /// session topology. Used only when the named pane survives listing filters.
+    pub authoritative_focus: Option<PaneId>,
 }
 
 #[derive(Clone, Debug, Default)]

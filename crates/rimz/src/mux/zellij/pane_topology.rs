@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 pub struct PaneTopologyCache {
     pub session_name: String,
     pub produced_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focused_pane: Option<u64>,
     #[serde(default)]
     pub panes: Vec<PaneTopologyPane>,
 }
@@ -55,7 +57,7 @@ mod tests {
 
     #[test]
     fn topology_without_focus_resolution_parses() {
-        let _cache: PaneTopologyCache = serde_json::from_str(
+        let cache: PaneTopologyCache = serde_json::from_str(
             r#"{
                 "session_name": "rimz-test",
                 "produced_at_ms": 42,
@@ -63,6 +65,25 @@ mod tests {
             }"#,
         )
         .expect("topology parses");
+
+        assert_eq!(cache.focused_pane, None);
+    }
+
+    #[test]
+    fn topology_focus_resolution_round_trips() {
+        let cache: PaneTopologyCache = serde_json::from_str(
+            r#"{
+                "session_name": "rimz-test",
+                "produced_at_ms": 42,
+                "focused_pane": 7,
+                "panes": []
+            }"#,
+        )
+        .expect("topology parses");
+
+        assert_eq!(cache.focused_pane, Some(7));
+        let encoded = serde_json::to_value(&cache).expect("topology serializes");
+        assert_eq!(encoded["focused_pane"], 7);
     }
 
     #[test]

@@ -113,6 +113,8 @@ pub struct FocusPatch {
 pub struct TopologyPayload {
     pub session_name: String,
     pub produced_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focused_pane: Option<u32>,
     pub panes: Vec<PaneFields>,
 }
 
@@ -120,11 +122,13 @@ impl TopologyPayload {
     pub fn from_tabs(
         session_name: impl Into<String>,
         produced_at_ms: u64,
+        focused_pane: Option<u32>,
         tabs: &BTreeMap<usize, Vec<PaneFields>>,
     ) -> Self {
         Self {
             session_name: session_name.into(),
             produced_at_ms,
+            focused_pane,
             panes: tabs.values().flatten().cloned().collect(),
         }
     }
@@ -133,6 +137,7 @@ impl TopologyPayload {
 pub fn published_topology_payload(
     session_name: impl Into<String>,
     produced_at_ms: u64,
+    focused_pane: Option<u32>,
     tabs: Option<&BTreeMap<usize, Vec<PaneFields>>>,
     foreground: &BTreeMap<u32, String>,
 ) -> Option<TopologyPayload> {
@@ -144,6 +149,7 @@ pub fn published_topology_payload(
     Some(TopologyPayload::from_tabs(
         session_name,
         produced_at_ms,
+        focused_pane,
         &tabs,
     ))
 }

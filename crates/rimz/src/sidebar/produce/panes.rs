@@ -232,6 +232,7 @@ pub fn repaired_pane_frame_for_binding(
             panes: fixture,
             observed_at_ms: unix_now_ms(),
             served_from_topology: false,
+            authoritative_focus: None,
         },
         None => list_session_panes(
             mux,
@@ -247,6 +248,7 @@ pub fn repaired_pane_frame_for_binding(
         produced_at_ms: unix_now_ms(),
         observed_at_ms: listing.observed_at_ms,
         session_name: session.to_owned(),
+        authoritative_focus: None,
         client_viewed: &[],
         prior: prior.as_deref(),
     });
@@ -554,6 +556,7 @@ pub(super) fn cached_panes_or_produce(
             };
             let served_from_topology = listing.served_from_topology;
             let observed_at_ms = listing.observed_at_ms;
+            let authoritative_focus = listing.authoritative_focus;
             let panes = filter_foreign_session_panes(listing.panes, session, diag);
             let prior = read_snapshot_cache(&cache_path, session);
             // A topology-served pane list skips the expensive `list-panes`
@@ -589,6 +592,7 @@ pub(super) fn cached_panes_or_produce(
                     produced_at_ms: unix_now_ms(),
                     observed_at_ms,
                     session_name: session.to_owned(),
+                    authoritative_focus,
                     client_viewed: &viewed_panes,
                     prior: prior.as_deref(),
                 });

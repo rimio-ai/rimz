@@ -315,6 +315,7 @@ pub struct FrameInputs<'a> {
     pub produced_at_ms: u64,
     pub observed_at_ms: u64,
     pub session_name: String,
+    pub authoritative_focus: Option<PaneId>,
     pub client_viewed: &'a [PaneId],
     pub prior: Option<&'a PaneFrame>,
 }
@@ -337,6 +338,7 @@ pub fn assemble_frame_with_diagnostics(
         produced_at_ms,
         observed_at_ms: produced_at_ms,
         session_name: session_name.into(),
+        authoritative_focus: None,
         client_viewed: &[],
         prior: None,
     })
@@ -348,6 +350,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         produced_at_ms,
         observed_at_ms,
         session_name,
+        authoritative_focus,
         client_viewed,
         prior,
     } = inputs;
@@ -413,6 +416,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
         .collect::<HashSet<_>>();
     let focused_pane = resolve_session_focus(
+        authoritative_focus.as_ref(),
         prior.and_then(|frame| frame.focused_pane.as_ref()),
         client_viewed,
         &raw_focused,
@@ -435,11 +439,18 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
 }
 
 pub(crate) fn resolve_session_focus(
+    authoritative: Option<&PaneId>,
     prior: Option<&PaneId>,
     client_viewed: &[PaneId],
     raw_focused: &[PaneId],
     live: &HashSet<PaneId>,
 ) -> Option<PaneId> {
+    if let Some(pane) = authoritative
+        && live.contains(pane)
+    {
+        return Some(pane.clone());
+    }
+
     let live_viewed = client_viewed
         .iter()
         .filter(|pane| live.contains(*pane))

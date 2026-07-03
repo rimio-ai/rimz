@@ -529,6 +529,7 @@ pub(super) struct RawPaneListing {
     pub(super) panes: Vec<RawPane>,
     pub(super) observed_at_ms: u64,
     pub(super) served_from_topology: bool,
+    pub(super) authoritative_focus: Option<PaneId>,
 }
 
 impl RawPaneListing {
@@ -537,15 +538,18 @@ impl RawPaneListing {
             panes,
             observed_at_ms,
             served_from_topology: false,
+            authoritative_focus: None,
         }
     }
 
     pub(super) fn from_topology(cache: PaneTopologyCache) -> Self {
         let observed_at_ms = cache.produced_at_ms;
+        let authoritative_focus = cache.focused_pane.map(zellij_pane_id);
         Self {
             panes: raw_panes_from_topology(cache),
             observed_at_ms,
             served_from_topology: true,
+            authoritative_focus,
         }
     }
 
@@ -563,6 +567,7 @@ impl RawPaneListing {
                 .collect(),
             observed_at_ms: self.observed_at_ms,
             served_from_topology: self.served_from_topology,
+            authoritative_focus: self.authoritative_focus,
         }
     }
 }

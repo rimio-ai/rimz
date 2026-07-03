@@ -158,6 +158,17 @@ fn raw_stable_hash_ignores_titles_but_tracks_stable_fields() {
     );
 }
 
+#[test]
+fn published_topology_payload_carries_resolved_focus() {
+    let manifest = tabs(vec![pane(1), focused(pane(2))]);
+    let resolved = resolved_focused_pane_id(&manifest, Some(0), None);
+    let payload =
+        published_topology_payload("rimz-test", 42, resolved, Some(&manifest), &BTreeMap::new())
+            .expect("topology payload publishes");
+
+    assert_eq!(payload.focused_pane, Some(2));
+}
+
 // --- focus_shortcut: focus-only moves take the optimistic CLI patch ---
 
 #[test]

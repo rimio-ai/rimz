@@ -423,6 +423,29 @@ fn topology_cache_panes_feed_the_existing_classifier() {
 }
 
 #[test]
+fn topology_cache_focus_becomes_authoritative_listing_focus() {
+    let cache: PaneTopologyCache = serde_json::from_str(
+        r#"{
+          "session_name": "rimz-test",
+          "produced_at_ms": 1,
+          "focused_pane": 7,
+          "panes": [
+            {"id": 7, "tab_position": 0, "title": "zsh"}
+          ]
+        }"#,
+    )
+    .unwrap();
+
+    let listing = RawPaneListing::from_topology(cache);
+
+    assert!(listing.served_from_topology);
+    assert_eq!(
+        listing.authoritative_focus,
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_7"))
+    );
+}
+
+#[test]
 fn sidebar_geometry_classifies_dock_shapes() {
     let json = r#"[
           {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh",

@@ -465,9 +465,15 @@ mod shell {
             if !self.granted {
                 return false;
             }
+            let focused = policy::resolved_focused_pane_id(
+                &self.tabs,
+                self.active_tab,
+                self.session_focused_pane,
+            );
             let topology = wire::topology_json(
                 self.session_name.as_deref(),
                 now,
+                focused,
                 &self.tabs,
                 &self.foreground,
             );

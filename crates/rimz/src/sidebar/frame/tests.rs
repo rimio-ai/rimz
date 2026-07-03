@@ -47,12 +47,62 @@ fn client_view_sets_session_focus_register() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
+        authoritative_focus: None,
         client_viewed: std::slice::from_ref(&viewed),
         prior: None,
     });
 
     assert!(diagnostics.is_empty());
     assert_eq!(frame.focused_pane, Some(viewed));
+}
+
+#[test]
+fn authoritative_focus_wins_when_live() {
+    let authoritative = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let stale_client = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let prior = PaneFrame {
+        focused_pane: Some(stale_client.clone()),
+        ..assemble_frame(
+            vec![
+                pane("terminal_1", "tab_0", Some("zsh"), false),
+                pane("terminal_2", "tab_1", Some("codex"), false),
+            ],
+            6,
+            "rimz-test",
+        )
+    };
+
+    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), true),
+            pane("terminal_2", "tab_1", Some("codex"), false),
+        ],
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        authoritative_focus: Some(authoritative.clone()),
+        client_viewed: std::slice::from_ref(&stale_client),
+        prior: Some(&prior),
+    });
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(frame.focused_pane, Some(authoritative));
+}
+
+#[test]
+fn authoritative_focus_ignores_dead_pane_and_falls_through() {
+    let raw_focus = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![pane("terminal_1", "tab_0", Some("zsh"), true)],
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        authoritative_focus: Some(PaneId::from_parts(MuxName::Zellij, "terminal_9")),
+        client_viewed: &[],
+        prior: None,
+    });
+
+    assert_eq!(frame.focused_pane, Some(raw_focus));
 }
 
 #[test]
@@ -79,6 +129,7 @@ fn multiple_client_views_stick_to_prior_or_take_freshest_entry() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
+        authoritative_focus: None,
         client_viewed: &[first.clone(), second.clone()],
         prior: Some(&prior),
     });
@@ -92,6 +143,7 @@ fn multiple_client_views_stick_to_prior_or_take_freshest_entry() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
+        authoritative_focus: None,
         client_viewed: std::slice::from_ref(&first),
         prior: Some(&prior),
     });
@@ -124,6 +176,7 @@ fn multiple_client_views_ignore_prior_missing_from_live_frame() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
+        authoritative_focus: None,
         client_viewed: &[first.clone(), second, stale],
         prior: Some(&prior),
     });
@@ -153,6 +206,7 @@ fn detached_focus_uses_prior_then_single_raw_mark() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
+        authoritative_focus: None,
         client_viewed: &[],
         prior: Some(&prior),
     });
@@ -166,6 +220,7 @@ fn detached_focus_uses_prior_then_single_raw_mark() {
         produced_at_ms: 8,
         observed_at_ms: 8,
         session_name: "rimz-test".to_owned(),
+        authoritative_focus: None,
         client_viewed: &[],
         prior: None,
     });
@@ -185,6 +240,7 @@ fn detached_ambiguous_raw_marks_clear_without_live_prior() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
+        authoritative_focus: None,
         client_viewed: &[],
         prior: None,
     });
@@ -203,6 +259,7 @@ fn sidebar_pane_can_be_the_session_focus_register() {
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
+        authoritative_focus: None,
         client_viewed: std::slice::from_ref(&own),
         prior: None,
     });

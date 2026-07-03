@@ -40,7 +40,7 @@ The **pane frame** is the topology everything else enriches: `PaneFrame` carries
 | Lane | Writer | Readers | Carries |
 | --- | --- | --- | --- |
 | `snapshot.json` | producer ([`produce::panes`](../../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's fold | the typed pane frame:<br>- panes with foreground/spawn command and cwd repaired from `/proc` when the mux races<br>- metrics, carried panes, `viewed_panes`, `focused_pane`, and client presence<br>- observation stamp plus producer `build` id; `observed_at_ms` is the supersession baseline<br>- poll-mode freshness by default, presence-stamp event TTL while `presence.stamp` is fresh |
-| `pane-topology.json` | Zellij presence plugin via the host CLI | Zellij producer pull | a pre-producer Zellij hint — live panes, tab names, raw focus candidates, foreground commands, and geometry |
+| `pane-topology.json` | Zellij presence plugin via the host CLI | Zellij producer pull | a pre-producer Zellij hint — live panes, tab names, the plugin-resolved session focused pane, raw focus candidates, foreground commands, and geometry |
 | `presence.stamp` | Zellij plugin, tmux control-mode watch | producer | an mtime liveness mark; while fresh, the pane lane relaxes to the longer event-mode TTL because typed events cover the latency |
 
 Producer **enrichment lanes** fold onto the admitted cards. The fetch worker handles `/proc` and group roots with pane production; the cache refresher handles git, PR state, spending, accounts, usage, credits, and auto-continue so the worker's fast lane projects their last published values instead of waiting behind them. The figures reach consumers through the cache (or, for metrics, restamped onto the pane frame).

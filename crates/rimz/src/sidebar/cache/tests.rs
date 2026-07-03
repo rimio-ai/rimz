@@ -16,6 +16,7 @@ fn pane_topology_cache_freshness_honors_requested_floor() {
     let cache = PaneTopologyCache {
         session_name: "rimz-test".to_owned(),
         produced_at_ms: 100,
+        focused_pane: None,
         panes: Vec::new(),
     };
 

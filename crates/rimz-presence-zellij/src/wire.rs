@@ -317,11 +317,17 @@ pub fn focus_sidebar_argv(ctx: &WakeContext<'_>) -> Vec<String> {
 pub fn topology_json(
     session_name: Option<&str>,
     produced_at_ms: u64,
+    focused_pane: Option<u32>,
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
     foreground: &BTreeMap<u32, String>,
 ) -> Option<String> {
-    let payload =
-        policy::published_topology_payload(session_name?, produced_at_ms, Some(tabs), foreground)?;
+    let payload = policy::published_topology_payload(
+        session_name?,
+        produced_at_ms,
+        focused_pane,
+        Some(tabs),
+        foreground,
+    )?;
     serde_json::to_string(&payload).ok()
 }
 
@@ -339,6 +345,35 @@ mod tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    fn pane(id: u32) -> PaneFields {
+        PaneFields {
+            id,
+            is_plugin: false,
+            is_focused: false,
+            is_suppressed: false,
+            is_floating: false,
+            exited: false,
+            is_held: false,
+            tab_position: 0,
+            tab_name: Some("main".to_owned()),
+            pane_x: Some(0),
+            pane_columns: Some(80),
+            title: format!("pane-{id}"),
+            pane_command: None,
+            terminal_command: Some("zsh".to_owned()),
+        }
+    }
+
+    #[test]
+    fn topology_json_carries_focused_pane() {
+        let tabs = BTreeMap::from([(0, vec![pane(7)])]);
+        let json = topology_json(Some("session-1"), 42, Some(7), &tabs, &BTreeMap::new())
+            .expect("topology serializes");
+        let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
+
+        assert_eq!(payload["focused_pane"], 7);
     }
 
     #[test]

@@ -154,6 +154,7 @@ impl MuxBackend for TmuxBackend {
             panes,
             observed_at_ms,
             served_from_topology: false,
+            authoritative_focus: None,
         })
     }
 

@@ -203,6 +203,7 @@ impl WakeEnv {
         PaneTopologyCache {
             session_name: SESSION_NAME.to_owned(),
             produced_at_ms,
+            focused_pane: Some(7),
             panes: vec![
                 PaneTopologyPane {
                     id: 6,
@@ -248,6 +249,7 @@ impl WakeEnv {
         PaneTopologyCache {
             session_name: SESSION_NAME.to_owned(),
             produced_at_ms,
+            focused_pane: panes.first().map(|(id, _, _)| *id),
             panes: panes
                 .iter()
                 .map(|(id, tab_position, tab_name)| PaneTopologyPane {
@@ -548,7 +550,7 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
     assert!(wake.status.success(), "topology wake must succeed");
 
     let output = env.snapshot_with_list_clients(Some(
-        "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 zsh\n",
+        "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_6 rimz-sidebar\n",
     ));
     assert!(
         output.status.success(),
@@ -566,8 +568,8 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
         .expect("snapshot cache published from topology");
     assert_eq!(
         cached.viewed_panes,
-        vec![PaneId::from_parts(MuxName::Zellij, "terminal_7")],
-        "topology cache skips list-panes but refreshes viewed panes",
+        vec![PaneId::from_parts(MuxName::Zellij, "terminal_6")],
+        "topology cache skips list-panes but refreshes viewed panes even when the sample lags",
     );
     assert_eq!(
         cached.presence.map(|presence| presence.human_clients),
@@ -581,7 +583,7 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
     assert_eq!(
         cached.focused_pane.as_ref().map(PaneId::raw),
         Some("terminal_7"),
-        "client-viewed pane should win the session focus register"
+        "topology authoritative focus should win over a stale client-view sample"
     );
     let panes = cached.to_pane_refs();
     assert!(
@@ -589,6 +591,49 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
             && pane.command.as_deref() == Some("zsh")
             && pane.view_name.as_deref() == Some("main")),
         "snapshot panes should include topology-derived working pane: {panes:?}",
+    );
+}
+
+#[test]
+fn focus_changed_wake_publishes_authoritative_topology_focus_without_list_panes_fork() {
+    let env = WakeEnv::new();
+    let mut topology =
+        env.topology_cache_for_tabs(unix_now_ms(), &[(7, 0, "main"), (8, 1, "agent")]);
+    topology.focused_pane = Some(8);
+    let topology_json = serde_json::to_string(&topology).expect("serialize topology");
+    let wake = env.wake_with(
+        "focus-changed",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--unfocused-pane-id",
+            "terminal_7",
+            "--focused-pane-id",
+            "terminal_8",
+            "--topology",
+            topology_json.as_str(),
+        ],
+    );
+    assert!(
+        wake.status.success(),
+        "focus-changed topology wake failed: stderr={}",
+        String::from_utf8_lossy(&wake.stderr),
+    );
+
+    let output = env.snapshot_with_list_clients(Some(""));
+    assert!(
+        output.status.success(),
+        "snapshot failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    env.assert_no_list_panes_fork("fresh focus-changed topology");
+    let cached = read_snapshot_cache(&env.runtime.pane_frame_path(), SESSION_NAME)
+        .expect("snapshot cache published from focus-changed topology");
+    assert_eq!(
+        cached.focused_pane.as_ref().map(PaneId::raw),
+        Some("terminal_8"),
+        "focus-changed topology should update focus without waiting for list-clients",
     );
 }
 
