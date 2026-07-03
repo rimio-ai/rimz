@@ -653,42 +653,45 @@ mod tests {
     }
 
     #[test]
-    fn builtin_spinner_frames_are_single_cell() {
-        for frame in THINKING_FRAMES {
-            validate_single_cell(frame)
-                .unwrap_or_else(|err| panic!("thinking frame {frame:?}: {err}"));
-        }
-    }
-
-    #[test]
-    fn unset_config_resolves_to_builtins() {
-        let animations = ResolvedAnimations::default();
+    fn resolves_builtins_and_nerd_heads() {
+        let indexed_palette = test_palette();
+        let indexed = resolve_for_test(&ThemeAnimationsConfig::default(), &indexed_palette);
         assert_eq!(
-            animations.role(AnimationRole::Thinking).frames(),
+            indexed.role(AnimationRole::Thinking).frames(),
             THINKING_FRAMES
         );
+        for role in [
+            AnimationRole::Thinking,
+            AnimationRole::Working,
+            AnimationRole::Delegating,
+        ] {
+            assert_eq!(indexed.role(role).color(), Color::Indexed(173));
+        }
         assert_eq!(
-            animations.role(AnimationRole::Working).color(),
-            Color::Indexed(173)
-        );
-        assert_eq!(
-            animations.role(AnimationRole::Failed).color(),
-            test_palette().animation_color(AnimationColor::Alarm),
+            indexed.role(AnimationRole::Failed).color(),
+            indexed_palette.animation_color(AnimationColor::Alarm),
             "the static failed marker remains alarm-red"
         );
-    }
 
-    #[test]
-    fn nerd_font_swaps_static_heads_but_keeps_unicode_spinners() {
-        let palette = test_palette();
-        let unicode = resolve_for_test(&ThemeAnimationsConfig::default(), &palette);
+        let truecolor_palette = Palette::resolve(
+            &crate::config::ThemeConfig::default(),
+            crate::config::ColorDepth::Truecolor,
+        );
+        let truecolor = resolve_for_test(&ThemeAnimationsConfig::default(), &truecolor_palette);
+        let clay = Color::Rgb(0xd9, 0x77, 0x57);
+        assert_eq!(
+            truecolor_palette.animation_color(AnimationColor::Clay),
+            clay
+        );
+        assert_eq!(truecolor.role(AnimationRole::Thinking).color(), clay);
+        assert_eq!(truecolor.role(AnimationRole::Working).color(), clay);
+        assert_eq!(truecolor.role(AnimationRole::Delegating).color(), clay);
+
         let nerd = ResolvedAnimations::resolve(
             &ThemeAnimationsConfig::default(),
             &nerd_glyph_set(),
-            &palette,
+            &indexed_palette,
         );
-        // The agent's working/thinking motion keeps its Unicode spinner in every
-        // preset — the Nerd Font set does not theme the animated frames.
         for role in [
             AnimationRole::Thinking,
             AnimationRole::Working,
@@ -698,34 +701,19 @@ mod tests {
         ] {
             assert_eq!(
                 nerd.role(role).frames(),
-                unicode.role(role).frames(),
+                indexed.role(role).frames(),
                 "{role:?} keeps its Unicode frames"
             );
         }
-        // The single-frame status heads take the curated Nerd Font icons.
         assert_eq!(nerd.role(AnimationRole::Idle).frames(), ["\u{f2dd}"]);
         assert_eq!(nerd.role(AnimationRole::Success).frames(), ["\u{f00c}"]);
         assert_eq!(nerd.role(AnimationRole::Failed).frames(), ["\u{f12a}"]);
     }
 
     #[test]
-    fn partial_override_changes_only_the_named_field() {
-        let config: ThemeAnimationsConfig =
-            toml::from_str("[thinking]\nframes = \"ab\"\n").expect("config");
-        let palette = test_palette();
-        let animations = resolve_for_test(&config, &palette);
-        let thinking = animations.role(AnimationRole::Thinking);
-        assert_eq!(thinking.frames(), ["a", "b"]);
-        assert_eq!(thinking.color(), Color::Indexed(173));
-        assert_eq!(frame_at(thinking, 0), "a");
-        assert_eq!(frame_at(thinking, 1), "b", "fast advances every tick");
-        assert_eq!(frame_at(thinking, 2), "a");
-    }
-
-    #[test]
-    fn clay_and_semantic_colors_resolve_to_palette_tones() {
+    fn override_applies_named_fields_through_palette() {
         let config: ThemeAnimationsConfig = toml::from_str(
-            "[working]\ncolor = \"clay\"\n\n[idle]\ncolor = \"good\"\n\n[success]\ncolor = 34\n",
+            "[thinking]\nframes = \"ab\"\n\n[working]\ncolor = \"clay\"\n\n[idle]\ncolor = \"good\"\n\n[success]\ncolor = 34\n",
         )
         .expect("config");
         let palette = Palette::resolve(
@@ -736,6 +724,12 @@ mod tests {
             crate::config::ColorDepth::Indexed,
         );
         let animations = resolve_for_test(&config, &palette);
+        let thinking = animations.role(AnimationRole::Thinking);
+        assert_eq!(thinking.frames(), ["a", "b"]);
+        assert_eq!(thinking.color(), Color::Indexed(173));
+        assert_eq!(frame_at(thinking, 0), "a");
+        assert_eq!(frame_at(thinking, 1), "b", "fast advances every tick");
+        assert_eq!(frame_at(thinking, 2), "a");
         assert_eq!(
             animations.role(AnimationRole::Working).color(),
             Color::Indexed(173)
@@ -756,54 +750,22 @@ mod tests {
     }
 
     #[test]
-    fn default_clay_animations_follow_truecolor_depth() {
-        let palette = Palette::resolve(
-            &crate::config::ThemeConfig::default(),
-            crate::config::ColorDepth::Truecolor,
-        );
-        let animations = resolve_for_test(&ThemeAnimationsConfig::default(), &palette);
-        let clay = palette.animation_color(AnimationColor::Clay);
-        assert_eq!(animations.role(AnimationRole::Thinking).color(), clay);
-        assert_eq!(animations.role(AnimationRole::Working).color(), clay);
-        assert_eq!(animations.role(AnimationRole::Delegating).color(), clay);
-    }
-
-    #[test]
-    fn effects_and_resting_motion_are_resolved() {
-        let config: ThemeAnimationsConfig =
-            toml::from_str("[idle]\neffect = \"breathe\"\n").expect("config");
-        let palette = test_palette();
-        let animations = resolve_for_test(&config, &palette);
-        assert!(animations.has_resting_motion());
-        assert_eq!(
-            effect_weight(animations.role(AnimationRole::Idle), 0),
-            Modifier::DIM
-        );
-    }
-
-    #[test]
-    fn speed_modulates_effect_cadence() {
+    fn effect_and_speed_overrides_drive_motion_and_cadence() {
         let config: ThemeAnimationsConfig = toml::from_str(
-            "[idle]\neffect = \"breathe\"\nspeed = \"slow\"\n\n[success]\neffect = \"breathe\"\nspeed = \"fast\"\n",
+            "[idle]\neffect = \"breathe\"\nspeed = \"slow\"\n\n[success]\neffect = \"breathe\"\nspeed = \"fast\"\n\n[waiting]\neffect = \"breathe\"\nspeed = \"fast\"\n",
         )
         .expect("config");
         let palette = test_palette();
         let animations = resolve_for_test(&config, &palette);
+        assert_eq!(
+            effect_weight(animations.role(AnimationRole::Idle), 0),
+            Modifier::DIM
+        );
         assert_ne!(
             effect_weight(animations.role(AnimationRole::Idle), 5),
             effect_weight(animations.role(AnimationRole::Success), 5),
             "slow and fast breathe effects must diverge on the same render phase"
         );
-    }
-
-    #[test]
-    fn attention_and_paused_roles_accept_effect_and_speed() {
-        let config: ThemeAnimationsConfig = toml::from_str(
-            "[waiting]\neffect = \"breathe\"\nspeed = \"fast\"\n\n[paused]\neffect = \"breathe\"\nspeed = \"fast\"\n",
-        )
-        .expect("config");
-        let palette = test_palette();
-        let animations = resolve_for_test(&config, &palette);
         assert_eq!(
             animations
                 .role(AnimationRole::Waiting)
@@ -811,16 +773,20 @@ mod tests {
             Some(6),
             "configured speed reaches the attention blink phase"
         );
+
+        let paused: ThemeAnimationsConfig =
+            toml::from_str("[paused]\neffect = \"breathe\"\nspeed = \"fast\"\n").expect("config");
+        let paused = resolve_for_test(&paused, &palette);
         assert!(
-            animations.has_resting_motion(),
+            paused.has_resting_motion(),
             "a paused effect override now participates in the uniform model"
         );
 
         let quiet: ThemeAnimationsConfig =
             toml::from_str("[waiting]\neffect = \"static\"\n").expect("config");
-        let animations = resolve_for_test(&quiet, &palette);
+        let quieted = resolve_for_test(&quiet, &palette);
         assert_eq!(
-            animations
+            quieted
                 .role(AnimationRole::Waiting)
                 .attention_breath_phase(3),
             None,
@@ -829,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn motion_quieted_matches_raw_config_motion_truth_table() {
+    fn motion_quieted_truth_table() {
         let palette = test_palette();
         let default = resolve_for_test(&ThemeAnimationsConfig::default(), &palette);
         assert!(
@@ -883,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn breath_curve_is_smooth_but_attention_blink_is_two_pole() {
+    fn breath_eases_blink_snaps_two_pole() {
         assert_eq!(breath_tempo(-1), FRESH_ATTENTION_PERIOD);
         assert_eq!(
             breath_tempo(ATTENTION_AGE_CEILING_SECS),
@@ -895,7 +861,6 @@ mod tests {
         );
         assert!(breath_tempo(1_800) < breath_tempo(0));
 
-        // The calm, configurable breathe effect still eases smoothly.
         let trough = BreathSample::new(0, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
         let middle = BreathSample::new(6, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
         let peak = BreathSample::new(12, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
@@ -904,9 +869,12 @@ mod tests {
         assert!(trough.lightness_delta() < 0.0);
         assert!(peak.lightness_delta() > 0.0);
 
-        // The unread attention blink is a hard 2-pole square wave: the lightness
-        // snaps between the resting tone (off-pole, delta 0) and the bright crest
-        // (on-pole), with no eased value between them, and never below rest.
+        assert_eq!(blink_level(0, 12.0), 1.0);
+        assert_eq!(blink_level(5, 12.0), 1.0);
+        assert_eq!(blink_level(6, 12.0), 0.0);
+        assert_eq!(blink_level(11, 12.0), 0.0);
+        assert_eq!(blink_level(12, 12.0), 1.0, "the cycle wraps");
+
         let peak_delta = BLINK_PEAK_LIFT;
         let on =
             BreathSample::blink_for_age(0, 2 * ATTENTION_AGE_CEILING_SECS, BREATH_DEEP_AMPLITUDE);
@@ -927,18 +895,7 @@ mod tests {
             );
             assert!(delta >= 0.0, "the blink never dims below the resting tone");
         }
-    }
 
-    #[test]
-    fn attention_blink_is_a_hard_two_pole_square_wave() {
-        // A 50/50 square wave on the period: on for the first half, off the second.
-        assert_eq!(blink_level(0, 12.0), 1.0);
-        assert_eq!(blink_level(5, 12.0), 1.0);
-        assert_eq!(blink_level(6, 12.0), 0.0);
-        assert_eq!(blink_level(11, 12.0), 0.0);
-        assert_eq!(blink_level(12, 12.0), 1.0, "the cycle wraps");
-
-        // Older asks blink faster: a shorter period reaches the off-pole sooner.
         let first_off = |age: i64| {
             (0..64)
                 .find(|&phase| {
@@ -954,26 +911,26 @@ mod tests {
     }
 
     #[test]
-    fn steady_peak_is_a_constant_bright_crest() {
-        let bright = BreathSample::steady_peak(BREATH_DEEP_AMPLITUDE);
-        assert_eq!(
-            bright.grow_delta(),
-            BLINK_PEAK_LIFT,
-            "bright holds the blink's bright pole",
-        );
-        assert_eq!(bright.grow_modifier(), Modifier::BOLD);
+    fn breath_modifier_tracks_amplitude_depth() {
+        let shallow_lift = BreathSample::new(12, DEFAULT_BREATH_PERIOD, BREATH_SHALLOW_AMPLITUDE);
+        let deep_lift = BreathSample::new(12, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
+        assert_eq!(shallow_lift.modifier(), Modifier::empty());
+        assert_eq!(deep_lift.modifier(), Modifier::BOLD);
+
+        let shallow_fade = BreathSample::new(4, DEFAULT_BREATH_PERIOD, BREATH_SHALLOW_AMPLITUDE);
+        let deep_fade = BreathSample::new(4, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
+        assert_eq!(shallow_fade.modifier(), Modifier::empty());
+        assert_eq!(deep_fade.modifier(), Modifier::DIM);
     }
 
     #[test]
-    fn shimmer_lift_peaks_under_the_beam_and_is_flat_beyond_it() {
+    fn shimmer_beam_is_local_and_travels() {
         let wave = ShimmerWave {
             phase: 12,
             age_secs: 0,
         };
         let len = 12;
         let lifts: Vec<f32> = (0..len).map(|i| shimmer_lift(wave, i, len)).collect();
-        // The beam is local: not every cell lights at one phase, and the lit
-        // cells peak at the shimmer crest, never above it.
         assert!(
             lifts.iter().any(|&l| l > 0.0),
             "some cell is under the beam: {lifts:?}"
@@ -988,11 +945,7 @@ mod tests {
                 "lift in range: {l}"
             );
         }
-    }
 
-    #[test]
-    fn shimmer_beam_travels_with_phase() {
-        let len = 12;
         let center = |phase| {
             (0..len)
                 .map(|i| (i, shimmer_lift(ShimmerWave { phase, age_secs: 0 }, i, len)))
@@ -1004,24 +957,19 @@ mod tests {
             center(80) >= center(2),
             "the brightest cell moves to the right as the beam travels",
         );
-    }
 
-    #[test]
-    fn single_cell_shimmer_pulses_over_a_cycle() {
-        // The glyph and the make-up buckets are one cell: their ring is just wider
-        // than the beam, so the beam passing produces a periodic lift — bright
-        // then rest — rather than a flowing run or a constant glow.
-        let lifts: Vec<f32> = (0..40)
+        let single_cell_lifts: Vec<f32> = (0..40)
             .map(|phase| shimmer_lift(ShimmerWave { phase, age_secs: 0 }, 0, 1))
             .collect();
-        assert!(lifts.iter().any(|&l| l > 0.0), "the beam reaches the cell");
-        assert!(lifts.contains(&0.0), "and leaves it again");
+        assert!(
+            single_cell_lifts.iter().any(|&l| l > 0.0),
+            "the beam reaches the cell"
+        );
+        assert!(single_cell_lifts.contains(&0.0), "and leaves it again");
     }
 
     #[test]
-    fn shimmer_beam_widens_with_the_run_then_clamps() {
-        // The lit band tracks the run's length so a long line is not a dot,
-        // floored for short runs and capped so a very long line never washes.
+    fn shimmer_beam_geometry_scales_and_clamps() {
         assert_eq!(
             shimmer_half(4),
             SHIMMER_BEAM_HALF_MIN,
@@ -1036,13 +984,7 @@ mod tests {
             SHIMMER_BEAM_HALF_MAX,
             "very long runs cap"
         );
-    }
 
-    #[test]
-    fn shimmer_speed_scales_with_length_then_caps_for_smoothness() {
-        // A longer run sweeps faster in cells/frame to keep pace, but the speed
-        // is capped so a long line glides at the refresh rate instead of stepping
-        // several cells per frame.
         assert!(
             shimmer_velocity(50, 0) > shimmer_velocity(10, 0),
             "a longer run flows faster to keep pace"
@@ -1062,10 +1004,19 @@ mod tests {
     }
 
     #[test]
-    fn unread_anim_picks_the_variant_and_honors_the_static_quiet() {
+    fn unread_anim_selects_variant_defaults_and_static_quiets() {
         let palette = test_palette();
-        let animations = resolve_for_test(&ThemeAnimationsConfig::default(), &palette);
-        let waiting = animations.role(AnimationRole::Waiting);
+        let default = resolve_for_test(&ThemeAnimationsConfig::default(), &palette);
+        assert_eq!(default.unread_effect(), UnreadEffect::Shimmer);
+
+        let config: ThemeAnimationsConfig =
+            toml::from_str("unread = \"bright\"\n").expect("config");
+        assert_eq!(
+            resolve_for_test(&config, &palette).unread_effect(),
+            UnreadEffect::Bright
+        );
+
+        let waiting = default.role(AnimationRole::Waiting);
         assert!(matches!(
             waiting.unread_anim(UnreadEffect::Blink, 0, 0),
             Some(UnreadAnim::Blink(_))
@@ -1079,43 +1030,46 @@ mod tests {
             Some(UnreadAnim::Shimmer(_))
         ));
 
+        let bright = BreathSample::steady_peak(BREATH_DEEP_AMPLITUDE);
+        assert_eq!(
+            bright.grow_delta(),
+            BLINK_PEAK_LIFT,
+            "bright holds the blink's bright pole",
+        );
+        assert_eq!(bright.grow_modifier(), Modifier::BOLD);
+
         let quiet: ThemeAnimationsConfig =
             toml::from_str("[waiting]\neffect = \"static\"\n").expect("config");
         let quieted = resolve_for_test(&quiet, &palette);
-        assert_eq!(
-            quieted
-                .role(AnimationRole::Waiting)
-                .unread_anim(UnreadEffect::Shimmer, 0, 0),
-            None,
-            "a static-quieted role suppresses every unread effect",
-        );
-    }
-
-    #[test]
-    fn unread_effect_resolves_from_config_and_defaults_to_shimmer() {
-        let palette = test_palette();
-        assert_eq!(
-            resolve_for_test(&ThemeAnimationsConfig::default(), &palette).unread_effect(),
-            UnreadEffect::Shimmer,
-        );
-        let config: ThemeAnimationsConfig =
-            toml::from_str("unread = \"bright\"\n").expect("config");
-        assert_eq!(
-            resolve_for_test(&config, &palette).unread_effect(),
+        for unread in [
+            UnreadEffect::Blink,
             UnreadEffect::Bright,
-        );
+            UnreadEffect::Shimmer,
+        ] {
+            assert_eq!(
+                quieted
+                    .role(AnimationRole::Waiting)
+                    .unread_anim(unread, 0, 0),
+                None,
+                "a static-quieted role suppresses {unread:?}",
+            );
+        }
     }
 
     #[test]
-    fn no_color_modifier_preserves_pulse_depth_ordering() {
-        let shallow_lift = BreathSample::new(12, DEFAULT_BREATH_PERIOD, BREATH_SHALLOW_AMPLITUDE);
-        let deep_lift = BreathSample::new(12, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
-        assert_eq!(shallow_lift.modifier(), Modifier::empty());
-        assert_eq!(deep_lift.modifier(), Modifier::BOLD);
-
-        let shallow_fade = BreathSample::new(4, DEFAULT_BREATH_PERIOD, BREATH_SHALLOW_AMPLITUDE);
-        let deep_fade = BreathSample::new(4, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
-        assert_eq!(shallow_fade.modifier(), Modifier::empty());
-        assert_eq!(deep_fade.modifier(), Modifier::DIM);
+    fn builtin_spinner_frames_are_single_cell() {
+        let animations = ResolvedAnimations::default();
+        for role in [
+            AnimationRole::Thinking,
+            AnimationRole::Working,
+            AnimationRole::Compacting,
+            AnimationRole::Delegating,
+            AnimationRole::Resolving,
+        ] {
+            for frame in animations.role(role).frames() {
+                validate_single_cell(frame)
+                    .unwrap_or_else(|err| panic!("{role:?} frame {frame:?}: {err}"));
+            }
+        }
     }
 }
