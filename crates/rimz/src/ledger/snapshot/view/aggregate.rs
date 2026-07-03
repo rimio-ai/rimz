@@ -12,6 +12,7 @@ use super::layout::{
     capped_rows, compare_groups, effective_worktree_roots, group_branch_label, multi_branch_paths,
     sort_rows, status_counts, worktree_group_key,
 };
+use super::score;
 use super::{SidebarWorktreeGroup, SidebarWorktreeKind};
 
 mod status;
@@ -31,6 +32,26 @@ pub(super) struct AttentionWindows {
     pub stalled_after_secs: u32,
     /// No-activity → inactive-sink window (`inactive_after_secs`).
     pub inactive_after_secs: u32,
+    /// No-activity → archive-sink window (`archive_after_secs`).
+    pub archive_after_secs: u32,
+}
+
+impl AttentionWindows {
+    pub(super) fn from_config(config: &crate::config::AttentionConfig) -> Self {
+        let inactive_after_secs = config.inactive_after_secs.get();
+        // `archive_after_secs` is a display knob. A value at or below the
+        // inactive window is interpreted as "just after inactive" instead of
+        // rejecting the config at startup.
+        let archive_after_secs = config
+            .archive_after_secs
+            .get()
+            .max(inactive_after_secs.saturating_add(1));
+        Self {
+            stalled_after_secs: config.stalled_after_secs.get(),
+            inactive_after_secs,
+            archive_after_secs,
+        }
+    }
 }
 
 pub(super) struct AgentProjection<'a> {
@@ -65,7 +86,7 @@ pub(super) fn build_worktree_groups_from_rows(
         now,
         windows.stalled_after_secs,
     );
-    stamp_inactive(&mut rows, now, windows.inactive_after_secs);
+    stamp_attention(&mut rows, now, windows);
 
     let multi_branch = multi_branch_paths(
         rows.iter()
@@ -137,18 +158,29 @@ pub(super) fn build_worktree_groups_from_rows(
     groups
 }
 
-/// Stamp the inactive sink: an agent row with no activity past
-/// `inactive_after_secs` drops into the inactive partition, beneath every live
-/// agent row, whatever its status — a stale `waiting` ask sinks the same as a
-/// stale `idle`, then leads the inactive band by its attention rank. Process
-/// rows are exempt: their activity clock is foreground-process start, not
-/// attention, and row ordering already seats them below every agent card.
-/// Durable `unread` still outranks the sink. The boundary is strict (`>`), so
-/// the configured window is the last live second.
-fn stamp_inactive(rows: &mut [SidebarRow], now: Timestamp, inactive_after_secs: u32) {
+/// Stamp attention ranking facts: no-activity age drives the inactive sink, the
+/// archive sink, and the fixed-point score every later presentation sort reads.
+/// Process rows are exempt from the sinks because their activity clock is
+/// foreground-process start, not attention, and row ordering already seats them
+/// below every agent card. Durable `unread` still outranks both sinks. Both
+/// boundaries are strict (`>`), so the configured second is the last member of
+/// the previous band.
+fn stamp_attention(rows: &mut [SidebarRow], now: Timestamp, windows: AttentionWindows) {
     for row in rows {
-        row.inactive = !row.is_process()
-            && now.duration_since(row.last_activity).as_secs() > i64::from(inactive_after_secs);
+        let age_secs = score::age_secs(now, row.last_activity);
+        let is_process = row.is_process();
+        row.inactive = !is_process && age_secs > windows.inactive_after_secs;
+        row.archived = !is_process && age_secs > windows.archive_after_secs;
+        row.attention_score = if is_process {
+            0
+        } else {
+            score::attention_score(
+                row.status(),
+                age_secs,
+                windows.inactive_after_secs,
+                windows.archive_after_secs,
+            )
+        };
     }
 }
 
@@ -156,7 +188,9 @@ fn stamp_inactive(rows: &mut [SidebarRow], now: Timestamp, inactive_after_secs: 
 mod tests {
     use super::*;
     use crate::agents::AgentStatus;
+    use crate::config::AttentionConfig;
     use crate::ledger::snapshot::row::{AgentCard, ProcessCard, RowCard};
+    use std::num::NonZeroU32;
 
     fn now() -> Timestamp {
         Timestamp::from_second(1_750_000_000).expect("fixed test instant is valid")
@@ -173,6 +207,8 @@ mod tests {
             channel: None,
             unread: false,
             inactive: false,
+            archived: false,
+            attention_score: 0,
             last_activity: now() - std::time::Duration::from_secs(age_secs as u64),
             card: RowCard::Agent(Box::new(AgentCard {
                 status: AgentStatus::Idle,
@@ -185,12 +221,28 @@ mod tests {
     fn inactive_window_is_threshold_driven_and_strict() {
         // The same row sinks or stays live by the configured window alone.
         let mut rows = vec![row_aged(1_800)];
-        stamp_inactive(&mut rows, now(), 3_600);
+        stamp_attention(
+            &mut rows,
+            now(),
+            AttentionWindows {
+                stalled_after_secs: 1,
+                inactive_after_secs: 3_600,
+                archive_after_secs: 86_400,
+            },
+        );
         assert!(
             !rows[0].inactive,
             "30m of silence is live under a one-hour window"
         );
-        stamp_inactive(&mut rows, now(), 1_200);
+        stamp_attention(
+            &mut rows,
+            now(),
+            AttentionWindows {
+                stalled_after_secs: 1,
+                inactive_after_secs: 1_200,
+                archive_after_secs: 86_400,
+            },
+        );
         assert!(
             rows[0].inactive,
             "the same row sinks under a twenty-minute window"
@@ -198,10 +250,26 @@ mod tests {
 
         // The boundary is strict: the configured window is the last live second.
         let mut exact = vec![row_aged(3_600)];
-        stamp_inactive(&mut exact, now(), 3_600);
+        stamp_attention(
+            &mut exact,
+            now(),
+            AttentionWindows {
+                stalled_after_secs: 1,
+                inactive_after_secs: 3_600,
+                archive_after_secs: 86_400,
+            },
+        );
         assert!(!exact[0].inactive, "exactly at the window is still live");
         let mut past = vec![row_aged(3_601)];
-        stamp_inactive(&mut past, now(), 3_600);
+        stamp_attention(
+            &mut past,
+            now(),
+            AttentionWindows {
+                stalled_after_secs: 1,
+                inactive_after_secs: 3_600,
+                archive_after_secs: 86_400,
+            },
+        );
         assert!(past[0].inactive, "one second past the window sinks");
     }
 
@@ -218,6 +286,8 @@ mod tests {
                 channel: None,
                 unread: false,
                 inactive: false,
+                archived: false,
+                attention_score: 0,
                 last_activity: aged,
                 card: RowCard::Agent(Box::new(AgentCard {
                     status: AgentStatus::Idle,
@@ -233,14 +303,80 @@ mod tests {
                 channel: None,
                 unread: false,
                 inactive: false,
+                archived: false,
+                attention_score: 0,
                 last_activity: aged,
                 card: RowCard::Process(ProcessCard::default()),
             },
         ];
 
-        stamp_inactive(&mut rows, now(), 3_600);
+        stamp_attention(
+            &mut rows,
+            now(),
+            AttentionWindows {
+                stalled_after_secs: 1,
+                inactive_after_secs: 3_600,
+                archive_after_secs: 86_400,
+            },
+        );
 
         assert!(rows[0].inactive, "aged agent rows sink");
+        assert!(!rows[0].archived, "aged agent rows below archive stay warm");
         assert!(!rows[1].inactive, "aged process rows stay live");
+        assert!(!rows[1].archived, "aged process rows never archive");
+    }
+
+    #[test]
+    fn archive_window_is_threshold_driven_and_strict() {
+        let windows = AttentionWindows {
+            stalled_after_secs: 1,
+            inactive_after_secs: 3_600,
+            archive_after_secs: 86_400,
+        };
+        let mut exact = vec![row_aged(86_400)];
+        stamp_attention(&mut exact, now(), windows);
+        assert!(!exact[0].archived, "exactly at archive is still warm");
+
+        let mut past = vec![row_aged(86_401)];
+        stamp_attention(&mut past, now(), windows);
+        assert!(past[0].archived, "one second past archive parks");
+        assert_eq!(
+            past[0].attention_score,
+            score::status_weight(AgentStatus::Idle),
+            "archive band keeps flat status score"
+        );
+    }
+
+    #[test]
+    fn stamp_attention_records_score() {
+        let windows = AttentionWindows {
+            stalled_after_secs: 1,
+            inactive_after_secs: 3_600,
+            archive_after_secs: 86_400,
+        };
+        let mut rows = vec![row_aged(1_800)];
+        rows[0].as_agent_mut().unwrap().status = AgentStatus::Waiting;
+        stamp_attention(&mut rows, now(), windows);
+        assert_eq!(
+            rows[0].attention_score,
+            score::attention_score(Some(AgentStatus::Waiting), 1_800, 3_600, 86_400)
+        );
+    }
+
+    #[test]
+    fn attention_windows_lift_archive_below_inactive() {
+        let config = AttentionConfig {
+            inactive_after_secs: NonZeroU32::new(3_600).unwrap(),
+            archive_after_secs: NonZeroU32::new(60).unwrap(),
+            ..AttentionConfig::default()
+        };
+
+        let windows = AttentionWindows::from_config(&config);
+
+        assert_eq!(windows.inactive_after_secs, 3_600);
+        assert_eq!(
+            windows.archive_after_secs, 3_601,
+            "archive values at or below inactive lift to the first warm second"
+        );
     }
 }

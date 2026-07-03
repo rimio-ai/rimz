@@ -31,6 +31,7 @@ mod model;
 mod providers;
 mod reap;
 mod rows;
+mod score;
 
 pub use model::{
     PresenceSample, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarProviderPanel,
@@ -65,7 +66,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 3;
+pub const SNAPSHOT_VERSION: u32 = 4;
 
 /// Sidebar view-model. The pane frame admits every rendered card; ledger,
 /// sidecars, and realtime events only enrich rows admitted from live panes.

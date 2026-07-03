@@ -1137,14 +1137,20 @@ fn attention_config_defaults_parses_and_rejects_zero() {
         crate::agents::DEFAULT_STALL_AFTER_SECS,
         "unset uses the shipped 30-minute stall window",
     );
+    assert_eq!(
+        config.agents.attention.archive_after_secs.get(),
+        crate::agents::DEFAULT_ARCHIVE_AFTER_SECS,
+        "unset uses the shipped 24-hour archive window",
+    );
 
     let tuned = load_no_fragments(&write_named(
         &dir,
         "agents.toml",
-        "[agents.attention]\nstalled_after_secs = 2700\n",
+        "[agents.attention]\nstalled_after_secs = 2700\narchive_after_secs = 7200\n",
     ))
     .expect("load");
     assert_eq!(tuned.agents.attention.stalled_after_secs.get(), 2700);
+    assert_eq!(tuned.agents.attention.archive_after_secs.get(), 7200);
 
     let partial =
         load_no_fragments(&write_named(&dir, "agents.toml", "[agents.attention]\n")).expect("load");
@@ -1155,6 +1161,14 @@ fn attention_config_defaults_parses_and_rejects_zero() {
             &dir,
             "agents.toml",
             "[agents.attention]\nstalled_after_secs = 0\n",
+        ))
+        .is_err()
+    );
+    assert!(
+        load_no_fragments(&write_named(
+            &dir,
+            "agents.toml",
+            "[agents.attention]\narchive_after_secs = 0\n",
         ))
         .is_err()
     );

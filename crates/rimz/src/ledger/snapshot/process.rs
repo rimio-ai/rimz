@@ -79,6 +79,8 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: pane.pane_process_start.unwrap_or(now),
         card: RowCard::Process(ProcessCard {
             state,

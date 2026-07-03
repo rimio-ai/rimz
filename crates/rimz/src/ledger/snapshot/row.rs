@@ -33,9 +33,22 @@ pub struct SidebarRow {
     /// Renderer-local `unread` still outranks this sink.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inactive: bool,
+    /// Producer-stamped archive sink: this row has aged past the archive
+    /// window, so it parks below hot and warm rows. Process rows are exempt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
+    /// Producer-stamped fixed-point attention score in milli-units for every
+    /// presentation sort after the fold. Unread rows recompute their flat inbox
+    /// rank from status because unread is derived after this score is stamped.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub attention_score: u32,
     pub last_activity: Timestamp,
     #[serde(flatten)]
     pub card: RowCard,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 impl SidebarRow {

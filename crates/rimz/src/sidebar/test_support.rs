@@ -174,6 +174,8 @@ pub(crate) fn activity_row(
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity,
         card: if is_agent {
             crate::RowCard::Agent(Box::new(crate::AgentCard {

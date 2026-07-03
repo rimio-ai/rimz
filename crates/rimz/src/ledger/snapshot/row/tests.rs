@@ -16,6 +16,8 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: row_time(),
         card: RowCard::Agent(Box::new(AgentCard {
             status: AgentStatus::Running,
@@ -41,6 +43,8 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: row_time(),
         card: RowCard::Process(ProcessCard {
             state: ProcessState::Stuck,
@@ -73,6 +77,8 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         channel: None,
         unread: true,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: row_time(),
         card: RowCard::Agent(Box::new(AgentCard {
             status: AgentStatus::Success,
@@ -97,6 +103,8 @@ fn display_name_prefers_agent_handle_and_falls_back_to_row_name() {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: row_time(),
         card: RowCard::Agent(Box::new(AgentCard {
             handle: Some("planner".to_owned()),
@@ -121,6 +129,8 @@ fn display_name_prefers_agent_handle_and_falls_back_to_row_name() {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: row_time(),
         card: RowCard::Process(ProcessCard::default()),
     };

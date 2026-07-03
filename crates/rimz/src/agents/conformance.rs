@@ -628,6 +628,8 @@ fn agent_row(kind: &str) -> SidebarRow {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: Timestamp::from_second(1).unwrap(),
         card: RowCard::Agent(Box::new(AgentCard {
             status: AgentStatus::Running,

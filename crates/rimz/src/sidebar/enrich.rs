@@ -453,6 +453,9 @@ pub fn enrich(
     // walk's TTL.
     apply_live_today_spend(&mut snapshot, &spending_caches.workspace);
     super::unread::derive(&mut snapshot, &episodes, &read_marks);
+    // Git facts and late unread bits land after the pane fold's initial sort,
+    // so publish the spine once both ranking inputs are present.
+    snapshot.sort_groups_for_presentation();
     snapshot
 }
 

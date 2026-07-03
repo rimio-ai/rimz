@@ -271,6 +271,8 @@ fn selected_pet_action_follows_process_cards() {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: fixed_now(),
         card: crate::RowCard::Process(crate::ProcessCard {
             state: crate::ProcessState::Busy,

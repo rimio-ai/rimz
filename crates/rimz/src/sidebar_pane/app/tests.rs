@@ -63,6 +63,8 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
             channel: None,
             unread: false,
             inactive: false,
+            archived: false,
+            attention_score: 0,
             last_activity: Timestamp::now(),
             card: crate::RowCard::Agent(Box::new(crate::AgentCard {
                 status: crate::agents::AgentStatus::Waiting,
@@ -475,6 +477,8 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
                 channel: None,
                 unread,
                 inactive: false,
+                archived: false,
+                attention_score: 0,
                 last_activity: Timestamp::now(),
                 card: crate::RowCard::Agent(Box::new(crate::AgentCard {
                     status,

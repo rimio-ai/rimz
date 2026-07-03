@@ -92,6 +92,8 @@ fn row_snapshot_at(
             channel: None,
             unread: false,
             inactive: false,
+            archived: false,
+            attention_score: 0,
             last_activity,
             card: RowCard::Agent(Box::new(AgentCard {
                 status,
@@ -142,6 +144,8 @@ fn snapshot_in_group(
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: jiff::Timestamp::from_second(1_000).unwrap(),
         card: crate::RowCard::Process(crate::ProcessCard::default()),
     };

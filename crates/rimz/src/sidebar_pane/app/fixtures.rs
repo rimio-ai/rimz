@@ -56,6 +56,8 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
                 channel: None,
                 unread: false,
                 inactive: false,
+                archived: false,
+                attention_score: 0,
                 last_activity: Timestamp::now(),
                 card: crate::RowCard::Process(crate::ProcessCard::default()),
             })
@@ -86,6 +88,8 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: Timestamp::now(),
         card: crate::RowCard::Agent(Box::new(crate::AgentCard {
             status: crate::agents::AgentStatus::Idle,

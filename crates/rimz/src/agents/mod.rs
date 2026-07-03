@@ -81,8 +81,8 @@ pub use registry::{ADAPTERS, adapter_by_kind, descriptor_by_kind, find_adapter, 
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentSignal, AgentState, AgentStatus, COMPACTING_WINDOW_SECS,
-    ContextSeverity, DEFAULT_INACTIVE_AFTER_SECS, DEFAULT_STALL_AFTER_SECS, is_stalled,
-    is_turn_complete, is_turn_dead,
+    ContextSeverity, DEFAULT_ARCHIVE_AFTER_SECS, DEFAULT_INACTIVE_AFTER_SECS,
+    DEFAULT_STALL_AFTER_SECS, is_stalled, is_turn_complete, is_turn_dead,
 };
 pub(crate) use state::{
     AccountBudget, ResumeArm, account_budgets_from_caches, display_turn_error,

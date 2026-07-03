@@ -235,6 +235,8 @@ mod tests {
             channel: None,
             unread,
             inactive: false,
+            archived: false,
+            attention_score: 0,
             last_activity: Timestamp::now(),
             card: RowCard::Agent(Box::new(AgentCard {
                 status,

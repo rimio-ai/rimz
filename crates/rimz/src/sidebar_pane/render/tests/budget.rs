@@ -65,6 +65,8 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: super::fixed_now(),
         card: RowCard::Agent(Box::new(AgentCard {
             status: crate::agents::AgentStatus::Running,

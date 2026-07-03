@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -6,6 +6,7 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
+use super::score::{self, GitRung};
 use super::{SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
 
 pub(super) const WORKTREE_ROW_CAP: usize = 6;
@@ -305,7 +306,10 @@ struct RankFacts<'a> {
     is_process: bool,
     unread: bool,
     inactive: bool,
+    archived: bool,
     status: Option<AgentStatus>,
+    score: u32,
+    factor_milli: u32,
     last_activity: jiff::Timestamp,
     pane_ordinal: Option<u64>,
     cohort: Option<&'a str>,
@@ -318,7 +322,10 @@ fn row_rank_facts(row: &SidebarRow) -> RankFacts<'_> {
         is_process: row.is_process(),
         unread: row.unread,
         inactive: row.inactive,
+        archived: row.archived,
         status: row.status(),
+        score: row.attention_score,
+        factor_milli: score::recovered_time_factor_milli(row.status(), row.attention_score),
         last_activity: row.last_activity,
         pane_ordinal: row_ordinal(row),
         cohort: row.launch_cohort(),
@@ -327,12 +334,27 @@ fn row_rank_facts(row: &SidebarRow) -> RankFacts<'_> {
     }
 }
 
-fn agent_rank_facts(agent: &AgentState) -> RankFacts<'_> {
+fn agent_rank_facts(
+    agent: &AgentState,
+    now: jiff::Timestamp,
+    inactive_after_secs: u32,
+    archive_after_secs: u32,
+) -> RankFacts<'_> {
+    let age_secs = score::age_secs(now, agent.last_activity);
+    let score = score::attention_score(
+        Some(agent.status),
+        age_secs,
+        inactive_after_secs,
+        archive_after_secs,
+    );
     RankFacts {
         is_process: false,
         unread: false,
-        inactive: false,
+        inactive: age_secs > inactive_after_secs,
+        archived: age_secs > archive_after_secs,
         status: Some(agent.status),
+        score,
+        factor_milli: score::recovered_time_factor_milli(Some(agent.status), score),
         last_activity: agent.last_activity,
         pane_ordinal: agent_ordinal(agent),
         cohort: agent_launch_cohort(agent),
@@ -351,7 +373,7 @@ struct RankKey {
 struct BlockKey {
     is_process: bool,
     band: u8,
-    rank: u8,
+    urgency: Reverse<u32>,
     tiebreak: BucketTiebreak,
     identity: String,
     cohort_absent: bool,
@@ -408,7 +430,38 @@ impl<T: Ord> PartialOrd for StartKey<T> {
 #[derive(Clone, Debug)]
 struct CohortBlock {
     band: u8,
+    urgency: u32,
+    tiebreak: BucketTiebreak,
+}
+
+#[derive(Clone, Debug)]
+struct CohortAccum {
+    band: u8,
     pane_ordinal: Option<u64>,
+    oldest_attention: Option<jiff::Timestamp>,
+    best_actionable: Option<ActionableDriver>,
+    oldest_paused: Option<PausedDriver>,
+    most_recent_calm: Option<CalmDriver>,
+    has_running: bool,
+    has_success: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActionableDriver {
+    score: u32,
+    last_activity: jiff::Timestamp,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PausedDriver {
+    factor_milli: u32,
+    last_activity: jiff::Timestamp,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CalmDriver {
+    factor_milli: u32,
+    last_activity: jiff::Timestamp,
 }
 
 fn rank_cohort_blocks<'a>(
@@ -419,22 +472,129 @@ fn rank_cohort_blocks<'a>(
         let Some(cohort) = facts.cohort else {
             continue;
         };
-        let block = blocks.entry(cohort.to_owned()).or_insert(CohortBlock {
+        let block = blocks.entry(cohort.to_owned()).or_insert(CohortAccum {
             band: u8::MAX,
             pane_ordinal: None,
+            oldest_attention: None,
+            best_actionable: None,
+            oldest_paused: None,
+            most_recent_calm: None,
+            has_running: false,
+            has_success: false,
         });
         block.band = block.band.min(facts_band(&facts));
         if let Some(ordinal) = facts.pane_ordinal {
             block.pane_ordinal = Some(block.pane_ordinal.map_or(ordinal, |min| min.min(ordinal)));
         }
-    }
-    for block in blocks.values_mut() {
-        // An unread member lifts an inactive launch block back into live work,
-        // but never into the top unread inbox band; the block itself is still a
-        // calm launch cohort.
-        block.band = block.band.max(1);
+        if is_attention(facts.status) {
+            block.oldest_attention = Some(
+                block
+                    .oldest_attention
+                    .map_or(facts.last_activity, |oldest| {
+                        oldest.min(facts.last_activity)
+                    }),
+            );
+        }
+        match facts.status {
+            Some(AgentStatus::Waiting | AgentStatus::Failed) => {
+                let candidate = ActionableDriver {
+                    score: facts.score,
+                    last_activity: facts.last_activity,
+                };
+                if block.best_actionable.is_none_or(|current| {
+                    candidate.score > current.score
+                        || (candidate.score == current.score
+                            && candidate.last_activity < current.last_activity)
+                }) {
+                    block.best_actionable = Some(candidate);
+                }
+            }
+            Some(AgentStatus::Paused) => {
+                let candidate = PausedDriver {
+                    factor_milli: facts.factor_milli,
+                    last_activity: facts.last_activity,
+                };
+                if block
+                    .oldest_paused
+                    .is_none_or(|current| candidate.last_activity < current.last_activity)
+                {
+                    block.oldest_paused = Some(candidate);
+                }
+            }
+            Some(AgentStatus::Running) => {
+                block.has_running = true;
+                block.observe_calm(&facts);
+            }
+            Some(AgentStatus::Success) => {
+                block.has_success = true;
+                block.observe_calm(&facts);
+            }
+            Some(AgentStatus::Idle) | None => block.observe_calm(&facts),
+        }
     }
     blocks
+        .into_iter()
+        .map(|(cohort, block)| (cohort, block.finish()))
+        .collect()
+}
+
+impl CohortAccum {
+    fn observe_calm(&mut self, facts: &RankFacts<'_>) {
+        let candidate = CalmDriver {
+            factor_milli: facts.factor_milli,
+            last_activity: facts.last_activity,
+        };
+        if self
+            .most_recent_calm
+            .is_none_or(|current| candidate.last_activity > current.last_activity)
+        {
+            self.most_recent_calm = Some(candidate);
+        }
+    }
+
+    fn finish(self) -> CohortBlock {
+        // An unread member lifts an inactive launch block back into live work,
+        // but never into the top unread inbox band; the block itself is ranked
+        // by its derived team state.
+        let band = self.band.max(1);
+        if let Some(driver) = self.best_actionable {
+            return CohortBlock {
+                band,
+                urgency: driver.score,
+                tiebreak: BucketTiebreak::Attention(
+                    self.oldest_attention.unwrap_or(driver.last_activity),
+                ),
+            };
+        }
+        if let Some(driver) = self.oldest_paused {
+            return CohortBlock {
+                band,
+                urgency: score::score_from_weight_and_factor(
+                    AgentStatus::Paused,
+                    driver.factor_milli,
+                ),
+                tiebreak: BucketTiebreak::Attention(
+                    self.oldest_attention.unwrap_or(driver.last_activity),
+                ),
+            };
+        }
+        let status = if self.has_running {
+            AgentStatus::Running
+        } else if self.has_success {
+            AgentStatus::Success
+        } else {
+            AgentStatus::Idle
+        };
+        CohortBlock {
+            band,
+            urgency: score::score_from_weight_and_factor(
+                status,
+                self.most_recent_calm
+                    .map_or(1_000, |driver| driver.factor_milli),
+            ),
+            tiebreak: BucketTiebreak::Calm(StartKey::from(self.pane_ordinal)),
+        }
+    }
 }
 
 fn rank_key(facts: RankFacts<'_>, cohorts: &BTreeMap<String, CohortBlock>) -> RankKey {
@@ -445,23 +605,23 @@ fn rank_key(facts: RankFacts<'_>, cohorts: &BTreeMap<String, CohortBlock>) -> Ra
         BlockKey {
             is_process: false,
             band: cohort_block.band,
-            rank: 3,
-            tiebreak: BucketTiebreak::Calm(StartKey::from(cohort_block.pane_ordinal)),
+            urgency: Reverse(cohort_block.urgency),
+            tiebreak: cohort_block.tiebreak.clone(),
             identity: cohort.to_owned(),
             cohort_absent: false,
         }
     } else {
         // Agent cards lead the channel; process rows are the command tail beneath
-        // them, whatever either's activity. Within each side the three layers hold:
-        // the unread inbox first, live work over dormant, then the most
-        // attention-hungry within each band. The final singleton tiebreak is the
-        // stable `id` alone — never `name`, which mutates through the
-        // session-name -> task -> prompt label ladder and would reshuffle a bucket
-        // on every rename.
+        // them, whatever either's activity. Within each side the bands hold:
+        // unread inbox, hot work, warm work, then archive; the fixed-point
+        // urgency score orders within a band. The final singleton tiebreak is
+        // the stable `id` alone — never `name`, which mutates through the
+        // session-name -> task -> prompt label ladder and would reshuffle a
+        // bucket on every rename.
         BlockKey {
             is_process: facts.is_process,
             band: facts_band(&facts),
-            rank: facts_rank(&facts),
+            urgency: Reverse(facts_urgency(&facts)),
             tiebreak: bucket_tiebreak(&facts),
             identity: facts.id.to_owned(),
             cohort_absent: true,
@@ -492,15 +652,16 @@ fn bucket_tiebreak(facts: &RankFacts<'_>) -> BucketTiebreak {
     }
 }
 
-fn facts_rank(facts: &RankFacts<'_>) -> u8 {
-    match facts.status {
-        Some(status) => status_rank(status),
-        None => 7,
-    }
+fn facts_band(facts: &RankFacts<'_>) -> u8 {
+    band(facts.unread, facts.inactive, facts.archived)
 }
 
-fn facts_band(facts: &RankFacts<'_>) -> u8 {
-    band(facts.unread, facts.inactive)
+fn facts_urgency(facts: &RankFacts<'_>) -> u32 {
+    if facts_band(facts) == 0 {
+        score::status_weight_opt(facts.status)
+    } else {
+        facts.score
+    }
 }
 
 fn is_attention(status: Option<AgentStatus>) -> bool {
@@ -525,26 +686,33 @@ pub(super) fn compare_groups(
 ) -> Ordering {
     // The `external` catch-all always tails: out-of-project residue never
     // displaces project work, so it sorts below every project group — below even
-    // the inactive groups, and regardless of any `waiting`/`failed` member it
-    // holds. Among project groups the same three layers apply, read off the
-    // most-urgent member: the unread inbox first, then active over inactive, then
-    // the attention bucket (every calm status collapsed to one rank so a group
-    // never leapfrogs a sibling because its top row flipped success↔running↔idle),
-    // then the earliest member's pane-creation order, then label.
-    group_sort_key(left.rows.iter().map(row_rank_facts), left.kind, &left.label).cmp(
-        &group_sort_key(
-            right.rows.iter().map(row_rank_facts),
-            right.kind,
-            &right.label,
-        ),
+    // archived groups, and regardless of any `waiting`/`failed` member it holds.
+    // Among project groups the same macro bands apply, read off the liveliest
+    // member: unread inbox, hot work, warm work, archive. Score decides
+    // attention rows inside the winning band, calm members collapse to one
+    // constant, process-only live groups tail calm agent groups, git decides
+    // among calm worktree groups, then pane creation and label settle ties.
+    group_sort_key(
+        left.rows.iter().map(row_rank_facts),
+        left.kind,
+        group_git_rung(left),
+        &left.label,
     )
+    .cmp(&group_sort_key(
+        right.rows.iter().map(row_rank_facts),
+        right.kind,
+        group_git_rung(right),
+        &right.label,
+    ))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct GroupRankKey {
     external: bool,
     band: u8,
-    rank: u8,
+    urgency: Reverse<u32>,
+    agentless: bool,
+    git: GitRung,
     earliest_ordinal: StartKey<u64>,
     label: String,
 }
@@ -552,23 +720,25 @@ struct GroupRankKey {
 fn group_sort_key<'a>(
     facts: impl Iterator<Item = RankFacts<'a>>,
     kind: SidebarWorktreeKind,
+    git: GitRung,
     label: &str,
 ) -> GroupRankKey {
-    // The group's band (layers 1 and 2) is read from its liveliest member. Row
-    // order seats process rows below agent cards, so group liveness is computed
-    // across all rows instead of borrowed from `rows.first()`; an empty group
-    // sinks last.
+    // The group's band is read from its liveliest member. Row order seats
+    // process rows below agent cards, so group liveness is computed across all
+    // rows instead of borrowed from `rows.first()`; an empty group sinks last.
     let mut band = u8::MAX;
-    let mut rank = u8::MAX;
+    let mut urgency = 0;
+    let mut agentless = true;
     let mut earliest_ordinal: Option<u64> = None;
     for facts in facts {
         let facts_band = facts_band(&facts);
-        let facts_rank = group_member_rank(&facts);
         if facts_band < band {
             band = facts_band;
-            rank = facts_rank;
+            urgency = group_member_urgency(&facts, facts_band);
+            agentless = facts.status.is_none();
         } else if facts_band == band {
-            rank = rank.min(facts_rank);
+            urgency = urgency.max(group_member_urgency(&facts, facts_band));
+            agentless &= facts.status.is_none();
         }
         if let Some(ordinal) = facts.pane_ordinal {
             earliest_ordinal = Some(earliest_ordinal.map_or(ordinal, |min| min.min(ordinal)));
@@ -577,7 +747,9 @@ fn group_sort_key<'a>(
     GroupRankKey {
         external: kind == SidebarWorktreeKind::External,
         band,
-        rank,
+        urgency: Reverse(urgency),
+        agentless,
+        git,
         // The group's earliest member pane ordinal uses the same creation-order
         // key as the calm tiebreak, so group order tracks the mux's pane layout
         // even when no agent reports a process start (Zellij) instead of
@@ -587,49 +759,42 @@ fn group_sort_key<'a>(
     }
 }
 
-fn group_member_rank(facts: &RankFacts<'_>) -> u8 {
-    match facts.status {
-        Some(status) if status.is_attention() => status_rank(status),
-        Some(_) => 3,
-        None => 4,
+fn group_git_rung(group: &SidebarWorktreeGroup) -> GitRung {
+    if group.kind == SidebarWorktreeKind::Worktree {
+        score::git_rung(group.clean, group.landed)
+    } else {
+        GitRung::Unknown
     }
 }
 
-/// The macro band folding layers 1 and 2: the unread inbox first, then live
-/// work, then dormant work past the inactive window. Status no longer sets the
-/// band — `status_rank` orders within one — so a fresh `idle` agent outranks a
-/// stale `waiting` one, and only `unread` or crossing the inactive window moves a
-/// row between bands. The `external` partition is group-only ([`compare_groups`]).
-fn row_band(row: &SidebarRow) -> u8 {
-    band(row.unread, row.inactive)
+fn group_member_urgency(facts: &RankFacts<'_>, band: u8) -> u32 {
+    if band == 0 {
+        score::status_weight_opt(facts.status)
+    } else if is_attention(facts.status) {
+        facts.score
+    } else {
+        0
+    }
 }
 
-fn band(unread: bool, inactive: bool) -> u8 {
+/// Macro bands: unread inbox first, then hot work, warm work past the inactive
+/// window, and archived work past the archive window. Status no longer sets the
+/// band — score orders within one — so a fresh `idle` agent outranks a warm or
+/// archived `waiting` one. The `external` partition is group-only
+/// ([`compare_groups`]).
+fn row_band(row: &SidebarRow) -> u8 {
+    band(row.unread, row.inactive, row.archived)
+}
+
+fn band(unread: bool, inactive: bool, archived: bool) -> u8 {
     if unread {
         0
+    } else if archived {
+        3
     } else if inactive {
         2
     } else {
         1
-    }
-}
-
-fn status_rank(status: AgentStatus) -> u8 {
-    // Actionable attention (`waiting`/`failed`) leads; `paused` sits just
-    // under it — attention-class, but parked with nothing to do but wait, so it
-    // ranks below a real failure and above calm. Among the calm states `idle`
-    // ranks *last*: a fresh agent registers idle, so idle-at-the-bottom makes a
-    // new card append at the bottom of the calm region every time — it never
-    // lands above finished or working agents only to drop on its first prompt.
-    // Finished work (`success`) reads first — it has a result for you — then
-    // live work, then the parked idle tail the per-worktree cap trims first.
-    match status {
-        AgentStatus::Waiting => 0,
-        AgentStatus::Failed => 1,
-        AgentStatus::Paused => 2,
-        AgentStatus::Success => 3,
-        AgentStatus::Running => 4,
-        AgentStatus::Idle => 5,
     }
 }
 
@@ -652,6 +817,7 @@ pub fn group_live_agents_by_worktree<'a>(
     snapshot: &SidebarSnapshot,
 ) -> Vec<AgentWorktreeGroup<'a>> {
     let project_root = snapshot.project_root.as_deref();
+    let (inactive_after_secs, archive_after_secs) = rank_windows(snapshot);
     // Split a path that hosts more than one branch into per-branch pods, exactly
     // as the sidebar's row fold does, so two checkouts of one path never collapse
     // under a single mislabeled header.
@@ -697,12 +863,20 @@ pub fn group_live_agents_by_worktree<'a>(
     }
     let mut groups: Vec<AgentWorktreeGroup<'a>> = by_key.into_values().collect();
     for group in &mut groups {
-        sort_listing_agents(&mut group.agents);
+        sort_listing_agents(
+            &mut group.agents,
+            snapshot.now,
+            inactive_after_secs,
+            archive_after_secs,
+        );
     }
     groups.sort_by_cached_key(|group| {
         group_sort_key(
-            group.agents.iter().copied().map(agent_rank_facts),
+            group.agents.iter().copied().map(|agent| {
+                agent_rank_facts(agent, snapshot.now, inactive_after_secs, archive_after_secs)
+            }),
             group.kind,
+            GitRung::Unknown,
             &group.label,
         )
     });
@@ -718,11 +892,36 @@ fn agent_ordinal(agent: &AgentState) -> Option<u64> {
         .and_then(|pane| pane.pane_id.creation_ordinal())
 }
 
-fn sort_listing_agents(agents: &mut [&AgentState]) {
-    let cohorts = rank_cohort_blocks(agents.iter().copied().map(agent_rank_facts));
-    agents.sort_by_cached_key(|agent| rank_key(agent_rank_facts(agent), &cohorts));
+fn sort_listing_agents(
+    agents: &mut [&AgentState],
+    now: jiff::Timestamp,
+    inactive_after_secs: u32,
+    archive_after_secs: u32,
+) {
+    let cohorts = rank_cohort_blocks(
+        agents
+            .iter()
+            .copied()
+            .map(|agent| agent_rank_facts(agent, now, inactive_after_secs, archive_after_secs)),
+    );
+    agents.sort_by_cached_key(|agent| {
+        rank_key(
+            agent_rank_facts(agent, now, inactive_after_secs, archive_after_secs),
+            &cohorts,
+        )
+    });
 }
 
 fn agent_launch_cohort(agent: &AgentState) -> Option<&str> {
     agent.team.as_deref().or(agent.launch_group.as_deref())
+}
+
+fn rank_windows(snapshot: &SidebarSnapshot) -> (u32, u32) {
+    let inactive_after_secs = snapshot.attention.inactive_after_secs.get();
+    let archive_after_secs = snapshot
+        .attention
+        .archive_after_secs
+        .get()
+        .max(inactive_after_secs.saturating_add(1));
+    (inactive_after_secs, archive_after_secs)
 }

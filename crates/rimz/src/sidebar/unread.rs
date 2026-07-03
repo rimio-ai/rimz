@@ -422,6 +422,8 @@ mod tests {
             channel: None,
             unread: false,
             inactive: false,
+            archived: false,
+            attention_score: 0,
             last_activity: jiff::Timestamp::from_millisecond(last_activity).expect("timestamp"),
             card: RowCard::Agent(Box::new(AgentCard {
                 status,

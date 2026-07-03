@@ -295,7 +295,7 @@ A [directory room](../reference/cli.md#start-and-attach-a-workspace) groups git-
  ○ zsh
 ```
 
-**Ranking is automatic: the most attention-hungry rises, nothing else moves.** Within a worktree, rows sort `waiting → failed → paused → done → working → idle` (a parked idle agent is the least needy, so it settles to the bottom — which is exactly where a freshly-launched agent appears). Attention rows sort oldest-first, so the longest-overdue is always on top. Worktrees themselves sort by their most-urgent member.
+**Ranking is automatic: unread, hot, warm, then archived.** Within a worktree, rows first sort by inbox and age band, then by a fixed-point attention score: `waiting`, `failed`, and `paused` heat as their clock approaches the one-hour boundary, warm rows decay until 24 hours, and archived rows park below current work. Calm rows keep stable pane order within equal states, and worktrees sort by their most-urgent member plus git state when attention is tied.
 
 **The cap.** Each worktree shows a capped number of rows (configurable) with a dim `+K more`. The cap trims only the idle/process tail; active, blocked, paused, finished, and focused rows stay visible:
 

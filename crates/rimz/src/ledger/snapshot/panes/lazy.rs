@@ -358,6 +358,8 @@ fn idle_agent_row(
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: pane.pane_process_start.unwrap_or(now),
         card: RowCard::Agent(Box::new(AgentCard {
             status: AgentStatus::Idle,

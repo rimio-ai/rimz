@@ -6,7 +6,8 @@ use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
 use crate::sidebar::refresh::AccountsCache;
 use crate::sidebar::refresh::git_stats::{
-    DiffStatsCacheEntry, focused_worktree_paths, hot_worktree_paths, needed_worktree_paths,
+    DiffStatsCache, DiffStatsCacheEntry, focused_worktree_paths, hot_worktree_paths,
+    needed_worktree_paths,
 };
 use crate::sidebar::refresh::{CodexDaemonReap, read_codex_daemon_reap, write_codex_daemon_reap};
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
@@ -142,6 +143,59 @@ fn pr_state_projection_uses_the_given_map() {
 
     project_pr_state_map(&mut snapshot, &BTreeMap::new());
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
+}
+
+#[test]
+fn cached_enrich_resorts_groups_after_git_projection() {
+    let (dir, runtime, mut snapshot) = runtime();
+    let dirty = dir.path().join("dirty");
+    let merged = dir.path().join("merged");
+    std::fs::create_dir_all(&dirty).unwrap();
+    std::fs::create_dir_all(&merged).unwrap();
+    let now = snapshot.now;
+    snapshot.worktree_groups = vec![
+        worktree_group(
+            &merged,
+            vec![activity_row(true, Some(AgentStatus::Idle), now, &merged)],
+        ),
+        worktree_group(
+            &dirty,
+            vec![activity_row(true, Some(AgentStatus::Idle), now, &dirty)],
+        ),
+    ];
+
+    let mut cache = DiffStatsCache::default();
+    let mut dirty_entry = diff_entry(false, false, Some(true), 0, 0);
+    dirty_entry.branch = Some("dirty".to_owned());
+    let mut merged_entry = diff_entry(true, true, Some(true), 0, 0);
+    merged_entry.branch = Some("merged".to_owned());
+    cache
+        .entries
+        .insert(dirty.display().to_string(), dirty_entry);
+    cache
+        .entries
+        .insert(merged.display().to_string(), merged_entry);
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &cache).unwrap();
+
+    let snapshot = enrich(
+        snapshot,
+        None,
+        &runtime,
+        None,
+        None,
+        cached_opts(),
+        &crate::diag::DiagSink::disabled(),
+    );
+
+    assert_eq!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .map(|group| group.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["dirty", "merged"],
+        "cached git facts re-rank the already-built group spine"
+    );
 }
 
 fn stats(rtt_ms: Option<u32>, miss_pct: u16) -> LinkStats {
@@ -794,6 +848,8 @@ fn config_fold_stamps_agent_context_severity() {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: jiff::Timestamp::now(),
         card: crate::RowCard::Agent(Box::new(crate::AgentCard {
             status: AgentStatus::Running,
@@ -811,6 +867,8 @@ fn config_fold_stamps_agent_context_severity() {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: jiff::Timestamp::now(),
         card: crate::RowCard::Process(crate::ProcessCard::default()),
     };

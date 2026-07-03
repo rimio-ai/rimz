@@ -122,10 +122,7 @@ impl SidebarSnapshot {
             &self.worktree_roots,
             self.root_class,
             self.now,
-            AttentionWindows {
-                stalled_after_secs: self.attention.stalled_after_secs.get(),
-                inactive_after_secs: self.attention.inactive_after_secs.get(),
-            },
+            AttentionWindows::from_config(&self.attention),
         );
         projection.diagnostics
     }

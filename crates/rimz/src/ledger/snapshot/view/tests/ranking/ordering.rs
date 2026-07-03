@@ -132,6 +132,82 @@ fn attention_bucket_sorts_longest_overdue_first() {
 }
 
 #[test]
+fn hot_band_score_interleaves_attention_by_overdue_heat() {
+    let snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("fresh-wait", "/repo/main", AgentStatus::Waiting, 1_000).active_ago(120),
+            agent_in("old-fail", "/repo/main", AgentStatus::Failed, 2_000).active_ago(50 * 60),
+            agent_in("calm", "/repo/main", AgentStatus::Success, 3_000).active_ago(60),
+        ],
+    );
+
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["old-fail", "fresh-wait", "calm"],
+        "heat lets an older failure outrank a fresh ask while attention still leads calm work"
+    );
+}
+
+#[test]
+fn warm_band_decay_can_sink_old_attention_below_recent_calm() {
+    let snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("old-ask", "/repo/main", AgentStatus::Waiting, 1_000).active_ago(20 * 60 * 60),
+            agent_in("recent-done", "/repo/main", AgentStatus::Success, 2_000)
+                .active_ago(2 * 60 * 60),
+        ],
+    );
+
+    assert!(row(&snapshot, "old-ask").inactive);
+    assert!(row(&snapshot, "recent-done").inactive);
+    assert!(!row(&snapshot, "old-ask").archived);
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["recent-done", "old-ask"],
+        "warm decay favors recent finished work over a much older ask"
+    );
+}
+
+#[test]
+fn archive_band_parks_rows_below_warm_and_keeps_attention_above_idle() {
+    let snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("warm-idle", "/repo/main", AgentStatus::Idle, 1_000).active_ago(23 * 60 * 60),
+            agent_in("archived-idle", "/repo/main", AgentStatus::Idle, 2_000)
+                .active_ago(25 * 60 * 60),
+            agent_in("archived-ask", "/repo/main", AgentStatus::Waiting, 3_000)
+                .active_ago(25 * 60 * 60),
+        ],
+    );
+
+    assert!(!row(&snapshot, "warm-idle").archived);
+    assert!(row(&snapshot, "archived-ask").archived);
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["warm-idle", "archived-ask", "archived-idle"],
+        "archive rows never compete with warm rows, but attention still leads inside archive"
+    );
+}
+
+#[test]
 fn unread_rows_lead_read_attention() {
     let mut snapshot = room_with_agent_panes(
         Vec::new(),
@@ -163,6 +239,31 @@ fn unread_rows_lead_read_attention() {
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
     assert_eq!(order, vec!["new-wait", "read-old"]);
+}
+
+#[test]
+fn unread_band_uses_flat_status_order_not_decayed_score() {
+    let mut snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("old-fail", "/repo/main", AgentStatus::Failed, 1_000).active_ago(50 * 60),
+            agent_in("fresh-wait", "/repo/main", AgentStatus::Waiting, 2_000).active_ago(120),
+        ],
+    );
+    row_mut(&mut snapshot, "old-fail").unread = true;
+    row_mut(&mut snapshot, "fresh-wait").unread = true;
+    snapshot.sort_groups_for_presentation();
+
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["fresh-wait", "old-fail"],
+        "unread status order stays waiting before failed even when hot score would interleave them"
+    );
 }
 
 #[test]
@@ -453,6 +554,59 @@ fn inline_cohorts_stay_contiguous_without_interleaving() {
 }
 
 #[test]
+fn team_blocks_rank_by_derived_state_and_stay_contiguous() {
+    let blocked_a = cohort_agent(
+        "blocked-a",
+        AgentStatus::Waiting,
+        1_000,
+        "blocked",
+        Some(0),
+        "%4",
+    );
+    let blocked_b = cohort_agent(
+        "blocked-b",
+        AgentStatus::Success,
+        2_000,
+        "blocked",
+        Some(1),
+        "%5",
+    );
+    let success_a = cohort_agent(
+        "success-a",
+        AgentStatus::Success,
+        3_000,
+        "success",
+        Some(0),
+        "%6",
+    );
+    let working_a = cohort_agent(
+        "working-a",
+        AgentStatus::Running,
+        5_000,
+        "working",
+        Some(0),
+        "%0",
+    );
+    let idle_a = cohort_agent("idle-a", AgentStatus::Idle, 7_000, "idle", Some(0), "%2");
+
+    let snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![blocked_b, idle_a, working_a, success_a, blocked_a],
+    );
+
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["blocked-a", "blocked-b", "success-a", "working-a", "idle-a",],
+        "blocked teams lead contiguously; then success, working, and idle blocks follow derived state"
+    );
+}
+
+#[test]
 fn inactive_cohort_sinks_until_unread_member_clamps_it_live() {
     let mut snapshot = room_with_agent_panes(
         Vec::new(),
@@ -598,6 +752,8 @@ fn process_row(id: &str, worktree: &str) -> SidebarRow {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: epoch(),
         card: crate::RowCard::Process(crate::ProcessCard::default()),
     }
@@ -613,6 +769,8 @@ fn idle_agent_row(id: &str, pane_raw: Option<&str>) -> SidebarRow {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: epoch(),
         card: crate::RowCard::Agent(Box::new(crate::ledger::snapshot::row::AgentCard {
             status: AgentStatus::Idle,

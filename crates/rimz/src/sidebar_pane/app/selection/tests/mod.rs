@@ -44,6 +44,8 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: Timestamp::now(),
         card: crate::RowCard::Agent(Box::new(crate::AgentCard {
             status: crate::agents::AgentStatus::Running,
@@ -65,6 +67,8 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: Timestamp::now(),
         card: crate::RowCard::Process(crate::ProcessCard::default()),
     };
@@ -161,6 +165,8 @@ fn filter_row(
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: Timestamp::now(),
         card: if is_agent {
             crate::RowCard::Agent(Box::new(crate::AgentCard {

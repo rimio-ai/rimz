@@ -27,6 +27,11 @@ pub const ATTENTION_AGE_CEILING_SECS: i64 = 3_600;
 /// this long sinks into the inactive partition, beneath every live row.
 pub const DEFAULT_INACTIVE_AFTER_SECS: u32 = ATTENTION_AGE_CEILING_SECS as u32;
 
+/// Default `[agents.attention] archive_after_secs`: a row with no activity for
+/// this long stops competing with hot or warm work and parks in the archive
+/// partition.
+pub const DEFAULT_ARCHIVE_AFTER_SECS: u32 = 24 * 60 * 60;
+
 /// Agent status as the sidebar reads it. The first five are the lifecycle
 /// rollup the agent owns and Rimz observes; [`Paused`](AgentStatus::Paused) is
 /// the one Rimz-*derived* projection — never emitted by a hook, only projected

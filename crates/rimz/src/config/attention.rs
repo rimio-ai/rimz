@@ -15,6 +15,11 @@ pub struct AttentionConfig {
     /// hour by default, the boundary the agent's own prompt cache crosses, so a
     /// card that has gone cold reads as cold.
     pub inactive_after_secs: NonZeroU32,
+    /// Seconds a row may record no activity before the sidebar parks it in the
+    /// archive partition, below hot and warm work. Values at or below
+    /// `inactive_after_secs` are lifted at projection time because this is a
+    /// display preference, not a ledger invariant.
+    pub archive_after_secs: NonZeroU32,
 }
 
 impl Default for AttentionConfig {
@@ -24,6 +29,8 @@ impl Default for AttentionConfig {
                 .expect("non-zero default stall window"),
             inactive_after_secs: NonZeroU32::new(crate::agents::DEFAULT_INACTIVE_AFTER_SECS)
                 .expect("non-zero default inactive window"),
+            archive_after_secs: NonZeroU32::new(crate::agents::DEFAULT_ARCHIVE_AFTER_SECS)
+                .expect("non-zero default archive window"),
         }
     }
 }

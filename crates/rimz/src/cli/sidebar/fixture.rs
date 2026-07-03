@@ -122,6 +122,8 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: now,
         card: rimz::RowCard::Process(rimz::ProcessCard {
             state: rimz::ProcessState::Busy,
@@ -265,6 +267,8 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: now,
         card: rimz::RowCard::Process(rimz::ProcessCard {
             state: rimz::ProcessState::Busy,
@@ -1885,6 +1889,8 @@ fn agent_row_with(
         channel: None,
         unread: false,
         inactive: false,
+        archived: false,
+        attention_score: 0,
         last_activity: activity_at,
         card: rimz::RowCard::Agent(Box::new(card)),
     }

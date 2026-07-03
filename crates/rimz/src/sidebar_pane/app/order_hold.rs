@@ -100,6 +100,8 @@ mod tests {
             channel: None,
             unread: false,
             inactive: false,
+            archived: false,
+            attention_score: 0,
             last_activity: jiff::Timestamp::from_second(1).expect("fixed timestamp"),
             card: RowCard::Process(ProcessCard::default()),
         }
