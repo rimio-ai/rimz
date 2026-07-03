@@ -60,6 +60,42 @@ pub struct AgentLaunchPayload {
     pub description: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionDeathCause {
+    Crash,
+    Reboot,
+}
+
+impl SessionDeathCause {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Crash => "crash",
+            Self::Reboot => "reboot",
+        }
+    }
+}
+
+impl std::fmt::Display for SessionDeathCause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionDeathAgent {
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionDeathPayload {
+    pub cause: SessionDeathCause,
+    pub lost_agents: Vec<SessionDeathAgent>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageEventMethod {
     Queued,
@@ -193,6 +229,7 @@ pub enum EventKind<'a> {
         payload: MessageEventPayload,
     },
     SessionRebirth,
+    SessionDeath(SessionDeathPayload),
     /// Deliberate carrier for audit/user events that have not graduated to a
     /// folded typed variant yet, including `feed.*`, `event.emit`, and unknown
     /// methods from older or newer binaries.
@@ -218,6 +255,7 @@ impl PartialEq for EventKind<'_> {
                 },
             ) => left_method == right_method && left_payload == right_payload,
             (Self::SessionRebirth, Self::SessionRebirth) => true,
+            (Self::SessionDeath(left), Self::SessionDeath(right)) => left == right,
             (
                 Self::Other {
                     method: left_method,
@@ -310,6 +348,27 @@ impl EventEnvelope {
         )
     }
 
+    /// Constructor for the `session.death` audit marker written before a
+    /// genuine mux-session birth when the previous incarnation died by reboot
+    /// or mux crash.
+    pub fn session_death(
+        workspace_id: WorkspaceId,
+        session_name: impl Into<String>,
+        cause: SessionDeathCause,
+        lost_agents: Vec<SessionDeathAgent>,
+    ) -> Self {
+        let params = serde_json::to_value(SessionDeathPayload { cause, lost_agents })
+            .expect("SessionDeathPayload contains only JSON-serializable fields");
+        Self::new(
+            workspace_id,
+            session_name,
+            "rimz",
+            "runtime",
+            "session.death",
+            params,
+        )
+    }
+
     pub fn agent_launched(
         workspace_id: WorkspaceId,
         session_name: impl Into<String>,
@@ -347,6 +406,12 @@ impl EventEnvelope {
                     params: &self.params,
                 }),
             "session.rebirth" => EventKind::SessionRebirth,
+            "session.death" => serde_json::from_str(self.params.get())
+                .map(EventKind::SessionDeath)
+                .unwrap_or(EventKind::Other {
+                    method: self.method.as_str(),
+                    params: &self.params,
+                }),
             method => MessageEventMethod::parse(method)
                 .and_then(|method| {
                     serde_json::from_str(self.params.get())

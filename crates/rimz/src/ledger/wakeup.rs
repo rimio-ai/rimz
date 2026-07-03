@@ -140,6 +140,7 @@ fn agent_signal(event: &EventEnvelope) -> Option<String> {
         EventKind::AgentLaunch(_)
         | EventKind::Message { .. }
         | EventKind::SessionRebirth
+        | EventKind::SessionDeath(_)
         | EventKind::Other { .. } => None,
     }
 }

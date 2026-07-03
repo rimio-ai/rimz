@@ -552,6 +552,13 @@ impl MuxBackend for ZellijBackend {
         )
     }
 
+    fn resurrection_cache_paths(&self, name: &str) -> Vec<PathBuf> {
+        super::super::recovery::zellij_session_cache_paths_in(
+            &crate::ledger::paths::cache_home(),
+            name,
+        )
+    }
+
     fn reconcile_sidebars(
         &self,
         opts: &SidebarPaneOptions,

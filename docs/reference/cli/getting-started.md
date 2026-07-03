@@ -40,6 +40,8 @@ A few specifics:
 - `--no-resume` skips recovering prior agents when a room is reborn; live agents are unaffected. The default recovers (yes on a prompt, automatically when non-interactive).
 - `--refresh-ms <ms>` overrides the sidebar render cadence for sidebars born by this launch; the persistent cadence lives in machine config.
 
+When the previous incarnation died, `start` prints a notice such as `rimz: previous session died (crash): 16 agents lost at 2026-07-02 17:37; offering recovery` before the recovery prompt.
+
 ## Remote rooms
 
 ```sh
@@ -70,7 +72,7 @@ Link-health, reconnect mechanics, and bandwidth attribution are in [remote.md](.
 rimz list [-a|--all] [--json]
 ```
 
-`rimz list` joins known Rimz workspace records with live Zellij and tmux sessions. The default view shows running rooms and rooms active in the last 24 hours; `--all` includes dormant ones. `--json` emits `workspace_id`, `project_root`, `session_name`, `running_on`, and `last_activity` for scripts.
+`rimz list` joins known Rimz workspace records with live Zellij and tmux sessions. The default view shows running rooms and rooms active in the last 24 hours; `--all` includes dormant ones and annotates a recorded death as `died: crash · 16 agents · 2026-07-02 17:37`. `--json` emits `workspace_id`, `project_root`, `session_name`, `running_on`, `last_activity`, and `last_death` for scripts.
 
 ## Setup and doctor
 

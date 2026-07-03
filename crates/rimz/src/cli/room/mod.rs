@@ -1,6 +1,7 @@
 //! Room entry: the start/attach pipeline from workspace resolution to the mux attach command.
 
 mod attach_exec;
+mod coroner;
 mod daemon_view;
 mod hook_install;
 mod resume;
@@ -28,19 +29,17 @@ use crate::cli::{
 use attach_exec::{
     inside_selected_mux, report_already_inside, run_attach_action, should_report_already_inside,
 };
+use coroner::{inspect_previous_incarnation, report_previous_session_death};
 use daemon_view::{build_daemon_view, maybe_launch_remote_control};
 use hook_install::ensure_detected_agent_hooks;
 pub(crate) use hook_install::{detected_installable_adapters, render_dry_run};
-use resume::{
-    plan_room_resume, reboot_since_last_birth, record_rebirth_boundary, report_resume,
-    session_is_healthy_live,
-};
+use resume::{plan_room_resume, record_rebirth_boundary, report_resume};
 pub(crate) use room_recovery::gate_room_before_attach;
 use session_record::retire_renamed_session;
 use start_notice::report_start_notices;
 
 pub(crate) use attach_exec::{attach_action, exec_attach_command};
-pub(crate) use resume::session_is_live;
+pub(crate) use resume::session_is_healthy_live;
 pub(crate) use room_recovery::{print_reset_report, rebirth_room};
 pub(crate) use session_record::{pick_mux_for_session, workspace_record_for_session};
 
@@ -450,6 +449,7 @@ pub(crate) fn register_focus_key(
 
 fn resume_plan_for_birth(
     was_live: bool,
+    recover_agents: bool,
     workspace_id: &WorkspaceId,
     session_name: &str,
     resume_cfg: &rimz::config::ResumeConfig,
@@ -458,7 +458,6 @@ fn resume_plan_for_birth(
     if was_live {
         return Ok(rimz::harness::resume::ResumePlan::default());
     }
-    let recover_agents = reboot_since_last_birth(workspace_id);
     let plan = plan_room_resume(
         workspace_id,
         session_name,
@@ -516,6 +515,17 @@ struct RemoteControlLaunch<'a> {
 fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
     let room = &birth.room;
     let machine_config = birth.machine_config;
+    let recovery = if birth.was_live {
+        coroner::BirthRecovery::default()
+    } else {
+        inspect_previous_incarnation(birth.backend, room.workspace_id, room.session_name)
+    };
+    if let Some(death) = &recovery.death {
+        report_previous_session_death(
+            death,
+            recovery.recover_agents && machine_config.resume.on_rebirth && !birth.no_resume,
+        );
+    }
     birth.backend.ensure_session(&SessionOptions {
         session_name: room.session_name.to_owned(),
         workspace_id: room.workspace_id.clone(),
@@ -535,6 +545,7 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
     // exactly today's bare working room.
     let resume_plan = resume_plan_for_birth(
         birth.was_live,
+        recovery.recover_agents,
         room.workspace_id,
         room.session_name,
         &machine_config.resume,

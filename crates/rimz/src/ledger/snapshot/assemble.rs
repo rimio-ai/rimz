@@ -75,6 +75,7 @@ fn assemble_snapshot(
     let projection = RuntimeProjection::from_parts(
         items,
         std::collections::BTreeSet::new(),
+        std::collections::BTreeSet::new(),
         agents,
         RuntimeScope::Runtime,
     );

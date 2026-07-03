@@ -376,6 +376,13 @@ const CODEX_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
             gap: "no SessionEnd hook; cleared on a snapshot tick, not at session exit",
         },
     ),
+    (
+        LifecycleSignalKind::Lost,
+        HookCoverage::Derived {
+            via: "rimz exec wrapper",
+            gap: "native hooks do not report mux-session death",
+        },
+    ),
 ];
 
 /// Installed events. Tuple is `(event_name, optional_matcher)` — the single

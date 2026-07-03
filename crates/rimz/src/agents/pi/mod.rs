@@ -285,6 +285,13 @@ const PI_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
             event: "session_shutdown",
         },
     ),
+    (
+        LifecycleSignalKind::Lost,
+        HookCoverage::Derived {
+            via: "rimz exec wrapper",
+            gap: "native hooks do not report mux-session death",
+        },
+    ),
 ];
 
 /// The non-blocking events the embedded extension forwards — the lifecycle

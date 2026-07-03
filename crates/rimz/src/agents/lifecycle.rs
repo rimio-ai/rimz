@@ -58,6 +58,7 @@ lifecycle_signal_kinds! {
     Compacting => "compacting",
     CompactionEnded => "compaction_ended",
     Ended => "ended",
+    Lost => "lost",
 }
 
 /// The agent-agnostic intent each native lifecycle event carries. An adapter's
@@ -123,6 +124,10 @@ pub enum LifecycleSignal {
     /// the reducer's tombstone path, so it is never routed through [`step`];
     /// the variant exists only so an adapter can name the event.
     Ended,
+    /// The agent's pane disappeared because its mux session died, not because
+    /// the user closed the agent. Rimz synthesizes this marker from the exec
+    /// wrapper (`rimz.agent-lost`) so crash recovery has positive evidence.
+    Lost,
 }
 
 impl LifecycleSignal {
@@ -138,6 +143,7 @@ impl LifecycleSignal {
             Self::Compacting => LifecycleSignalKind::Compacting,
             Self::CompactionEnded { .. } => LifecycleSignalKind::CompactionEnded,
             Self::Ended => LifecycleSignalKind::Ended,
+            Self::Lost => LifecycleSignalKind::Lost,
         }
     }
 
@@ -159,6 +165,7 @@ impl LifecycleSignal {
             Self::Compacting => "compacting",
             Self::CompactionEnded { .. } => "compaction_ended",
             Self::Ended => "ended",
+            Self::Lost => "lost",
         }
     }
 }
@@ -247,9 +254,9 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
     let was_compacting = prev.is_some_and(|p| p.compacting);
     let mut kind = TransitionKind::Normal;
 
-    // `Ended` is handled as removal upstream and should never be stepped; if it
-    // reaches here, keep prior state intact and flag the no-op.
-    if matches!(signal, LifecycleSignal::Ended) {
+    // `Ended` and `Lost` are handled by rollup side channels. If either reaches
+    // the state machine, keep prior state intact and flag the no-op.
+    if matches!(signal, LifecycleSignal::Ended | LifecycleSignal::Lost) {
         return Transition {
             next: LifecycleState {
                 status: prior_status.unwrap_or(AgentStatus::Idle),
@@ -257,7 +264,11 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
                 compacting: was_compacting,
             },
             kind: TransitionKind::Ignored {
-                reason: "session ended (handled as removal)",
+                reason: match signal {
+                    LifecycleSignal::Ended => "session ended (handled as removal)",
+                    LifecycleSignal::Lost => "session lost (handled as recovery marker)",
+                    _ => unreachable!("guarded above"),
+                },
             },
             compaction_closed: false,
             opened_turn: false,
@@ -398,7 +409,9 @@ fn map_status(
             prior_status.unwrap_or(AgentStatus::Idle)
         }
         // Handled above.
-        LifecycleSignal::Ended => unreachable!("Ended returns early"),
+        LifecycleSignal::Ended | LifecycleSignal::Lost => {
+            unreachable!("terminal side-channel signals return early")
+        }
     }
 }
 
@@ -434,7 +447,9 @@ fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStat
         | LifecycleSignal::TurnEnded { .. }
         | LifecycleSignal::SubagentStopped { .. } => TurnPhase::Idle,
         // Handled above.
-        LifecycleSignal::Ended => unreachable!("Ended returns early"),
+        LifecycleSignal::Ended | LifecycleSignal::Lost => {
+            unreachable!("terminal side-channel signals return early")
+        }
     };
     // The phase axis exists only inside a running turn — a resting or
     // attention status always reads `Idle`, by construction.

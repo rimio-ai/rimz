@@ -28,6 +28,7 @@ pub enum AgentLiveness {
 pub struct RuntimeProjection {
     pub items: Vec<FeedItem>,
     pub ended: BTreeSet<(AgentKind, AgentSessionId)>,
+    pub lost: BTreeSet<(AgentKind, AgentSessionId)>,
     pub agents: Vec<AgentState>,
 }
 
@@ -35,6 +36,7 @@ impl RuntimeProjection {
     pub fn from_parts(
         items: Vec<FeedItem>,
         ended: BTreeSet<(AgentKind, AgentSessionId)>,
+        lost: BTreeSet<(AgentKind, AgentSessionId)>,
         agents: Vec<AgentState>,
         scope: RuntimeScope,
     ) -> Self {
@@ -42,11 +44,13 @@ impl RuntimeProjection {
             RuntimeScope::Audit => Self {
                 items,
                 ended,
+                lost,
                 agents,
             },
             RuntimeScope::Runtime => Self {
                 items: items.into_iter().filter(item_is_runtime_visible).collect(),
                 ended,
+                lost,
                 agents: agents
                     .into_iter()
                     .filter(agent_is_runtime_visible)
@@ -253,6 +257,7 @@ mod tests {
                 ),
             ],
             BTreeSet::new(),
+            BTreeSet::new(),
             Vec::new(),
             RuntimeScope::Runtime,
         );
@@ -264,6 +269,7 @@ mod tests {
 
         let audit = RuntimeProjection::from_parts(
             vec![item(Surface::Script, None)],
+            BTreeSet::new(),
             BTreeSet::new(),
             Vec::new(),
             RuntimeScope::Audit,
@@ -284,6 +290,7 @@ mod tests {
 
         let projection = RuntimeProjection::from_parts(
             Vec::new(),
+            BTreeSet::new(),
             BTreeSet::new(),
             agents,
             RuntimeScope::Runtime,

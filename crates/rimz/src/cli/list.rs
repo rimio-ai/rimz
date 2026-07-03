@@ -16,12 +16,13 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use clap::Args;
 use jiff::Timestamp;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use super::GlobalFlags;
 use crate::cli::render;
 use rimz::ids::MuxName;
+use rimz::ledger::event::{SessionDeathAgent, SessionDeathCause};
 use rimz::ledger::paths::workspaces_dir;
 
 /// Workspaces idle longer than this are hidden from the default view; `--all`
@@ -46,6 +47,14 @@ struct WorkspaceRow {
     session_name: String,
     running_on: Option<String>,
     last_activity: Option<String>,
+    last_death: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct LastDeathMarker {
+    cause: SessionDeathCause,
+    lost_agents: Vec<SessionDeathAgent>,
+    at: Timestamp,
 }
 
 pub fn run(args: ListArgs, _globals: &GlobalFlags) -> Result<()> {
@@ -72,7 +81,9 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
     let mut rows: Vec<WorkspaceRow> = known
         .into_iter()
         .filter_map(|known| {
-            let last_activity = activity_for(&root.join(known.workspace_id.as_str()));
+            let workspace_dir = root.join(known.workspace_id.as_str());
+            let last_activity = activity_for(&workspace_dir);
+            let last_death = death_for(&workspace_dir);
             let running_on = if zellij_sessions.contains(&known.session_name) {
                 Some(MuxName::Zellij.as_str().to_owned())
             } else if tmux_sessions.contains(&known.session_name) {
@@ -93,6 +104,7 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
                 last_activity: last_activity
                     .and_then(|at| Timestamp::try_from(at).ok())
                     .map(|ts| ts.to_string()),
+                last_death,
             })
         })
         .collect();
@@ -108,6 +120,22 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
         }
     });
     Ok(rows)
+}
+
+fn death_for(workspace_dir: &std::path::Path) -> Option<String> {
+    let marker: LastDeathMarker =
+        serde_json::from_slice(&std::fs::read(workspace_dir.join("last-death.json")).ok()?).ok()?;
+    Some(format!(
+        "died: {} · {} agent{} · {}",
+        marker.cause,
+        marker.lost_agents.len(),
+        if marker.lost_agents.len() == 1 {
+            ""
+        } else {
+            "s"
+        },
+        marker.at.strftime("%Y-%m-%d %H:%M"),
+    ))
 }
 
 /// Best-effort "last activity" instant — newest mtime across the files that
@@ -164,10 +192,12 @@ fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
         "PROJECT_ROOT",
         "RUNNING",
         "LAST_ACTIVITY",
+        "LAST_DEATH",
     ]);
     for row in rows {
         let running = row.running_on.as_deref().unwrap_or("-");
         let last = row.last_activity.as_deref().unwrap_or("-");
+        let death = row.last_death.as_deref().unwrap_or("-");
         let running_style = if row.running_on.is_some() {
             render::palette::GOOD
         } else {
@@ -179,6 +209,7 @@ fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
             render::cell(row.project_root.as_str()).fg(render::palette::BODY),
             render::cell(running).fg(running_style),
             render::cell(last).dash(),
+            render::cell(death).dash(),
         ]);
     }
     table.render(&mut render::out())

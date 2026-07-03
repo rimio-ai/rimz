@@ -183,6 +183,12 @@ fn core_turn_and_subagent_edges_follow_the_contract() {
     assert!(matches!(ended.kind, TransitionKind::Ignored { .. }));
     assert!(!ended.compaction_closed);
     assert!(!ended.opened_turn);
+
+    let lost = step(Some(&reasoning), &LifecycleSignal::Lost);
+    assert_eq!(lost.next, reasoning);
+    assert!(matches!(lost.kind, TransitionKind::Ignored { .. }));
+    assert!(!lost.compaction_closed);
+    assert!(!lost.opened_turn);
 }
 
 #[test]
@@ -346,7 +352,7 @@ fn state_machine_is_total_and_keeps_phase_axis_valid() {
                 let prev = state(status, phase, compacting);
                 for signal in &signals {
                     let transition = step(Some(&prev), signal);
-                    if !matches!(signal, LifecycleSignal::Ended)
+                    if !matches!(signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
                         && transition.next.status != AgentStatus::Running
                     {
                         assert_eq!(

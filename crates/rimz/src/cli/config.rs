@@ -928,7 +928,7 @@ pane_border_lines = "heavy"
 
 [resume]
 on_rebirth = true
-max = 8
+max = 128
 auto_continue = true
 auto_continue_backoff_secs = [180, 300]
 auto_continue_max_retries = 13

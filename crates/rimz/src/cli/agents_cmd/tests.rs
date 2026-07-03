@@ -1146,17 +1146,17 @@ mod pane_exec {
     }
 
     #[test]
-    fn close_is_deliberate_keeps_only_mux_loss_signal_exits_recoverable() {
-        for (signaled, session_live, expected) in [
+    fn close_is_deliberate_keeps_only_unhealthy_abrupt_exits_recoverable() {
+        for (abrupt, session_healthy, expected) in [
             (false, false, true),
             (false, true, true),
             (true, true, true),
             (true, false, false),
         ] {
             assert_eq!(
-                close_is_deliberate(signaled, session_live),
+                close_is_deliberate(abrupt, session_healthy),
                 expected,
-                "signaled={signaled}, session_live={session_live}"
+                "abrupt={abrupt}, session_healthy={session_healthy}"
             );
         }
     }

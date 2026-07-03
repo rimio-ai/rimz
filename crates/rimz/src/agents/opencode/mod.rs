@@ -241,6 +241,13 @@ const OPENCODE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
             gap: "dispose is server-scoped and carries no session id",
         },
     ),
+    (
+        LifecycleSignalKind::Lost,
+        HookCoverage::Derived {
+            via: "rimz exec wrapper",
+            gap: "native hooks do not report mux-session death",
+        },
+    ),
 ];
 
 const LIFECYCLE_EVENTS: &[&str] = &[

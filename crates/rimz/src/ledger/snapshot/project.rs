@@ -194,6 +194,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                 stamp_compact_command(map.values_mut(), payload);
                 continue;
             }
+            EventKind::SessionDeath(_) => continue,
             EventKind::Other {
                 method: "agent.lifecycle",
                 ..
@@ -262,6 +263,17 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
             continue;
         }
         let prior = map.get(&key).or(provisional_prior.as_ref());
+        if matches!(signal, lifecycle::LifecycleSignal::Lost) && prior.is_none() {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                event_id = %envelope.event_id,
+                workspace = %envelope.workspace_id,
+                kind = %kind,
+                agent_id = %agent_id,
+                "lost marker for unknown session ignored by agent-state reducer",
+            );
+            continue;
+        }
         if matches!(signal, lifecycle::LifecycleSignal::SubagentStopped { .. })
             && prior.is_none()
             && event_parent_agent_id.is_some()

@@ -303,8 +303,9 @@ impl Ledger {
         let items = feed_store::list(&self.inner.paths.feed_dir)?;
         let (cache, agents, _) = snapshot::catch_up_rollup(&self.inner.paths)?;
         let ended = cache.tombstones.into_iter().collect();
+        let lost = cache.lost.into_iter().collect();
         Ok(runtime::RuntimeProjection::from_parts(
-            items, ended, agents, scope,
+            items, ended, lost, agents, scope,
         ))
     }
 

@@ -270,14 +270,14 @@ codex = 25.0
 ```toml
 [resume]
 on_rebirth = true
-max = 8
+max = 128
 auto_continue = false
 auto_continue_backoff_secs = [180, 300]
 auto_continue_max_retries = 13
 auto_continue_text = "continue"
 ```
 
-Resume covers two tenses. On a **rebirth after reboot** (the machine rebooted since the room was last alive), Rimz offers to recover prior agents from the durable rollup — the prompt defaults yes, non-interactive starts recover, and each restored agent starts idle in its worktree tab. Empty named channels still reopen on same-boot rebirths. `on_rebirth = false`, `--no-resume`, and `rimz reset` come up without agents; `max` bounds how many agents one birth relaunches. While the room is **live**, `auto_continue` picks any parked turn back up by typing `auto_continue_text` through the same path as `message --steer`: rate-limit and spend-limit parks fire from the fused account budget's spent-window reset, while overload and transient API-error parks (stalled streams, timeouts, and connection drops) fire on the bounded retry ramp (`auto_continue_backoff_secs`, `auto_continue_max_retries`). Rate-limit, spend-limit, and overload records all stop after `auto_continue_max_retries`. The default backoff sends the first overload/transient retry 3 minutes after the marker, then every 5 minutes until about 63 minutes, then leaves the row parked. It is off by default. The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth) and the live path in [provider.md → Auto-continue](../internals/agents/provider.md#auto-continue).
+Resume covers two tenses. On a **rebirth after reboot or mux crash** (the machine rebooted since the room was last alive, or wrappers recorded positive lost-agent markers when the mux died), Rimz offers to recover prior agents from the durable rollup — the prompt defaults yes, non-interactive starts recover, and each restored agent starts idle in its worktree tab. Empty named channels still reopen on same-boot rebirths. `on_rebirth = false`, `--no-resume`, and `rimz reset` come up without agents; `max` bounds how many agents one birth relaunches and defaults to 128. While the room is **live**, `auto_continue` picks any parked turn back up by typing `auto_continue_text` through the same path as `message --steer`: rate-limit and spend-limit parks fire from the fused account budget's spent-window reset, while overload and transient API-error parks (stalled streams, timeouts, and connection drops) fire on the bounded retry ramp (`auto_continue_backoff_secs`, `auto_continue_max_retries`). Rate-limit, spend-limit, and overload records all stop after `auto_continue_max_retries`. The default backoff sends the first overload/transient retry 3 minutes after the marker, then every 5 minutes until about 63 minutes, then leaves the row parked. It is off by default. The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth) and the live path in [provider.md → Auto-continue](../internals/agents/provider.md#auto-continue).
 
 ### Smart compaction
 

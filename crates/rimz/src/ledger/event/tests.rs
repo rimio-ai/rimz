@@ -388,6 +388,26 @@ fn session_rebirth_constructor_keeps_the_existing_wire_shape() {
 }
 
 #[test]
+fn session_death_constructor_decodes_typed_payload() {
+    let typed = EventEnvelope::session_death(
+        workspace(),
+        "session",
+        SessionDeathCause::Crash,
+        vec![SessionDeathAgent {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from("sess-1"),
+            name: Some("amber-atlas".to_owned()),
+        }],
+    );
+
+    let EventKind::SessionDeath(payload) = typed.kind() else {
+        panic!("session.death decodes as typed event");
+    };
+    assert_eq!(payload.cause, SessionDeathCause::Crash);
+    assert_eq!(payload.lost_agents[0].agent_id, "sess-1");
+}
+
+#[test]
 fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
     let now = Timestamp::now();
     let message = MessageRecord {

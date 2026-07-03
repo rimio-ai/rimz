@@ -284,6 +284,13 @@ const CLAUDE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
             event: "SessionEnd",
         },
     ),
+    (
+        LifecycleSignalKind::Lost,
+        HookCoverage::Derived {
+            via: "rimz exec wrapper",
+            gap: "native hooks do not report mux-session death",
+        },
+    ),
 ];
 
 /// Per-hook timeout written into the Claude config (seconds). Matches

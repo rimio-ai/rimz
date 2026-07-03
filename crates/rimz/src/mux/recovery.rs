@@ -64,8 +64,20 @@ pub fn teardown_room(
 /// `cache_root` argument so it is testable against a tempdir.
 pub fn purge_zellij_session_cache_in(cache_root: &Path, name: &str) -> Vec<PathBuf> {
     let mut removed = Vec::new();
+    for entry in zellij_session_cache_paths_in(cache_root, name) {
+        if remove_path(&entry) {
+            removed.push(entry);
+        }
+    }
+    removed
+}
+
+/// Zellij's serialized-session cache paths for `name`, across every
+/// `contract_version_*` child.
+pub fn zellij_session_cache_paths_in(cache_root: &Path, name: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
     let Ok(versions) = fs::read_dir(cache_root.join("zellij")) else {
-        return removed;
+        return paths;
     };
     for version in versions.flatten() {
         if !version
@@ -76,11 +88,11 @@ pub fn purge_zellij_session_cache_in(cache_root: &Path, name: &str) -> Vec<PathB
             continue;
         }
         let entry = version.path().join("session_info").join(name);
-        if remove_path(&entry) {
-            removed.push(entry);
+        if entry.exists() {
+            paths.push(entry);
         }
     }
-    removed
+    paths
 }
 
 /// Remove a file or directory, returning whether anything was removed. A path

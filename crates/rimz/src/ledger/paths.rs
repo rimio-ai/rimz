@@ -70,6 +70,8 @@ pub struct StatePaths {
     pub workspace_record: PathBuf,
     pub channels_record: PathBuf,
     pub boot_marker: PathBuf,
+    pub last_death_marker: PathBuf,
+    pub crashes_dir: PathBuf,
 }
 
 impl StatePaths {
@@ -108,6 +110,8 @@ impl StatePaths {
             workspace_record: root.join("workspace.json"),
             channels_record: root.join("channels.json"),
             boot_marker: root.join("boot.json"),
+            last_death_marker: root.join("last-death.json"),
+            crashes_dir: root.join("crashes"),
             locks_dir,
             root,
         })

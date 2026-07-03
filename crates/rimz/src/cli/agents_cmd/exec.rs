@@ -123,10 +123,13 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .as_ref()
         .map(|context| context.session_name.as_str())
         .unwrap_or(&workspace.session_name);
-    let session_live_now = !outcome.signaled || session_live(globals, session_name);
-    let deliberate = close_is_deliberate(outcome.signaled, session_live_now);
+    let abrupt = outcome.signaled || cleanup_signal_received();
+    let session_healthy_now = !abrupt || session_is_healthy(globals, session_name);
+    let deliberate = close_is_deliberate(abrupt, session_healthy_now);
     if deliberate && should_record_end_trace(&args) {
         record_own_agent_end_trace(&workspace, &args);
+    } else if !deliberate && should_record_end_trace(&args) {
+        record_own_agent_lost_trace(&workspace, &args);
     }
     if let Some(path) = entered_worktree.as_deref()
         && deliberate
@@ -156,10 +159,11 @@ pub(super) fn should_record_end_trace(args: &ExecArgs) -> bool {
     !args.exit_on_run_completion
 }
 
-/// Clean quits are deliberate. Signal exits are deliberate only while the mux
-/// session still exists; if the mux is gone, keep the agent for recovery.
-pub(super) fn close_is_deliberate(signaled: bool, session_live: bool) -> bool {
-    !signaled || session_live
+/// Non-abrupt exits are deliberate. Abrupt exits are deliberate only while the
+/// mux session is still healthy; if the mux is gone or wedged, keep the agent
+/// recoverable.
+pub(super) fn close_is_deliberate(abrupt: bool, session_healthy: bool) -> bool {
+    !abrupt || session_healthy
 }
 
 fn enter_worktree(path: &Path) -> Result<PathBuf> {
@@ -464,11 +468,36 @@ fn record_launch_failed(
 
 fn record_own_agent_end_trace(workspace: &rimz::ResolvedWorkspace, args: &ExecArgs) {
     match resolve_own_agent_end_trace(workspace, args) {
-        Ok(Some((kind, agent_id))) => append_agent_end_trace(workspace, kind, agent_id),
+        Ok(Some((kind, agent_id))) => append_agent_lifecycle_trace(
+            workspace,
+            kind,
+            agent_id,
+            rimz::agents::LifecycleSignal::Ended,
+            "rimz.agent-ended",
+            "agent exit tombstone",
+        ),
         Ok(None) => tracing::debug!("agent exit produced no pane binding to tombstone"),
         Err(err) => tracing::debug!(
             error = %err,
             "could not resolve agent exit tombstone",
+        ),
+    }
+}
+
+fn record_own_agent_lost_trace(workspace: &rimz::ResolvedWorkspace, args: &ExecArgs) {
+    match resolve_own_agent_end_trace(workspace, args) {
+        Ok(Some((kind, agent_id))) => append_agent_lifecycle_trace(
+            workspace,
+            kind,
+            agent_id,
+            rimz::agents::LifecycleSignal::Lost,
+            "rimz.agent-lost",
+            "agent lost marker",
+        ),
+        Ok(None) => tracing::debug!("agent loss produced no pane binding to mark"),
+        Err(err) => tracing::debug!(
+            error = %err,
+            "could not resolve agent loss marker",
         ),
     }
 }
@@ -498,22 +527,23 @@ fn resolve_own_agent_end_trace(
     }))
 }
 
-fn append_agent_end_trace(
+fn append_agent_lifecycle_trace(
     workspace: &rimz::ResolvedWorkspace,
     kind: AgentKind,
     agent_id: AgentSessionId,
+    signal: rimz::agents::LifecycleSignal,
+    event_name: &'static str,
+    label: &'static str,
 ) {
     let appended = (|| -> Result<()> {
-        let ledger = open_ledger(workspace).context("opening ledger for agent exit tombstone")?;
-        let observation = rimz::agents::AgentLifecycleObservation::new(
-            Some(agent_id.clone()),
-            rimz::agents::LifecycleSignal::Ended,
-        );
+        let ledger = open_ledger(workspace).context("opening ledger for agent lifecycle trace")?;
+        let observation =
+            rimz::agents::AgentLifecycleObservation::new(Some(agent_id.clone()), signal);
         let event = rimz::EventEnvelope::agent_lifecycle(
             workspace.workspace_id.clone(),
             &workspace.session_name,
             kind.as_str(),
-            "rimz.agent-ended",
+            event_name,
             &observation,
         );
         ledger.append_event(&event)?;
@@ -524,7 +554,7 @@ fn append_agent_end_trace(
             kind = %kind,
             agent_id = %agent_id,
             error = %err,
-            "could not record agent exit tombstone",
+            "could not record {label}",
         );
     }
 }
@@ -717,12 +747,12 @@ fn signal_child(pid: u32, signal: ChildSignal) {
 #[cfg(not(unix))]
 fn signal_child(_pid: u32, _signal: ChildSignal) {}
 
-fn session_live(globals: &GlobalFlags, session_name: &str) -> bool {
+fn session_is_healthy(globals: &GlobalFlags, session_name: &str) -> bool {
     let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
         return false;
     };
     let backend = rimz::mux::backend_for(mux);
-    crate::cli::room::session_is_live(backend.as_ref(), session_name)
+    crate::cli::room::session_is_healthy_live(backend.as_ref(), session_name)
 }
 
 fn close_own_pane(globals: &GlobalFlags, session_name: &str) {

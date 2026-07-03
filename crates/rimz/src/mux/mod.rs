@@ -594,6 +594,13 @@ pub trait MuxBackend: Send + Sync {
         let _ = name;
         Vec::new()
     }
+    /// Return backend resurrection-cache paths for `name` without removing them,
+    /// so crash forensics can archive the dead incarnation before a same-name
+    /// rebirth overwrites it. tmux has no such cache.
+    fn resurrection_cache_paths(&self, name: &str) -> Vec<PathBuf> {
+        let _ = name;
+        Vec::new()
+    }
     /// Converge every view (Zellij tab / tmux window) to one healthy sidebar per
     /// working view: in a working view close duplicate or unresponsive sidebar
     /// panes (those `live` does not claim) and re-add one if none survived; in an

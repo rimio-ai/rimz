@@ -111,6 +111,7 @@ fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Res
     let live_agents = runtime::RuntimeProjection::from_parts(
         Vec::new(),
         cache.tombstones.iter().cloned().collect(),
+        cache.lost.iter().cloned().collect(),
         merged_agents,
         runtime::RuntimeScope::Runtime,
     )
@@ -123,6 +124,7 @@ fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Res
             agents: live_agents,
             agent_identity: cache.agent_identity.without_consumed_launches(),
             resume_outcomes,
+            lost: cache.lost,
         },
     )?;
     Ok(carryover_agents)
@@ -732,6 +734,7 @@ mod tests {
                 agents: vec![old, fresh],
                 agent_identity: Default::default(),
                 resume_outcomes: Vec::new(),
+                lost: Vec::new(),
             },
         )
         .expect("write carryover");

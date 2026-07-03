@@ -113,6 +113,7 @@ fn compact_command_events_stamp_carryover_agents_after_rotation() {
             agents: vec![agent("claude", "sess-a", AgentStatus::Idle, 0)],
             agent_identity: Default::default(),
             resume_outcomes: Vec::new(),
+            lost: Vec::new(),
         },
     )
     .unwrap();

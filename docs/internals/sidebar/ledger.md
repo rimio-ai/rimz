@@ -91,6 +91,12 @@ History and runtime are separate views over the one durable ledger ([`runtime.rs
 
 `runtime_owner` records the owner kind (`agent` or `script`), a stable subject id, pid, and the Linux process-start token when available. Short-lived `feed push` and `feed ask --no-block` records are written for audit and drop out of runtime views once their CLI process exits.
 
+## Session death records
+
+`session.death` records the previous room incarnation's death before a genuine birth replaces it. The event carries `cause` (`reboot` or `crash`) and `lost_agents`; reboot wins when the boot marker changed, while same-boot crash recovery requires positive `agent-lost` markers from the exec wrappers. The fold keeps the `lost` set only until the next `session.rebirth`, so a later incarnation never sees stale crash evidence.
+
+The coroner also writes `last-death.json` beside the workspace ledger for cheap `rimz list --all` display. Crash births archive mux forensics under `crashes/<utc-ts>/mux-cache/` and write `roster.json` with the lost agents' rollup rows; retention keeps the newest five archives. The archive is best-effort and never blocks launch.
+
 ## Wakeups
 
 After every write, the writer wakes live consumers off-lock: it walks fresh sidebar heartbeats (TTL ~5s) and sends each a `ledger_delta` wakeup datagram, and it pings any per-request bridge socket. The envelope and its event taxonomy live in [state.md → event taxonomy](./state.md#event-taxonomy) and [`sidebar/events.rs`](../../../crates/rimz/src/sidebar/events.rs).

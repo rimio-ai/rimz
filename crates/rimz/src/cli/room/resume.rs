@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use rimz::mux::{MuxBackend, SessionHealth};
 use rimz::{Ledger, RuntimePaths, StatePaths};
 
-pub(super) fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
+pub(crate) fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
     let exists = backend
         .list_sessions()
         .map(|sessions| sessions.iter().any(|name| name == session_name))
@@ -17,17 +17,6 @@ pub(super) fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &s
             backend.probe_session_health(session_name),
             Ok(SessionHealth::Healthy)
         )
-}
-
-/// Whether a live (non-resurrectable) session named `session_name` exists now.
-/// Used by the agent wrapper on a close signal: a live session means the pane
-/// closed deliberately while the room stayed up, while a missing session means
-/// mux loss and the agent stays recoverable.
-pub(crate) fn session_is_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
-    backend
-        .list_sessions()
-        .map(|sessions| sessions.iter().any(|name| name == session_name))
-        .unwrap_or(false)
 }
 
 #[cfg(target_os = "linux")]
@@ -155,7 +144,7 @@ pub(super) fn reboot_since_last_birth(workspace_id: &rimz::WorkspaceId) -> bool 
 }
 
 /// Plan a reborn session. Prior agents are re-seeded only when the caller's
-/// reboot gate is open, using the durable *audit* rollup — the one that keeps
+/// recovery gate is open, using the durable *audit* rollup — the one that keeps
 /// the dead-process agents a runtime read would expel. Empty named channel tabs
 /// restore on every ordinary rebirth. Best-effort: disabled recovery,
 /// `--no-resume`, or any planning read error never blocks the launch.

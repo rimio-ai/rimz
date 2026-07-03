@@ -1,8 +1,8 @@
 //! Resume-on-rebirth planning: turn the durable agent rollup into the tabs a
 //! reborn session re-seeds.
 //!
-//! When the CLI admits agent recovery for a reborn room — a machine reboot by
-//! default — the agents' processes are gone, but the ledger remembers them.
+//! When the CLI admits agent recovery for a reborn room — a machine reboot or
+//! mux crash — the agents' processes are gone, but the ledger remembers them.
 //! This module reads that memory (the audit rollup, which keeps the
 //! dead-process agents the runtime projection would expel) and plans one
 //! `#channel` tab per worktree, with one resume pane per prior root agent, so
@@ -25,7 +25,7 @@ use crate::mux::ResumeTab;
 /// The default ceiling on agents auto-resumed into one reborn session, so a
 /// long-lived workspace cannot fork-bomb a fleet of agent processes on birth.
 /// Anything past it is reported, never silently dropped.
-pub const DEFAULT_RESUME_MAX: usize = 8;
+pub const DEFAULT_RESUME_MAX: usize = 128;
 
 /// Why a candidate agent was not resumed — surfaced in the start report so a
 /// skipped agent stays visible rather than silently lost.

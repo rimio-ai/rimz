@@ -150,6 +150,7 @@ fn carryover_round_trips_on_disk() {
         }],
         agent_identity: AgentIdentityState::default(),
         resume_outcomes: Vec::new(),
+        lost: Vec::new(),
     };
     write_carryover(&path, &carryover).unwrap();
     let loaded = read_carryover(&path).unwrap();
