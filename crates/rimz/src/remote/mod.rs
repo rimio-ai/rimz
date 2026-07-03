@@ -545,6 +545,12 @@ mod tests {
                 spec: RemoteSpec::Session("build@2".to_owned()),
             },
             TargetCase {
+                input: "dev-box:~/code/foo@v2",
+                destination: "dev-box",
+                host: "dev-box",
+                spec: RemoteSpec::Path("$HOME/code/foo@v2".to_owned()),
+            },
+            TargetCase {
                 input: "alice@corp.com@dev-box:query-engine",
                 destination: "alice@corp.com@dev-box",
                 host: "dev-box",
