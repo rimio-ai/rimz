@@ -105,12 +105,6 @@ pub enum SidebarAppErr {
     Io(#[from] io::Error),
     #[error(transparent)]
     Paths(#[from] PathErr),
-    #[error("running `{program}`: {source}")]
-    CommandIo {
-        program: String,
-        #[source]
-        source: io::Error,
-    },
     #[error("heartbeat write failed: {0}")]
     Heartbeat(String),
 }
