@@ -69,7 +69,10 @@ pub use display::{
     BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, ContextMeterConfig,
     DisplayConfig, ProviderTabsMode, ScrollbarMode,
 };
-pub use glyphs::{GlyphGroup, GlyphNamespaces, GlyphRole, ThemeGlyphsConfig, is_named_glyph_set};
+pub use glyphs::{
+    GlyphOverrides, GlyphRole, ThemeGlyphsConfig, glyph_lookup_hint, is_named_glyph_set,
+    validate_glyph_source,
+};
 pub use harness::{HarnessConfig, RtkMode};
 pub use loop_::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
 pub use mux::{

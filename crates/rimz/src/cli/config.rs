@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use rimz::config::{GlyphRole, MachineConfig, validate_glyph_cells};
+use rimz::config::{GlyphRole, MachineConfig, validate_glyph_cells, validate_glyph_source};
 use rimz::ledger::atomic::write_bytes_atomically;
 use rimz::ledger::paths;
 use toml_edit::{ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
@@ -1144,7 +1144,7 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         let Some(source) = value.as_str() else {
             bail!("theme.glyphs.set must be a string");
         };
-        if let Err(err) = rimz::sidebar_pane::render::glyph_set::validate_glyph_source(source) {
+        if let Err(err) = validate_glyph_source(source) {
             bail!("{err}");
         }
     }

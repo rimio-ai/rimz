@@ -32,24 +32,21 @@ pub(crate) struct GlyphSet {
 
 impl Default for GlyphSet {
     fn default() -> Self {
-        Self::resolve(&ThemeGlyphsConfig::default())
+        let config = ThemeGlyphsConfig::default();
+        Self::resolve(config.set.as_deref(), &config)
     }
 }
 
 impl GlyphSet {
-    pub(crate) fn resolve(config: &ThemeGlyphsConfig) -> Self {
-        Self::resolve_with_set(config.set.as_deref(), config)
-    }
-
     pub(crate) fn from_theme(theme: &ThemeConfig) -> Self {
-        Self::resolve_with_set(theme.glyph_set_source().as_deref(), &theme.glyphs)
+        Self::resolve(theme.glyph_set_source().as_deref(), &theme.glyphs)
     }
 
     /// Resolve with an explicit set source, used by the `[theme] style` preset
     /// to select `nerd_font` without restating it under `[theme.glyphs]`. An
     /// explicit `glyphs.set` (the `config.set` the caller passes through) still
     /// wins; the matching inline set overrides apply last.
-    pub(crate) fn resolve_with_set(set: Option<&str>, config: &ThemeGlyphsConfig) -> Self {
+    pub(crate) fn resolve(set: Option<&str>, config: &ThemeGlyphsConfig) -> Self {
         let kind = GlyphSetKind::from_source(set);
         let mut glyphs = GlyphRole::ALL
             .iter()
@@ -417,7 +414,7 @@ mod tests {
              box_vertical = \"|\"\n",
         )
         .expect("glyph config");
-        let glyphs = GlyphSet::resolve(&config);
+        let glyphs = GlyphSet::resolve(config.set.as_deref(), &config);
         assert_eq!(glyphs.kind(), GlyphSetKind::NerdFont);
         assert_eq!(glyphs.glyph(GlyphRole::StatusWorking), "⢿");
         assert_eq!(glyphs.glyph(GlyphRole::KeysFocus), "F");
@@ -443,7 +440,7 @@ mod tests {
             .expect("theme template parses");
         let mut unicode_config = parsed.theme.glyphs.clone();
         unicode_config.set = Some("unicode".to_owned());
-        let from_template = GlyphSet::resolve(&unicode_config);
+        let from_template = GlyphSet::resolve(unicode_config.set.as_deref(), &unicode_config);
         let default = GlyphSet::default();
         for &role in GlyphRole::ALL {
             assert_eq!(
@@ -456,11 +453,12 @@ mod tests {
 
         let mut nerd_config = parsed.theme.glyphs;
         nerd_config.set = Some("nerd_font".to_owned());
-        let from_template = GlyphSet::resolve(&nerd_config);
-        let expected = GlyphSet::resolve(&ThemeGlyphsConfig {
+        let from_template = GlyphSet::resolve(nerd_config.set.as_deref(), &nerd_config);
+        let expected_config = ThemeGlyphsConfig {
             set: Some("nerd_font".to_owned()),
             ..ThemeGlyphsConfig::default()
-        });
+        };
+        let expected = GlyphSet::resolve(expected_config.set.as_deref(), &expected_config);
         for &role in GlyphRole::ALL {
             assert_eq!(
                 from_template.glyph(role),

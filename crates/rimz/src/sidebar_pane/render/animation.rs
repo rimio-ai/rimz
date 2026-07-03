@@ -660,10 +660,11 @@ mod tests {
     }
 
     fn nerd_glyph_set() -> GlyphSet {
-        GlyphSet::resolve(&crate::config::ThemeGlyphsConfig {
+        let config = crate::config::ThemeGlyphsConfig {
             set: Some("nerd_font".to_owned()),
             ..Default::default()
-        })
+        };
+        GlyphSet::resolve(config.set.as_deref(), &config)
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::validate_glyph_cells;
 
@@ -9,329 +10,142 @@ use super::validate_glyph_cells;
 /// way the sidebar lays them out: `status` heads, the `cockpit` identity row,
 /// `tokens`, `meter` bars, the age `clock`, the `worktree` header, the agent
 /// `card`, `process` rows, help `keys`, and `chrome`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum GlyphRole {
-    // status — the leading cell of every agent row.
-    StatusWaiting,
-    StatusAttention,
-    StatusPaused,
-    StatusDone,
-    StatusIdle,
-    StatusWorking,
-    StatusThinking,
-    StatusDelegating,
-    StatusResolving,
-    StatusCompacting,
-    // cockpit — the identity and summary row.
-    CockpitWorkspace,
-    CockpitSessions,
-    CockpitAgents,
-    // tokens — the token-accounting markers.
-    TokensTotal,
-    TokensInput,
-    TokensOutput,
-    TokensCacheRead,
-    TokensCacheWrite,
-    TokensFilled,
-    TokensCompaction,
-    // meter — the drawn gauges and bars.
-    MeterContextFull,
-    MeterContextEmpty,
-    MeterBarFilled,
-    MeterBarTrack,
-    MeterBarCap,
-    MeterManaFilled,
-    MeterManaTrack,
-    MeterReset,
-    MeterScrollThumb,
-    MeterScrollTrack,
-    // clock — the last-activity age face.
-    ClockQ1,
-    ClockQ2,
-    ClockQ3,
-    ClockQ4,
-    ClockOver,
-    // worktree — the group header's git story.
-    WorktreeBranch,
-    WorktreeMerge,
-    WorktreeAhead,
-    WorktreeBehind,
-    WorktreeTrunkEqual,
-    WorktreeTrunkBranch,
-    WorktreeTrunkMerge,
-    WorktreePrOpen,
-    WorktreePrClosed,
-    WorktreeReconciling,
-    WorktreeDotted,
-    ChannelHash,
-    // card — the agent card body.
-    CardSubagents,
-    CardParkedBg,
-    // process — the process-row resource grid.
-    ProcessCpu,
-    ProcessMem,
-    ProcessIo,
-    // keys — action glyphs in the help overlay.
-    KeysMove,
-    KeysFocus,
-    KeysInbox,
-    KeysRead,
-    KeysAccounts,
-    KeysReload,
-    KeysDismiss,
-    // chrome — framing, spines, tabs, and badges.
-    ChromeAlert,
-    ChromePresenceAway,
-    ChromeRemoteLink,
-    ChromeRemoteControl,
-    ChromeHairline,
-    ChromeBoxTopLeft,
-    ChromeBoxTopRight,
-    ChromeBoxBottomLeft,
-    ChromeBoxBottomRight,
-    ChromeBoxVertical,
-    ChromeTabCapLeft,
-    ChromeTabCapRight,
-    ChromeSpineCardLeft,
-    ChromeSpineCardRight,
-    ChromeSpineLaneLeft,
-    ChromeSpineLaneRight,
-    ChromeInfinity,
+macro_rules! glyph_roles {
+    ($($namespace:literal { $($variant:ident => $name:literal,)+ })+) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+        #[repr(usize)]
+        pub enum GlyphRole {
+            $($($variant,)+)+
+        }
+
+        const ROLE_TABLE: &[(GlyphRole, &str, &str)] = &[
+            $($( (GlyphRole::$variant, $namespace, $name), )+)+
+        ];
+
+        impl GlyphRole {
+            pub const ALL: &'static [Self] = &[
+                $($( Self::$variant, )+)+
+            ];
+
+            const NAMESPACES: &'static [&'static str] = &[
+                $($namespace,)+
+            ];
+
+            fn role_entry(self) -> (&'static str, &'static str) {
+                let (role, namespace, name) = ROLE_TABLE[self as usize];
+                debug_assert_eq!(role, self);
+                (namespace, name)
+            }
+        }
+    };
+}
+
+glyph_roles! {
+    "status" {
+        StatusWaiting => "waiting",
+        StatusAttention => "attention",
+        StatusPaused => "paused",
+        StatusDone => "done",
+        StatusIdle => "idle",
+        StatusWorking => "working",
+        StatusThinking => "thinking",
+        StatusDelegating => "delegating",
+        StatusResolving => "resolving",
+        StatusCompacting => "compacting",
+    }
+    "cockpit" {
+        CockpitWorkspace => "workspace",
+        CockpitSessions => "sessions",
+        CockpitAgents => "agents",
+    }
+    "tokens" {
+        TokensTotal => "total",
+        TokensInput => "input",
+        TokensOutput => "output",
+        TokensCacheRead => "cache_read",
+        TokensCacheWrite => "cache_write",
+        TokensFilled => "filled",
+        TokensCompaction => "compaction",
+    }
+    "meter" {
+        MeterContextFull => "context_full",
+        MeterContextEmpty => "context_empty",
+        MeterBarFilled => "bar_filled",
+        MeterBarTrack => "bar_track",
+        MeterBarCap => "bar_cap",
+        MeterManaFilled => "mana_filled",
+        MeterManaTrack => "mana_track",
+        MeterReset => "reset",
+        MeterScrollThumb => "scroll_thumb",
+        MeterScrollTrack => "scroll_track",
+    }
+    "clock" {
+        ClockQ1 => "q1",
+        ClockQ2 => "q2",
+        ClockQ3 => "q3",
+        ClockQ4 => "q4",
+        ClockOver => "over",
+    }
+    "worktree" {
+        WorktreeBranch => "branch",
+        WorktreeMerge => "merge",
+        WorktreeAhead => "ahead",
+        WorktreeBehind => "behind",
+        WorktreeTrunkEqual => "trunk_equal",
+        WorktreeTrunkBranch => "trunk_branch",
+        WorktreeTrunkMerge => "trunk_merge",
+        WorktreePrOpen => "pr_open",
+        WorktreePrClosed => "pr_closed",
+        WorktreeReconciling => "reconciling",
+        WorktreeDotted => "dotted",
+        ChannelHash => "channel_hash",
+    }
+    "card" {
+        CardSubagents => "subagents",
+        CardParkedBg => "parked_bg",
+    }
+    "process" {
+        ProcessCpu => "cpu",
+        ProcessMem => "mem",
+        ProcessIo => "io",
+    }
+    "keys" {
+        KeysMove => "move",
+        KeysFocus => "focus",
+        KeysInbox => "inbox",
+        KeysRead => "read",
+        KeysAccounts => "accounts",
+        KeysReload => "reload",
+        KeysDismiss => "dismiss",
+    }
+    "chrome" {
+        ChromeAlert => "alert",
+        ChromePresenceAway => "presence_away",
+        ChromeRemoteLink => "remote_link",
+        ChromeRemoteControl => "remote_control",
+        ChromeHairline => "hairline",
+        ChromeBoxTopLeft => "box_top_left",
+        ChromeBoxTopRight => "box_top_right",
+        ChromeBoxBottomLeft => "box_bottom_left",
+        ChromeBoxBottomRight => "box_bottom_right",
+        ChromeBoxVertical => "box_vertical",
+        ChromeTabCapLeft => "tab_cap_left",
+        ChromeTabCapRight => "tab_cap_right",
+        ChromeSpineCardLeft => "spine_card_left",
+        ChromeSpineCardRight => "spine_card_right",
+        ChromeSpineLaneLeft => "spine_lane_left",
+        ChromeSpineLaneRight => "spine_lane_right",
+        ChromeInfinity => "infinity",
+    }
 }
 
 impl GlyphRole {
-    pub const ALL: &'static [Self] = &[
-        Self::StatusWaiting,
-        Self::StatusAttention,
-        Self::StatusPaused,
-        Self::StatusDone,
-        Self::StatusIdle,
-        Self::StatusWorking,
-        Self::StatusThinking,
-        Self::StatusDelegating,
-        Self::StatusResolving,
-        Self::StatusCompacting,
-        Self::CockpitWorkspace,
-        Self::CockpitSessions,
-        Self::CockpitAgents,
-        Self::TokensTotal,
-        Self::TokensInput,
-        Self::TokensOutput,
-        Self::TokensCacheRead,
-        Self::TokensCacheWrite,
-        Self::TokensFilled,
-        Self::TokensCompaction,
-        Self::MeterContextFull,
-        Self::MeterContextEmpty,
-        Self::MeterBarFilled,
-        Self::MeterBarTrack,
-        Self::MeterBarCap,
-        Self::MeterManaFilled,
-        Self::MeterManaTrack,
-        Self::MeterReset,
-        Self::MeterScrollThumb,
-        Self::MeterScrollTrack,
-        Self::ClockQ1,
-        Self::ClockQ2,
-        Self::ClockQ3,
-        Self::ClockQ4,
-        Self::ClockOver,
-        Self::WorktreeBranch,
-        Self::WorktreeMerge,
-        Self::WorktreeAhead,
-        Self::WorktreeBehind,
-        Self::WorktreeTrunkEqual,
-        Self::WorktreeTrunkBranch,
-        Self::WorktreeTrunkMerge,
-        Self::WorktreePrOpen,
-        Self::WorktreePrClosed,
-        Self::WorktreeReconciling,
-        Self::WorktreeDotted,
-        Self::ChannelHash,
-        Self::CardSubagents,
-        Self::CardParkedBg,
-        Self::ProcessCpu,
-        Self::ProcessMem,
-        Self::ProcessIo,
-        Self::KeysMove,
-        Self::KeysFocus,
-        Self::KeysInbox,
-        Self::KeysRead,
-        Self::KeysAccounts,
-        Self::KeysReload,
-        Self::KeysDismiss,
-        Self::ChromeAlert,
-        Self::ChromePresenceAway,
-        Self::ChromeRemoteLink,
-        Self::ChromeRemoteControl,
-        Self::ChromeHairline,
-        Self::ChromeBoxTopLeft,
-        Self::ChromeBoxTopRight,
-        Self::ChromeBoxBottomLeft,
-        Self::ChromeBoxBottomRight,
-        Self::ChromeBoxVertical,
-        Self::ChromeTabCapLeft,
-        Self::ChromeTabCapRight,
-        Self::ChromeSpineCardLeft,
-        Self::ChromeSpineCardRight,
-        Self::ChromeSpineLaneLeft,
-        Self::ChromeSpineLaneRight,
-        Self::ChromeInfinity,
-    ];
-
     pub fn namespace(self) -> &'static str {
-        match self {
-            Self::StatusWaiting
-            | Self::StatusAttention
-            | Self::StatusPaused
-            | Self::StatusDone
-            | Self::StatusIdle
-            | Self::StatusWorking
-            | Self::StatusThinking
-            | Self::StatusDelegating
-            | Self::StatusResolving
-            | Self::StatusCompacting => "status",
-            Self::CockpitWorkspace | Self::CockpitSessions | Self::CockpitAgents => "cockpit",
-            Self::TokensTotal
-            | Self::TokensInput
-            | Self::TokensOutput
-            | Self::TokensCacheRead
-            | Self::TokensCacheWrite
-            | Self::TokensFilled
-            | Self::TokensCompaction => "tokens",
-            Self::MeterContextFull
-            | Self::MeterContextEmpty
-            | Self::MeterBarFilled
-            | Self::MeterBarTrack
-            | Self::MeterBarCap
-            | Self::MeterManaFilled
-            | Self::MeterManaTrack
-            | Self::MeterReset
-            | Self::MeterScrollThumb
-            | Self::MeterScrollTrack => "meter",
-            Self::ClockQ1 | Self::ClockQ2 | Self::ClockQ3 | Self::ClockQ4 | Self::ClockOver => {
-                "clock"
-            }
-            Self::WorktreeBranch
-            | Self::WorktreeMerge
-            | Self::WorktreeAhead
-            | Self::WorktreeBehind
-            | Self::WorktreeTrunkEqual
-            | Self::WorktreeTrunkBranch
-            | Self::WorktreeTrunkMerge
-            | Self::WorktreePrOpen
-            | Self::WorktreePrClosed
-            | Self::WorktreeReconciling
-            | Self::WorktreeDotted
-            | Self::ChannelHash => "worktree",
-            Self::CardSubagents | Self::CardParkedBg => "card",
-            Self::ProcessCpu | Self::ProcessMem | Self::ProcessIo => "process",
-            Self::KeysMove
-            | Self::KeysFocus
-            | Self::KeysInbox
-            | Self::KeysRead
-            | Self::KeysAccounts
-            | Self::KeysReload
-            | Self::KeysDismiss => "keys",
-            Self::ChromeAlert
-            | Self::ChromePresenceAway
-            | Self::ChromeRemoteLink
-            | Self::ChromeRemoteControl
-            | Self::ChromeHairline
-            | Self::ChromeBoxTopLeft
-            | Self::ChromeBoxTopRight
-            | Self::ChromeBoxBottomLeft
-            | Self::ChromeBoxBottomRight
-            | Self::ChromeBoxVertical
-            | Self::ChromeTabCapLeft
-            | Self::ChromeTabCapRight
-            | Self::ChromeSpineCardLeft
-            | Self::ChromeSpineCardRight
-            | Self::ChromeSpineLaneLeft
-            | Self::ChromeSpineLaneRight
-            | Self::ChromeInfinity => "chrome",
-        }
+        self.role_entry().0
     }
 
     pub fn name(self) -> &'static str {
-        match self {
-            Self::StatusWaiting => "waiting",
-            Self::StatusAttention => "attention",
-            Self::StatusPaused => "paused",
-            Self::StatusDone => "done",
-            Self::StatusIdle => "idle",
-            Self::StatusWorking => "working",
-            Self::StatusThinking => "thinking",
-            Self::StatusDelegating => "delegating",
-            Self::StatusResolving => "resolving",
-            Self::StatusCompacting => "compacting",
-            Self::CockpitWorkspace => "workspace",
-            Self::CockpitSessions => "sessions",
-            Self::CockpitAgents => "agents",
-            Self::TokensTotal => "total",
-            Self::TokensInput => "input",
-            Self::TokensOutput => "output",
-            Self::TokensCacheRead => "cache_read",
-            Self::TokensCacheWrite => "cache_write",
-            Self::TokensFilled => "filled",
-            Self::TokensCompaction => "compaction",
-            Self::MeterContextFull => "context_full",
-            Self::MeterContextEmpty => "context_empty",
-            Self::MeterBarFilled => "bar_filled",
-            Self::MeterBarTrack => "bar_track",
-            Self::MeterBarCap => "bar_cap",
-            Self::MeterManaFilled => "mana_filled",
-            Self::MeterManaTrack => "mana_track",
-            Self::MeterReset => "reset",
-            Self::MeterScrollThumb => "scroll_thumb",
-            Self::MeterScrollTrack => "scroll_track",
-            Self::ClockQ1 => "q1",
-            Self::ClockQ2 => "q2",
-            Self::ClockQ3 => "q3",
-            Self::ClockQ4 => "q4",
-            Self::ClockOver => "over",
-            Self::WorktreeBranch => "branch",
-            Self::WorktreeMerge => "merge",
-            Self::WorktreeAhead => "ahead",
-            Self::WorktreeBehind => "behind",
-            Self::WorktreeTrunkEqual => "trunk_equal",
-            Self::WorktreeTrunkBranch => "trunk_branch",
-            Self::WorktreeTrunkMerge => "trunk_merge",
-            Self::WorktreePrOpen => "pr_open",
-            Self::WorktreePrClosed => "pr_closed",
-            Self::WorktreeReconciling => "reconciling",
-            Self::WorktreeDotted => "dotted",
-            Self::ChannelHash => "channel_hash",
-            Self::CardSubagents => "subagents",
-            Self::CardParkedBg => "parked_bg",
-            Self::ProcessCpu => "cpu",
-            Self::ProcessMem => "mem",
-            Self::ProcessIo => "io",
-            Self::KeysMove => "move",
-            Self::KeysFocus => "focus",
-            Self::KeysInbox => "inbox",
-            Self::KeysRead => "read",
-            Self::KeysAccounts => "accounts",
-            Self::KeysReload => "reload",
-            Self::KeysDismiss => "dismiss",
-            Self::ChromeAlert => "alert",
-            Self::ChromePresenceAway => "presence_away",
-            Self::ChromeRemoteLink => "remote_link",
-            Self::ChromeRemoteControl => "remote_control",
-            Self::ChromeHairline => "hairline",
-            Self::ChromeBoxTopLeft => "box_top_left",
-            Self::ChromeBoxTopRight => "box_top_right",
-            Self::ChromeBoxBottomLeft => "box_bottom_left",
-            Self::ChromeBoxBottomRight => "box_bottom_right",
-            Self::ChromeBoxVertical => "box_vertical",
-            Self::ChromeTabCapLeft => "tab_cap_left",
-            Self::ChromeTabCapRight => "tab_cap_right",
-            Self::ChromeSpineCardLeft => "spine_card_left",
-            Self::ChromeSpineCardRight => "spine_card_right",
-            Self::ChromeSpineLaneLeft => "spine_lane_left",
-            Self::ChromeSpineLaneRight => "spine_lane_right",
-            Self::ChromeInfinity => "infinity",
-        }
+        self.role_entry().1
     }
 
     pub fn namespaced_name(self) -> String {
@@ -346,118 +160,79 @@ impl GlyphRole {
     }
 }
 
-/// Sparse per-namespace glyph overrides.
-#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
-#[serde(transparent)]
-pub struct GlyphGroup(BTreeMap<String, String>);
+/// Sparse glyph overrides for one named glyph set.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GlyphOverrides(BTreeMap<GlyphRole, String>);
 
-impl GlyphGroup {
+impl GlyphOverrides {
+    pub fn glyph(&self, role: GlyphRole) -> Option<&str> {
+        self.0.get(&role).map(String::as_str)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+}
 
-    pub fn get(&self, name: &str) -> Option<&str> {
-        self.0.get(name).map(String::as_str)
-    }
-
-    fn validate(namespace: &str, values: BTreeMap<String, String>) -> Result<Self, String> {
-        for (name, value) in &values {
-            if GlyphRole::from_namespaced(namespace, name).is_none() {
-                return Err(format!("unknown sidebar glyph role `{namespace}.{name}`"));
-            }
-            validate_glyph_cells(value)
-                .map_err(|err| format!("sidebar glyph `{namespace}.{name}` {err}"))?;
+impl Serialize for GlyphOverrides {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let groups = self.ordered_groups();
+        let mut map = serializer.serialize_map(Some(groups.len()))?;
+        for (namespace, values) in groups {
+            map.serialize_entry(namespace, &values)?;
         }
-        Ok(Self(values))
+        map.end()
     }
 }
 
-/// Sparse glyph overrides for one named glyph set, grouped by the sidebar's
-/// on-screen zones.
-#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct GlyphNamespaces {
-    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
-    pub status: GlyphGroup,
-    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
-    pub cockpit: GlyphGroup,
-    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
-    pub tokens: GlyphGroup,
-    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
-    pub meter: GlyphGroup,
-    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
-    pub clock: GlyphGroup,
-    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
-    pub worktree: GlyphGroup,
-    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
-    pub card: GlyphGroup,
-    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
-    pub process: GlyphGroup,
-    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
-    pub keys: GlyphGroup,
-    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
-    pub chrome: GlyphGroup,
-}
-
-impl GlyphNamespaces {
-    pub fn glyph(&self, role: GlyphRole) -> Option<&str> {
-        let group = match role.namespace() {
-            "status" => &self.status,
-            "cockpit" => &self.cockpit,
-            "tokens" => &self.tokens,
-            "meter" => &self.meter,
-            "clock" => &self.clock,
-            "worktree" => &self.worktree,
-            "card" => &self.card,
-            "process" => &self.process,
-            "keys" => &self.keys,
-            "chrome" => &self.chrome,
-            _ => return None,
-        };
-        group.get(role.name())
-    }
-
-    pub fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-}
-
-impl<'de> Deserialize<'de> for GlyphNamespaces {
+impl<'de> Deserialize<'de> for GlyphOverrides {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        #[derive(Default, Deserialize)]
-        #[serde(default, deny_unknown_fields)]
-        struct RawGlyphNamespaces {
-            status: BTreeMap<String, String>,
-            cockpit: BTreeMap<String, String>,
-            tokens: BTreeMap<String, String>,
-            meter: BTreeMap<String, String>,
-            clock: BTreeMap<String, String>,
-            worktree: BTreeMap<String, String>,
-            card: BTreeMap<String, String>,
-            process: BTreeMap<String, String>,
-            keys: BTreeMap<String, String>,
-            chrome: BTreeMap<String, String>,
+        let raw = BTreeMap::<String, BTreeMap<String, String>>::deserialize(deserializer)?;
+        let mut overrides = BTreeMap::new();
+        for (namespace, values) in raw {
+            if !GlyphRole::NAMESPACES.contains(&namespace.as_str()) {
+                return Err(serde::de::Error::unknown_field(
+                    &namespace,
+                    GlyphRole::NAMESPACES,
+                ));
+            }
+            for (name, value) in values {
+                let Some(role) = GlyphRole::from_namespaced(&namespace, &name) else {
+                    return Err(serde::de::Error::custom(format!(
+                        "unknown sidebar glyph role `{namespace}.{name}`"
+                    )));
+                };
+                validate_glyph_cells(&value).map_err(|err| {
+                    serde::de::Error::custom(format!("sidebar glyph `{namespace}.{name}` {err}"))
+                })?;
+                overrides.insert(role, value);
+            }
         }
+        Ok(Self(overrides))
+    }
+}
 
-        let raw = RawGlyphNamespaces::deserialize(deserializer)?;
-        let group = |namespace, values| {
-            GlyphGroup::validate(namespace, values).map_err(serde::de::Error::custom)
-        };
-        Ok(Self {
-            status: group("status", raw.status)?,
-            cockpit: group("cockpit", raw.cockpit)?,
-            tokens: group("tokens", raw.tokens)?,
-            meter: group("meter", raw.meter)?,
-            clock: group("clock", raw.clock)?,
-            worktree: group("worktree", raw.worktree)?,
-            card: group("card", raw.card)?,
-            process: group("process", raw.process)?,
-            keys: group("keys", raw.keys)?,
-            chrome: group("chrome", raw.chrome)?,
-        })
+impl GlyphOverrides {
+    fn ordered_groups(&self) -> Vec<(&'static str, BTreeMap<&'static str, &str>)> {
+        let mut groups = Vec::new();
+        for &namespace in GlyphRole::NAMESPACES {
+            let mut values = BTreeMap::new();
+            for (&role, glyph) in &self.0 {
+                if role.namespace() == namespace {
+                    values.insert(role.name(), glyph.as_str());
+                }
+            }
+            if !values.is_empty() {
+                groups.push((namespace, values));
+            }
+        }
+        groups
     }
 }
 
@@ -469,10 +244,10 @@ impl<'de> Deserialize<'de> for GlyphNamespaces {
 pub struct ThemeGlyphsConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub set: Option<String>,
-    #[serde(skip_serializing_if = "GlyphNamespaces::is_empty")]
-    pub unicode: GlyphNamespaces,
-    #[serde(skip_serializing_if = "GlyphNamespaces::is_empty")]
-    pub nerd_font: GlyphNamespaces,
+    #[serde(skip_serializing_if = "GlyphOverrides::is_empty")]
+    pub unicode: GlyphOverrides,
+    #[serde(skip_serializing_if = "GlyphOverrides::is_empty")]
+    pub nerd_font: GlyphOverrides,
 }
 
 impl ThemeGlyphsConfig {
@@ -498,8 +273,8 @@ impl<'de> Deserialize<'de> for ThemeGlyphsConfig {
         #[serde(default, deny_unknown_fields)]
         struct RawThemeGlyphsConfig {
             set: Option<String>,
-            unicode: GlyphNamespaces,
-            nerd_font: GlyphNamespaces,
+            unicode: GlyphOverrides,
+            nerd_font: GlyphOverrides,
         }
 
         let raw = RawThemeGlyphsConfig::deserialize(deserializer)?;
@@ -520,6 +295,20 @@ impl<'de> Deserialize<'de> for ThemeGlyphsConfig {
 
 pub fn is_named_glyph_set(name: &str) -> bool {
     matches!(name, "unicode" | "nerd_font")
+}
+
+pub fn validate_glyph_source(name: &str) -> Result<(), String> {
+    if is_named_glyph_set(name) {
+        Ok(())
+    } else {
+        Err(format!(
+            "unknown theme glyph set `{name}`; expected unicode or nerd_font"
+        ))
+    }
+}
+
+pub fn glyph_lookup_hint() -> String {
+    "named sets: unicode, nerd_font".to_owned()
 }
 
 #[cfg(test)]

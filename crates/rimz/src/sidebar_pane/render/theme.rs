@@ -118,7 +118,7 @@ impl Default for Theme {
 impl Theme {
     fn assemble(no_color: bool, depth: ColorDepth, theme: &ThemeConfig) -> Self {
         let palette = Palette::resolve(theme, depth);
-        let glyphs = GlyphSet::resolve_with_set(theme.glyph_set_source().as_deref(), &theme.glyphs);
+        let glyphs = GlyphSet::resolve(theme.glyph_set_source().as_deref(), &theme.glyphs);
         let animations = ResolvedAnimations::resolve(&theme.animations, &glyphs, &palette);
         Self {
             no_color,
