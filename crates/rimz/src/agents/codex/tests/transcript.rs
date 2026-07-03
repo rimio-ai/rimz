@@ -12,7 +12,7 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     std::fs::write(
         &full,
         "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-1\"}}\n\
-             {\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.5\"}}\n\
+             {\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.5\",\"effort\":\"xhigh\"}}\n\
              {\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":\
              {\"last_token_usage\":{\"input_tokens\":129200,\"cached_input_tokens\":120000,\
              \"output_tokens\":800,\"total_tokens\":130000},\
@@ -25,6 +25,7 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     assert_eq!(usage.reported_context_window(), Some(258_400));
     assert_eq!(usage.total_tokens, Some(130_000));
     assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(usage.effort.as_deref(), Some("xhigh"));
     assert_eq!(usage.last_input_tokens, Some(129_200));
     assert_eq!(usage.last_cached_input_tokens, Some(120_000));
     assert_eq!(usage.last_output_tokens, Some(800));
@@ -45,6 +46,7 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     assert_eq!(usage.context_window, Some(272_000));
     assert_eq!(usage.reported_context_window(), None);
     assert_eq!(usage.total_tokens, Some(0));
+    assert_eq!(usage.effort, None);
     assert_eq!(usage.last_input_tokens, Some(0));
     assert_eq!(usage.last_cached_input_tokens, Some(0));
     assert_eq!(usage.last_output_tokens, Some(0));
@@ -408,6 +410,7 @@ fn transcript_enrichment_maps_split_to_rich_usage_and_prices_cumulative_totals()
         context_window_reported: true,
         total_tokens: Some(4_200),
         model: Some("gpt-5".to_owned()),
+        effort: None,
         last_input_tokens: Some(1_200),
         last_cached_input_tokens: Some(1_000),
         last_output_tokens: Some(80),
@@ -444,6 +447,7 @@ fn transcript_enrichment_maps_split_to_rich_usage_and_prices_cumulative_totals()
         context_window_reported: false,
         total_tokens: None,
         model: model.map(ToOwned::to_owned),
+        effort: None,
         last_input_tokens: None,
         last_cached_input_tokens: None,
         last_output_tokens: None,
@@ -474,6 +478,7 @@ fn transcript_enrichment_uses_configured_model_when_tail_lacks_turn_context() {
         context_window_reported: false,
         total_tokens: None,
         model: None,
+        effort: None,
         last_input_tokens: None,
         last_cached_input_tokens: None,
         last_output_tokens: None,
@@ -493,18 +498,18 @@ fn transcript_enrichment_uses_configured_model_when_tail_lacks_turn_context() {
 }
 
 #[test]
-fn refresh_transcript_context_stat_gate_skips_unchanged_tail_but_stale_effort_reruns() {
+fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout-session.jsonl");
     std::fs::write(
         &path,
-        "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\"}}\n",
+        "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\",\"effort\":\"xhigh\"}}\n",
     )
     .unwrap();
     let stat = transcript_stat(&path).unwrap();
     let path_string = path.to_string_lossy().into_owned();
     assert!(
-        refresh_transcript_context("sess-1", None, None, Some(&path_string), Some(&stat)).is_none(),
+        refresh_transcript_context("sess-1", None, Some(&path_string), Some(&stat)).is_none(),
         "unchanged stat skips the tail read and sidecar write"
     );
 
@@ -518,8 +523,9 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail_but_stale_effort_re
               \"model_context_window\":100}}}\n",
         )
         .unwrap();
-    let refresh = refresh_transcript_context("sess-1", None, None, Some(&path_string), Some(&stat))
+    let refresh = refresh_transcript_context("sess-1", None, Some(&path_string), Some(&stat))
         .expect("changed stat refreshes");
+    assert_eq!(refresh.effort.as_deref(), Some("xhigh"));
     // The refresh carries the derivation inputs (window + current usage), not a
     // baked percentage — the gauge derives 50% (50 of 100) downstream.
     let tokens = refresh
@@ -537,21 +543,24 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail_but_stale_effort_re
     assert_ne!(refresh.transcript_stat, Some(stat));
 
     let unchanged_stat = transcript_stat(&path).unwrap();
-    let refresh = refresh_transcript_context(
-        "sess-1",
-        None,
-        Some("medium"),
-        Some(&path_string),
-        Some(&unchanged_stat),
-    )
-    .expect("stale prior effort forces a local refresh despite unchanged stat");
-    assert_eq!(
-        refresh
-            .tokens
-            .as_ref()
-            .and_then(|tokens| tokens.context_window_size),
-        Some(100)
+    assert!(
+        refresh_transcript_context("sess-1", None, Some(&path_string), Some(&unchanged_stat))
+            .is_none(),
+        "unchanged stat remains gated regardless of prior effort"
     );
+
+    let no_context = dir.path().join("rollout-no-context.jsonl");
+    std::fs::write(
+        &no_context,
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+          \"last_token_usage\":{\"input_tokens\":50,\"total_tokens\":60},\
+          \"model_context_window\":100}}}\n",
+    )
+    .unwrap();
+    let no_context_path = no_context.to_string_lossy().into_owned();
+    let refresh = refresh_transcript_context("sess-1", None, Some(&no_context_path), None)
+        .expect("missing stat refreshes");
+    assert_eq!(refresh.effort, None);
 }
 
 #[test]

@@ -332,7 +332,6 @@ fn is_zero_u32(value: &u32) -> bool {
 pub struct LocalContextRefreshCtx<'a> {
     pub agent_id: &'a str,
     pub model_hint: Option<&'a str>,
-    pub prior_effort: Option<&'a str>,
     pub prior_transcript_path: Option<&'a str>,
     pub prior_transcript_stat: Option<&'a TranscriptStat>,
 }

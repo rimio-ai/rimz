@@ -329,9 +329,9 @@ fn claude_context(now: Timestamp) -> AgentContext {
 }
 
 /// The Codex rich context sidecar: app-server-owned rate-limit windows, official
-/// model display name, and version, plus local config-owned actual effort — but
-/// no token usage or cost in this fixture. The gauge falls back to the rollout
-/// scalars.
+/// model display name, and version, plus rollout-observed live effort — but no
+/// token usage or cost in this fixture. The gauge falls back to rollout scalars
+/// for missing fields.
 fn codex_context(now: Timestamp) -> AgentContext {
     AgentContext {
         source: "codex".to_owned(),

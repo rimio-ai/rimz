@@ -16,14 +16,12 @@ pub(super) fn display_model(row: &SidebarRow) -> Option<String> {
         .map(model_label)
 }
 
-/// Reasoning effort: the hook/ledger value (what the user configured) is
-/// preferred; context falls back for sessions whose lifecycle observation has
-/// not named it. This means a configured `xhigh` wins over provider/catalog
-/// defaults such as `medium` or `high`.
+/// Reasoning effort: the session's observed live value is preferred; the
+/// hook/ledger scalar falls back for the window before first observation.
 pub(super) fn display_effort(row: &SidebarRow) -> Option<&str> {
-    agent(row)
-        .and_then(|agent| agent.effort.as_deref())
-        .or_else(|| ctx(row).and_then(|context| context.effort.as_deref()))
+    ctx(row)
+        .and_then(|context| context.effort.as_deref())
+        .or_else(|| agent(row).and_then(|agent| agent.effort.as_deref()))
         .filter(|effort| !effort.is_empty())
 }
 

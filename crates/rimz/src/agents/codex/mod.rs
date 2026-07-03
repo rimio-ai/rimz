@@ -871,7 +871,6 @@ impl AgentAdapter for CodexAdapter {
         refresh_transcript_context(
             ctx.agent_id,
             ctx.model_hint,
-            ctx.prior_effort,
             ctx.prior_transcript_path,
             ctx.prior_transcript_stat,
         )
@@ -1075,6 +1074,7 @@ fn build_codex_observation(
     transcript: CodexTranscriptObservation,
 ) -> AgentLifecycleObservation {
     let usage = transcript.usage;
+    let usage_effort = usage.effort.clone();
     let is_subagent = parent_agent_id.is_some();
     let mut observation =
         AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
@@ -1088,13 +1088,9 @@ fn build_codex_observation(
     observation.turn_error = transcript.turn_error;
     let reported_context_window = usage.reported_context_window();
     observation.launch.model = optional_payload_string(payload, &["model"]).or(usage.model);
-    observation.launch.effort = payload_reasoning_effort(payload).or_else(|| {
-        if is_subagent {
-            configured_reasoning_effort()
-        } else {
-            None
-        }
-    });
+    observation.launch.effort = payload_reasoning_effort(payload)
+        .or(usage_effort)
+        .or_else(|| is_subagent.then(configured_reasoning_effort).flatten());
     observation.context_window = reported_context_window;
     observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
     observation.cache_read_input_tokens = usage.last_cached_input_tokens;

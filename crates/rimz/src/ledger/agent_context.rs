@@ -133,9 +133,9 @@ pub fn new_record(kind: &str, agent_id: &str, context: AgentContext) -> AgentCon
     }
 }
 
-/// Merge transcript/config-derived local context into a sidecar record. Local
-/// refresh owns tokens, cost, model id, actual reasoning effort, and the
-/// transcript stat gate; app-server/statusline-only fields are preserved.
+/// Merge transcript-derived local context into a sidecar record. Local refresh
+/// owns tokens, cost, model id, observed reasoning effort, and the transcript
+/// stat gate; a tail that misses effort preserves the prior value.
 pub fn merge_local_context(
     runtime: &RuntimePaths,
     kind: &str,
@@ -158,7 +158,9 @@ pub fn merge_local_context(
     if refresh.model_id.is_some() {
         record.context.model_id = refresh.model_id;
     }
-    record.context.effort = refresh.effort;
+    if refresh.effort.is_some() {
+        record.context.effort = refresh.effort;
+    }
     let mut refresh_tokens = refresh.tokens;
     preserve_established_tokens(prior_tokens.as_ref(), &mut refresh_tokens);
     record.context.tokens = refresh_tokens;

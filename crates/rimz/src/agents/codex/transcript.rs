@@ -29,11 +29,9 @@ use crate::agents::{
 pub fn refresh_transcript_context(
     session_id: &str,
     model_hint: Option<&str>,
-    prior_effort: Option<&str>,
     prior_transcript_path: Option<&str>,
     prior_transcript_stat: Option<&TranscriptStat>,
 ) -> Option<LocalContextRefresh> {
-    let effort = configured_reasoning_effort();
     let mut path = prior_transcript_path.map(PathBuf::from);
     let mut stat = path.as_deref().and_then(transcript_stat);
     if stat.is_none() {
@@ -42,9 +40,7 @@ pub fn refresh_transcript_context(
     }
     let path = path?;
     let stat = stat?;
-    if prior_transcript_stat.is_some_and(|prior| *prior == stat)
-        && prior_effort == effort.as_deref()
-    {
+    if prior_transcript_stat.is_some_and(|prior| *prior == stat) {
         return None;
     }
 
@@ -57,7 +53,7 @@ pub fn refresh_transcript_context(
     let (tokens, cost, model_id) = transcript_enrichment(&usage, model_hint);
     Some(LocalContextRefresh {
         model_id,
-        effort,
+        effort: usage.effort,
         tokens,
         cost,
         turn_complete,
@@ -98,6 +94,9 @@ pub(super) struct TranscriptUsage {
     pub(super) context_window_reported: bool,
     pub(super) total_tokens: Option<u64>,
     pub(super) model: Option<String>,
+    /// Session's live reasoning effort from the latest `turn_context`; updates
+    /// when the user changes it in the Codex TUI.
+    pub(super) effort: Option<String>,
     /// The latest call's full input from `last_token_usage.input_tokens` —
     /// the cached slice included, so this is the window numerator the
     /// composition line splits.
@@ -303,6 +302,7 @@ impl TranscriptUsage {
             context_window_reported: false,
             total_tokens: Some(0),
             model: None,
+            effort: None,
             last_input_tokens: Some(0),
             last_cached_input_tokens: Some(0),
             last_output_tokens: Some(0),
@@ -621,6 +621,7 @@ struct LastUsage {
 #[derive(Default)]
 struct TranscriptScan {
     latest_model: Option<String>,
+    latest_effort: Option<String>,
     latest_usage: Option<LastUsage>,
     latest_cumulative: Option<(u64, u64, u64)>,
 }
@@ -642,12 +643,14 @@ impl TranscriptScan {
             Some(last) => usage_from_last_record(
                 last,
                 self.latest_model,
+                self.latest_effort,
                 cumulative_input_tokens,
                 cumulative_cached_tokens,
                 cumulative_output_tokens,
             ),
             None => TranscriptUsage {
                 model: self.latest_model,
+                effort: self.latest_effort,
                 cumulative_input_tokens,
                 cumulative_cached_tokens,
                 cumulative_output_tokens,
@@ -679,6 +682,9 @@ fn scan_transcript_record(value: &Value, scan: &mut TranscriptScan) {
     if scan.latest_model.is_none() {
         scan.latest_model = turn_context_model(value);
     }
+    if scan.latest_effort.is_none() {
+        scan.latest_effort = turn_context_effort(value);
+    }
     if scan.latest_usage.is_some() && scan.latest_cumulative.is_some() {
         return;
     }
@@ -707,6 +713,12 @@ fn turn_context_model(value: &Value) -> Option<String> {
                 .filter(|model| !model.is_empty())
                 .map(ToOwned::to_owned)
         })
+        .flatten()
+}
+
+fn turn_context_effort(value: &Value) -> Option<String> {
+    (value.get("type").and_then(Value::as_str) == Some("turn_context"))
+        .then(|| value.get("payload").and_then(payload_reasoning_effort))
         .flatten()
 }
 
@@ -761,6 +773,7 @@ fn cumulative_usage_from_info(info: Option<&Value>) -> Option<(u64, u64, u64)> {
 fn usage_from_last_record(
     last: LastUsage,
     model: Option<String>,
+    effort: Option<String>,
     cumulative_input_tokens: Option<u64>,
     cumulative_cached_tokens: u64,
     cumulative_output_tokens: Option<u64>,
@@ -776,6 +789,7 @@ fn usage_from_last_record(
         context_window_reported,
         total_tokens: last.total,
         model,
+        effort,
         last_input_tokens: last.input,
         last_cached_input_tokens: last.cached,
         last_output_tokens: last.output,

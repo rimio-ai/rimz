@@ -34,6 +34,12 @@ fn merge_local_context_preserves_prior_fields_by_case() {
             assert: assert_prior_tokens,
         },
         MergeCase {
+            name: "unknown local effort keeps prior effort",
+            prior: prior_effort,
+            refresh: unknown_effort_refresh,
+            assert: assert_prior_effort,
+        },
+        MergeCase {
             name: "fresh Codex zero usage keeps established usage",
             prior: prior_established_codex_usage,
             refresh: fresh_zero_codex_refresh,
@@ -210,6 +216,12 @@ fn prior_tokens(observed_at: Timestamp) -> AgentContextRecord {
     record
 }
 
+fn prior_effort(observed_at: Timestamp) -> AgentContextRecord {
+    let mut record = codex_record(observed_at);
+    record.context.effort = Some("xhigh".to_owned());
+    record
+}
+
 fn prior_established_codex_usage(observed_at: Timestamp) -> AgentContextRecord {
     let mut record = codex_record(observed_at);
     record.context.tokens = Some(codex_tokens(
@@ -263,6 +275,13 @@ fn unpriced_refresh() -> LocalContextRefresh {
 fn unknown_tokens_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
         tokens: None,
+        ..unpriced_refresh()
+    }
+}
+
+fn unknown_effort_refresh() -> LocalContextRefresh {
+    LocalContextRefresh {
+        effort: None,
         ..unpriced_refresh()
     }
 }
@@ -346,6 +365,14 @@ fn assert_prior_tokens(merged: &AgentContextRecord, _: Timestamp, _: Timestamp) 
         used_pct(merged),
         Some(10),
         "unknown local tokens keep the established sidebar meter",
+    );
+}
+
+fn assert_prior_effort(merged: &AgentContextRecord, _: Timestamp, _: Timestamp) {
+    assert_eq!(
+        merged.context.effort.as_deref(),
+        Some("xhigh"),
+        "missing rollout effort preserves the last observed effort",
     );
 }
 

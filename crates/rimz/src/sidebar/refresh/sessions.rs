@@ -61,9 +61,6 @@ pub fn refresh_session_transcript_context(
     let ctx = LocalContextRefreshCtx {
         agent_id: session_id,
         model_hint,
-        prior_effort: prior
-            .as_ref()
-            .and_then(|record| record.context.effort.as_deref()),
         prior_transcript_path: prior
             .as_ref()
             .and_then(|record| record.transcript_path.as_deref()),

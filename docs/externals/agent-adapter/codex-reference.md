@@ -209,7 +209,7 @@ The reaper queries the per-user daemon **specifically** (never a cold-spawn, who
 
 Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and a server-side change in window count or length renders gracefully off `windowDurationMins` rather than a hard-coded 5h/7d. The optional `credits` object is mapped by the shared Codex credit rule: `overageLimitReached: true` means exhausted, `unlimited: true` means usable with unknown remaining balance, numeric/string `balance` means remaining USD, and `hasCredits: false` means disabled. Snake-case aliases are tolerated for the credit-state fields, and unknown credit shapes leave valid windows intact.
 
-**`model/list`** (`{ "includeHidden": true }`) → the session model's display name. The payload also carries `defaultReasoningEffort`, but Rimz does not map it to row effort because it is a catalog default/recommendation, not the current session's configured value.
+**`model/list`** (`{ "includeHidden": true }`) → the session model's display name. The payload also carries `defaultReasoningEffort`, but Rimz does not map it to row effort because it is a catalog default/recommendation, not the current session's live value.
 
 ```jsonc
 // result.data[] (RawModel)
@@ -260,8 +260,8 @@ Codex writes one rollout file per session — its session log — at `~/.codex/s
               "last_token_usage": { "input_tokens": <u64>, "cached_input_tokens": <u64>,
                                     "output_tokens": <u64>, "total_tokens": <u64> } } } }
 
-// model
-{ "type": "turn_context", "payload": { "model": "gpt-5.5-codex" } }
+// model and reasoning effort
+{ "type": "turn_context", "payload": { "model": "gpt-5.5-codex", "effort": "xhigh" } }
 
 // assistant stream message
 { "type": "event_msg", "payload": { "type": "agent_message", "message": "..." } }

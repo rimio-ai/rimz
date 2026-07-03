@@ -247,6 +247,30 @@ fn root_identity_events_stamp_codex_session_origin() {
 }
 
 #[test]
+fn root_lifecycle_effort_falls_back_to_rollout_turn_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let day_dir = dir.path().join("2026").join("06").join("26");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    std::fs::write(
+        day_dir.join("rollout-2026-06-26T00-00-00-sess-live.jsonl"),
+        "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\",\"effort\":\"xhigh\"}}\n",
+    )
+    .unwrap();
+
+    let turn_started = with_codex_sessions_root(dir.path(), || {
+        CodexAdapter
+            .observe_lifecycle(
+                "UserPromptSubmit",
+                &json!({"session_id":"sess-live","prompt":"continue"}),
+            )
+            .unwrap()
+    });
+
+    assert_eq!(turn_started.launch.model.as_deref(), Some("gpt-5"));
+    assert_eq!(turn_started.launch.effort.as_deref(), Some("xhigh"));
+}
+
+#[test]
 fn subagent_lifecycle_effort_falls_back_to_codex_config() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
@@ -376,7 +400,6 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
     let ctx = crate::agents::LocalContextRefreshCtx {
         agent_id: "sess-1",
         model_hint: Some("gpt-5"),
-        prior_effort: None,
         prior_transcript_path: Some(&path),
         prior_transcript_stat: None,
     };

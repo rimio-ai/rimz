@@ -137,9 +137,6 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
         transcript_model_hint,
         prior
             .as_ref()
-            .and_then(|record| record.context.effort.as_deref()),
-        prior
-            .as_ref()
             .and_then(|record| record.transcript_path.as_deref()),
         prior
             .as_ref()

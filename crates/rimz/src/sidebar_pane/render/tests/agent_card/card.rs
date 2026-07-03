@@ -246,9 +246,8 @@ fn render_enriched_selected_agent_card() {
         Some("db migrate"),
     );
     // Transcript scalars are the coarse fallback; the statusline enriches the
-    // display name (`Opus` → `Opus 4.8`). Effort stays with the hook-derived
-    // configured value (`xhigh`) even when the statusline reports a capped
-    // model-effective level (`high`).
+    // display name (`Opus` → `Opus 4.8`) and publishes the live effective
+    // effort (`high`) over the launch scalar (`xhigh`).
     claude.model = Some("Opus".to_owned());
     claude.effort = Some("xhigh".to_owned());
     claude.context_pct = Some(38);
@@ -291,7 +290,11 @@ fn render_enriched_selected_agent_card() {
     assert!(rendered.contains("Opus 4.8"));
     assert!(!rendered.contains("(1M"));
     assert!(!rendered.contains("context"));
-    assert!(rendered.contains("xhigh"), "effort:\n{rendered}");
+    assert!(rendered.contains("high"), "effort:\n{rendered}");
+    assert!(
+        !rendered.contains("xhigh"),
+        "launch effort should not render:\n{rendered}"
+    );
     assert!(rendered.contains("· 200k"), "window token:\n{rendered}");
     // Per-row cost now reads at full cent resolution, like every other spend.
     assert!(rendered.contains("$1.27"));
