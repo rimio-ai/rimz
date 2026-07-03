@@ -65,7 +65,7 @@ If a room already existed with Zellij web sharing off, restart the room through 
 
 ## Remote rooms
 
-`rimz remote connect <target> --web` opens the remote Zellij room in the local browser through an SSH local-forward tunnel, then proceeds to the normal terminal attach.
+`rimz remote connect <target> --web` opens the remote Zellij room in the local browser through an SSH local-forward tunnel and stays in the foreground supervising that tunnel until Ctrl-C.
 
 The local process first runs a non-PTY prep command on the remote host:
 
@@ -73,13 +73,13 @@ The local process first runs a non-PTY prep command on the remote host:
 ssh -o ConnectTimeout=10 -- <host> '<PATH repair>; exec rimz web open --print --json ...'
 ```
 
-That remote `rimz web open` resolves or verifies the workspace, births the Rimz room with `web_sharing on` when the target is a path, starts the remote Zellij web server when allowed, and returns `rimz.web.v1`. A tmux room, old remote Rimz, old Zellij, or disabled web capability fails here before the terminal attach starts.
+That remote `rimz web open` resolves or verifies the workspace, births the Rimz room with `web_sharing on` when the target is a path, starts the remote Zellij web server when allowed, and returns `rimz.web.v1`. A tmux room, old remote Rimz, old Zellij, or disabled web capability fails here before browser access opens.
 
-When the payload reports `token_count = 0`, local Rimz runs `rimz web token create` remotely and relays Zellij's one-time token output under a short banner. Rimz never stores the token and never puts it in the URL.
+`--web-token` runs `rimz web token create` remotely and relays Zellij's one-time token output under a short banner. Without `--web-token`, a payload with `token_count = 0` prints a one-line hint and leaves authentication to Zellij's login page. Rimz never stores the token and never puts it in the URL.
 
-The local tunnel uses a stable deterministic port derived from the session name in `8300..8399`, scanning to the next free port on collision; `--web-port <port>` overrides it and fails if the port is already in use. The tunnel always forwards to remote `127.0.0.1:<remote-web-port>` and is supervised separately from the interactive attach with the same established-link reconnect policy. The browser URL is `http://127.0.0.1:<local-port>/<session>`, so browser cookies remain tied to a stable local origin across reconnects and repeat runs.
+The local tunnel uses a stable deterministic port derived from the session name in `8300..8399`, scanning to the next free port on collision; `--web-port <port>` overrides it and fails if the port is already in use. The tunnel always forwards to remote `127.0.0.1:<remote-web-port>` and uses the same established-link reconnect policy as remote attach unless `--no-reconnect` is set. The browser URL is `http://127.0.0.1:<local-port>/<session>`, so browser cookies remain tied to a stable local origin across reconnects and repeat runs.
 
-The remote path deliberately uses three SSH connections: prep, tunnel, and attach. Key or agent authentication is the intended shape; password authentication prompts for each connection. The tunnel is not coupled to the attach ControlMaster, so it can reconnect independently when the terminal link drops.
+The remote path uses two SSH connections: prep and tunnel. `--web-token` adds one token-creation connection. Key or agent authentication is the intended shape; password authentication prompts for each connection. The tunnel runs independently in the foreground, reconnects when allowed, and stops when the local Rimz process receives Ctrl-C.
 
 ## Security
 

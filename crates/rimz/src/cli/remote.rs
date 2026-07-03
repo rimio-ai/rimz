@@ -66,6 +66,9 @@ enum RemoteSubcmd {
         /// Local tunnel port for `--web`.
         #[arg(long, requires = "web")]
         web_port: Option<u16>,
+        /// Create and relay a Zellij web login token before opening (needs --web).
+        #[arg(long, requires = "web")]
+        web_token: bool,
         #[command(flatten)]
         attach: AttachFlags,
     },
@@ -81,6 +84,9 @@ enum RemoteSubcmd {
         /// Local tunnel port for `--web`.
         #[arg(long, requires = "web")]
         web_port: Option<u16>,
+        /// Create and relay a Zellij web login token before opening (needs --web).
+        #[arg(long, requires = "web")]
+        web_token: bool,
         #[command(flatten)]
         attach: AttachFlags,
     },
@@ -190,6 +196,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             no_reconnect,
             web,
             web_port,
+            web_token,
             attach,
         } => connect(
             alias_or_target,
@@ -198,6 +205,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             web::RemoteWebOptions {
                 enabled: web,
                 port: web_port,
+                token: web_token,
             },
             attach,
             globals,
@@ -207,6 +215,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             no_reconnect,
             web,
             web_port,
+            web_token,
             attach,
         } => connect(
             alias_or_target,
@@ -215,6 +224,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             web::RemoteWebOptions {
                 enabled: web,
                 port: web_port,
+                token: web_token,
             },
             attach,
             globals,
@@ -296,11 +306,9 @@ fn connect(
 
 /// SSH remote attach: the local rimz is a launcher and link supervisor only.
 /// Workspace resolution, session birth, the sidebar, and the health gate all
-/// run on the remote host's own `rimz`; the room renders here over `ssh -t`.
+/// run on the remote host's own `rimz`; terminal mode renders here over
+/// `ssh -t`, and web mode opens a supervised local-forward tunnel.
 fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
-    let term = remote_term_plan();
-    let plain_spec = ssh_attach_spec(&remote.target, remote.no_resume, remote.mux, &term, None);
-
     // The local nesting block does not apply: a remote room inside a local
     // pane is a legitimate shape (the remote rimz checks its own env).
     match attach_action(
@@ -311,10 +319,11 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
     ) {
         AttachAction::Print => {
             if remote.web.enabled {
-                bail!(
-                    "`rimz remote connect --web` cannot be combined with `--print`; remove `--print` to open the tunnel and browser"
-                );
+                bail!("--web is web-only and has no SSH attach command; drop --print");
             }
+            let term = remote_term_plan();
+            let plain_spec =
+                ssh_attach_spec(&remote.target, remote.no_resume, remote.mux, &term, None);
             supervisor::print_remote_command(&plain_spec);
             Ok(())
         }
@@ -326,11 +335,12 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                      remotely, or run with --print to emit the command"
                 )
             })?;
-            let _web_guard = if remote.web.enabled {
-                Some(web::prepare_remote_web(&remote)?)
-            } else {
-                None
-            };
+            if remote.web.enabled {
+                return web::run_remote_web(&remote);
+            }
+            let term = remote_term_plan();
+            let plain_spec =
+                ssh_attach_spec(&remote.target, remote.no_resume, remote.mux, &term, None);
             if remote.reconnect {
                 let control = rimz::remote::link::validated_control_path()
                     .context("checking SSH ControlMaster socket path")?;
@@ -342,29 +352,12 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                     Some(&control),
                 );
                 supervisor::supervise_remote(&control_spec, &plain_spec, &remote.target, &control)
-            } else if remote.web.enabled {
-                supervisor::report_remote_connect(remote.target.host_display(), false);
-                run_attach_command(&plain_spec)
             } else {
                 supervisor::report_remote_connect(remote.target.host_display(), false);
                 exec_attach_command(&plain_spec)
             }
         }
     }
-}
-
-fn run_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
-    let status = spec
-        .to_command()
-        .status()
-        .with_context(|| format!("running `{}`", rimz::remote::display_ssh_command(spec)))?;
-    if !status.success() {
-        bail!(
-            "ssh attach command `{}` exited with {status}",
-            rimz::remote::display_ssh_command(spec)
-        );
-    }
-    Ok(())
 }
 
 fn remote_term_plan() -> TermPlan {

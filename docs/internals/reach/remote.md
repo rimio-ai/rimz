@@ -12,13 +12,13 @@ The print and one-shot paths use a single `ssh -t` invocation. Every attach enab
 
 ## Web Access
 
-`rimz remote connect <target> --web` opens a remote Zellij room in the local browser before entering the normal SSH attach. The local process runs remote `rimz web open --print --json` as a non-PTY prep command, parses the `rimz.web.v1` payload, creates and relays a first-run Zellij web token when the remote token list is empty, chooses a stable local port from the session name, starts an SSH `-L 127.0.0.1:<local>:127.0.0.1:<remote>` tunnel, waits for the local port to accept connections, prints `web: http://127.0.0.1:<local>/<session>`, opens the browser best-effort, and then proceeds to attach.
+`rimz remote connect <target> --web` opens a remote Zellij room in the local browser and stays in the foreground supervising the browser tunnel. The local process runs remote `rimz web open --print --json` as a non-PTY prep command, parses the `rimz.web.v1` payload, relays a Zellij web token only when `--web-token` is set, chooses a stable local port from the session name, starts an SSH `-L 127.0.0.1:<local>:127.0.0.1:<remote>` tunnel, waits for the local port to accept connections, prints `web: http://127.0.0.1:<local>/<session>`, opens the browser best-effort, and then waits until Ctrl-C or tunnel exit.
 
-The prep command is the fail-fast boundary. A tmux-selected room, remote Rimz without `rimz web`, Zellij without the `web` subcommand, or a remote room error aborts before the terminal attach starts and surfaces the remote diagnostic. Path targets birth the room with Zellij `web_sharing on`; exact-session targets rely on that existing session's Zellij sharing state.
+The prep command is the fail-fast boundary. A tmux-selected room, remote Rimz without `rimz web`, Zellij without the `web` subcommand, or a remote room error aborts before browser access opens and surfaces the remote diagnostic. Path targets birth the room with Zellij `web_sharing on`; exact-session targets rely on that existing session's Zellij sharing state. When the payload reports `token_count = 0` and `--web-token` is absent, Rimz prints a one-line hint and leaves authentication to Zellij's login page.
 
-The tunnel is a separate SSH child with its own reconnect loop using the same gatetime and backoff as the attach supervisor. It is deliberately independent of the attach ControlMaster so browser access survives terminal-link drops and reconnects on its own. `--web-port <port>` pins the local browser origin; without it Rimz hashes the session name into `8300..8399` and scans to the next free port on collision. Ctrl-C or attach exit drops the guard and kills the tunnel child.
+The tunnel is a separate SSH child with its own reconnect loop using the same gatetime and backoff as the attach supervisor. `--no-reconnect` applies to that tunnel and exits on a lost established link instead of retrying. `--web-port <port>` pins the local browser origin; without it Rimz hashes the session name into `8300..8399` and scans to the next free port on collision. Ctrl-C stops the foreground Rimz process and the tunnel child.
 
-Remote web uses three SSH connections: prep, tunnel, and attach. Key or agent authentication gives the intended no-prompt flow; password authentication prompts per connection.
+Remote web uses two SSH connections: prep and tunnel. `--web-token` adds one token-creation connection. Key or agent authentication gives the intended no-prompt flow; password authentication prompts per connection.
 
 ## Reconnect Policy
 
