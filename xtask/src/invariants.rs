@@ -754,6 +754,7 @@ fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
     ];
     let agents_show_command = root.join("crates/rimz/src/cli/agents_cmd/commands.rs");
     let run_failure_capture = root.join("crates/rimz/src/cli/agents_cmd/supervised/pane.rs");
+    let codex_turn_death_confirmation = "crates/rimz/src/sidebar/refresh/sessions.rs";
     for needle in [
         concat!("capture", "_pane("),
         concat!("send", "_keys("),
@@ -790,6 +791,18 @@ fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
                     && path == run_failure_capture.as_path()
                     && idx > 0
                     && lines[idx - 1].trim() == "// rimz-invariant: run-failure-capture"
+                {
+                    continue;
+                }
+                // Codex capacity kills expose their warning only in the pane;
+                // the producer reads a bounded tail to refine the transcript
+                // shape marker's label.
+                if needle == concat!("capture", "_pane(")
+                    && path
+                        .to_string_lossy()
+                        .ends_with(codex_turn_death_confirmation)
+                    && idx > 0
+                    && lines[idx - 1].trim() == "// rimz-invariant: codex-turn-death-confirmation"
                 {
                     continue;
                 }

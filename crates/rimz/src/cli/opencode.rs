@@ -258,6 +258,7 @@ mod tests {
                     total_cost_usd: Some(0.42),
                     ..AgentCost::default()
                 }),
+                turn_error: None,
                 turn_complete: None,
                 transcript_path: Some("/tmp/opencode.db".to_owned()),
                 transcript_stat: Some(TranscriptStat {

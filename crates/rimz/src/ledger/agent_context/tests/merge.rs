@@ -74,6 +74,80 @@ fn merge_local_context_preserves_prior_fields_by_case() {
 }
 
 #[test]
+fn codex_local_refresh_overwrites_turn_error_marker() {
+    let (_dir, runtime) = runtime();
+    let observed_at = Timestamp::from_second(1_700_000_000).unwrap();
+    let prior_marker = turn_error(TurnErrorClass::PausedRateLimit, "old limit", 1_700_000_000);
+    let next_marker = turn_error(
+        TurnErrorClass::Unknown,
+        "turn ended with no final message",
+        1_700_000_030,
+    );
+    let mut prior = codex_record(observed_at);
+    prior.context.turn_error = Some(prior_marker);
+    write_record(&runtime, &prior).unwrap();
+
+    let mut refresh = unpriced_refresh();
+    refresh.turn_error = Some(next_marker.clone());
+    merge_local_context(
+        &runtime,
+        "codex",
+        "sess-1",
+        read_one(&runtime, "codex", "sess-1"),
+        refresh,
+        observed_at,
+    )
+    .unwrap();
+    let merged = read_one(&runtime, "codex", "sess-1").unwrap();
+    assert_eq!(merged.context.turn_error, Some(next_marker));
+
+    let mut clear = unpriced_refresh();
+    clear.turn_error = None;
+    merge_local_context(
+        &runtime,
+        "codex",
+        "sess-1",
+        read_one(&runtime, "codex", "sess-1"),
+        clear,
+        observed_at,
+    )
+    .unwrap();
+    let merged = read_one(&runtime, "codex", "sess-1").unwrap();
+    assert_eq!(
+        merged.context.turn_error, None,
+        "Codex detector clears stale turn errors when the tail advances"
+    );
+}
+
+#[test]
+fn non_codex_local_refresh_preserves_turn_error_marker() {
+    let (_dir, runtime) = runtime();
+    let observed_at = Timestamp::from_second(1_700_000_000).unwrap();
+    let marker = turn_error(
+        TurnErrorClass::PausedOverloaded,
+        "provider parked",
+        1_700_000_000,
+    );
+    let mut prior = new_record("pi", "sess-1", ctx(observed_at));
+    prior.context.source = "pi".to_owned();
+    prior.context.turn_error = Some(marker.clone());
+    write_record(&runtime, &prior).unwrap();
+
+    merge_local_context(
+        &runtime,
+        "pi",
+        "sess-1",
+        read_one(&runtime, "pi", "sess-1"),
+        unpriced_refresh(),
+        observed_at,
+    )
+    .unwrap();
+
+    let merged = read_one(&runtime, "pi", "sess-1").unwrap();
+    assert_eq!(merged.context.turn_error, Some(marker));
+}
+
+#[test]
 fn merge_turn_error_skips_identical_marker() {
     let (_dir, runtime) = runtime();
     let marker = AgentTurnError {
@@ -94,6 +168,14 @@ fn merge_turn_error_skips_identical_marker() {
     );
     let second = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(second, first);
+}
+
+fn turn_error(class: TurnErrorClass, label: &str, at: i64) -> AgentTurnError {
+    AgentTurnError {
+        class,
+        at: Timestamp::from_second(at).unwrap(),
+        label: Some(label.to_owned()),
+    }
 }
 
 #[test]
@@ -254,6 +336,7 @@ fn full_local_refresh() -> LocalContextRefresh {
             }),
         )),
         cost: Some(cost(0.12)),
+        turn_error: None,
         turn_complete: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
@@ -266,6 +349,7 @@ fn unpriced_refresh() -> LocalContextRefresh {
         effort: Some("high".to_owned()),
         tokens: Some(tokens(1_000, 10, 90, None)),
         cost: None,
+        turn_error: None,
         turn_complete: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
@@ -295,6 +379,7 @@ fn fresh_zero_codex_refresh() -> LocalContextRefresh {
             Some(current_usage(0, 0, 0, 0)),
         )),
         cost: None,
+        turn_error: None,
         turn_complete: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
@@ -307,6 +392,7 @@ fn fallback_window_refresh() -> LocalContextRefresh {
         effort: Some("high".to_owned()),
         tokens: Some(tokens(codex_default_window(), 10, 90, None)),
         cost: None,
+        turn_error: None,
         turn_complete: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),

@@ -257,6 +257,7 @@ pub(super) fn supplement_realtime_cost(
         effort: prior.and_then(|record| record.context.effort.clone()),
         tokens: prior.and_then(|record| record.context.tokens.clone()),
         cost: None,
+        turn_error: prior.and_then(|record| record.context.turn_error.clone()),
         turn_complete: prior.and_then(|record| record.context.turn_complete),
         transcript_path: None,
         transcript_stat: None,

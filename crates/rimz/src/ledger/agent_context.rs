@@ -176,6 +176,13 @@ pub fn merge_local_context(
     if refresh.cost.is_some() {
         record.context.cost = refresh.cost;
     }
+    // Codex's local transcript detector re-derives turn death from the tail each
+    // refresh: a still-present marker re-stamps identically, and a fresh turn
+    // clears it by returning `None`. Other local-refresh users do not run that
+    // detector, so they must not clear hook/statusline-owned errors.
+    if kind == "codex" {
+        record.context.turn_error = refresh.turn_error;
+    }
     // Overwrite each refresh: a clean `task_complete` at the tail sets the
     // marker, and a fresh turn already underway clears it (the detector returns
     // `None`), so a stale completion never outlives its turn.

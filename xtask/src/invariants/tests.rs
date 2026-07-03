@@ -159,8 +159,9 @@ fn sidebar_enrich_stays_projection_only() {
 fn pane_auto_use_invariant_allows_marked_run_failure_capture_only() {
     let root = temp_repo_root("pane-capture-boundary");
     let allowed = root.join("crates/rimz/src/cli/agents_cmd/supervised/pane.rs");
+    let codex_allowed = root.join("crates/rimz/src/sidebar/refresh/sessions.rs");
     let bad = root.join("crates/rimz/src/cli/agents_cmd/supervised/bad.rs");
-    for path in [&allowed, &bad] {
+    for path in [&allowed, &codex_allowed, &bad] {
         std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
     }
     std::fs::write(
@@ -174,13 +175,25 @@ fn pane_auto_use_invariant_allows_marked_run_failure_capture_only() {
     )
     .expect("write allowed source");
     std::fs::write(
+        &codex_allowed,
+        concat!(
+            "fn f(backend: &dyn MuxBackend, pane: &PaneId) {\n",
+            "    // rimz-invariant: codex-turn-death-confirmation\n",
+            "    backend.capture_pane(pane, Some(60), false);\n",
+            "}\n",
+        ),
+    )
+    .expect("write codex allowed source");
+    std::fs::write(
         &bad,
         "fn f(backend: &dyn MuxBackend, pane: &PaneId) { backend.capture_pane(pane, None, false); }\n",
     )
     .expect("write bad source");
 
     ensure_no_core_pane_auto_use(&root, std::slice::from_ref(&allowed)).unwrap();
-    let err = ensure_no_core_pane_auto_use(&root, &[bad.clone(), allowed]).unwrap_err();
+    ensure_no_core_pane_auto_use(&root, &[allowed.clone(), codex_allowed.clone()]).unwrap();
+    let err =
+        ensure_no_core_pane_auto_use(&root, &[bad.clone(), allowed, codex_allowed]).unwrap_err();
     assert!(err.to_string().contains("capture"));
     assert!(err.to_string().contains(&bad.display().to_string()));
     let _ = std::fs::remove_dir_all(root);

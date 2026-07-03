@@ -345,6 +345,10 @@ pub struct LocalContextRefresh {
     pub effort: Option<String>,
     pub tokens: Option<AgentTokenUsage>,
     pub cost: Option<AgentCost>,
+    /// Provider turn-death marker derived from a local transcript tail. Codex
+    /// uses it for failures that write no hook-owned error; non-detector local
+    /// refreshes leave sidecar error state untouched at merge time.
+    pub turn_error: Option<AgentTurnError>,
     /// Timestamp of a cleanly-completed turn read from the rollout tail
     /// (`detect_turn_complete`), set when the session is at rest on a
     /// `task_complete` that fired no `Stop` hook (a `/review` turn). The

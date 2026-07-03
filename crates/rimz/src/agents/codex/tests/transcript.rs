@@ -347,7 +347,7 @@ fn turn_complete_detector_marks_clean_completion_but_skips_errored_and_supersede
     let user_message = json!({"timestamp":"2026-06-14T05:51:40.861Z","type":"event_msg","payload":{"type":"user_message","message":"/review"}});
     let exited = json!({"timestamp":"2026-06-14T05:59:49.267Z","type":"event_msg","payload":{"type":"exited_review_mode"}});
     let agent_message = json!({"timestamp":"2026-06-14T05:59:49.267Z","type":"event_msg","payload":{"type":"agent_message","message":"patch is correct"}});
-    let task_complete = json!({"timestamp":"2026-06-14T05:59:49.268Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":null}});
+    let task_complete = json!({"timestamp":"2026-06-14T05:59:49.268Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"patch is correct"}});
     let tail =
         format!("{task_started}\n{user_message}\n{exited}\n{agent_message}\n{task_complete}\n");
     assert_eq!(
@@ -361,8 +361,8 @@ fn turn_complete_detector_marks_clean_completion_but_skips_errored_and_supersede
     );
 
     // An errored `task_complete` is a death owned by `detect_turn_error`, and an
-    // empty-or-absent `error` (`null`/`false`/`""`/`{}`) is too ambiguous to
-    // claim success over — only a record with no `error` field at all settles.
+    // empty `error` (`null`/`false`/`""`/`{}`) is too ambiguous to claim success
+    // over — only a record with no `error` field at all can settle.
     let errored = json!({
         "timestamp": "2026-06-14T05:59:49.268Z",
         "type": "event_msg",
@@ -382,6 +382,18 @@ fn turn_complete_detector_marks_clean_completion_but_skips_errored_and_supersede
             "an empty-error task_complete is too ambiguous to mark a completion"
         );
     }
+    for last_agent_message in [serde_json::Value::Null, json!(""), json!("   ")] {
+        let messageless = json!({
+            "timestamp": "2026-06-14T05:59:49.268Z",
+            "type": "event_msg",
+            "payload": { "type": "task_complete", "last_agent_message": last_agent_message }
+        })
+        .to_string();
+        assert!(
+            detect_turn_complete(&messageless).is_none(),
+            "a clean-looking task_complete still needs a final assistant message"
+        );
+    }
 
     // A fresh turn already underway after a prior completion is not at rest.
     let complete = json!({
@@ -398,6 +410,147 @@ fn turn_complete_detector_marks_clean_completion_but_skips_errored_and_supersede
         detect_turn_complete(&format!("{complete}\n{next_turn}\n")).is_none(),
         "a newer prompt means a fresh turn, not a completed one"
     );
+}
+
+#[test]
+fn messageless_task_complete_refreshes_as_overload_death() {
+    for last_agent_message in [serde_json::Value::Null, json!("")] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-session.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n",
+                json!({
+                    "timestamp": "2026-07-03T12:55:00.000Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": last_agent_message
+                    }
+                })
+            ),
+        )
+        .unwrap();
+
+        let refresh =
+            refresh_transcript_context("sess-1", None, Some(path.to_string_lossy().as_ref()), None)
+                .expect("changed transcript refreshes");
+        let error = refresh.turn_error.expect("shape death is stamped");
+        assert_eq!(error.class, crate::agents::TurnErrorClass::Unknown);
+        assert_eq!(
+            error.at,
+            "2026-07-03T12:55:00.000Z"
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+        );
+        assert_eq!(
+            error.label.as_deref(),
+            Some("turn ended with no final message")
+        );
+        assert_eq!(refresh.turn_complete, None);
+    }
+}
+
+#[test]
+fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
+    let compaction_complete = json!({
+        "timestamp": "2026-07-03T12:55:00.000Z",
+        "type": "event_msg",
+        "payload": { "type": "task_complete", "last_agent_message": null }
+    });
+    let task_started = json!({
+        "timestamp": "2026-07-03T12:55:00.100Z",
+        "type": "event_msg",
+        "payload": { "type": "task_started" }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-compaction.jsonl");
+    std::fs::write(&path, format!("{compaction_complete}\n{task_started}\n")).unwrap();
+    let refresh =
+        refresh_transcript_context("sess-1", None, Some(path.to_string_lossy().as_ref()), None)
+            .expect("changed transcript refreshes");
+    assert_eq!(refresh.turn_error, None);
+    assert_eq!(refresh.turn_complete, None);
+
+    let path = dir.path().join("rollout-error.jsonl");
+    let real_error = json!({
+        "timestamp": "2026-07-03T12:56:00.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "stream_error",
+            "message": "Server is busy. Try again later."
+        }
+    });
+    std::fs::write(&path, format!("{compaction_complete}\n{real_error}\n")).unwrap();
+    let refresh =
+        refresh_transcript_context("sess-1", None, Some(path.to_string_lossy().as_ref()), None)
+            .expect("changed transcript refreshes");
+    let error = refresh.turn_error.expect("real error wins");
+    assert_eq!(
+        error.label.as_deref(),
+        Some("Server is busy. Try again later.")
+    );
+    assert_eq!(error.class, crate::agents::TurnErrorClass::PausedOverloaded);
+    assert_eq!(refresh.turn_complete, None);
+}
+
+#[test]
+fn death_warning_from_frame_extracts_last_warning_above_prompt() {
+    let frame = "\
+intro
+⚠ Earlier warning
+
+⚠ Selected model is at capacity. Please try a different model.
+› 
+";
+    assert_eq!(
+        death_warning_from_frame(frame).as_deref(),
+        Some("Selected model is at capacity. Please try a different model.")
+    );
+
+    let wrapped = "\
+│ output │
+│ ⚠ Selected model is at capacity. Please │
+│ try a different model. │
+│ ›  │
+";
+    assert_eq!(
+        death_warning_from_frame(wrapped).as_deref(),
+        Some("Selected model is at capacity. Please try a different model.")
+    );
+
+    assert_eq!(death_warning_from_frame("no warning\n› \n"), None);
+}
+
+#[test]
+fn refine_turn_death_from_frame_only_parks_keyword_proven_warning() {
+    let mut capacity = crate::agents::AgentTurnError {
+        class: crate::agents::TurnErrorClass::Unknown,
+        at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
+        label: Some("turn ended with no final message".to_owned()),
+    };
+    refine_turn_death_from_frame(
+        &mut capacity,
+        "⚠ Selected model is at capacity. Please try a different model.\n› \n",
+    );
+    assert_eq!(
+        capacity.class,
+        crate::agents::TurnErrorClass::PausedOverloaded
+    );
+    assert_eq!(
+        capacity.label.as_deref(),
+        Some("Selected model is at capacity. Please try a different model.")
+    );
+
+    let mut unknown = crate::agents::AgentTurnError {
+        class: crate::agents::TurnErrorClass::Unknown,
+        at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
+        label: Some("turn ended with no final message".to_owned()),
+    };
+    refine_turn_death_from_frame(&mut unknown, "⚠ Provider ended turn early\n› \n");
+    assert_eq!(unknown.class, crate::agents::TurnErrorClass::Unknown);
+    assert_eq!(unknown.label.as_deref(), Some("Provider ended turn early"));
 }
 
 #[test]

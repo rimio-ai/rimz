@@ -67,11 +67,14 @@ use self::transcript::{
 };
 #[cfg(test)]
 use self::transcript::{
-    configured_model_at, configured_reasoning_effort_at, detect_turn_complete,
-    find_session_transcript_under, transcript_enrichment, transcript_stat, usage_from_transcript,
-    with_codex_config_path, with_codex_sessions_root,
+    configured_model_at, configured_reasoning_effort_at, death_warning_from_frame,
+    detect_turn_complete, find_session_transcript_under, transcript_enrichment, transcript_stat,
+    usage_from_transcript, with_codex_config_path, with_codex_sessions_root,
 };
-pub use self::transcript::{refresh_transcript_context, session_origin};
+pub use self::transcript::{
+    refine_turn_death_from_frame, refresh_transcript_context, session_origin,
+    turn_death_needs_pane_confirmation,
+};
 use super::context::AgentContext;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,

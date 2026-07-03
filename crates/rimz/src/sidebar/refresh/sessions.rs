@@ -11,12 +11,17 @@ use jiff::Timestamp;
 use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
-use crate::agents::{LifecycleRefreshCtx, LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger};
+use crate::agents::{
+    LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger,
+};
+use crate::ids::PaneId;
 use crate::sidebar::timing::{
     SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL, SESSION_REFRESH_INTERVAL,
 };
 
 use super::SidebarSnapshot;
+
+const CODEX_TURN_DEATH_CAPTURE_LINES: u16 = 60;
 
 /// Refresh every live root session's adapter-owned context sidecar from the
 /// producer. Inline transcript reads run first with their adapter stat gate;
@@ -24,7 +29,8 @@ use super::SidebarSnapshot;
 /// channels.
 pub(crate) fn refresh_live_sessions(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
     for refresh in live_session_refreshes(snapshot) {
-        refresh_session_transcript_context(
+        refresh_session_transcript_context_with_snapshot(
+            Some(snapshot),
             runtime,
             &refresh.kind,
             &refresh.session_id,
@@ -54,6 +60,16 @@ pub fn refresh_session_transcript_context(
     session_id: &str,
     model_hint: Option<&str>,
 ) {
+    refresh_session_transcript_context_with_snapshot(None, runtime, kind, session_id, model_hint);
+}
+
+fn refresh_session_transcript_context_with_snapshot(
+    snapshot: Option<&SidebarSnapshot>,
+    runtime: &RuntimePaths,
+    kind: &str,
+    session_id: &str,
+    model_hint: Option<&str>,
+) {
     let Some(adapter) = crate::agents::find_adapter(kind) else {
         return;
     };
@@ -72,6 +88,10 @@ pub fn refresh_session_transcript_context(
     let Some(refresh) = refresh else {
         return;
     };
+    let mut refresh = refresh;
+    if let Some(snapshot) = snapshot {
+        confirm_codex_turn_death_from_snapshot(snapshot, kind, session_id, &mut refresh);
+    }
     if let Err(err) = crate::ledger::agent_context::merge_local_context(
         runtime,
         kind,
@@ -90,6 +110,51 @@ pub fn refresh_session_transcript_context(
         return;
     }
     let _ = crate::ledger::wakeup::wake_sidebars(runtime);
+}
+
+fn confirm_codex_turn_death_from_snapshot(
+    snapshot: &SidebarSnapshot,
+    kind: &str,
+    session_id: &str,
+    refresh: &mut LocalContextRefresh,
+) {
+    let Some(error) = refresh.turn_error.as_mut() else {
+        return;
+    };
+    if kind != "codex" || !crate::agents::codex::turn_death_needs_pane_confirmation(error) {
+        return;
+    }
+    let Some(pane) = snapshot
+        .agent_panes
+        .iter()
+        .find(|pane| {
+            pane.kind.as_str() == kind
+                && pane
+                    .agent_id
+                    .as_ref()
+                    .is_some_and(|agent_id| agent_id.as_str() == session_id)
+        })
+        .map(|pane| pane.pane_id.clone())
+    else {
+        return;
+    };
+    confirm_codex_turn_death_from_pane(&pane, refresh);
+}
+
+pub fn confirm_codex_turn_death_from_pane(pane: &PaneId, refresh: &mut LocalContextRefresh) {
+    let Some(error) = refresh.turn_error.as_mut() else {
+        return;
+    };
+    if !crate::agents::codex::turn_death_needs_pane_confirmation(error) {
+        return;
+    }
+    let backend = crate::mux::backend_for(pane.mux());
+    // rimz-invariant: codex-turn-death-confirmation
+    let Ok(capture) = backend.capture_pane(pane, Some(CODEX_TURN_DEATH_CAPTURE_LINES), false)
+    else {
+        return;
+    };
+    crate::agents::codex::refine_turn_death_from_frame(error, &capture.raw_text);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

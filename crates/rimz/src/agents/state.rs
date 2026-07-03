@@ -575,7 +575,7 @@ pub(crate) fn resume_park(
         TurnErrorClass::PausedOverloaded => Some(ResumeArm::Overloaded {
             overloaded_at: error.at,
         }),
-        TurnErrorClass::Failed => None,
+        TurnErrorClass::Unknown | TurnErrorClass::Failed => None,
     }
 }
 
@@ -933,7 +933,7 @@ impl AgentState {
             TurnErrorClass::PausedRateLimit
             | TurnErrorClass::PausedSpendLimit
             | TurnErrorClass::PausedOverloaded => AgentStatus::Paused,
-            TurnErrorClass::Failed => self.status,
+            TurnErrorClass::Unknown | TurnErrorClass::Failed => self.status,
         }
     }
 
@@ -1235,6 +1235,10 @@ mod tests {
         let mut running = test_agent(AgentStatus::Running, 1_000);
         running.context = Some(context_error(TurnErrorClass::Failed, 1_010));
         assert_eq!(running.effective_status(), AgentStatus::Running);
+
+        let mut unknown = test_agent(AgentStatus::Running, 1_000);
+        unknown.context = Some(context_error(TurnErrorClass::Unknown, 1_010));
+        assert_eq!(unknown.effective_status(), AgentStatus::Running);
     }
 
     #[test]

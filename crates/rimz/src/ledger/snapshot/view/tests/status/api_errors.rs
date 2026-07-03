@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::TurnErrorClass;
 
 #[test]
 fn api_error_turn_escalates_running_to_attention() {
@@ -248,4 +249,25 @@ fn paused_class_marker_survives_the_stall_window() {
         let row = row(&snapshot, "busy-claude");
         assert_eq!(row.status(), Some(AgentStatus::Paused), "{expected}");
     }
+}
+
+#[test]
+fn messageless_task_complete_marker_fails_running_codex_row_until_pane_proves_park() {
+    let session = agent("codex", "codex-capacity", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(60)
+        .turn_error_class(
+            10,
+            "turn ended with no final message",
+            TurnErrorClass::Unknown,
+        );
+
+    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let row = row(&snapshot, "codex-capacity");
+    assert_eq!(
+        row.status(),
+        Some(AgentStatus::Failed),
+        "a message-less task_complete is a turn-death marker, not success, but it waits for pane proof before parking"
+    );
 }

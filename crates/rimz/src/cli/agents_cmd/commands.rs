@@ -989,7 +989,8 @@ fn agent_status_projection(
             rimz::agents::AgentStatus::Paused,
             rimz::agents::TurnPhase::Idle,
         ),
-        Some(rimz::agents::TurnErrorClass::Failed) => (
+        Some(rimz::agents::TurnErrorClass::Unknown)
+        | Some(rimz::agents::TurnErrorClass::Failed) => (
             rimz::agents::AgentStatus::Failed,
             rimz::agents::TurnPhase::Idle,
         ),

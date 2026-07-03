@@ -77,7 +77,9 @@ pub(super) fn project_display_status(
             }
         } else if status == AgentStatus::Running && has_live_child {
             AgentStatus::Running
-        } else if let Some(error) = turn_error.filter(|error| error.class == TurnErrorClass::Failed)
+        } else if let Some((error, _class)) = turn_error
+            .map(|error| (error, effective_turn_error_class(error)))
+            .filter(|(_, class)| matches!(class, TurnErrorClass::Unknown | TurnErrorClass::Failed))
         {
             agent.turn_error_label = error.label.clone();
             AgentStatus::Failed

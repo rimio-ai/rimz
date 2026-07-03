@@ -49,13 +49,19 @@ pub fn refresh_transcript_context(
         .as_deref()
         .map(usage_from_transcript_tail)
         .unwrap_or_default();
-    let turn_complete = tail.as_deref().and_then(detect_turn_complete);
+    let outcome = tail.as_deref().and_then(detect_resting_turn_outcome);
+    let (turn_complete, turn_error) = match outcome {
+        Some(RestingTurnOutcome::Complete(at)) => (Some(at), None),
+        Some(RestingTurnOutcome::Died(error)) => (None, Some(error)),
+        None => (None, None),
+    };
     let (tokens, cost, model_id) = transcript_enrichment(&usage, model_hint);
     Some(LocalContextRefresh {
         model_id,
         effort: usage.effort,
         tokens,
         cost,
+        turn_error,
         turn_complete,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
@@ -413,6 +419,12 @@ pub(super) fn usage_from_transcript_tail(text: &str) -> TranscriptUsage {
 
 /// Cap on provider error text surfaced on the agent card.
 const TURN_ERROR_LABEL_MAX: usize = 80;
+const MESSAGELESS_TASK_COMPLETE_LABEL: &str = "turn ended with no final message";
+
+enum RestingTurnOutcome {
+    Complete(Timestamp),
+    Died(AgentTurnError),
+}
 
 pub(super) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
     for line in tail.lines().rev() {
@@ -426,31 +438,33 @@ pub(super) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
         if transcript_record_proves_recovery(&value) {
             return None;
         }
-        let Some(payload) = error_payload(&value) else {
-            continue;
-        };
-        let Some(at) = record_timestamp(&value) else {
-            continue;
-        };
-        let label = turn_error_label(payload);
-        let class = classify_turn_error(codex_error_info(payload), label.as_deref());
-        return Some(AgentTurnError { class, at, label });
+        if let Some(error) = turn_error_from_record(&value) {
+            return Some(error);
+        }
     }
     None
 }
 
 /// Detect a cleanly-completed Codex turn from the rollout tail. Codex closes a
 /// turn — including a `/review` turn that runs in review mode and fires no
-/// `Stop` hook — with an `event_msg`/`task_complete` payload that carries no
-/// `error` field at all. Returns that record's timestamp only when the session
-/// is at rest on it: scanning the tail newest-first, the first turn-boundary
-/// record is a clean `task_complete`. A later `user_message`/`task_started` (a
-/// fresh turn already underway), an errored `task_complete` (owned by
-/// [`detect_turn_error`]), or an ambiguous empty `error` (`null`/`false`/`""`/`{}`)
-/// yields `None`. The display-only success sibling of [`detect_turn_error`]; the
+/// `Stop` hook — with an `event_msg`/`task_complete` payload. Returns that
+/// record's timestamp only when the session is at rest on a no-error completion
+/// whose `last_agent_message` is a non-empty string. A later
+/// `user_message`/`task_started` (a fresh turn already underway), an errored
+/// `task_complete` (owned by [`detect_turn_error`]), an ambiguous empty `error`
+/// (`null`/`false`/`""`/`{}`), or a message-less clean-looking completion yields
+/// `None`. The display-only success sibling of [`detect_turn_error`]; the
 /// projection compares the timestamp against the row's `last_activity`, so a
 /// stale completion never reclassifies fresh work.
+#[cfg(test)]
 pub(super) fn detect_turn_complete(tail: &str) -> Option<Timestamp> {
+    match detect_resting_turn_outcome(tail) {
+        Some(RestingTurnOutcome::Complete(at)) => Some(at),
+        Some(RestingTurnOutcome::Died(_)) | None => None,
+    }
+}
+
+fn detect_resting_turn_outcome(tail: &str) -> Option<RestingTurnOutcome> {
     for line in tail.lines().rev() {
         let line = line.trim();
         if line.is_empty() {
@@ -459,22 +473,114 @@ pub(super) fn detect_turn_complete(tail: &str) -> Option<Timestamp> {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if transcript_record_proves_recovery(&value) {
+            return None;
+        }
+        if let Some(error) = turn_error_from_record(&value) {
+            return Some(RestingTurnOutcome::Died(error));
+        }
         let Some(payload) = event_msg_payload(&value) else {
             continue;
         };
         match payload.get("type").and_then(Value::as_str) {
-            // Only an explicitly clean completion — no `error` field at all —
-            // settles the turn. A real error belongs to `detect_turn_error`, and
-            // an empty `error` (`null`/`false`/`""`/`{}`) is too ambiguous to
-            // claim success over, so it falls through to the stall fallback.
             Some("task_complete") if payload.get("error").is_none() => {
-                return record_timestamp(&value);
+                let at = record_timestamp(&value)?;
+                if task_complete_has_final_message(payload) {
+                    return Some(RestingTurnOutcome::Complete(at));
+                }
+                return Some(RestingTurnOutcome::Died(messageless_task_complete(at)));
             }
-            Some("task_complete" | "user_message" | "task_started") => return None,
+            Some("task_complete") => return None,
             _ => continue,
         }
     }
     None
+}
+
+pub fn turn_death_needs_pane_confirmation(error: &AgentTurnError) -> bool {
+    error.class == TurnErrorClass::Unknown
+        && error.label.as_deref() == Some(MESSAGELESS_TASK_COMPLETE_LABEL)
+}
+
+pub fn refine_turn_death_from_frame(error: &mut AgentTurnError, frame: &str) {
+    if !turn_death_needs_pane_confirmation(error) {
+        return;
+    }
+    let Some(label) = death_warning_from_frame(frame) else {
+        return;
+    };
+    error.label = Some(label);
+    let class = TurnErrorClass::classify_label(error.label.as_deref());
+    if class != TurnErrorClass::Failed {
+        error.class = class;
+    }
+}
+
+pub fn death_warning_from_frame(frame: &str) -> Option<String> {
+    let lines: Vec<&str> = frame.lines().collect();
+    let prompt_idx = lines.iter().rposition(|line| is_codex_input_prompt(line));
+    let search_len = prompt_idx.unwrap_or(lines.len());
+    for idx in (0..search_len).rev() {
+        let line = trim_frame_line(lines[idx]);
+        let Some(first) = line.strip_prefix('⚠') else {
+            continue;
+        };
+        let mut block = vec![first.trim()];
+        for continuation in &lines[idx + 1..search_len] {
+            let continuation = trim_frame_line(continuation);
+            if continuation.is_empty()
+                || continuation.starts_with('⚠')
+                || is_codex_input_prompt_text(continuation)
+            {
+                break;
+            }
+            block.push(continuation);
+        }
+        return cap_turn_error_label(&block.join(" "));
+    }
+    None
+}
+
+fn task_complete_has_final_message(payload: &Value) -> bool {
+    payload
+        .get("last_agent_message")
+        .and_then(Value::as_str)
+        .is_some_and(|message| !message.trim().is_empty())
+}
+
+fn messageless_task_complete(at: Timestamp) -> AgentTurnError {
+    AgentTurnError {
+        class: TurnErrorClass::Unknown,
+        at,
+        label: Some(MESSAGELESS_TASK_COMPLETE_LABEL.to_owned()),
+    }
+}
+
+fn turn_error_from_record(value: &Value) -> Option<AgentTurnError> {
+    let payload = error_payload(value)?;
+    let at = record_timestamp(value)?;
+    let label = turn_error_label(payload);
+    let class = classify_turn_error(codex_error_info(payload), label.as_deref());
+    Some(AgentTurnError { class, at, label })
+}
+
+fn trim_frame_line(line: &str) -> &str {
+    let mut text = line.trim();
+    if let Some(stripped) = text.strip_prefix('│') {
+        text = stripped.trim_start();
+    }
+    if let Some(stripped) = text.strip_suffix('│') {
+        text = stripped.trim_end();
+    }
+    text
+}
+
+fn is_codex_input_prompt(line: &str) -> bool {
+    is_codex_input_prompt_text(trim_frame_line(line))
+}
+
+fn is_codex_input_prompt_text(text: &str) -> bool {
+    text.starts_with('›')
 }
 
 fn transcript_record_proves_recovery(value: &Value) -> bool {

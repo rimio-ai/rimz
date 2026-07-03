@@ -419,6 +419,10 @@ pub enum TurnErrorClass {
     /// is no local reset window to wait for, so the row stays paused until a
     /// newer hook event self-clears it.
     PausedOverloaded,
+    /// The turn ended without machine-readable cause. It renders like a failed
+    /// turn and never arms automatic resume until another evidence channel
+    /// proves a resumable class.
+    Unknown,
     /// Any other provider API error: actionable failure with the upstream text
     /// on the card.
     #[default]
@@ -452,6 +456,7 @@ impl TurnErrorClass {
 
 fn is_transient_server_error(lower: &str) -> bool {
     lower.contains("overloaded")
+        || lower.contains("at capacity")
         || lower.contains("server is busy")
         || lower.contains("internal server error")
         || lower.contains("server error")
@@ -603,6 +608,11 @@ mod tests {
                 "paused_overloaded",
                 "API Error: Overloaded",
             ),
+            (
+                TurnErrorClass::Unknown,
+                "unknown",
+                "turn ended with no final message",
+            ),
             (TurnErrorClass::Failed, "failed", "API Error: Bad Request"),
         ] {
             let error = AgentTurnError {
@@ -650,6 +660,10 @@ mod tests {
             ),
             (
                 "API Error: connection error",
+                TurnErrorClass::PausedOverloaded,
+            ),
+            (
+                "Selected model is at capacity. Please try a different model.",
                 TurnErrorClass::PausedOverloaded,
             ),
             ("API Error: Bad Request", TurnErrorClass::Failed),

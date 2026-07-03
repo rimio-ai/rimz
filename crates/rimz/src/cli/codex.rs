@@ -14,11 +14,12 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use jiff::Timestamp;
 
-use rimz::RuntimePaths;
 use rimz::agents;
 use rimz::agents::AgentContext;
 use rimz::agents::codex;
-use rimz::ids::WorkspaceId;
+use rimz::ids::{PaneId, WorkspaceId};
+use rimz::ledger::workspace_record;
+use rimz::{Ledger, ResolvedWorkspace, RuntimePaths, StatePaths};
 
 use super::GlobalFlags;
 
@@ -132,7 +133,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
             .and_then(|record| record.context.model_id.as_deref())
     });
     let mut wrote = false;
-    let transcript_refresh = codex::refresh_transcript_context(
+    let mut transcript_refresh = codex::refresh_transcript_context(
         session_id,
         transcript_model_hint,
         prior
@@ -142,6 +143,9 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
             .as_ref()
             .and_then(|record| record.transcript_stat.as_ref()),
     );
+    if let Some(refresh) = transcript_refresh.as_mut() {
+        confirm_codex_turn_death(&runtime, &workspace_id, session_id, refresh);
+    }
     if let Some(refresh) = transcript_refresh {
         rimz::ledger::agent_context::merge_local_context(
             &runtime,
@@ -205,6 +209,55 @@ fn app_server_due(
     record
         .and_then(|record| record.rate_limits_observed_at)
         .is_none_or(|observed_at| now - observed_at.as_second() >= within)
+}
+
+fn confirm_codex_turn_death(
+    runtime: &RuntimePaths,
+    workspace_id: &WorkspaceId,
+    session_id: &str,
+    refresh: &mut agents::LocalContextRefresh,
+) {
+    let Some(error) = refresh.turn_error.as_ref() else {
+        return;
+    };
+    if !codex::turn_death_needs_pane_confirmation(error) {
+        return;
+    }
+    let Some(pane) = codex_session_pane(runtime, workspace_id, session_id) else {
+        return;
+    };
+    rimz::sidebar::refresh::sessions::confirm_codex_turn_death_from_pane(&pane, refresh);
+}
+
+fn codex_session_pane(
+    runtime: &RuntimePaths,
+    workspace_id: &WorkspaceId,
+    session_id: &str,
+) -> Option<PaneId> {
+    let paths = StatePaths::for_workspace(workspace_id.clone()).ok()?;
+    let record = workspace_record::read(&paths.workspace_record).ok()?;
+    let ledger = Ledger::open(paths, runtime.clone()).ok()?;
+    let workspace = ResolvedWorkspace {
+        workspace_id: workspace_id.clone(),
+        project_root: record.project_root.clone(),
+        root_class: record.root_class,
+        worktree_root: record.project_root,
+        worktree_branch: None,
+        session_name: record.session_name,
+        mux_hint: None,
+    };
+    let snapshot = rimz::sidebar::produce::resolution_snapshot(&workspace, &ledger, None).ok()?;
+    snapshot
+        .agent_panes
+        .into_iter()
+        .find(|pane| {
+            pane.kind.as_str() == "codex"
+                && pane
+                    .agent_id
+                    .as_ref()
+                    .is_some_and(|agent_id| agent_id.as_str() == session_id)
+        })
+        .map(|pane| pane.pane_id)
 }
 
 fn merge_app_server_context(
@@ -302,6 +355,7 @@ mod tests {
                     total_cost_usd: Some(0.42),
                     ..AgentCost::default()
                 }),
+                turn_error: None,
                 turn_complete: None,
                 transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
                 transcript_stat: Some(TranscriptStat {

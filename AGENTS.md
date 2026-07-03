@@ -27,7 +27,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - **Ledger first.** Correctness lives in the ledger, CAS rules, nonces, and per-request sockets. Sidebar wakeups are latency, not truth.
 - **Hook stdout is the decision channel.** Logs go to stderr or Rimz state logs. Hook helper children get fresh stdio.
 - **Cross-backend parity.** Zellij and tmux are first-class. Core behaviour never depends on a backend-only feature.
-- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives; `message` routes human-authored text through the same send path, while pane reads stay in rendering and resolver-owned inspection.
+- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives; `message` routes human-authored text through the same send path, while pane reads stay in rendering, resolver-owned inspection, and Codex turn-death confirmation.
 - **Sidebar is read-only on the ledger.** Sidebar code reads via `rimz sidebar snapshot`; ledger-write modules stay out of the sidebar's import graph.
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
 - **Security surfaces stay visible.** Project trust, resolver allowlists, hook install diffs, and privacy settings are product behaviour, not implementation details.
