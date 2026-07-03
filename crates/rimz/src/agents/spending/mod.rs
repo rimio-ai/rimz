@@ -55,14 +55,10 @@ pub use publish::{
     write_provider_spending_cache, write_provider_spending_cache_with_rollups,
     write_workspace_spending_cache,
 };
-#[cfg(test)]
-pub(crate) use refresh::dedup_chunk;
 pub(crate) use refresh::{
     RefreshCallbacks, is_priceable_model_name, record_unknown_model, recorded_unknown_models,
     refresh_spending_cache,
 };
-#[cfg(test)]
-pub(crate) use refresh::{RefreshDecision, refresh_decision};
 pub(crate) use time::iso_to_unix_secs;
 pub use time::{unix_secs_now, utc_date};
 
