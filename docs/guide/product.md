@@ -10,7 +10,7 @@ Rimz is built for developers running ten or twenty Claude Code, Codex, or Pi ses
 
 Rimz gives every project one room: a Zellij or tmux session with a sidebar where every pane is a row. A bare shell reads as `○ zsh` and becomes the agent's card the moment you launch one, carrying its status, the task it's on, its model and effort, its context meter, and its running cost, grouped by the worktree it lives in.
 
-Ranking does the triage for you: the most overdue work rises to the top, calm work settles below, and the cockpit line sums the whole fleet (`? 2  ! 1 …`).
+Ranking does the triage for you: the most overdue work rises to the top, calm work settles below, and the cockpit line sums the whole fleet (`? 2  ! 1 …`). The reasoning behind that order — what deserves attention and why — lives in [attention.md](./attention.md).
 
 Account-scoped usage lifts off the rows into the provider dashboard pinned at the bottom: one tab per provider with its plan, headline spend, the week, and the month, draining included-window bars, and paid/API usage when available. One look tells you where the week is going.
 
