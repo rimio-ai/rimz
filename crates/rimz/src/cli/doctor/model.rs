@@ -140,6 +140,7 @@ pub(super) enum MuxLog {
     Ready {
         path: String,
         size_bytes: u64,
+        scanned_bytes: u64,
         matched: usize,
         entries: Vec<MuxLogEntry>,
     },

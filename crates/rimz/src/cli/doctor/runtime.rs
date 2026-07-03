@@ -184,6 +184,7 @@ fn scan_mux_log(
         Ok(scan) => model::MuxLog::Ready {
             path: path.display().to_string(),
             size_bytes: scan.size_bytes,
+            scanned_bytes: scan.scanned_bytes,
             matched: scan.matched,
             entries: scan
                 .entries

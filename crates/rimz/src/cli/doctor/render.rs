@@ -466,6 +466,9 @@ fn render_mux_binary_notes(w: &mut impl Write, mux: &Mux, tally: &mut Tally) -> 
             )?;
         }
     }
+    if mux.binaries.active.is_none() {
+        return Ok(());
+    }
     for server in &mux.binaries.server_mismatches {
         let deleted = if server.deleted { " (deleted)" } else { "" };
         note(
@@ -483,7 +486,10 @@ fn render_mux_binary_notes(w: &mut impl Write, mux: &Mux, tally: &mut Tally) -> 
 
 fn render_mux_log_notes(w: &mut impl Write, log: &MuxLog, tally: &mut Tally) -> io::Result<()> {
     let MuxLog::Ready {
-        matched, entries, ..
+        matched,
+        scanned_bytes,
+        entries,
+        ..
     } = log
     else {
         return Ok(());
@@ -495,7 +501,10 @@ fn render_mux_log_notes(w: &mut impl Write, log: &MuxLog, tally: &mut Tally) -> 
         tally,
         w,
         Health::Warn,
-        &format!("{matched} warn/error lines in the last 256 KiB"),
+        &format!(
+            "{matched} warn/error/panic problem lines in the last {}",
+            fmt_bytes(*scanned_bytes)
+        ),
     )?;
     for entry in entries {
         let health = if entry.severity == "warn" {
