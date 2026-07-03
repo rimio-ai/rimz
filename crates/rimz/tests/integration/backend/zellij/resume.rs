@@ -1,4 +1,15 @@
-use super::*;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use rimz::ids::{MuxName, PaneId};
+use rimz::mux::{
+    LayoutPanes, MuxBackend, PaneCmd, SessionHealth, SidebarPaneOptions, SidebarWidth, TabOptions,
+    ZellijBackend,
+};
+
+use crate::common::{CommandTimeoutExt, Env};
+
+use super::support::*;
 
 #[test]
 fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() {

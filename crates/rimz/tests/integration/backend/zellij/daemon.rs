@@ -1,5 +1,17 @@
-use super::*;
-use rimz::mux::{DaemonView, HostPane};
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+use rimz::ids::WorkspaceId;
+use rimz::mux::{
+    DaemonView, HostPane, MuxBackend, PaneListOptions, SidebarPaneOptions, SidebarWidth,
+    ZellijBackend,
+};
+use rimz::pane::PaneRef;
+use tempfile::TempDir;
+
+use crate::common::CommandTimeoutExt;
+
+use super::support::*;
 
 /// A `BackgroundViewOptions` for a session whose content and host panes are
 /// long-lived `sleep` commands and whose sidebar runs the alive-keeping `stub`,

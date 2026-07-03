@@ -1,4 +1,12 @@
-use super::*;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use rimz::ids::WorkspaceId;
+use rimz::mux::{MuxBackend, ZellijBackend, zellij};
+use tempfile::TempDir;
+
+use super::support::*;
 
 /// The presence-plugin wasm `cargo xtask build-plugin` produces, honoring
 /// `CARGO_TARGET_DIR`. `None` self-skips the live plugin test — CI's
