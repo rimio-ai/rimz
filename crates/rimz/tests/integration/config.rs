@@ -266,7 +266,9 @@ on_force_close = "explode"
         .success()
         .stdout(contains("Merged"))
         .stdout(contains("kept 1 setting(s)"))
-        .stdout(contains("skipped notifications.bogus_key (unknown key)"))
+        .stdout(contains(
+            "skipped notifications.bogus_key (invalid: unknown config key `notifications.bogus_key`)",
+        ))
         .stdout(contains("skipped zellij.on_force_close (invalid:"))
         .stdout(contains("Wrote"))
         .stdout(contains("No hooks or trust grants were changed"));

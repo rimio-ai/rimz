@@ -227,20 +227,15 @@ impl MachineConfig {
     /// Load from the default per-machine paths. Missing files are defaults —
     /// never an error.
     pub fn load() -> Result<Self> {
-        Self::load_shared().map(|config| config.as_ref().clone())
-    }
-
-    /// Load from the default per-machine paths and share the memoized config.
-    pub fn load_shared() -> Result<Arc<Self>> {
-        Self::load_shared_with_memo(&Self::config_path(), &paths::agents_home())
+        Self::load_from(&Self::config_path(), &paths::agents_home())
     }
 
     /// Load per-machine config for a runtime entry point. A file that fails to
     /// load degrades to its built-in defaults with a warning instead of
     /// aborting the room; the strict [`Self::load`] and [`Self::load_from`]
     /// report the precise error for `rimz config` and `rimz doctor`.
-    pub fn load_lenient() -> Self {
-        Self::load_lenient_from(&Self::config_path(), &paths::agents_home())
+    pub fn load_lenient() -> Arc<Self> {
+        Self::load_lenient_with_memo(&Self::config_path(), &paths::agents_home())
     }
 
     /// Load from an explicit config.toml path and its sibling theme.toml and
@@ -356,6 +351,17 @@ impl MachineConfig {
         }
     }
 
+    /// Parse one per-machine config file's text and return the key paths serde
+    /// ignored, dotted, in the file's own table coordinates.
+    pub fn parse_text_unknown_keys(path: &Path, text: &str) -> Result<Vec<String>> {
+        match path.file_name().and_then(|name| name.to_str()) {
+            Some(THEME_FILE) => parse_unknown_keys::<ThemeFile>(path, text),
+            Some(AGENTS_FILE) => parse_unknown_keys::<AgentsFile>(path, text),
+            Some(LOOP_FILE) => parse_unknown_keys::<LoopConfig>(path, text),
+            _ => parse_unknown_keys::<CoreConfig>(path, text),
+        }
+    }
+
     fn assemble(
         core: CoreConfig,
         theme: ThemeConfig,
@@ -393,41 +399,47 @@ impl MachineConfig {
     }
 
     #[cfg(test)]
-    fn load_with_memo(config_path: &Path, agents_home: &Path) -> Result<Self> {
-        Self::load_shared_with_memo(config_path, agents_home).map(|config| config.as_ref().clone())
+    fn load_with_memo(config_path: &Path, agents_home: &Path) -> Self {
+        Self::load_lenient_with_memo(config_path, agents_home)
+            .as_ref()
+            .clone()
     }
 
-    fn load_shared_with_memo(config_path: &Path, agents_home: &Path) -> Result<Arc<Self>> {
+    fn load_lenient_with_memo(config_path: &Path, agents_home: &Path) -> Arc<Self> {
         let now = Instant::now();
         if let Ok(memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
             && let Some(cached) = memo.as_ref()
             && now.duration_since(cached.last_verified) <= CONFIG_STAMP_TTL
         {
-            return Ok(cached.config.clone());
+            return cached.config.clone();
         }
 
-        let stamp = ConfigStamp::from_inputs(config_path, agents_home)?;
-        if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
-            && let Some(cached) = memo.as_mut()
-            && cached.stamp == stamp
-        {
-            cached.last_verified = now;
-            return Ok(cached.config.clone());
+        let stamp = ConfigStamp::from_inputs(config_path, agents_home);
+        if let Ok(stamp) = stamp {
+            if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
+                && let Some(cached) = memo.as_mut()
+                && cached.stamp == stamp
+            {
+                cached.last_verified = now;
+                return cached.config.clone();
+            }
+
+            let config = Arc::new(Self::load_lenient_from(config_path, agents_home));
+            if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
+                *memo = Some(LoadMemo {
+                    stamp,
+                    config: config.clone(),
+                    last_verified: now,
+                });
+            }
+            return config;
         }
 
-        let config = Arc::new(Self::load_from(config_path, agents_home)?);
-        if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
-            *memo = Some(LoadMemo {
-                stamp,
-                config: config.clone(),
-                last_verified: now,
-            });
-        }
-        Ok(config)
+        Arc::new(Self::load_lenient_from(config_path, agents_home))
     }
 
     pub(crate) fn load_stamp_generation() -> u64 {
-        let _ = Self::load_shared();
+        let _ = Self::load_lenient();
         if let Ok(memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
             && let Some(cached) = memo.as_ref()
         {
@@ -577,6 +589,25 @@ fn parse_core_text(path: &Path, text: &str) -> Result<CoreConfig> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+fn parse_unknown_keys<'de, T>(path: &Path, text: &'de str) -> Result<Vec<String>>
+where
+    T: Deserialize<'de>,
+{
+    let deserializer = toml::Deserializer::parse(text).map_err(|source| ConfigErr::Parse {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mut ignored = Vec::new();
+    let _ = serde_ignored::deserialize::<_, _, T>(deserializer, |path| {
+        ignored.push(path.to_string());
+    })
+    .map_err(|source| ConfigErr::Parse {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(ignored)
 }
 
 fn parse_theme_text(path: &Path, text: &str) -> Result<ThemeConfig> {

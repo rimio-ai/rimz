@@ -24,7 +24,7 @@ pub fn load() -> Tasks {
 }
 
 pub fn load_all() -> BTreeMap<String, (TaskEntry, TaskSource)> {
-    load_all_from(load(), MachineConfig::load_lenient().r#loop.tasks)
+    load_all_from(load(), MachineConfig::load_lenient().r#loop.tasks.clone())
 }
 
 pub fn load_entry(name: &str) -> Option<(TaskEntry, TaskSource)> {

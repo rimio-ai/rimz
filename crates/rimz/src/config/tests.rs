@@ -735,8 +735,8 @@ fn load_memo_reuses_unchanged_inputs_and_busts_on_file_change() {
     let agents_home = tempdir().expect("agents home");
     let config_path = write(&dir, "[sidebar]\nfocus_key = \"Alt+x\"\n");
 
-    let first = MachineConfig::load_with_memo(&config_path, agents_home.path()).expect("load");
-    let second = MachineConfig::load_with_memo(&config_path, agents_home.path()).expect("load");
+    let first = MachineConfig::load_with_memo(&config_path, agents_home.path());
+    let second = MachineConfig::load_with_memo(&config_path, agents_home.path());
     assert_eq!(second, first);
 
     std::fs::write(&config_path, "[sidebar]\nfocus_key = \"Alt+yy\"\n").expect("rewrite config");
@@ -746,7 +746,7 @@ fn load_memo_reuses_unchanged_inputs_and_busts_on_file_change() {
         memo.last_verified =
             Instant::now() - CONFIG_STAMP_TTL - std::time::Duration::from_millis(1);
     }
-    let changed = MachineConfig::load_with_memo(&config_path, agents_home.path()).expect("reload");
+    let changed = MachineConfig::load_with_memo(&config_path, agents_home.path());
     assert_eq!(changed.sidebar.focus_key, "Alt+yy");
     assert_ne!(changed, first);
 }

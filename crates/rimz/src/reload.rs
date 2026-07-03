@@ -166,10 +166,7 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
             tracing::warn!(error = %err, "current executable unavailable; reload uses bare `rimz`");
             PathBuf::from("rimz")
         });
-    let machine_config = MachineConfig::load().unwrap_or_else(|err| {
-        tracing::warn!(error = %err, "reading per-machine config; using built-in defaults");
-        MachineConfig::default()
-    });
+    let machine_config = MachineConfig::load_lenient();
     let live = LiveSessions::probe();
     let mut reconciled_sessions: HashSet<(MuxName, String)> = HashSet::new();
     let mut live_targets = Vec::new();

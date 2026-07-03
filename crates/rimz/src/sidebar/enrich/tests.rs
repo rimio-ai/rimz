@@ -853,7 +853,7 @@ fn config_fold_stamps_agent_context_severity() {
 /// loaded machine config. Tests that pre-write a per-scope workspace cache key
 /// it through here so the consumer reads back the same hash.
 fn workspace_scope_hash(project: &Path) -> String {
-    let config = crate::config::MachineConfig::load().unwrap_or_default();
+    let config = crate::config::MachineConfig::load_lenient();
     let home = crate::worktree::worktree_parent(project, &config.agents.worktree).ok();
     crate::agents::spending::SpendScope::for_workspace(Some(project), &[], home.as_deref()).hash()
 }

@@ -234,7 +234,7 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
         return;
     }
     let machine_config = machine_config();
-    let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
+    let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
     let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,

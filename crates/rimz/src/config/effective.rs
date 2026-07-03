@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
+use crate::config::{AgentsConfig, CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::spec::{self as agents_spec, LayoutErr};
 use crate::trust::{self, TrustState};
 
@@ -48,26 +48,49 @@ struct RepoConfig {
     teams: TeamsConfig,
 }
 
-/// Effective profiles for launch: machine profiles overlaid by trusted repo
-/// profiles. Repo profiles are inert until trust is granted, and a repo profile
-/// may inherit only repo profiles or built-in kinds so the hashed executable
-/// surface stays closed.
-pub fn effective_profiles(
-    machine: &ProfilesConfig,
+/// Effective launch config: machine profiles/teams overlaid by trusted repo
+/// profiles/teams. Repo entries are inert until trust is granted, and a repo
+/// profile may inherit only repo profiles or built-in kinds so the hashed
+/// executable surface stays closed.
+pub struct LaunchAgents {
+    pub profiles: ProfilesConfig,
+    pub teams: TeamsConfig,
+    state: TrustState,
+    config_path: PathBuf,
+}
+
+pub fn load(
+    machine: &AgentsConfig,
     project_root: &Path,
     config_root: &Path,
-) -> Result<ProfilesConfig> {
+) -> Result<LaunchAgents> {
     let report = trust::status_with_roots(project_root, config_root)?;
     let config_path = project_root.join(PROJECT_CONFIG_REL);
     if report.state != TrustState::Trusted {
-        return Ok(machine.clone());
+        return Ok(LaunchAgents {
+            profiles: machine.profiles.clone(),
+            teams: machine.teams.clone(),
+            state: report.state,
+            config_path,
+        });
     }
 
-    let Some(mut repo) = read_repo_config(&config_path)? else {
-        return Ok(machine.clone());
+    let Some(repo_value) = read_repo_value(&config_path)? else {
+        return Ok(LaunchAgents {
+            profiles: machine.profiles.clone(),
+            teams: machine.teams.clone(),
+            state: report.state,
+            config_path,
+        });
     };
+    let mut repo =
+        repo_config_from_value(&repo_value).map_err(|source| EffectiveConfigErr::Parse {
+            path: config_path.clone(),
+            source,
+        })?;
     let config_dir = config_path.parent().unwrap_or(project_root);
     agents_spec::resolve_profile_prompt_paths(&mut repo.profiles, config_dir);
+    agents_spec::resolve_team_prompt_paths(&mut repo.teams, config_dir);
     agents_spec::validate_config(
         &repo.profiles,
         &CommandsConfig::default(),
@@ -81,7 +104,7 @@ pub fn effective_profiles(
         agents_spec::resolve_profile(name, &repo.profiles).map_err(|source| {
             let source = match source {
                 LayoutErr::UnknownProfileBase { profile, base }
-                    if machine.0.contains_key(&base) =>
+                    if machine.profiles.0.contains_key(&base) =>
                 {
                     LayoutErr::RepoProfileEscapesTrust { profile, base }
                 }
@@ -93,32 +116,6 @@ pub fn effective_profiles(
             }
         })?;
     }
-
-    let mut merged = machine.clone();
-    merged.0.extend(repo.profiles.0);
-    Ok(merged)
-}
-
-/// Effective teams for launch: machine teams overlaid by trusted repo teams.
-/// Repo teams may bind only repo profiles, keeping shared launch shapes inside
-/// the trusted executable surface.
-pub fn effective_teams(
-    machine: &TeamsConfig,
-    project_root: &Path,
-    config_root: &Path,
-) -> Result<TeamsConfig> {
-    let report = trust::status_with_roots(project_root, config_root)?;
-    let config_path = project_root.join(PROJECT_CONFIG_REL);
-    if report.state != TrustState::Trusted {
-        return Ok(machine.clone());
-    }
-
-    let Some(mut repo) = read_repo_config(&config_path)? else {
-        return Ok(machine.clone());
-    };
-    let config_dir = config_path.parent().unwrap_or(project_root);
-    agents_spec::resolve_profile_prompt_paths(&mut repo.profiles, config_dir);
-    agents_spec::resolve_team_prompt_paths(&mut repo.teams, config_dir);
     agents_spec::validate_config(&repo.profiles, &CommandsConfig::default(), &repo.teams).map_err(
         |source| EffectiveConfigErr::Agents {
             path: config_path.clone(),
@@ -126,72 +123,75 @@ pub fn effective_teams(
         },
     )?;
 
-    let mut merged = machine.clone();
-    merged.0.extend(repo.teams.0);
-    Ok(merged)
-}
-
-/// Return a trust error only when a requested launch spec would consume a repo
-/// profile while the project is not trusted. Repo profiles are otherwise inert:
-/// machine profiles, machine commands, and built-in cells keep launching in an
-/// untrusted checkout even when `.rimz/config.toml` declares profiles.
-pub fn block_untrusted_profile_reference(
-    spec: Option<&str>,
-    profiles: &ProfilesConfig,
-    commands: &CommandsConfig,
-    teams: &TeamsConfig,
-    project_root: &Path,
-    config_root: &Path,
-) -> Result<()> {
-    let Some(spec) = spec.map(str::trim).filter(|spec| !spec.is_empty()) else {
-        return Ok(());
-    };
-    let report = trust::status_with_roots(project_root, config_root)?;
-    if report.state == TrustState::Trusted {
-        return Ok(());
-    }
-    let config_path = project_root.join(PROJECT_CONFIG_REL);
-    let Some(repo_value) = repo_value(&config_path)? else {
-        return Ok(());
-    };
-    let repo_profiles = profile_names(&repo_value);
-    let repo_teams = team_names(&repo_value);
-    let team_spec = spec.split_once('.').map_or(spec, |(team, _)| team);
-    if (repo_profiles.is_empty()
-        || !spec_references_repo_profile(spec, &repo_profiles, profiles, commands, teams))
-        && !repo_teams.contains(team_spec)
-    {
-        return Ok(());
-    }
-    let fix = match report.state {
-        TrustState::Stale => {
-            "the executable surface changed since the grant; review it and rerun `rimz trust grant`"
-        }
-        _ => "run `rimz trust grant` to apply them",
-    };
-    Err(EffectiveConfigErr::Blocked {
-        path: config_path,
-        state: report.state.as_str(),
-        fix,
+    let mut profiles = machine.profiles.clone();
+    profiles.0.extend(repo.profiles.0);
+    let mut teams = machine.teams.clone();
+    teams.0.extend(repo.teams.0);
+    Ok(LaunchAgents {
+        profiles,
+        teams,
+        state: report.state,
+        config_path,
     })
 }
 
-fn read_repo_config(path: &Path) -> Result<Option<RepoConfig>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => {
-            let value = toml::from_str::<toml::Value>(&text).map_err(|source| {
-                EffectiveConfigErr::Parse {
-                    path: path.to_path_buf(),
-                    source,
-                }
-            })?;
-            repo_config_from_value(&value)
-                .map(Some)
-                .map_err(|source| EffectiveConfigErr::Parse {
-                    path: path.to_path_buf(),
-                    source,
-                })
+impl LaunchAgents {
+    /// Return a trust error only when a requested launch spec would consume a
+    /// repo profile or team while the project is not trusted. Repo entries are
+    /// otherwise inert: machine profiles, machine commands, and built-in cells
+    /// keep launching in an untrusted checkout even when `.rimz/config.toml`
+    /// declares profiles.
+    pub fn block_untrusted_reference(
+        &self,
+        spec: Option<&str>,
+        commands: &CommandsConfig,
+    ) -> Result<()> {
+        let Some(spec) = spec.map(str::trim).filter(|spec| !spec.is_empty()) else {
+            return Ok(());
+        };
+        if self.state == TrustState::Trusted {
+            return Ok(());
         }
+        let Some(repo_value) = read_repo_value(&self.config_path)? else {
+            return Ok(());
+        };
+        let repo_profiles = profile_names(&repo_value);
+        let repo_teams = team_names(&repo_value);
+        let team_spec = spec.split_once('.').map_or(spec, |(team, _)| team);
+        if (repo_profiles.is_empty()
+            || !spec_references_repo_profile(
+                spec,
+                &repo_profiles,
+                &self.profiles,
+                commands,
+                &self.teams,
+            ))
+            && !repo_teams.contains(team_spec)
+        {
+            return Ok(());
+        }
+        let fix = match self.state {
+            TrustState::Stale => {
+                "the executable surface changed since the grant; review it and rerun `rimz trust grant`"
+            }
+            _ => "run `rimz trust grant` to apply them",
+        };
+        Err(EffectiveConfigErr::Blocked {
+            path: self.config_path.clone(),
+            state: self.state.as_str(),
+            fix,
+        })
+    }
+}
+
+fn read_repo_value(path: &Path) -> Result<Option<toml::Value>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => toml::from_str::<toml::Value>(&text)
+            .map(Some)
+            .map_err(|source| EffectiveConfigErr::Parse {
+                path: path.to_path_buf(),
+                source,
+            }),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(source) => Err(EffectiveConfigErr::Io {
             path: path.to_path_buf(),
@@ -216,22 +216,6 @@ fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig
         .transpose()?
         .unwrap_or_default();
     Ok(RepoConfig { profiles, teams })
-}
-
-fn repo_value(path: &Path) -> Result<Option<toml::Value>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => toml::from_str::<toml::Value>(&text)
-            .map(Some)
-            .map_err(|source| EffectiveConfigErr::Parse {
-                path: path.to_path_buf(),
-                source,
-            }),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(EffectiveConfigErr::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
 }
 
 fn profile_names(value: &toml::Value) -> BTreeSet<String> {

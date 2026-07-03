@@ -266,7 +266,7 @@ struct ReadyRoom {
 
 fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
     let machine_config = machine_config();
-    let mut mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
+    let mut mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
     if entry.requests_web_sharing() {
         mux_config.zellij.web_sharing = true;
     }

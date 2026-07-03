@@ -1,5 +1,7 @@
 use super::*;
-use crate::config::{CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig};
+use crate::config::{
+    AgentsConfig, CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig,
+};
 use crate::harness::run::PermissionMode;
 use std::collections::BTreeMap;
 use tempfile::tempdir;
@@ -42,6 +44,53 @@ fn role(role: &str, profile: &str) -> RoleBinding {
         append_system_prompt_file: None,
         args: None,
     }
+}
+
+fn machine_agents(profiles: ProfilesConfig, teams: TeamsConfig) -> AgentsConfig {
+    AgentsConfig {
+        profiles,
+        teams,
+        ..AgentsConfig::default()
+    }
+}
+
+fn effective_profiles(
+    machine: &ProfilesConfig,
+    project_root: &std::path::Path,
+    config_root: &std::path::Path,
+) -> Result<ProfilesConfig> {
+    load(
+        &machine_agents(machine.clone(), TeamsConfig::default()),
+        project_root,
+        config_root,
+    )
+    .map(|launch| launch.profiles)
+}
+
+fn effective_teams(
+    machine: &TeamsConfig,
+    project_root: &std::path::Path,
+    config_root: &std::path::Path,
+) -> Result<TeamsConfig> {
+    load(
+        &machine_agents(ProfilesConfig::default(), machine.clone()),
+        project_root,
+        config_root,
+    )
+    .map(|launch| launch.teams)
+}
+
+fn block_untrusted_profile_reference(
+    spec: Option<&str>,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+    teams: &TeamsConfig,
+    project_root: &std::path::Path,
+    config_root: &std::path::Path,
+) -> Result<()> {
+    let agents = machine_agents(profiles.clone(), teams.clone());
+    let launch = load(&agents, project_root, config_root)?;
+    launch.block_untrusted_reference(spec, commands)
 }
 
 #[test]

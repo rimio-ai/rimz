@@ -247,33 +247,21 @@ fn task_subject(entry: &TaskEntry) -> String {
 
 fn resolve_task_spec(spec: &str, workspace: &rimz::ResolvedWorkspace) -> Result<ResolvedTaskSpec> {
     let machine_config = super::machine_config();
-    let profiles = rimz::config::effective::effective_profiles(
-        &machine_config.agents.profiles,
-        &workspace.project_root,
-        &config_home(),
-    )?;
-    let teams = rimz::config::effective::effective_teams(
-        &machine_config.agents.teams,
+    let launch = rimz::config::effective::load(
+        &machine_config.agents,
         &workspace.project_root,
         &config_home(),
     )?;
     let layout = match agents_spec::resolve_spec(
         Some(spec),
-        &profiles,
+        &launch.profiles,
         &machine_config.agents.commands,
-        &teams,
+        &launch.teams,
     ) {
         Ok(layout) => layout,
         Err(err @ agents_spec::LayoutErr::UnknownTeam { .. })
         | Err(err @ agents_spec::LayoutErr::UnknownCell { .. }) => {
-            rimz::config::effective::block_untrusted_profile_reference(
-                Some(spec),
-                &profiles,
-                &machine_config.agents.commands,
-                &teams,
-                &workspace.project_root,
-                &config_home(),
-            )?;
+            launch.block_untrusted_reference(Some(spec), &machine_config.agents.commands)?;
             return Err(err.into());
         }
         Err(err) => return Err(err.into()),

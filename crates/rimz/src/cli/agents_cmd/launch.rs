@@ -70,7 +70,7 @@ pub(super) fn launch_layout(
     agents_launch::ensure_live_session(backend.as_ref(), &workspace.session_name)?;
     record_workspace(&workspace)?;
 
-    let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
+    let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
     let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
     let launch = agents_launch::resolve_cwd(
         &workspace,
@@ -468,18 +468,17 @@ pub(super) fn prepare_launch_layout(
     named_single_cell: Option<&str>,
 ) -> Result<PreparedLaunch> {
     let spec = args.spec.as_deref();
-    let profiles = effective_launch_profiles(machine_config, workspace)?;
-    let teams = effective_launch_teams(machine_config, workspace)?;
-    let mut layout = resolve_launch_layout(spec, &profiles, &teams, machine_config, workspace)?;
+    let launch = effective_launch_agents(machine_config, workspace)?;
+    let mut layout = resolve_launch_layout(spec, &launch, machine_config)?;
     let team_name = spec
-        .and_then(|spec| rimz::harness::spec::spec_team(spec, &teams))
+        .and_then(|spec| rimz::harness::spec::spec_team(spec, &launch.teams))
         .map(str::to_owned);
     reject_prompt_that_looks_like_spec(
         args.spec.as_deref(),
         args.prompt.as_deref(),
-        &profiles,
+        &launch.profiles,
         &machine_config.agents.commands,
-        &teams,
+        &launch.teams,
     )?;
     ensure_profile_prompt_files(&layout)?;
     if named_single_cell.is_some() && layout.agent_kinds().count() != 1 {
@@ -493,8 +492,8 @@ pub(super) fn prepare_launch_layout(
     )?;
     apply_default_launch_models(&mut layout)?;
     Ok(PreparedLaunch {
-        profiles,
-        teams,
+        profiles: launch.profiles,
+        teams: launch.teams,
         layout,
         team_name,
     })
@@ -737,24 +736,12 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
     Ok(())
 }
 
-pub(super) fn effective_launch_profiles(
+pub(super) fn effective_launch_agents(
     machine_config: &rimz::config::MachineConfig,
     workspace: &rimz::ResolvedWorkspace,
-) -> Result<rimz::config::ProfilesConfig> {
-    rimz::config::effective::effective_profiles(
-        &machine_config.agents.profiles,
-        &workspace.project_root,
-        &rimz::ledger::paths::config_home(),
-    )
-    .map_err(Into::into)
-}
-
-pub(super) fn effective_launch_teams(
-    machine_config: &rimz::config::MachineConfig,
-    workspace: &rimz::ResolvedWorkspace,
-) -> Result<rimz::config::TeamsConfig> {
-    rimz::config::effective::effective_teams(
-        &machine_config.agents.teams,
+) -> Result<rimz::config::effective::LaunchAgents> {
+    rimz::config::effective::load(
+        &machine_config.agents,
         &workspace.project_root,
         &rimz::ledger::paths::config_home(),
     )
@@ -763,24 +750,19 @@ pub(super) fn effective_launch_teams(
 
 pub(super) fn resolve_launch_layout(
     spec: Option<&str>,
-    profiles: &rimz::config::ProfilesConfig,
-    teams: &rimz::config::TeamsConfig,
+    launch: &rimz::config::effective::LaunchAgents,
     machine_config: &rimz::config::MachineConfig,
-    workspace: &rimz::ResolvedWorkspace,
 ) -> Result<LayoutSpec> {
-    match rimz::harness::spec::resolve_spec(spec, profiles, &machine_config.agents.commands, teams)
-    {
+    match rimz::harness::spec::resolve_spec(
+        spec,
+        &launch.profiles,
+        &machine_config.agents.commands,
+        &launch.teams,
+    ) {
         Ok(layout) => Ok(layout),
         Err(err @ rimz::harness::spec::LayoutErr::UnknownTeam { .. })
         | Err(err @ rimz::harness::spec::LayoutErr::UnknownCell { .. }) => {
-            rimz::config::effective::block_untrusted_profile_reference(
-                spec,
-                profiles,
-                &machine_config.agents.commands,
-                teams,
-                &workspace.project_root,
-                &rimz::ledger::paths::config_home(),
-            )?;
+            launch.block_untrusted_reference(spec, &machine_config.agents.commands)?;
             Err(err.into())
         }
         Err(err) => Err(err.into()),

@@ -27,6 +27,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+# `rimz config` probes unknown keys through the serde model so the editable key
+# surface stays derived from the real config structs instead of a hand-mirrored
+# schema. The crate is a tiny visitor wrapper over serde deserializers and adds
+# no transitive dependencies beyond serde.
+serde_ignored = "0.1"
 toml = "1"
 flate2 = "1"
 # OpenCode stores usage in a WAL SQLite database; the adapter opens it

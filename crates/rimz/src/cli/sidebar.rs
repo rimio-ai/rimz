@@ -536,7 +536,7 @@ fn serve(
         Some(mux) => mux,
         None => rimz::mux::auto_detect_backend(globals.mux)?,
     };
-    let machine_config = rimz::config::MachineConfig::load().unwrap_or_default();
+    let machine_config = rimz::config::MachineConfig::load_lenient();
     let config = rimz::sidebar_pane::app::ServeConfig {
         workspace_id,
         mux,
@@ -545,7 +545,7 @@ fn serve(
         tick_seconds,
         refresh_ms_override: refresh_ms,
         timezone: machine_config.time_zone(),
-        notification_prefs: machine_config.notifications,
+        notification_prefs: machine_config.notifications.clone(),
         own_pane: rimz::mux::own_pane_id(mux),
     };
     if rimz::sidebar_pane::supervise::is_worker() {
@@ -637,7 +637,7 @@ fn gallery(globals: &GlobalFlags) -> Result<()> {
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     let machine_config = super::machine_config();
-    let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
+    let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
     let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
     let detected_size = rimz::mux::detect_terminal_size();
     let room = crate::cli::room::RoomTarget {
@@ -999,9 +999,9 @@ fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> 
         unread_count: None,
     };
     if !command.no_command {
-        let prefs = rimz::config::MachineConfig::load()
-            .unwrap_or_default()
-            .notifications;
+        let prefs = rimz::config::MachineConfig::load_lenient()
+            .notifications
+            .clone();
         rimz::sidebar::notify::spawn_notify_handlers(&prefs, &notification);
     }
     let panes = resolved

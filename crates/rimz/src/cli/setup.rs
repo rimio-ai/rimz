@@ -184,12 +184,8 @@ fn render_merge_report(report: &config::MergeReport) -> Result<()> {
             }
         }
         for skipped in &file.skipped {
-            let reason = match &skipped.reason {
-                config::SkipReason::Unknown => "unknown key".to_owned(),
-                config::SkipReason::Invalid(message) => {
-                    format!("invalid: {}", one_line(message))
-                }
-            };
+            let config::SkipReason::Invalid(message) = &skipped.reason;
+            let reason = format!("invalid: {}", one_line(message));
             print_line(&format!("  skipped {} ({reason})", skipped.key))?;
         }
     }

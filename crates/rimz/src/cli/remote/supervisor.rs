@@ -237,9 +237,9 @@ fn emit_local_link_notification(
     body: &str,
     delivery: LocalLinkNotificationDelivery,
 ) {
-    let prefs = rimz::config::MachineConfig::load()
-        .map(|config| config.notifications)
-        .unwrap_or_default();
+    let prefs = rimz::config::MachineConfig::load_lenient()
+        .notifications
+        .clone();
     let bytes = local_link_terminal_notification_bytes(
         title,
         body,

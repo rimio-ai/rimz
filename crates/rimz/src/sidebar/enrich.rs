@@ -269,10 +269,10 @@ pub fn enrich(
     diag: &crate::diag::DiagSink,
 ) -> SidebarSnapshot {
     let producing = opts.producing;
-    let machine_config = opts.config.take().unwrap_or_else(|| {
-        crate::config::MachineConfig::load_shared()
-            .unwrap_or_else(|_| Arc::new(crate::config::MachineConfig::default()))
-    });
+    let machine_config = opts
+        .config
+        .take()
+        .unwrap_or_else(crate::config::MachineConfig::load_lenient);
     // Attention timing is needed during pane projection, before the full config
     // fold builds provider panels and stamps context severity.
     snapshot.sidebar = machine_config.sidebar.clone();

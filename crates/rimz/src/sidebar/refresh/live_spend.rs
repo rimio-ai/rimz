@@ -164,7 +164,7 @@ mod tests {
             )];
             snapshot
         };
-        let config = crate::config::MachineConfig::load().unwrap_or_default();
+        let config = crate::config::MachineConfig::load_lenient();
         let worktree_home =
             crate::worktree::worktree_parent(dir.path(), &config.agents.worktree).ok();
         let scope = SpendScope::for_workspace(Some(dir.path()), &[], worktree_home.as_deref());

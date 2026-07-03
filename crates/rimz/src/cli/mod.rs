@@ -572,7 +572,7 @@ pub(crate) fn confirm_with_default(prompt: &str, default_yes: bool) -> Result<bo
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
-pub(crate) fn machine_config() -> rimz::config::MachineConfig {
+pub(crate) fn machine_config() -> std::sync::Arc<rimz::config::MachineConfig> {
     rimz::config::MachineConfig::load_lenient()
 }
 

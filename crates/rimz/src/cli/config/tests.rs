@@ -223,7 +223,11 @@ fn validates_config_key_read_and_write_surfaces() {
         ("loop", true),
         ("loop.tasks", true),
     ] {
-        assert_eq!(is_known_get_key(&parse_key(key).unwrap()), known, "{key}");
+        assert_eq!(
+            is_known_get_key(&parse_key(key).unwrap()).unwrap(),
+            known,
+            "{key}"
+        );
     }
 }
 
@@ -268,35 +272,63 @@ nope = "surprise"
     let expected_background = parse_key("theme.colors.primary.background").expect("key");
     let found = collect_explicit_keys(FileKind::Theme, &doc);
     let mut saw_background = false;
-    let mut saw_unknown = false;
+    let mut saw_nope = false;
     for item in found {
         match item {
             Found::Settable { logical, value } if logical == expected_background => {
                 assert_eq!(value.as_str(), Some("#000000"));
                 saw_background = true;
             }
-            Found::Unknown(key) if key == "colors.primary.nope" => {
-                saw_unknown = true;
+            Found::Settable { logical, value }
+                if logical == parse_key("theme.colors.primary.nope").expect("key") =>
+            {
+                assert_eq!(value.as_str(), Some("surprise"));
+                saw_nope = true;
             }
             other => panic!("unexpected key: {other:?}"),
         }
     }
     assert!(saw_background, "background override should be settable");
-    assert!(saw_unknown, "unknown color leaf should be reported");
+    assert!(
+        saw_nope,
+        "unknown color leaf should flow to trial validation"
+    );
 }
 
 #[test]
 fn merge_key_oracle_accepts_sentry_and_rejects_bogus_keys() {
-    assert!(is_known_merge_key(&parse_key("sentry.dsn").expect("key")));
-    assert!(is_known_merge_key(
-        &parse_key("sentry.environment").expect("key")
-    ));
-    assert!(is_known_merge_key(
-        &parse_key("notifications.enabled").expect("key")
-    ));
-    assert!(!is_known_merge_key(
-        &parse_key("notifications.nope").expect("key")
-    ));
+    let agents_home = tempfile::tempdir().expect("agents home");
+    let mut doc = MachineConfig::template_core()
+        .parse::<DocumentMut>()
+        .expect("template parses");
+    let mut skipped = Vec::new();
+    let kept = apply_merge_keys(
+        std::path::Path::new("config.toml"),
+        &mut doc,
+        vec![
+            PendingKey {
+                logical: parse_key("sentry.dsn").expect("key"),
+                value: Value::from("https://public@example.com/1"),
+            },
+            PendingKey {
+                logical: parse_key("notifications.nope").expect("key"),
+                value: Value::from(true),
+            },
+        ],
+        &mut skipped,
+        agents_home.path(),
+    );
+
+    assert_eq!(kept, 1);
+    assert_eq!(
+        item_at(&doc, &parse_key("sentry.dsn").expect("key"))
+            .and_then(Item::as_value)
+            .and_then(Value::as_str),
+        Some("https://public@example.com/1")
+    );
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].key, "notifications.nope");
+    assert!(matches!(&skipped[0].reason, SkipReason::Invalid(_)));
 }
 
 #[test]
@@ -391,7 +423,7 @@ fn derived_set_keys_keep_legacy_surface() {
     for key in LEGACY_SET_KEYS {
         let parsed = parse_key(key).unwrap_or_else(|err| panic!("{key}: {err}"));
         validate_set_key(&parsed).unwrap_or_else(|err| panic!("set {key}: {err}"));
-        assert!(is_known_get_key(&parsed), "get {key}");
+        assert!(is_known_get_key(&parsed).unwrap(), "get {key}");
     }
 
     for key in ["nope", "theme.nope", "agents.profiles"] {
@@ -418,8 +450,6 @@ fn derived_set_keys_keep_legacy_surface() {
         err,
         "unknown config key `theme.display.context_meter.green.percent`"
     );
-    assert!(exact_set_keys().contains("theme.display.context_meter.green"));
-    assert!(!exact_set_keys().contains("theme.display.context_meter.green.percent"));
 }
 
 #[test]

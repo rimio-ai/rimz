@@ -544,7 +544,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
     )?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
-    let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
+    let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
     let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
     let detected_size = rimz::mux::detect_terminal_size();
     let was_live = backend.list_sessions()?.contains(&workspace.session_name);

@@ -503,17 +503,10 @@ pub(crate) fn create_on_miss(
     let machine_config = crate::cli::machine_config();
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
-    let profiles = effective_launch_profiles(&machine_config, &workspace)?;
-    let teams = effective_launch_teams(&machine_config, &workspace)?;
-    if !is_launchable_type(&create.selector, &profiles) {
-        rimz::config::effective::block_untrusted_profile_reference(
-            Some(&create.selector),
-            &profiles,
-            &machine_config.agents.commands,
-            &teams,
-            &workspace.project_root,
-            &rimz::ledger::paths::config_home(),
-        )?;
+    let launch = effective_launch_agents(&machine_config, &workspace)?;
+    if !is_launchable_type(&create.selector, &launch.profiles) {
+        launch
+            .block_untrusted_reference(Some(&create.selector), &machine_config.agents.commands)?;
         bail!(
             "`{target}` names a specific agent that is not running; create one with `@<kind>` or a profile from [agents.profiles]"
         );

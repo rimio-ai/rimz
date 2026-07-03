@@ -95,7 +95,7 @@ impl Reporting {
 /// a DSN that fails to parse yields [`Reporting::InvalidDsn`] rather than a
 /// panic or a degraded surface.
 pub fn init() -> Reporting {
-    let config = MachineConfig::load().unwrap_or_default();
+    let config = MachineConfig::load_lenient();
     let Some((dsn, environment)) = resolve_from(
         env_nonempty(ENV_DSN),
         env_nonempty(ENV_ENVIRONMENT),
