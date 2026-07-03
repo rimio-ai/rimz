@@ -198,6 +198,15 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
         Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));
     ui.theme(&snapshot.theme);
     assert!(!is_animating(&snapshot, &ui, 0, false));
+
+    snapshot.theme.animations.thinking =
+        Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));
+    ui.pet.as_mut().expect("pet").action = crate::sidebar_pane::pets::PetAction::Thinking;
+    ui.theme(&snapshot.theme);
+    assert!(
+        !is_animating(&snapshot, &ui, 0, false),
+        "a static effect with omitted frames quiets spinner-role pets too"
+    );
 }
 
 #[test]

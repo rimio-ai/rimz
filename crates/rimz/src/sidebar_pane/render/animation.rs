@@ -341,6 +341,7 @@ pub(crate) struct Animation {
     color: Color,
     effect: AnimationEffect,
     speed: AnimationSpeed,
+    frames_overridden: bool,
     effect_overridden: bool,
     color_overridden: bool,
 }
@@ -394,7 +395,9 @@ impl Animation {
     }
 
     pub(crate) fn motion_quieted(&self) -> bool {
-        self.effect_overridden && self.effect == AnimationEffect::Static && self.frames.len() <= 1
+        self.effect_overridden
+            && self.effect == AnimationEffect::Static
+            && !(self.frames_overridden && self.frames.len() > 1)
     }
 }
 
@@ -520,6 +523,7 @@ fn resolve_role(
     if let Some(spec) = spec {
         if let Some(frames) = spec.frames.as_ref() {
             animation.frames = frames.as_slice().to_vec();
+            animation.frames_overridden = true;
         }
         if let Some(color) = spec.color {
             animation.color = palette.animation_color(color);
@@ -618,6 +622,7 @@ fn builtin(role: AnimationRole, glyphs: &GlyphSet, palette: &Palette) -> Animati
         color,
         effect,
         speed,
+        frames_overridden: false,
         effect_overridden: false,
         color_overridden: false,
     }
@@ -854,6 +859,26 @@ mod tests {
         assert!(
             !breathe.role(AnimationRole::Waiting).motion_quieted(),
             "non-static effects still move"
+        );
+
+        let spinner_static: ThemeAnimationsConfig =
+            toml::from_str("[thinking]\neffect = \"static\"\n").expect("config");
+        let spinner_static = resolve_for_test(&spinner_static, &palette);
+        assert!(
+            spinner_static
+                .role(AnimationRole::Thinking)
+                .motion_quieted(),
+            "omitted override frames quiet motion even when the built-in role has multiple frames"
+        );
+
+        let spinner_frames: ThemeAnimationsConfig =
+            toml::from_str("[thinking]\nframes = \"ab\"\neffect = \"static\"\n").expect("config");
+        let spinner_frames = resolve_for_test(&spinner_frames, &palette);
+        assert!(
+            !spinner_frames
+                .role(AnimationRole::Thinking)
+                .motion_quieted(),
+            "override-supplied multiple frames still move"
         );
     }
 
