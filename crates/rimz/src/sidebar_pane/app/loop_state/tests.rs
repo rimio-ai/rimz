@@ -519,6 +519,7 @@ fn watched_renderer_and_elder_fetch_identity_free_events_immediately() {
         state.last_known_elder = elder;
         if watched {
             state.current.own_view = Some(own_view(false, true));
+            state.current.viewed_panes = vec![pane("terminal_9", "tab_0", false).pane_id];
         }
         let (mut fetch, request_rx) = fetch_dispatcher();
 
