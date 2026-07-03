@@ -67,7 +67,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 - [tmux.md](./docs/guide/tmux.md) — configure your own `~/.tmux.conf`: true color, copy-mode, status bar, and the behaviors agents rely on.
 - [product.md](./docs/guide/product.md) — the working tour: the room, the loop, and the four scenarios people run.
 - [experience.md](./docs/guide/experience.md) — first-run-to-fleet experience, section by section.
-- [attention.md](./docs/guide/attention.md) — what deserves attention and why: the attention states, the unread inbox, the one-hour and archive windows, team state, and the git verdict behind the sidebar order.
+- [attention.md](./docs/guide/attention.md) — attention routing and card ranking: what needs you, the glance-to-pane loop, the unread inbox, the one-hour and archive windows, team state, and the git verdict behind the sidebar order.
 - [security.md](./docs/guide/security.md) — threat model and guardrails.
 
 **Interface** — `docs/interface/`
