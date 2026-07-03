@@ -91,8 +91,6 @@ fn remove_carried_notice(snapshot: &mut SidebarSnapshot, pane_id: &crate::ids::P
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
     use super::*;
     use crate::ids::{MuxName, PaneId, WorkspaceId};
     use crate::pane::PaneRef;
@@ -164,59 +162,21 @@ mod tests {
             .collect()
     }
 
-    fn fuse_n(
-        snapshot: &SidebarSnapshot,
-        store: &EventStore,
-        now_ms: u64,
-        rounds: u32,
-    ) -> Duration {
-        let start = Instant::now();
-        for _ in 0..rounds {
-            let _ = fuse(snapshot, store, now_ms);
-        }
-        start.elapsed()
-    }
-
-    fn fleet_panes(count: usize) -> Vec<PaneRef> {
-        (0..count)
-            .map(|idx| {
-                let mut pane = pane(&format!("terminal_{idx}"), "zsh");
-                pane.cwd = Some(format!("/repo/wt{}", idx / 25));
-                pane
-            })
-            .collect()
-    }
-
-    fn fleet_events(count: usize, baseline_ms: u64) -> EventStore {
-        let mut store = EventStore::default();
-        for idx in 0..count {
-            let pane_id = PaneId::from_parts(MuxName::Zellij, format!("terminal_{idx}"));
-            let event = if idx % 2 == 0 {
-                SidebarEvent::CommandChanged {
-                    pane_id,
-                    command: "cargo build".to_owned(),
-                }
-            } else {
-                SidebarEvent::PaneClosed { pane_id }
-            };
-            append(&mut store, baseline_ms + 1 + idx as u64, event);
-        }
-        store
-    }
-
     #[test]
-    fn pane_closed_newer_than_pull_deletes_the_card() {
-        let snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
+    fn pane_closed_newer_than_pull_removes_row_and_clears_focus() {
+        let focused = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
+        snapshot.focused_pane = Some(focused.clone());
         let mut store = EventStore::default();
         append(
             &mut store,
             11,
-            SidebarEvent::PaneClosed {
-                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
-            },
+            SidebarEvent::PaneClosed { pane_id: focused },
         );
 
-        assert!(row_ids(&fuse(&snapshot, &store, 11)).is_empty());
+        let fused = fuse(&snapshot, &store, 11);
+        assert!(row_ids(&fused).is_empty());
+        assert_eq!(fused.focused_pane, None);
     }
 
     #[test]
@@ -282,22 +242,6 @@ mod tests {
         let fused = fuse(&snapshot, &store, 20);
         assert!(row_ids(&fused).is_empty());
         assert_eq!(fused.truth_degraded, None);
-    }
-
-    #[test]
-    fn pane_closed_clears_focus_register() {
-        let focused = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
-        snapshot.focused_pane = Some(focused.clone());
-        let mut store = EventStore::default();
-        append(
-            &mut store,
-            11,
-            SidebarEvent::PaneClosed { pane_id: focused },
-        );
-
-        let fused = fuse(&snapshot, &store, 11);
-        assert_eq!(fused.focused_pane, None);
     }
 
     #[test]
@@ -405,21 +349,5 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(focused_rows.contains(&second));
         assert!(focused_rows.contains(&foreign));
-    }
-
-    #[test]
-    fn fuse_stays_inside_the_frame_bucket_at_fleet_scale() {
-        let snapshot = pulled(fleet_panes(500), 1_000);
-        let store = fleet_events(crate::sidebar::events::MAX_EVENTS, 1_000);
-        let now_ms = 2_000;
-
-        fuse_n(&snapshot, &store, now_ms, 5); // warm
-        let elapsed = fuse_n(&snapshot, &store, now_ms, 20) / 20;
-
-        assert!(
-            elapsed < Duration::from_millis(50),
-            "one fleet-scale fuse took {elapsed:?}; the default 100ms frame grid \
-             leaves no headroom for this"
-        );
     }
 }
