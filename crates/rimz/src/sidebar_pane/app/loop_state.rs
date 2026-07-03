@@ -127,7 +127,7 @@ pub(super) struct LoopState {
     prev_width: Option<u16>,
     pub(super) should_exit: bool,
     pub(super) tab_emptied: bool,
-    pub(super) reexec_to: Option<PathBuf>,
+    pub(super) reload_requested: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -215,7 +215,7 @@ impl LoopState {
             prev_width: initial_width,
             should_exit: false,
             tab_emptied: false,
-            reexec_to: None,
+            reload_requested: false,
         }
     }
 
@@ -433,8 +433,8 @@ impl LoopState {
         match envelope.event {
             SidebarEvent::Reload => {
                 self.clear_pending_fetch();
-                if let Some(target) = reload_or_refetch(&config.session_name, fetch) {
-                    self.reexec_to = Some(target);
+                if reload_or_refetch(&config.session_name, fetch) {
+                    self.reload_requested = true;
                     return Ok(LoopFlow::Exit);
                 }
             }

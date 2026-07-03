@@ -197,6 +197,7 @@ The mistakes worth not re-introducing, because each looked reasonable:
 - **Per-second consumer refolds** reloaded config, cloned published JSON, enriched, and rendered once per renderer even while every input file was unchanged; consumers now stamp the exact read set and skip to a lightweight unchanged outcome until an input or the 30s backstop requires a real fold.
 - **Zellij session-metadata churn** kept a disabled-resurrection room writing metadata and running command discovery anyway; Rimz now passes the separate `disable_session_metadata` room option so serialization and metadata both follow the clean-rebirth contract.
 - **Unwatched delta refold storms** let identity-free ledger wakeups refold every renderer in every tab at the writer's event rate; unwatched non-producer renderers now coalesce those nudges behind `UNWATCHED_FOLD_CLAMP`, while watched panes and the producer remain immediate.
+- **Binding-log write amplification** appended the same lazy-pairing ambiguity on every producer fold for resumed panes with unknown process-start timestamps; the producer now keeps a process-local signature per workspace and agent, so `binding.log.jsonl` records the first distinct ambiguity and every genuine change, not each fold.
 
 ## Bottlenecks and deferred work
 

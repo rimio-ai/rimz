@@ -3,13 +3,15 @@
 //! One ordered spine serves both producer and consumer reads. It projects lane
 //! caches and sidecars; it forks no subprocess and writes no cache files.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::agents::spending::SpendingCaches;
 use crate::harness::auto_continue::{self, ResumeMessage};
-use crate::ids::{PaneId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::snapshot::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, ResumeOutcome, RuntimeReapInputs,
     SidebarPresence,
@@ -249,6 +251,15 @@ struct ProducerBindingFallbackLog<'a> {
     pairing: &'a LazyAgentPairingDiagnostic,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct LazyPairingLogKey {
+    workspace_id: WorkspaceId,
+    kind: AgentKind,
+    agent_id: AgentSessionId,
+}
+
+static LOGGED_LAZY_PAIRINGS: OnceLock<Mutex<HashMap<LazyPairingLogKey, u64>>> = OnceLock::new();
+
 /// Fold the enrichments onto a base snapshot — one ordered spine for the
 /// producer and every consumer, so the two paths can never drift. `frame` is
 /// the live pane frame (panes plus the observed-or-produced pane stamp): the
@@ -476,7 +487,31 @@ fn log_lazy_pairing_ambiguities(
     runtime: &RuntimePaths,
     lazy_pairings: &LazyAgentPairingResult,
 ) {
-    for pairing in lazy_pairings.diagnostics() {
+    let diagnostics = lazy_pairings.diagnostics();
+    let mut active = HashSet::new();
+    let mut append = Vec::new();
+    if let Ok(mut logged) = LOGGED_LAZY_PAIRINGS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        for pairing in diagnostics {
+            let key = lazy_pairing_log_key(snapshot, pairing);
+            active.insert(key.clone());
+            let Some(signature) = lazy_pairing_signature(pairing) else {
+                append.push(pairing);
+                continue;
+            };
+            if logged.get(&key).copied() != Some(signature) {
+                logged.insert(key, signature);
+                append.push(pairing);
+            }
+        }
+        logged.retain(|key, _| key.workspace_id != snapshot.workspace_id || active.contains(key));
+    } else {
+        append.extend(diagnostics);
+    }
+
+    for pairing in append {
         crate::diag::binding::log(runtime).append(&ProducerBindingFallbackLog {
             event: "producer_lazy_agent_pairing",
             at: Timestamp::now(),
@@ -484,6 +519,33 @@ fn log_lazy_pairing_ambiguities(
             pairing,
         });
     }
+}
+
+fn lazy_pairing_log_key(
+    snapshot: &SidebarSnapshot,
+    pairing: &LazyAgentPairingDiagnostic,
+) -> LazyPairingLogKey {
+    LazyPairingLogKey {
+        workspace_id: snapshot.workspace_id.clone(),
+        kind: pairing.kind.clone(),
+        agent_id: pairing.agent_id.clone(),
+    }
+}
+
+fn lazy_pairing_signature(pairing: &LazyAgentPairingDiagnostic) -> Option<u64> {
+    let signature = serde_json::json!({
+        "kind": &pairing.kind,
+        "agent_id": &pairing.agent_id,
+        "worktree_path": &pairing.worktree_path,
+        "selected_pane": &pairing.selected_pane,
+        "selected_pane_process_start": &pairing.selected_pane_process_start,
+        "method": &pairing.method,
+        "candidates": &pairing.candidates,
+    });
+    let bytes = serde_json::to_vec(&signature).ok()?;
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    Some(hasher.finish())
 }
 
 fn apply_pane_metrics(snapshot: &mut SidebarSnapshot, metrics: Vec<(PaneId, PaneMetrics)>) {

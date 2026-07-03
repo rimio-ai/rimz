@@ -1,34 +1,18 @@
 //! Reload (`rimz reload` or the `r` keypress): resolve the on-disk renderer
-//! binary, compare it to the running image, and re-exec in place only when the
-//! build actually changed.
+//! binary, compare it to the running worker image, and ask the supervisor to
+//! re-exec only when the build actually changed.
 
 use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
-use super::SidebarAppErr;
-
-/// Replace this process with a fresh invocation of `exe` and our own argv.
-/// After `rimz reload`, the renderer's binary on disk has been updated in
-/// place; re-execing the resolved path loads the new code without touching the
-/// pane or session. Only returns on failure — success replaces the image.
-pub(super) fn reexec_self(exe: &Path) -> SidebarAppErr {
-    use std::os::unix::process::CommandExt;
-
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let source = Command::new(exe).args(&args).exec();
-    SidebarAppErr::CommandIo {
-        program: exe.display().to_string(),
-        source,
-    }
-}
 
 /// What a reload (`rimz reload` or the `r` keypress) does this tick: re-exec
-/// onto a changed on-disk binary, skip the re-exec when it is byte-identical to
-/// the running image, or keep the current build when nothing is on disk to load.
+/// the supervisor onto a changed on-disk binary, skip reload when it is
+/// byte-identical to the running worker image, or keep the current build when
+/// nothing is on disk to load.
 pub(super) enum ReloadAction {
-    /// The on-disk binary differs from the running image — load it in place.
+    /// The on-disk binary differs from the running image — the worker exits so
+    /// the supervisor can load it in place while keeping the pane PID.
     Reexec(PathBuf),
     /// The on-disk binary is byte-identical to the running image — skip the
     /// re-exec churn and refetch in place instead.

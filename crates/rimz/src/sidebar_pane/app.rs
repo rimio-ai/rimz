@@ -6,7 +6,7 @@
 //! integrator), [`gate`] (the last-known-good regression hold), [`health`]
 //! (failure debounce and give-up), [`lifecycle`] (self-close and the bounded
 //! resize-grow paint hold), [`order_hold`] (renderer-local row/group order
-//! freeze), [`reload`] (binary resolution and re-exec), and [`selection`] (the
+//! freeze), [`reload`] (binary-change detection), and [`selection`] (the
 //! identity-keyed highlight and input handlers).
 
 use std::cell::Cell;
@@ -65,7 +65,7 @@ use fetch::{FetchDispatcher, FetchOutcome, FetchRequest, spawn_fetch_worker};
 use gate::GateState;
 use input::{Wakeup, encode_key, encode_mouse, wait_for_wakeup};
 use lifecycle::{PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, resize_grew};
-use reload::{ReloadAction, reexec_self, reload_action};
+use reload::{ReloadAction, reload_action};
 use selection::{InputOutcome, handle_key, handle_mouse_click, handle_scroll, row_index_of_pane};
 use state::placeholder_snapshot;
 
@@ -286,8 +286,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             // through the same helper.
             Wakeup::Reload => {
                 state.clear_pending_fetch();
-                if let Some(target) = reload_or_refetch(&config.session_name, &mut fetch) {
-                    state.reexec_to = Some(target);
+                if reload_or_refetch(&config.session_name, &mut fetch) {
+                    state.reload_requested = true;
                     break;
                 }
             }
@@ -322,14 +322,14 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         close_self_closing_view_floating_panes(&config);
     }
     state.clear_pixel(&mut terminal);
-    if let Some(target) = state.reexec_to {
+    if state.reload_requested {
         // Restore the terminal and release this instance's runtime files before
-        // replacing the process image — `exec` never returns, so their RAII
-        // Drop would otherwise be skipped and leak a stale socket + heartbeat.
+        // the reload exit — `process::exit` never runs RAII drops and would
+        // otherwise leak a stale socket + heartbeat.
         drop(_input_mode);
         drop(_socket_cleanup);
         drop(_heartbeat_cleanup);
-        return Err(reexec_self(&target));
+        std::process::exit(crate::sidebar_pane::supervise::RELOAD_EXIT_CODE);
     }
     Ok(())
 }
@@ -506,23 +506,20 @@ fn focus_stranded_target(
 pub(crate) static PANIC_HOOK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Resolve a reload request — the `r` keypress and the typed `Reload` event
-/// share this. `Some(target)` means a differing on-disk binary: the caller
-/// re-execs onto it and exits the loop. A byte-identical or missing binary
-/// skips the re-exec churn but still honours the reload intent with an
-/// immediate producing refetch, so a reload always pulls live data and
-/// un-sticks a tab whose producer has stalled.
-fn reload_or_refetch(
-    session_name: &str,
-    fetch: &mut FetchDispatcher,
-) -> Option<std::path::PathBuf> {
+/// share this. `true` means a differing on-disk binary: the caller exits with
+/// the supervisor reload code so the pane command converges onto the new
+/// binary. A byte-identical or missing binary skips reload but still honours
+/// the intent with an immediate producing refetch, so a reload always pulls
+/// live data and un-sticks a tab whose producer has stalled.
+fn reload_or_refetch(session_name: &str, fetch: &mut FetchDispatcher) -> bool {
     match reload_action() {
         ReloadAction::Reexec(target) => {
             debug!(
                 session = %session_name,
                 target = %target.display(),
-                "reload: on-disk binary differs; re-execing the renderer in place",
+                "reload: on-disk binary differs; asking supervisor to re-exec",
             );
-            return Some(target);
+            return true;
         }
         ReloadAction::AlreadyCurrent => {
             debug!(
@@ -541,7 +538,7 @@ fn reload_or_refetch(
         }
     }
     fetch.request(FetchRequest::hard_refresh(), true);
-    None
+    false
 }
 
 /// Focus the pane on a detached thread so the keypress/click returns instantly:

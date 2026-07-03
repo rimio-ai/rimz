@@ -2,7 +2,11 @@
 
 #![cfg(unix)]
 
+use std::path::Path;
+use std::process::{Child, ExitStatus, Stdio};
+use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use rimz::diag::record::{DiagEnvelope, DiagEvent};
 
@@ -65,5 +69,87 @@ fn sidebar_supervisor_records_worker_abort() {
             assert!(stderr_excerpt.contains("rimz test sidebar worker abort"));
         }
         other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sidebar_supervisor_reaps_stray_children_while_worker_runs() {
+    let env = Env::new();
+    let stray_pid_path = env.home_root.join("stray.pid");
+    let mut cmd = env.rimz();
+    cmd.args([
+        "sidebar",
+        "serve",
+        "--workspace-id",
+        env.workspace_id.as_str(),
+        "--mux",
+        "tmux",
+        "--session-name",
+        "rimz-test",
+    ])
+    .env("RIMZ_TEST_SIDEBAR_WORKER_FAULT", "sleep_then_exit")
+    .env(
+        "RIMZ_TEST_SIDEBAR_SUPERVISOR_STRAY_PID_FILE",
+        &stray_pid_path,
+    )
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
+
+    let mut child = cmd.spawn().expect("spawn sidebar supervisor");
+    let stray_pid = read_pid_file(&stray_pid_path, Duration::from_secs(2));
+
+    wait_for_reap(stray_pid, Duration::from_secs(3));
+    assert!(
+        child.try_wait().expect("poll supervisor").is_none(),
+        "worker should still be running when the supervisor reaps the stray child"
+    );
+
+    let status = wait_child(&mut child, Duration::from_secs(8));
+    assert!(status.success(), "supervisor exited with {status}");
+}
+
+#[cfg(target_os = "linux")]
+fn read_pid_file(path: &Path, timeout: Duration) -> u32 {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            return raw.trim().parse().expect("stray pid file contains a pid");
+        }
+        assert!(Instant::now() < deadline, "stray pid file was not written");
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_reap(pid: u32, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    let proc_path = Path::new("/proc").join(pid.to_string());
+    loop {
+        if !proc_path.exists() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "stray child {pid} was not reaped"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_child(child: &mut Child, timeout: Duration) -> ExitStatus {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().expect("poll supervisor") {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("sidebar supervisor did not finish within {timeout:?}");
+        }
+        thread::sleep(Duration::from_millis(10));
     }
 }

@@ -1,25 +1,34 @@
-//! Thin supervisor for the pane-resident sidebar renderer.
+//! Convergence supervisor for the pane-resident sidebar renderer.
 //!
-//! The worker owns the TUI and its in-process panic diagnostics. The
-//! supervisor exists only to observe deaths Rust hooks cannot catch: aborts and
-//! fatal signals that otherwise leave the pane with no durable evidence.
+//! The worker owns the TUI and its in-process panic diagnostics. The supervisor
+//! owns the pane command PID: it relaunches or re-execs the worker onto the
+//! current binary, preserves the sidebar instance identity across reloads,
+//! reaps stray children, and records deaths Rust hooks cannot catch.
 
 use std::env;
+use std::ffi::OsString;
 use std::io::{self, Read, Write};
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use crate::diag::record::DiagEvent;
 use crate::ids::SidebarInstanceId;
 use crate::sidebar_pane::app::ServeConfig;
 use crate::tui::{MouseCapture, restore_terminal};
+use tracing::debug;
 
 const WORKER_ENV: &str = "RIMZ_SIDEBAR_WORKER";
 const INSTANCE_ENV: &str = "RIMZ_SIDEBAR_INSTANCE_ID";
 #[cfg(feature = "testkit")]
 const TEST_FAULT_ENV: &str = "RIMZ_TEST_SIDEBAR_WORKER_FAULT";
+#[cfg(feature = "testkit")]
+const TEST_STRAY_PID_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_STRAY_PID_FILE";
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
+const REAP_POLL_INTERVAL: Duration = Duration::from_secs(1);
+pub const RELOAD_EXIT_CODE: i32 = 100;
 const PANIC_EXIT_CODE: i32 = 101;
 
 #[derive(Debug, thiserror::Error)]
@@ -60,45 +69,157 @@ pub fn run_worker(config: ServeConfig) -> crate::sidebar_pane::app::Result<()> {
 }
 
 pub fn run(config: ServeConfig) -> Result<()> {
-    let exe = crate::proc::rimz_exe();
     let args = env::args_os().skip(1).collect::<Vec<_>>();
-    let mut child = Command::new(&exe)
+    loop {
+        let exe = crate::proc::rimz_exe();
+        let mut child = spawn_worker(&exe, &args, &config)?;
+        let worker_pid = worker_pid(&child);
+        spawn_test_stray_if_requested();
+
+        let stderr_tail = Arc::new(Mutex::new(StderrTail::new(STDERR_TAIL_BYTES)));
+        let stderr_handle = child
+            .stderr
+            .take()
+            .map(|stderr| drain_stderr(stderr, stderr_tail.clone()));
+        let worker = wait_for_worker_and_reap_strays(worker_pid);
+        drop(child);
+        if let Some(handle) = stderr_handle {
+            let _ = handle.join();
+        }
+        let worker = worker?;
+
+        match supervise_action(worker.exit_code, worker.signal) {
+            SuperviseAction::ReloadReexec => {
+                let Some(target) = crate::reload::current_reexec_target() else {
+                    debug!("reload: supervisor replacement binary missing; respawning worker");
+                    continue;
+                };
+                debug!(
+                    target = %target.display(),
+                    instance = %config.instance_id,
+                    "reload: re-execing sidebar supervisor",
+                );
+                return exec_supervisor(&target, &args, &config);
+            }
+            SuperviseAction::Panic => std::process::exit(PANIC_EXIT_CODE),
+            SuperviseAction::Done => return Ok(()),
+            SuperviseAction::Death => {
+                let stderr_excerpt = stderr_tail
+                    .lock()
+                    .map(|tail| tail.excerpt())
+                    .unwrap_or_default();
+                restore_terminal(MouseCapture::Stdout);
+                record_signal_death(&config, worker.signal, worker.exit_code, stderr_excerpt);
+                return Err(SidebarSuperviseErr::WorkerTerminated {
+                    signal: worker.signal,
+                    exit_code: worker.exit_code,
+                });
+            }
+        }
+    }
+}
+
+fn spawn_worker(exe: &Path, args: &[OsString], config: &ServeConfig) -> Result<Child> {
+    Command::new(exe)
         .args(args)
         .env(WORKER_ENV, "1")
         .env(INSTANCE_ENV, config.instance_id.as_str())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|source| SidebarSuperviseErr::Spawn {
-            program: render_program(&exe),
+            program: render_program(exe),
             source,
-        })?;
+        })
+}
 
-    let stderr_tail = Arc::new(Mutex::new(StderrTail::new(STDERR_TAIL_BYTES)));
-    let stderr_handle = child
-        .stderr
-        .take()
-        .map(|stderr| drain_stderr(stderr, stderr_tail.clone()));
-    let status = child.wait().map_err(SidebarSuperviseErr::Wait)?;
-    if let Some(handle) = stderr_handle {
-        let _ = handle.join();
-    }
+fn exec_supervisor(exe: &Path, args: &[OsString], config: &ServeConfig) -> Result<()> {
+    use std::os::unix::process::CommandExt;
 
-    if status.success() {
-        return Ok(());
-    }
-    if status.code() == Some(PANIC_EXIT_CODE) {
-        std::process::exit(PANIC_EXIT_CODE);
-    }
+    let source = Command::new(exe)
+        .args(args)
+        .env_remove(WORKER_ENV)
+        .env(INSTANCE_ENV, config.instance_id.as_str())
+        .exec();
+    Err(SidebarSuperviseErr::Spawn {
+        program: render_program(exe),
+        source,
+    })
+}
 
-    let signal = termination_signal(&status);
-    let exit_code = status.code();
-    let stderr_excerpt = stderr_tail
-        .lock()
-        .map(|tail| tail.excerpt())
-        .unwrap_or_default();
-    restore_terminal(MouseCapture::Stdout);
-    record_signal_death(&config, signal, exit_code, stderr_excerpt);
-    Err(SidebarSuperviseErr::WorkerTerminated { signal, exit_code })
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SuperviseAction {
+    ReloadReexec,
+    Panic,
+    Done,
+    Death,
+}
+
+fn supervise_action(exit_code: Option<i32>, signal: Option<i32>) -> SuperviseAction {
+    match (exit_code, signal) {
+        (Some(RELOAD_EXIT_CODE), None) => SuperviseAction::ReloadReexec,
+        (Some(PANIC_EXIT_CODE), None) => SuperviseAction::Panic,
+        (Some(0), None) => SuperviseAction::Done,
+        _ => SuperviseAction::Death,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct WorkerTermination {
+    signal: Option<i32>,
+    exit_code: Option<i32>,
+}
+
+#[cfg(unix)]
+fn worker_pid(child: &Child) -> nix::unistd::Pid {
+    nix::unistd::Pid::from_raw(child.id() as i32)
+}
+
+#[cfg(unix)]
+fn wait_for_worker_and_reap_strays(worker_pid: nix::unistd::Pid) -> Result<WorkerTermination> {
+    use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+    use nix::unistd::Pid;
+
+    loop {
+        match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
+            Ok(WaitStatus::Exited(pid, status)) if pid == worker_pid => {
+                return Ok(WorkerTermination {
+                    exit_code: Some(status),
+                    signal: None,
+                });
+            }
+            Ok(WaitStatus::Signaled(pid, signal, _)) if pid == worker_pid => {
+                return Ok(WorkerTermination {
+                    exit_code: None,
+                    signal: Some(signal as i32),
+                });
+            }
+            Ok(WaitStatus::Exited(pid, status)) => {
+                debug!(
+                    pid = pid.as_raw(),
+                    status, "reaped stray sidebar supervisor child",
+                );
+            }
+            Ok(WaitStatus::Signaled(pid, signal, _)) => {
+                debug!(
+                    pid = pid.as_raw(),
+                    signal = ?signal,
+                    "reaped stray sidebar supervisor child",
+                );
+            }
+            Ok(WaitStatus::StillAlive) => thread::sleep(REAP_POLL_INTERVAL),
+            Ok(status) => {
+                debug!(status = ?status, "observed non-terminal child status");
+            }
+            Err(nix::errno::Errno::ECHILD) => return Ok(WorkerTermination::default()),
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(err) => return Err(SidebarSuperviseErr::Wait(wait_error(err))),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn wait_error(err: nix::errno::Errno) -> io::Error {
+    io::Error::from_raw_os_error(err as i32)
 }
 
 fn record_signal_death(
@@ -199,18 +320,6 @@ impl StderrTail {
     }
 }
 
-#[cfg(unix)]
-fn termination_signal(status: &std::process::ExitStatus) -> Option<i32> {
-    use std::os::unix::process::ExitStatusExt;
-
-    status.signal()
-}
-
-#[cfg(not(unix))]
-fn termination_signal(_status: &std::process::ExitStatus) -> Option<i32> {
-    None
-}
-
 fn render_program(exe: &std::path::Path) -> String {
     exe.to_string_lossy().into_owned()
 }
@@ -220,14 +329,47 @@ fn inject_test_fault_if_requested() {
     let Some(fault) = env::var_os(TEST_FAULT_ENV).filter(|value| !value.is_empty()) else {
         return;
     };
-    if fault.to_string_lossy() == "abort" {
-        let _ = io::stderr().write_all(b"rimz test sidebar worker abort\n");
-        std::process::abort();
+    match fault.to_string_lossy().as_ref() {
+        "abort" => {
+            let _ = io::stderr().write_all(b"rimz test sidebar worker abort\n");
+            std::process::abort();
+        }
+        "sleep_then_exit" => {
+            thread::sleep(Duration::from_secs(5));
+            std::process::exit(0);
+        }
+        _ => {}
     }
 }
 
 #[cfg(not(feature = "testkit"))]
 fn inject_test_fault_if_requested() {}
+
+#[cfg(feature = "testkit")]
+fn spawn_test_stray_if_requested() {
+    let Some(path) = env::var_os(TEST_STRAY_PID_FILE_ENV).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let path = PathBuf::from(path);
+    let result = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("exit 0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    match result {
+        Ok(child) => {
+            let _ = std::fs::write(path, child.id().to_string());
+        }
+        Err(err) => {
+            let _ = std::fs::write(path, format!("spawn failed: {err}"));
+        }
+    }
+}
+
+#[cfg(not(feature = "testkit"))]
+fn spawn_test_stray_if_requested() {}
 
 #[cfg(test)]
 mod tests {
@@ -250,5 +392,20 @@ mod tests {
         tail.push(b"abcdef");
 
         assert_eq!(tail.excerpt(), "cdef");
+    }
+
+    #[test]
+    fn supervise_action_classifies_worker_exit() {
+        assert_eq!(
+            supervise_action(Some(RELOAD_EXIT_CODE), None),
+            SuperviseAction::ReloadReexec
+        );
+        assert_eq!(
+            supervise_action(Some(PANIC_EXIT_CODE), None),
+            SuperviseAction::Panic
+        );
+        assert_eq!(supervise_action(Some(0), None), SuperviseAction::Done);
+        assert_eq!(supervise_action(None, Some(9)), SuperviseAction::Death);
+        assert_eq!(supervise_action(Some(1), None), SuperviseAction::Death);
     }
 }

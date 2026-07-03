@@ -732,6 +732,98 @@ fn codex_root(id: &str, worktree: &str, pane_id: &str) -> AgentState {
 }
 
 #[test]
+fn producer_binding_log_dedups_unchanged_lazy_pairing_ambiguity() {
+    let (_dir, runtime, snapshot) = runtime();
+    let worktree = "/repo/main";
+    let mut agent = root_agent("codex", "lazy-session", None);
+    agent.worktree_path = Some(worktree.to_owned());
+    let snapshot = SidebarSnapshot::build_with_agents(
+        snapshot.workspace_id.clone(),
+        Vec::new(),
+        vec![agent.clone()],
+        Timestamp::now(),
+    );
+    let frame = crate::sidebar::frame::assemble_frame(
+        vec![
+            pane("terminal_1", "codex", worktree),
+            pane("terminal_2", "codex", worktree),
+        ],
+        1_000,
+        "rimz-test",
+    );
+
+    let _ = enrich(
+        snapshot.clone(),
+        Some(&frame),
+        &runtime,
+        None,
+        None,
+        producing_opts(),
+        &crate::diag::DiagSink::disabled(),
+    );
+    let _ = enrich(
+        snapshot.clone(),
+        Some(&frame),
+        &runtime,
+        None,
+        None,
+        producing_opts(),
+        &crate::diag::DiagSink::disabled(),
+    );
+
+    assert_eq!(binding_log_lines(&runtime), 1);
+
+    let mut active_agent = agent.clone();
+    active_agent.last_activity += SignedDuration::from_secs(1);
+    let active_snapshot = SidebarSnapshot::build_with_agents(
+        snapshot.workspace_id.clone(),
+        Vec::new(),
+        vec![active_agent],
+        Timestamp::now(),
+    );
+    let _ = enrich(
+        active_snapshot,
+        Some(&frame),
+        &runtime,
+        None,
+        None,
+        producing_opts(),
+        &crate::diag::DiagSink::disabled(),
+    );
+
+    assert_eq!(binding_log_lines(&runtime), 1);
+
+    let mut later_pane = pane("terminal_2", "codex", worktree);
+    later_pane.pane_process_start =
+        Some(agent.registered_at.unwrap_or(agent.last_activity) - SignedDuration::from_secs(1));
+    let changed_frame = crate::sidebar::frame::assemble_frame(
+        vec![pane("terminal_1", "codex", worktree), later_pane],
+        1_000,
+        "rimz-test",
+    );
+    let _ = enrich(
+        snapshot,
+        Some(&changed_frame),
+        &runtime,
+        None,
+        None,
+        producing_opts(),
+        &crate::diag::DiagSink::disabled(),
+    );
+
+    assert_eq!(binding_log_lines(&runtime), 2);
+}
+
+fn binding_log_lines(runtime: &RuntimePaths) -> usize {
+    let path = crate::diag::binding::log(runtime).path().to_path_buf();
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
+}
+
+#[test]
 fn frame_fold_carries_presence_onto_snapshot() {
     let (_dir, runtime, snapshot) = runtime();
     let mut frame = crate::sidebar::frame::assemble_frame(Vec::new(), 1_000, "rimz-test");
