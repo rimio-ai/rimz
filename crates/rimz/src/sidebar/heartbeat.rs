@@ -37,8 +37,8 @@ pub struct SidebarHeartbeat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
     /// Short digest of the renderer binary that wrote this heartbeat. Missing
-    /// means an older renderer or a startup beat before build-id warmup
-    /// completed; reload treats it as live but not build-verified.
+    /// means an older renderer or an unreadable running image; reload treats it
+    /// as live but not build-verified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
     pub last_seen: Timestamp,

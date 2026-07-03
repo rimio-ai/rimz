@@ -3,9 +3,10 @@
 //!
 //! User-scoped and cwd-independent: it enumerates every known workspace
 //! ([`crate::workspace::known_workspaces`]), finds which have a live mux session,
-//! and reconciles each in place — one live sidebar per working view, running the
-//! current binary — closing duplicate or unresponsive sidebar panes and reaping
-//! orphaned sidebar processes whose pane is gone. Held `rimz stats --refresh`
+//! and reconciles live sessions concurrently in place — one live sidebar per
+//! working view, running the current binary — closing duplicate or unresponsive
+//! sidebar panes and reaping orphaned sidebar processes whose pane is gone. Held
+//! `rimz stats --refresh`
 //! dashboards are signalled to re-exec in place before workspace enumeration, so
 //! standalone dashboards reload even when no rooms exist. `rimz reload` is the
 //! convergence path for moving long-lived sidebars and stats dashboards onto a
@@ -106,6 +107,41 @@ pub struct ReloadOutcome {
     pub misdocked: usize,
 }
 
+impl ReloadOutcome {
+    fn merge(&mut self, delta: Self) {
+        let Self {
+            sessions,
+            already_current,
+            reexeced,
+            restarted,
+            unverified,
+            recovered,
+            closed,
+            reaped,
+            dead_swept,
+            stats_reloaded,
+            failed,
+            deferred,
+            redocked,
+            misdocked,
+        } = delta;
+        self.sessions += sessions;
+        self.already_current += already_current;
+        self.reexeced += reexeced;
+        self.restarted += restarted;
+        self.unverified += unverified;
+        self.recovered += recovered;
+        self.closed += closed;
+        self.reaped += reaped;
+        self.dead_swept += dead_swept;
+        self.stats_reloaded += stats_reloaded;
+        self.failed += failed;
+        self.deferred += deferred;
+        self.redocked += redocked;
+        self.misdocked += misdocked;
+    }
+}
+
 /// Reload and reconcile every running sidebar across all of this user's
 /// workspaces. Returns the aggregate outcome.
 pub fn reload_user_sidebars() -> ReloadOutcome {
@@ -136,6 +172,7 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
     });
     let live = LiveSessions::probe();
     let mut reconciled_sessions: HashSet<(MuxName, String)> = HashSet::new();
+    let mut live_targets = Vec::new();
 
     for ws in workspaces {
         match live.mux_of(&ws.session_name) {
@@ -155,7 +192,7 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
                         continue;
                     }
                 };
-                reconcile_live(mux, &ws, &runtime, &rimz_bin, &machine_config, &mut outcome);
+                live_targets.push((mux, ws, runtime));
             }
             None => {
                 let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
@@ -181,6 +218,28 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
             }
         }
     }
+
+    // Claimed sessions are independent: each target owns its mux server
+    // round-trips and filters heartbeats by `(mux, session_name)`. Shared
+    // workspace wakeup fanout and orphan-runtime sweeps are idempotent,
+    // best-effort, and tolerate races.
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = live_targets
+            .iter()
+            .map(|(mux, ws, runtime)| {
+                let rimz_bin = &rimz_bin;
+                let machine_config = &machine_config;
+                scope.spawn(move || reconcile_live(*mux, ws, runtime, rimz_bin, machine_config))
+            })
+            .collect();
+        for handle in handles {
+            match handle.join() {
+                Ok(delta) => outcome.merge(delta),
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+        }
+    });
+
     outcome
 }
 
@@ -201,9 +260,11 @@ fn reconcile_live(
     runtime: &RuntimePaths,
     rimz_bin: &Path,
     machine_config: &MachineConfig,
-    outcome: &mut ReloadOutcome,
-) {
-    outcome.sessions += 1;
+) -> ReloadOutcome {
+    let mut outcome = ReloadOutcome {
+        sessions: 1,
+        ..ReloadOutcome::default()
+    };
     let backend = backend_for(mux);
     let before_signal = session_heartbeats(runtime, mux, &ws.session_name);
     let on_disk_build = on_disk_build(rimz_bin);
@@ -304,6 +365,7 @@ fn reconcile_live(
     //    reaped renderer leaves a pair), and the sweep already spares anything
     //    fresh or still starting.
     crate::sidebar::sweep_orphan_runtime(runtime);
+    outcome
 }
 
 fn on_disk_build(rimz_bin: &Path) -> Option<String> {
@@ -592,6 +654,62 @@ mod tests {
         assert!(
             claim_live_session(&mut seen, MuxName::Tmux, "rimz-query-engine"),
             "the same name on a different mux is a different live session",
+        );
+    }
+
+    #[test]
+    fn reload_outcome_merge_sums_every_field() {
+        let mut base = ReloadOutcome {
+            sessions: 1,
+            already_current: 2,
+            reexeced: 3,
+            restarted: 4,
+            unverified: 5,
+            recovered: 6,
+            closed: 7,
+            reaped: 8,
+            dead_swept: 9,
+            stats_reloaded: 10,
+            failed: 11,
+            deferred: 12,
+            redocked: 13,
+            misdocked: 14,
+        };
+        base.merge(ReloadOutcome {
+            sessions: 15,
+            already_current: 16,
+            reexeced: 17,
+            restarted: 18,
+            unverified: 19,
+            recovered: 20,
+            closed: 21,
+            reaped: 22,
+            dead_swept: 23,
+            stats_reloaded: 24,
+            failed: 25,
+            deferred: 26,
+            redocked: 27,
+            misdocked: 28,
+        });
+
+        assert_eq!(
+            base,
+            ReloadOutcome {
+                sessions: 16,
+                already_current: 18,
+                reexeced: 20,
+                restarted: 22,
+                unverified: 24,
+                recovered: 26,
+                closed: 28,
+                reaped: 30,
+                dead_swept: 32,
+                stats_reloaded: 34,
+                failed: 36,
+                deferred: 38,
+                redocked: 40,
+                misdocked: 42,
+            }
         );
     }
 

@@ -74,8 +74,9 @@ pub struct HeartbeatWriteErr {
 /// owns it directly rather than forking `rimz sidebar heartbeat` once per tick.
 /// The JSON shape and the atomic temp-then-rename are identical to the CLI path
 /// they replace, so the ledger wakeup fanout and the launch freshness gate that
-/// read it are unchanged. The renderer ensures the runtime dirs at startup, so
-/// this only does the write.
+/// read it are unchanged. The heartbeat carries this process's build id when
+/// the running image is readable. The renderer ensures the runtime dirs at
+/// startup, so this only does the write.
 pub fn write_heartbeat(
     runtime: &RuntimePaths,
     workspace_id: WorkspaceId,
@@ -93,7 +94,7 @@ pub fn write_heartbeat(
         wakeup_socket.to_path_buf(),
         pane_id,
     );
-    heartbeat.build = crate::build_id::current_if_ready().map(str::to_owned);
+    heartbeat.build = crate::build_id::current().map(str::to_owned);
     let path = runtime.sidebar_heartbeat_path(instance_id);
     // Cache-class: a heartbeat is disposable liveness, rewritten every beat
     // and gc-swept when stale — surviving a power cut buys nothing.
@@ -555,6 +556,7 @@ mod tests {
         assert_eq!(hb.protocol_version, SIDEBAR_PROTOCOL_VERSION);
         assert_eq!(hb.mux, MuxName::Zellij);
         assert_eq!(hb.wakeup_socket, socket);
+        assert!(hb.build.is_some(), "heartbeat carries the running build id");
     }
 
     #[test]
