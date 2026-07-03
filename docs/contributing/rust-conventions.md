@@ -228,7 +228,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 Three deserve a note:
 
 - `cargo xtask complexity [N]` ranks tracked `.rs` files by cyclomatic/cognitive complexity via `rust-code-analysis-cli` (`cargo install rust-code-analysis-cli --locked`); a local report, not part of any gate.
-- `cargo xtask install-dev` is the contributor opt-in to [off-box reporting](../internals/health/observability.md): a debug host `rimz` built `--features sentry`, so its reporting defaults to the `development` environment.
+- `cargo xtask install-dev` is the contributor opt-in to [off-box reporting](../internals/health/diagnostics.md#off-box-error-reporting): a debug host `rimz` built `--features sentry`, so its reporting defaults to the `development` environment.
 - `cargo xtask profile-build` writes an optimized `target/profiling/rimz` with line tables, frame pointers, and v0 symbol names for `perf`/`samply` profiling, without installing it.
 
 ## Quality gates
