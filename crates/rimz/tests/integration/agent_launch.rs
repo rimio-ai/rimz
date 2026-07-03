@@ -216,6 +216,7 @@ fn prompt_with_shell_metacharacters_stays_one_argument() {
 #[test]
 fn close_pane_exec_reports_startup_failure_before_exiting_with_child_status() {
     let env = Env::new();
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let shim_dir = write_failing_agent_shim(&env, "codex", 7);
     let launch_id = "launch_startup_failure";
     seed_provisional_agent_launch(&env, launch_id, "pruner");
@@ -236,6 +237,7 @@ fn close_pane_exec_reports_startup_failure_before_exiting_with_child_status() {
             "pruner",
             "--close-pane-on-exit",
         ])
+        .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .bounded_output()
         .expect("agents exec returns without waiting on non-tty stdin");
