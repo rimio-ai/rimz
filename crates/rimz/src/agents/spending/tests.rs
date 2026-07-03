@@ -132,6 +132,23 @@ fn compute_scoped_tally(
     compute_scoped_spending(files, cache, scope, now_secs, spec).tally
 }
 
+macro_rules! walk_spending {
+    ($walker:expr, $cache_path:expr, $files:expr, $prices:expr, $now_secs:expr, $observer:expr) => {{
+        let prices = $prices;
+        let origin_overrides = HashMap::new();
+        let spec = HeadlineSpec::default();
+        let req = WalkRequest {
+            files: $files,
+            prices: &prices,
+            now_secs: $now_secs,
+            origin_overrides: &origin_overrides,
+            scope: None,
+            spec: &spec,
+        };
+        $walker.walk($cache_path, &req, $observer)
+    }};
+}
+
 fn compute_total(files: &[PathBuf], cache: &mut SpendingDiskCache) -> SpendTally {
     let tagged: Vec<(&'static dyn AgentAdapter, PathBuf)> = files
         .iter()
@@ -1083,15 +1100,13 @@ fn spending_walk_observer_checkpoints_on_first_interval() {
     };
     let mut walker = SpendingWalker::new();
 
-    let result = walker.walk(
+    let result = walk_spending!(
+        walker,
         &cache_path,
         &files,
-        &PriceBook::default(),
+        PriceBook::default(),
         NOW_SECS,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut observer,
+        &mut observer
     );
 
     assert!(observer.intervals >= 1);
@@ -1123,25 +1138,21 @@ fn parallel_cold_parse_aggregates_deterministically() {
 
     let mut first_walker = SpendingWalker::new();
     let mut second_walker = SpendingWalker::new();
-    let first = first_walker.walk(
+    let first = walk_spending!(
+        first_walker,
         &dir.path().join("first-spending.json"),
         &files,
-        &PriceBook::default(),
+        PriceBook::default(),
         NOW_SECS,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
+        &mut SilentWalk
     );
-    let second = second_walker.walk(
+    let second = walk_spending!(
+        second_walker,
         &dir.path().join("second-spending.json"),
         &files,
-        &PriceBook::default(),
+        PriceBook::default(),
         NOW_SECS,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
+        &mut SilentWalk
     );
 
     assert!((first.spending.total.year.usd - expected).abs() < 1e-9);
@@ -1475,15 +1486,13 @@ fn spending_walk_persists_cursor_before_aggregate() {
     panic_after_next_refresh_for_test();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut observer = SilentWalk;
-        walker.walk(
+        walk_spending!(
+            walker,
             &cache_path,
             &files,
-            &PriceBook::default(),
+            PriceBook::default(),
             NOW_SECS,
-            &Default::default(),
-            None,
-            &HeadlineSpec::default(),
-            &mut observer,
+            &mut observer
         )
     }));
 
@@ -1513,15 +1522,13 @@ fn spending_walk_gates_warm_cursor_persists() {
         vec![(claude_adapter(), transcript.clone())];
     let mut walker = SpendingWalker::new();
 
-    let first = walker.walk(
+    let first = walk_spending!(
+        walker,
         &cache_path,
         &files,
-        &PriceBook::default(),
+        PriceBook::default(),
         NOW_SECS,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
+        &mut SilentWalk
     );
     assert!(first.stats.cache_written);
     assert_eq!(
@@ -1534,15 +1541,13 @@ fn spending_walk_gates_warm_cursor_persists() {
 
     append_line(&transcript, &claude_line(&today, 2.0, "msg-2", "req-2"));
     set_file_mtime(&transcript, NOW_SECS + 60);
-    let second = walker.walk(
+    let second = walk_spending!(
+        walker,
         &cache_path,
         &files,
-        &PriceBook::default(),
+        PriceBook::default(),
         NOW_SECS + 60,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
+        &mut SilentWalk
     );
     assert!(!second.stats.cache_written);
     assert!((second.spending.total.year.usd - 3.0).abs() < 1e-9);
@@ -1555,15 +1560,13 @@ fn spending_walk_gates_warm_cursor_persists() {
         "warm suffix stays in memory until the persist interval expires"
     );
 
-    let third = walker.walk(
+    let third = walk_spending!(
+        walker,
         &cache_path,
         &files,
-        &PriceBook::default(),
+        PriceBook::default(),
         NOW_SECS + SPENDING_PERSIST_MIN_INTERVAL + 61,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
+        &mut SilentWalk
     );
     assert!(third.stats.cache_written);
     assert_eq!(
@@ -1582,15 +1585,13 @@ fn spending_walk_gates_warm_cursor_persists() {
         ),
     );
     set_file_mtime(&transcript, NOW_SECS + SPENDING_PERSIST_MIN_INTERVAL + 62);
-    let fourth = walker.walk(
+    let fourth = walk_spending!(
+        walker,
         &cache_path,
         &files,
-        &PriceBook::default(),
+        PriceBook::default(),
         NOW_SECS + SPENDING_PERSIST_MIN_INTERVAL + 62,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
+        &mut SilentWalk
     );
     assert!(fourth.stats.parse_bytes >= SPENDING_PERSIST_PARSE_BYTES);
     assert!(fourth.stats.cache_written);

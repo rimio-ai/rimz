@@ -184,6 +184,15 @@ struct SpendingMemoKey {
     files_signature: u64,
 }
 
+pub struct WalkRequest<'a> {
+    pub files: &'a [(&'static dyn AgentAdapter, PathBuf)],
+    pub prices: &'a PriceBook,
+    pub now_secs: u64,
+    pub origin_overrides: &'a HashMap<PathBuf, PathBuf>,
+    pub scope: Option<&'a SpendScope>,
+    pub spec: &'a HeadlineSpec,
+}
+
 impl SpendingWalker {
     pub fn new() -> Self {
         Self {
@@ -208,67 +217,29 @@ impl SpendingWalker {
         recorded_unknown_models(files, &self.cache, now_secs)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn walk(
         &mut self,
         cache_path: &Path,
-        files: &[(&'static dyn AgentAdapter, PathBuf)],
-        prices: &PriceBook,
-        now_secs: u64,
-        origin_overrides: &HashMap<PathBuf, PathBuf>,
-        scope: Option<&SpendScope>,
-        spec: &HeadlineSpec,
+        req: &WalkRequest<'_>,
         observer: &mut dyn WalkObserver,
     ) -> SpendingWalkResult {
-        self.walk_inner(
-            cache_path,
-            true,
-            files,
-            prices,
-            now_secs,
-            origin_overrides,
-            scope,
-            spec,
-            observer,
-        )
+        self.walk_inner(cache_path, true, req, observer)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn walk_local(
         &mut self,
         cache_path: &Path,
-        files: &[(&'static dyn AgentAdapter, PathBuf)],
-        prices: &PriceBook,
-        now_secs: u64,
-        origin_overrides: &HashMap<PathBuf, PathBuf>,
-        scope: Option<&SpendScope>,
-        spec: &HeadlineSpec,
+        req: &WalkRequest<'_>,
         observer: &mut dyn WalkObserver,
     ) -> SpendingWalkResult {
-        self.walk_inner(
-            cache_path,
-            false,
-            files,
-            prices,
-            now_secs,
-            origin_overrides,
-            scope,
-            spec,
-            observer,
-        )
+        self.walk_inner(cache_path, false, req, observer)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn walk_inner(
         &mut self,
         cache_path: &Path,
         persist: bool,
-        files: &[(&'static dyn AgentAdapter, PathBuf)],
-        prices: &PriceBook,
-        now_secs: u64,
-        origin_overrides: &HashMap<PathBuf, PathBuf>,
-        scope: Option<&SpendScope>,
-        spec: &HeadlineSpec,
+        req: &WalkRequest<'_>,
         observer: &mut dyn WalkObserver,
     ) -> SpendingWalkResult {
         let mut stats = WalkStats::default();
@@ -277,7 +248,7 @@ impl SpendingWalker {
         let persist_worthy = Cell::new(
             persist
                 && self.last_persisted_now_secs.is_none_or(|last| {
-                    now_secs.saturating_sub(last) >= SPENDING_PERSIST_MIN_INTERVAL
+                    req.now_secs.saturating_sub(last) >= SPENDING_PERSIST_MIN_INTERVAL
                 }),
         );
         let mut checkpoint_written = false;
@@ -307,11 +278,11 @@ impl SpendingWalker {
                 }
             };
             refresh_spending_cache(
-                files,
+                req.files,
                 &mut self.cache,
-                prices,
-                now_secs,
-                origin_overrides,
+                req.prices,
+                req.now_secs,
+                req.origin_overrides,
                 &mut stats,
                 &mut RefreshCallbacks {
                     on_jobs_scheduled: &mut on_jobs_scheduled,
@@ -321,7 +292,7 @@ impl SpendingWalker {
         }
         if checkpoint_written {
             stats.cache_written = true;
-            self.last_persisted_now_secs = Some(now_secs);
+            self.last_persisted_now_secs = Some(req.now_secs);
             if checkpoint_generation == Some(self.cache.generation) {
                 self.cache.dirty = false;
                 self.cache_stamp = cache_stamp(cache_path);
@@ -334,7 +305,7 @@ impl SpendingWalker {
         {
             self.cache.dirty = false;
             self.cache_stamp = cache_stamp(cache_path);
-            self.last_persisted_now_secs = Some(now_secs);
+            self.last_persisted_now_secs = Some(req.now_secs);
             stats.cache_written = true;
         }
         #[cfg(test)]
@@ -345,24 +316,24 @@ impl SpendingWalker {
 
         let key = SpendingMemoKey {
             generation: self.cache.generation,
-            files_signature: spending_files_signature(files),
+            files_signature: spending_files_signature(req.files),
         };
         if self.memo.as_ref().is_none_or(|memo| memo.key != key) {
             self.memo = Some(SpendingMemo {
                 key,
-                counted: dedup_cached_entries_owned(files, &self.cache).into_counted(),
+                counted: dedup_cached_entries_owned(req.files, &self.cache).into_counted(),
             });
             stats.dedup_passes = 1;
         }
 
         let counted = &self.memo.as_ref().expect("memo seeded above").counted;
         aggregate_walk_publish_from_counted(
-            files,
+            req.files,
             &self.cache,
             counted,
-            now_secs,
-            scope,
-            spec,
+            req.now_secs,
+            req.scope,
+            req.spec,
             stats,
         )
     }

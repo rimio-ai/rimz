@@ -14,7 +14,7 @@
 //! `--refresh` recomputes on a background thread, repaints the held frame in
 //! place every minute, and re-centres promptly after a width change.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,7 +36,7 @@ use rimz::agents::AgentAdapter;
 use rimz::agents::pricing;
 use rimz::agents::spending::{
     DaySpend, HeadlineSpec, ProviderSpendingCache, SilentWalk, SpendProgress, SpendTally,
-    SpendWindow, Spending, SpendingWalker, WalkObserver, discover_spending_files,
+    SpendWindow, Spending, SpendingWalker, WalkObserver, WalkRequest, discover_spending_files,
     read_provider_spending_cache, unix_secs_now, utc_date,
     write_provider_spending_cache_with_rollups,
 };
@@ -306,45 +306,28 @@ fn compute_stats_from_files(
     } else {
         pricing::load_cached_for_spending(&paths.shared_pricing_cache_path())
     };
+    let origin_overrides = HashMap::new();
+    let spec = HeadlineSpec::default();
+    let req = WalkRequest {
+        files: &files,
+        prices: &prices,
+        now_secs,
+        origin_overrides: &origin_overrides,
+        scope: None,
+        spec: &spec,
+    };
     let result = match (publish, progress) {
         (true, Some(progress)) => {
             let mut observer = ProgressObserver(progress);
-            walker.walk(
-                &cursor_path,
-                &files,
-                &prices,
-                now_secs,
-                &Default::default(),
-                None,
-                &HeadlineSpec::default(),
-                &mut observer,
-            )
+            walker.walk(&cursor_path, &req, &mut observer)
         }
         (true, None) => {
             let mut observer = SilentWalk;
-            walker.walk(
-                &cursor_path,
-                &files,
-                &prices,
-                now_secs,
-                &Default::default(),
-                None,
-                &HeadlineSpec::default(),
-                &mut observer,
-            )
+            walker.walk(&cursor_path, &req, &mut observer)
         }
         (false, _) => {
             let mut observer = SilentWalk;
-            walker.walk_local(
-                &cursor_path,
-                &files,
-                &prices,
-                now_secs,
-                &Default::default(),
-                None,
-                &HeadlineSpec::default(),
-                &mut observer,
-            )
+            walker.walk_local(&cursor_path, &req, &mut observer)
         }
     };
     if publish {

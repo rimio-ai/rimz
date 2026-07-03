@@ -225,16 +225,17 @@ fn spending_fixture(warm: bool) -> SpendingFixture {
     let prices = rimz::agents::PriceBook::default();
     let mut walker = rimz::agents::spending::SpendingWalker::new();
     if warm {
-        let _ = walker.walk(
-            &cache_path,
-            &files,
-            &prices,
-            SPENDING_NOW_SECS,
-            &Default::default(),
-            None,
-            &rimz::agents::spending::HeadlineSpec::default(),
-            &mut rimz::agents::spending::SilentWalk,
-        );
+        let origin_overrides = HashMap::new();
+        let spec = rimz::agents::spending::HeadlineSpec::default();
+        let req = rimz::agents::spending::WalkRequest {
+            files: &files,
+            prices: &prices,
+            now_secs: SPENDING_NOW_SECS,
+            origin_overrides: &origin_overrides,
+            scope: None,
+            spec: &spec,
+        };
+        let _ = walker.walk(&cache_path, &req, &mut rimz::agents::spending::SilentWalk);
     }
     SpendingFixture {
         _tempdir: tempdir,
@@ -272,14 +273,19 @@ fn spending_walk_cold(bencher: Bencher) {
     bencher
         .with_inputs(|| spending_fixture(false))
         .bench_local_values(|mut fixture| {
+            let origin_overrides = HashMap::new();
+            let spec = rimz::agents::spending::HeadlineSpec::default();
+            let req = rimz::agents::spending::WalkRequest {
+                files: &fixture.files,
+                prices: &fixture.prices,
+                now_secs: SPENDING_NOW_SECS,
+                origin_overrides: &origin_overrides,
+                scope: None,
+                spec: &spec,
+            };
             divan::black_box(fixture.walker.walk(
                 &fixture.cache_path,
-                &fixture.files,
-                &fixture.prices,
-                SPENDING_NOW_SECS,
-                &Default::default(),
-                None,
-                &rimz::agents::spending::HeadlineSpec::default(),
+                &req,
                 &mut rimz::agents::spending::SilentWalk,
             ));
         });
@@ -290,14 +296,19 @@ fn spending_walk_warm_no_change(bencher: Bencher) {
     bencher
         .with_inputs(|| spending_fixture(true))
         .bench_local_values(|mut fixture| {
+            let origin_overrides = HashMap::new();
+            let spec = rimz::agents::spending::HeadlineSpec::default();
+            let req = rimz::agents::spending::WalkRequest {
+                files: &fixture.files,
+                prices: &fixture.prices,
+                now_secs: SPENDING_NOW_SECS,
+                origin_overrides: &origin_overrides,
+                scope: None,
+                spec: &spec,
+            };
             divan::black_box(fixture.walker.walk(
                 &fixture.cache_path,
-                &fixture.files,
-                &fixture.prices,
-                SPENDING_NOW_SECS,
-                &Default::default(),
-                None,
-                &rimz::agents::spending::HeadlineSpec::default(),
+                &req,
                 &mut rimz::agents::spending::SilentWalk,
             ));
         });

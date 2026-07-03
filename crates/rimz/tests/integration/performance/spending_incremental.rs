@@ -21,7 +21,7 @@ use std::time::SystemTime;
 
 use rimz::agents::spending::{
     CachedEntry, FileCacheEntry, HeadlineSpec, SilentWalk, SpendCursor, SpendingWalker,
-    read_spending_cache, write_spending_cache,
+    WalkRequest, read_spending_cache, write_spending_cache,
 };
 use rimz::agents::{AgentAdapter, ClaudeAdapter, PriceBook};
 
@@ -129,6 +129,22 @@ fn modified(path: &std::path::Path) -> SystemTime {
         .expect("mtime")
 }
 
+macro_rules! walk_spending {
+    ($walker:expr, $method:ident, $cache_path:expr, $files:expr, $prices:expr, $now_secs:expr) => {{
+        let origin_overrides = HashMap::new();
+        let spec = HeadlineSpec::default();
+        let req = WalkRequest {
+            files: $files,
+            prices: $prices,
+            now_secs: $now_secs,
+            origin_overrides: &origin_overrides,
+            scope: None,
+            spec: &spec,
+        };
+        $walker.$method($cache_path, &req, &mut SilentWalk)
+    }};
+}
+
 #[test]
 fn spending_walk_io_is_history_independent() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -139,16 +155,7 @@ fn spending_walk_io_is_history_independent() {
     let mut walker = SpendingWalker::new();
 
     let cold_len = std::fs::metadata(&file).expect("seed metadata").len();
-    let cold = walker.walk(
-        &cache_path,
-        &files,
-        &prices,
-        NOW_SECS,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
-    );
+    let cold = walk_spending!(walker, walk, &cache_path, &files, &prices, NOW_SECS);
     assert_eq!(cold.stats.parse_jobs, 1, "cold walk parses the file once");
     assert_eq!(
         cold.stats.parse_bytes, cold_len,
@@ -180,16 +187,7 @@ fn spending_walk_io_is_history_independent() {
         .len()
         - prior_len;
 
-    let warm = walker.walk(
-        &cache_path,
-        &files,
-        &prices,
-        NOW_SECS,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
-    );
+    let warm = walk_spending!(walker, walk, &cache_path, &files, &prices, NOW_SECS);
     assert_eq!(warm.stats.parse_jobs, 1, "warm walk parses one suffix");
     assert_eq!(
         warm.stats.parse_bytes, appended_len,
@@ -206,16 +204,7 @@ fn spending_walk_io_is_history_independent() {
     );
 
     let cache_mtime = modified(&cache_path);
-    let steady = walker.walk(
-        &cache_path,
-        &files,
-        &prices,
-        NOW_SECS,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
-    );
+    let steady = walk_spending!(walker, walk, &cache_path, &files, &prices, NOW_SECS);
     assert!(
         !steady.stats.cache_written,
         "unchanged walk does not rewrite"
@@ -225,16 +214,7 @@ fn spending_walk_io_is_history_independent() {
         cache_mtime,
         "unchanged walk leaves the spending cache mtime untouched"
     );
-    let due = walker.walk(
-        &cache_path,
-        &files,
-        &prices,
-        NOW_SECS + 301,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
-    );
+    let due = walk_spending!(walker, walk, &cache_path, &files, &prices, NOW_SECS + 301);
     assert!(
         due.stats.cache_written,
         "post-interval walk persists the held suffix cursor"
@@ -268,29 +248,11 @@ fn spending_walk_warm_skips_parse_dedup_and_write() {
         let prices = PriceBook::default();
         let mut walker = SpendingWalker::new();
 
-        let first = walker.walk(
-            &cache_path,
-            &files,
-            &prices,
-            NOW_SECS,
-            &Default::default(),
-            None,
-            &HeadlineSpec::default(),
-            &mut SilentWalk,
-        );
+        let first = walk_spending!(walker, walk, &cache_path, &files, &prices, NOW_SECS);
         assert_eq!(first.stats.dedup_passes, 1);
         let cache_mtime = modified(&cache_path);
 
-        let second = walker.walk(
-            &cache_path,
-            &files,
-            &prices,
-            NOW_SECS,
-            &Default::default(),
-            None,
-            &HeadlineSpec::default(),
-            &mut SilentWalk,
-        );
+        let second = walk_spending!(walker, walk, &cache_path, &files, &prices, NOW_SECS);
         assert_eq!(
             modified(&cache_path),
             cache_mtime,
@@ -345,26 +307,8 @@ fn spending_walk_warm_keeps_trailing_windows_fresh() {
     let prices = PriceBook::default();
     let mut walker = SpendingWalker::new();
 
-    let first = walker.walk(
-        &cache_path,
-        &files,
-        &prices,
-        NOW_SECS,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
-    );
-    let second = walker.walk(
-        &cache_path,
-        &files,
-        &prices,
-        NOW_SECS + 2,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
-    );
+    let first = walk_spending!(walker, walk, &cache_path, &files, &prices, NOW_SECS);
+    let second = walk_spending!(walker, walk, &cache_path, &files, &prices, NOW_SECS + 2);
 
     assert_eq!(first.stats.dedup_passes, 1);
     assert_eq!(second.stats.dedup_passes, 0);
@@ -404,15 +348,13 @@ fn spending_walk_local_seeds_from_disk() {
     let prices = PriceBook::default();
     let mut local_walker = SpendingWalker::new();
 
-    let local = local_walker.walk_local(
+    let local = walk_spending!(
+        local_walker,
+        walk_local,
         &cache_path,
         &files,
         &prices,
-        NOW_SECS,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
+        NOW_SECS
     );
 
     assert!(local.stats.cache_parsed);
@@ -427,15 +369,13 @@ fn spending_walk_local_seeds_from_disk() {
 
     let cold_cache_path = dir.path().join("cold-spending.json");
     let mut cold_walker = SpendingWalker::new();
-    let cold = cold_walker.walk(
+    let cold = walk_spending!(
+        cold_walker,
+        walk,
         &cold_cache_path,
         &files,
         &prices,
-        NOW_SECS,
-        &Default::default(),
-        None,
-        &HeadlineSpec::default(),
-        &mut SilentWalk,
+        NOW_SECS
     );
     assert!(
         (cold.spending.total.year.usd - actual_cost).abs() < 1e-9,

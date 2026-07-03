@@ -135,7 +135,7 @@ fn walk_fleet_spending(
     use crate::agents::pricing;
     use crate::agents::spending::{
         PROVIDER_SPENDING_VERSION, ProviderSpendingCache, SilentWalk, SpendScope, Spending,
-        SpendingCaches, WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache,
+        SpendingCaches, WORKSPACE_SPENDING_VERSION, WalkRequest, WorkspaceSpendingCache,
         read_provider_spending_cache, unix_secs_now, write_provider_spending_cache,
         write_provider_spending_cache_with_rollups, write_workspace_spending_cache,
     };
@@ -213,6 +213,14 @@ fn walk_fleet_spending(
         pricing::PriceBook::embedded()
     };
     let origin_overrides = codex_origin_overrides(snapshot);
+    let req = WalkRequest {
+        files: &files,
+        prices: &prices,
+        now_secs,
+        origin_overrides: &origin_overrides,
+        scope: Some(&scope),
+        spec,
+    };
     let result = if publish {
         let mut observer = PublishingWalkObserver {
             runtime,
@@ -224,28 +232,10 @@ fn walk_fleet_spending(
             spec,
             live_costs: &live_costs,
         };
-        walker.walk(
-            &cache_path,
-            &files,
-            &prices,
-            now_secs,
-            &origin_overrides,
-            Some(&scope),
-            spec,
-            &mut observer,
-        )
+        walker.walk(&cache_path, &req, &mut observer)
     } else {
         let mut observer = SilentWalk;
-        walker.walk_local(
-            &cache_path,
-            &files,
-            &prices,
-            now_secs,
-            &origin_overrides,
-            Some(&scope),
-            spec,
-            &mut observer,
-        )
+        walker.walk_local(&cache_path, &req, &mut observer)
     };
     let refreshed_at_ms = unix_now_ms();
     let workspace = if let Some(scope_hash) = scope_hash.as_deref() {
