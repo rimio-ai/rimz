@@ -10,7 +10,8 @@ use super::{PaletteRole, parse_hex};
 /// is the one cross-cutting knob: it picks how unread attention rows read,
 /// shared across the lead glyph, the card name, the description, and the
 /// make-up buckets.
-#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct ThemeAnimationsConfig {
     /// How an unread attention row carries its signal — a flowing `shimmer`
     /// (default), a constant `bright`, or the hard 2-pole `blink`. Unset keeps
@@ -47,49 +48,61 @@ impl ThemeAnimationsConfig {
 
     /// Whether calm status heads need a cosmetic animation tick.
     pub fn has_resting_motion(&self) -> bool {
-        self.paused.as_ref().is_some_and(AnimationSpec::has_motion)
-            || self.idle.as_ref().is_some_and(AnimationSpec::has_motion)
-            || self.success.as_ref().is_some_and(AnimationSpec::has_motion)
+        [
+            AnimationRole::Paused,
+            AnimationRole::Idle,
+            AnimationRole::Success,
+        ]
+        .iter()
+        .any(|role| self.get(*role).is_some_and(AnimationSpec::has_motion))
+    }
+
+    pub fn get(&self, role: AnimationRole) -> Option<&AnimationSpec> {
+        match role {
+            AnimationRole::Thinking => self.thinking.as_ref(),
+            AnimationRole::Working => self.working.as_ref(),
+            AnimationRole::Compacting => self.compacting.as_ref(),
+            AnimationRole::Delegating => self.delegating.as_ref(),
+            AnimationRole::Resolving => self.resolving.as_ref(),
+            AnimationRole::Idle => self.idle.as_ref(),
+            AnimationRole::Success => self.success.as_ref(),
+            AnimationRole::Paused => self.paused.as_ref(),
+            AnimationRole::Waiting => self.waiting.as_ref(),
+            AnimationRole::Failed => self.failed.as_ref(),
+        }
     }
 }
 
-impl<'de> Deserialize<'de> for ThemeAnimationsConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Default, Deserialize)]
-        #[serde(default)]
-        struct RawThemeAnimationsConfig {
-            unread: Option<UnreadEffect>,
-            thinking: Option<AnimationSpec>,
-            working: Option<AnimationSpec>,
-            compacting: Option<AnimationSpec>,
-            delegating: Option<AnimationSpec>,
-            resolving: Option<AnimationSpec>,
-            idle: Option<AnimationSpec>,
-            success: Option<AnimationSpec>,
-            paused: Option<AnimationSpec>,
-            waiting: Option<AnimationSpec>,
-            failed: Option<AnimationSpec>,
-        }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub enum AnimationRole {
+    Thinking,
+    Working,
+    Compacting,
+    Delegating,
+    Resolving,
+    Idle,
+    Success,
+    Paused,
+    Waiting,
+    Failed,
+}
 
-        let raw = RawThemeAnimationsConfig::deserialize(deserializer)?;
-        let config = Self {
-            unread: raw.unread,
-            thinking: raw.thinking,
-            working: raw.working,
-            compacting: raw.compacting,
-            delegating: raw.delegating,
-            resolving: raw.resolving,
-            idle: raw.idle,
-            success: raw.success,
-            paused: raw.paused,
-            waiting: raw.waiting,
-            failed: raw.failed,
-        };
-        Ok(config)
-    }
+impl AnimationRole {
+    pub const ALL: &'static [Self] = &[
+        Self::Thinking,
+        Self::Working,
+        Self::Compacting,
+        Self::Delegating,
+        Self::Resolving,
+        Self::Idle,
+        Self::Success,
+        Self::Paused,
+        Self::Waiting,
+        Self::Failed,
+    ];
+
+    pub const COUNT: usize = Self::ALL.len();
 }
 
 /// One role override under `[theme.animations.<role>]`.

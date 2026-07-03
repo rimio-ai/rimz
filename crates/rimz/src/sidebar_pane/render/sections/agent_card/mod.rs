@@ -5,7 +5,7 @@
 
 use crate::agents::{AgentContext, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
-use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
+use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::{AgentCard, SidebarProviderPanel, SidebarRow, SidebarSubAgent};
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
@@ -18,10 +18,10 @@ use crate::sidebar_pane::render::fmt::{
 };
 use crate::sidebar_pane::render::labels::{
     CardAttention, CardEmphasis, activity_age_style, agent_glyph, agent_lead_style_with_attention,
-    agent_role_style_at, compacting_glyph, compacting_head_style, context_breakdown_spans,
-    context_compaction_spans, context_gauge_spans, context_total_spans, elapsed_glyph, emphasize,
-    resolver_glyph, resolver_style, severity_heat_amount, severity_heat_color, subagent_glyph,
-    subagent_head_style, token_total_glyph, unread_run_spans, window_style,
+    agent_role_style_at, compacting_head_style, context_breakdown_spans, context_compaction_spans,
+    context_gauge_spans, context_total_spans, elapsed_glyph, emphasize, resolver_style, role_glyph,
+    severity_heat_amount, severity_heat_color, subagent_head_style, token_total_glyph,
+    unread_run_spans, window_style,
 };
 use crate::sidebar_pane::render::layout::ellipsize;
 use crate::sidebar_pane::render::theme::{Component, Theme};

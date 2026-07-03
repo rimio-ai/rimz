@@ -77,54 +77,12 @@ fn elapsed_quarter_role(secs: i64) -> GlyphRole {
     }
 }
 
-pub(in crate::sidebar_pane::render) fn working_glyph(
+pub(in crate::sidebar_pane::render) fn role_glyph(
     theme: &Theme,
+    role: AnimationRole,
     animation_phase: u64,
 ) -> String {
-    frame_at(
-        theme.animations.role(AnimationRole::Working),
-        animation_phase,
-    )
-}
-
-pub(in crate::sidebar_pane::render) fn thinking_glyph(
-    theme: &Theme,
-    animation_phase: u64,
-) -> String {
-    frame_at(
-        theme.animations.role(AnimationRole::Thinking),
-        animation_phase,
-    )
-}
-
-pub(in crate::sidebar_pane::render) fn resolver_glyph(
-    theme: &Theme,
-    animation_phase: u64,
-) -> String {
-    frame_at(
-        theme.animations.role(AnimationRole::Resolving),
-        animation_phase,
-    )
-}
-
-pub(in crate::sidebar_pane::render) fn compacting_glyph(
-    theme: &Theme,
-    animation_phase: u64,
-) -> String {
-    frame_at(
-        theme.animations.role(AnimationRole::Compacting),
-        animation_phase,
-    )
-}
-
-pub(in crate::sidebar_pane::render) fn subagent_glyph(
-    theme: &Theme,
-    animation_phase: u64,
-) -> String {
-    frame_at(
-        theme.animations.role(AnimationRole::Delegating),
-        animation_phase,
-    )
+    frame_at(theme.animations.role(role), animation_phase)
 }
 
 /// The leading cell for an agent row. A `running` agent shows the thinking
@@ -141,9 +99,9 @@ pub(in crate::sidebar_pane::render) fn agent_glyph(
 ) -> String {
     match status {
         AgentStatus::Running if phase == TurnPhase::Reasoning => {
-            thinking_glyph(theme, animation_phase)
+            role_glyph(theme, AnimationRole::Thinking, animation_phase)
         }
-        AgentStatus::Running => working_glyph(theme, animation_phase),
+        AgentStatus::Running => role_glyph(theme, AnimationRole::Working, animation_phase),
         AgentStatus::Idle
         | AgentStatus::Success
         | AgentStatus::Paused
@@ -191,30 +149,24 @@ pub(in crate::sidebar_pane::render) fn status_chip_color(
     theme: &Theme,
     status: AgentStatus,
 ) -> Option<Color> {
-    let animation = theme.animations.status(status);
-    if status == AgentStatus::Idle && !animation.color_overridden() {
-        None
-    } else {
-        Some(animation.color())
-    }
+    theme.animations.natural_color(
+        crate::sidebar_pane::render::animation::ResolvedAnimations::status_role(status),
+    )
 }
 
 fn role_style(theme: &Theme, role: AnimationRole, animation_phase: u64) -> Style {
     let animation = theme.animations.role(role);
-    if role == AnimationRole::Idle && !animation.color_overridden() {
-        Style::default().add_modifier(effect_weight(animation, animation_phase))
-    } else {
-        effect_style(theme, animation, animation_phase)
+    match theme.animations.natural_color(role) {
+        Some(_) => effect_style(theme, animation, animation_phase),
+        None => Style::default().add_modifier(effect_weight(animation, animation_phase)),
     }
 }
 
 fn role_style_with_modifier(theme: &Theme, role: AnimationRole, modifier: Modifier) -> Style {
-    let animation = theme.animations.role(role);
-    if role == AnimationRole::Idle && !animation.color_overridden() {
-        Style::default().add_modifier(modifier)
-    } else {
-        theme.style(animation.color(), modifier)
-    }
+    theme.animations.natural_color(role).map_or_else(
+        || Style::default().add_modifier(modifier),
+        |color| theme.style(color, modifier),
+    )
 }
 
 /// The completed-compaction count marker's tone: the warn slot, kept separate
@@ -307,7 +259,7 @@ pub(in crate::sidebar_pane::render) fn card_emphasis(
 /// configured [`unread_effect`](crate::sidebar_pane::render::animation::ResolvedAnimations::unread_effect)
 /// (the shimmer beam or the 2-pole blink), so the one pane that most needs you is
 /// the only thing in continuous motion; every other unread row settles to the
-/// steady [`bright`](crate::sidebar_pane::render::animation::UnreadEffect::Bright)
+/// steady [`bright`](crate::config::UnreadEffect::Bright)
 /// crest — unmistakable by contrast, but still. `None` when a per-role `effect =
 /// "static"` quiets it. `is_lead` is the renderer's reservation flag; with no
 /// reservation context (`None` lead, as in a single-row unit test) every unread
@@ -491,13 +443,7 @@ pub(in crate::sidebar_pane::render) fn agent_lead_style_with_attention(
 /// plain identity. The unread attention effect (carried by [`CardAttention`])
 /// supplies any motion; the tone itself never slides with age.
 fn agent_natural_color(theme: &Theme, status: AgentStatus, phase: TurnPhase) -> Option<Color> {
-    let role = agent_role(status, phase);
-    let animation = theme.animations.role(role);
-    if role == AnimationRole::Idle && !animation.color_overridden() {
-        None
-    } else {
-        Some(animation.color())
-    }
+    theme.animations.natural_color(agent_role(status, phase))
 }
 
 fn agent_role(status: AgentStatus, phase: TurnPhase) -> AnimationRole {

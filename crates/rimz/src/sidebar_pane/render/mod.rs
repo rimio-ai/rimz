@@ -51,7 +51,7 @@ use std::io::{self, Write};
 
 use crate::agents::AgentStatus;
 use crate::agents::TurnPhase;
-use crate::config::GlyphRole;
+use crate::config::{AnimationRole, GlyphRole};
 use crate::sidebar_pane::pets::PetAction;
 use crate::{ProcessState, SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend};
@@ -390,17 +390,16 @@ pub(crate) fn pet_body_enabled(snapshot: &SidebarSnapshot) -> bool {
 }
 
 pub(crate) fn pet_motion_enabled(snapshot: &SidebarSnapshot, action: PetAction) -> bool {
-    let animations = &snapshot.theme.animations;
-    let spec = match action {
-        PetAction::Idle => animations.idle.as_ref(),
-        PetAction::Thinking => animations.thinking.as_ref(),
-        PetAction::Running => animations.working.as_ref(),
-        PetAction::Waiting => animations.delegating.as_ref(),
-        PetAction::Review => animations.compacting.as_ref(),
-        PetAction::Ask => animations.waiting.as_ref(),
-        PetAction::Failed => animations.failed.as_ref(),
+    let role = match action {
+        PetAction::Idle => AnimationRole::Idle,
+        PetAction::Thinking => AnimationRole::Thinking,
+        PetAction::Running => AnimationRole::Working,
+        PetAction::Waiting => AnimationRole::Delegating,
+        PetAction::Review => AnimationRole::Compacting,
+        PetAction::Ask => AnimationRole::Waiting,
+        PetAction::Failed => AnimationRole::Failed,
     };
-    animation::spec_needs_motion(spec)
+    animation::spec_needs_motion(snapshot.theme.animations.get(role))
 }
 
 pub fn draw_to_terminal<B: Backend>(

@@ -1,12 +1,12 @@
 use crate::agents::AgentStatus;
-use crate::config::GlyphRole;
+use crate::config::{AnimationRole, GlyphRole};
 use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarSnapshot};
 use jiff::Timestamp;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use super::fmt::{age_label, age_short};
-use super::labels::{status_glyph, subagent_glyph, thinking_glyph};
+use super::labels::{role_glyph, status_glyph};
 use super::layout;
 use super::theme::Theme;
 use super::{Alert, GateNotice};
@@ -345,8 +345,8 @@ fn help_body_rows(theme: &Theme, focus_key: Option<&str>) -> Vec<Line<'static>> 
     let done = status_glyph(theme, AgentStatus::Success);
     let working = status_glyph(theme, AgentStatus::Running);
     let idle = status_glyph(theme, AgentStatus::Idle);
-    let thinking = thinking_glyph(theme, 0);
-    let delegating = subagent_glyph(theme, 0);
+    let thinking = role_glyph(theme, AnimationRole::Thinking, 0);
+    let delegating = role_glyph(theme, AnimationRole::Delegating, 0);
     let mut lines = vec![
         key_row(
             theme,

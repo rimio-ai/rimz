@@ -2,16 +2,14 @@
 //! the full-command detail line, and the resolver's composed row.
 
 use crate::agents::AgentStatus;
-use crate::config::GlyphRole;
+use crate::config::{AnimationRole, GlyphRole};
 use crate::{ProcessState, SidebarRow};
 use jiff::Timestamp;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::{age_short, fmt_cpu, fmt_io, fmt_rss};
-use crate::sidebar_pane::render::labels::{
-    status_glyph, status_style, working_glyph, working_style,
-};
+use crate::sidebar_pane::render::labels::{role_glyph, status_glyph, status_style, working_style};
 use crate::sidebar_pane::render::layout::{ellipsize, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
@@ -42,7 +40,7 @@ pub(super) fn process_row_line(
     } else {
         match state {
             ProcessState::Busy => (
-                working_glyph(theme, animation_phase),
+                role_glyph(theme, AnimationRole::Working, animation_phase),
                 working_style(theme, animation_phase).add_modifier(Modifier::DIM),
             ),
             ProcessState::Stuck => (

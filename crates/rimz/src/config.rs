@@ -56,7 +56,7 @@ pub use agents::{
     TeamsConfig,
 };
 pub use animation::{
-    AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
+    AnimationColor, AnimationEffect, AnimationFrames, AnimationRole, AnimationSpec, AnimationSpeed,
     ThemeAnimationsConfig, UnreadEffect, validate_glyph_cells, validate_single_cell,
 };
 pub use attention::AttentionConfig;

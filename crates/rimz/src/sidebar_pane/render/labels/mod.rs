@@ -8,13 +8,13 @@
 use crate::agents::ContextSeverity;
 use crate::agents::TurnPhase;
 use crate::agents::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
-use crate::config::{BudgetBarConfig, BudgetBurnRateConfig};
+use crate::config::{AnimationRole, BudgetBarConfig, BudgetBurnRateConfig, UnreadEffect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
 use super::animation::{
-    AnimationRole, BREATH_DEEP_AMPLITUDE, BreathSample, UnreadAnim, UnreadEffect, effect_style,
-    effect_weight, frame_at, shimmer_lift,
+    BREATH_DEEP_AMPLITUDE, BreathSample, UnreadAnim, effect_style, effect_weight, frame_at,
+    shimmer_lift,
 };
 use super::theme::Theme;
 

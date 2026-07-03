@@ -1,7 +1,7 @@
 use crate::agents::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
 use crate::config::{
-    AnimationColor, AnimationEffect as ConfigEffect, AnimationSpec, AnimationSpeed as ConfigSpeed,
-    GlyphRole, ThemeAnimationsConfig, UnreadEffect as ConfigUnreadEffect,
+    AnimationColor, AnimationEffect, AnimationRole, AnimationSpec, AnimationSpeed, GlyphRole,
+    ThemeAnimationsConfig, UnreadEffect,
 };
 use ratatui::style::{Color, Modifier, Style};
 
@@ -117,14 +117,15 @@ fn lead_unread_needs_motion(snapshot: &SidebarSnapshot) -> bool {
 /// Whether the configured unread effect flows on the phase grid. `shimmer` and
 /// `blink` move; the held `bright` crest is static, so a lead row wearing it
 /// asks nothing of the breath grid.
-fn unread_effect_animates(effect: Option<ConfigUnreadEffect>) -> bool {
-    !matches!(effect, Some(ConfigUnreadEffect::Bright))
+fn unread_effect_animates(effect: Option<UnreadEffect>) -> bool {
+    !matches!(effect, Some(UnreadEffect::Bright))
 }
 
 fn status_needs_motion(animations: &ThemeAnimationsConfig, status: AgentStatus) -> bool {
     let spec = match status {
-        AgentStatus::Waiting => animations.waiting.as_ref(),
-        AgentStatus::Failed => animations.failed.as_ref(),
+        AgentStatus::Waiting | AgentStatus::Failed => {
+            animations.get(ResolvedAnimations::status_role(status))
+        }
         _ => None,
     };
     spec_needs_motion(spec)
@@ -134,56 +135,6 @@ pub(super) fn spec_needs_motion(spec: Option<&AnimationSpec>) -> bool {
     match spec {
         Some(spec) if spec.disables_effect_motion() => spec.has_frame_motion(),
         _ => true,
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AnimationRole {
-    Thinking,
-    Working,
-    Compacting,
-    Delegating,
-    Resolving,
-    Idle,
-    Success,
-    Paused,
-    Waiting,
-    Failed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Effect {
-    Static,
-    Breathe,
-}
-
-impl From<ConfigEffect> for Effect {
-    fn from(value: ConfigEffect) -> Self {
-        match value {
-            ConfigEffect::Static => Self::Static,
-            ConfigEffect::Breathe => Self::Breathe,
-        }
-    }
-}
-
-/// How an unread attention row reads — the resolved twin of the config
-/// [`ConfigUnreadEffect`], shared by the lead glyph, the card name, the
-/// description, and the make-up buckets.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum UnreadEffect {
-    #[default]
-    Shimmer,
-    Bright,
-    Blink,
-}
-
-impl From<ConfigUnreadEffect> for UnreadEffect {
-    fn from(value: ConfigUnreadEffect) -> Self {
-        match value {
-            ConfigUnreadEffect::Shimmer => Self::Shimmer,
-            ConfigUnreadEffect::Bright => Self::Bright,
-            ConfigUnreadEffect::Blink => Self::Blink,
-        }
     }
 }
 
@@ -283,31 +234,6 @@ pub(crate) fn shimmer_lift(wave: ShimmerWave, index: usize, len: usize) -> f32 {
     }
     let falloff = 0.5 * (1.0 + (std::f32::consts::PI * distance / half).cos());
     SHIMMER_PEAK_LIFT * falloff
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Speed {
-    Slow,
-    Normal,
-    Fast,
-}
-
-impl Speed {
-    fn divisor(self) -> u64 {
-        match self {
-            Self::Slow => 3,
-            Self::Normal => 2,
-            Self::Fast => 1,
-        }
-    }
-
-    fn effect_phase(self, phase: u64) -> u64 {
-        match self {
-            Self::Slow => phase / 2,
-            Self::Normal => phase,
-            Self::Fast => phase.wrapping_mul(2),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -415,13 +341,19 @@ pub(crate) fn blink_level(phase: u64, period: f32) -> f32 {
     if frac < 0.5 { 1.0 } else { 0.0 }
 }
 
-impl From<ConfigSpeed> for Speed {
-    fn from(value: ConfigSpeed) -> Self {
-        match value {
-            ConfigSpeed::Slow => Self::Slow,
-            ConfigSpeed::Normal => Self::Normal,
-            ConfigSpeed::Fast => Self::Fast,
-        }
+fn speed_divisor(speed: AnimationSpeed) -> u64 {
+    match speed {
+        AnimationSpeed::Slow => 3,
+        AnimationSpeed::Normal => 2,
+        AnimationSpeed::Fast => 1,
+    }
+}
+
+fn speed_effect_phase(speed: AnimationSpeed, phase: u64) -> u64 {
+    match speed {
+        AnimationSpeed::Slow => phase / 2,
+        AnimationSpeed::Normal => phase,
+        AnimationSpeed::Fast => phase.wrapping_mul(2),
     }
 }
 
@@ -429,8 +361,8 @@ impl From<ConfigSpeed> for Speed {
 pub(crate) struct Animation {
     frames: Vec<String>,
     color: Color,
-    effect: Effect,
-    speed: Speed,
+    effect: AnimationEffect,
+    speed: AnimationSpeed,
     effect_overridden: bool,
     color_overridden: bool,
 }
@@ -451,8 +383,8 @@ impl Animation {
 
     pub(crate) fn attention_breath_phase(&self, phase: u64) -> Option<u64> {
         match (self.effect, self.effect_overridden) {
-            (Effect::Static, true) => None,
-            _ => Some(self.speed.effect_phase(phase)),
+            (AnimationEffect::Static, true) => None,
+            _ => Some(speed_effect_phase(self.speed, phase)),
         }
     }
 
@@ -481,23 +413,14 @@ impl Animation {
 
     #[cfg(test)]
     fn has_motion(&self) -> bool {
-        self.frames.len() > 1 || self.effect != Effect::Static
+        self.frames.len() > 1 || self.effect != AnimationEffect::Static
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ResolvedAnimations {
     unread: UnreadEffect,
-    thinking: Animation,
-    working: Animation,
-    compacting: Animation,
-    delegating: Animation,
-    resolving: Animation,
-    idle: Animation,
-    success: Animation,
-    paused: Animation,
-    waiting: Animation,
-    failed: Animation,
+    roles: [Animation; AnimationRole::COUNT],
 }
 
 impl Default for ResolvedAnimations {
@@ -520,79 +443,18 @@ impl ResolvedAnimations {
         glyphs: &GlyphSet,
         palette: &Palette,
     ) -> Self {
+        let roles = std::array::from_fn(|index| {
+            let role = AnimationRole::ALL[index];
+            resolve_role(role, config.get(role), glyphs, palette)
+        });
         Self {
-            unread: config.unread.map(UnreadEffect::from).unwrap_or_default(),
-            thinking: resolve_role(
-                AnimationRole::Thinking,
-                config.thinking.as_ref(),
-                glyphs,
-                palette,
-            ),
-            working: resolve_role(
-                AnimationRole::Working,
-                config.working.as_ref(),
-                glyphs,
-                palette,
-            ),
-            compacting: resolve_role(
-                AnimationRole::Compacting,
-                config.compacting.as_ref(),
-                glyphs,
-                palette,
-            ),
-            delegating: resolve_role(
-                AnimationRole::Delegating,
-                config.delegating.as_ref(),
-                glyphs,
-                palette,
-            ),
-            resolving: resolve_role(
-                AnimationRole::Resolving,
-                config.resolving.as_ref(),
-                glyphs,
-                palette,
-            ),
-            idle: resolve_role(AnimationRole::Idle, config.idle.as_ref(), glyphs, palette),
-            success: resolve_role(
-                AnimationRole::Success,
-                config.success.as_ref(),
-                glyphs,
-                palette,
-            ),
-            paused: resolve_role(
-                AnimationRole::Paused,
-                config.paused.as_ref(),
-                glyphs,
-                palette,
-            ),
-            waiting: resolve_role(
-                AnimationRole::Waiting,
-                config.waiting.as_ref(),
-                glyphs,
-                palette,
-            ),
-            failed: resolve_role(
-                AnimationRole::Failed,
-                config.failed.as_ref(),
-                glyphs,
-                palette,
-            ),
+            unread: config.unread.unwrap_or_default(),
+            roles,
         }
     }
 
     pub(crate) fn role(&self, role: AnimationRole) -> &Animation {
-        match role {
-            AnimationRole::Thinking => &self.thinking,
-            AnimationRole::Working => &self.working,
-            AnimationRole::Compacting => &self.compacting,
-            AnimationRole::Delegating => &self.delegating,
-            AnimationRole::Resolving => &self.resolving,
-            AnimationRole::Idle => &self.idle,
-            AnimationRole::Success => &self.success,
-            AnimationRole::Paused => &self.paused,
-            AnimationRole::Waiting => &self.waiting,
-            AnimationRole::Failed => &self.failed,
-        }
+        &self.roles[role_index(role)]
     }
 
     pub(crate) fn status_role(status: AgentStatus) -> AnimationRole {
@@ -615,6 +477,17 @@ impl ResolvedAnimations {
         self.unread
     }
 
+    /// The role's resting tone, or `None` for an un-themed idle — a bare idle
+    /// card reads as plain identity.
+    pub(crate) fn natural_color(&self, role: AnimationRole) -> Option<Color> {
+        let animation = self.role(role);
+        if role == AnimationRole::Idle && !animation.color_overridden() {
+            None
+        } else {
+            Some(animation.color())
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn has_resting_motion(&self) -> bool {
         [
@@ -628,15 +501,15 @@ impl ResolvedAnimations {
 }
 
 pub(crate) fn frame_at(animation: &Animation, phase: u64) -> String {
-    let index = ((phase / animation.speed.divisor()) as usize) % animation.frames.len();
+    let index = ((phase / speed_divisor(animation.speed)) as usize) % animation.frames.len();
     animation.frames[index].clone()
 }
 
 pub(crate) fn effect_style(theme: &Theme, animation: &Animation, phase: u64) -> Style {
-    let phase = animation.speed.effect_phase(phase);
+    let phase = speed_effect_phase(animation.speed, phase);
     match animation.effect {
-        Effect::Static => theme.style(animation.color, Modifier::empty()),
-        Effect::Breathe => theme.breathe(
+        AnimationEffect::Static => theme.style(animation.color, Modifier::empty()),
+        AnimationEffect::Breathe => theme.breathe(
             animation.color,
             BreathSample::new(phase, DEFAULT_BREATH_PERIOD, BREATH_CONFIG_AMPLITUDE),
         ),
@@ -644,13 +517,17 @@ pub(crate) fn effect_style(theme: &Theme, animation: &Animation, phase: u64) -> 
 }
 
 pub(crate) fn effect_weight(animation: &Animation, phase: u64) -> Modifier {
-    let phase = animation.speed.effect_phase(phase);
+    let phase = speed_effect_phase(animation.speed, phase);
     match animation.effect {
-        Effect::Static => Modifier::empty(),
-        Effect::Breathe => {
+        AnimationEffect::Static => Modifier::empty(),
+        AnimationEffect::Breathe => {
             BreathSample::new(phase, DEFAULT_BREATH_PERIOD, BREATH_CONFIG_AMPLITUDE).modifier()
         }
     }
+}
+
+fn role_index(role: AnimationRole) -> usize {
+    role as usize
 }
 
 fn resolve_role(
@@ -669,11 +546,11 @@ fn resolve_role(
             animation.color_overridden = true;
         }
         if let Some(effect) = spec.effect {
-            animation.effect = effect.into();
+            animation.effect = effect;
             animation.effect_overridden = true;
         }
         if let Some(speed) = spec.speed {
-            animation.speed = speed.into();
+            animation.speed = speed;
         }
     }
     animation
@@ -698,62 +575,62 @@ fn builtin(role: AnimationRole, glyphs: &GlyphSet, palette: &Palette) -> Animati
         AnimationRole::Thinking => (
             seq(THINKING_FRAMES),
             palette.animation_color(AnimationColor::Clay),
-            Effect::Static,
-            Speed::Fast,
+            AnimationEffect::Static,
+            AnimationSpeed::Fast,
         ),
         AnimationRole::Working => (
             seq(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]),
             palette.animation_color(AnimationColor::Clay),
-            Effect::Static,
-            Speed::Fast,
+            AnimationEffect::Static,
+            AnimationSpeed::Fast,
         ),
         AnimationRole::Compacting => (
             seq(&["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃"]),
             palette.animation_color(AnimationColor::Meta),
-            Effect::Static,
-            Speed::Fast,
+            AnimationEffect::Static,
+            AnimationSpeed::Fast,
         ),
         AnimationRole::Delegating => (
             seq(&["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"]),
             palette.animation_color(AnimationColor::Clay),
-            Effect::Static,
-            Speed::Fast,
+            AnimationEffect::Static,
+            AnimationSpeed::Fast,
         ),
         AnimationRole::Resolving => (
             seq(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
             palette.animation_color(AnimationColor::Meta),
-            Effect::Static,
-            Speed::Fast,
+            AnimationEffect::Static,
+            AnimationSpeed::Fast,
         ),
         AnimationRole::Idle => (
             head(GlyphRole::StatusIdle),
             palette.animation_color(AnimationColor::Good),
-            Effect::Static,
-            Speed::Normal,
+            AnimationEffect::Static,
+            AnimationSpeed::Normal,
         ),
         AnimationRole::Success => (
             head(GlyphRole::StatusDone),
             palette.animation_color(AnimationColor::Good),
-            Effect::Static,
-            Speed::Normal,
+            AnimationEffect::Static,
+            AnimationSpeed::Normal,
         ),
         AnimationRole::Paused => (
             head(GlyphRole::StatusPaused),
             palette.animation_color(AnimationColor::Cool),
-            Effect::Static,
-            Speed::Normal,
+            AnimationEffect::Static,
+            AnimationSpeed::Normal,
         ),
         AnimationRole::Waiting => (
             head(GlyphRole::StatusWaiting),
             palette.animation_color(AnimationColor::Warn),
-            Effect::Static,
-            Speed::Normal,
+            AnimationEffect::Static,
+            AnimationSpeed::Normal,
         ),
         AnimationRole::Failed => (
             head(GlyphRole::StatusAttention),
             palette.animation_color(AnimationColor::Alarm),
-            Effect::Static,
-            Speed::Normal,
+            AnimationEffect::Static,
+            AnimationSpeed::Normal,
         ),
     };
     Animation {

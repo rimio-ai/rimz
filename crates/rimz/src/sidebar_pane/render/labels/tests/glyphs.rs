@@ -1,5 +1,6 @@
 use super::super::super::age_heat_amount_for_test;
 use super::*;
+use crate::config::AnimationRole;
 use crate::sidebar_pane::render::animation::{BREATH_DEEP_AMPLITUDE, BreathSample};
 use crate::sidebar_pane::render::theme::Component;
 
@@ -551,30 +552,42 @@ fn only_the_lead_unread_row_keeps_the_configured_effect() {
 fn animations_cycle_and_wrap() {
     let theme = Theme::fixed(false);
     let working = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
-    assert_eq!(working_glyph(&theme, 0), working[0]);
-    assert_eq!(working_glyph(&theme, 3), working[3]);
-    assert_eq!(working_glyph(&theme, working.len() as u64), working[0]);
+    assert_eq!(role_glyph(&theme, AnimationRole::Working, 0), working[0]);
+    assert_eq!(role_glyph(&theme, AnimationRole::Working, 3), working[3]);
+    assert_eq!(
+        role_glyph(&theme, AnimationRole::Working, working.len() as u64),
+        working[0]
+    );
     let thinking = [
         "⠁", "⠂", "⠄", "⡀", "⡈", "⡐", "⡠", "⣀", "⣁", "⣂", "⣄", "⣌", "⣔", "⣤", "⣥", "⣦", "⣮", "⣶",
         "⣷", "⣿", "⡿", "⠿", "⢟", "⠟", "⡛", "⠛", "⠫", "⢋", "⠋", "⠍", "⡉", "⠉", "⠑", "⠡", "⢁",
     ];
-    assert_eq!(thinking_glyph(&theme, 0), thinking[0]);
-    assert_eq!(thinking_glyph(&theme, 19), thinking[19]);
-    assert_eq!(thinking_glyph(&theme, thinking.len() as u64), thinking[0]);
+    assert_eq!(role_glyph(&theme, AnimationRole::Thinking, 0), thinking[0]);
+    assert_eq!(
+        role_glyph(&theme, AnimationRole::Thinking, 19),
+        thinking[19]
+    );
+    assert_eq!(
+        role_glyph(&theme, AnimationRole::Thinking, thinking.len() as u64),
+        thinking[0]
+    );
     let resolving = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    assert_eq!(resolver_glyph(&theme, resolving.len() as u64), resolving[0]);
+    assert_eq!(
+        role_glyph(&theme, AnimationRole::Resolving, resolving.len() as u64),
+        resolving[0]
+    );
     let compacting = ["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃"];
     assert_eq!(
-        compacting_glyph(&theme, compacting.len() as u64),
+        role_glyph(&theme, AnimationRole::Compacting, compacting.len() as u64),
         compacting[0]
     );
     let delegating = ["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"];
     assert_eq!(
-        subagent_glyph(&theme, delegating.len() as u64),
+        role_glyph(&theme, AnimationRole::Delegating, delegating.len() as u64),
         delegating[0]
     );
     assert_eq!(
-        working_glyph(&theme, u64::MAX),
+        role_glyph(&theme, AnimationRole::Working, u64::MAX),
         working[(u64::MAX % working.len() as u64) as usize]
     );
 }

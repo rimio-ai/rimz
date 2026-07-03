@@ -61,7 +61,7 @@ pub(super) fn identity_line(ctx: IdentityLineContext<'_>, row: &SidebarRow) -> L
         return composed_row(
             ctx.theme,
             Span::styled(
-                resolver_glyph(ctx.theme, ctx.animation_phase),
+                role_glyph(ctx.theme, AnimationRole::Resolving, ctx.animation_phase),
                 resolver_style(ctx.theme, ctx.animation_phase),
             ),
             row.display_name(),
@@ -103,7 +103,7 @@ pub(super) fn agent_lead_cell(
     let actionable = status.is_actionable();
     if !actionable && agent(row).is_some_and(|agent| agent.compacting) {
         return Span::styled(
-            compacting_glyph(theme, animation_phase),
+            role_glyph(theme, AnimationRole::Compacting, animation_phase),
             compacting_head_style(theme, animation_phase),
         );
     }
@@ -116,7 +116,7 @@ pub(super) fn agent_lead_cell(
         })
     {
         return Span::styled(
-            subagent_glyph(theme, animation_phase),
+            role_glyph(theme, AnimationRole::Delegating, animation_phase),
             subagent_head_style(theme, animation_phase),
         );
     }
