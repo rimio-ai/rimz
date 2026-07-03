@@ -1003,6 +1003,47 @@ fn cold_parse_skip_ignores_new_files_outside_widest_window() {
 }
 
 #[test]
+fn refresh_decision_matches_cache_state() {
+    let cursor = SpendCursor {
+        offset: 7,
+        state: None,
+    };
+    let entry = FileCacheEntry {
+        mtime_secs: 10,
+        len: 20,
+        cursor: cursor.clone(),
+        origin_path: None,
+        entries: Vec::new(),
+        unknown_models: BTreeMap::new(),
+    };
+
+    assert_eq!(
+        refresh_decision(Some(&entry), 10, 20, false, NOW_SECS),
+        RefreshDecision::Unchanged
+    );
+    assert_eq!(
+        refresh_decision(Some(&entry), 10, 20, true, NOW_SECS),
+        RefreshDecision::Parse { resume: None }
+    );
+    assert_eq!(
+        refresh_decision(
+            None,
+            1_000,
+            0,
+            false,
+            1_001 + WIDEST_SPEND_WINDOW_SECS + SKIP_PARSE_MARGIN_SECS
+        ),
+        RefreshDecision::SkipOutOfWindow
+    );
+    assert_eq!(
+        refresh_decision(Some(&entry), 10, 30, false, NOW_SECS),
+        RefreshDecision::Parse {
+            resume: Some(cursor)
+        }
+    );
+}
+
+#[test]
 fn spending_walk_observer_checkpoints_on_first_interval() {
     struct CaptureObserver {
         cache_path: PathBuf,
