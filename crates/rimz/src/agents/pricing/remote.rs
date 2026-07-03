@@ -1,11 +1,11 @@
 //! Tier 2 + 3b: the runtime fetches that keep the table fresh.
 //!
 //! [`fetch_litellm`] re-downloads the upstream LiteLLM table; [`fetch_models_dev`]
-//! pulls authoritative models.dev provider catalogues used to fill models neither
-//! the embedded snapshot nor the LiteLLM refresh knows. Both are best-effort: a
-//! failure returns `None` and the caller keeps whatever it already had. The
-//! decision of *when* to fetch (TTL + back-off, on-disk cache) lives in the
-//! parent module — this file only knows how to GET and parse.
+//! pulls chase-only authoritative models.dev provider catalogues used to fill
+//! models neither the embedded snapshot nor the LiteLLM refresh knows. Both are
+//! best-effort: a failure returns `None` and the caller keeps whatever it already
+//! had. The decision of *when* to fetch (TTL + back-off, on-disk cache) lives in
+//! the parent module — this file only knows how to GET and parse.
 
 use std::collections::BTreeMap;
 use std::time::Duration;

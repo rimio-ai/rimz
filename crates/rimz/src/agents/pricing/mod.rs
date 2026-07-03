@@ -11,9 +11,9 @@
 //! 1. **Embedded snapshot** ([`embedded`]) — the generated LiteLLM table
 //!    `build.rs` compacts and gzips into release binaries. Fresh clones without
 //!    the generated file embed an empty table.
-//! 2. **Remote refresh** ([`remote`]) — a fresh LiteLLM pull plus the models.dev
-//!    catalogue (filling models the snapshot lacks), cached on disk with a TTL so
-//!    the one-shot `rimz sidebar snapshot` process fetches at most once per day.
+//! 2. **Remote refresh** ([`remote`]) — a weekly LiteLLM pull; the models.dev
+//!    catalogue is fetched only during an unknown-model chase, filling models
+//!    LiteLLM lacks.
 //! 3. **Builtins** ([`builtins`]) — hardcoded prices applied last, so the team's
 //!    values always win over a stale or missing remote entry.
 //!
@@ -21,7 +21,7 @@
 //! process from the embedded data and the on-disk cache, and
 //! [`PriceBook::price`] resolves a model by exact match then a boundary-aware
 //! fuzzy scan. The only network is the gated refresh in [`load_for_spending`]:
-//! a daily refresh, plus an escalating unknown-model chase when a transcript
+//! a weekly refresh, plus an escalating unknown-model chase when a transcript
 //! names a priceable model the current book cannot resolve.
 
 mod builtins;
@@ -119,7 +119,7 @@ impl PriceBook {
 /// Load the price book for a spending pass, refreshing the on-disk cache at most
 /// once per TTL. A second gated trigger chases model names recorded by spend
 /// parsers when the assembled book still cannot price them, backing off from
-/// 30 minutes to the daily cap while the same names persist. Best-effort: a
+/// 30 minutes to the 24-hour cap while the same names persist. Best-effort: a
 /// failed or skipped fetch falls back to the cache, then to the embedded
 /// snapshot — the returned book is always usable.
 ///
@@ -136,27 +136,14 @@ pub fn load_for_spending(cache_path: &Path, unknown_models: &BTreeSet<String>) -
     }
 
     if should_refresh(&cache, now, remote::offline(), &pending) {
-        cache.last_attempt_secs = now;
-        if !pending.is_empty() {
-            note_chase_attempt(&mut cache, now, pending);
-        }
-        if let Some(json) = remote::fetch_litellm() {
-            let table = embedded::parse(&json);
-            if !table.is_empty() {
-                cache.litellm = table.into_iter().collect();
-                cache.fetched_at_secs = now;
-            }
-        }
-        if let Some(json) = remote::fetch_models_dev() {
-            let table = remote::parse_models_dev(&json);
-            if !table.is_empty() {
-                cache.models_dev = table;
-            }
-        }
-        book = PriceBook::assembled(&cache);
-        if unpriced_subset(&book, unknown_models).is_empty() {
-            clear_unknown_chase(&mut cache);
-        }
+        book = refresh_cache(
+            &mut cache,
+            now,
+            pending,
+            unknown_models,
+            remote::fetch_litellm,
+            remote::fetch_models_dev,
+        );
         write = true;
     }
     if write {
@@ -173,15 +160,54 @@ pub fn load_cached_for_spending(cache_path: &Path) -> PriceBook {
     PriceBook::assembled(&read_cache(cache_path))
 }
 
+fn refresh_cache(
+    cache: &mut PricingCache,
+    now: u64,
+    pending: BTreeSet<String>,
+    unknown_models: &BTreeSet<String>,
+    fetch_litellm: impl FnOnce() -> Option<String>,
+    fetch_models_dev: impl FnOnce() -> Option<String>,
+) -> PriceBook {
+    cache.last_attempt_secs = now;
+    let chasing = !pending.is_empty();
+    if chasing {
+        note_chase_attempt(cache, now, pending);
+    }
+    if let Some(json) = fetch_litellm() {
+        let table = embedded::parse(&json);
+        if !table.is_empty() {
+            cache.litellm = table.into_iter().collect();
+            cache.fetched_at_secs = now;
+        }
+    }
+    if chasing {
+        let book = PriceBook::assembled(cache);
+        if !unpriced_subset(&book, unknown_models).is_empty()
+            && let Some(json) = fetch_models_dev()
+        {
+            let table = remote::parse_models_dev(&json);
+            if !table.is_empty() {
+                cache.models_dev = table;
+            }
+        }
+    }
+    let book = PriceBook::assembled(cache);
+    if unpriced_subset(&book, unknown_models).is_empty() {
+        clear_unknown_chase(cache);
+    }
+    book
+}
+
 // ── Disk cache ──────────────────────────────────────────────────────────────
 
-/// Refetch once a day; on failure, back off an hour before retrying so a
+/// Refetch once a week; on failure, back off an hour before retrying so a
 /// persistent network outage never fetches on every snapshot.
-const REFRESH_TTL_SECS: u64 = 24 * 60 * 60;
+const REFRESH_TTL_SECS: u64 = 7 * 24 * 60 * 60;
 const RETRY_BACKOFF_SECS: u64 = 60 * 60;
 /// Chase a newly observed unpriced model after 30 minutes, then double up to the
-/// daily refresh cap while the same unknown set persists.
+/// 24-hour cap while the same unknown set persists.
 const UNKNOWN_REFRESH_TTL_SECS: u64 = 30 * 60;
+const UNKNOWN_BACKOFF_CAP_SECS: u64 = 24 * 60 * 60;
 
 /// On-disk pricing cache at persistent shared `pricing-cache.json`. Sorted maps
 /// keep the file diff-stable.
@@ -212,10 +238,10 @@ fn should_refresh(
     if offline {
         return false;
     }
-    daily_refresh_due(cache, now) || unknown_refresh_due(cache, now, pending)
+    baseline_refresh_due(cache, now) || unknown_refresh_due(cache, now, pending)
 }
 
-fn daily_refresh_due(cache: &PricingCache, now: u64) -> bool {
+fn baseline_refresh_due(cache: &PricingCache, now: u64) -> bool {
     now.saturating_sub(cache.fetched_at_secs) > REFRESH_TTL_SECS
         && now.saturating_sub(cache.last_attempt_secs) > RETRY_BACKOFF_SECS
 }
@@ -248,7 +274,7 @@ fn note_chase_attempt(cache: &mut PricingCache, now: u64, pending: BTreeSet<Stri
     cache.unknown_backoff_secs = if new_sighting {
         UNKNOWN_REFRESH_TTL_SECS
     } else {
-        gate.saturating_mul(2).min(REFRESH_TTL_SECS)
+        gate.saturating_mul(2).min(UNKNOWN_BACKOFF_CAP_SECS)
     };
 }
 
@@ -462,9 +488,9 @@ mod tests {
         note_chase_attempt(&mut cache, 2, set(&["new-model"]));
         assert_eq!(cache.unknown_backoff_secs, 2 * UNKNOWN_REFRESH_TTL_SECS);
 
-        cache.unknown_backoff_secs = REFRESH_TTL_SECS;
+        cache.unknown_backoff_secs = UNKNOWN_BACKOFF_CAP_SECS;
         note_chase_attempt(&mut cache, 3, set(&["new-model"]));
-        assert_eq!(cache.unknown_backoff_secs, REFRESH_TTL_SECS);
+        assert_eq!(cache.unknown_backoff_secs, UNKNOWN_BACKOFF_CAP_SECS);
 
         let mut cache = PricingCache {
             unknown_attempt_secs: 10,
@@ -477,6 +503,110 @@ mod tests {
 
         assert_eq!(cache.unknown_attempt_secs, 0);
         assert_eq!(cache.unknown_backoff_secs, 0);
+        assert!(cache.unknown_seen.is_empty());
+    }
+
+    #[test]
+    fn refresh_fetches_models_dev_only_for_unknowns_litellm_still_lacks() {
+        use std::cell::Cell;
+
+        fn litellm_json(model: &str) -> String {
+            format!(
+                r#"{{
+                    "{model}": {{
+                        "input_cost_per_token": 1e-6,
+                        "output_cost_per_token": 2e-6
+                    }}
+                }}"#
+            )
+        }
+
+        fn models_dev_json(model: &str) -> String {
+            format!(
+                r#"{{
+                    "openai": {{
+                        "models": {{
+                            "{model}": {{
+                                "cost": {{
+                                    "input": 1.0,
+                                    "output": 2.0
+                                }}
+                            }}
+                        }}
+                    }}
+                }}"#
+            )
+        }
+
+        let now = REFRESH_TTL_SECS + RETRY_BACKOFF_SECS + 1;
+
+        let litellm_fetches = Cell::new(0);
+        let models_dev_fetches = Cell::new(0);
+        let mut cache = PricingCache::default();
+        refresh_cache(
+            &mut cache,
+            now,
+            BTreeSet::new(),
+            &BTreeSet::new(),
+            || {
+                litellm_fetches.set(litellm_fetches.get() + 1);
+                Some(litellm_json("rimz-test-baseline-model"))
+            },
+            || {
+                models_dev_fetches.set(models_dev_fetches.get() + 1);
+                Some(models_dev_json("rimz-test-baseline-model"))
+            },
+        );
+
+        assert_eq!(litellm_fetches.get(), 1);
+        assert_eq!(models_dev_fetches.get(), 0);
+
+        let litellm_fetches = Cell::new(0);
+        let models_dev_fetches = Cell::new(0);
+        let mut cache = PricingCache::default();
+        let unknowns = set(&["rimz-test-litellm-chase-model"]);
+        let book = refresh_cache(
+            &mut cache,
+            now,
+            unknowns.clone(),
+            &unknowns,
+            || {
+                litellm_fetches.set(litellm_fetches.get() + 1);
+                Some(litellm_json("rimz-test-litellm-chase-model"))
+            },
+            || {
+                models_dev_fetches.set(models_dev_fetches.get() + 1);
+                Some(models_dev_json("rimz-test-litellm-chase-model"))
+            },
+        );
+
+        assert_eq!(litellm_fetches.get(), 1);
+        assert_eq!(models_dev_fetches.get(), 0);
+        assert!(book.price("rimz-test-litellm-chase-model").is_some());
+        assert!(cache.unknown_seen.is_empty());
+
+        let litellm_fetches = Cell::new(0);
+        let models_dev_fetches = Cell::new(0);
+        let mut cache = PricingCache::default();
+        let unknowns = set(&["rimz-test-models-dev-chase-model"]);
+        let book = refresh_cache(
+            &mut cache,
+            now,
+            unknowns.clone(),
+            &unknowns,
+            || {
+                litellm_fetches.set(litellm_fetches.get() + 1);
+                Some(litellm_json("rimz-test-other-model"))
+            },
+            || {
+                models_dev_fetches.set(models_dev_fetches.get() + 1);
+                Some(models_dev_json("rimz-test-models-dev-chase-model"))
+            },
+        );
+
+        assert_eq!(litellm_fetches.get(), 1);
+        assert_eq!(models_dev_fetches.get(), 1);
+        assert!(book.price("rimz-test-models-dev-chase-model").is_some());
         assert!(cache.unknown_seen.is_empty());
     }
 
