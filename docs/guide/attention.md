@@ -1,6 +1,6 @@
 # Attention
 
-Rimz routes attention: the sidebar keeps the card that needs you next at the top, so triage is a glance instead of a scan. This page explains the model behind that order — which states deserve attention, how urgency changes with time, and how teams and git state fold in. The rendered frames and glyph legend live in [the interface reference](../interface/sidebar.md), the exact ranking contract in [the internals](../internals/sidebar/sidebar.md#attention-ranking-and-the-per-worktree-cap), and the timing knobs in [configuration.md](../reference/configuration.md#sidebar-rendering).
+Rimz routes attention: the sidebar keeps the card that needs you next at the top, so triage is a glance instead of a scan. This page explains the model behind that order — which states deserve attention, how urgency changes with time, and how teams and git state fold in. The rendered frames and glyph legend live in [the interface reference](../interface/sidebar.md), the exact ranking contract in [the internals](../internals/sidebar/sidebar.md#attention-ranking-and-the-cap), and the timing knobs in [configuration.md](../reference/configuration.md#sidebar-rendering).
 
 ## What deserves attention
 
