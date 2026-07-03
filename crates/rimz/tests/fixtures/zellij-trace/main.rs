@@ -77,6 +77,16 @@ fn main() {
         return;
     }
 
+    if cli
+        .windows(2)
+        .any(|window| window[0] == "action" && window[1] == "list-panes")
+    {
+        if let Ok(output) = env::var("RIMZ_TEST_ZELLIJ_LIST_PANES") {
+            write_stdout_raw(&output);
+        }
+        return;
+    }
+
     let mode = env::var("RIMZ_TEST_ZELLIJ_MODE").unwrap_or_default();
     if mode == "socket-overflow-on-birth"
         && cli.first().is_some_and(|arg| arg == "attach")

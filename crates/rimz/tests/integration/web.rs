@@ -6,6 +6,10 @@ fn zellij_shim() -> PathBuf {
     crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
 }
 
+fn materialized_room_panes_json() -> &'static str {
+    r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#
+}
+
 #[test]
 fn web_status_json_parses_zellij_status_and_token_count() {
     let env = Env::new();
@@ -63,6 +67,10 @@ fn web_open_json_keeps_autostart_banner_off_stdout() {
             "RIMZ_TEST_ZELLIJ_WEB_START_STDOUT",
             "Web Server started on 127.0.0.1 port 8082\n",
         )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            materialized_room_panes_json(),
+        )
         .bounded_output()
         .expect("run rimz web open");
 
@@ -96,6 +104,10 @@ fn web_open_json_keeps_autostart_banner_off_stdout() {
     assert!(log.contains("web\t--start\t--daemonize"), "{log}");
     assert!(log.contains("web\t--status"), "{log}");
     assert!(log.contains("web\t--list-tokens"), "{log}");
+    assert!(
+        log.contains("\tattach\t--create-background\t") && log.contains("\t--web-sharing\ton\t"),
+        "web open --session should prepare a web-shareable room before printing JSON: {log}"
+    );
     assert!(
         log.contains(&format!(
             "--session\t{}\tpipe\t--plugin",

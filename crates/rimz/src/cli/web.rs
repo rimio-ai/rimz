@@ -149,8 +149,8 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
 
 fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
     let (session, workspace_id) = if let Some(session) = args.session {
-        let record = require_workspace_record_for_session(&session, globals.mux)?;
-        (session, record.workspace_id)
+        let record = room::ensure_session_room_for_web(&session, globals)?;
+        (record.session_name, record.workspace_id)
     } else {
         let path = args.path.unwrap_or_else(|| PathBuf::from("."));
         let workspace = room::ensure_workspace_room_for_web(&path, globals)?;

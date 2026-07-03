@@ -12,7 +12,7 @@ mod start_notice;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::mux::{
@@ -72,6 +72,9 @@ enum RoomEntry<'a> {
         workspace: rimz::ResolvedWorkspace,
         mux: MuxName,
     },
+    WebSession {
+        record: &'a WorkspaceRecord,
+    },
     AttachCwd {
         workspace: rimz::ResolvedWorkspace,
         mode: AttachMode,
@@ -91,7 +94,7 @@ impl RoomEntry<'_> {
     fn mode(&self) -> AttachMode {
         match self {
             Self::Start { args, .. } => args.attach.mode(),
-            Self::StartWeb { .. } => AttachMode::Print,
+            Self::StartWeb { .. } | Self::WebSession { .. } => AttachMode::Print,
             Self::AttachCwd { mode, .. } | Self::AttachSession { mode, .. } => *mode,
         }
     }
@@ -99,7 +102,7 @@ impl RoomEntry<'_> {
     fn no_resume(&self) -> bool {
         match self {
             Self::Start { args, .. } => args.no_resume,
-            Self::StartWeb { .. } => false,
+            Self::StartWeb { .. } | Self::WebSession { .. } => false,
             Self::AttachCwd { no_resume, .. } | Self::AttachSession { no_resume, .. } => *no_resume,
         }
     }
@@ -107,11 +110,15 @@ impl RoomEntry<'_> {
     fn refresh_ms(&self) -> Option<u16> {
         match self {
             Self::Start { args, .. } => args.refresh_ms,
-            Self::StartWeb { .. } => None,
+            Self::StartWeb { .. } | Self::WebSession { .. } => None,
             Self::AttachCwd { refresh_ms, .. } | Self::AttachSession { refresh_ms, .. } => {
                 *refresh_ms
             }
         }
+    }
+
+    fn requests_web_sharing(&self) -> bool {
+        matches!(self, Self::StartWeb { .. } | Self::WebSession { .. })
     }
 
     fn session_name(&self) -> &str {
@@ -119,6 +126,7 @@ impl RoomEntry<'_> {
             Self::Start { workspace, .. }
             | Self::StartWeb { workspace, .. }
             | Self::AttachCwd { workspace, .. } => &workspace.session_name,
+            Self::WebSession { record } => &record.session_name,
             Self::AttachSession { session, .. } => session,
         }
     }
@@ -189,6 +197,24 @@ pub(crate) fn ensure_workspace_room_for_web(
     Ok(workspace)
 }
 
+pub(crate) fn ensure_session_room_for_web(
+    session: &str,
+    globals: &GlobalFlags,
+) -> Result<WorkspaceRecord> {
+    let record = workspace_record_for_session(session).context("checking Rimz workspace record")?;
+    let Some(record) = record else {
+        bail!(
+            "session `{session}` is not a known Rimz workspace session; run `rimz list` or open the workspace with `rimz start` first"
+        );
+    };
+    let mux = pick_mux_for_session(session, globals.mux, MissingSessionReport::Silent)?;
+    if mux != MuxName::Zellij {
+        bail!("session `{session}` is not a Zellij session; `rimz web` supports Zellij only");
+    }
+    prepare_room(RoomEntry::WebSession { record: &record }, globals)?;
+    Ok(record)
+}
+
 pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
     let mode = args.attach.mode();
     match args.workspace {
@@ -241,7 +267,7 @@ struct ReadyRoom {
 fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
     let machine_config = machine_config();
     let mut mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
-    if matches!(entry, RoomEntry::StartWeb { .. }) {
+    if entry.requests_web_sharing() {
         mux_config.zellij.web_sharing = true;
     }
     let sidebar_width = SidebarWidth::from_config(&machine_config.theme.display);
@@ -259,6 +285,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
 
     let mux = match &entry {
         RoomEntry::Start { mux, .. } | RoomEntry::StartWeb { mux, .. } => *mux,
+        RoomEntry::WebSession { .. } => MuxName::Zellij,
         RoomEntry::AttachCwd { .. } => rimz::mux::auto_detect_backend(globals.mux)?,
         RoomEntry::AttachSession {
             session, record, ..
@@ -358,6 +385,28 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             })?;
             attached_workspace_id = Some(workspace.workspace_id.clone());
         }
+        RoomEntry::WebSession { record } => {
+            let room = RoomTarget {
+                workspace_id: &record.workspace_id,
+                project_root: &record.project_root,
+                session_name: &record.session_name,
+                cwd: &record.project_root,
+                mux_config: &mux_config,
+                width: sidebar_width,
+                detected_size,
+                refresh_ms: entry.refresh_ms(),
+            };
+            birth_room(&RoomBirth {
+                backend: backend.as_ref(),
+                machine_config: &machine_config,
+                room,
+                was_live,
+                no_resume: entry.no_resume(),
+                daemon: None,
+                remote: None,
+            })?;
+            attached_workspace_id = Some(record.workspace_id.clone());
+        }
         RoomEntry::AttachSession {
             session, record, ..
         } => match record {
@@ -416,6 +465,10 @@ fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
         | RoomEntry::AttachCwd { workspace, .. } => {
             rimz_socket_environment_preflight(&workspace.workspace_id)?;
             mux_environment_preflight(mux, &workspace.session_name)
+        }
+        RoomEntry::WebSession { record } => {
+            rimz_socket_environment_preflight(&record.workspace_id)?;
+            mux_environment_preflight(mux, &record.session_name)
         }
         RoomEntry::AttachSession {
             session, record, ..
