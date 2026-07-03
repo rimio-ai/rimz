@@ -1,4 +1,4 @@
-# Sidebar State And Timing
+# Sidebar state and timing
 
 This doc owns the sidebar **data plane**: the node model every renderer runs, the per-lane caches the elected producer publishes, the typed events that wake the nodes, and the timing that binds them. Product commitments live in [DESIGN.md](../../../DESIGN.md); presence, ranking, and pane binding live in [sidebar.md](./sidebar.md); render-thread budgets live in [performance.md](../health/performance.md); the live-state inspection workflow lives in [diagnostics.md](../health/diagnostics.md#inspecting-live-card-state).
 
@@ -21,7 +21,7 @@ Every sidebar renderer is a **node**. A node paints from two in-memory stores �
 
 Durable truth is the ledger; everything the producer publishes is a cache that a pull rebuilds. Wakeup events are latency hints — a dropped datagram costs staleness bounded by the next pull, never correctness.
 
-## The Node Model
+## The node model
 
 A node holds two-part runtime state. **Pulled truth** is the event-fresh ledger rollup folded over the producer's published pane frame and enrichment caches. The **event store** is a small set of typed realtime events received since the last fold. Every paint computes `fuse(pulled, events, now)` and renders the resulting `SidebarSnapshot`, so a node's frame is a function of its two stores and one clock value.
 
@@ -29,9 +29,9 @@ The pane frame admits the cards; the ledger, sidecars, and events only enrich ad
 
 Durable truth feeds every node identically and bypasses the producer: each node reads the rollup in process (`latest.json` plus the unfolded log tail — [ledger.md](./ledger.md#runtime-projection)) and reads the per-session sidecars fresh from disk behind stat-gated parse caches.
 
-One **producer** — the eldest fresh heartbeat per workspace — owns every consistent-cadence external pull and publishes each lane as its own single-writer cache. Its fetch worker publishes pane truth and roots, then projects heavy caches; its elder-gated cache refresher publishes git diff-stats, spending, accounts, usage, credits, auto-continue side effects, and loop-task firing on the same data cadence. Every other node consumes those caches in process and never pulls for freshness on its own; the producer consumes its own published fast lane before paying for a refresh. Realtime events never patch a published cache — pulled truth on disk is written only by producer pulls. A dead producer is a degradation like any other, handled by the heartbeat election ([Failure Modes](#failure-modes)).
+One **producer** — the eldest fresh heartbeat per workspace — owns every consistent-cadence external pull and publishes each lane as its own single-writer cache. Two producer threads split that work. The fetch worker publishes pane truth and group roots each data tick, then projects the heavy caches' last published values into its snapshot. The elder-gated cache refresher owns the TTL-gated refreshes behind those caches — git diff-stats, PR state, spending, accounts, usage, credits, and auto-continue side effects — on the same data cadence, so a status flip never waits behind a `git` fork or a provider probe. Every other node consumes the published caches in process and never pulls for freshness on its own; the producer itself consumes its own published fast lane before paying for a refresh. Realtime events never patch a published cache — pulled truth on disk is written only by producer pulls. A dead producer is a degradation like any other, handled by the heartbeat election ([Failure modes](#failure-modes)).
 
-## Published Caches
+## Published caches
 
 One file per lane, one writer per lane, each written temp-file-plus-rename. Exact freshness values live in [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs); per-file mechanics (locks, single-flighting, repair) live in the module that writes the lane. Account-global data lanes live under `$XDG_STATE_HOME/rimz/shared/` so relaunches open warm; their `*.lock` election files live under `$XDG_RUNTIME_DIR/rimz/shared/`. The rest are room-local under the workspace runtime directory.
 
@@ -41,9 +41,9 @@ The **pane frame** is the topology everything else enriches: `PaneFrame` carries
 | --- | --- | --- | --- |
 | `snapshot.json` | producer ([`produce::panes`](../../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's fold | the typed pane frame:<br>- panes with foreground/spawn command and cwd repaired from `/proc` when the mux races<br>- metrics, carried panes, focus-contention flags, `viewed_panes` global focus, and client presence<br>- observation stamp plus producer `build` id; `observed_at_ms` is the supersession baseline<br>- poll-mode freshness by default, presence-stamp event TTL while `presence.stamp` is fresh |
 | `pane-topology.json` | Zellij presence plugin via the host CLI | Zellij producer pull | a pre-producer Zellij hint — live panes, tab names, authoritative per-tab active panes usable with topology-served or CLI-served rosters, raw focus candidates, geometry |
-| `presence.stamp` | Zellij plugin, tmux control-mode watch | producer | an mtime liveness mark; while fresh, the pane lane runs on the shorter event-mode TTL |
+| `presence.stamp` | Zellij plugin, tmux control-mode watch | producer | an mtime liveness mark; while fresh, the pane lane relaxes to the longer event-mode TTL because typed events cover the latency |
 
-Producer **enrichment lanes** fold onto the admitted cards. The fetch worker handles `/proc` and group roots with pane production; the cache refresher handles git, spending, accounts, usage, credits, auto-continue, and loop-task firing so the worker's fast lane projects their last published values instead of waiting behind them. The figures reach consumers through the cache (or, for metrics, restamped onto the pane frame).
+Producer **enrichment lanes** fold onto the admitted cards. The fetch worker handles `/proc` and group roots with pane production; the cache refresher handles git, PR state, spending, accounts, usage, credits, and auto-continue so the worker's fast lane projects their last published values instead of waiting behind them. The figures reach consumers through the cache (or, for metrics, restamped onto the pane frame).
 
 | Lane | Scope | Carries |
 | --- | --- | --- |
@@ -59,24 +59,24 @@ Producer **enrichment lanes** fold onto the admitted cards. The fetch worker han
 | `rate_limits.json` | account-global | per-account budget windows |
 | `credits.json` | account-global | provider-reported paid/extra usage |
 
-Per-session **sidecars** (`agent_context/`, `subagent_context/`, `agent-activity/`) are the exception to producer ownership: CLI hook and statusline runs write them latest-wins, and the elder's transcript watcher refreshes Codex context between hooks ([Push Channels](#push-channels)). Every node reads them fresh behind stat-gated parse caches.
+Per-session **sidecars** (`agent_context/`, `subagent_context/`, `agent-activity/`) are the exception to producer ownership: CLI hook and statusline runs write them latest-wins, and the elder's transcript watcher refreshes Codex context between hooks ([Push channels](#push-channels)). Every node reads them fresh behind stat-gated parse caches.
 
 The remaining files are **coordination and receipts**, terse by design: `heartbeat/sidebar.<instance>.json` (election and wakeup fanout — the eldest fresh heartbeat is the producer), `sock/sidebar.<instance>.sock` (the node's wakeup datagram socket), `loop-fire.json` (elder loop-task arm/fire stamps for this room), `unread.json` and `read-marks/…` (open unread episodes and per-row read receipts that every fold reads), `focus-anchor.json` (a TTL-gated jump viewport hint that every renderer reads on focus adoption), `binding.log.jsonl` (append-only pane-bind decisions; [sidebar.md](./sidebar.md)), and `diag.log.jsonl` (typed anomaly records; [diagnostics.md](../health/diagnostics.md)). The ledger's own `snapshots/latest.json` and `snapshots/rollup.json` are state-dir files owned by the ledger write tail — [ledger.md](./ledger.md) owns them.
 
-## Realtime Events
+## Realtime events
 
 Wakeup datagrams carry `SidebarEventEnvelope` ([`sidebar/events.rs`](../../../crates/rimz/src/sidebar/events.rs)): a schema version, the workspace id, an optional session scope, a sender timestamp, and the typed event. `session_name` is the scope — `Some` targets the one mux session whose pane ids the event names, `None` is workspace-wide (ledger deltas, reloads, and pane-frame publications reach every renderer of the workspace).
 
-The receive path drops an event for another workspace or session before it reaches the store. The store keeps each event under a receiver-clock TTL and records both `sent_at_ms` (for supersession) and the receive time (for expiry), so a skewed sender clock can mis-order an overlay briefly but never pin it. Only **overlay** events live in the store — `PaneClosed`, `CommandChanged`, `FocusChanged`, and a `PaneOpened` that carries a command; the rest are consumed as renderer actions or producer-verification nudges.
+The receive path drops an event for another workspace or session before it reaches the store. Only **overlay** events live in the store — `PaneClosed`, `CommandChanged`, `FocusChanged`, and a `PaneOpened` that carries a command; the rest are consumed as renderer actions or producer-verification nudges. The store keeps one slot per key (per pane per event kind, plus a single focus slot), latest stamp wins, capped at `MAX_EVENTS`. Each entry expires under a receiver-clock TTL and records both `sent_at_ms` (for supersession) and the receive time (for expiry), so a skewed sender clock can mis-order an overlay briefly but never pin it.
 
-### Event Taxonomy
+### Event taxonomy
 
 | Event | Payload | Fusion action | Emitter |
 | --- | --- | --- | --- |
 | `PaneClosed` | `pane_id` | Delete every row bound to the pane (highest precedence) | Zellij plugin, tmux control-mode watch |
 | `CommandChanged` | `pane_id`, `command` | Overlay the command until a pull verifies the pane's row shape | Zellij plugin, tmux watch |
 | `FocusChanged` | focused / unfocused pane ids | Mirror focus bits onto every row; retarget the own-view baseline only onto one of the view's own working panes | Zellij plugin pane-focus and tab-switch-to-work events, tmux watch (pane-active and window switch), renderer jumps |
-| `FocusStranded` | sidebar `pane_id` | Renderer action only: the matching sidebar pane refocuses its held or own-view working sibling; when attached clients are viewing distinct panes, the renderer leaves focus alone because `focus-pane-id` is session-global | Zellij plugin |
+| `FocusStranded` | sidebar `pane_id` | Renderer action only, dropped past the short `FOCUS_STRANDED_EVENT_TTL` so late delivery cannot yank focus: the matching sidebar pane refocuses its held or own-view working sibling; when attached clients are viewing distinct panes, the renderer leaves focus alone because `focus-pane-id` is session-global | Zellij plugin |
 | `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull; never admits a card on its own | Zellij plugin, tmux watch |
 | `PanesChanged` | none | Nudge a producer pull — topology moved, identity unknown | tmux watch fallback, the Zellij manifest fold |
 | `LedgerDelta` | optional event method and lifecycle signal | Refetch the rollup; a session start/end also requests fresh panes | ledger and context-sidecar writers |
@@ -84,30 +84,34 @@ The receive path drops an event for another workspace or session before it reach
 | `Notify` | `title`, `body`, target panes, `recheck_unread`, kind | Renderer action only: raise the configured desktop/bell/command notification, gated on row-unread when `recheck_unread`; never fused into rows ([notifications.md](./notifications.md)) | the notification path |
 | `Reload` | none | Re-exec or hard-refresh the renderer | `rimz reload` |
 
-### Push Channels
+### Push channels
 
 Each push channel exists so a change a writer already knows about reaches every node within one wakeup instead of a poll window; the producer's pull stays the structural backstop behind all of them.
 
 - **Ledger and sidecar writers** post a `LedgerDelta` after every durable write or context-sidecar merge, so status, tokens, and cost repaint within one wakeup.
 - **The Zellij presence plugin** pushes exact pane events, stamps `presence.stamp`, and publishes `pane-topology.json` through the host CLI; it skips title-only manifest churn before projection, floors repeated same-pane command shortcuts to one immediate patch plus the settled producer pull, and emits `FocusChanged` when a tab switch lands on a working pane. **The tmux control-mode watcher** pushes typed pane overlays from its `refresh-client -B` subscription, emits `FocusChanged` on window switches, stamps `presence.stamp`, and falls back to `PanesChanged` for identity-free topology notices ([multiplexers.md](./multiplexers.md)).
 - **The elder's transcript watcher** ([`transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs)) watches each live Codex session's rollout JSONL and runs the stat-gated context refresh on write, covering the mid-turn gap where Codex hooks fire only at progress events. Only the elder watches; demotion drops the watch, and a watcher that never starts costs nothing because the producer-tick refresh stays unconditional.
-- **The elder's cache refresher** ([`cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs)) ticks on the data cadence, re-checks the heartbeat election each pass, refreshes heavy caches from the last published pane frame, and fires due loop tasks for this room. Demotion turns it into a sleeper; a panic resets its rollup cursor and the next tick retries from cache truth.
+- **The elder's cache refresher** ([`cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs)) ticks on the data cadence, re-checks the heartbeat election each pass, refreshes heavy caches from the last published pane frame, fires due loop tasks for this room, and wakes due scheduled messages. Demotion turns it into a sleeper; a panic resets its rollup cursor and spending walker, and the next tick retries from cache truth.
 
 Focus drives a dynamic fast tick for the work the user is viewing. The producer folds `PaneFrame.viewed_panes` into `SidebarSnapshot::viewed_panes`; git edit-sensitive facts for the viewed worktree and `/proc` metrics for the viewed pane run on the focused tier, while commit-shaped git facts and every background worktree/pane stay on their cheaper cadences.
 
-Client presence rides the same producer sample as viewed panes. The mux `client_view` read returns attached human clients plus the panes they view; tmux also returns the freshest `client_activity` epoch, so `SidebarPresence::classify` marks `Idle` once input is quiet for the configured `[sidebar] afk_after_secs` window (15 minutes by default) and `Detached` when no human client remains. Zellij exposes attach state but no per-client input-idle timestamp, so an attached Zellij room stays `Active` until every terminal client detaches. Remote rooms identified by a live link-stats sidecar use the same present-while-attached rule: remote tmux `client_activity` is only a proxy for input that crosses SSH, so the idle window is suppressed and only a fully detached client reads away; remote launches with link probing disabled keep tmux idle classification because no sidecar identifies the room as remote. A topology-cache hit skips the expensive pane-list command while still sampling `client_view`; if that focus probe fails, the producer carries the prior presence sample from `snapshot.json` with the prior viewed panes.
+Client presence rides the same producer sample as viewed panes. The mux `client_view` read returns attached human clients plus the panes they view; tmux also returns the freshest `client_activity` epoch, so `SidebarPresence::classify` marks `Idle` once input is quiet for the configured `[sidebar] afk_after_secs` window (15 minutes by default) and `Detached` when no human client remains. Zellij exposes attach state but no per-client input-idle timestamp, so an attached Zellij room stays `Active` until every terminal client detaches.
 
-## Fusion Rules
+Remote rooms identified by a live link-stats sidecar suppress the idle window the same way: remote tmux `client_activity` is only a proxy for input that crosses SSH, so only a fully detached client reads away. A remote launch with link probing disabled has no sidecar to identify the room as remote and keeps tmux idle classification. A topology-cache hit skips the expensive pane-list command while still sampling `client_view`; if that focus probe fails, the producer carries the prior presence sample from `snapshot.json` with the prior viewed panes.
+
+## Fusion rules
 
 Fusion is pure over pulled truth, the event store, and `now_ms`: no IO, no subprocess, no clock read past `now`.
 
-`SidebarSnapshot::panes_observed_at_ms.or(panes_produced_at_ms)` is the supersession baseline. An event no newer than the pane observation is skipped — the pull already saw later pane truth. A viewed work tab anchors `active_pane` to `client_view` focus and is not focus-contested; an unviewed plugin-resolved work tab trusts `active_panes` over raw `is_focused` churn on both topology-served and CLI-served roster paths. Only unviewed fallback tabs reach the contested fallback, and a fallback frame whose own view remains focus-contested abstains from superseding `FocusChanged` events that name panes in that contested view.
+`SidebarSnapshot::panes_observed_at_ms.or(panes_produced_at_ms)` is the supersession baseline: an event no newer than the pane observation is skipped, because the pull already saw later pane truth. Two event classes pierce the baseline. A `PaneClosed` naming a *carried* pane applies at any age — the frame held that pane on `/proc` evidence rather than seeing it, so the frame proves nothing the close could be superseded by, and the close also retires the pane's carried-truth notice. A `FocusChanged` that names a focus-contested pane applies too — the frame's own focus verdict for that pane is a guess, so the event resolves the contest instead of losing to it.
+
+Which panes count as contested is the frame's call. A viewed work tab anchors `active_pane` to `client_view` focus and is never contested; an unviewed plugin-resolved work tab trusts `active_panes` over raw `is_focused` churn on both topology-served and CLI-served roster paths; only unviewed fallback tabs reach the contested fallback and flag their unresolved panes.
 
 The overlays apply in precedence order. `PaneClosed` runs first and deletes rows. `PaneOpened` creates nothing; it asks the producer for a verified frame. `CommandChanged` overlays the command for non-deleted, already-admitted panes. The newest `FocusChanged` lands last: row bits mirror every listed focus mark, and the own-view baseline retargets only onto one of the view's own working panes (`SidebarOwnView::working_pane_ids`) — a focus move in another tab is that view's mark, never this renderer's selection. When the event names an own working pane, fusion also marks that pane viewed, so a locally delivered focus move clears unread before the next pull.
 
 Expired events disappear by receiver-clock TTL, and any wrong verdict from a missed event or clock skew is bounded by the next producer pull.
 
-## Pull-Tick Table
+## Pull-tick table
 
 The table names staleness-budget semantics; exact values and rationale live as named constants in [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs).
 
@@ -126,7 +130,7 @@ The table names staleness-budget semantics; exact values and rationale live as n
 | Account credits | `CREDITS_TTL` success; `CREDITS_RETRY_TTL` failure | Provider dashboard paid/extra usage row |
 | Remote link stats | `LINK_STATS_STALE`, expiring at `LINK_STATS_EXPIRE` | Footer link badge for `rimz remote connect` rooms |
 
-## Render Cadences
+## Render cadences
 
 `[theme.display] refresh_ms` is the base render grid, defaulting to `DEFAULT_REFRESH_MS`. It rides `snapshot.theme.display`, so the renderer uses the default until the first fold and picks up config changes on later folds without reading config itself.
 
@@ -138,7 +142,7 @@ The jump scroll anchor is a display-only runtime file, TTL-gated by `FOCUS_ANCHO
 
 An attached sidebar in an unviewed tab keeps animation suspended and repaints only when its glanceable roster/status/unread projection changes, throttled by `BACKGROUND_PAINT_MIN_INTERVAL`; turn phase, gauges, `/proc` metrics, spend, git facts, and animation phase stay off the hidden paint trigger.
 
-## Failure Modes
+## Failure modes
 
 A **missed event** is acceptable because events are latency hints; the producer's next pull is the structural backstop.
 
