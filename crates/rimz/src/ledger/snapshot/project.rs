@@ -881,8 +881,8 @@ fn assemble_launch_state(
         .prompt
         .clone()
         .or_else(|| prior.and_then(|state| state.prompt.clone()));
-    let description = payload.description.clone().or(carried.description.clone());
-    let mut recent_prompts = carried.recent_prompts.clone();
+    let description = payload.description.clone().or(carried.description);
+    let mut recent_prompts = carried.recent_prompts;
     if let Some(prompt) = payload
         .prompt
         .as_deref()
