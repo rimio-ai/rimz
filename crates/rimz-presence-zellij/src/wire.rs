@@ -14,6 +14,10 @@ use crate::policy::{self, FocusPatch, FocusResolution, PaneFields};
 /// pane, since a Zellij keybind cannot focus a pane by id on its own.
 pub const FOCUS_SIDEBAR_PIPE: &str = "rimz:focus_sidebar";
 
+/// The pipe message name `rimz web open` sends so this plugin asks Zellij to
+/// admit web clients to the current session.
+pub const SHARE_SESSION_PIPE: &str = "rimz:share_session";
+
 /// The modifier half of a focus-key chord.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChordModifier {

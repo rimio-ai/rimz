@@ -14,7 +14,7 @@ mod shell {
         self, CorrectionAction, FocusCorrection, FocusPatch, FocusResolution,
         ForegroundCommandUpdate, PaneFields, Poke, PokePolicy, RawStablePaneFields, TimerGate,
     };
-    use rimz_presence_zellij::wire::{self, FOCUS_SIDEBAR_PIPE};
+    use rimz_presence_zellij::wire::{self, FOCUS_SIDEBAR_PIPE, SHARE_SESSION_PIPE};
     use zellij_tile::prelude::*;
 
     #[derive(Default)]
@@ -55,6 +55,11 @@ mod shell {
         /// cached `RunCommands` grant is proven. Hold one topology signal until
         /// a permission-bearing event or grant result lets us run the wake CLI.
         pending_pregrant_change: bool,
+        /// `rimz web open` asked this plugin to share the session for browser
+        /// clients. The first `share_current_session()` call may arrive before
+        /// the new `StartWebServer` grant is live, so the explicit grant event
+        /// replays it.
+        share_requested: bool,
         /// Deduplicates host timers over the policy's deadlines, so a burst
         /// of events arms one timer, not one per event, and a superseded
         /// timer's late fire never arms a duplicate chain.
@@ -80,6 +85,7 @@ mod shell {
                 PermissionType::ReadApplicationState,
                 PermissionType::RunCommands,
                 PermissionType::Reconfigure,
+                PermissionType::StartWebServer,
             ];
             request_permission(&permissions);
             subscribe(&[
@@ -105,10 +111,13 @@ mod shell {
                     // The explicit grant is the authoritative moment every
                     // requested permission — Reconfigure included — is live.
                     // Re-issue the idempotent runtime reconfigure here so an
-                    // upgrade that proved an older two-permission cache via an
+                    // upgrade that proved an older permission cache via an
                     // app-state event before answering the new prompt still
-                    // applies it.
+                    // applies every new capability.
                     self.apply_runtime_reconfigure();
+                    if self.share_requested {
+                        share_current_session();
+                    }
                 }
                 Event::PermissionRequestResult(PermissionStatus::Denied) => {
                     self.granted = false;
@@ -285,6 +294,13 @@ mod shell {
             // from any pane — a Zellij keybind cannot focus a pane by id itself.
             if pipe_message.name == FOCUS_SIDEBAR_PIPE {
                 self.run_focus_sidebar();
+                return false;
+            }
+            if pipe_message.name == SHARE_SESSION_PIPE {
+                self.share_requested = true;
+                // This can be dropped while the upgraded StartWebServer grant
+                // is pending; PermissionRequestResult(Granted) replays it.
+                share_current_session();
                 return false;
             }
             // Otherwise the launch channel: rimz loads this plugin via `zellij

@@ -802,6 +802,10 @@ impl MuxBackend for ZellijBackend {
         self.ensure_presence_plugin_for(opts)
     }
 
+    fn share_web_session(&self, opts: &super::super::PresencePluginOptions) -> Result<()> {
+        self.share_web_session_for(opts)
+    }
+
     fn version(&self) -> Result<String> {
         memoized_version(&self.version, &self.cmd().arg("--version"))
     }

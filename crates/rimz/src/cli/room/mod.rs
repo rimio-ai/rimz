@@ -459,22 +459,13 @@ pub(crate) fn ensure_presence_plugin(
     zellij_config: &rimz::config::ZellijConfig,
     focus_key: Option<&str>,
 ) {
-    let Some(wasm) = rimz::mux::zellij::presence_plugin_path() else {
+    let Some(opts) = presence_plugin_options(session_name, workspace_id, zellij_config, focus_key)
+    else {
         tracing::debug!(
             session = %session_name,
             "presence plugin unavailable; the producer keeps its pane poll",
         );
         return;
-    };
-    let opts = PresencePluginOptions {
-        session_name: session_name.to_owned(),
-        workspace_id: workspace_id.clone(),
-        wasm,
-        rimz_bin: sidebar::rimz_cli_program(),
-        converge: false,
-        focus_key: focus_key.map(str::to_owned),
-        focus_follows_mouse: zellij_config.focus_follows_mouse,
-        mouse_click_through: zellij_config.mouse_click_through,
     };
     if let Err(err) = backend.ensure_presence_plugin(&opts) {
         tracing::debug!(
@@ -483,6 +474,53 @@ pub(crate) fn ensure_presence_plugin(
             "presence plugin load failed; the producer keeps its pane poll",
         );
     }
+}
+
+pub(crate) fn enable_web_sharing(
+    backend: &dyn MuxBackend,
+    session_name: &str,
+    workspace_id: &WorkspaceId,
+    zellij_config: &rimz::config::ZellijConfig,
+    focus_key: Option<&str>,
+) {
+    let Some(opts) = presence_plugin_options(session_name, workspace_id, zellij_config, focus_key)
+    else {
+        tracing::debug!(
+            session = %session_name,
+            "presence plugin unavailable; Zellij web sharing was not requested",
+        );
+        return;
+    };
+    if let Err(err) = backend.share_web_session(&opts) {
+        tracing::debug!(
+            session = %session_name,
+            error = %err,
+            "Zellij web-sharing pipe failed",
+        );
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "rimz: could not confirm Zellij web sharing for `{session_name}`; if the browser says \"Web clients are not allowed to attach to this session\", attach to the room once, accept the plugin permission prompt, and rerun `rimz web open`."
+        );
+    }
+}
+
+fn presence_plugin_options(
+    session_name: &str,
+    workspace_id: &WorkspaceId,
+    zellij_config: &rimz::config::ZellijConfig,
+    focus_key: Option<&str>,
+) -> Option<PresencePluginOptions> {
+    let wasm = rimz::mux::zellij::presence_plugin_path()?;
+    Some(PresencePluginOptions {
+        session_name: session_name.to_owned(),
+        workspace_id: workspace_id.clone(),
+        wasm,
+        rimz_bin: sidebar::rimz_cli_program(),
+        converge: false,
+        focus_key: focus_key.map(str::to_owned),
+        focus_follows_mouse: zellij_config.focus_follows_mouse,
+        mouse_click_through: zellij_config.mouse_click_through,
+    })
 }
 
 /// Register the focus-sidebar chord with the backend. tmux binds it directly;

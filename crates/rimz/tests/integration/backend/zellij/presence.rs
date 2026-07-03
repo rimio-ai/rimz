@@ -27,7 +27,7 @@ fn seed_presence_permissions(xdg: &Path, wasm: &Path) {
     std::fs::write(
         cache_dir.join("permissions.kdl"),
         format!(
-            "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n    Reconfigure\n}}\n",
+            "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n    Reconfigure\n    StartWebServer\n}}\n",
             wasm.display(),
         ),
     )

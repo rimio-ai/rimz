@@ -148,13 +148,13 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
-    let session = if let Some(session) = args.session {
-        require_workspace_record_for_session(&session, globals.mux)?;
-        session
+    let (session, workspace_id) = if let Some(session) = args.session {
+        let record = require_workspace_record_for_session(&session, globals.mux)?;
+        (session, record.workspace_id)
     } else {
         let path = args.path.unwrap_or_else(|| PathBuf::from("."));
         let workspace = room::ensure_workspace_room_for_web(&path, globals)?;
-        workspace.session_name
+        (workspace.session_name, workspace.workspace_id)
     };
     let config = machine_config();
     let payload = web_payload(
@@ -165,6 +165,14 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
             require_online: true,
         },
     )?;
+    let backend = rimz::mux::backend_for(MuxName::Zellij);
+    room::enable_web_sharing(
+        backend.as_ref(),
+        &session,
+        &workspace_id,
+        &config.zellij,
+        config.sidebar.focus_key_label(),
+    );
     if args.json {
         print_json(&payload)?;
         return Ok(());
@@ -299,19 +307,19 @@ fn read_token_count() -> Result<usize> {
 fn require_workspace_record_for_session(
     session: &str,
     explicit_mux: Option<MuxName>,
-) -> Result<()> {
+) -> Result<rimz::WorkspaceRecord> {
     let record =
         room::workspace_record_for_session(session).context("checking Rimz workspace record")?;
-    if record.is_none() {
+    let Some(record) = record else {
         bail!(
             "session `{session}` is not a known Rimz workspace session; run `rimz list` or open the workspace with `rimz start` first"
         );
-    }
+    };
     let mux = room::pick_mux_for_session(session, explicit_mux, MissingSessionReport::Silent)?;
     if mux != MuxName::Zellij {
         bail!("session `{session}` is not a Zellij session; `rimz web` supports Zellij only");
     }
-    Ok(())
+    Ok(record)
 }
 
 fn ensure_zellij_selected(globals: &GlobalFlags) -> Result<()> {

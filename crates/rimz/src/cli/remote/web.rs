@@ -80,16 +80,14 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
             payload.version
         );
     }
-    match token_action(remote.web.token, payload.token_count) {
-        TokenAction::Create => relay_web_token(remote)?,
-        TokenAction::Hint => {
-            writeln!(
-                std::io::stderr().lock(),
-                "no Zellij web login token on {}; re-run with --web-token to create one",
-                remote.target.host_display()
-            )?;
-        }
-        TokenAction::Nothing => {}
+    if remote.web.token {
+        relay_web_token(remote)?;
+    } else {
+        writeln!(
+            std::io::stderr().lock(),
+            "Zellij web asks for a login token on this browser's first visit to {}; re-run with --web-token to mint one.",
+            remote.target.host_display()
+        )?;
     }
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
@@ -113,21 +111,6 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
     super::super::web::open_browser_best_effort(&url);
     report_web_tunnel_up(remote.target.host_display(), remote.reconnect);
     guard.wait()
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TokenAction {
-    Create,
-    Hint,
-    Nothing,
-}
-
-fn token_action(flag: bool, token_count: usize) -> TokenAction {
-    match (flag, token_count) {
-        (true, _) => TokenAction::Create,
-        (false, 0) => TokenAction::Hint,
-        (false, _) => TokenAction::Nothing,
-    }
 }
 
 fn relay_web_token(remote: &RemoteConnect) -> Result<()> {
@@ -348,14 +331,6 @@ fn report_web_tunnel_up(host: &str, reconnect: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn token_action_requires_explicit_creation() {
-        assert_eq!(token_action(true, 0), TokenAction::Create);
-        assert_eq!(token_action(true, 2), TokenAction::Create);
-        assert_eq!(token_action(false, 0), TokenAction::Hint);
-        assert_eq!(token_action(false, 2), TokenAction::Nothing);
-    }
 
     #[test]
     fn no_reconnect_turns_retry_into_fatal_tunnel_exit() {

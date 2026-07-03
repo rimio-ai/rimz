@@ -96,6 +96,17 @@ fn web_open_json_keeps_autostart_banner_off_stdout() {
     assert!(log.contains("web\t--start\t--daemonize"), "{log}");
     assert!(log.contains("web\t--status"), "{log}");
     assert!(log.contains("web\t--list-tokens"), "{log}");
+    assert!(
+        log.contains(&format!(
+            "--session\t{}\tpipe\t--plugin",
+            workspace.session_name
+        )),
+        "web open should pipe the presence plugin for this session: {log}"
+    );
+    assert!(
+        log.contains("\t--name\trimz:share_session\t--\tshare"),
+        "web open should request runtime web sharing through the presence plugin: {log}"
+    );
 }
 
 #[test]

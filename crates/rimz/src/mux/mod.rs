@@ -664,6 +664,12 @@ pub trait MuxBackend: Send + Sync {
     fn ensure_presence_plugin(&self, _opts: &PresencePluginOptions) -> Result<()> {
         Ok(())
     }
+    /// Ask the session's presence plugin to enable Zellij web sharing for this
+    /// session. Zellij implements it through the plugin; tmux is a no-op because
+    /// browser access is Zellij-only.
+    fn share_web_session(&self, _opts: &PresencePluginOptions) -> Result<()> {
+        Ok(())
+    }
     fn version(&self) -> Result<String>;
 }
 

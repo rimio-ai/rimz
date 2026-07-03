@@ -93,6 +93,10 @@ const STACK_PANES_MIN_ZELLIJ: (u32, u32, u32) = (0, 42, 0);
 /// Pipe name the presence-plugin launch sends its boot message down.
 const PRESENCE_BOOT_PIPE: &str = "rimz_presence_boot";
 
+/// Pipe name `rimz web open` sends to the presence plugin; keep in sync with
+/// `crates/rimz-presence-zellij/src/wire.rs`.
+const PRESENCE_SHARE_PIPE: &str = "rimz:share_session";
+
 /// Deadline for the presence-plugin boot pipe.
 const PRESENCE_PIPE_TIMEOUT: Duration = Duration::from_secs(2);
 

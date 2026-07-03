@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::{env, fs};
 
 use super::{
-    PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_PLUGIN_MIN_ZELLIJ, ZellijBackend,
-    parse_version,
+    PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_PLUGIN_MIN_ZELLIJ, PRESENCE_SHARE_PIPE,
+    ZellijBackend, parse_version,
 };
 use crate::ledger::{atomic, paths};
 use crate::mux::{MuxBackend, MuxErr, Result};
@@ -153,13 +153,7 @@ impl ZellijBackend {
         &self,
         opts: &super::super::PresencePluginOptions,
     ) -> Result<()> {
-        let parsed = self.version().ok().as_deref().and_then(parse_version);
-        if parsed.is_none_or(|v| v < PRESENCE_PLUGIN_MIN_ZELLIJ) {
-            tracing::debug!(
-                session = %opts.session_name,
-                version = ?parsed,
-                "zellij below the presence-plugin floor; the producer keeps its pane poll",
-            );
+        if !self.presence_plugin_supported(opts, PRESENCE_BOOT_PIPE) {
             return Ok(());
         }
         let url = format!("file:{}", opts.wasm.display());
@@ -180,28 +174,8 @@ impl ZellijBackend {
                 ])
                 .run()?;
         }
-        // `zellij pipe --plugin` launches the plugin if absent — the one load
-        // verb that works on a clientless session (`start-or-reload-plugin`
-        // refuses without a connected client) — and routes a no-op message to
-        // it when running, so the call is idempotent per (url, configuration).
-        let result = self
-            .cmd()
-            .args([
-                "--session",
-                &opts.session_name,
-                "pipe",
-                "--plugin",
-                &url,
-                "--plugin-configuration",
-                &configuration,
-                "--name",
-                PRESENCE_BOOT_PIPE,
-                "--",
-                "load",
-            ])
-            .run_with_timeout(PRESENCE_PIPE_TIMEOUT);
-        match result {
-            Ok(_) => Ok(()),
+        match self.pipe_to_presence_plugin(opts, PRESENCE_BOOT_PIPE, "load") {
+            Ok(()) => Ok(()),
             // The held-CLI kill: the launch is delivered, the plugin is
             // waiting on the user's one-time permission answer (or the
             // session has no client yet to surface it). Expected, not an
@@ -215,6 +189,66 @@ impl ZellijBackend {
             }
             Err(err) => Err(err),
         }
+    }
+
+    pub(super) fn share_web_session_for(
+        &self,
+        opts: &super::super::PresencePluginOptions,
+    ) -> Result<()> {
+        // Target the same (url, configuration) as the boot path: it launches the
+        // plugin if absent and reaches the running instance otherwise.
+        self.pipe_to_presence_plugin(opts, PRESENCE_SHARE_PIPE, "share")
+    }
+
+    fn pipe_to_presence_plugin(
+        &self,
+        opts: &super::super::PresencePluginOptions,
+        pipe_name: &str,
+        payload: &str,
+    ) -> Result<()> {
+        if !self.presence_plugin_supported(opts, pipe_name) {
+            return Ok(());
+        }
+        // `zellij pipe --plugin` launches the plugin if absent — the one load
+        // verb that works on a clientless session (`start-or-reload-plugin`
+        // refuses without a connected client) — and routes a no-op message to
+        // it when running, so the call is idempotent per (url, configuration).
+        let url = format!("file:{}", opts.wasm.display());
+        let configuration = presence_plugin_configuration(opts);
+        self.cmd()
+            .args([
+                "--session",
+                &opts.session_name,
+                "pipe",
+                "--plugin",
+                &url,
+                "--plugin-configuration",
+                &configuration,
+                "--name",
+                pipe_name,
+                "--",
+                payload,
+            ])
+            .run_with_timeout(PRESENCE_PIPE_TIMEOUT)
+            .map(|_| ())
+    }
+
+    fn presence_plugin_supported(
+        &self,
+        opts: &super::super::PresencePluginOptions,
+        pipe_name: &str,
+    ) -> bool {
+        let parsed = self.version().ok().as_deref().and_then(parse_version);
+        if parsed.is_none_or(|v| v < PRESENCE_PLUGIN_MIN_ZELLIJ) {
+            tracing::debug!(
+                session = %opts.session_name,
+                version = ?parsed,
+                pipe_name,
+                "zellij below the presence-plugin floor; skipping presence pipe",
+            );
+            return false;
+        }
+        true
     }
 }
 
@@ -236,10 +270,56 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    fn zellij_shim(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let shim = temp.path().join("zellij");
+        let mut file = std::fs::File::create(&shim).expect("create shim");
+        file.write_all(script.as_bytes()).expect("write shim");
+        let mut perms = file.metadata().expect("shim metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&shim, perms).expect("chmod shim");
+        drop(file);
+        (temp, shim)
+    }
+
     #[test]
     fn embedded_presence_plugin_is_present() {
         assert!(!EMBEDDED_PRESENCE_PLUGIN.is_empty());
         assert!(EMBEDDED_PRESENCE_PLUGIN.starts_with(b"\0asm"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn share_web_session_pipes_share_payload_to_presence_plugin() {
+        let (temp, shim) = zellij_shim(
+            r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "--version" ]; then
+  printf 'zellij 0.44.3\n'
+fi
+"#,
+        );
+        let backend = ZellijBackend::with_program_for_test(&shim);
+        let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+
+        backend
+            .share_web_session_for(&opts)
+            .expect("share session pipe");
+
+        let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read log");
+        assert!(
+            log.contains("--session rimz-test pipe --plugin file:/tmp/rimz-presence-zellij.wasm"),
+            "share should target the presence plugin by session and wasm URL:\n{log}",
+        );
+        assert!(
+            log.contains("--name rimz:share_session -- share"),
+            "share should send the runtime web-sharing pipe and payload:\n{log}",
+        );
     }
 
     #[test]
