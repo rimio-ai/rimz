@@ -289,7 +289,7 @@ pub(crate) fn selected_pet_action(snapshot: &SidebarSnapshot, ui: &UiState) -> P
 
 fn row_pet_action(row: &SidebarRow) -> PetAction {
     if let Some(agent) = row.as_agent() {
-        let status = agent.status.unwrap_or(AgentStatus::Idle);
+        let status = agent.status;
         if agent.compacting {
             return PetAction::Review;
         }

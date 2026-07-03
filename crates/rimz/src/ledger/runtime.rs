@@ -115,14 +115,7 @@ pub fn agent_liveness(agent: &AgentState) -> AgentLiveness {
             AgentLiveness::Dead
         };
     }
-    let Some(pid) = agent.agent_pid else {
-        return AgentLiveness::Unknown;
-    };
-    if process_is_live(pid, agent.agent_process_start.as_deref()) {
-        AgentLiveness::Live { pid }
-    } else {
-        AgentLiveness::Dead
-    }
+    AgentLiveness::Unknown
 }
 
 #[cfg(target_os = "linux")]
@@ -198,8 +191,6 @@ mod tests {
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: None,
-            agent_pid: owner.as_ref().map(|owner| owner.pid),
-            agent_process_start: owner.as_ref().and_then(|owner| owner.process_start.clone()),
             runtime_owner: owner,
             parent_agent_id: None,
             worktree_path: None,
@@ -346,30 +337,22 @@ mod tests {
         assert_eq!(agent_liveness(&agent(None)), AgentLiveness::Unknown);
     }
 
-    #[test]
-    fn agent_liveness_checks_agent_pid_without_runtime_owner() {
-        let mut state = agent(None);
-        state.agent_pid = Some(std::process::id());
-        state.agent_process_start = process_start_token(std::process::id());
-
-        assert_eq!(
-            agent_liveness(&state),
-            AgentLiveness::Live {
-                pid: std::process::id()
-            }
-        );
-    }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn agent_liveness_reports_dead_for_missing_or_wrong_process() {
-        let mut state = agent(None);
-        state.agent_pid = Some(u32::MAX);
-        assert_eq!(agent_liveness(&state), AgentLiveness::Dead);
+        let missing = RuntimeOwner::new(RuntimeOwnerKind::Agent, "sess-missing", u32::MAX, None);
+        assert_eq!(agent_liveness(&agent(Some(missing))), AgentLiveness::Dead);
 
-        state.agent_pid = Some(std::process::id());
-        state.agent_process_start = Some("definitely-not-this-process".to_owned());
-        assert_eq!(agent_liveness(&state), AgentLiveness::Dead);
+        let wrong_start = RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "sess-wrong-start",
+            std::process::id(),
+            Some("definitely-not-this-process".to_owned()),
+        );
+        assert_eq!(
+            agent_liveness(&agent(Some(wrong_start))),
+            AgentLiveness::Dead
+        );
 
         let daemon = RuntimeOwner::new(RuntimeOwnerKind::Daemon, "sess-daemon", u32::MAX, None);
         assert_eq!(agent_liveness(&agent(Some(daemon))), AgentLiveness::Dead);

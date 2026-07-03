@@ -33,9 +33,7 @@ pub(super) fn project_display_status(
         let Some(agent) = row.as_agent_mut() else {
             continue;
         };
-        let Some(status) = agent.status else {
-            continue;
-        };
+        let status = agent.status;
         // A human-blocked `waiting` ask outranks every derived state.
         if status == AgentStatus::Waiting {
             continue;
@@ -98,7 +96,7 @@ pub(super) fn project_display_status(
                 effective_status
             }
         };
-        agent.status = Some(projected);
+        agent.status = projected;
         if projected != AgentStatus::Running {
             // Phase is a head on Running — the reduced state's invariant — so a
             // Failed/Paused override drops it.

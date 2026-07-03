@@ -328,7 +328,7 @@ fn next_attention_jump_targets_unread_before_read_attention() {
     let unread_success = &mut snapshot.worktree_groups[0].rows[1];
     unread_success.name = "claude".to_owned();
     unread_success.card = crate::RowCard::Agent(Box::new(crate::AgentCard {
-        status: Some(AgentStatus::Success),
+        status: AgentStatus::Success,
         phase: crate::agents::TurnPhase::Idle,
         ..crate::AgentCard::default()
     }));
@@ -363,7 +363,7 @@ fn next_attention_jump_orders_unread_episodes_by_age() {
     let success = &mut snapshot.worktree_groups[0].rows[1];
     success.name = "claude".to_owned();
     success.card = crate::RowCard::Agent(Box::new(crate::AgentCard {
-        status: Some(AgentStatus::Success),
+        status: AgentStatus::Success,
         phase: crate::agents::TurnPhase::Idle,
         ..crate::AgentCard::default()
     }));
@@ -410,7 +410,7 @@ fn step_attention_index_reverses_the_inbox_walk() {
     let unread_success = &mut snapshot.worktree_groups[0].rows[1];
     unread_success.name = "claude".to_owned();
     unread_success.card = crate::RowCard::Agent(Box::new(crate::AgentCard {
-        status: Some(AgentStatus::Success),
+        status: AgentStatus::Success,
         phase: crate::agents::TurnPhase::Idle,
         ..crate::AgentCard::default()
     }));

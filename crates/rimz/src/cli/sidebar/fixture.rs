@@ -1829,7 +1829,7 @@ fn agent_row_with(
         .account_sub_provider
         .or_else(|| openai_sub_provider(name));
     let mut card = rimz::AgentCard {
-        status: Some(status),
+        status,
         phase,
         surface: Some(rimz::Surface::NativeUi),
         task: Some(task.to_owned()),

@@ -354,8 +354,6 @@ mod tests {
             status: AgentStatus::Running,
             phase: TurnPhase::Reasoning,
             pane: Some(pane()),
-            agent_pid: None,
-            agent_process_start: None,
             runtime_owner: None,
             parent_agent_id: None,
             worktree_path: None,

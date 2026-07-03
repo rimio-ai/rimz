@@ -94,7 +94,7 @@ impl SidebarRow {
     }
 
     pub fn status(&self) -> Option<AgentStatus> {
-        self.as_agent().and_then(|agent| agent.status)
+        self.as_agent().map(|agent| agent.status)
     }
 
     pub fn phase(&self) -> TurnPhase {
@@ -266,10 +266,9 @@ pub enum RowCard {
     Process(ProcessCard),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentCard {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<AgentStatus>,
+    pub status: AgentStatus,
     /// The running turn's shape, copied from the rollup: `reasoning` paints the
     /// thinking head, `acting` the working spinner, `parked` the secondary
     /// "background" marker.
@@ -351,6 +350,42 @@ pub struct AgentCard {
     /// Provider error label projected while a dead turn escalates to failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error_label: Option<String>,
+}
+
+impl Default for AgentCard {
+    fn default() -> Self {
+        Self {
+            status: AgentStatus::Idle,
+            phase: TurnPhase::Idle,
+            request_id: None,
+            surface: None,
+            task: None,
+            prompt: None,
+            description: None,
+            model: None,
+            effort: None,
+            handle: None,
+            team: None,
+            launch_group: None,
+            launch_ordinal: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            context: None,
+            context_severity: None,
+            registered_at: None,
+            resolver: None,
+            options: Vec::new(),
+            sub_agents: Vec::new(),
+            compacting: false,
+            compaction_count: 0,
+            turn_error_label: None,
+        }
+    }
 }
 
 impl AgentCard {

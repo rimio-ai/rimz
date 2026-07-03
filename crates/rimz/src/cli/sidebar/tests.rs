@@ -149,7 +149,7 @@ fn gallery_fixture_states_carry_feature_flags() {
         .iter()
         .find(|card| card.handle.as_deref() == Some("planner"))
         .expect("planner card");
-    assert_eq!(planner.status, Some(rimz::agents::AgentStatus::Running));
+    assert_eq!(planner.status, rimz::agents::AgentStatus::Running);
     assert_eq!(planner.phase, rimz::agents::TurnPhase::Reasoning);
     assert_eq!(planner.sub_agents.len(), 5);
     assert_eq!(
@@ -240,11 +240,11 @@ fn gallery_fixture_states_carry_feature_flags() {
     assert!(statuses.contains(&rimz::agents::AgentStatus::Failed));
     assert!(statuses.contains(&rimz::agents::AgentStatus::Paused));
     assert!(agent_cards(cockpit).iter().any(|card| {
-        card.status == Some(rimz::agents::AgentStatus::Running)
+        card.status == rimz::agents::AgentStatus::Running
             && card.phase == rimz::agents::TurnPhase::Acting
     }));
     assert!(agent_cards(cockpit).iter().any(|card| {
-        card.status == Some(rimz::agents::AgentStatus::Running)
+        card.status == rimz::agents::AgentStatus::Running
             && card.phase == rimz::agents::TurnPhase::Reasoning
     }));
     assert!(

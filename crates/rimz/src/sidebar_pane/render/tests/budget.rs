@@ -67,7 +67,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
         inactive: false,
         last_activity: super::fixed_now(),
         card: RowCard::Agent(Box::new(AgentCard {
-            status: Some(crate::agents::AgentStatus::Running),
+            status: crate::agents::AgentStatus::Running,
             phase: crate::agents::TurnPhase::Acting,
             task: Some(format!("refactor module {index} of worktree {group}")),
             model: Some("Opus".to_owned()),

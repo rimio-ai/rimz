@@ -65,7 +65,7 @@ fn animating_agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     let crate::RowCard::Agent(card) = &mut row.card else {
         panic!("fixture row is an agent");
     };
-    card.status = Some(crate::agents::AgentStatus::Running);
+    card.status = crate::agents::AgentStatus::Running;
     card.phase = crate::agents::TurnPhase::Acting;
     snapshot
 }
@@ -177,7 +177,7 @@ fn set_agent_status(snapshot: &mut SidebarSnapshot, status: crate::agents::Agent
     let card = snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
         .expect("agent row");
-    card.status = Some(status);
+    card.status = status;
 }
 
 fn set_agent_phase(snapshot: &mut SidebarSnapshot, phase: crate::agents::TurnPhase) {

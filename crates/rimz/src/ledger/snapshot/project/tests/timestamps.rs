@@ -47,6 +47,21 @@ fn registered_at_stamps_first_event_and_restamps_after_tombstone() {
 }
 
 #[test]
+fn launch_registered_at_stamps_first_launch_event() {
+    let mut launch = raw_launch(
+        AgentLaunchState::Bound,
+        "launch-a",
+        "lucid-atlas",
+        Some("tmux:%1"),
+    );
+    launch.timestamp = Timestamp::from_second(epoch().as_second() + 5).unwrap();
+
+    let agents = reduce_agent_states(&[launch.clone()]);
+
+    assert_eq!(agents[0].registered_at, Some(launch.timestamp));
+}
+
+#[test]
 fn turn_started_at_survives_parked_wake_then_restamps_on_next_turn() {
     let start = raw_lifecycle_at(
         "claude",

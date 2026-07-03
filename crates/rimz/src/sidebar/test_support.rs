@@ -101,8 +101,6 @@ pub(crate) fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> Age
         status: AgentStatus::Running,
         phase: TurnPhase::Idle,
         pane: None,
-        agent_pid: None,
-        agent_process_start: None,
         runtime_owner: None,
         parent_agent_id: None,
         worktree_path: None,
@@ -179,7 +177,7 @@ pub(crate) fn activity_row(
         last_activity,
         card: if is_agent {
             crate::RowCard::Agent(Box::new(crate::AgentCard {
-                status,
+                status: status.unwrap_or(AgentStatus::Idle),
                 phase: TurnPhase::Idle,
                 ..crate::AgentCard::default()
             }))

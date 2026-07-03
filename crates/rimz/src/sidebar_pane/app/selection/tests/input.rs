@@ -148,7 +148,7 @@ fn focus_keys_fire_without_mutating_selection() {
     );
     snapshot.worktree_groups[0].rows[1].name = "claude".to_owned();
     snapshot.worktree_groups[0].rows[1].card = crate::RowCard::Agent(Box::new(crate::AgentCard {
-        status: Some(crate::agents::AgentStatus::Waiting),
+        status: crate::agents::AgentStatus::Waiting,
         phase: crate::agents::TurnPhase::Idle,
         ..crate::AgentCard::default()
     }));

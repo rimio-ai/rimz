@@ -138,14 +138,24 @@ fn forked_side_session_survives_the_reaper_and_keeps_primary_card() {
         .in_pane("%1")
         .active_ago(120);
     main.registered_at = Some(ago(600));
-    main.agent_pid = Some(9_999); // shared app-server daemon pid
+    main.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "main-sess",
+        9_999,
+        None,
+    )); // shared app-server daemon pid
 
     let mut fork = agent("codex", "fork-sess", AgentStatus::Running, 2_000)
         .worktree("/repo/main")
         .in_pane("%1")
         .active_ago(5);
     fork.registered_at = Some(ago(60));
-    fork.agent_pid = Some(9_999); // same daemon pid — a fork, not a relaunch
+    fork.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "fork-sess",
+        9_999,
+        None,
+    )); // same daemon pid — a fork, not a relaunch
 
     let mut snapshot = room(Vec::new(), vec![main, fork]);
     snapshot.reap_stale_sessions();
@@ -181,7 +191,12 @@ fn cleared_fresh_session_reap_repins_shared_pane_but_fork_keeps_primary() {
             .in_pane("%1")
             .active_ago(120);
         main.registered_at = Some(ago(600));
-        main.agent_pid = Some(9_999);
+        main.runtime_owner = Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "main-sess",
+            9_999,
+            None,
+        ));
         main.origin = main_origin;
 
         let mut replacement = agent("codex", "new-sess", AgentStatus::Running, 2_000)
@@ -189,11 +204,20 @@ fn cleared_fresh_session_reap_repins_shared_pane_but_fork_keeps_primary() {
             .in_pane("%1")
             .active_ago(5);
         replacement.registered_at = Some(ago(60));
-        replacement.agent_pid = Some(9_999);
+        replacement.runtime_owner = Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "new-sess",
+            9_999,
+            None,
+        ));
         replacement.origin = replacement_origin;
 
         let mut snapshot = room(Vec::new(), vec![main, replacement]);
-        snapshot.drop_cleared_codex_sessions(&[pane("%1", "codex", "/repo/main")]);
+        snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+            daemon_pids: &BTreeSet::new(),
+            loaded: None,
+            live_panes: Some(&[pane("%1", "codex", "/repo/main")]),
+        });
         let snapshot = snapshot.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
 
         let rows = rows(&snapshot);

@@ -88,7 +88,7 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         inactive: false,
         last_activity: Timestamp::now(),
         card: crate::RowCard::Agent(Box::new(crate::AgentCard {
-            status: Some(crate::agents::AgentStatus::Idle),
+            status: crate::agents::AgentStatus::Idle,
             phase: crate::agents::TurnPhase::Idle,
             task: Some("inspect auth".to_owned()),
             model: Some("Opus".to_owned()),

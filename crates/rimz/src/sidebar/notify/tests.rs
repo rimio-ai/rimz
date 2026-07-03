@@ -151,8 +151,6 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
             elevated_agent: None,
             first_seen_at_ms: None,
         }),
-        agent_pid: None,
-        agent_process_start: None,
         runtime_owner: None,
         parent_agent_id: None,
         worktree_path: None,

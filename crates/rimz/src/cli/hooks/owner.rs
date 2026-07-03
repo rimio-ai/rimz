@@ -34,7 +34,7 @@ pub(super) fn attach_agent_owner(source: &str, observation: &mut AgentLifecycleO
     let Some(pid) = observation.agent_pid.or_else(|| hook_agent_pid(source)) else {
         return;
     };
-    let kind = if rimz::remote_control::pid_is_codex_daemon(pid) {
+    let kind = if rimz::agents::codex::pid_is_codex_daemon(pid) {
         RuntimeOwnerKind::Daemon
     } else {
         RuntimeOwnerKind::Agent

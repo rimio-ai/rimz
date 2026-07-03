@@ -6,7 +6,7 @@ use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::config::LaunchPlacement;
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::spec::Column;
-use rimz::ids::{AgentKind, AgentSessionId, WorkspaceId};
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, ViewId, WorkspaceId};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -1341,6 +1341,87 @@ mod render {
     use super::*;
 
     #[test]
+    fn cached_agents_reap_uses_published_live_panes_for_clear_lineage() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let runtime = rimz::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
+        let mut old = agent_with_status(
+            "old",
+            rimz::agents::AgentStatus::Running,
+            rimz::agents::TurnPhase::Reasoning,
+            1_000,
+        );
+        let mut new = agent_with_status(
+            "new",
+            rimz::agents::AgentStatus::Running,
+            rimz::agents::TurnPhase::Reasoning,
+            1_010,
+        );
+        for agent in [&mut old, &mut new] {
+            agent.kind = AgentKind::new_unchecked("codex");
+            agent.worktree_path = Some("/repo/main".to_owned());
+            agent.worktree_branch = Some("main".to_owned());
+            agent.origin = Some(rimz::agents::SessionOrigin::Fresh);
+            agent.pane = Some(rimz::pane::PaneRef::from_id(pane_id.clone()));
+        }
+        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+            workspace_id,
+            Vec::new(),
+            vec![old, new],
+            jiff::Timestamp::from_second(1_020).unwrap(),
+        );
+        let frame = rimz::sidebar::frame::PaneFrame {
+            produced_at_ms: 1,
+            observed_at_ms: 1,
+            build: None,
+            session_name: "rimz-test".to_owned(),
+            tabs: vec![rimz::sidebar::frame::TabFrame {
+                view_id: ViewId::new_unchecked("window-1"),
+                kind: rimz::ViewKind::Window,
+                name: None,
+                active_pane: Some(pane_id.clone()),
+                focus_contested: false,
+                panes: vec![rimz::sidebar::frame::PaneState {
+                    pane_id,
+                    first_seen_at_ms: None,
+                    hosted_carry_since_ms: None,
+                    is_floating: false,
+                    current: rimz::sidebar::frame::PaneProcess {
+                        pid: None,
+                        command: Some("codex".to_owned()),
+                        spawn_command: None,
+                        cwd: Some("/repo/main".to_owned()),
+                        started_at: None,
+                        hosted_agent_kind: None,
+                        hosted_agent_process_start: None,
+                        resumed_session_id: None,
+                        elevated_agent: None,
+                    },
+                    previous: None,
+                    children: Vec::new(),
+                    metrics: rimz::sidebar::frame::PaneMetrics::default(),
+                }],
+            }],
+            carried_panes: Vec::new(),
+            viewed_panes: Vec::new(),
+            presence: None,
+        };
+        rimz::ledger::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
+            .unwrap();
+
+        super::commands::apply_cached_daemon_reap(&mut snapshot, &runtime, "rimz-test");
+
+        let ids = snapshot
+            .agents
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["new"]);
+    }
+
+    #[test]
     fn agents_table_projects_turn_error_statuses() {
         let now = jiff::Timestamp::from_second(2_000).unwrap();
         let failed = agent_with_status(
@@ -1597,8 +1678,6 @@ fn agent_with_status(
         status,
         phase,
         pane: None,
-        agent_pid: None,
-        agent_process_start: None,
         runtime_owner: None,
         parent_agent_id: None,
         worktree_path: Some("/tmp/rimz-agents-table".to_owned()),

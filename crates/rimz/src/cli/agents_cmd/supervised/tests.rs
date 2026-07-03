@@ -393,8 +393,6 @@ fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {
         status,
         phase: rimz::agents::TurnPhase::Idle,
         pane: None,
-        agent_pid: None,
-        agent_process_start: None,
         runtime_owner: None,
         parent_agent_id: None,
         worktree_path: None,

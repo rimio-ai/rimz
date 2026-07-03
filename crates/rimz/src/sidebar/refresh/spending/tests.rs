@@ -765,8 +765,6 @@ fn codex_origin_overrides_read_transcript_and_worktree_from_snapshot() {
         status: AgentStatus::Running,
         phase: TurnPhase::Idle,
         pane: None,
-        agent_pid: None,
-        agent_process_start: None,
         runtime_owner: None,
         parent_agent_id: None,
         worktree_path: Some(worktree.display().to_string()),

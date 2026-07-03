@@ -237,7 +237,7 @@ mod tests {
             inactive: false,
             last_activity: Timestamp::now(),
             card: RowCard::Agent(Box::new(AgentCard {
-                status: Some(status),
+                status,
                 phase: crate::agents::TurnPhase::Idle,
                 ..AgentCard::default()
             })),

@@ -61,11 +61,13 @@ pub struct SidebarOwnView {
     pub own_view_is_daemon: bool,
 }
 
-/// Whether `agent` is a daemon-mode Codex session: a root (non-subagent)
-/// `codex` session with no stamped pane whose recorded hook owner is the shared
-/// app-server daemon ([`crate::remote_control::codex_daemon_pids`]).
-pub(super) fn is_daemon_mode_codex(agent: &AgentState, daemon_pids: &BTreeSet<u32>) -> bool {
-    if agent.kind != "codex" || agent.pane.is_some() || agent.parent_agent_id.is_some() {
+/// Whether `agent` is a daemon-mode session: a root (non-subagent)
+/// daemon-hooked session with no stamped pane whose recorded hook owner is a
+/// shared app-server daemon ([`crate::agents::codex::codex_daemon_pids`] today).
+pub(super) fn is_daemon_mode(agent: &AgentState, daemon_pids: &BTreeSet<u32>) -> bool {
+    let daemon_hooked = crate::agents::descriptor_by_kind(agent.kind.as_str())
+        .is_some_and(|descriptor| descriptor.capabilities.daemon_hooked_sessions);
+    if !daemon_hooked || agent.pane.is_some() || agent.parent_agent_id.is_some() {
         return false;
     }
     if agent
@@ -111,15 +113,11 @@ pub(super) fn pane_admits_card(pane: &PaneRef, exclude: Option<&PaneId>) -> Card
     CardAdmission::Admitted
 }
 
-/// The pid the hook recorded as this session's owner: the runtime owner when
-/// one was captured, else the legacy `agent_pid`. In daemon mode this is the
-/// shared app-server daemon; in standalone mode it is the session's own process.
+/// The pid the hook recorded as this session's owner. In daemon mode this is
+/// the shared app-server daemon; in standalone mode it is the session's own
+/// process.
 pub(super) fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
-    agent
-        .runtime_owner
-        .as_ref()
-        .map(|owner| owner.pid)
-        .or(agent.agent_pid)
+    agent.runtime_owner.as_ref().map(|owner| owner.pid)
 }
 
 /// The agent that stamped this exact pane id, if one is still unbound. Non-lazy

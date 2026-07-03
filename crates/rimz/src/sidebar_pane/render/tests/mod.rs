@@ -213,8 +213,6 @@ fn agent(
         status,
         phase: crate::agents::TurnPhase::Idle,
         pane: None,
-        agent_pid: None,
-        agent_process_start: None,
         runtime_owner: None,
         parent_agent_id: None,
         worktree_path: worktree_path.map(ToOwned::to_owned),

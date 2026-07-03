@@ -48,7 +48,9 @@ pub(crate) fn daemon_reap_due(cache: &Option<CodexDaemonReap>, now_ms: u64) -> b
 
 fn should_probe_codex_daemon_reap(agents: &[AgentState]) -> bool {
     agents.iter().any(|agent| {
-        agent.kind == "codex" && agent.pane.is_none() && agent.parent_agent_id.is_none()
+        let daemon_hooked = crate::agents::descriptor_by_kind(agent.kind.as_str())
+            .is_some_and(|descriptor| descriptor.capabilities.daemon_hooked_sessions);
+        daemon_hooked && agent.pane.is_none() && agent.parent_agent_id.is_none()
     })
 }
 
@@ -61,7 +63,7 @@ pub(crate) fn refresh_codex_daemon_reap_cache(
     if !should_probe_codex_daemon_reap(agents) || !daemon_reap_due(&current, now_ms) {
         return current.unwrap_or_default();
     }
-    let daemon_pids = crate::remote_control::codex_daemon_pids();
+    let daemon_pids = crate::agents::codex::codex_daemon_pids();
     let loaded = if daemon_pids.is_empty() {
         None
     } else {
@@ -88,10 +90,10 @@ mod tests {
     use jiff::Timestamp;
 
     use super::*;
-    use crate::SidebarSnapshot;
     use crate::agents::spending::SpendingWalker;
     use crate::ids::WorkspaceId;
     use crate::sidebar::test_support::root_agent;
+    use crate::{RuntimeOwner, RuntimeOwnerKind, SidebarSnapshot};
 
     #[test]
     fn daemon_reap_due_tracks_cache_ttl() {
@@ -127,7 +129,12 @@ mod tests {
         std::fs::create_dir_all(&messages).unwrap();
 
         let mut agent = root_agent("codex", "live-thread", None);
-        agent.agent_pid = Some(77);
+        agent.runtime_owner = Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "live-thread",
+            77,
+            None,
+        ));
         let pre_reap = SidebarSnapshot::build_with_agents(
             workspace.clone(),
             Vec::new(),
@@ -145,7 +152,13 @@ mod tests {
         .unwrap();
 
         let mut base = pre_reap.clone();
-        base.drop_dead_daemon_sessions(&BTreeSet::from([77]), Some(&BTreeSet::new()));
+        let daemon_pids = BTreeSet::from([77]);
+        let loaded = BTreeSet::new();
+        base.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+            daemon_pids: &daemon_pids,
+            loaded: Some(&loaded),
+            live_panes: None,
+        });
         assert!(
             base.agents.is_empty(),
             "stale cache reaps the intermediate base"

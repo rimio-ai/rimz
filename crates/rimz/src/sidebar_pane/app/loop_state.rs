@@ -53,7 +53,7 @@ struct BackgroundRowKey {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BackgroundRowStatusKey {
-    Agent(Option<crate::agents::AgentStatus>),
+    Agent(crate::agents::AgentStatus),
     Process(crate::ProcessState),
 }
 

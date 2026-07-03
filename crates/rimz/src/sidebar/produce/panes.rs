@@ -153,35 +153,32 @@ fn repair_pane_frame(
         &crate::proc::comm,
         &crate::proc::children,
     );
-    stamp_hosted_agent_processes(
-        frame,
-        &crate::remote_control::in_pane_agent_process_for_root,
-    );
+    stamp_hosted_agent_processes(frame, &crate::proc::in_pane_agent_process_for_root);
     backfill_pane_cwds(frame, &|pid| crate::proc::cwd(pid));
     stamp_pane_resumed_session_ids(
         frame,
-        &crate::remote_control::codex_resumed_session_id_for_root,
+        &crate::agents::codex::codex_resumed_session_id_for_root,
     );
     stamp_pane_process_starts(
         frame,
         &unstamped,
-        &crate::remote_control::in_pane_agent_start_for_root,
-        &crate::remote_control::in_pane_agent_starts,
+        &crate::proc::in_pane_agent_start_for_root,
+        &crate::proc::in_pane_agent_starts,
     );
     carry_hosted_agent_stamps(
         frame,
         prior,
         unix_now_ms(),
-        &crate::remote_control::hosted_agent_absent_under_root,
+        &crate::proc::hosted_agent_absent_under_root,
     );
     if crate::proc::process_start(std::process::id()).is_some() {
         drop_reused_pid_bindings(
             frame,
-            &crate::remote_control::in_pane_agent_start_for_root,
+            &crate::proc::in_pane_agent_start_for_root,
             &crate::proc::process_start,
         );
     }
-    annotate_elevated_agents(frame, &crate::remote_control::elevated_in_pane_agent);
+    annotate_elevated_agents(frame, &crate::proc::elevated_in_pane_agent);
     stamp_first_seen(frame);
 }
 
@@ -457,7 +454,7 @@ fn annotate_elevated_agents(
         let Some(command) = pane.current.command.as_deref() else {
             continue;
         };
-        if !crate::remote_control::command_starts_with_elevation_wrapper(command) {
+        if !crate::proc::command_starts_with_elevation_wrapper(command) {
             continue;
         }
         if let Some(pid) = pane.current.pid {
@@ -1087,10 +1084,7 @@ fn refresh_cached_metrics(
             )
             .unwrap_or(frame);
             if super::metrics::enrich_pane_metrics(&mut latest, session, runtime) {
-                annotate_elevated_agents(
-                    &mut latest,
-                    &crate::remote_control::elevated_in_pane_agent,
-                );
+                annotate_elevated_agents(&mut latest, &crate::proc::elevated_in_pane_agent);
                 publish_frame(runtime, cache_path, &latest);
             }
             latest

@@ -360,7 +360,7 @@ fn idle_agent_row(
         inactive: false,
         last_activity: pane.pane_process_start.unwrap_or(now),
         card: RowCard::Agent(Box::new(AgentCard {
-            status: Some(AgentStatus::Idle),
+            status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             request_id: None,
             surface: None,

@@ -46,7 +46,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         inactive: false,
         last_activity: Timestamp::now(),
         card: crate::RowCard::Agent(Box::new(crate::AgentCard {
-            status: Some(crate::agents::AgentStatus::Running),
+            status: crate::agents::AgentStatus::Running,
             phase: crate::agents::TurnPhase::Idle,
             task: Some("inspect auth".to_owned()),
             model: Some("Opus".to_owned()),
@@ -164,7 +164,7 @@ fn filter_row(
         last_activity: Timestamp::now(),
         card: if is_agent {
             crate::RowCard::Agent(Box::new(crate::AgentCard {
-                status,
+                status: status.unwrap_or(crate::agents::AgentStatus::Idle),
                 phase: crate::agents::TurnPhase::Idle,
                 ..crate::AgentCard::default()
             }))

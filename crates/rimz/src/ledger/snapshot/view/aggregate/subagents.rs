@@ -106,9 +106,7 @@ pub(super) fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
         if agent.sub_agents.is_empty() {
             continue;
         }
-        let Some(status) = agent.status else {
-            continue;
-        };
+        let status = agent.status;
         if matches!(status, AgentStatus::Waiting | AgentStatus::Failed) {
             continue;
         }

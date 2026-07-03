@@ -424,7 +424,7 @@ mod tests {
             inactive: false,
             last_activity: jiff::Timestamp::from_millisecond(last_activity).expect("timestamp"),
             card: RowCard::Agent(Box::new(AgentCard {
-                status: Some(status),
+                status,
                 ..AgentCard::default()
             })),
         }

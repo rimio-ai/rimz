@@ -622,11 +622,19 @@ mod tests {
         #[cfg(target_os = "linux")]
         {
             let mut dead = agent("dead", Some("/repo-worktrees/demo"), None, now);
-            dead.agent_pid = Some(u32::MAX);
+            dead.runtime_owner = Some(rimz::RuntimeOwner::new(
+                rimz::RuntimeOwnerKind::Agent,
+                "dead",
+                u32::MAX,
+                None,
+            ));
             assert!(!roster_binds_worktree(&[dead], Some(&own), worktree));
         }
         let mut live = agent("live", Some("/repo-worktrees/demo"), None, now);
-        live.agent_pid = Some(std::process::id());
+        live.runtime_owner = Some(rimz::ledger::runtime::current_process_owner(
+            rimz::RuntimeOwnerKind::Agent,
+            "live",
+        ));
         assert!(roster_binds_worktree(&[live], Some(&own), worktree));
         assert!(!roster_binds_worktree(
             &[agent(
@@ -645,7 +653,10 @@ mod tests {
     fn agent_pinned_paths_includes_realtime_process_cwd() {
         let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
         let mut live = agent("live", Some("/repo-worktrees/other"), None, now);
-        live.agent_pid = Some(std::process::id());
+        live.runtime_owner = Some(rimz::ledger::runtime::current_process_owner(
+            rimz::RuntimeOwnerKind::Agent,
+            "live",
+        ));
 
         let current =
             rimz::worktree::normalize_path_lexical(&std::env::current_dir().expect("current dir"));
@@ -681,8 +692,6 @@ mod tests {
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: raw_pane.map(|raw| pane(raw, Some("codex"), None)),
-            agent_pid: None,
-            agent_process_start: None,
             runtime_owner: None,
             parent_agent_id: None,
             worktree_path: worktree_path.map(ToOwned::to_owned),

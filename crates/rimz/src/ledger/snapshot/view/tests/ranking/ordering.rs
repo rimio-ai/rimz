@@ -615,7 +615,7 @@ fn idle_agent_row(id: &str, pane_raw: Option<&str>) -> SidebarRow {
         inactive: false,
         last_activity: epoch(),
         card: crate::RowCard::Agent(Box::new(crate::ledger::snapshot::row::AgentCard {
-            status: Some(AgentStatus::Idle),
+            status: AgentStatus::Idle,
             ..Default::default()
         })),
     }

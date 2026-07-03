@@ -11,7 +11,8 @@ use crate::agents::spending::SpendingCaches;
 use crate::harness::auto_continue::{self, ResumeMessage};
 use crate::ids::{PaneId, WorkspaceId};
 use crate::ledger::snapshot::{
-    LazyAgentPairingDiagnostic, LazyAgentPairingResult, ResumeOutcome, SidebarPresence,
+    LazyAgentPairingDiagnostic, LazyAgentPairingResult, ResumeOutcome, RuntimeReapInputs,
+    SidebarPresence,
 };
 use crate::{
     RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarSnapshot,
@@ -348,17 +349,14 @@ pub fn enrich(
     // and fail-safe: no daemon process, absent cache, or an untrusted loaded
     // list keeps every session.
     let daemon_inputs = read_codex_daemon_reap(runtime).unwrap_or_default();
-    snapshot.drop_dead_daemon_sessions(&daemon_inputs.daemon_pids, daemon_inputs.loaded.as_ref());
-
-    // Codex `/clear` / `/new` starts a fresh session id in the same pane and
-    // process. The rollout head lineage is carried on each root, so both lanes
-    // can drop only same-live-pane fresh replacements; unknown lineage or
-    // forked sessions keep both rows.
-    if let Some(frame) = &frame {
-        let admitted_panes =
-            SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), exclude);
-        snapshot.drop_cleared_codex_sessions(&admitted_panes);
-    }
+    let admitted_reap_panes = frame
+        .as_ref()
+        .map(|frame| SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), exclude));
+    snapshot.reap_runtime(RuntimeReapInputs {
+        daemon_pids: &daemon_inputs.daemon_pids,
+        loaded: daemon_inputs.loaded.as_ref(),
+        live_panes: admitted_reap_panes.as_deref(),
+    });
 
     let account_budgets = crate::agents::account_budgets_from_caches(runtime, snapshot.now);
     let resume_messages = read_auto_continue_resume_messages(

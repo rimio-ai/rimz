@@ -94,7 +94,7 @@ fn row_snapshot_at(
             inactive: false,
             last_activity,
             card: RowCard::Agent(Box::new(AgentCard {
-                status: Some(status),
+                status,
                 phase: crate::agents::TurnPhase::Idle,
                 ..AgentCard::default()
             })),
@@ -209,7 +209,7 @@ fn set_row_status(snapshot: &mut SidebarSnapshot, row_id: &str, status: AgentSta
         .flat_map(|group| group.rows.iter_mut())
         .find(|row| row.id == row_id)
         .expect("row exists");
-    row.as_agent_mut().expect("agent row").status = Some(status);
+    row.as_agent_mut().expect("agent row").status = status;
 }
 
 fn append_agent_row(
@@ -227,7 +227,7 @@ fn append_agent_row(
         raw_pane,
     )));
     row.unread = unread;
-    row.as_agent_mut().expect("agent row").status = Some(status);
+    row.as_agent_mut().expect("agent row").status = status;
     snapshot.worktree_groups[0].rows.push(row);
 }
 

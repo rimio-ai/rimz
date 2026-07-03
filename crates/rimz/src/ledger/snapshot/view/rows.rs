@@ -26,7 +26,7 @@ pub(in crate::ledger::snapshot) fn row_from_agent(
         inactive: false,
         last_activity: agent.last_activity,
         card: RowCard::Agent(Box::new(AgentCard {
-            status: Some(agent.status),
+            status: agent.status,
             phase: agent.phase,
             request_id: None,
             surface: None,
@@ -98,7 +98,7 @@ pub(super) fn row_from_standalone_item(item: &FeedItem, pane: &PaneRef) -> Sideb
         inactive: false,
         last_activity: item.updated_at,
         card: RowCard::Agent(Box::new(AgentCard {
-            status: Some(AgentStatus::Waiting),
+            status: AgentStatus::Waiting,
             // A waiting row is blocked on the human, not reasoning — no turn phase.
             phase: TurnPhase::Idle,
             request_id: Some(item.request_id.clone()),

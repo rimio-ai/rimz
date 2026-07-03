@@ -6,6 +6,15 @@
 //! callers fall back rather than guessing without `/proc`. It also owns the
 //! hot-path subprocess spawn seams the perf guards count.
 
+mod pane_probe;
+
+pub(crate) use pane_probe::command_starts_with_elevation_wrapper;
+pub use pane_probe::{
+    InPaneAgentProcess, elevated_in_pane_agent, hosted_agent_absent_under_root,
+    in_pane_agent_process_for_root, in_pane_agent_start, in_pane_agent_start_for_root,
+    in_pane_agent_starts,
+};
+
 fn git_binary() -> &'static std::path::Path {
     static GIT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     GIT.get_or_init(|| which::which("git").unwrap_or_else(|_| "git".into()))

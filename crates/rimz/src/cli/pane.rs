@@ -528,8 +528,6 @@ mod tests {
                 MuxName::Zellij,
                 pane_raw,
             ))),
-            agent_pid: None,
-            agent_process_start: None,
             runtime_owner: None,
             parent_agent_id: None,
             worktree_path: Some(format!("/repo/{branch}")),

@@ -63,7 +63,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
             inactive: false,
             last_activity: Timestamp::now(),
             card: crate::RowCard::Agent(Box::new(crate::AgentCard {
-                status: Some(crate::agents::AgentStatus::Waiting),
+                status: crate::agents::AgentStatus::Waiting,
                 phase: crate::agents::TurnPhase::Idle,
                 task: Some("allow cargo fmt".to_owned()),
                 ..crate::AgentCard::default()
@@ -89,7 +89,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     slow.worktree_groups[0].rows[0]
         .as_agent_mut()
         .unwrap()
-        .status = Some(crate::agents::AgentStatus::Running);
+        .status = crate::agents::AgentStatus::Running;
     assert_eq!(
         frame_interval(&slow, &UiState::default(), false),
         crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
@@ -454,7 +454,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
                 inactive: false,
                 last_activity: Timestamp::now(),
                 card: crate::RowCard::Agent(Box::new(crate::AgentCard {
-                    status: Some(status),
+                    status,
                     phase: crate::agents::TurnPhase::Idle,
                     ..crate::AgentCard::default()
                 })),

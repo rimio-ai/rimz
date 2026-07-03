@@ -16,7 +16,7 @@ pub(super) fn list_agents(
     let context_records = rimz::ledger::agent_context::read_all(&runtime);
 
     let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    apply_cached_daemon_reap(&mut snapshot, &runtime);
+    apply_cached_daemon_reap(&mut snapshot, &runtime, &workspace.session_name);
     // Group by the room's worktree checkouts the way the sidebar does: a
     // worktree parked outside the project root still earns its own pod. The
     // cached enumeration is read-only and best-effort, matching the sidebar's
@@ -106,7 +106,7 @@ pub(super) fn show_agent(
     // payload — carries the real token window, not the carried-forward
     // `context_pct`.
     let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    apply_cached_daemon_reap(&mut snapshot, &runtime);
+    apply_cached_daemon_reap(&mut snapshot, &runtime, &workspace.session_name);
     let snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
     let agent_result = crate::cli::resolve_agent_one(
         &snapshot,
@@ -257,10 +257,19 @@ pub(super) fn show_agent(
     Ok(())
 }
 
-fn apply_cached_daemon_reap(snapshot: &mut rimz::SidebarSnapshot, runtime: &rimz::RuntimePaths) {
-    if let Some(cache) = rimz::sidebar::refresh::read_codex_daemon_reap(runtime) {
-        snapshot.drop_dead_daemon_sessions(&cache.daemon_pids, cache.loaded.as_ref());
-    }
+pub(super) fn apply_cached_daemon_reap(
+    snapshot: &mut rimz::SidebarSnapshot,
+    runtime: &rimz::RuntimePaths,
+    session: &str,
+) {
+    let cache = rimz::sidebar::refresh::read_codex_daemon_reap(runtime).unwrap_or_default();
+    let live_panes = rimz::sidebar::cache::read_snapshot_cache(&runtime.pane_frame_path(), session)
+        .map(|frame| rimz::SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None));
+    snapshot.reap_runtime(rimz::ledger::snapshot::RuntimeReapInputs {
+        daemon_pids: &cache.daemon_pids,
+        loaded: cache.loaded.as_ref(),
+        live_panes: live_panes.as_deref(),
+    });
 }
 
 fn resolve_audit_agent(

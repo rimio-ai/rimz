@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::pane::{PaneRef, RuntimeOwner};
+use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
 use super::context::{
     AgentContext, AgentRateLimits, AgentTokenUsage, AgentTurnError, RateLimitWindow, TurnErrorClass,
@@ -605,6 +605,7 @@ pub fn is_turn_complete(
 pub const COMPACTING_WINDOW_SECS: i64 = 90;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "AgentStateWire")]
 pub struct AgentState {
     pub agent_id: AgentSessionId,
     pub kind: AgentKind,
@@ -652,10 +653,6 @@ pub struct AgentState {
     #[serde(default)]
     pub phase: TurnPhase,
     pub pane: Option<PaneRef>,
-    #[serde(default)]
-    pub agent_pid: Option<u32>,
-    #[serde(default)]
-    pub agent_process_start: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_owner: Option<RuntimeOwner>,
     /// The root session id this agent is a *child* of, set only when a
@@ -787,6 +784,118 @@ pub struct AgentState {
     pub registered_at: Option<Timestamp>,
 }
 
+#[derive(Deserialize)]
+struct AgentStateWire {
+    agent_id: AgentSessionId,
+    kind: AgentKind,
+    name: Option<String>,
+    kind_ordinal: Option<u32>,
+    profile: Option<String>,
+    role: Option<String>,
+    team: Option<String>,
+    launch_group: Option<String>,
+    launch_ordinal: Option<u32>,
+    channel: Option<String>,
+    status: AgentStatus,
+    #[serde(default)]
+    phase: TurnPhase,
+    pane: Option<PaneRef>,
+    #[serde(default)]
+    agent_pid: Option<u32>,
+    #[serde(default)]
+    agent_process_start: Option<String>,
+    runtime_owner: Option<RuntimeOwner>,
+    parent_agent_id: Option<AgentSessionId>,
+    worktree_path: Option<String>,
+    worktree_branch: Option<String>,
+    task: Option<String>,
+    prompt: Option<String>,
+    description: Option<String>,
+    transcript_path: Option<String>,
+    origin: Option<crate::agents::SessionOrigin>,
+    #[serde(default)]
+    recent_prompts: Vec<String>,
+    model: Option<String>,
+    effort: Option<String>,
+    context_pct: Option<u8>,
+    context_window: Option<u64>,
+    total_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
+    cache_write_input_tokens: Option<u64>,
+    fresh_input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    context: Option<AgentContext>,
+    subagent_description: Option<String>,
+    subagent_started_at: Option<Timestamp>,
+    turn_started_at: Option<Timestamp>,
+    compacting_since: Option<Timestamp>,
+    #[serde(default)]
+    compaction_count: u32,
+    last_compact_command_tokens: Option<u64>,
+    last_seen: Timestamp,
+    last_activity: Timestamp,
+    registered_at: Option<Timestamp>,
+}
+
+impl From<AgentStateWire> for AgentState {
+    fn from(wire: AgentStateWire) -> Self {
+        let runtime_owner = wire.runtime_owner.or_else(|| {
+            wire.agent_pid.map(|pid| {
+                RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    wire.agent_id.to_string(),
+                    pid,
+                    wire.agent_process_start,
+                )
+            })
+        });
+        Self {
+            agent_id: wire.agent_id,
+            kind: wire.kind,
+            name: wire.name,
+            kind_ordinal: wire.kind_ordinal,
+            profile: wire.profile,
+            role: wire.role,
+            team: wire.team,
+            launch_group: wire.launch_group,
+            launch_ordinal: wire.launch_ordinal,
+            channel: wire.channel,
+            status: wire.status,
+            phase: wire.phase,
+            pane: wire.pane,
+            runtime_owner,
+            parent_agent_id: wire.parent_agent_id,
+            worktree_path: wire.worktree_path,
+            worktree_branch: wire.worktree_branch,
+            task: wire.task,
+            prompt: wire.prompt,
+            description: wire.description,
+            transcript_path: wire.transcript_path,
+            origin: wire.origin,
+            recent_prompts: wire.recent_prompts,
+            model: wire.model,
+            effort: wire.effort,
+            context_pct: wire.context_pct,
+            context_window: wire.context_window,
+            total_tokens: wire.total_tokens,
+            cache_read_input_tokens: wire.cache_read_input_tokens,
+            cache_write_input_tokens: wire.cache_write_input_tokens,
+            fresh_input_tokens: wire.fresh_input_tokens,
+            output_tokens: wire.output_tokens,
+            context: wire.context,
+            subagent_description: wire.subagent_description,
+            subagent_started_at: wire.subagent_started_at,
+            turn_started_at: wire.turn_started_at,
+            compacting_since: wire.compacting_since,
+            compaction_count: wire.compaction_count,
+            last_compact_command_tokens: wire.last_compact_command_tokens,
+            last_seen: wire.last_seen,
+            last_activity: wire.last_activity,
+            registered_at: wire.registered_at,
+        }
+    }
+}
+
 fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
@@ -901,6 +1010,8 @@ impl AgentState {
     }
 
     pub(crate) fn backfill_rotation_enrichment_from(&mut self, base: &Self) {
+        // Fill-only rotation merge. `ledger::snapshot::project::carried_state`
+        // owns the authoritative reducer lifetime list.
         if self.transcript_path.is_none() {
             self.transcript_path = base.transcript_path.clone();
         }
@@ -940,6 +1051,30 @@ impl AgentState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_agent_pid_deserializes_to_runtime_owner() {
+        let agent: AgentState = serde_json::from_value(serde_json::json!({
+            "agent_id": "sess-1",
+            "kind": "codex",
+            "status": "running",
+            "agent_pid": 4242,
+            "agent_process_start": "12345",
+            "last_seen": "2026-07-01T00:00:00Z",
+            "last_activity": "2026-07-01T00:00:00Z"
+        }))
+        .expect("legacy agent state");
+
+        let owner = agent.runtime_owner.as_ref().expect("owner synthesized");
+        assert_eq!(owner.kind, RuntimeOwnerKind::Agent);
+        assert_eq!(owner.subject_id, "sess-1");
+        assert_eq!(owner.pid, 4242);
+        assert_eq!(owner.process_start.as_deref(), Some("12345"));
+
+        let encoded = serde_json::to_value(&agent).expect("encode");
+        assert!(encoded.get("agent_pid").is_none());
+        assert!(encoded.get("agent_process_start").is_none());
+    }
 
     /// The context tier climbs calm → yellow → amber → red, taking the worse
     /// of two axes — fill percentage and absolute tokens. Defaults: the Yellow
@@ -1012,8 +1147,6 @@ mod tests {
             status,
             phase: TurnPhase::Idle,
             pane: None,
-            agent_pid: None,
-            agent_process_start: None,
             runtime_owner: None,
             parent_agent_id: None,
             worktree_path: None,

@@ -87,7 +87,7 @@ pub(super) fn payload_context_agent_id(payload: &Value) -> Option<&str> {
 fn agent_runtime_owner(source: &str, payload: &Value) -> Option<rimz::RuntimeOwner> {
     let subject_id = payload_agent_id(payload)?;
     let pid = hook_agent_pid(source)?;
-    let kind = if rimz::remote_control::pid_is_codex_daemon(pid) {
+    let kind = if rimz::agents::codex::pid_is_codex_daemon(pid) {
         RuntimeOwnerKind::Daemon
     } else {
         RuntimeOwnerKind::Agent

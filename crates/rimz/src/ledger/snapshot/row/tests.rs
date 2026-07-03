@@ -18,7 +18,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         inactive: false,
         last_activity: row_time(),
         card: RowCard::Agent(Box::new(AgentCard {
-            status: Some(AgentStatus::Running),
+            status: AgentStatus::Running,
             prompt: Some("fix auth flow".to_owned()),
             ..AgentCard::default()
         })),
@@ -75,7 +75,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         inactive: false,
         last_activity: row_time(),
         card: RowCard::Agent(Box::new(AgentCard {
-            status: Some(AgentStatus::Success),
+            status: AgentStatus::Success,
             ..AgentCard::default()
         })),
     };

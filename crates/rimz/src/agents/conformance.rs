@@ -630,7 +630,7 @@ fn agent_row(kind: &str) -> SidebarRow {
         inactive: false,
         last_activity: Timestamp::from_second(1).unwrap(),
         card: RowCard::Agent(Box::new(AgentCard {
-            status: Some(AgentStatus::Running),
+            status: AgentStatus::Running,
             phase: TurnPhase::Reasoning,
             ..AgentCard::default()
         })),

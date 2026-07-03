@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use crate::agents::AgentState;
 use crate::agents::SessionOrigin;
 use crate::feed::FeedItem;
-use crate::ledger::snapshot::panes::{agent_owner_pid, is_daemon_mode_codex};
+use crate::ledger::snapshot::panes::{agent_owner_pid, is_daemon_mode};
 use crate::ledger::snapshot::process::{
     command_is_sidebar_chrome, pane_agent_kind, pane_worktree_path,
 };
@@ -14,6 +14,14 @@ use crate::remote_control;
 
 use super::SidebarSnapshot;
 use super::rows::agent_id_from_item;
+
+/// Inputs for the runtime-side session reaps. Every field is optional and an
+/// absent input keeps every session (the tri-state fail-safe).
+pub struct RuntimeReapInputs<'a> {
+    pub daemon_pids: &'a BTreeSet<u32>,
+    pub loaded: Option<&'a BTreeSet<String>>,
+    pub live_panes: Option<&'a [PaneRef]>,
+}
 
 impl SidebarSnapshot {
     /// Apply best-effort process liveness to agent overlays that published a
@@ -25,13 +33,11 @@ impl SidebarSnapshot {
             if let Some(owner) = &agent.runtime_owner {
                 return is_alive(owner.pid, owner.process_start.as_deref());
             }
-            agent
-                .agent_pid
-                .is_none_or(|pid| is_alive(pid, agent.agent_process_start.as_deref()))
+            true
         });
     }
 
-    /// Reap daemon-mode Codex sessions the per-user app-server daemon no longer
+    /// Reap daemon-mode sessions the per-user app-server daemon no longer
     /// holds in memory. A daemon-backed session records the shared daemon's pid,
     /// not its own CLI's, so process liveness — which keeps it while the daemon
     /// lives ([`drop_dead_agents_with`]) — can never reap it. Without this a closed
@@ -45,13 +51,20 @@ impl SidebarSnapshot {
     ///   could not be trusted — keep every session;
     /// - `daemon_pids` is empty — no daemon is running, so every session is
     ///   standalone — keep every session;
-    /// - a session is daemon-mode ([`is_daemon_mode_codex`]) and its id is absent
+    /// - a session is daemon-mode ([`is_daemon_mode`]) and its id is absent
     ///   from `loaded` — reap it;
     /// - anything else — keep it.
     ///
     /// The render lanes run this before the live-pane fold, so a reaped session
     /// can neither render a row nor attach stale stats to a live pane.
-    pub fn drop_dead_daemon_sessions(
+    pub fn reap_runtime(&mut self, inputs: RuntimeReapInputs<'_>) {
+        self.drop_dead_daemon_sessions(inputs.daemon_pids, inputs.loaded);
+        if let Some(live_panes) = inputs.live_panes {
+            self.drop_cleared_sessions(live_panes);
+        }
+    }
+
+    fn drop_dead_daemon_sessions(
         &mut self,
         daemon_pids: &BTreeSet<u32>,
         loaded: Option<&BTreeSet<String>>,
@@ -61,32 +74,24 @@ impl SidebarSnapshot {
             return;
         }
         self.agents.retain(|agent| {
-            let reapable = is_daemon_mode_codex(agent, daemon_pids)
-                && !loaded.contains(agent.agent_id.as_str());
+            let reapable =
+                is_daemon_mode(agent, daemon_pids) && !loaded.contains(agent.agent_id.as_str());
             !reapable
         });
     }
 
-    /// Reap Codex roots superseded by strictly-newer same-live-pane roots whose
+    /// Reap daemon-hooked roots superseded by strictly-newer same-live-pane roots whose
     /// carried rollout lineage proves both sessions are fresh `/clear` / `/new`
     /// conversations. Unknown lineage keeps both sessions, so `/side` / `/btw`
     /// forks never cause the primary to drop.
-    pub fn drop_cleared_codex_sessions(&mut self, live_panes: &[PaneRef]) {
-        let live_panes = live_codex_panes_by_worktree(live_panes);
+    fn drop_cleared_sessions(&mut self, live_panes: &[PaneRef]) {
+        let live_panes = live_daemon_kind_panes_by_worktree(live_panes);
         if live_panes.is_empty() {
             return;
         }
-        let superseded: Vec<bool> = self
-            .agents
-            .iter()
-            .map(|older| {
-                self.agents
-                    .iter()
-                    .any(|newer| cleared_codex_session_supersedes(older, newer, &live_panes))
-            })
-            .collect();
-        let mut superseded = superseded.into_iter();
-        self.agents.retain(|_| !superseded.next().unwrap_or(false));
+        retain_unsuperseded(&mut self.agents, |older, newer| {
+            cleared_session_supersedes(older, newer, &live_panes)
+        });
     }
 
     /// Reap ghost sessions from the agent rollup. This filters the *derived*
@@ -107,47 +112,17 @@ impl SidebarSnapshot {
     ///     `/side` / `/btw`) that shares the primary's live process.
     pub fn reap_stale_sessions(&mut self) {
         let now = self.now;
-        // Mark each superseded older session by position, borrowing `agents`
-        // read-only. Runs on every snapshot rebuild, so the old approach — a
-        // `BTreeSet` of owned `(kind, agent_id)` tuples plus a second clone per
-        // agent in `retain` — meant up to ~3×N string allocations per call; the
-        // parallel `Vec<bool>` keeps it allocation-free per agent.
-        //
-        // Both reap rules are root-only. A subagent is paneless and pidless by
-        // construction and shares no worktree key with its parent, so the
-        // supersession rule would collapse two live parallel siblings and the
-        // pidless-TTL rule would reap an idle child — both wrong. A subagent
-        // `older` therefore maps to `false` (never superseded), and the retain
-        // below keeps every subagent outright; they leave the rollup only
-        // transitively once the parent is gone.
-        let superseded: Vec<bool> = self
-            .agents
-            .iter()
-            .map(|older| {
-                older.parent_agent_id.is_none()
-                    && self.agents.iter().any(|newer| {
-                        newer.parent_agent_id.is_none()
-                            && newer.kind == older.kind
-                            && newer.agent_id != older.agent_id
-                            && newer.last_activity > older.last_activity
-                            && older_yields_pane(older, newer)
-                    })
-            })
-            .collect();
-        // `Vec::retain` visits each element once, front to back, so a cursor over
-        // `superseded` stays aligned with `agents` without a hand-rolled index.
-        let mut superseded = superseded.into_iter();
+        retain_unsuperseded(&mut self.agents, |older, newer| {
+            newer.kind == older.kind
+                && newer.agent_id != older.agent_id
+                && newer.last_activity > older.last_activity
+                && older_yields_pane(older, newer)
+        });
         self.agents.retain(|agent| {
-            // Advance the cursor once per agent, before any early return, so it
-            // stays aligned with `agents` even when a subagent short-circuits.
-            let is_superseded = superseded.next().unwrap_or(false);
             // Subagents are never reaped here — kept until their parent leaves,
             // when the projection's orphan-drop hides them.
             if agent.parent_agent_id.is_some() {
                 return true;
-            }
-            if is_superseded {
-                return false;
             }
             !(agent_is_pidless(agent) && session_age_secs(now, agent) > GHOST_SESSION_TTL_SECS)
         });
@@ -208,11 +183,39 @@ impl SidebarSnapshot {
 /// abandoned one clears on its own.
 pub(super) const GHOST_SESSION_TTL_SECS: i64 = 3 * 60 * 60;
 
+/// Retain only root sessions not superseded under `supersedes(older, newer)`;
+/// subagents always remain because they leave transitively with their parent.
+fn retain_unsuperseded(
+    agents: &mut Vec<AgentState>,
+    supersedes: impl Fn(&AgentState, &AgentState) -> bool,
+) {
+    // Mark each superseded older session by position, borrowing `agents`
+    // read-only. Runs on every snapshot rebuild, so an owned key set would add
+    // avoidable string allocations per call; the parallel `Vec<bool>` keeps it
+    // allocation-free per agent.
+    let superseded: Vec<bool> = agents
+        .iter()
+        .map(|older| {
+            older.parent_agent_id.is_none()
+                && agents
+                    .iter()
+                    .any(|newer| newer.parent_agent_id.is_none() && supersedes(older, newer))
+        })
+        .collect();
+    // `Vec::retain` visits each element once, front to back, so a cursor over
+    // `superseded` stays aligned with `agents` without a hand-rolled index.
+    let mut superseded = superseded.into_iter();
+    agents.retain(|agent| {
+        let is_superseded = superseded.next().unwrap_or(false);
+        agent.parent_agent_id.is_some() || !is_superseded
+    });
+}
+
 fn agent_is_pidless(agent: &AgentState) -> bool {
     match agent.runtime_owner.as_ref().map(|owner| owner.kind) {
         Some(RuntimeOwnerKind::Agent | RuntimeOwnerKind::Script) => false,
         Some(RuntimeOwnerKind::Daemon) => true,
-        None => agent.agent_pid.is_none(),
+        None => true,
     }
 }
 
@@ -249,7 +252,7 @@ fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool {
 /// the pane to its earliest-registered primary. A standalone relaunch records two
 /// distinct live pids, so it still collapses here. A daemon-routed relaunch shares
 /// the daemon's owner pid like a fork, but the loaded-thread reaper
-/// ([`drop_dead_daemon_sessions`]) and the projection's process-start guard
+/// ([`SidebarSnapshot::reap_runtime`]) and the projection's process-start guard
 /// ([`crate::ledger::snapshot::panes::pane_start_allows_bind`]) collapse it
 /// instead. Unknown owners never collapse — a missing pid cannot prove a relaunch.
 fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
@@ -259,24 +262,24 @@ fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
     }
 }
 
-fn cleared_codex_session_supersedes(
+fn cleared_session_supersedes(
     older: &AgentState,
     newer: &AgentState,
     live_panes: &BTreeMap<&str, Vec<&PaneRef>>,
 ) -> bool {
     older.parent_agent_id.is_none()
         && newer.parent_agent_id.is_none()
-        && older.kind == "codex"
-        && newer.kind == "codex"
+        && older.kind == newer.kind
+        && kind_has_daemon_hooked_sessions(older.kind.as_str())
         && newer.agent_id != older.agent_id
         && newer.last_activity > older.last_activity
         && older.origin == Some(SessionOrigin::Fresh)
         && newer.origin == Some(SessionOrigin::Fresh)
-        && same_cleared_codex_scope(older, newer)
-        && same_live_codex_pane(older, newer, live_panes)
+        && same_cleared_scope(older, newer)
+        && same_live_daemon_kind_pane(older, newer, live_panes)
 }
 
-fn same_cleared_codex_scope(older: &AgentState, newer: &AgentState) -> bool {
+fn same_cleared_scope(older: &AgentState, newer: &AgentState) -> bool {
     let Some(older_path) = older
         .worktree_path
         .as_deref()
@@ -292,10 +295,10 @@ fn same_cleared_codex_scope(older: &AgentState, newer: &AgentState) -> bool {
     true
 }
 
-fn live_codex_panes_by_worktree(panes: &[PaneRef]) -> BTreeMap<&str, Vec<&PaneRef>> {
+fn live_daemon_kind_panes_by_worktree(panes: &[PaneRef]) -> BTreeMap<&str, Vec<&PaneRef>> {
     let mut live: BTreeMap<&str, Vec<&PaneRef>> = BTreeMap::new();
     for pane in panes {
-        if pane_agent_kind(pane) != Some("codex") {
+        if !pane_agent_kind(pane).is_some_and(kind_has_daemon_hooked_sessions) {
             continue;
         }
         let Some(worktree) = pane_worktree_path(pane) else {
@@ -306,7 +309,12 @@ fn live_codex_panes_by_worktree(panes: &[PaneRef]) -> BTreeMap<&str, Vec<&PaneRe
     live
 }
 
-fn same_live_codex_pane(
+fn kind_has_daemon_hooked_sessions(kind: &str) -> bool {
+    crate::agents::descriptor_by_kind(kind)
+        .is_some_and(|descriptor| descriptor.capabilities.daemon_hooked_sessions)
+}
+
+fn same_live_daemon_kind_pane(
     older: &AgentState,
     newer: &AgentState,
     live_panes: &BTreeMap<&str, Vec<&PaneRef>>,

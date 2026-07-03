@@ -9,7 +9,6 @@ fn daemon_codex(id: &str, worktree: &str, owner_pid: u32) -> AgentState {
         owner_pid,
         None,
     ));
-    codex.agent_pid = Some(owner_pid);
     codex
 }
 
@@ -100,7 +99,11 @@ fn daemon_session_reap_handles_loaded_set_edges() {
             .loaded
             .map(|ids| ids.into_iter().map(str::to_owned).collect::<BTreeSet<_>>());
         let mut snapshot = room(Vec::new(), case.agents);
-        snapshot.drop_dead_daemon_sessions(&daemon_pids, loaded.as_ref());
+        snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+            daemon_pids: &daemon_pids,
+            loaded: loaded.as_ref(),
+            live_panes: None,
+        });
         assert_eq!(rollup_ids(&snapshot), case.expected, "{}", case.label);
     }
 }
@@ -208,7 +211,11 @@ fn cleared_codex_session_reap_handles_lineage_and_scope_edges() {
         },
     ] {
         let mut snapshot = room(Vec::new(), case.agents);
-        snapshot.drop_cleared_codex_sessions(&case.live_panes);
+        snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+            daemon_pids: &BTreeSet::new(),
+            loaded: None,
+            live_panes: Some(&case.live_panes),
+        });
         assert_eq!(rollup_ids(&snapshot), case.expected, "{}", case.label);
     }
 }

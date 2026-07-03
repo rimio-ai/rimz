@@ -73,3 +73,29 @@ fn lifecycle_carries_transcript_path_and_bounded_prompt_history() {
         Some("prompt 17")
     );
 }
+
+#[test]
+fn launch_prompts_append_to_recent_prompt_history() {
+    let launch_with_prompt = |prompt: &str, offset: i64| {
+        let mut event = launch_event(
+            "codex",
+            AgentLaunchPayload {
+                prompt: Some(prompt.to_owned()),
+                ..launch_payload("launch-a", "lucid-atlas")
+            },
+        );
+        event.timestamp = Timestamp::from_second(epoch().as_second() + offset).unwrap();
+        event
+    };
+
+    let agents = reduce_agent_states(&[
+        launch_with_prompt("plan", 1),
+        launch_with_prompt("build", 2),
+        launch_with_prompt("verify", 3),
+    ]);
+
+    assert_eq!(
+        agents[0].recent_prompts,
+        vec!["plan".to_owned(), "build".to_owned(), "verify".to_owned()]
+    );
+}

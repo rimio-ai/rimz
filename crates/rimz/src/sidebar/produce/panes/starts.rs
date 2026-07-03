@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::carry::expired_at;
 use crate::ids::{AgentKind, PaneId};
-use crate::remote_control::InPaneAgentProcess;
+use crate::proc::InPaneAgentProcess;
 use crate::sidebar::frame::{PaneFrame, PaneMetrics, PaneState};
 use crate::sidebar::timing::PROCESS_START_MATCH_TOLERANCE;
 
@@ -57,8 +57,8 @@ fn pane_process_agent_kind(process: &crate::sidebar::frame::PaneProcess) -> Opti
 ///    guard needs.
 ///
 /// The derivers are injected for tests; production passes
-/// [`crate::remote_control::in_pane_agent_start_for_root`] and
-/// [`crate::remote_control::in_pane_agent_starts`].
+/// [`crate::proc::in_pane_agent_start_for_root`] and
+/// [`crate::proc::in_pane_agent_starts`].
 pub(super) fn stamp_pane_process_starts(
     frame: &mut PaneFrame,
     unstamped: &HashSet<PaneId>,

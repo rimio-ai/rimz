@@ -175,7 +175,7 @@ mod tests {
             inactive: false,
             last_activity: now() - std::time::Duration::from_secs(age_secs as u64),
             card: RowCard::Agent(Box::new(AgentCard {
-                status: Some(AgentStatus::Idle),
+                status: AgentStatus::Idle,
                 ..Default::default()
             })),
         }
@@ -220,7 +220,7 @@ mod tests {
                 inactive: false,
                 last_activity: aged,
                 card: RowCard::Agent(Box::new(AgentCard {
-                    status: Some(AgentStatus::Idle),
+                    status: AgentStatus::Idle,
                     ..Default::default()
                 })),
             },

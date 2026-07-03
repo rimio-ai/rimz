@@ -1,10 +1,14 @@
 use super::*;
 
 #[test]
-fn liveness_drops_dead_agent_pid_from_rollup() {
+fn liveness_drops_dead_runtime_owner_from_rollup() {
     let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000).branch("main");
-    codex.agent_pid = Some(424_242);
-    codex.agent_process_start = Some("12345".to_owned());
+    codex.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "sess-1",
+        424_242,
+        Some("12345".to_owned()),
+    ));
 
     let mut snapshot = room(Vec::new(), vec![codex]);
     assert_eq!(snapshot.agents.len(), 1);
@@ -45,7 +49,7 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
 
     for case in [
         Case {
-            label: "pidless stale session drops, recent and pid-bearing survive",
+            label: "ownerless stale session drops, recent and owned survive",
             agents: {
                 let stale = agent("claude", "stale", AgentStatus::Idle, 0)
                     .worktree("/repo/stale")
@@ -56,7 +60,12 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
                 let mut pidful = agent("codex", "pidful", AgentStatus::Idle, 0)
                     .worktree("/repo/pidful")
                     .active_ago(GHOST_SESSION_TTL_SECS * 10);
-                pidful.agent_pid = Some(4242);
+                pidful.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "pidful",
+                    4242,
+                    None,
+                ));
                 vec![stale, recent, pidful]
             },
             expected: vec!["pidful", "recent"],
@@ -73,7 +82,6 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
                     77,
                     None,
                 ));
-                stale_daemon.agent_pid = Some(77);
                 let mut recent_daemon = agent("codex", "recent-daemon", AgentStatus::Idle, 0)
                     .worktree("/repo/recent-daemon")
                     .active_ago(60);
@@ -83,7 +91,6 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
                     77,
                     None,
                 ));
-                recent_daemon.agent_pid = Some(77);
                 let mut pane_owner = agent("codex", "pane-owner", AgentStatus::Idle, 0)
                     .worktree("/repo/pane-owner")
                     .in_pane("%9")
@@ -94,7 +101,6 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
                     88,
                     None,
                 ));
-                pane_owner.agent_pid = Some(77);
                 vec![stale_daemon, recent_daemon, pane_owner]
             },
             expected: vec!["pane-owner", "recent-daemon"],
@@ -136,13 +142,23 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
                     .branch("main")
                     .in_pane("%1")
                     .active_ago(120);
-                older.agent_pid = Some(111);
+                older.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "older",
+                    111,
+                    None,
+                ));
                 let mut newer = agent("claude", "newer", AgentStatus::Running, 0)
                     .worktree("/repo/a")
                     .branch("feature")
                     .in_pane("%1")
                     .active_ago(60);
-                newer.agent_pid = Some(222);
+                newer.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "newer",
+                    222,
+                    None,
+                ));
                 vec![older, newer]
             },
             expected: vec!["newer"],
@@ -155,13 +171,23 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
                     .branch("main")
                     .in_pane("%1")
                     .active_ago(120);
-                older.agent_pid = Some(111);
+                older.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "older",
+                    111,
+                    None,
+                ));
                 let mut newer = agent("claude", "newer", AgentStatus::Running, 0)
                     .worktree("/repo/a")
                     .branch("main")
                     .in_pane("%2")
                     .active_ago(60);
-                newer.agent_pid = Some(222);
+                newer.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "newer",
+                    222,
+                    None,
+                ));
                 vec![older, newer]
             },
             expected: vec!["newer", "older"],

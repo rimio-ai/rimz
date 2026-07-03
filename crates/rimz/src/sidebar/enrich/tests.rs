@@ -2,6 +2,7 @@ use super::*;
 use crate::agents::SessionOrigin;
 use crate::agents::{AgentState, AgentStatus, TurnPhase};
 use crate::ledger::atomic;
+use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
 use crate::sidebar::refresh::AccountsCache;
 use crate::sidebar::refresh::git_stats::{
@@ -422,7 +423,11 @@ fn cleared_codex_reap_drops_only_fresh_same_pane_roots() {
         Timestamp::now(),
     );
 
-    snapshot.drop_cleared_codex_sessions(&[pane("terminal_1", "codex", "/repo/main")]);
+    snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+        daemon_pids: &BTreeSet::new(),
+        loaded: None,
+        live_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
+    });
 
     let ids: Vec<_> = snapshot
         .agents
@@ -450,7 +455,11 @@ fn cleared_codex_reap_requires_both_sessions_on_live_pane() {
         Timestamp::now(),
     );
 
-    snapshot.drop_cleared_codex_sessions(&[pane("terminal_1", "codex", "/repo/main")]);
+    snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+        daemon_pids: &BTreeSet::new(),
+        loaded: None,
+        live_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
+    });
 
     assert_eq!(snapshot.agents.len(), 2);
 }
@@ -470,7 +479,11 @@ fn cleared_codex_reap_keeps_unknown_lineage() {
         Timestamp::now(),
     );
 
-    snapshot.drop_cleared_codex_sessions(&[pane("terminal_1", "codex", "/repo/main")]);
+    snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+        daemon_pids: &BTreeSet::new(),
+        loaded: None,
+        live_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
+    });
 
     assert_eq!(snapshot.agents.len(), 2);
 }
@@ -520,9 +533,14 @@ fn cached_enrich_reaps_codex_clear_session_before_pane_binding() {
 fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
     let (_dir, runtime_paths, _) = runtime();
     let mut closed = root_agent("codex", "closed", None);
-    closed.agent_pid = Some(77);
+    closed.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "closed",
+        77,
+        None,
+    ));
     let mut open = root_agent("codex", "open", None);
-    open.agent_pid = Some(77);
+    open.runtime_owner = Some(RuntimeOwner::new(RuntimeOwnerKind::Agent, "open", 77, None));
     let snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
         Vec::new(),
@@ -560,7 +578,7 @@ fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
 
     let (_empty_dir, empty_runtime, _) = runtime();
     let mut kept = root_agent("codex", "kept", None);
-    kept.agent_pid = Some(77);
+    kept.runtime_owner = Some(RuntimeOwner::new(RuntimeOwnerKind::Agent, "kept", 77, None));
     let snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
         Vec::new(),
@@ -775,7 +793,7 @@ fn config_fold_stamps_agent_context_severity() {
         inactive: false,
         last_activity: jiff::Timestamp::now(),
         card: crate::RowCard::Agent(Box::new(crate::AgentCard {
-            status: Some(AgentStatus::Running),
+            status: AgentStatus::Running,
             phase: TurnPhase::Idle,
             context_pct: pct,
             ..crate::AgentCard::default()

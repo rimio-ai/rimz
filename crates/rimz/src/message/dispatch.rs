@@ -728,8 +728,6 @@ mod tests {
                 MuxName::Zellij,
                 "terminal_3",
             ))),
-            agent_pid: None,
-            agent_process_start: None,
             runtime_owner: None,
             parent_agent_id: None,
             worktree_path: Some("/repo/project".to_owned()),

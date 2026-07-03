@@ -283,7 +283,7 @@ fn fold_ask_onto_row(row: &mut SidebarRow, ask: &FeedItem) {
     let Some(agent) = row.as_agent_mut() else {
         return;
     };
-    agent.status = Some(AgentStatus::Waiting);
+    agent.status = AgentStatus::Waiting;
     agent.phase = TurnPhase::Idle;
     agent.request_id = Some(ask.request_id.clone());
     agent.surface = Some(ask.surface);

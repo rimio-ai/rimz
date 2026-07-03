@@ -30,6 +30,7 @@ pub mod broker;
 mod install;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
+pub mod process;
 pub(crate) mod spend;
 mod transcript;
 
@@ -54,6 +55,11 @@ use self::payloads::{
     CodexSubagentStart, CodexSubagentStop, CodexUserPromptSubmit, parse_post_compact,
     parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
     parse_user_prompt_submit,
+};
+pub(crate) use self::process::is_codex_cli_cmdline;
+pub use self::process::{
+    codex_daemon_pids, codex_resumed_session_id_for_root, codex_resumed_session_id_from_cmdline,
+    pid_is_codex_daemon,
 };
 use self::transcript::{
     TranscriptUsage, configured_model, configured_reasoning_effort, detect_turn_error,
@@ -1157,7 +1163,7 @@ pub fn refresh_context(
 
 /// The thread ids the per-user Codex app-server daemon currently holds in memory,
 /// for the sidebar's daemon-mode ghost reap
-/// ([`crate::ledger::snapshot::SidebarSnapshot::drop_dead_daemon_sessions`]).
+/// ([`crate::ledger::snapshot::SidebarSnapshot::reap_runtime`]).
 /// Connects to the daemon **specifically** — never a cold-spawn, whose empty set
 /// would mass-reap — and reads `thread/loaded/list`. `None` when there is no daemon
 /// to ask or its list cannot be trusted, which the caller reads as "unknown, keep
