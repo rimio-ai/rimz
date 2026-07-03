@@ -47,6 +47,8 @@ fn frame_grid_advances_one_frame_or_snaps_past_missed_frames() {
 fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     let ws = workspace();
     let mut slow = snapshot(&ws);
+    slow.theme.animations.waiting =
+        Some(toml::from_str("effect = \"breathe\"\n").expect("animation spec"));
     slow.worktree_groups = vec![crate::SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
@@ -80,9 +82,18 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         trunk_sync: None,
         pr_state: None,
     }];
-
+    assert!(is_animating(&slow, &UiState::default(), 0, false));
     assert_eq!(
         frame_interval(&slow, &UiState::default(), false),
+        crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS),
+        "a cold theme cache stays on the safe base grid until the first paint warms it"
+    );
+
+    let mut ui = UiState::default();
+    ui.theme(&slow.theme);
+
+    assert_eq!(
+        frame_interval(&slow, &ui, false),
         crate::sidebar::timing::BREATH_ANIMATION_FRAME
     );
 
@@ -91,7 +102,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         .unwrap()
         .status = crate::agents::AgentStatus::Running;
     assert_eq!(
-        frame_interval(&slow, &UiState::default(), false),
+        frame_interval(&slow, &ui, false),
         crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
     );
 }
@@ -136,7 +147,7 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
     let ws = workspace();
     let mut snapshot = snapshot(&ws);
     snapshot.theme.pets.enabled = true;
-    let ui = UiState {
+    let mut ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
                 crate::sidebar_pane::pets::PetCell {
@@ -152,6 +163,7 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
         }),
         ..Default::default()
     };
+    ui.theme(&snapshot.theme);
 
     if render::pet_body_enabled(&snapshot) {
         assert!(is_animating(&snapshot, &ui, 0, false));
@@ -184,6 +196,7 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
 
     snapshot.theme.animations.idle =
         Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));
+    ui.theme(&snapshot.theme);
     assert!(!is_animating(&snapshot, &ui, 0, false));
 }
 
@@ -192,7 +205,7 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
     let ws = workspace();
     let mut snapshot = snapshot(&ws);
     snapshot.theme.pets.enabled = true;
-    let ui = UiState {
+    let mut ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
                 crate::sidebar_pane::pets::PetCell {
@@ -208,6 +221,7 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
         }),
         ..Default::default()
     };
+    ui.theme(&snapshot.theme);
     let alert_active = render::Alert::active("snapshot failed", snapshot.now).is_active();
 
     assert!(render::dashboard_present(&snapshot, false));

@@ -38,7 +38,7 @@ const BLINK_PEAK_LIFT: f32 = 0.08;
 /// resting breathe, sampled near the base grid without paying the full spinner
 /// cadence for calm rooms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AnimationCadence {
+pub(crate) enum AnimationCadence {
     None,
     Breath,
     Fast,
@@ -46,24 +46,23 @@ pub enum AnimationCadence {
 
 /// Whether any visible row is in an animated state — a running agent (working
 /// or pre-edit thinking), a resolver mid-flight, an active process spinning on
-/// real work (a build, a test, a `sudo` install), or the single lead unread
-/// `?`/`!` row whose configured effect flows. The serve loop uses this as the
-/// broad "does anything move?" gate; [`animation_cadence`] decides whether the
-/// movement needs the fast frame grid or the breath grid. A fully settled
-/// sidebar — quiet read idle/done rows, and every unread row past the lead
-/// resting at its static crest — keeps idling on the slow data tick. A stalled
-/// agent is projected to `failed` upstream, so it reads as a pulsing `!` here.
-/// The cockpit's headline-spend count-up rides a separate gate (`UiState::tally`),
-/// so a finished-turn climb keeps the tick alive even when every row is
-/// otherwise static.
-pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
-    animation_cadence(snapshot) != AnimationCadence::None
-}
-
-// Deliberately unfiltered by the make-up filter: the cockpit's attention
-// buckets still animate (and the counts still tick) for rows a filter hides,
-// so the gate must track the whole room, not the narrowed body.
-pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
+/// real work (a build, a test, a `sudo` install), a row whose resolved status
+/// head moves, or the single lead unread `?`/`!` row whose configured effect
+/// flows. The serve loop uses this to choose the fast frame grid, the breath
+/// grid, or the slow data tick. A fully settled sidebar — quiet read idle/done
+/// rows, and every unread row past the lead resting at its static crest — keeps
+/// idling on the slow data tick. A stalled agent is projected to `failed`
+/// upstream, so it reads as an attention row here. The cockpit's headline-spend
+/// count-up rides a separate gate (`UiState::tally`), so a finished-turn climb
+/// keeps the tick alive even when every row is otherwise static.
+///
+/// Deliberately unfiltered by the make-up filter: the cockpit's attention
+/// buckets still animate (and the counts still tick) for rows a filter hides,
+/// so the gate must track the whole room, not the narrowed body.
+pub(crate) fn animation_cadence(
+    snapshot: &SidebarSnapshot,
+    animations: &ResolvedAnimations,
+) -> AnimationCadence {
     let mut breath = false;
     for row in snapshot
         .worktree_groups
@@ -74,15 +73,14 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
             if row.resolver().is_some() || row.status() == Some(AgentStatus::Running) {
                 return AnimationCadence::Fast;
             }
-            // A read `?`/`!` row honours its configured effect. Unread motion is
-            // reserved to the single lead row (checked once below); every other
-            // unread row settles to the static `bright` crest and asks nothing
-            // of the grid.
-            if !row.unread
-                && let Some(status) = row.status()
+            // The status head asks for the breath grid only when its resolved
+            // frames or effect move. The unread treatment is reserved to the
+            // single lead row (checked once below); every other unread row
+            // settles to the static `bright` crest.
+            if let Some(status) = row.status()
                 && status.is_actionable()
             {
-                breath |= status_needs_motion(&snapshot.theme.animations, status);
+                breath |= animations.status(status).has_motion();
             }
         } else if row.process_is_busy() {
             return AnimationCadence::Fast;
@@ -93,8 +91,8 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
     // frame, not when it rests at the static `bright` crest or its role is
     // quieted to `static`. The cockpit lead bucket pulses with it, so this one
     // condition covers both the row and its bucket.
-    breath |= lead_unread_needs_motion(snapshot);
-    if breath || snapshot.theme.animations.has_resting_motion() {
+    breath |= lead_unread_needs_motion(snapshot, animations);
+    if breath || animations.has_resting_motion() {
         AnimationCadence::Breath
     } else {
         AnimationCadence::None
@@ -106,36 +104,16 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
 /// it animates when the configured unread effect flows (shimmer or blink, not
 /// the held `bright` crest) and the lead's role has not been quieted to
 /// `static`.
-fn lead_unread_needs_motion(snapshot: &SidebarSnapshot) -> bool {
+fn lead_unread_needs_motion(snapshot: &SidebarSnapshot, animations: &ResolvedAnimations) -> bool {
     let Some((_, status)) = lead_unread(&snapshot.worktree_groups) else {
         return false;
     };
-    unread_effect_animates(snapshot.theme.animations.unread)
-        && status_needs_motion(&snapshot.theme.animations, status)
-}
-
-/// Whether the configured unread effect flows on the phase grid. `shimmer` and
-/// `blink` move; the held `bright` crest is static, so a lead row wearing it
-/// asks nothing of the breath grid.
-fn unread_effect_animates(effect: Option<UnreadEffect>) -> bool {
-    !matches!(effect, Some(UnreadEffect::Bright))
-}
-
-fn status_needs_motion(animations: &ThemeAnimationsConfig, status: AgentStatus) -> bool {
-    let spec = match status {
-        AgentStatus::Waiting | AgentStatus::Failed => {
-            animations.get(ResolvedAnimations::status_role(status))
-        }
-        _ => None,
-    };
-    spec_needs_motion(spec)
-}
-
-pub(super) fn spec_needs_motion(spec: Option<&AnimationSpec>) -> bool {
-    match spec {
-        Some(spec) if spec.disables_effect_motion() => spec.has_frame_motion(),
-        _ => true,
-    }
+    matches!(
+        animations
+            .status(status)
+            .unread_anim(animations.unread_effect(), 0, 0),
+        Some(UnreadAnim::Blink(_) | UnreadAnim::Shimmer(_))
+    )
 }
 
 /// The resolved unread treatment for one row, built once and shared by every
@@ -411,9 +389,12 @@ impl Animation {
         })
     }
 
-    #[cfg(test)]
-    fn has_motion(&self) -> bool {
+    pub(crate) fn has_motion(&self) -> bool {
         self.frames.len() > 1 || self.effect != AnimationEffect::Static
+    }
+
+    pub(crate) fn motion_quieted(&self) -> bool {
+        self.effect_overridden && self.effect == AnimationEffect::Static && self.frames.len() <= 1
     }
 }
 
@@ -488,7 +469,6 @@ impl ResolvedAnimations {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn has_resting_motion(&self) -> bool {
         [
             AnimationRole::Paused,
@@ -840,6 +820,40 @@ mod tests {
                 .attention_breath_phase(3),
             None,
             "configured static quiets the default attention blink"
+        );
+    }
+
+    #[test]
+    fn motion_quieted_matches_raw_config_motion_truth_table() {
+        let palette = test_palette();
+        let default = resolve_for_test(&ThemeAnimationsConfig::default(), &palette);
+        assert!(
+            !default.role(AnimationRole::Waiting).motion_quieted(),
+            "unset config leaves default pet tracks live"
+        );
+
+        let quiet: ThemeAnimationsConfig =
+            toml::from_str("[waiting]\neffect = \"static\"\n").expect("config");
+        let quiet = resolve_for_test(&quiet, &palette);
+        assert!(
+            quiet.role(AnimationRole::Waiting).motion_quieted(),
+            "a single-frame explicit static override quiets motion"
+        );
+
+        let static_frames: ThemeAnimationsConfig =
+            toml::from_str("[waiting]\nframes = \"?¿\"\neffect = \"static\"\n").expect("config");
+        let static_frames = resolve_for_test(&static_frames, &palette);
+        assert!(
+            !static_frames.role(AnimationRole::Waiting).motion_quieted(),
+            "static effects with multiple frames still move"
+        );
+
+        let breathe: ThemeAnimationsConfig =
+            toml::from_str("[waiting]\neffect = \"breathe\"\n").expect("config");
+        let breathe = resolve_for_test(&breathe, &palette);
+        assert!(
+            !breathe.role(AnimationRole::Waiting).motion_quieted(),
+            "non-static effects still move"
         );
     }
 

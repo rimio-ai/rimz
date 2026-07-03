@@ -13,7 +13,7 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
             Some("db migrate"),
         )],
     );
-    assert_eq!(animation_cadence(&running), AnimationCadence::Fast);
+    assert_eq!(animation_cadence_for_test(&running), AnimationCadence::Fast);
 
     let mut waiting = snapshot_with(
         Vec::new(),
@@ -26,15 +26,28 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
             Some("allow cargo fmt"),
         )],
     );
-    assert_eq!(animation_cadence(&waiting), AnimationCadence::Breath);
+    assert_eq!(
+        animation_cadence_for_test(&waiting),
+        AnimationCadence::None,
+        "a read waiting row honours its resolved effect; the default single-frame static head paints nothing per-frame"
+    );
+    waiting.theme.animations.waiting =
+        Some(toml::from_str::<AnimationSpec>("effect = \"breathe\"\n").expect("animation spec"));
+    assert_eq!(
+        animation_cadence_for_test(&waiting),
+        AnimationCadence::Breath
+    );
     waiting.theme.animations.waiting =
         Some(toml::from_str::<AnimationSpec>("effect = \"static\"\n").expect("animation spec"));
-    assert_eq!(animation_cadence(&waiting), AnimationCadence::None);
+    assert_eq!(animation_cadence_for_test(&waiting), AnimationCadence::None);
     waiting.theme.animations.waiting = Some(
         toml::from_str::<AnimationSpec>("frames = \"?¿\"\neffect = \"static\"\n")
             .expect("animation spec"),
     );
-    assert_eq!(animation_cadence(&waiting), AnimationCadence::Breath);
+    assert_eq!(
+        animation_cadence_for_test(&waiting),
+        AnimationCadence::Breath
+    );
 
     let idle_empty = snapshot_with(
         Vec::new(),
@@ -47,7 +60,10 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
             None,
         )],
     );
-    assert_eq!(animation_cadence(&idle_empty), AnimationCadence::None);
+    assert_eq!(
+        animation_cadence_for_test(&idle_empty),
+        AnimationCadence::None
+    );
 
     let mut calm = snapshot_with(
         Vec::new(),
@@ -60,7 +76,7 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
             Some("done"),
         )],
     );
-    assert_eq!(animation_cadence(&calm), AnimationCadence::None);
+    assert_eq!(animation_cadence_for_test(&calm), AnimationCadence::None);
 
     // An unread `✓` result never leads the attention ladder: it settles to the
     // static bright crest, asking nothing of the breath grid. A static unread
@@ -68,7 +84,7 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
     // reservation removes.
     calm.worktree_groups[0].rows[0].unread = true;
     assert_eq!(
-        animation_cadence(&calm),
+        animation_cadence_for_test(&calm),
         AnimationCadence::None,
         "an unread result settles to a static crest — no motion to keep the grid warm"
     );
@@ -88,7 +104,7 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
     );
     lead.worktree_groups[0].rows[0].unread = true;
     assert_eq!(
-        animation_cadence(&lead),
+        animation_cadence_for_test(&lead),
         AnimationCadence::Breath,
         "the lead unread ask flows its shimmer beam — continuous motion the grid serves"
     );
@@ -96,7 +112,7 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
     // even the lead asks nothing of the grid.
     lead.theme.animations.unread = Some(crate::config::UnreadEffect::Bright);
     assert_eq!(
-        animation_cadence(&lead),
+        animation_cadence_for_test(&lead),
         AnimationCadence::None,
         "the `bright` unread crest holds still, so even the lead leaves the grid asleep"
     );
@@ -105,7 +121,7 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
     lead.theme.animations.waiting =
         Some(toml::from_str::<AnimationSpec>("effect = \"static\"\n").expect("animation spec"));
     assert_eq!(
-        animation_cadence(&lead),
+        animation_cadence_for_test(&lead),
         AnimationCadence::None,
         "a static-quieted waiting role stills the lead's unread motion"
     );
@@ -121,10 +137,10 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
             None,
         )],
     );
-    assert_eq!(animation_cadence(&idle), AnimationCadence::None);
+    assert_eq!(animation_cadence_for_test(&idle), AnimationCadence::None);
     idle.theme.animations.idle =
         Some(toml::from_str::<AnimationSpec>("effect = \"breathe\"\n").expect("animation spec"));
-    assert_eq!(animation_cadence(&idle), AnimationCadence::Breath);
+    assert_eq!(animation_cadence_for_test(&idle), AnimationCadence::Breath);
 }
 
 #[test]

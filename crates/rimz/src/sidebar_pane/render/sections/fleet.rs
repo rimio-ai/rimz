@@ -100,10 +100,17 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Waiting,
         status_chip_color(theme, AgentStatus::Waiting),
         waiting,
-        attention_bucket_style(
+        bucket_style(
             theme,
             groups,
             AgentStatus::Waiting,
+            (
+                theme.style(
+                    theme.animations.status(AgentStatus::Waiting).color(),
+                    Modifier::empty(),
+                ),
+                Some(theme.animations.status(AgentStatus::Waiting).color()),
+            ),
             now,
             animation_phase,
             lead_unread_status == Some(AgentStatus::Waiting),
@@ -113,10 +120,17 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Failed,
         status_chip_color(theme, AgentStatus::Failed),
         failed,
-        attention_bucket_style(
+        bucket_style(
             theme,
             groups,
             AgentStatus::Failed,
+            (
+                theme.style(
+                    theme.animations.status(AgentStatus::Failed).color(),
+                    Modifier::empty(),
+                ),
+                Some(theme.animations.status(AgentStatus::Failed).color()),
+            ),
             now,
             animation_phase,
             lead_unread_status == Some(AgentStatus::Failed),
@@ -129,28 +143,34 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Paused,
         status_chip_color(theme, AgentStatus::Paused),
         paused,
-        unread_bucket_style(
+        bucket_style(
             theme,
             groups,
             AgentStatus::Paused,
-            status_rest_style(theme, AgentStatus::Paused),
-            status_chip_color(theme, AgentStatus::Paused),
+            (
+                status_rest_style(theme, AgentStatus::Paused),
+                status_chip_color(theme, AgentStatus::Paused),
+            ),
             now,
             animation_phase,
+            false,
         ),
     );
     left.push_count(
         AgentStatus::Success,
         status_chip_color(theme, AgentStatus::Success),
         success,
-        unread_bucket_style(
+        bucket_style(
             theme,
             groups,
             AgentStatus::Success,
-            status_rest_style(theme, AgentStatus::Success),
-            status_chip_color(theme, AgentStatus::Success),
+            (
+                status_rest_style(theme, AgentStatus::Success),
+                status_chip_color(theme, AgentStatus::Success),
+            ),
             now,
             animation_phase,
+            false,
         ),
     );
     let mut right = Cluster::new(theme, status_filter);
@@ -158,28 +178,31 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Running,
         status_chip_color(theme, AgentStatus::Running),
         working,
-        unread_bucket_style(
+        bucket_style(
             theme,
             groups,
             AgentStatus::Running,
-            status_rest_style(theme, AgentStatus::Running),
-            status_chip_color(theme, AgentStatus::Running),
+            (
+                status_rest_style(theme, AgentStatus::Running),
+                status_chip_color(theme, AgentStatus::Running),
+            ),
             now,
             animation_phase,
+            false,
         ),
     );
     right.push_count(
         AgentStatus::Idle,
         status_chip_color(theme, AgentStatus::Idle),
         idle,
-        unread_bucket_style(
+        bucket_style(
             theme,
             groups,
             AgentStatus::Idle,
-            theme.body(),
-            status_chip_color(theme, AgentStatus::Idle),
+            (theme.body(), status_chip_color(theme, AgentStatus::Idle)),
             now,
             animation_phase,
+            false,
         ),
     );
 
@@ -334,59 +357,31 @@ pub(in crate::sidebar_pane::render) fn fleet_size(
     (main, subs)
 }
 
-/// The cockpit `?`/`!` bucket's tone, in lockstep with its rows: it wears the
-/// status's fixed semantic tone — waiting yellow, failed red — and when this
-/// bucket owns the lead unread row (`is_lead_bucket`) it carries the configured
-/// continuous attention signal on that row; an unread bucket that is *not* the
-/// lead settles to the steady bright crest, and a read bucket holds the flat
-/// tone. Reads the rendered rows (capped-away agents are excluded — the bucket
-/// count still spans them, but a hidden agent never drives the visible signal).
-fn attention_bucket_style(
+/// One cockpit bucket's tone, in lockstep with its rows. A `?`/`!` bucket owns
+/// the lead unread row when `is_lead_bucket`, so it carries the configured
+/// continuous attention signal with that row; any unread bucket that is *not*
+/// the lead settles to the steady bright crest, and a read bucket holds its
+/// `rest_style`. Reads the rendered rows (capped-away agents are excluded — the
+/// bucket count still spans them, but a hidden agent never drives the visible
+/// signal).
+fn bucket_style(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
     status: AgentStatus,
+    tone: (Style, Option<Color>),
     now: Timestamp,
     animation_phase: u64,
     is_lead_bucket: bool,
 ) -> Style {
+    let (rest_style, color) = tone;
     let oldest_unread = groups
         .iter()
         .flat_map(|group| &group.rows)
         .filter(|row| row.status() == Some(status) && row.unread)
         .map(|row| age_secs(row.last_activity, now))
         .max();
-    // The bucket wears its status's fixed semantic tone — waiting yellow, failed
-    // red — held steady; the unread lead row carries any motion, never age.
-    let color = theme.animations.status(status).color();
     if let Some(age) = oldest_unread {
         return match unread_anim(theme, status, age, animation_phase, is_lead_bucket) {
-            Some(anim) => attention_cell_style(theme, Some(color), anim, 0, 1),
-            None => theme.style(color, Modifier::BOLD),
-        };
-    }
-    theme.style(color, Modifier::empty())
-}
-
-fn unread_bucket_style(
-    theme: &Theme,
-    groups: &[SidebarWorktreeGroup],
-    status: AgentStatus,
-    rest_style: Style,
-    color: Option<Color>,
-    now: Timestamp,
-    animation_phase: u64,
-) -> Style {
-    let oldest_unread = groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .filter(|row| row.status() == Some(status) && row.unread)
-        .map(|row| age_secs(row.last_activity, now))
-        .max();
-    if let Some(age) = oldest_unread {
-        // Non-action buckets never lead the room; they settle to the steady
-        // bright crest while the oldest actionable ask owns any continuous
-        // motion.
-        return match unread_anim(theme, status, age, animation_phase, false) {
             Some(anim) => attention_cell_style(theme, color, anim, 0, 1),
             None => color.map_or_else(
                 || rest_style.add_modifier(Modifier::BOLD),

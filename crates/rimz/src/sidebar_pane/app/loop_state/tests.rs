@@ -453,6 +453,7 @@ fn frame_timing_caps_idle_timeout_at_order_hold_expiry() {
     let (_dir, mut state) = loop_state(&ws);
     state.dirty = false;
     state.last_self_close_check = Instant::now();
+    state.ui.theme(&state.current.theme);
     let now_ms = jiff::Timestamp::now().as_millisecond();
     state.ui.order_hold = Some(crate::sidebar_pane::render::OrderHold {
         frozen: crate::sidebar_pane::render::FrozenOrder::default(),

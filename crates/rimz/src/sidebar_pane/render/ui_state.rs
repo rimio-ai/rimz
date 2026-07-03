@@ -159,6 +159,11 @@ impl UiState {
         self.theme_cache = Some((config.clone(), Rc::clone(&theme)));
         theme
     }
+
+    pub(crate) fn cached_theme(&self, config: &ThemeConfig) -> Option<Rc<Theme>> {
+        let (cached_config, theme) = self.theme_cache.as_ref()?;
+        (cached_config == config).then(|| Rc::clone(theme))
+    }
 }
 
 /// The manual dashboard-tab pick: the provider kind to show, plus the

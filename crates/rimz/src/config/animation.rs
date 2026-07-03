@@ -46,17 +46,6 @@ impl ThemeAnimationsConfig {
         *self == Self::default()
     }
 
-    /// Whether calm status heads need a cosmetic animation tick.
-    pub fn has_resting_motion(&self) -> bool {
-        [
-            AnimationRole::Paused,
-            AnimationRole::Idle,
-            AnimationRole::Success,
-        ]
-        .iter()
-        .any(|role| self.get(*role).is_some_and(AnimationSpec::has_motion))
-    }
-
     pub fn get(&self, role: AnimationRole) -> Option<&AnimationSpec> {
         match role {
             AnimationRole::Thinking => self.thinking.as_ref(),
@@ -119,23 +108,6 @@ pub struct AnimationSpec {
     pub speed: Option<AnimationSpeed>,
 }
 
-impl AnimationSpec {
-    fn has_motion(&self) -> bool {
-        self.has_frame_motion()
-            || self
-                .effect
-                .is_some_and(|effect| effect != AnimationEffect::Static)
-    }
-
-    pub(crate) fn has_frame_motion(&self) -> bool {
-        self.frames.as_ref().is_some_and(|frames| frames.len() > 1)
-    }
-
-    pub(crate) fn disables_effect_motion(&self) -> bool {
-        self.effect == Some(AnimationEffect::Static)
-    }
-}
-
 /// The glyph frames for one animation. A TOML string splits into Unicode
 /// scalar values; an array keeps explicit multi-scalar glyphs intact.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -144,10 +116,6 @@ pub struct AnimationFrames(Vec<String>);
 impl AnimationFrames {
     pub fn as_slice(&self) -> &[String] {
         &self.0
-    }
-
-    fn len(&self) -> usize {
-        self.0.len()
     }
 
     fn parse(frames: Vec<String>) -> Result<Self, String> {

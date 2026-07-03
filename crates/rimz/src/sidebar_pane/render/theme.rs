@@ -205,6 +205,35 @@ impl Theme {
         }
     }
 
+    /// One lifted cell at the active depth: truecolor rides the gamut-safe
+    /// OKLab-L lift (with `truecolor_mod` held), while indexed, `no_color`, and
+    /// a colorless `fg` carry `fallback_mod` over the base tone.
+    fn lifted(
+        &self,
+        fg: Option<Color>,
+        lift: f32,
+        truecolor_mod: Modifier,
+        fallback_mod: Modifier,
+    ) -> Style {
+        if self.no_color {
+            return Style::default().add_modifier(fallback_mod);
+        }
+        let Some(rgb) = fg.and_then(color_to_rgb) else {
+            return Style::default().add_modifier(fallback_mod);
+        };
+        match self.depth {
+            ColorDepth::Truecolor => {
+                let lifted = oklab::lift_lightness(rgb, lift);
+                Style::default()
+                    .fg(rgb_color(lifted, self.depth))
+                    .add_modifier(truecolor_mod)
+            }
+            ColorDepth::Indexed => Style::default()
+                .fg(rgb_color(rgb, self.depth))
+                .add_modifier(fallback_mod),
+        }
+    }
+
     /// The unread attention blink: a hard 2-pole brightness toggle between the
     /// element's resting tone and a bright crest. At truecolor the crest is a
     /// lightness lift, held bold the whole cycle so weight never flickers with the
@@ -215,23 +244,12 @@ impl Theme {
     /// of an unread row, and the `?`/`!`/`✓` make-up buckets, share one sample so
     /// they flip in unison.
     pub(super) fn pulse(&self, fg: Color, sample: BreathSample) -> Style {
-        if self.no_color {
-            return Style::default().add_modifier(sample.grow_modifier());
-        }
-        let Some(rgb) = color_to_rgb(fg) else {
-            return Style::default().add_modifier(sample.grow_modifier());
-        };
-        match self.depth {
-            ColorDepth::Truecolor => {
-                let lifted = oklab::lift_lightness(rgb, sample.grow_delta());
-                Style::default()
-                    .fg(rgb_color(lifted, self.depth))
-                    .add_modifier(Modifier::BOLD)
-            }
-            ColorDepth::Indexed => Style::default()
-                .fg(rgb_color(rgb, self.depth))
-                .add_modifier(sample.grow_modifier()),
-        }
+        self.lifted(
+            Some(fg),
+            sample.grow_delta(),
+            Modifier::BOLD,
+            sample.grow_modifier(),
+        )
     }
 
     /// One cell of the unread **shimmer** beam: a per-cell OKLab-L `lift` from
@@ -248,23 +266,7 @@ impl Theme {
         } else {
             Modifier::empty()
         };
-        if self.no_color {
-            return Style::default().add_modifier(bold);
-        }
-        let Some(rgb) = fg.and_then(color_to_rgb) else {
-            return Style::default().add_modifier(bold);
-        };
-        match self.depth {
-            ColorDepth::Truecolor => {
-                let lifted = oklab::lift_lightness(rgb, lift);
-                Style::default()
-                    .fg(rgb_color(lifted, self.depth))
-                    .add_modifier(Modifier::BOLD)
-            }
-            ColorDepth::Indexed => Style::default()
-                .fg(rgb_color(rgb, self.depth))
-                .add_modifier(bold),
-        }
+        self.lifted(fg, lift, Modifier::BOLD, bold)
     }
 
     /// The body-text tone as a concrete color, so a pulsing description can lift

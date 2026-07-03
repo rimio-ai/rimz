@@ -128,6 +128,11 @@ fn snapshot_text(screen: &str) -> String {
         .join("\n")
 }
 
+fn animation_cadence_for_test(snapshot: &SidebarSnapshot) -> AnimationCadence {
+    let theme = Theme::fixed_for_theme(false, &snapshot.theme);
+    animation_cadence(snapshot, &theme.animations)
+}
+
 fn assert_snapshot(name: &str, screen: String) {
     // Row ages and degraded elapsed values are intentionally relative.
     let screen = snapshot_text(&screen);

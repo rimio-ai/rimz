@@ -90,6 +90,7 @@ impl FramePainter {
         alert_active: bool,
     ) {
         let action = render::selected_pet_action(snapshot, ui);
+        let theme = ui.theme(&snapshot.theme);
         let tier = effective_render_tier(
             snapshot.theme.pets.glyphs,
             self.caps,
@@ -112,7 +113,7 @@ impl FramePainter {
                 phase: ui.animation_phase,
                 refresh_ms: snapshot.theme.display.resolved_refresh_ms(),
                 body,
-                motion_enabled: render::pet_motion_enabled(snapshot, action),
+                motion_enabled: render::pet_motion_enabled(&theme.animations, action),
                 unread_triggered,
             },
         );

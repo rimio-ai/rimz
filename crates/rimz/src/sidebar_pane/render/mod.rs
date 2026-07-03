@@ -28,7 +28,7 @@ mod sections;
 mod theme;
 mod ui_state;
 
-pub use self::animation::{AnimationCadence, animation_cadence, has_live_animation};
+pub(crate) use self::animation::{AnimationCadence, animation_cadence};
 use self::ansi::{infallible, write_buffer_line_ansi};
 use self::chrome::{hairline_rule, help_lines};
 pub(crate) use self::compose::compose_lines;
@@ -59,6 +59,7 @@ use ratatui::text::Text;
 use ratatui::widgets::{Clear, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 
+use self::animation::ResolvedAnimations;
 #[cfg(test)]
 pub(crate) use self::sections::{MakeUpHit, ProviderTabHit};
 pub(crate) use self::sections::{status_total, unread_total};
@@ -390,7 +391,7 @@ pub(crate) fn pet_body_enabled(_snapshot: &SidebarSnapshot) -> bool {
     !crate::tui::no_color()
 }
 
-pub(crate) fn pet_motion_enabled(snapshot: &SidebarSnapshot, action: PetAction) -> bool {
+pub(crate) fn pet_motion_enabled(animations: &ResolvedAnimations, action: PetAction) -> bool {
     let role = match action {
         PetAction::Idle => AnimationRole::Idle,
         PetAction::Thinking => AnimationRole::Thinking,
@@ -400,7 +401,7 @@ pub(crate) fn pet_motion_enabled(snapshot: &SidebarSnapshot, action: PetAction) 
         PetAction::Ask => AnimationRole::Waiting,
         PetAction::Failed => AnimationRole::Failed,
     };
-    animation::spec_needs_motion(snapshot.theme.animations.get(role))
+    !animations.role(role).motion_quieted()
 }
 
 pub fn draw_to_terminal<B: Backend>(

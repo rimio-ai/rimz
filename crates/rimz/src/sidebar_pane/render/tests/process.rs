@@ -323,10 +323,10 @@ fn active_process_row_keeps_the_animation_tick_alive() {
         vec![pane("%1", "cargo build --release", "/repo/main")],
         None,
     );
-    assert!(has_live_animation(&busy));
+    assert_eq!(animation_cadence_for_test(&busy), AnimationCadence::Fast);
 
     // A bare shell is presence, not motion: it stays on the calm data tick.
     let idle = snapshot_with(Vec::new(), Vec::new())
         .with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
-    assert!(!has_live_animation(&idle));
+    assert_eq!(animation_cadence_for_test(&idle), AnimationCadence::None);
 }

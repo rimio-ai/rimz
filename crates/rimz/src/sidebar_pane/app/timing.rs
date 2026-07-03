@@ -6,12 +6,16 @@ pub(super) fn is_animating(
     phase: u64,
     alert_active: bool,
 ) -> bool {
-    render::has_live_animation(snapshot)
+    let Some(theme) = ui.cached_theme(&snapshot.theme) else {
+        return true;
+    };
+    render::animation_cadence(snapshot, &theme.animations) != render::AnimationCadence::None
         || pet_frame_interval(
             snapshot,
             ui,
             alert_active,
             snapshot.theme.display.resolved_refresh_ms(),
+            |action| render::pet_motion_enabled(&theme.animations, action),
         )
         .is_some()
         || ui.tally.any_rolling(phase)
@@ -24,6 +28,7 @@ fn pet_frame_interval(
     ui: &UiState,
     alert_active: bool,
     refresh_ms: u16,
+    motion_enabled: impl FnOnce(crate::sidebar_pane::pets::PetAction) -> bool,
 ) -> Option<Duration> {
     if !snapshot.theme.pets.enabled || !render::dashboard_present(snapshot, alert_active) {
         return None;
@@ -32,10 +37,7 @@ fn pet_frame_interval(
     if view.loading {
         return Some(crate::sidebar::timing::animation_frame(refresh_ms));
     }
-    if view.has_body()
-        && render::pet_body_enabled(snapshot)
-        && render::pet_motion_enabled(snapshot, view.action)
-    {
+    if view.has_body() && render::pet_body_enabled(snapshot) && motion_enabled(view.action) {
         return Some(crate::sidebar_pane::pets::animation_frame(
             view.active_track,
             refresh_ms,
@@ -70,13 +72,16 @@ pub(super) fn frame_interval(
 ) -> Duration {
     let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
     let base = crate::sidebar::timing::animation_frame(refresh_ms);
+    let Some(theme) = ui.cached_theme(&snapshot.theme) else {
+        return base;
+    };
     // A scrollbar fade needs the fast grid to read as motion; it is brief and
     // self-terminating, so the cost is bounded to the settle window. Continuous
     // row pulse rides the breath cadence below.
     if ui.scrollbar.fading(ui.animation_phase) {
         return base;
     }
-    let cadence = render::animation_cadence(snapshot);
+    let cadence = render::animation_cadence(snapshot, &theme.animations);
     if cadence == render::AnimationCadence::Fast {
         return base;
     }
@@ -94,7 +99,11 @@ pub(super) fn frame_interval(
     // The dashboard pet paints on its track cadence, but a money climb in the
     // still-visible cockpit must keep sampling on the money grid, so a rolling
     // room takes the faster of the two.
-    if let Some(pet_interval) = pet_frame_interval(snapshot, ui, alert_active, refresh_ms) {
+    if let Some(pet_interval) =
+        pet_frame_interval(snapshot, ui, alert_active, refresh_ms, |action| {
+            render::pet_motion_enabled(&theme.animations, action)
+        })
+    {
         return if money_rolling {
             pet_interval.min(money_grid())
         } else {
