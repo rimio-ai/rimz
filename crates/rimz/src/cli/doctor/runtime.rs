@@ -765,9 +765,7 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
             let excerpt = stderr_excerpt.lines().last().unwrap_or(stderr_excerpt);
             format!("render worker died by {reason}: {excerpt}")
         }
-        DiagEvent::RendererExit { cause } => {
-            format!("renderer exited cleanly: {}", cause.as_str())
-        }
+        DiagEvent::RendererExit { cause } => format!("renderer exited: {}", cause.as_str()),
         DiagEvent::FrameAnomaly {
             anomaly,
             suppressed_since_last,
@@ -806,7 +804,9 @@ fn summary_with_record_count(summary: String, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rimz::diag::record::{DiagEnvelope, DiagEvent, FrameRejectReason, TickLoop};
+    use rimz::diag::record::{
+        DiagEnvelope, DiagEvent, FrameRejectReason, RendererExitCause, TickLoop,
+    };
 
     fn sidebar(raw: &str) -> rimz::SidebarInstanceId {
         rimz::SidebarInstanceId::parse(raw).expect("valid sidebar id")
@@ -902,6 +902,22 @@ mod tests {
         });
         assert!(tick.contains("last 900ms (250ms mux)/1024B/1 spawns"));
         assert!(tick.contains("worst 1500ms (900ms mux)/300000B/40 spawns"));
+    }
+
+    #[test]
+    fn diagnostic_summary_describes_renderer_exit_without_cleanly_label() {
+        assert_eq!(
+            diagnostic_summary(&DiagEvent::RendererExit {
+                cause: RendererExitCause::SelfCloseEmptyTab,
+            }),
+            "renderer exited: self_close_empty_tab"
+        );
+        assert_eq!(
+            diagnostic_summary(&DiagEvent::RendererExit {
+                cause: RendererExitCause::DegradedGaveUp,
+            }),
+            "renderer exited: degraded_gave_up"
+        );
     }
 
     #[test]
