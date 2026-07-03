@@ -74,7 +74,8 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 
 **Reference** — `docs/reference/`
 - [cli.md](./docs/reference/cli.md) — CLI entry point and command map; grouped command details live in the `docs/reference/cli/` leaves below it.
-  - [getting-started.md](./docs/reference/cli/getting-started.md) — bootstrap and reach a room: `start`, `attach`, `remote`, `list`, `setup`, and `doctor`.
+  - [getting-started.md](./docs/reference/cli/getting-started.md) — bootstrap and reach a room: `start`, `attach`, `remote`, `web`, `list`, `setup`, and `doctor`.
+  - [web.md](./docs/reference/cli/web.md) — open a Zellij room in the browser and manage Zellij web server/token helpers.
   - [agents.md](./docs/reference/cli/agents.md) — run the fleet: `agents` launch and supervised runs, `message`, `transcript`, `pane`, `worktree`, `loop`, and the `@handle`/`#channel` addressing grammar.
   - [channel.md](./docs/reference/cli/channel.md) — durable named-channel commands and the `--channel` launch/send flag.
   - [feed.md](./docs/reference/cli/feed.md) — decisions, hooks, and trust: `feed`, `event`, `resolver`, `hooks`, and `trust`.

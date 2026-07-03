@@ -48,6 +48,7 @@ mod transcript;
 mod transcript_watch;
 mod trust;
 mod wakeup_pipe;
+mod web;
 mod workspace;
 mod worktree;
 mod zellij_health;

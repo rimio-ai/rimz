@@ -43,6 +43,7 @@ pub mod storage;
 pub mod testkit;
 pub mod trust;
 pub mod tui;
+pub mod web;
 pub mod workspace;
 pub mod worktree;
 

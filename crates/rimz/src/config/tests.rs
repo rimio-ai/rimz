@@ -64,6 +64,23 @@ fn missing_or_empty_file_is_default_off() {
 }
 
 #[test]
+fn web_zellij_config_is_per_machine_preference() {
+    let dir = tempdir().expect("tempdir");
+    let path = write(
+        &dir,
+        "[web.zellij]\nbase_url = \"https://devbox.example/zellij\"\nauto_start = false\n",
+    );
+
+    let config = load_no_fragments(&path).expect("load");
+
+    assert_eq!(
+        config.web.zellij.base_url.as_deref(),
+        Some("https://devbox.example/zellij")
+    );
+    assert!(!config.web.zellij.auto_start);
+}
+
+#[test]
 fn agents_home_fragments_merge_profiles_commands_and_teams() {
     let root = tempdir().expect("tempdir");
     write_agents_home_fragment(

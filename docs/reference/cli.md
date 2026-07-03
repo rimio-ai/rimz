@@ -19,13 +19,13 @@ rimz
 
 - **Drive agents live.** Launch them into panes and tabs with [`rimz agents`](./cli/agents.md#agents), then use [`rimz message`](./cli/agents.md#message-an-agent) to interrupt now with `--steer`, park for the next boundary, or schedule the earliest delivery time.
 - **Script the fleet.** Run one supervised agent turn with [`rimz agents … -p`](./cli/agents.md#supervised-runs--p) and branch on its exit code, or block on a human decision with [`rimz feed ask`](./cli/feed.md#feed-items-and-decisions).
-- **Reach a room anywhere.** Attach over SSH with [`rimz remote`](./cli/getting-started.md#remote-rooms), then attribute render-stream bytes with `rimz remote bandwidth` from inside the served room.
+- **Reach a room anywhere.** Attach over SSH with [`rimz remote`](./cli/getting-started.md#remote-rooms), open Zellij rooms in the browser with [`rimz web`](./cli/web.md), then attribute render-stream bytes with `rimz remote bandwidth` from inside the served room.
 
 ## Find a command
 
 | Group | Commands | Reference |
 | --- | --- | --- |
-| **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `list`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) |
+| **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `web`, `list`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) · [Web](./cli/web.md) |
 | **Work with agents** | `agents`, `message`, `transcript`, `pane`, `channel`, `worktree`, `loop` | [Agent control](./cli/agents.md) · [Channels](./cli/channel.md) |
 | **Decisions, hooks, and trust** | `feed`, `event`, `resolver`, `hooks`, `trust` | [Feed, resolvers, hooks, and trust](./cli/feed.md) |
 | **Configure and maintain** | `config`, `coverage`, `list-pets`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, `ping` | [Maintenance](./cli/maintenance.md) |

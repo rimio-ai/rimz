@@ -36,6 +36,7 @@ mod statusline;
 mod transcript;
 mod trust;
 mod version;
+mod web;
 mod workspace;
 mod worktree;
 use std::ffi::OsString;
@@ -89,6 +90,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Start(args)) => room::start(args, &globals),
         Some(Subcmd::Attach(args)) => room::attach(args, &globals),
         Some(Subcmd::Remote(args)) => remote::run(args, &globals),
+        Some(Subcmd::Web(args)) => web::run(args, &globals),
         None => room::start(
             StartArgs {
                 path: PathBuf::from("."),
@@ -154,6 +156,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         None | Some(Subcmd::Start(_)) => ("start", None, None),
         Some(Subcmd::Attach(_)) => ("attach", None, None),
         Some(Subcmd::Remote(args)) => (args.command_label(), None, None),
+        Some(Subcmd::Web(_)) => ("web", None, None),
         Some(Subcmd::Workspace(_)) => ("workspace", None, None),
         Some(Subcmd::List(_)) => ("list", None, None),
         Some(Subcmd::Stats(_)) => ("stats", None, None),
@@ -417,6 +420,8 @@ enum Subcmd {
     Attach(AttachArgs),
     /// Manage and connect to SSH remote rooms.
     Remote(remote::RemoteArgs),
+    /// Open a Zellij room in the browser.
+    Web(web::WebArgs),
     /// Workspace identity helpers.
     Workspace(workspace::WorkspaceArgs),
     /// Show known workspaces and which mux is currently running them.

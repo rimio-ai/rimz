@@ -189,6 +189,9 @@ fn zellij_options_args(
         "--auto-layout".to_owned(),
         bool_value(config.auto_layout),
     ];
+    if config.web_sharing {
+        args.extend(["--web-sharing".to_owned(), "on".to_owned()]);
+    }
     args.extend(mouse_click_through_args(
         config.mouse_click_through,
         parsed_version,

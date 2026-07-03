@@ -392,6 +392,10 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
     assert!(has("--auto-layout", "true"));
     assert!(has("--session-serialization", "false"));
     assert!(has("--disable-session-metadata", "true"));
+    assert!(
+        !args.iter().any(|arg| arg == "--web-sharing"),
+        "normal rooms defer web sharing to the user's Zellij config"
+    );
     for flag in [
         "--advanced-mouse-actions",
         "--mouse-hover-effects",
@@ -418,6 +422,20 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
     assert!(!unknown.iter().any(|arg| arg == "--mouse-click-through"));
     assert!(!unknown.iter().any(|arg| arg == "--advanced-mouse-actions"));
     assert!(!unknown.iter().any(|arg| arg == "--mouse-hover-effects"));
+}
+
+#[test]
+fn zellij_options_enable_web_sharing_for_web_born_rooms() {
+    let config = ZellijConfig {
+        web_sharing: true,
+        ..ZellijConfig::default()
+    };
+    let args = zellij_options_args(&config, Some((0, 44, 3)));
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--web-sharing" && pair[1] == "on"),
+        "{args:?}"
+    );
 }
 
 #[test]

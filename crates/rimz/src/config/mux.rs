@@ -25,6 +25,11 @@ impl From<&MachineConfig> for MultiplexerConfig {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ZellijConfig {
+    /// Runtime-only: `rimz web open` sets this on the mux config it threads
+    /// into a web-born room so Zellij accepts browser clients. It is not a
+    /// persisted user preference; normal rooms follow the user's Zellij config.
+    #[serde(skip)]
+    pub web_sharing: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mouse_mode: Option<bool>,
     pub mouse_click_through: bool,
@@ -73,6 +78,7 @@ pub struct ZellijConfig {
 impl Default for ZellijConfig {
     fn default() -> Self {
         Self {
+            web_sharing: false,
             mouse_mode: None,
             mouse_click_through: true,
             advanced_mouse_actions: None,

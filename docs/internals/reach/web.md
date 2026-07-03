@@ -2,66 +2,19 @@
 
 > See [DESIGN.md](../../../DESIGN.md) and [multiplexers.md](../sidebar/multiplexers.md) for the commitments this doc extends.
 
-This document defines the target shape for web access. The feature is Zellij-only in its first version. tmux remains first-class for core Rimz behaviour; web access is an attach convenience, not a correctness path.
+Rimz opens a Zellij room in the browser by delegating terminal transport and authentication to `zellij web` while keeping workspace resolution, session birth, sidebar layout, and diagnostics in Rimz.
 
 ## Contract
 
-Rimz exposes a workspace in the browser through Zellij's web server. Zellij owns the browser terminal, session transport, login tokens, cookies, TLS, remote terminal attach, and the `/session-name` URL scheme. Rimz owns workspace resolution, stable session naming, session/sidebar birth, URL construction, and diagnostics.
+Zellij owns the web server, browser terminal, session transport, login tokens, cookies, TLS, and the `/session-name` route. Rimz owns the workspace-to-session mapping, the Rimz sidebar birth path, URL construction, remote SSH tunneling, and fail-fast diagnostics when the selected backend or Zellij binary cannot serve web clients.
 
-Rimz does not proxy terminal I/O, implement browser auth, store Zellij login tokens, or scrape panes. The ledger, hooks, resolver bridge, and sidebar wakeups work the same way whether the attached client is a terminal emulator or a browser.
+The ledger, hooks, resolver bridge, and sidebar wakeups work the same way whether the attached client is a terminal emulator or a browser. Rimz never stores Zellij login tokens, puts them in URLs, proxies terminal I/O, or scrapes browser clients.
 
-## User shape
-
-```sh
-cd ~/code/terrain-lab
-rimz web open
-```
-
-`rimz web open` resolves the current workspace, selects the Zellij backend, ensures the Rimz session exists with the normal sidebar layout, ensures the Zellij web server is online, and prints or opens the session URL.
-
-The session URL is the Zellij web base URL plus the Rimz session name:
-
-```text
-<zellij-web-base>/<rimz-session-name>
-```
-
-For example:
-
-```text
-http://127.0.0.1:8082/rimz-home-me-code-terrain-lab
-```
-
-Behind a reverse proxy with Zellij's `web_client.base_url` set:
-
-```text
-https://devbox.example/zellij/rimz-home-me-code-terrain-lab
-```
-
-The route is the existing Rimz/Zellij session identity. There is no separate Rimz web session ID.
-
-## Session names
-
-Rimz session names are derived from the project root because the product invariant is `project repo == Rimz workspace == multiplexer session`.
-
-The session name is the `rimz-` prefix plus the slugified project root:
-
-```text
-rimz-<slugified-project-path>
-```
-
-The slug maps every character that is not ASCII alphanumeric or `_` to `-`, then collapses runs of `-` and trims the ends. `/home/me/code/terrain-lab` becomes `rimz-home-me-code-terrain-lab`.
-
-Encoding the full path keeps the name URL-safe, shell-friendly, and collision-free: the project root is already unique, so the slug needs no extra hash. `/` collapses to a single `-`, so the name stays one URL path segment rather than several route segments. The tradeoff is that the name is longer and embeds the local path — including home directories and any private customer or branch names in the path — directly in `zellij list-sessions` output and web URLs.
-
-The derivation can change between releases, so the name is not the durable identity — the `workspace_id` (a hash of the project root) is. When a launch derives a name that differs from the one in `workspace.json` and a session still answers to the recorded name, launch retires the old session and rebirths the workspace under the new name. The rename takes effect without stranding the running session or its sidebar; see [`ledger.md`](../sidebar/ledger.md).
-
-## Planned CLI
-
-Stage one keeps the surface small and delegates directly to `zellij web`:
+## CLI
 
 ```sh
-rimz web open [PATH] [--print] [--no-start]
-rimz web url [PATH] [--json]
+rimz web open [PATH] [--session <name>] [--print] [--no-start] [--json]
+rimz web url [PATH] [--session <name>] [--json]
 rimz web status [--json]
 rimz web start [--daemonize] [--ip <ip>] [--port <port>] [--cert <path>] [--key <path>]
 rimz web stop
@@ -71,119 +24,75 @@ rimz web token revoke <name>
 rimz web token revoke-all
 ```
 
-`rimz web` is an alias for `rimz web open`.
+`rimz web` is `rimz web open`. `open` resolves the workspace, requires the selected backend to be Zellij, ensures the Rimz room exists with the normal sidebar layout, births new rooms with Zellij `web_sharing on`, starts `zellij web --start --daemonize` when allowed and offline, prints the URL, and opens the local browser unless `--print` or `--json` is set. `url` resolves the same session and prints the URL without starting the server or birthing a room; it requires an existing Rimz workspace record so a URL never points at a bare Zellij session. `--session <name>` targets an existing Rimz workspace session by exact session name for local scripting and remote prep.
 
-`open` is workspace-aware. It must not only print a Zellij URL for a session that has never been born through Rimz, because a bare Zellij web route can create a normal Zellij session without Rimz's workspace record or sidebar layout.
+`status`, `start`, `stop`, and `token` are thin wrappers over Zellij's web CLI. Token commands relay only Zellij's output. `status --json`, `open --json`, and `url --json` emit versioned JSON with `version = "rimz.web.v1"`; the `open`/`url` payload includes `url`, `session`, `base_url`, `ip`, `port`, and `token_count`.
 
-`url` is pure URL construction after workspace resolution and status/config lookup. It does not start the web server unless paired with `open`.
+## Session names and URLs
 
-`start`, `stop`, `status`, and `token` are thin wrappers around Zellij's web CLI. Token commands print only what Zellij prints. Rimz never places tokens in URLs.
+Rimz session names come from the canonical project root: `rimz-<basename-slug>-<hash6>`. The slug is the root basename with non-ASCII-alphanumeric characters mapped to `-`, capped for short mux names; the six-character suffix comes from the workspace id. The durable identity remains the `workspace_id`, not the session string, so a future derivation change can retire and rebirth the room under a new name.
 
-When backend selection resolves to tmux, every `rimz web ...` command returns an unsupported-backend diagnostic with the selected backend and the normal `rimz attach` path.
-
-## Server ownership
-
-Zellij's web server is off by default. Rimz checks it with:
-
-```sh
-zellij web --status
-```
-
-When `rimz web open` needs to start it, it runs:
-
-```sh
-zellij web --start --daemonize
-```
-
-Explicit server options pass through to Zellij:
-
-```sh
-rimz web start --daemonize --ip 127.0.0.1 --port 8082
-rimz web start --daemonize --ip 0.0.0.0 --port 443 --cert /path/to/fullchain.pem --key /path/to/key.pem
-```
-
-Rimz treats the web server as host-local runtime state. A host reboot may leave the ledger intact while the Zellij web server is offline. Operators who need web access after reboot use Zellij config, systemd, or another host supervisor to start the web server.
-
-## URL sources
-
-The default base URL is Zellij's default:
+The browser URL is one path segment under the Zellij web base URL:
 
 ```text
-http://127.0.0.1:8082
+<zellij-web-base>/<rimz-session-name>
 ```
 
-`rimz web status` prefers the base URL reported by `zellij web --status`. External reverse-proxy hostnames are not discoverable from Zellij when the local server listens on `127.0.0.1`, so Rimz also supports a per-machine base URL:
+With the default Zellij web listener this is `http://127.0.0.1:8082/rimz-project-a1b2c3`. Behind a reverse proxy path, set `[web.zellij].base_url = "https://devbox.example/zellij"` so Rimz prints `https://devbox.example/zellij/rimz-project-a1b2c3`.
+
+## Server and config
+
+Rimz checks server state with `zellij web --status`, parses the Zellij 0.44.3 online/offline strings, and treats unknown output as a typed parse failure with the raw line in the diagnostic. The default base URL is `http://127.0.0.1:8082`; a configured `[web.zellij].base_url` overrides the URL users open, while the parsed status URL still supplies the loopback `ip` and `port` for remote tunneling.
 
 ```toml
-# ~/.config/rimz/preferences.toml
 [web.zellij]
 base_url = "https://devbox.example/zellij"
 auto_start = true
 ```
 
-This setting is per-machine, not project config. A committed project should not publish one contributor's private hostname, tunnel, or reverse-proxy path.
+This section is per-machine policy. It does not enter the project trust hash because it executes no command and commonly names private hostnames or local tunnels.
 
-Session names are generated as URL-safe ASCII, but URL construction still treats the session name as one path segment.
-
-## Zellij configuration
-
-Zellij can enable the web server from its own config:
+Zellij's own config still controls server defaults and sharing policy:
 
 ```text
 web_server true
 web_server_ip "127.0.0.1"
 web_server_port 8082
+web_sharing "on"
 ```
 
-When serving behind a reverse proxy path, Zellij's web client must know the path prefix:
+If a room already existed with Zellij web sharing off, restart the room through `rimz web open` or set `web_sharing "on"` in Zellij config before using the browser route. If Zellij config locks web sharing to `disabled`, Zellij rejects browser clients until that config changes and the session restarts.
+
+## Remote rooms
+
+`rimz remote connect <target> --web` opens the remote Zellij room in the local browser through an SSH local-forward tunnel, then proceeds to the normal terminal attach.
+
+The local process first runs a non-PTY prep command on the remote host:
 
 ```text
-web_client {
-    base_url "/zellij"
-}
+ssh -o ConnectTimeout=10 -- <host> '<PATH repair>; exec rimz web open --print --json ...'
 ```
 
-Rimz's configured `web.zellij.base_url` and Zellij's `web_client.base_url` must agree. If Zellij serves under `/zellij`, Rimz must construct routes under the same prefix.
+That remote `rimz web open` resolves or verifies the workspace, births the Rimz room with `web_sharing on` when the target is a path, starts the remote Zellij web server when allowed, and returns `rimz.web.v1`. A tmux room, old remote Rimz, old Zellij, or disabled web capability fails here before the terminal attach starts.
+
+When the payload reports `token_count = 0`, local Rimz runs `rimz web token create` remotely and relays Zellij's one-time token output under a short banner. Rimz never stores the token and never puts it in the URL.
+
+The local tunnel uses a stable deterministic port derived from the session name in `8300..8399`, scanning to the next free port on collision; `--web-port <port>` overrides it and fails if the port is already in use. The tunnel always forwards to remote `127.0.0.1:<remote-web-port>` and is supervised separately from the interactive attach with the same established-link reconnect policy. The browser URL is `http://127.0.0.1:<local-port>/<session>`, so browser cookies remain tied to a stable local origin across reconnects and repeat runs.
+
+The remote path deliberately uses three SSH connections: prep, tunnel, and attach. Key or agent authentication is the intended shape; password authentication prompts for each connection. The tunnel is not coupled to the attach ControlMaster, so it can reconnect independently when the terminal link drops.
 
 ## Security
 
-A browser-attached Zellij session is shell access as the local user. Treat a login token like SSH access to the account.
+A browser-attached Zellij session is shell access as the room's user. Treat a login token like SSH access to the account.
 
-Rules:
-
-- Zellij authentication stays mandatory. Rimz never bypasses it.
-- Login tokens are never embedded in URLs, query strings, logs, feed items, or workspace state.
-- Read-only tokens are for observation only, but terminal output can still contain secrets.
+- Zellij authentication stays mandatory.
+- Login tokens stay out of URLs, query strings, logs, feed items, and workspace state.
+- Read-only tokens are observation-only, while terminal output can still contain secrets.
 - HTTPS is required when listening on anything other than `127.0.0.1`.
-- A reverse proxy is the supported shape for untrusted networks, because Zellij's web server does not provide its own rate limiting.
-- Web configuration is local machine policy. It does not enter the project trust hash unless a future project config field executes a command.
+- A reverse proxy with rate limiting is the supported shape for untrusted networks.
 
-The safest remote shape is:
+The safest public shape is:
 
 ```text
 browser -> HTTPS reverse proxy with rate limiting -> zellij web on 127.0.0.1
 ```
-
-## Remote terminal attach
-
-Zellij can also attach to a web-served session from another terminal:
-
-```sh
-zellij attach https://devbox.example/zellij/rimz-terrain-lab-<path-hash> --token <login-token>
-```
-
-Rimz does not need to wrap this in the first version. The same session URL from `rimz web url` is enough for users who prefer Zellij's native remote attach command.
-
-## Testing
-
-Implementation tests cover:
-
-- URL construction from a base URL plus Rimz session name.
-- reverse-proxy path handling.
-- `zellij web --status` parsing.
-- `zellij web --start --daemonize` argv construction.
-- token command argv construction.
-- unsupported-backend diagnostics for tmux.
-- workspace-first behaviour: `open` ensures the Rimz session before returning the browser URL.
-
-Tests do not launch a real browser. Zellij integration tests self-skip when the binary is absent and use the existing Zellij trace fixture for argv-level checks.

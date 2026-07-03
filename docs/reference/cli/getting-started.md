@@ -16,6 +16,7 @@ rimz                        # open the room and drop in
 | Start or reattach a room for a path | `rimz start [PATH]` |
 | Attach by directory or exact session name | `rimz attach [SESSION]` |
 | Connect to a remote room over SSH | `rimz remote connect <alias-or-target>` |
+| Open a Zellij room in the browser | `rimz web open [PATH]` |
 | Save, update, rename, list, or remove remote aliases | `rimz remote add` / `update` / `rename` / `list` / `rm` |
 | Attribute render-stream bytes in the current room | `rimz remote bandwidth` |
 | Find known rooms and their live backend | `rimz list` |
@@ -47,6 +48,7 @@ When the previous incarnation died, `start` prints a notice such as `rimz: previ
 ```sh
 rimz remote add dev-box dev-box:query-engine     # save an alias
 rimz remote connect dev-box                       # attach the saved room over SSH
+rimz remote connect dev-box --web                 # attach and open the remote Zellij web UI locally
 rimz remote connect agent@prod-box:/srv/query-engine
 rimz remote bandwidth --secs 5                    # attribute pane write-rate in this room
 ```
@@ -61,10 +63,11 @@ A raw target is `[user@]host:<session-or-path>`. After the colon, a value contai
 - Reconnect supervision is on by default. `--no-reconnect` hands the link to one SSH run; `remote add --no-reconnect` saves that as the alias default.
 - `remote connect --reset` and `remote reset` pass `--no-resume` to the remote `rimz`, so a remote room comes up empty instead of recovering; `remote add --no-resume` saves that birth behavior.
 - `--attach`, `--no-attach`, and `--print` mirror local behavior; `--print` emits the SSH command instead of running it.
+- `--web` runs remote `rimz web open --print --json`, starts a supervised SSH local-forward tunnel to the remote Zellij web server, prints `web: http://127.0.0.1:<port>/<session>`, opens the local browser best-effort, then attaches normally. `--web-port <port>` pins the local browser origin; otherwise Rimz derives a stable port from the session name in `8300..8399`.
 - For `remote add` and `remote update`, `--mux` given anywhere on the invocation is saved on the alias; `rimz remote connect --mux <name>` keeps `--mux` as a per-invocation override.
 - `rimz remote bandwidth [--secs N] [--json]` runs on the host serving the room and samples `/proc` to attribute per-pane process write-rate on both backends; tmux reports pane pids natively, and Zellij pane pids resolve through `/proc`. Use it inside the room when a remote attach looks chatty; full-screen TUIs such as agents mid-turn or system monitors should dominate the report.
 
-Link-health, reconnect mechanics, and bandwidth attribution are in [remote.md](../../internals/reach/remote.md).
+Link-health, web tunneling, reconnect mechanics, and bandwidth attribution are in [remote.md](../../internals/reach/remote.md).
 
 ## List rooms
 

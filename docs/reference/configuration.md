@@ -241,6 +241,16 @@ codex = false
 
 These opt this machine into background remote-control infrastructure shown in the `rimzd` daemon view. `claude = true` adds `claude remote-control` to the daemon column when `claude` is on PATH; `codex = true` ensures the managed standalone Codex daemon before the room opens (a `codex` CLI on PATH already adds the per-session app-server broker). `rimz start` refuses when an installed enabled host has a fixable misconfiguration, such as incompatible Claude version or settings. An enabled host whose agent is not installed is skipped so the room still starts; `rimz doctor` reports that advisory with the install fix. The mechanics are in [provider.md](../internals/agents/provider.md) and the security boundary in [security.md](../guide/security.md).
 
+### Web access
+
+```toml
+[web.zellij]
+base_url = "https://devbox.example/zellij"
+auto_start = true
+```
+
+`[web.zellij]` tunes browser access through Zellij's web server. `base_url` is the URL prefix Rimz prints for `rimz web open` and `rimz web url`, useful when a reverse proxy serves Zellij under a public host or path. `auto_start` lets `rimz web open` run `zellij web --start --daemonize` when the server is offline; set it to `false` when another supervisor owns the server. These keys are per-machine and outside the project trust hash because they run no command and often name private hostnames or tunnels. Command details are in [web.md](./cli/web.md), and remote browser tunnels are in [remote.md](../internals/reach/remote.md#web-access).
+
 ### Daemon view
 
 ```toml

@@ -10,6 +10,16 @@ The remote PTY carries the local `$TERM`. Portable names such as `xterm-256color
 
 The print and one-shot paths use a single `ssh -t` invocation. Every attach enables `-o Compression=yes`; sshd negotiates it and an sshd that disallows compression continues uncompressed. The supervised path adds a PID-scoped ControlMaster socket under the local runtime directory so a second SSH channel can measure the same TCP connection without opening a new transport. The socket directory must be owned by the current user and private (`0700`); when Rimz cannot guarantee that, it skips ControlMaster/probes and attaches with plain SSH.
 
+## Web Access
+
+`rimz remote connect <target> --web` opens a remote Zellij room in the local browser before entering the normal SSH attach. The local process runs remote `rimz web open --print --json` as a non-PTY prep command, parses the `rimz.web.v1` payload, creates and relays a first-run Zellij web token when the remote token list is empty, chooses a stable local port from the session name, starts an SSH `-L 127.0.0.1:<local>:127.0.0.1:<remote>` tunnel, waits for the local port to accept connections, prints `web: http://127.0.0.1:<local>/<session>`, opens the browser best-effort, and then proceeds to attach.
+
+The prep command is the fail-fast boundary. A tmux-selected room, remote Rimz without `rimz web`, Zellij without the `web` subcommand, or a remote room error aborts before the terminal attach starts and surfaces the remote diagnostic. Path targets birth the room with Zellij `web_sharing on`; exact-session targets rely on that existing session's Zellij sharing state.
+
+The tunnel is a separate SSH child with its own reconnect loop using the same gatetime and backoff as the attach supervisor. It is deliberately independent of the attach ControlMaster so browser access survives terminal-link drops and reconnects on its own. `--web-port <port>` pins the local browser origin; without it Rimz hashes the session name into `8300..8399` and scans to the next free port on collision. Ctrl-C or attach exit drops the guard and kills the tunnel child.
+
+Remote web uses three SSH connections: prep, tunnel, and attach. Key or agent authentication gives the intended no-prompt flow; password authentication prompts per connection.
+
 ## Reconnect Policy
 
 OpenSSH keepalives stay at `ServerAliveInterval=5` and `ServerAliveCountMax=3`, with `Compression=yes` on the same attach transport, so a hard transport loss reaches exit `255` in about fifteen seconds. A session must live past the gatetime (`30s` by default, `RIMZ_REMOTE_GATETIME_MS` in tests) before exit `255` counts as a dropped established link; an initial auth, host-key, or connect failure is fatal and does not loop a password prompt.

@@ -46,6 +46,7 @@ mod resume;
 mod sentry;
 mod sidebar;
 mod theme;
+mod web;
 mod worktree;
 
 pub use accounts::{AccountsConfig, UsageLimitUsd};
@@ -88,6 +89,7 @@ pub use theme::{
     InlineAnsiColors, InlinePalette, InlinePrimaryColors, InlineSelectionColors, ThemeConfig,
     ThemeProviderStyle, ThemeStyle,
 };
+pub use web::{WebPrefs, ZellijWebPrefs};
 pub use worktree::{WorktreeBase, WorktreeConfig};
 
 const CONFIG_FILE: &str = "config.toml";
@@ -169,6 +171,7 @@ pub struct MachineConfig {
     pub resume: ResumeConfig,
     pub harness: HarnessConfig,
     pub sentry: SentryConfig,
+    pub web: WebPrefs,
     #[serde(skip_serializing_if = "ThemeConfig::is_unset")]
     pub theme: ThemeConfig,
     pub agents: AgentsConfig,
@@ -367,6 +370,7 @@ impl MachineConfig {
             resume: core.resume,
             harness: core.harness,
             sentry: core.sentry,
+            web: core.web,
             theme,
             agents,
             r#loop: loop_,
@@ -549,6 +553,7 @@ struct CoreConfig {
     resume: ResumeConfig,
     harness: HarnessConfig,
     sentry: SentryConfig,
+    web: WebPrefs,
 }
 
 #[derive(Default, Deserialize)]

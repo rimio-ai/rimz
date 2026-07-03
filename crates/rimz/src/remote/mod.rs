@@ -11,6 +11,7 @@
 
 pub mod aliases;
 pub mod link;
+pub mod web;
 
 use std::path::Path;
 use std::time::Duration;

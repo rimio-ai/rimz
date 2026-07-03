@@ -31,6 +31,35 @@ fn main() {
         std::process::exit(1);
     }
 
+    if cli.first().is_some_and(|arg| arg == "web") {
+        match cli.get(1).map(String::as_str) {
+            Some("--help") => {
+                write_stdout("zellij-web");
+                return;
+            }
+            Some("--status") => {
+                let status = env::var("RIMZ_TEST_ZELLIJ_WEB_STATUS").unwrap_or_else(|_| {
+                    "Web server is offline, checked: http://127.0.0.1:8082".to_owned()
+                });
+                write_stdout_raw(&status);
+                return;
+            }
+            Some("--list-tokens") => {
+                if let Ok(tokens) = env::var("RIMZ_TEST_ZELLIJ_WEB_TOKENS") {
+                    write_stdout_raw(&tokens);
+                }
+                return;
+            }
+            Some("--start")
+            | Some("--stop")
+            | Some("--create-token")
+            | Some("--create-read-only-token")
+            | Some("--revoke-token")
+            | Some("--revoke-all-tokens") => return,
+            _ => {}
+        }
+    }
+
     if cli
         .windows(2)
         .any(|window| window[0] == "action" && window[1] == "list-clients")

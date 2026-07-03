@@ -54,6 +54,12 @@
 # spend_window = "session"            # cockpit & provider headline window: "session", "24h", or "today"
 ## trunk = "develop"                  # optional preferred branch for worktree comparison stats
 
+[web.zellij]
+# Zellij browser access. base_url is the URL users open; set it when a reverse
+# proxy serves Zellij under a public host or path.
+## base_url = "https://devbox.example/zellij"
+# auto_start = true                   # `rimz web open` starts `zellij web` when offline
+
 [zellij]
 # Critical room invariants Rimz always applies:
 mouse_click_through = true            # single click on a card jumps to the agent (Zellij >= 0.44.0)
