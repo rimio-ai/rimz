@@ -99,6 +99,39 @@ fn multiple_client_views_stick_to_prior_or_take_freshest_entry() {
 }
 
 #[test]
+fn multiple_client_views_ignore_prior_missing_from_live_frame() {
+    let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let stale = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+    let prior = PaneFrame {
+        focused_pane: Some(stale.clone()),
+        ..assemble_frame(
+            vec![
+                pane("terminal_1", "tab_0", Some("zsh"), false),
+                pane("terminal_2", "tab_1", Some("codex"), false),
+                pane("terminal_3", "tab_2", Some("vim"), false),
+            ],
+            6,
+            "rimz-test",
+        )
+    };
+
+    let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), false),
+            pane("terminal_2", "tab_1", Some("codex"), false),
+        ],
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        client_viewed: &[first.clone(), second, stale],
+        prior: Some(&prior),
+    });
+
+    assert_eq!(frame.focused_pane, Some(first));
+}
+
+#[test]
 fn detached_focus_uses_prior_then_single_raw_mark() {
     let prior_focus = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let prior = PaneFrame {

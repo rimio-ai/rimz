@@ -447,7 +447,7 @@ pub(crate) fn resolve_session_focus(
     match live_viewed.as_slice() {
         [pane] => return Some((*pane).clone()),
         panes if panes.len() > 1 => {
-            if let Some(prior) = prior.filter(|prior| client_viewed.contains(prior)) {
+            if let Some(prior) = prior.filter(|prior| panes.contains(prior)) {
                 return Some(prior.clone());
             }
             return panes.first().map(|pane| (*pane).clone());
