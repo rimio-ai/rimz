@@ -87,7 +87,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     } = input;
     let mut turn_error_updated = false;
     if let Some(marker) = observed_turn_error {
-        turn_error_updated |= merge_turn_error_marker_and_transcript(
+        turn_error_updated |= merge_turn_error_marker_and_chat(
             workspace,
             ledger,
             agent,
@@ -96,7 +96,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
             marker,
         );
     } else if let Some(marker) = agent.observe_turn_error_from_hook(event_name, payload) {
-        turn_error_updated |= merge_turn_error_marker_and_transcript(
+        turn_error_updated |= merge_turn_error_marker_and_chat(
             workspace,
             ledger,
             agent,
@@ -107,7 +107,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     } else if turn_error_refresh_event(event_name)
         && let Some(marker) = agent.observe_turn_error(payload)
     {
-        turn_error_updated |= merge_turn_error_marker_and_transcript(
+        turn_error_updated |= merge_turn_error_marker_and_chat(
             workspace,
             ledger,
             agent,

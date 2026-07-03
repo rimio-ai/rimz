@@ -636,6 +636,10 @@ pub fn compose_channel(
     }
 }
 
+pub fn path_basename(path: &str) -> Option<&str> {
+    path.rsplit('/').next().filter(|value| !value.is_empty())
+}
+
 /// The agent's channel — the lane it cooperates in: explicit named lane, else
 /// branch, else worktree directory basename plus in-place team when present.
 /// `None` when the agent runs outside any channel context.

@@ -17,8 +17,7 @@ use crate::workspace::ResolvedWorkspace;
 use super::{
     AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest, AskExpiry,
     EventLogRotationOutcome, Ledger, LedgerErr, Result, StatePaths, WorkspaceRewriteOutcome,
-    event_log, feed_store, lock, message_store, runtime, snapshot, transcript_log,
-    workspace_record,
+    event_log, feed_store, lock, message_store, runtime, snapshot, workspace_record,
 };
 
 mod debounce;
@@ -312,22 +311,17 @@ impl Ledger {
     /// lock so partial writes can't surface to the sidebar.
     #[must_use = "durability barrier; check the result"]
     pub fn push_feed_item(&self, item: &FeedItem, session_name: &str) -> Result<()> {
-        self.push_feed_item_superseding(item, None, session_name, None)
-            .map(|_| ())
+        self.push_feed_item_superseding(item, None, session_name)
     }
 
-    /// [`Self::push_feed_item`] plus same-cycle superseding and an optional
-    /// transcript append. The feed push remains authoritative: transcript
-    /// append errors are returned for warning logs after wakeups, not promoted
-    /// into a failed ask.
+    /// [`Self::push_feed_item`] plus same-cycle superseding.
     #[must_use = "durability barrier; check the result"]
     pub fn push_feed_item_superseding(
         &self,
         item: &FeedItem,
         supersede: Option<(&str, &str)>,
         session_name: &str,
-        transcript: Option<&transcript_log::TranscriptEntry>,
-    ) -> Result<Option<transcript_log::TranscriptLogErr>> {
+    ) -> Result<()> {
         self.commit(PublishPolicy::Skip, |txn| {
             expiry::sweep_dead_owned_items_debounced(txn, session_name)?;
             if let Some((source, agent_id)) = supersede {
@@ -341,9 +335,7 @@ impl Ledger {
             }
             feed_store::write(&txn.paths.feed_dir, item)?;
             txn.append(&EventEnvelope::feed_pushed(item, session_name))?;
-            let transcript_err =
-                transcript.and_then(|entry| transcript_log::append_locked(txn.paths, entry).err());
-            Ok(transcript_err)
+            Ok(())
         })
     }
 

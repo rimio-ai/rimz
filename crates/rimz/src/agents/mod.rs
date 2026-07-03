@@ -47,6 +47,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::chat::{AskAnswer, AskQuestion};
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::harness::run::PermissionMode;
 
@@ -90,9 +91,7 @@ pub(crate) use state::{
     shortest_window_running,
 };
 pub use state::{PendingRefill, RateLimitsCache};
-pub use transcript::{
-    AskAnswer, AskOption, AskQuestion, ChatEntry, TranscriptMessage, TranscriptRole, answers_text,
-};
+pub use transcript::{TranscriptMessage, TranscriptRole};
 pub use transcript_fs::read_transcript_lines;
 pub(crate) use transcript_fs::read_transcript_tail;
 

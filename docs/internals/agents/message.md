@@ -265,7 +265,7 @@ The store exposes `list()` (live records) and `list_pending()` (`Queued` records
 
 Routing text to an agent is the write side; the transcript log is the durable record of the resulting conversation, and `rimz transcript` reads it back as a chat timeline. The log is Rimz-owned, distinct from a provider's native session files, so ended agents, past channels, and their asks and answers stay visible after those native files rotate away or leave the live snapshot.
 
-Hook and resolver paths append entries to `transcript/<bucket-start>.jsonl`, append-only and under the workspace lock. `[transcript] file_days` sets the bucket width for file-size control ([configuration.md](../../reference/configuration.md)); buckets are never pruned, and reads sort by recorded timestamp, so a bucket boundary carries no ordering meaning. Each entry stores a kind, the receiving agent's identity and channel, a timestamp, the text, and the structured `from`, `questions`, or `answers` its kind needs. Six kinds cover the conversation surface:
+Hook and resolver paths append entries to fixed 7-day buckets at `transcript/<bucket-start>.jsonl`, append-only and under the workspace lock. Buckets are never pruned, and reads sort by recorded timestamp, so a bucket boundary carries no ordering meaning. Each entry stores a kind, the receiving agent's identity and channel, a timestamp, the text, and the structured `from`, `questions`, or `answers` its kind needs. Six kinds cover the conversation surface:
 
 | Kind | Records | Reads back as |
 | --- | --- | --- |
@@ -282,7 +282,7 @@ A delivery becomes a `Message` entry when the receiver's turn-start hook parses 
 
 Two nearby reads are not this log. Supervised-run streaming (`agents wait --stream`, `--output-format stream-json`) tails the provider-native transcript through each adapter's `parse_transcript_messages` ([harness.md → Supervised runs](./harness.md#supervised-runs)), and the context-fill and spend gauges read those same native files ([agent.md → Enrichment](./agent.md#enrichment)). The audit trail below is a third log: operational `message.*` events that carry no message content.
 
-Domain types: [`ledger/transcript_log.rs`](../../../crates/rimz/src/ledger/transcript_log.rs) for the durable log, [`agents/transcript.rs`](../../../crates/rimz/src/agents/transcript.rs) for the chat projection.
+Domain types: [`chat.rs`](../../../crates/rimz/src/chat.rs) for the durable log, [`cli/transcript/`](../../../crates/rimz/src/cli/transcript/) for the chat projection.
 
 ## Audit trail
 

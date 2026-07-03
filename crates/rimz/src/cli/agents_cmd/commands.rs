@@ -494,7 +494,6 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
         &workspace.project_root,
         adapter,
         machine_config.harness.rtk,
-        machine_config.transcript.file_days,
         &launch_invocation,
     )?;
     supervised::preflight_agent(adapter)?;

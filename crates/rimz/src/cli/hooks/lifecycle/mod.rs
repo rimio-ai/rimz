@@ -2,13 +2,14 @@ use super::*;
 
 use std::borrow::Cow;
 
+mod chat;
 mod context;
 mod delivery;
 mod identity;
 mod observe;
 mod rotate;
-mod transcript;
 
+use chat::*;
 use context::*;
 use delivery::*;
 use identity::{
@@ -16,7 +17,6 @@ use identity::{
 };
 use observe::{expiry_scope_for_event_name, record_lifecycle_observation};
 use rotate::*;
-use transcript::*;
 
 pub(super) use identity::fill_root_launch_identity;
 #[cfg(test)]
@@ -78,13 +78,13 @@ pub(super) fn handle_lifecycle_hook(
     if let Some(recorded) = recorded.as_ref() {
         record_run_lifecycle(ledger, agent, event_name, payload, recorded);
         if let Err(err) =
-            record_transcript_conversation(workspace, ledger, agent, event_name, payload, recorded)
+            record_chat_conversation(workspace, ledger, agent, event_name, payload, recorded)
         {
             warn!(
                 agent = agent.descriptor().kind,
                 event = %event_name,
                 error = %err,
-                "lifecycle: failed to record transcript entry",
+                "lifecycle: failed to record chat entry",
             );
         }
         confirm_sent_message_for_lifecycle(ledger, agent, recorded, &workspace.session_name);

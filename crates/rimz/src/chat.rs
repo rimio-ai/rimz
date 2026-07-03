@@ -1,8 +1,8 @@
-//! Rolling Rimz-owned transcript log.
+//! Durable Rimz-owned cross-provider chat log.
 //!
-//! The log is append-only JSONL under `transcript/<bucket-start>.jsonl`. File
-//! buckets cap individual file size; reads return entries sorted by timestamp,
-//! so bucket boundaries never carry ordering meaning.
+//! The log is append-only JSONL under `transcript/<bucket-start>.jsonl` in the
+//! workspace state root. The directory name stays for compatibility; this chat
+//! log is distinct from provider-native transcript files.
 
 use std::fs;
 use std::io;
@@ -12,15 +12,14 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agents::{AskAnswer, AskQuestion};
 use crate::ids::{AgentKind, AgentSessionId, RequestId};
 use crate::ledger::{StatePaths, atomic, lock};
 
-const DEFAULT_FILE_DAYS: u32 = 7;
+const FILE_DAYS: u32 = 7;
 const SECONDS_PER_DAY: i64 = 86_400;
 
 #[derive(Debug, thiserror::Error)]
-pub enum TranscriptLogErr {
+pub enum ChatLogErr {
     #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
     #[error(transparent)]
@@ -35,11 +34,11 @@ pub enum TranscriptLogErr {
     Json(#[from] serde_json::Error),
 }
 
-pub type Result<T> = std::result::Result<T, TranscriptLogErr>;
+pub type Result<T> = std::result::Result<T, ChatLogErr>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TranscriptKind {
+pub enum ChatKind {
     Prompt,
     Message,
     Assistant,
@@ -49,7 +48,7 @@ pub enum TranscriptKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TranscriptEntry {
+pub struct ChatEntry {
     pub at: Timestamp,
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
@@ -61,7 +60,7 @@ pub struct TranscriptEntry {
     pub profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
-    pub entry: TranscriptKind,
+    pub entry: ChatKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<RequestId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,18 +72,135 @@ pub struct TranscriptEntry {
     pub answers: Vec<AskAnswer>,
 }
 
-/// Append one transcript entry. Callers must not already hold the workspace
-/// lock; append takes it to serialize hook children writing long JSONL lines.
-#[must_use = "durability barrier; check the result"]
-pub fn append(paths: &StatePaths, entry: &TranscriptEntry) -> Result<()> {
-    let _guard = lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
-    append_locked(paths, entry)
+impl ChatEntry {
+    pub fn new(
+        at: Timestamp,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        entry: ChatKind,
+        text: String,
+    ) -> Self {
+        Self {
+            at,
+            kind,
+            agent_id,
+            channel: None,
+            name: None,
+            profile: None,
+            role: None,
+            entry,
+            request_id: None,
+            from: None,
+            text,
+            questions: Vec::new(),
+            answers: Vec::new(),
+        }
+    }
 }
 
-/// Append one transcript entry while the caller holds the workspace lock.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskQuestion {
+    pub question: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<AskOption>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "AskOptionWire", into = "AskOptionWire")]
+pub struct AskOption {
+    pub label: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum AskOptionWire {
+    Label(String),
+    Detailed {
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+}
+
+impl From<AskOptionWire> for AskOption {
+    fn from(value: AskOptionWire) -> Self {
+        match value {
+            AskOptionWire::Label(label) => Self {
+                label,
+                description: None,
+            },
+            AskOptionWire::Detailed { label, description } => Self { label, description },
+        }
+    }
+}
+
+impl From<AskOption> for AskOptionWire {
+    fn from(value: AskOption) -> Self {
+        match value.description {
+            Some(description) => AskOptionWire::Detailed {
+                label: value.label,
+                description: Some(description),
+            },
+            None => AskOptionWire::Label(value.label),
+        }
+    }
+}
+
+impl From<String> for AskOption {
+    fn from(label: String) -> Self {
+        Self {
+            label,
+            description: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskAnswer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chosen: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+pub fn answers_text(answers: &[AskAnswer]) -> String {
+    answers
+        .iter()
+        .filter_map(|answer| {
+            let mut line = answer
+                .chosen
+                .iter()
+                .filter_map(|choice| non_empty(choice))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if line.is_empty() {
+                return None;
+            }
+            if let Some(note) = answer.note.as_deref().and_then(non_empty) {
+                line.push_str(" (note: ");
+                line.push_str(note);
+                line.push(')');
+            }
+            Some(line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn non_empty(text: &str) -> Option<&str> {
+    let text = text.trim();
+    (!text.is_empty()).then_some(text)
+}
+
+/// Append one chat entry. Callers must not already hold the workspace
+/// lock; append takes it to serialize hook children writing long JSONL lines.
 #[must_use = "durability barrier; check the result"]
-pub(crate) fn append_locked(paths: &StatePaths, entry: &TranscriptEntry) -> Result<()> {
-    fs::create_dir_all(&paths.transcript_dir).map_err(|source| TranscriptLogErr::Io {
+pub fn append(paths: &StatePaths, entry: &ChatEntry) -> Result<()> {
+    let _guard = lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+    fs::create_dir_all(&paths.transcript_dir).map_err(|source| ChatLogErr::Io {
         path: paths.transcript_dir.clone(),
         source,
     })?;
@@ -94,18 +210,18 @@ pub(crate) fn append_locked(paths: &StatePaths, entry: &TranscriptEntry) -> Resu
     Ok(())
 }
 
-pub fn read_all(paths: &StatePaths) -> Result<Vec<TranscriptEntry>> {
-    let mut files = transcript_files(&paths.transcript_dir)?;
+pub fn read_all(paths: &StatePaths) -> Result<Vec<ChatEntry>> {
+    let mut files = chat_files(&paths.transcript_dir)?;
     files.sort();
 
     let mut entries = Vec::new();
     for path in files {
-        let text = fs::read_to_string(&path).map_err(|source| TranscriptLogErr::Io {
+        let text = fs::read_to_string(&path).map_err(|source| ChatLogErr::Io {
             path: path.clone(),
             source,
         })?;
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            if let Ok(entry) = serde_json::from_str::<TranscriptEntry>(line) {
+            if let Ok(entry) = serde_json::from_str::<ChatEntry>(line) {
                 entries.push(entry);
             }
         }
@@ -144,12 +260,12 @@ fn text_value(value: &Value) -> Option<String> {
         .flatten()
 }
 
-fn transcript_files(dir: &Path) -> Result<Vec<PathBuf>> {
+fn chat_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(source) => {
-            return Err(TranscriptLogErr::Io {
+            return Err(ChatLogErr::Io {
                 path: dir.to_path_buf(),
                 source,
             });
@@ -157,7 +273,7 @@ fn transcript_files(dir: &Path) -> Result<Vec<PathBuf>> {
     };
     let mut files = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|source| TranscriptLogErr::Io {
+        let entry = entry.map_err(|source| ChatLogErr::Io {
             path: dir.to_path_buf(),
             source,
         })?;
@@ -170,15 +286,7 @@ fn transcript_files(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn bucket_path(paths: &StatePaths, at: Timestamp) -> PathBuf {
-    paths.transcript_dir.join(bucket_file_name(at, file_days()))
-}
-
-fn file_days() -> u32 {
-    std::env::var(crate::harness::run::ENV_TRANSCRIPT_FILE_DAYS)
-        .ok()
-        .and_then(|raw| raw.parse::<u32>().ok())
-        .filter(|days| *days > 0)
-        .unwrap_or(DEFAULT_FILE_DAYS)
+    paths.transcript_dir.join(bucket_file_name(at, FILE_DAYS))
 }
 
 fn bucket_file_name(at: Timestamp, file_days: u32) -> String {
@@ -193,8 +301,8 @@ fn bucket_file_name(at: Timestamp, file_days: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::AskOption;
     use crate::ids::WorkspaceId;
+    use serde_json::json;
     use tempfile::tempdir;
 
     fn ts(raw: &str) -> Timestamp {
@@ -208,22 +316,14 @@ mod tests {
         (dir, paths)
     }
 
-    fn entry(entry: TranscriptKind, text: &str, at: &str) -> TranscriptEntry {
-        TranscriptEntry {
-            at: ts(at),
-            kind: AgentKind::new_unchecked("claude"),
-            agent_id: AgentSessionId::from("sess-1"),
-            channel: None,
-            name: None,
-            profile: None,
-            role: None,
+    fn entry(entry: ChatKind, text: &str, at: &str) -> ChatEntry {
+        ChatEntry::new(
+            ts(at),
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("sess-1"),
             entry,
-            request_id: None,
-            from: None,
-            text: text.to_owned(),
-            questions: Vec::new(),
-            answers: Vec::new(),
-        }
+            text.to_owned(),
+        )
     }
 
     #[test]
@@ -251,14 +351,14 @@ mod tests {
     }
 
     #[test]
-    fn transcript_entry_round_trips_and_skips_empty_optionals() {
+    fn chat_entry_round_trips_and_skips_empty_optionals() {
         for kind in [
-            TranscriptKind::Prompt,
-            TranscriptKind::Message,
-            TranscriptKind::Assistant,
-            TranscriptKind::Ask,
-            TranscriptKind::Answer,
-            TranscriptKind::Error,
+            ChatKind::Prompt,
+            ChatKind::Message,
+            ChatKind::Assistant,
+            ChatKind::Ask,
+            ChatKind::Answer,
+            ChatKind::Error,
         ] {
             let entry = entry(kind, "hello", "2026-06-01T00:00:00Z");
             let json = serde_json::to_string(&entry).expect("serialize");
@@ -266,14 +366,14 @@ mod tests {
             assert!(!json.contains("channel"));
             assert!(!json.contains("questions"));
             assert!(!json.contains("answers"));
-            let decoded: TranscriptEntry = serde_json::from_str(&json).expect("decode");
+            let decoded: ChatEntry = serde_json::from_str(&json).expect("decode");
             assert_eq!(decoded, entry);
         }
     }
 
     #[test]
-    fn transcript_entry_round_trips_structured_asks_and_answers() {
-        let mut entry = entry(TranscriptKind::Ask, "lead-in", "2026-06-01T00:00:00Z");
+    fn chat_entry_round_trips_structured_asks_and_answers() {
+        let mut entry = entry(ChatKind::Ask, "lead-in", "2026-06-01T00:00:00Z");
         entry.questions = vec![AskQuestion {
             question: "Choose deployment path?".to_owned(),
             options: vec![
@@ -290,7 +390,7 @@ mod tests {
         let json = serde_json::to_string(&entry).expect("serialize");
         assert!(json.contains("questions"));
         assert!(json.contains("answers"));
-        let decoded: TranscriptEntry = serde_json::from_str(&json).expect("decode");
+        let decoded: ChatEntry = serde_json::from_str(&json).expect("decode");
 
         assert_eq!(decoded, entry);
     }
@@ -341,8 +441,8 @@ mod tests {
     fn read_all_sorts_by_timestamp_and_skips_malformed_lines() {
         let (_dir, paths) = paths();
         fs::create_dir_all(&paths.transcript_dir).expect("mkdir transcript");
-        let first = entry(TranscriptKind::Prompt, "first", "2026-06-01T00:00:02Z");
-        let second = entry(TranscriptKind::Assistant, "second", "2026-06-01T00:00:01Z");
+        let first = entry(ChatKind::Prompt, "first", "2026-06-01T00:00:02Z");
+        let second = entry(ChatKind::Assistant, "second", "2026-06-01T00:00:01Z");
         fs::write(
             paths.transcript_dir.join("2026-06-01.jsonl"),
             format!("{}\nnot json\n", serde_json::to_string(&first).unwrap()),
@@ -368,7 +468,7 @@ mod tests {
     #[test]
     fn append_creates_transcript_dir_lazily() {
         let (_dir, paths) = paths();
-        let entry = entry(TranscriptKind::Prompt, "hello", "2026-06-01T00:00:00Z");
+        let entry = entry(ChatKind::Prompt, "hello", "2026-06-01T00:00:00Z");
 
         append(&paths, &entry).expect("append");
 
@@ -394,6 +494,58 @@ mod tests {
         assert_eq!(
             answer_text(&serde_json::json!({"other": 1})),
             r#"{"other":1}"#
+        );
+    }
+
+    #[test]
+    fn ask_option_deserializes_legacy_string_shape() {
+        let option: AskOption = serde_json::from_value(json!("safe")).expect("decode option");
+
+        assert_eq!(
+            option,
+            AskOption {
+                label: "safe".to_owned(),
+                description: None,
+            }
+        );
+    }
+
+    #[test]
+    fn ask_option_deserializes_object_shape() {
+        let option: AskOption =
+            serde_json::from_value(json!({"label": "safe", "description": "Use staged rollout"}))
+                .expect("decode option");
+
+        assert_eq!(
+            option,
+            AskOption {
+                label: "safe".to_owned(),
+                description: Some("Use staged rollout".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn ask_option_deserializes_object_without_description() {
+        let option: AskOption =
+            serde_json::from_value(json!({"label": "safe"})).expect("decode option");
+
+        assert_eq!(option, AskOption::from("safe".to_owned()));
+    }
+
+    #[test]
+    fn ask_option_serializes_label_only_as_string_and_description_as_object() {
+        assert_eq!(
+            serde_json::to_value(AskOption::from("safe".to_owned())).expect("serialize option"),
+            json!("safe")
+        );
+        assert_eq!(
+            serde_json::to_value(AskOption {
+                label: "safe".to_owned(),
+                description: Some("Use staged rollout".to_owned()),
+            })
+            .expect("serialize option"),
+            json!({"label": "safe", "description": "Use staged rollout"})
         );
     }
 }

@@ -70,13 +70,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             ..rimz::harness::launch::ExecIdentity::default()
         },
     };
-    let rimz_env = full_agent_launch_env(
-        &workspace.project_root,
-        adapter,
-        rtk,
-        machine_config.transcript.file_days,
-        &exec_invocation,
-    )?;
+    let rimz_env = full_agent_launch_env(&workspace.project_root, adapter, rtk, &exec_invocation)?;
     let argv = rimz::harness::launch::login_shell_argv(&rimz_env, &argv);
     let (program, rest) = argv
         .split_first()

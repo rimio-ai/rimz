@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use jiff::Timestamp;
 use serde_json::Value;
+use tracing::warn;
 
 use super::{GlobalFlags, open_ledger};
 use crate::cli::render;
@@ -13,7 +14,7 @@ use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, SocketGuard};
 use rimz::feed::{
     AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, Surface,
 };
-use rimz::ids::{RequestId, ResolverId};
+use rimz::ids::{AgentKind, AgentSessionId, RequestId, ResolverId};
 use rimz::ledger::runtime::{RuntimeScope, current_process_owner};
 use rimz::ledger::{FeedStoreErr, LedgerErr};
 use rimz::pane::{PaneRef, RuntimeOwnerKind};
@@ -388,6 +389,7 @@ fn resolve(
     resolution.resolver_id = resolver_id.map(|id| id.parse::<ResolverId>()).transpose()?;
     let outcome =
         ledger.resolve_feed_item(&id, resolution, override_chain, &workspace.session_name)?;
+    record_resolved_agent_ask_answer(ledger, &outcome.resolved_item);
     #[expect(clippy::print_stdout, reason = "command outcome")]
     {
         println!(
@@ -396,6 +398,68 @@ fn resolve(
         );
     }
     Ok(())
+}
+
+fn record_resolved_agent_ask_answer(ledger: &Ledger, item: &Option<FeedItem>) {
+    let Some(item) = item.as_ref() else {
+        return;
+    };
+    if item.source_kind != "agent-hook" || !item.kind.is_ask() {
+        return;
+    }
+    let Some(resolution) = item.resolution.as_ref() else {
+        return;
+    };
+    let Some(agent_id) = item.agent_session_id().map(AgentSessionId::from) else {
+        return;
+    };
+    let text = rimz::chat::answer_text(&resolution.decision);
+    let mut entry = rimz::chat::ChatEntry::new(
+        resolution.resolved_at,
+        AgentKind::new_unchecked(item.source.clone()),
+        agent_id,
+        rimz::chat::ChatKind::Answer,
+        text.clone(),
+    );
+    entry.channel = rimz::harness::target::compose_channel(
+        None,
+        item.worktree_branch.as_deref(),
+        item.worktree_path
+            .as_deref()
+            .and_then(rimz::harness::target::path_basename),
+        None,
+    );
+    entry.request_id = Some(item.request_id.clone());
+    entry.from = Some(resolution_from(resolution));
+    entry.answers = vec![rimz::chat::AskAnswer {
+        question: None,
+        chosen: vec![text],
+        note: None,
+    }];
+    if let Err(err) = rimz::chat::append(ledger.paths(), &entry) {
+        warn!(
+            request_id = %item.request_id,
+            error = %err,
+            "resolve: failed to record transcript answer",
+        );
+    }
+}
+
+fn resolution_from(resolution: &Resolution) -> String {
+    match resolution.method {
+        ResolutionMethod::Cli
+        | ResolutionMethod::Sidebar
+        | ResolutionMethod::PaneSend
+        | ResolutionMethod::Dismiss => "you".to_owned(),
+        ResolutionMethod::HookBridge => resolution
+            .resolver_id
+            .as_ref()
+            .map(|resolver| format!("@{}", resolver.as_str()))
+            .unwrap_or_else(|| "resolver".to_owned()),
+        ResolutionMethod::AgentMovedOn
+        | ResolutionMethod::OwnerExited
+        | ResolutionMethod::WorkspaceReset => "resolver".to_owned(),
+    }
 }
 
 fn dismiss(

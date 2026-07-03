@@ -389,7 +389,6 @@ pub(super) fn full_agent_launch_env(
     project_root: &Path,
     adapter: &dyn AgentAdapter,
     rtk: rimz::config::RtkMode,
-    transcript_file_days: u32,
     inv: &rimz::harness::launch::ExecInvocation<'_>,
 ) -> Result<BTreeMap<String, String>> {
     let kind = adapter.descriptor().kind;
@@ -401,10 +400,6 @@ pub(super) fn full_agent_launch_env(
     env.insert(
         rimz::harness::run::ENV_RTK.to_owned(),
         rtk.as_str().to_owned(),
-    );
-    env.insert(
-        rimz::harness::run::ENV_TRANSCRIPT_FILE_DAYS.to_owned(),
-        transcript_file_days.to_string(),
     );
     validate_agent_launch_env(kind, &env)?;
     Ok(env)

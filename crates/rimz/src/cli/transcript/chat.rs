@@ -3,7 +3,7 @@ use super::scope::entry_key;
 use super::*;
 
 pub(super) fn render_entry_for_log_entry(
-    entry: &TranscriptEntry,
+    entry: &ChatEntry,
     identities: &HashMap<AgentKey, Identity>,
     include_channel: bool,
 ) -> RenderEntry {
@@ -16,13 +16,13 @@ pub(super) fn render_entry_for_log_entry(
 }
 
 pub(super) fn chat_entry_for_log_entry(
-    entry: &TranscriptEntry,
+    entry: &ChatEntry,
     identities: &HashMap<AgentKey, Identity>,
     include_channel: bool,
-) -> rimz::agents::ChatEntry {
+) -> ChatLine {
     let receiver = handle_for(entry, identities, include_channel);
     match entry.entry {
-        TranscriptKind::Prompt => rimz::agents::ChatEntry {
+        ChatKind::Prompt => ChatLine {
             from: "user".to_owned(),
             to: Some(receiver),
             at: Some(entry.at),
@@ -31,7 +31,7 @@ pub(super) fn chat_entry_for_log_entry(
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
         },
-        TranscriptKind::Message => rimz::agents::ChatEntry {
+        ChatKind::Message => ChatLine {
             from: entry.from.clone().unwrap_or_else(|| "user".to_owned()),
             to: Some(receiver),
             at: Some(entry.at),
@@ -40,7 +40,7 @@ pub(super) fn chat_entry_for_log_entry(
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
         },
-        TranscriptKind::Assistant | TranscriptKind::Ask => rimz::agents::ChatEntry {
+        ChatKind::Assistant | ChatKind::Ask => ChatLine {
             from: receiver,
             to: None,
             at: Some(entry.at),
@@ -49,7 +49,7 @@ pub(super) fn chat_entry_for_log_entry(
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
         },
-        TranscriptKind::Error => rimz::agents::ChatEntry {
+        ChatKind::Error => ChatLine {
             from: receiver,
             to: None,
             at: Some(entry.at),
@@ -58,7 +58,7 @@ pub(super) fn chat_entry_for_log_entry(
             questions: Vec::new(),
             answers: Vec::new(),
         },
-        TranscriptKind::Answer => rimz::agents::ChatEntry {
+        ChatKind::Answer => ChatLine {
             from: entry.from.clone().unwrap_or_else(|| "resolver".to_owned()),
             to: Some(receiver),
             at: Some(entry.at),
@@ -71,7 +71,7 @@ pub(super) fn chat_entry_for_log_entry(
 }
 
 pub(super) fn handle_for(
-    entry: &TranscriptEntry,
+    entry: &ChatEntry,
     identities: &HashMap<AgentKey, Identity>,
     include_channel: bool,
 ) -> String {
@@ -179,7 +179,7 @@ pub(super) fn render_chat_to(
             follows_day_delimiter = true;
             last_group = None;
         }
-        let is_ask = entry.kind == TranscriptKind::Ask;
+        let is_ask = entry.kind == ChatKind::Ask;
         let continuation = !is_ask
             && last_group
                 .as_ref()
@@ -223,7 +223,7 @@ pub(super) fn pair_answers(entries: &[RenderEntry]) -> AnswerPairs {
     let mut open_by_agent: HashMap<AgentKey, Vec<usize>> = HashMap::new();
     for (index, entry) in entries.iter().enumerate() {
         match entry.kind {
-            TranscriptKind::Ask => {
+            ChatKind::Ask => {
                 if let Some(request_id) = entry.request_id.as_ref() {
                     open_by_request.insert(request_id.clone(), index);
                 }
@@ -232,7 +232,7 @@ pub(super) fn pair_answers(entries: &[RenderEntry]) -> AnswerPairs {
                     .or_default()
                     .push(index);
             }
-            TranscriptKind::Answer => {
+            ChatKind::Answer => {
                 let mut by_agent = || {
                     let stack = open_by_agent.get_mut(&entry.agent)?;
                     while let Some(ask) = stack.pop() {

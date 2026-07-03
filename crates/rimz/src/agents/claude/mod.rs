@@ -61,14 +61,14 @@ use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation, AgentTurnError, AskAnswer,
-    AskQuestion, ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport,
-    Result, RootIdentity, SubagentIdentity, SubagentObservation, TranscriptMessage,
-    choice_is_allow, classify_agent_hook, non_empty_trimmed, optional_payload_string,
-    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
-    stop_payload_errored,
+    AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation, AgentTurnError,
+    ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
+    RootIdentity, SubagentIdentity, SubagentObservation, TranscriptMessage, choice_is_allow,
+    classify_agent_hook, non_empty_trimmed, optional_payload_string, read_transcript_tail,
+    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
+use crate::chat::{AskAnswer, AskQuestion};
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::harness::run::PermissionMode;
 

@@ -938,9 +938,6 @@ auto_continue_text = "continue"
 smart_compact = "70%"
 rtk = "auto"
 
-[transcript]
-file_days = 7
-
 [theme]
 style = "modern"
 mode = "truecolor"
@@ -1127,14 +1124,6 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         };
         if !matches!(mode, "auto" | "on" | "off") {
             bail!("harness.rtk must be one of auto, on, or off");
-        }
-    }
-    if matches!(path, [root, leaf] if root == "transcript" && leaf == "file_days") {
-        let Some(days) = value.as_integer() else {
-            bail!("transcript.file_days must be an integer");
-        };
-        if days <= 0 {
-            bail!("transcript.file_days must be greater than zero");
         }
     }
     if matches!(

@@ -106,6 +106,3 @@ aggressive_resize = true
 [harness]
 ## smart_compact = "70%"          # default compact-first threshold for message ("70%" or a token count); unset = off
 # rtk = "auto"                    # wrap agent cargo runs (build/check/test/nextest/clippy) through `rtk`; auto = when rtk is on PATH, on = force, off = never
-
-[transcript]
-# file_days = 7                   # days per transcript JSONL bucket; controls file size, not deletion

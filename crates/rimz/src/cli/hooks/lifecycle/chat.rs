@@ -1,4 +1,4 @@
-//! Transcript recording for lifecycle hooks.
+//! Chat recording for lifecycle hooks.
 
 use super::*;
 
@@ -12,7 +12,7 @@ pub(super) fn record_native_answer(
     let Some(answers) = agent.native_ask_answer(event_name, payload) else {
         return;
     };
-    let answer = rimz::agents::answers_text(&answers);
+    let answer = rimz::chat::answers_text(&answers);
     if answers.is_empty() || answer.is_empty() {
         return;
     }
@@ -55,25 +55,20 @@ pub(super) fn record_native_answer(
             .and_then(Value::as_str)
             .filter(|branch| !branch.is_empty())
             .or(workspace.worktree_branch.as_deref()),
-        path_basename(&worktree_path),
+        rimz::harness::target::path_basename(&worktree_path),
         None,
     );
-    let entry = rimz::ledger::transcript_log::TranscriptEntry {
-        at: jiff::Timestamp::now(),
-        kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
-        agent_id: rimz::ids::AgentSessionId::from(agent_id),
-        channel,
-        name: None,
-        profile: None,
-        role: None,
-        entry: rimz::ledger::transcript_log::TranscriptKind::Answer,
-        request_id: None,
-        from: Some("you".to_owned()),
-        text: answer,
-        questions: Vec::new(),
-        answers,
-    };
-    if let Err(err) = rimz::ledger::transcript_log::append(ledger.paths(), &entry) {
+    let mut entry = rimz::chat::ChatEntry::new(
+        jiff::Timestamp::now(),
+        rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+        rimz::ids::AgentSessionId::from(agent_id),
+        rimz::chat::ChatKind::Answer,
+        answer,
+    );
+    entry.channel = channel;
+    entry.from = Some("you".to_owned());
+    entry.answers = answers;
+    if let Err(err) = rimz::chat::append(ledger.paths(), &entry) {
         warn!(
             agent = agent.descriptor().kind,
             event = %event_name,
@@ -84,14 +79,14 @@ pub(super) fn record_native_answer(
     }
 }
 
-pub(super) fn record_transcript_conversation(
+pub(super) fn record_chat_conversation(
     workspace: &ResolvedWorkspace,
     ledger: &Ledger,
     agent: &dyn AgentAdapter,
     event_name: &str,
     payload: &Value,
     recorded: &RecordedLifecycle,
-) -> rimz::ledger::transcript_log::Result<()> {
+) -> rimz::chat::Result<()> {
     let observation = &recorded.observation;
     if observation.parent_agent_id.is_some() {
         return Ok(());
@@ -103,24 +98,26 @@ pub(super) fn record_transcript_conversation(
     let channel = rimz::harness::target::compose_channel(
         observation.launch.channel.as_deref(),
         observation.worktree_branch.as_deref(),
-        observation.worktree_path.as_deref().and_then(path_basename),
+        observation
+            .worktree_path
+            .as_deref()
+            .and_then(rimz::harness::target::path_basename),
         observation.launch.team.as_deref(),
     )
     .or_else(|| workspace.worktree_branch.clone());
-    let entry_base = |entry, text: String| rimz::ledger::transcript_log::TranscriptEntry {
-        at: jiff::Timestamp::now(),
-        kind: kind.clone(),
-        agent_id: agent_id.clone(),
-        channel: channel.clone(),
-        name: observation.agent_name.clone(),
-        profile: observation.launch.profile.clone(),
-        role: observation.launch.role.clone(),
-        entry,
-        request_id: None,
-        from: None,
-        text,
-        questions: Vec::new(),
-        answers: Vec::new(),
+    let entry_base = |entry, text: String| {
+        let mut entry = rimz::chat::ChatEntry::new(
+            jiff::Timestamp::now(),
+            kind.clone(),
+            agent_id.clone(),
+            entry,
+            text,
+        );
+        entry.channel = channel.clone();
+        entry.name = observation.agent_name.clone();
+        entry.profile = observation.launch.profile.clone();
+        entry.role = observation.launch.role.clone();
+        entry
     };
 
     match observation.signal {
@@ -139,17 +136,13 @@ pub(super) fn record_transcript_conversation(
                     let entry = if let Some((sender, body)) =
                         rimz::harness::target::parse_sender_prefix(segment)
                     {
-                        let mut entry =
-                            entry_base(rimz::ledger::transcript_log::TranscriptKind::Message, body);
+                        let mut entry = entry_base(rimz::chat::ChatKind::Message, body);
                         entry.from = Some(sender);
                         entry
                     } else {
-                        entry_base(
-                            rimz::ledger::transcript_log::TranscriptKind::Prompt,
-                            segment.to_owned(),
-                        )
+                        entry_base(rimz::chat::ChatKind::Prompt, segment.to_owned())
                     };
-                    rimz::ledger::transcript_log::append(ledger.paths(), &entry)?;
+                    rimz::chat::append(ledger.paths(), &entry)?;
                 }
             }
         }
@@ -159,12 +152,9 @@ pub(super) fn record_transcript_conversation(
                 .map(|message| message.trim().to_owned())
                 .filter(|message| !message.is_empty())
             {
-                rimz::ledger::transcript_log::append(
+                rimz::chat::append(
                     ledger.paths(),
-                    &entry_base(
-                        rimz::ledger::transcript_log::TranscriptKind::Assistant,
-                        message,
-                    ),
+                    &entry_base(rimz::chat::ChatKind::Assistant, message),
                 )?;
             }
         }
@@ -173,15 +163,11 @@ pub(super) fn record_transcript_conversation(
     Ok(())
 }
 
-pub(super) fn path_basename(path: &str) -> Option<&str> {
-    path.rsplit('/').next().filter(|value| !value.is_empty())
-}
-
 pub(super) fn turn_error_refresh_event(event_name: &str) -> bool {
     matches!(event_name, "Stop")
 }
 
-pub(super) fn merge_turn_error_marker_and_transcript(
+pub(super) fn merge_turn_error_marker_and_chat(
     workspace: &ResolvedWorkspace,
     ledger: &Ledger,
     agent: &dyn AgentAdapter,
@@ -192,7 +178,7 @@ pub(super) fn merge_turn_error_marker_and_transcript(
     let updated =
         merge_turn_error_marker(ledger, agent, event_name, context_agent_id, marker.clone());
     if updated {
-        record_turn_error_transcript(
+        record_turn_error_chat_entry(
             workspace,
             ledger,
             agent,
@@ -204,7 +190,7 @@ pub(super) fn merge_turn_error_marker_and_transcript(
     updated
 }
 
-pub(super) fn record_turn_error_transcript(
+pub(super) fn record_turn_error_chat_entry(
     workspace: &ResolvedWorkspace,
     ledger: &Ledger,
     agent: &dyn AgentAdapter,
@@ -212,25 +198,18 @@ pub(super) fn record_turn_error_transcript(
     context_agent_id: &str,
     marker: &rimz::agents::AgentTurnError,
 ) {
-    let entry = rimz::ledger::transcript_log::TranscriptEntry {
-        at: marker.at,
-        kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
-        agent_id: rimz::ids::AgentSessionId::from(context_agent_id),
-        channel: workspace.worktree_branch.clone(),
-        name: None,
-        profile: None,
-        role: None,
-        entry: rimz::ledger::transcript_log::TranscriptKind::Error,
-        request_id: None,
-        from: None,
-        text: marker
+    let mut entry = rimz::chat::ChatEntry::new(
+        marker.at,
+        rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+        rimz::ids::AgentSessionId::from(context_agent_id),
+        rimz::chat::ChatKind::Error,
+        marker
             .label
             .clone()
             .unwrap_or_else(|| "provider API error".to_owned()),
-        questions: Vec::new(),
-        answers: Vec::new(),
-    };
-    if let Err(err) = rimz::ledger::transcript_log::append(ledger.paths(), &entry) {
+    );
+    entry.channel = workspace.worktree_branch.clone();
+    if let Err(err) = rimz::chat::append(ledger.paths(), &entry) {
         warn!(
             agent = agent.descriptor().kind,
             event = %event_name,

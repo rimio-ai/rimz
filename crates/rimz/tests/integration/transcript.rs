@@ -3,9 +3,9 @@ use std::time::{Duration, Instant};
 use jiff::Timestamp;
 use serde_json::json;
 
+use rimz::chat::{ChatEntry, ChatKind};
 use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::ledger::transcript_log::{TranscriptEntry, TranscriptKind};
 
 use crate::common::Env;
 
@@ -261,6 +261,46 @@ fn transcript_records_native_ask_question_context_and_answer() {
 }
 
 #[test]
+fn resolving_agent_ask_through_cli_appends_transcript_answer() {
+    let env = Env::new();
+    let mut item = FeedItem::new(
+        env.workspace_id.clone(),
+        Surface::Bridge,
+        FeedKind::Permission,
+        "allow?",
+        "claude",
+        "agent-hook",
+    );
+    item.payload = json!({ "session_id": "sess-answer" });
+    item.worktree_branch = Some("feature-answer".to_owned());
+    let request_id = item.request_id.clone();
+    env.ledger()
+        .push_feed_item(&item, "rimz-test")
+        .expect("push");
+
+    let resolve = env.resolve(
+        request_id.as_str(),
+        r#"{"choice":"allow"}"#,
+        "opus-policy",
+        "cli",
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve failed: {}",
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let entries = rimz::chat::read_all(env.ledger().paths()).expect("transcript");
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[0];
+    assert_eq!(entry.entry, ChatKind::Answer);
+    assert_eq!(entry.agent_id.as_str(), "sess-answer");
+    assert_eq!(entry.channel.as_deref(), Some("feature-answer"));
+    assert_eq!(entry.from.as_deref(), Some("you"));
+    assert_eq!(entry.text, "allow");
+}
+
+#[test]
 fn transcript_groups_chronological_entries_across_append_order() {
     let env = Env::new();
     let branch = "chronological-transcript";
@@ -269,7 +309,7 @@ fn transcript_groups_chronological_entries_across_append_order() {
         entry(
             "sess-order",
             branch,
-            TranscriptKind::Prompt,
+            ChatKind::Prompt,
             "first prompt",
             "2026-06-01T00:00:00Z",
         ),
@@ -279,7 +319,7 @@ fn transcript_groups_chronological_entries_across_append_order() {
         entry(
             "sess-order",
             branch,
-            TranscriptKind::Prompt,
+            ChatKind::Prompt,
             "second prompt",
             "2026-06-01T00:00:03Z",
         ),
@@ -289,7 +329,7 @@ fn transcript_groups_chronological_entries_across_append_order() {
         entry(
             "sess-order",
             branch,
-            TranscriptKind::Assistant,
+            ChatKind::Assistant,
             "first answer",
             "2026-06-01T00:00:02Z",
         ),
@@ -299,7 +339,7 @@ fn transcript_groups_chronological_entries_across_append_order() {
         entry(
             "sess-order",
             branch,
-            TranscriptKind::Assistant,
+            ChatKind::Assistant,
             "second answer",
             "2026-06-01T00:00:04Z",
         ),
@@ -331,7 +371,7 @@ fn transcript_exact_session_target_filters_same_handle_peers() {
         entry(
             "sess-same-a",
             branch,
-            TranscriptKind::Prompt,
+            ChatKind::Prompt,
             "prompt from a",
             "2026-06-01T00:00:00Z",
         ),
@@ -341,7 +381,7 @@ fn transcript_exact_session_target_filters_same_handle_peers() {
         entry(
             "sess-same-a",
             branch,
-            TranscriptKind::Assistant,
+            ChatKind::Assistant,
             "answer from a",
             "2026-06-01T00:00:01Z",
         ),
@@ -351,7 +391,7 @@ fn transcript_exact_session_target_filters_same_handle_peers() {
         entry(
             "sess-same-b",
             branch,
-            TranscriptKind::Prompt,
+            ChatKind::Prompt,
             "prompt from b",
             "2026-06-01T00:00:02Z",
         ),
@@ -361,7 +401,7 @@ fn transcript_exact_session_target_filters_same_handle_peers() {
         entry(
             "sess-same-b",
             branch,
-            TranscriptKind::Assistant,
+            ChatKind::Assistant,
             "answer from b",
             "2026-06-01T00:00:03Z",
         ),
@@ -407,7 +447,7 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
             "claude",
             "sess-attribution-claude",
             branch,
-            TranscriptKind::Assistant,
+            ChatKind::Assistant,
             "visible claude reply",
             "2026-06-01T00:00:01Z",
         ),
@@ -429,7 +469,7 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
             "codex",
             "sess-attribution-codex",
             branch,
-            TranscriptKind::Assistant,
+            ChatKind::Assistant,
             "visible codex reply",
             "2026-06-01T00:00:03Z",
         ),
@@ -469,17 +509,17 @@ fn transcript_hook_records_routed_prompt_as_message_entry() {
         "codex reply",
     );
 
-    let entries = rimz::ledger::transcript_log::read_all(env.ledger().paths()).expect("read log");
+    let entries = rimz::chat::read_all(env.ledger().paths()).expect("read log");
     let message = entries
         .iter()
         .find(|entry| {
-            entry.agent_id.as_str() == "sess-hook-routed" && entry.entry == TranscriptKind::Message
+            entry.agent_id.as_str() == "sess-hook-routed" && entry.entry == ChatKind::Message
         })
         .expect("message entry");
     assert_eq!(message.from.as_deref(), Some("@claude"));
     assert_eq!(message.text, "ship it");
     assert!(entries.iter().all(|entry| {
-        entry.entry != TranscriptKind::Prompt || !entry.text.starts_with("from @claude:")
+        entry.entry != ChatKind::Prompt || !entry.text.starts_with("from @claude:")
     }));
 
     let output = run_ok(env.rimz().args(["transcript", "#hook-routed-transcript"]));
@@ -503,13 +543,7 @@ fn transcript_details_flag_is_gone() {
     assert!(stderr.contains("--details"), "{stderr}");
 }
 
-fn entry(
-    session_id: &str,
-    branch: &str,
-    kind: TranscriptKind,
-    text: &str,
-    at: &str,
-) -> TranscriptEntry {
+fn entry(session_id: &str, branch: &str, kind: ChatKind, text: &str, at: &str) -> ChatEntry {
     agent_entry("claude", session_id, branch, kind, text, at)
 }
 
@@ -517,25 +551,19 @@ fn agent_entry(
     kind: &str,
     session_id: &str,
     branch: &str,
-    entry: TranscriptKind,
+    entry: ChatKind,
     text: &str,
     at: &str,
-) -> TranscriptEntry {
-    TranscriptEntry {
-        at: at.parse().expect("timestamp"),
-        kind: AgentKind::new_unchecked(kind),
-        agent_id: AgentSessionId::from(session_id),
-        channel: Some(branch.to_owned()),
-        name: None,
-        profile: None,
-        role: None,
+) -> ChatEntry {
+    let mut entry = ChatEntry::new(
+        at.parse().expect("timestamp"),
+        AgentKind::new_unchecked(kind),
+        AgentSessionId::from(session_id),
         entry,
-        request_id: None,
-        from: None,
-        text: text.to_owned(),
-        questions: Vec::new(),
-        answers: Vec::new(),
-    }
+        text.to_owned(),
+    );
+    entry.channel = Some(branch.to_owned());
+    entry
 }
 
 fn message_entry(
@@ -545,14 +573,14 @@ fn message_entry(
     from: &str,
     text: &str,
     at: &str,
-) -> TranscriptEntry {
-    let mut entry = agent_entry(kind, session_id, branch, TranscriptKind::Message, text, at);
+) -> ChatEntry {
+    let mut entry = agent_entry(kind, session_id, branch, ChatKind::Message, text, at);
     entry.from = Some(from.to_owned());
     entry
 }
 
-fn append_transcript(env: &Env, entry: TranscriptEntry) {
-    rimz::ledger::transcript_log::append(env.ledger().paths(), &entry).expect("append transcript");
+fn append_transcript(env: &Env, entry: ChatEntry) {
+    rimz::chat::append(env.ledger().paths(), &entry).expect("append transcript");
 }
 
 fn write_claude_transcript(path: &std::path::Path, draft: &str, final_message: &str) {

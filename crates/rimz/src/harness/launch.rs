@@ -224,7 +224,7 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
 }
 
 /// The RIMZ_* identity env for one invocation (kind, run id, identity fields).
-/// Callers merge trust env, adapter launch env, rtk, and transcript-days around it.
+/// Callers merge trust env, adapter launch env, and rtk around it.
 pub fn exec_identity_env(inv: &ExecInvocation<'_>) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     env.insert(

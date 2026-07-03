@@ -2,10 +2,8 @@ use jiff::Timestamp;
 use serde_json::json;
 use tracing::warn;
 
-use crate::feed::{
-    AbandonReason, FeedItem, FeedStatus, Resolution, ResolutionMethod, ResolverStepState,
-};
-use crate::ids::{AgentKind, AgentSessionId, RequestId, ResolverId};
+use crate::feed::{AbandonReason, FeedStatus, Resolution, ResolutionMethod, ResolverStepState};
+use crate::ids::{RequestId, ResolverId};
 use crate::ledger::event::EventEnvelope;
 
 use super::super::{
@@ -109,59 +107,12 @@ impl Ledger {
             Ok(item_to_wake)
         })?;
 
-        if let Some(item) = &item_to_wake {
-            self.record_transcript_answer_best_effort(item);
-        }
-
         Ok(ResolveOutcome {
             request_id: request_id.clone(),
             effective: item_to_wake.is_some(),
             late: item_to_wake.is_none(),
+            resolved_item: item_to_wake,
         })
-    }
-
-    fn record_transcript_answer_best_effort(&self, item: &FeedItem) {
-        if item.source_kind != "agent-hook" || !item.kind.is_ask() {
-            return;
-        }
-        let Some(resolution) = item.resolution.as_ref() else {
-            return;
-        };
-        let Some(agent_id) = item.agent_session_id().map(AgentSessionId::from) else {
-            return;
-        };
-        let text = crate::ledger::transcript_log::answer_text(&resolution.decision);
-        let entry = crate::ledger::transcript_log::TranscriptEntry {
-            at: resolution.resolved_at,
-            kind: AgentKind::new_unchecked(item.source.clone()),
-            agent_id,
-            channel: crate::harness::target::compose_channel(
-                None,
-                item.worktree_branch.as_deref(),
-                item.worktree_path.as_deref().and_then(path_basename),
-                None,
-            ),
-            name: None,
-            profile: None,
-            role: None,
-            entry: crate::ledger::transcript_log::TranscriptKind::Answer,
-            request_id: Some(item.request_id.clone()),
-            from: Some(resolution_from(resolution)),
-            text: text.clone(),
-            questions: Vec::new(),
-            answers: vec![crate::agents::AskAnswer {
-                question: None,
-                chosen: vec![text],
-                note: None,
-            }],
-        };
-        if let Err(err) = crate::ledger::transcript_log::append(self.paths(), &entry) {
-            warn!(
-                request_id = %item.request_id,
-                error = %err,
-                "resolve: failed to record transcript answer",
-            );
-        }
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -391,26 +342,5 @@ impl Ledger {
             ))?;
             Ok(())
         })
-    }
-}
-
-fn path_basename(path: &str) -> Option<&str> {
-    path.rsplit('/').next().filter(|value| !value.is_empty())
-}
-
-fn resolution_from(resolution: &Resolution) -> String {
-    match resolution.method {
-        ResolutionMethod::Cli
-        | ResolutionMethod::Sidebar
-        | ResolutionMethod::PaneSend
-        | ResolutionMethod::Dismiss => "you".to_owned(),
-        ResolutionMethod::HookBridge => resolution
-            .resolver_id
-            .as_ref()
-            .map(|resolver| format!("@{}", resolver.as_str()))
-            .unwrap_or_else(|| "resolver".to_owned()),
-        ResolutionMethod::AgentMovedOn
-        | ResolutionMethod::OwnerExited
-        | ResolutionMethod::WorkspaceReset => "resolver".to_owned(),
     }
 }

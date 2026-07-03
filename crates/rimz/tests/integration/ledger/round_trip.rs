@@ -87,64 +87,6 @@ fn push_then_resolve_round_trip() {
 }
 
 #[test]
-fn resolving_agent_ask_appends_transcript_answer() {
-    let h = crate::common::Harness::new();
-    let mut item = bridge_permission(&h, "allow?");
-    item.payload = json!({ "session_id": "sess-answer" });
-    item.worktree_branch = Some("feature-answer".to_owned());
-    let request_id = item.request_id.clone();
-    h.ledger.push_feed_item(&item, "rimz-test").expect("push");
-
-    h.ledger
-        .resolve_feed_item(
-            &request_id,
-            Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::Cli),
-            true,
-            "rimz-test",
-        )
-        .expect("resolve");
-
-    let entries = rimz::ledger::transcript_log::read_all(h.ledger.paths()).expect("transcript");
-    assert_eq!(entries.len(), 1);
-    let entry = &entries[0];
-    assert_eq!(
-        entry.entry,
-        rimz::ledger::transcript_log::TranscriptKind::Answer
-    );
-    assert_eq!(entry.agent_id.as_str(), "sess-answer");
-    assert_eq!(entry.channel.as_deref(), Some("feature-answer"));
-    assert_eq!(entry.from.as_deref(), Some("you"));
-    assert_eq!(entry.text, "allow");
-}
-
-#[test]
-fn dismiss_and_timeout_do_not_append_transcript_answers() {
-    let h = crate::common::Harness::new();
-
-    let native = native_agent_ask(&h, FeedKind::Permission, "dismiss me", "sess-native");
-    let native_id = native.request_id.clone();
-    h.ledger
-        .push_feed_item(&native, "rimz-test")
-        .expect("push native");
-    h.ledger
-        .dismiss_feed_item(&native_id, Some("not now".into()), "rimz-test")
-        .expect("dismiss");
-
-    let mut bridge = bridge_permission(&h, "time out?");
-    bridge.payload = json!({ "session_id": "sess-timeout" });
-    let bridge_id = bridge.request_id.clone();
-    h.ledger
-        .push_feed_item(&bridge, "rimz-test")
-        .expect("push bridge");
-    h.ledger
-        .mark_feed_item_timed_out(&bridge_id, "rimz-test", AbandonReason::BridgeCapElapsed)
-        .expect("timeout");
-
-    let entries = rimz::ledger::transcript_log::read_all(h.ledger.paths()).expect("transcript");
-    assert!(entries.is_empty(), "{entries:?}");
-}
-
-#[test]
 fn resolving_active_resolver_marks_chain_answered_and_clears_active() {
     let h = crate::common::Harness::new();
     let opus: ResolverId = "opus-policy".parse().unwrap();

@@ -16,7 +16,7 @@ pub(super) fn live_root_agent_keys(workspace: &rimz::ResolvedWorkspace) -> BTree
         .unwrap_or_default()
 }
 
-pub(super) fn entry_in_scope(entry: &TranscriptEntry, scope: &Scope) -> bool {
+pub(super) fn entry_in_scope(entry: &ChatEntry, scope: &Scope) -> bool {
     scope
         .focus_keys
         .as_ref()
@@ -37,8 +37,8 @@ pub(super) fn compare_optional_timestamps(
 }
 
 pub(super) fn entry_matches_focus(
-    entry: &TranscriptEntry,
-    chat: &rimz::agents::ChatEntry,
+    entry: &ChatEntry,
+    chat: &ChatLine,
     scope: &Scope,
     identities: &HashMap<AgentKey, Identity>,
 ) -> bool {
@@ -87,10 +87,10 @@ pub(super) fn split_rendered_handle(handle: &str) -> (&str, Option<&str>) {
         .map_or((handle, None), |(base, channel)| (base, Some(channel)))
 }
 
-pub(super) fn dedup_asks(entries: Vec<TranscriptEntry>) -> Vec<TranscriptEntry> {
+pub(super) fn dedup_asks(entries: Vec<ChatEntry>) -> Vec<ChatEntry> {
     let mut latest_asks: HashMap<RequestId, (usize, jiff::Timestamp)> = HashMap::new();
     for (index, entry) in entries.iter().enumerate() {
-        if entry.entry == TranscriptKind::Ask
+        if entry.entry == ChatKind::Ask
             && let Some(request_id) = entry.request_id.as_ref()
         {
             latest_asks
@@ -107,7 +107,7 @@ pub(super) fn dedup_asks(entries: Vec<TranscriptEntry>) -> Vec<TranscriptEntry> 
         .into_iter()
         .enumerate()
         .filter_map(|(index, entry)| {
-            if entry.entry == TranscriptKind::Ask
+            if entry.entry == ChatKind::Ask
                 && let Some(request_id) = entry.request_id.as_ref()
             {
                 return (latest_asks.get(request_id).map(|(latest, _)| *latest) == Some(index))
@@ -118,7 +118,7 @@ pub(super) fn dedup_asks(entries: Vec<TranscriptEntry>) -> Vec<TranscriptEntry> 
         .collect()
 }
 
-pub(super) fn build_identities(entries: &[TranscriptEntry]) -> HashMap<AgentKey, Identity> {
+pub(super) fn build_identities(entries: &[ChatEntry]) -> HashMap<AgentKey, Identity> {
     let mut identities = HashMap::new();
     for entry in entries {
         let candidate = Identity {
@@ -349,7 +349,7 @@ pub(super) fn channel_matches(entry_channel: Option<&str>, filter: Option<&str>)
     filter.is_none_or(|filter| entry_channel == Some(filter))
 }
 
-pub(super) fn entry_key(entry: &TranscriptEntry) -> AgentKey {
+pub(super) fn entry_key(entry: &ChatEntry) -> AgentKey {
     (entry.kind.clone(), entry.agent_id.clone())
 }
 

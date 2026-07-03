@@ -12,10 +12,9 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{GlobalFlags, current_channel};
 use crate::cli::render;
-use rimz::agents::AskOption;
+use rimz::chat::{AskOption, ChatEntry, ChatKind};
 use rimz::feed::FeedItem;
 use rimz::ids::{AgentKind, AgentSessionId, RequestId};
-use rimz::ledger::transcript_log::{TranscriptEntry, TranscriptKind};
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -49,17 +48,37 @@ struct ChatView {
     channel: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     focus: Option<String>,
-    entries: Vec<rimz::agents::ChatEntry>,
+    entries: Vec<ChatLine>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct ChatLine {
+    pub from: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<jiff::Timestamp>,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub error: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<rimz::chat::AskQuestion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub answers: Vec<rimz::chat::AskAnswer>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 type AgentKey = (AgentKind, AgentSessionId);
 
 #[derive(Clone, Debug)]
 struct RenderEntry {
-    kind: TranscriptKind,
+    kind: ChatKind,
     request_id: Option<RequestId>,
     agent: AgentKey,
-    chat: rimz::agents::ChatEntry,
+    chat: ChatLine,
 }
 
 #[derive(Clone, Debug)]
@@ -101,7 +120,7 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
     let current = current_channel(&workspace);
-    let entries = dedup_asks(rimz::ledger::transcript_log::read_all(&paths)?);
+    let entries = dedup_asks(rimz::chat::read_all(&paths)?);
     if entries.is_empty() {
         bail!("no transcripts on disk yet");
     }
@@ -114,7 +133,7 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         &identities,
         &live_root_keys,
     )?;
-    let filtered: Vec<&TranscriptEntry> = entries
+    let filtered: Vec<&ChatEntry> = entries
         .iter()
         .filter(|entry| entry_in_scope(entry, &scope))
         .collect();

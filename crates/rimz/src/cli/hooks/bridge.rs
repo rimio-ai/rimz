@@ -141,9 +141,10 @@ fn push_feed_item_recording_ask(
     supersede: Option<(&str, &str)>,
     session_name: &str,
 ) -> Result<()> {
-    let transcript = transcript_ask_entry(agent, event_name, item);
-    if let Some(err) =
-        ledger.push_feed_item_superseding(item, supersede, session_name, transcript.as_ref())?
+    let chat = chat_ask_entry(agent, event_name, item);
+    ledger.push_feed_item_superseding(item, supersede, session_name)?;
+    if let Some(entry) = chat.as_ref()
+        && let Err(err) = rimz::chat::append(ledger.paths(), entry)
     {
         warn!(
             agent = agent.descriptor().kind,
@@ -155,11 +156,11 @@ fn push_feed_item_recording_ask(
     Ok(())
 }
 
-fn transcript_ask_entry(
+fn chat_ask_entry(
     agent: &dyn AgentAdapter,
     event_name: &str,
     item: &FeedItem,
-) -> Option<rimz::ledger::transcript_log::TranscriptEntry> {
+) -> Option<rimz::chat::ChatEntry> {
     if item.source_kind != "agent-hook" || !item.kind.is_ask() {
         return None;
     }
@@ -189,28 +190,22 @@ fn transcript_ask_entry(
     let channel = rimz::harness::target::compose_channel(
         None,
         item.worktree_branch.as_deref(),
-        item.worktree_path.as_deref().and_then(path_basename),
+        item.worktree_path
+            .as_deref()
+            .and_then(rimz::harness::target::path_basename),
         None,
     );
-    Some(rimz::ledger::transcript_log::TranscriptEntry {
-        at: item.created_at,
-        kind: rimz::ids::AgentKind::new_unchecked(item.source.clone()),
+    let mut entry = rimz::chat::ChatEntry::new(
+        item.created_at,
+        rimz::ids::AgentKind::new_unchecked(item.source.clone()),
         agent_id,
-        channel,
-        name: None,
-        profile: None,
-        role: None,
-        entry: rimz::ledger::transcript_log::TranscriptKind::Ask,
-        request_id: Some(item.request_id.clone()),
-        from: None,
+        rimz::chat::ChatKind::Ask,
         text,
-        questions,
-        answers: Vec::new(),
-    })
-}
-
-fn path_basename(path: &str) -> Option<&str> {
-    path.rsplit('/').next().filter(|value| !value.is_empty())
+    );
+    entry.channel = channel;
+    entry.request_id = Some(item.request_id.clone());
+    entry.questions = questions;
+    Some(entry)
 }
 
 /// Poll loop driving the bridge from a resolver answer, a per-step budget,

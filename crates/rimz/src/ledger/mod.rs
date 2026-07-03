@@ -13,7 +13,6 @@
 //!   pending_terminal.rs feed pending/terminal file-store invariant
 //!   feed_store.rs   feed item wrappers + status CAS
 //!   message_store.rs live message queue JSONL store
-//!   transcript_log.rs rolling Rimz-owned conversation JSONL
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
 //!   writer.rs       write choreography façade: lock → write → append → wake → publish
 //!   writer/         debounce, publish, expiry, resolver-chain writes
@@ -52,7 +51,6 @@ pub(crate) mod sidecar;
 pub mod single_flight;
 pub mod snapshot;
 pub mod subagent_context;
-pub mod transcript_log;
 pub mod wakeup;
 pub mod workspace_record;
 
@@ -159,6 +157,7 @@ pub struct ResolveOutcome {
     pub request_id: RequestId,
     pub effective: bool,
     pub late: bool,
+    pub resolved_item: Option<FeedItem>,
 }
 
 #[derive(Clone, Debug)]

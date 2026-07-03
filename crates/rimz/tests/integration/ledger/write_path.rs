@@ -263,7 +263,7 @@ fn superseding_push_expires_priors_then_pushes_in_one_cycle() {
     // its one publish covers.
     force_next_publish(&h);
     h.ledger
-        .push_feed_item_superseding(&fresh, Some(("claude", "live")), "rimz-test", None)
+        .push_feed_item_superseding(&fresh, Some(("claude", "live")), "rimz-test")
         .map(|_| ())
         .expect("superseding push");
 
