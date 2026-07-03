@@ -358,7 +358,11 @@ fn resolve_from(
 /// report as `development`, so the production dashboard stays clear of
 /// contributor noise.
 fn default_environment() -> &'static str {
-    if option_env!("RIMZ_BUILD_PROFILE") == Some("release") {
+    environment_for_build_profile(option_env!("RIMZ_BUILD_PROFILE"))
+}
+
+fn environment_for_build_profile(profile: Option<&str>) -> &'static str {
+    if profile == Some("release") {
         "production"
     } else {
         "development"
@@ -395,6 +399,17 @@ mod tests {
         assert_eq!(environment, default_environment());
         // The suite builds under the dev profile, so the default is development.
         assert_eq!(environment, "development");
+    }
+
+    #[test]
+    fn build_profile_maps_release_only_to_production() {
+        assert_eq!(environment_for_build_profile(Some("release")), "production");
+        assert_eq!(
+            environment_for_build_profile(Some("profiling")),
+            "development"
+        );
+        assert_eq!(environment_for_build_profile(Some("debug")), "development");
+        assert_eq!(environment_for_build_profile(None), "development");
     }
 
     #[test]

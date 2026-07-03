@@ -617,13 +617,10 @@ pub(super) fn cached_panes_or_produce(
         // cold room still has a chance to recover.
         Coalesced::ProduceLocal => {
             let prior = read_snapshot_cache(&cache_path, session);
-            if let Some(prior) = prior.as_ref().and_then(|prior| {
-                publishable_prior(
-                    std::sync::Arc::unwrap_or_clone(std::sync::Arc::clone(prior)),
-                    own_pane,
-                    diag,
-                )
-            }) {
+            if let Some(prior) = prior
+                .as_ref()
+                .and_then(|prior| publishable_prior((**prior).clone(), own_pane, diag))
+            {
                 return Ok(prior);
             }
             let frame = produce_candidate(false, min_pane_cache_ms)?;
@@ -638,9 +635,7 @@ pub(super) fn cached_panes_or_produce(
             )?;
             validate_frame_for_publish(
                 frame,
-                prior
-                    .as_ref()
-                    .map(|prior| std::sync::Arc::unwrap_or_clone(std::sync::Arc::clone(prior))),
+                prior.as_ref().map(|prior| (**prior).clone()),
                 own_pane,
                 diag,
                 false,
@@ -668,9 +663,7 @@ pub(super) fn cached_panes_or_produce(
             )?;
             validate_frame_for_publish(
                 frame,
-                prior
-                    .as_ref()
-                    .map(|prior| std::sync::Arc::unwrap_or_clone(std::sync::Arc::clone(prior))),
+                prior.as_ref().map(|prior| (**prior).clone()),
                 own_pane,
                 diag,
                 true,

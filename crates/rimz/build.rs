@@ -31,6 +31,7 @@ use serde_json::{Map, Value};
 const GENERATED_SNAPSHOT: &str = "pricing/litellm-pricing.json";
 const THEME_CATALOG_DIR: &str = "themes/alacritty";
 const PRESENCE_PLUGIN_ENV: &str = "RIMZ_EMBED_PRESENCE_PLUGIN";
+const BUILD_PROFILE_OVERRIDE_ENV: &str = "RIMZ_BUILD_PROFILE_OVERRIDE";
 const PRESENCE_PLUGIN_VENDOR_DIR: &str = "presence";
 const PRESENCE_PLUGIN_OUT: &str = "rimz-presence-zellij.wasm";
 const KEPT_FIELDS: [&str; 4] = [
@@ -58,7 +59,12 @@ fn main() {
 }
 
 fn emit_build_profile() {
-    let profile = env::var("PROFILE").expect("PROFILE set by cargo");
+    println!("cargo:rerun-if-env-changed={BUILD_PROFILE_OVERRIDE_ENV}");
+    let profile = env::var(BUILD_PROFILE_OVERRIDE_ENV)
+        .ok()
+        .filter(|profile| !profile.is_empty())
+        .or_else(|| env::var("PROFILE").ok())
+        .expect("PROFILE set by cargo");
     println!("cargo:rustc-env=RIMZ_BUILD_PROFILE={profile}");
 }
 

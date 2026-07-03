@@ -17,6 +17,7 @@ const PRESENCE_PLUGIN_TARGET: &str = "wasm32-wasip1";
 const DARWIN_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 const SYSTEM_INSTALL_BIN_DIR: &str = "/usr/local/bin";
 const PROFILING_RUSTFLAGS: &str = "-C force-frame-pointers=yes -C symbol-mangling-version=v0";
+const BUILD_PROFILE_OVERRIDE_ENV: &str = "RIMZ_BUILD_PROFILE_OVERRIDE";
 pub(crate) const WASM_MAGIC: [u8; 4] = *b"\0asm";
 
 pub(crate) fn build(root: &Path) -> Result<()> {
@@ -279,10 +280,11 @@ pub(crate) fn install(root: &Path) -> Result<()> {
     install_from_stage(&stage)
 }
 
-/// Build host `rimz` with the dev-only `sentry` feature and install it. A debug
-/// build, so its off-box reporting defaults to the `development` environment and
-/// contributor telemetry stays off the production dashboard; opt in by resolving
-/// a DSN at runtime. See [off-box error reporting](../../docs/internals/health/diagnostics.md#off-box-error-reporting).
+/// Build host `rimz` with the dev-only `sentry` feature and install it. The
+/// profiling build reports off-box events to the `development` environment by
+/// default, so contributor telemetry stays off the production dashboard; opt in
+/// by resolving a DSN at runtime. See
+/// [off-box error reporting](../../docs/internals/health/diagnostics.md#off-box-error-reporting).
 pub(crate) fn install_dev(root: &Path) -> Result<()> {
     let stage = stage_dev_install(root)?;
     install_from_stage(&stage)?;
@@ -295,6 +297,7 @@ pub(crate) fn install_dev(root: &Path) -> Result<()> {
 pub(crate) fn profile_build(root: &Path) -> Result<()> {
     build_plugin(root)?;
     let mut envs = presence_plugin_embed_env(root);
+    envs.push(HostProfile::Profiling.build_profile_override_env());
     envs.push(("RUSTFLAGS", PathBuf::from(PROFILING_RUSTFLAGS)));
     run_with_env(root, "cargo", profiling_build_args(), &envs)?;
     report_profile_build(&profile_artifact(root, "profiling", "rimz"));
@@ -448,6 +451,10 @@ impl HostProfile {
             Self::Profiling => "profiling",
         }
     }
+
+    fn build_profile_override_env(self) -> (&'static str, PathBuf) {
+        (BUILD_PROFILE_OVERRIDE_ENV, PathBuf::from(self.target_dir()))
+    }
 }
 
 /// Build the host `rimz` binary for the given profile and feature set, then copy
@@ -459,10 +466,7 @@ fn stage_host_rimz(
     rustflags: Option<&'static str>,
 ) -> Result<PathBuf> {
     build_plugin(root)?;
-    let mut envs = presence_plugin_embed_env(root);
-    if let Some(rustflags) = rustflags {
-        envs.push(("RUSTFLAGS", PathBuf::from(rustflags)));
-    }
+    let envs = host_build_envs(root, profile, rustflags);
     run_with_env(root, "cargo", host_build_args(profile, features), &envs)?;
     let profile_dir = profile.target_dir();
     let stage = stage_bin_dir(root);
@@ -472,6 +476,19 @@ fn stage_host_rimz(
         &stage.join("rimz"),
     )?;
     Ok(stage)
+}
+
+fn host_build_envs(
+    root: &Path,
+    profile: HostProfile,
+    rustflags: Option<&'static str>,
+) -> Vec<(&'static str, PathBuf)> {
+    let mut envs = presence_plugin_embed_env(root);
+    envs.push(profile.build_profile_override_env());
+    if let Some(rustflags) = rustflags {
+        envs.push(("RUSTFLAGS", PathBuf::from(rustflags)));
+    }
+    envs
 }
 
 /// Cargo args to build the host `rimz` binary. `features` opts dev-only cargo

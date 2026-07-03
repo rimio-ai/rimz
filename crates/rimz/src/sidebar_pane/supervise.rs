@@ -24,8 +24,6 @@ const PANIC_EXIT_CODE: i32 = 101;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SidebarSuperviseErr {
-    #[error("resolving current executable: {0}")]
-    CurrentExe(#[source] io::Error),
     #[error("spawning sidebar render worker `{program}`: {source}")]
     Spawn {
         program: String,

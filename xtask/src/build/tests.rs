@@ -67,6 +67,40 @@ fn dev_install_builds_profiling_with_the_sentry_feature() {
 }
 
 #[test]
+fn dev_install_tells_build_script_it_is_profiling() {
+    let envs = host_build_envs(
+        Path::new("/workspace"),
+        HostProfile::Profiling,
+        Some(PROFILING_RUSTFLAGS),
+    );
+
+    assert_eq!(
+        env_value(&envs, BUILD_PROFILE_OVERRIDE_ENV),
+        Some(Path::new("profiling"))
+    );
+    assert_eq!(
+        env_value(&envs, "RUSTFLAGS"),
+        Some(Path::new(PROFILING_RUSTFLAGS))
+    );
+}
+
+#[test]
+fn release_install_tells_build_script_it_is_release() {
+    let envs = host_build_envs(Path::new("/workspace"), HostProfile::Release, None);
+
+    assert_eq!(
+        env_value(&envs, BUILD_PROFILE_OVERRIDE_ENV),
+        Some(Path::new("release"))
+    );
+    assert_eq!(env_value(&envs, "RUSTFLAGS"), None);
+}
+
+fn env_value<'a>(envs: &'a [(&str, PathBuf)], key: &str) -> Option<&'a Path> {
+    envs.iter()
+        .find_map(|(env_key, value)| (*env_key == key).then_some(value.as_path()))
+}
+
+#[test]
 fn release_install_adds_no_extra_features() {
     let args = host_build_args(HostProfile::Release, &[]);
 
