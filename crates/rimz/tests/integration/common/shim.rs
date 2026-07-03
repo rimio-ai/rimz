@@ -39,6 +39,16 @@ pub fn write_env_dump_shim(env: &Env, agent: &str) -> PathBuf {
 }
 
 #[cfg(unix)]
+pub fn write_failing_agent_shim(env: &Env, agent: &str, code: u8) -> PathBuf {
+    let dir = env.home_root.join("agent-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir agent bin");
+    let shim = dir.join(agent);
+    std::fs::write(&shim, format!("#!/bin/sh\nexit {code}\n")).expect("write agent shim");
+    chmod_executable(&shim);
+    dir
+}
+
+#[cfg(unix)]
 pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
     assert!(matches!(agent, "codex" | "claude"));
     let dir = env.home_root.join("agent-bin");

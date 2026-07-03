@@ -1146,6 +1146,112 @@ mod pane_exec {
     }
 
     #[test]
+    fn hold_pane_gate_matches_interactive_rimz_owned_panes() {
+        let args = bare_exec_args();
+        assert!(!should_hold_pane(&args, false));
+
+        let mut args = bare_exec_args();
+        args.close_pane_on_exit = true;
+        assert!(should_hold_pane(&args, false));
+        assert!(!should_hold_pane(&args, true));
+
+        let mut args = bare_exec_args();
+        args.worktree_path = Some(PathBuf::from("/tmp/rimz-worktree"));
+        assert!(should_hold_pane(&args, false));
+
+        let mut args = bare_exec_args();
+        args.close_pane_on_exit = true;
+        args.run_id = Some(rimz::RunId::new());
+        assert!(!should_hold_pane(&args, false));
+    }
+
+    #[test]
+    fn relaunch_command_prefers_team_role_then_profile_then_kind() {
+        let mut args = bare_exec_args();
+        args.agent_team = Some("trim".to_owned());
+        args.agent_role = Some("pruner".to_owned());
+        args.agent_profile = Some("codex-plan".to_owned());
+        assert_eq!(relaunch_command(&args), "rimz agents trim.pruner");
+
+        let mut args = bare_exec_args();
+        args.agent_profile = Some("codex-plan".to_owned());
+        assert_eq!(relaunch_command(&args), "rimz agents codex-plan");
+
+        let args = bare_exec_args();
+        assert_eq!(relaunch_command(&args), "rimz agents codex");
+    }
+
+    #[test]
+    fn hold_message_reports_startup_failure_and_relaunch_command() {
+        let status = exit_status(7);
+        let message = hold_message("codex", &status, true, "rimz agents trim.pruner");
+
+        assert_eq!(
+            message,
+            format!(
+                "rimz: agent `codex` failed to start ({status})\r\n\
+                 rimz: fix the problem above, then relaunch this teammate with:\r\n\
+                 rimz:   rimz agents trim.pruner\r\n\
+                 rimz: press Enter to close this pane\r\n",
+            )
+        );
+    }
+
+    #[test]
+    fn hold_message_reports_clean_exit_and_relaunch_command() {
+        let status = exit_status(0);
+        let message = hold_message("codex", &status, false, "rimz agents codex-plan");
+
+        assert_eq!(
+            message,
+            format!(
+                "rimz: agent `codex` exited ({status})\r\n\
+                 rimz: relaunch with `rimz agents codex-plan`\r\n\
+                 rimz: press Enter to close this pane\r\n",
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stdin_nonblocking_guard_restores_original_flags() {
+        use nix::fcntl::{FcntlArg, OFlag, fcntl};
+        use std::os::fd::AsFd;
+
+        let (read, _write) = nix::unistd::pipe().expect("pipe");
+        let before =
+            OFlag::from_bits_truncate(fcntl(&read, FcntlArg::F_GETFL).expect("flags before"));
+        assert!(!before.contains(OFlag::O_NONBLOCK));
+
+        {
+            let _guard = StdinNonblocking::new(read.as_fd()).expect("nonblocking guard");
+            let during =
+                OFlag::from_bits_truncate(fcntl(&read, FcntlArg::F_GETFL).expect("flags during"));
+            assert!(during.contains(OFlag::O_NONBLOCK));
+        }
+
+        let after =
+            OFlag::from_bits_truncate(fcntl(&read, FcntlArg::F_GETFL).expect("flags after"));
+        assert_eq!(after, before);
+    }
+
+    fn exit_status(code: i32) -> std::process::ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+
+            std::process::ExitStatus::from_raw(code << 8)
+        }
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", &format!("exit {code}")])
+                .status()
+                .expect("exit status")
+        }
+    }
+
+    #[test]
     fn close_is_deliberate_keeps_only_unaccepted_abrupt_exits_recoverable() {
         for (abrupt, session_accepts_close, expected) in [
             (false, false, true),

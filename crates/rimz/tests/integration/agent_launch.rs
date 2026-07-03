@@ -4,11 +4,17 @@
 use assert_cmd::assert::OutputAssertExt;
 #[cfg(unix)]
 use predicates::str::contains;
+#[cfg(unix)]
+use rimz::agents::LaunchParams;
+#[cfg(unix)]
+use rimz::ids::{AgentKind, AgentSessionId};
+#[cfg(unix)]
+use rimz::ledger::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 
 #[cfg(unix)]
 use crate::common::{
-    CommandTimeoutExt, Env, path_with_front, write_env_dump_shim, write_fake_bash_shell,
-    write_fake_login_shell,
+    CommandTimeoutExt, Env, path_with_front, write_env_dump_shim, write_failing_agent_shim,
+    write_fake_bash_shell, write_fake_login_shell,
 };
 
 #[cfg(unix)]
@@ -204,4 +210,73 @@ fn prompt_with_shell_metacharacters_stays_one_argument() {
             .any(|line| line == format!("ARGV_1={prompt}")),
         "prompt argv element was changed by the shell wrapper:\n{dumped}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn close_pane_exec_reports_startup_failure_before_exiting_with_child_status() {
+    let env = Env::new();
+    let shim_dir = write_failing_agent_shim(&env, "codex", 7);
+    let launch_id = "launch_startup_failure";
+    seed_provisional_agent_launch(&env, launch_id, "pruner");
+
+    let output = env
+        .rimz()
+        .args([
+            "agents",
+            "exec",
+            "codex",
+            "--launch-id",
+            launch_id,
+            "--agent-name",
+            "pruner",
+            "--agent-team",
+            "trim",
+            "--agent-role",
+            "pruner",
+            "--close-pane-on-exit",
+        ])
+        .env("PATH", path_with_front(&shim_dir))
+        .bounded_output()
+        .expect("agents exec returns without waiting on non-tty stdin");
+
+    assert_eq!(output.status.code(), Some(7));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("failed to start"), "{stderr}");
+    assert!(stderr.contains("rimz agents trim.pruner"), "{stderr}");
+}
+
+#[cfg(unix)]
+fn seed_provisional_agent_launch(env: &Env, launch_id: &str, agent_name: &str) {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let kind = AgentKind::new_unchecked("codex");
+    let event = EventEnvelope::agent_launched(
+        workspace.workspace_id,
+        workspace.session_name,
+        &kind,
+        AgentLaunchPayload {
+            agent_id: AgentSessionId::from(launch_id),
+            agent_name: agent_name.to_owned(),
+            launch: LaunchParams {
+                profile: None,
+                role: Some("pruner".to_owned()),
+                model: None,
+                effort: None,
+                team: Some("trim".to_owned()),
+                launch_group: None,
+                launch_ordinal: None,
+                channel: None,
+                kind_ordinal: Some(1),
+            },
+            state: AgentLaunchState::Starting,
+            run_id: None,
+            pane_id: None,
+            runtime_owner: None,
+            worktree_path: Some(env.project_root.display().to_string()),
+            worktree_branch: None,
+            prompt: None,
+            description: None,
+        },
+    );
+    env.ledger().append_event(&event).expect("append launch");
 }

@@ -89,7 +89,9 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
     reset_cleanup_signal_flag();
+    reset_interrupt_signal_flag();
     install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
+    install_interrupt_signal_handler().context("installing interrupt signal handler")?;
     let mut command = Command::new(program);
     command.args(rest);
     command.envs(&rimz_env);
@@ -112,10 +114,11 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     if let Some(context) = run_context.as_ref() {
         fail_run_if_child_exited_first(context, RUN_EXIT_TERMINAL_GRACE);
     }
-    if !outcome.status.success()
-        && let Some(identity) = launch_identity.as_ref()
-        && launch_is_still_provisional(&workspace, identity)
-    {
+    let startup_failure = !outcome.status.success()
+        && launch_identity
+            .as_ref()
+            .is_some_and(|identity| launch_is_still_provisional(&workspace, identity));
+    if startup_failure && let Some(identity) = launch_identity.as_ref() {
         record_launch_failed(&workspace, identity, args.prompt.as_deref());
     }
 
@@ -131,10 +134,12 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     } else if !deliberate && should_record_end_trace(&args) {
         record_own_agent_lost_trace(&workspace, &args);
     }
+    hold_pane_after_agent_exit(&args, &outcome.status, outcome.signaled, startup_failure);
+    let signaled_after_hold = outcome.signaled || cleanup_signal_received();
     if let Some(path) = entered_worktree.as_deref()
         && deliberate
         && let Err(err) =
-            cleanup_worktree_via_ondisk(path, globals, !outcome.signaled, outcome.signaled)
+            cleanup_worktree_via_ondisk(path, globals, !signaled_after_hold, signaled_after_hold)
     {
         let _ = writeln!(
             std::io::stderr().lock(),
@@ -157,6 +162,128 @@ pub(super) fn should_exec_agent_directly(args: &ExecArgs) -> bool {
 
 pub(super) fn should_record_end_trace(args: &ExecArgs) -> bool {
     !args.exit_on_run_completion
+}
+
+pub(super) fn should_hold_pane(args: &ExecArgs, signaled: bool) -> bool {
+    (args.close_pane_on_exit || args.worktree_path.is_some()) && args.run_id.is_none() && !signaled
+}
+
+pub(super) fn relaunch_command(args: &ExecArgs) -> String {
+    match (
+        args.agent_team.as_deref(),
+        args.agent_role.as_deref(),
+        args.agent_profile.as_deref(),
+    ) {
+        (Some(team), Some(role), _) => format!("rimz agents {team}.{role}"),
+        (_, _, Some(profile)) => format!("rimz agents {profile}"),
+        _ => format!("rimz agents {}", args.kind),
+    }
+}
+
+pub(super) fn hold_message(
+    kind: &str,
+    status: &ExitStatus,
+    startup_failure: bool,
+    relaunch: &str,
+) -> String {
+    if startup_failure {
+        format!(
+            "rimz: agent `{kind}` failed to start ({status})\r\n\
+             rimz: fix the problem above, then relaunch this teammate with:\r\n\
+             rimz:   {relaunch}\r\n\
+             rimz: press Enter to close this pane\r\n",
+        )
+    } else {
+        format!(
+            "rimz: agent `{kind}` exited ({status})\r\n\
+             rimz: relaunch with `{relaunch}`\r\n\
+             rimz: press Enter to close this pane\r\n",
+        )
+    }
+}
+
+#[cfg(unix)]
+fn hold_pane_after_agent_exit(
+    args: &ExecArgs,
+    status: &ExitStatus,
+    signaled: bool,
+    startup_failure: bool,
+) {
+    use std::os::fd::AsFd;
+
+    if !should_hold_pane(args, signaled) {
+        return;
+    }
+    let relaunch = relaunch_command(args);
+    let message = hold_message(&args.kind, status, startup_failure, &relaunch);
+    let _ = write!(std::io::stderr().lock(), "{message}");
+
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        return;
+    }
+    reset_interrupt_signal_flag();
+    let mut stdin = stdin.lock();
+    let _nonblocking = match StdinNonblocking::new(stdin.as_fd()) {
+        Ok(guard) => guard,
+        Err(err) => {
+            tracing::debug!(
+                error = %err,
+                "could not set stdin nonblocking for agent-exit pane hold",
+            );
+            return;
+        }
+    };
+    let mut byte = [0_u8; 1];
+    loop {
+        if interrupt_signal_received() || cleanup_signal_received() {
+            break;
+        }
+        match stdin.read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) if matches!(byte[0], b'\n' | b'\r' | 0x03) => break,
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+}
+
+#[cfg(unix)]
+pub(super) struct StdinNonblocking {
+    fd: std::os::fd::OwnedFd,
+    flags: nix::fcntl::OFlag,
+}
+
+#[cfg(unix)]
+impl StdinNonblocking {
+    pub(super) fn new(fd: std::os::fd::BorrowedFd<'_>) -> nix::Result<Self> {
+        use nix::fcntl::{FcntlArg, OFlag, fcntl};
+
+        let fd = nix::unistd::dup(fd)?;
+        let flags = OFlag::from_bits_truncate(fcntl(&fd, FcntlArg::F_GETFL)?);
+        fcntl(&fd, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
+        Ok(Self { fd, flags })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for StdinNonblocking {
+    fn drop(&mut self) {
+        let _ = nix::fcntl::fcntl(&self.fd, nix::fcntl::FcntlArg::F_SETFL(self.flags));
+    }
+}
+
+#[cfg(not(unix))]
+fn hold_pane_after_agent_exit(
+    _args: &ExecArgs,
+    _status: &ExitStatus,
+    _signaled: bool,
+    _startup_failure: bool,
+) {
 }
 
 /// Non-abrupt exits are deliberate. Abrupt exits are deliberate only while the
@@ -711,6 +838,18 @@ fn cleanup_signal_flag() -> &'static Arc<AtomicBool> {
     CLEANUP_SIGNAL_RECEIVED.get_or_init(|| Arc::new(AtomicBool::new(false)))
 }
 
+fn reset_interrupt_signal_flag() {
+    interrupt_signal_flag().store(false, Ordering::SeqCst);
+}
+
+fn interrupt_signal_received() -> bool {
+    interrupt_signal_flag().load(Ordering::SeqCst)
+}
+
+fn interrupt_signal_flag() -> &'static Arc<AtomicBool> {
+    INTERRUPT_SIGNAL_RECEIVED.get_or_init(|| Arc::new(AtomicBool::new(false)))
+}
+
 #[cfg(unix)]
 fn install_cleanup_signal_handlers() -> Result<()> {
     use signal_hook::consts::signal::{SIGHUP, SIGTERM};
@@ -723,6 +862,19 @@ fn install_cleanup_signal_handlers() -> Result<()> {
 
 #[cfg(not(unix))]
 fn install_cleanup_signal_handlers() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn install_interrupt_signal_handler() -> Result<()> {
+    use signal_hook::consts::signal::SIGINT;
+
+    signal_hook::flag::register(SIGINT, interrupt_signal_flag().clone())?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn install_interrupt_signal_handler() -> Result<()> {
     Ok(())
 }
 

@@ -8,7 +8,7 @@ mod refresh_usage;
 mod supervised;
 
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -46,6 +46,7 @@ const CHILD_WAIT_POLL: Duration = Duration::from_millis(25);
 const RUN_MONITOR_POLL: Duration = Duration::from_millis(250);
 const RUN_EXIT_TERMINAL_GRACE: Duration = Duration::from_millis(500);
 static CLEANUP_SIGNAL_RECEIVED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+static INTERRUPT_SIGNAL_RECEIVED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
 type LaunchIdentity = AgentLaunchIdentity;
 

@@ -55,7 +55,7 @@ Every agent pane runs the hidden **`rimz agents exec <kind>`** wrapper rather th
 
 The wrapper runs the agent in the pane, inheriting the pane's TTY. It launches through the user's shell-startup path when that shell and `/usr/bin/env` are available, falling back to direct exec otherwise, and it exports `RIMZ_RTK` from `[harness] rtk` into the run, which `cargo xtask` reads to route recognized cargo subcommands through `rtk`.
 
-The wrapper stays resident behind the agent whenever it has work left after the agent exits (a run to complete, a worktree to reclaim, a pane to close), which makes it the attach point for supervised runs ([below](#supervised-runs)) and for the end traces and reclamation in [Cleanup](#cleanup). A plain in-place launch has none of those, so the wrapper direct-execs the agent and the pane returns straight to the shell.
+The wrapper stays resident behind the agent whenever it has work left after the agent exits (a run to complete, a held close-pane or worktree pane to present, a worktree to reclaim, a pane to close), which makes it the attach point for supervised runs ([below](#supervised-runs)) and for the end traces and reclamation in [Cleanup](#cleanup). A plain in-place launch has none of those, so the wrapper direct-execs the agent and the pane returns straight to the shell.
 
 ### Backend shape and placement
 
@@ -177,7 +177,7 @@ Durable definitions live in `~/.config/rimz/loop.toml` under `[tasks.*]`. Machin
 
 ## Cleanup
 
-When an agent exits, the same resident [exec wrapper](#the-exec-wrapper) that launched it reclaims what it owns: the supervised run's pane, and — for a worktree launch — the worktree.
+When an agent exits, the same resident [exec wrapper](#the-exec-wrapper) that launched it reclaims what it owns: the supervised run's pane, and — for a worktree launch — the worktree. Interactive close-pane and worktree panes first hold the pane with the exit status and a relaunch command until Enter, so startup errors and normal exits stay visible. Supervised runs and rimz-driven teardown skip the hold.
 
 **End and lost traces.** Interactive agent panes keep the wrapper resident. A clean child exit is deliberate. An abrupt exit from a tab/pane close is deliberate when the mux session still accepts live pane closes, even if the room is mid-teardown or missing sidebar chrome. The wrapper records a durable `rimz.agent-ended` trace before slower cleanup, so that agent stays out of future recovery. When the wrapper exits abruptly and the mux session is gone, wedged, or resurrected — reboot, mux crash, closing the last tab, in-`start` stuck-room recovery — it records `rimz.agent-lost`, skips worktree cleanup, and preserves recovery state so the next birth can regroup the agent into a `#<channel>` tab. The probe is stronger than a bare session listing, so a wedged-but-listed Zellij server still counts as lost while a live room with missing sidebar chrome still treats a pane close as deliberate.
 

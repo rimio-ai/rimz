@@ -27,7 +27,7 @@ use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed, write_heartb
 use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
 
-use crate::common::{Env, ScrubSessionEnvExt};
+use crate::common::{Env, ScrubSessionEnvExt, write_failing_agent_shim};
 
 fn tiled_column(panes: Vec<PaneCmd>) -> LayoutColumn {
     LayoutColumn {
@@ -1693,6 +1693,77 @@ fn closing_agent_tab_disposes_clean_worktree_when_session_survives() {
     );
 }
 
+#[test]
+fn failing_close_pane_agent_stays_visible_until_enter() {
+    require_tmux!();
+
+    let env = Env::new();
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let server = TmuxServer::new();
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: workspace.session_name.clone(),
+            workspace_id: workspace.workspace_id.clone(),
+            project_root: workspace.project_root.clone(),
+            cwd: workspace.worktree_root.clone(),
+            config: rimz::config::MultiplexerConfig::default(),
+            detected_size: Some((160, 40)),
+            truecolor: false,
+        })
+        .expect("ensure session");
+
+    let agent_bin = write_failing_agent_shim(&env, "codex", 7);
+    let command = tmux_failing_agent_exec_command(&env, &agent_bin, "launch_tmux_failure");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    server
+        .backend
+        .open_tab(&TabOptions {
+            session_name: workspace.session_name.clone(),
+            title: "#rimz-fail".to_owned(),
+            cwd: workspace.worktree_root.clone(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd { argv: command }])],
+            },
+            focus: false,
+            dock_sidebar: true,
+            sidebar: SidebarPaneOptions {
+                session_name: workspace.session_name.clone(),
+                workspace_id: workspace.workspace_id.clone(),
+                project_root: workspace.project_root.clone(),
+                cwd: workspace.worktree_root.clone(),
+                birth_size: SidebarWidth::default().birth_size(Some(160)),
+                rimz_bin: stub,
+                replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
+                resume_tabs: Vec::new(),
+                refresh_ms: None,
+            },
+        })
+        .expect("open agent tab");
+
+    let panes = server.wait_for_panes(&format!("{}:#rimz-fail", workspace.session_name), 2);
+    let pane = panes
+        .iter()
+        .find(|pane| pane.left > 0)
+        .expect("agent pane right of sidebar");
+    let pane_id = PaneId::from_parts(MuxName::Tmux, pane.id.clone());
+    let capture = capture_pane_until(
+        &server.backend,
+        &pane_id,
+        "rimz agents trim.pruner",
+        Duration::from_secs(5),
+    );
+    assert!(capture.contains("failed to start"), "{capture:?}");
+    assert!(capture.contains("rimz agents trim.pruner"), "{capture:?}");
+
+    server
+        .backend
+        .send_key(&pane_id, NamedKey::Enter)
+        .expect("send Enter");
+    wait_for_pane_absent(&server, &workspace.session_name, &pane_id);
+}
+
 /// `open_tab` builds a caller-specified multi-column layout imperatively: the
 /// first pane is the `new-window`, the remaining rows of a column split `-v`
 /// below it, and each later column splits `-h` to the right of the previous
@@ -2453,6 +2524,35 @@ fn tmux_agent_exec_command(
     ]
 }
 
+fn tmux_failing_agent_exec_command(env: &Env, agent_bin: &Path, launch_id: &str) -> Vec<String> {
+    let path = path_with_front(agent_bin);
+    let rimz_bin = env.rimz_bin().to_string_lossy().into_owned();
+    vec![
+        "/usr/bin/env".to_owned(),
+        format!("XDG_STATE_HOME={}", env.state_root().display()),
+        format!("XDG_RUNTIME_DIR={}", env.runtime_root.display()),
+        format!("XDG_CONFIG_HOME={}", env.config_root().display()),
+        format!("HOME={}", env.home_root.display()),
+        "SHELL=/definitely/not/a/shell".to_owned(),
+        format!("PATH={path}"),
+        rimz_bin,
+        "--mux".to_owned(),
+        "tmux".to_owned(),
+        "agents".to_owned(),
+        "exec".to_owned(),
+        "codex".to_owned(),
+        "--launch-id".to_owned(),
+        launch_id.to_owned(),
+        "--agent-name".to_owned(),
+        "pruner".to_owned(),
+        "--agent-team".to_owned(),
+        "trim".to_owned(),
+        "--agent-role".to_owned(),
+        "pruner".to_owned(),
+        "--close-pane-on-exit".to_owned(),
+    ]
+}
+
 fn chmod_executable(path: &Path) {
     #[cfg(unix)]
     {
@@ -2493,6 +2593,22 @@ fn wait_for_path_absent(path: &Path, message: &str) {
         thread::sleep(Duration::from_millis(25));
     }
     panic!("{message}: {}", path.display());
+}
+
+fn wait_for_pane_absent(server: &TmuxServer, session: &str, pane_id: &PaneId) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if list_session_panes(server, session)
+            .iter()
+            .all(|pane| pane.pane_id != *pane_id)
+        {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("pane {pane_id} stayed open after Enter");
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn wait_for_agent_tombstone(env: &Env, agent_id: &str) {
