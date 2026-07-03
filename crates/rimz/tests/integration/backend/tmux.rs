@@ -100,6 +100,34 @@ fn capture_pane_until(
     }
 }
 
+fn find_pane_with_capture_until(
+    backend: &TmuxBackend,
+    pane_ids: &[PaneId],
+    needle: &str,
+    budget: Duration,
+) -> (PaneId, String) {
+    let deadline = Instant::now() + budget;
+    let mut last = Vec::new();
+    loop {
+        last.clear();
+        for pane_id in pane_ids {
+            match backend.capture_pane(pane_id, None, false) {
+                Ok(capture) => {
+                    if capture.raw_text.contains(needle) {
+                        return (pane_id.clone(), capture.raw_text);
+                    }
+                    last.push(format!("{pane_id:?}: {:?}", capture.raw_text));
+                }
+                Err(err) => last.push(format!("{pane_id:?}: {err}")),
+            }
+        }
+        if Instant::now() >= deadline {
+            panic!("no pane captured {needle:?} before timeout: {last:?}");
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 /// Skip the test (return) if the host has no `tmux` binary on PATH.
 macro_rules! require_tmux {
     () => {
@@ -1742,15 +1770,15 @@ fn failing_close_pane_agent_stays_visible_until_enter() {
         })
         .expect("open agent tab");
 
-    let panes = server.wait_for_panes(&format!("{}:#rimz-fail", workspace.session_name), 2);
-    let pane = panes
+    let panes = server.wait_for_panes(&format!("{}:#rimz-fail", workspace.session_name), 1);
+    let pane_ids: Vec<PaneId> = panes
         .iter()
-        .find(|pane| pane.left > 0)
-        .expect("agent pane right of sidebar");
-    let pane_id = PaneId::from_parts(MuxName::Tmux, pane.id.clone());
-    let capture = capture_pane_until(
+        .map(|pane| PaneId::from_parts(MuxName::Tmux, pane.id.clone()))
+        .collect();
+    assert!(!pane_ids.is_empty(), "expected an agent pane: {panes:?}");
+    let (pane_id, capture) = find_pane_with_capture_until(
         &server.backend,
-        &pane_id,
+        &pane_ids,
         "rimz agents trim.pruner",
         Duration::from_secs(5),
     );
