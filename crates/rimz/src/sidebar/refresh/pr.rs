@@ -85,7 +85,7 @@ pub(crate) fn produce_pr_states(
         crate::ledger::single_flight::Coalesced::Shared(cache) => cache.states,
         crate::ledger::single_flight::Coalesced::Produce(_guard) => {
             let prior = read_pr_state_cache(&path);
-            let result = probe_pr_states(snapshot);
+            let result = probe_pr_states(snapshot, &prior.states);
             let (states, ok) = merge_probe_results(&prior.states, result);
             let cache = PrStateCache {
                 refreshed_at_ms: unix_now_ms(),
@@ -98,7 +98,7 @@ pub(crate) fn produce_pr_states(
         }
         crate::ledger::single_flight::Coalesced::ProduceLocal => {
             let prior = read_pr_state_cache(&path);
-            merge_probe_results(&prior.states, probe_pr_states(snapshot)).0
+            merge_probe_results(&prior.states, probe_pr_states(snapshot, &prior.states)).0
         }
     }
 }
@@ -122,15 +122,22 @@ impl ProbeBatch {
     }
 }
 
-fn probe_pr_states(snapshot: &SidebarSnapshot) -> ProbeBatch {
+fn probe_pr_states(
+    snapshot: &SidebarSnapshot,
+    prior: &BTreeMap<String, WorktreePrState>,
+) -> ProbeBatch {
     let paths = needed_pr_worktree_paths(snapshot);
+    let (pinned, to_probe) = probe_targets(&paths, prior);
     let mut states = BTreeMap::new();
+    for path in pinned {
+        states.insert(path.clone(), WorktreePrState::Merged);
+    }
     let mut failed_paths = Vec::new();
-    for chunk in paths.chunks(MAX_PARALLEL_PR_PROBES) {
+    for chunk in to_probe.chunks(MAX_PARALLEL_PR_PROBES) {
         std::thread::scope(|scope| {
             let handles = chunk
                 .iter()
-                .map(|path| scope.spawn(move || probe_worktree(path)))
+                .map(|path| scope.spawn(move || probe_worktree(path.as_str())))
                 .collect::<Vec<_>>();
             for handle in handles {
                 if let Ok(result) = handle.join() {
@@ -148,6 +155,17 @@ fn probe_pr_states(snapshot: &SidebarSnapshot) -> ProbeBatch {
         states,
         failed_paths,
     }
+}
+
+/// Split the worktrees due for a sweep into terminal cached verdicts that can
+/// be carried forward and worktrees that still need a forge probe.
+fn probe_targets<'a>(
+    paths: &'a [String],
+    prior: &BTreeMap<String, WorktreePrState>,
+) -> (Vec<&'a String>, Vec<&'a String>) {
+    paths
+        .iter()
+        .partition(|path| prior.get(*path) == Some(&WorktreePrState::Merged))
 }
 
 fn merge_probe_results(
@@ -412,6 +430,25 @@ mod tests {
             !merged.contains_key("/repo/gone"),
             "paths absent from this probe are not kept just because they existed before"
         );
+    }
+
+    #[test]
+    fn merged_worktrees_are_pinned_not_reprobed() {
+        let paths = vec![
+            "/repo/a".to_owned(),
+            "/repo/b".to_owned(),
+            "/repo/c".to_owned(),
+            "/repo/d".to_owned(),
+        ];
+        let mut prior = BTreeMap::new();
+        prior.insert("/repo/a".to_owned(), WorktreePrState::Merged);
+        prior.insert("/repo/b".to_owned(), WorktreePrState::Open);
+        prior.insert("/repo/c".to_owned(), WorktreePrState::Closed);
+
+        let (pinned, to_probe) = probe_targets(&paths, &prior);
+
+        assert_eq!(pinned, vec![&paths[0]]);
+        assert_eq!(to_probe, vec![&paths[1], &paths[2], &paths[3]]);
     }
 
     #[test]
