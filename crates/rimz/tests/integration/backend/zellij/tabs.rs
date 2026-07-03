@@ -6,6 +6,8 @@ use rimz::mux::{
 };
 use tempfile::TempDir;
 
+use crate::common::CommandTimeoutExt;
+
 use super::support::*;
 
 #[test]
@@ -200,6 +202,9 @@ fn work_area_swap_layout_rebalances_backend_and_native_tabs() {
     let client_rows: u16 = 46;
     let _client = AttachedClient::attach(xdg.path(), &name, client_columns, client_rows);
     wait_for_attached_client(xdg.path(), &name);
+    let work_pane = || PaneCmd {
+        argv: vec!["sleep".to_owned(), "600".to_owned()],
+    };
 
     let backend_tab = "backend work split";
     backend
@@ -209,12 +214,8 @@ fn work_area_swap_layout_rebalances_backend_and_native_tabs() {
             cwd: cwd.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![
-                    tiled_column(vec![PaneCmd {
-                        argv: vec!["sleep".to_owned(), "600".to_owned()],
-                    }]),
-                    tiled_column(vec![PaneCmd {
-                        argv: vec!["sleep".to_owned(), "600".to_owned()],
-                    }]),
+                    tiled_column(vec![work_pane()]),
+                    tiled_column(vec![work_pane()]),
                 ],
             },
             focus: true,
@@ -230,6 +231,98 @@ fn work_area_swap_layout_rebalances_backend_and_native_tabs() {
         cwd.path(),
         client_columns,
         client_rows,
+    );
+
+    let overflow_tab = "backend overflow split";
+    backend
+        .open_tab(&TabOptions {
+            session_name: name.clone(),
+            title: overflow_tab.to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![
+                    tiled_column(vec![work_pane()]),
+                    tiled_column(vec![work_pane()]),
+                    tiled_column(vec![work_pane()]),
+                ],
+            },
+            focus: true,
+            dock_sidebar: true,
+            sidebar: sidebar.clone(),
+        })
+        .expect("open backend overflow tab layout");
+    let overflow_work = wait_for_named_work_pane_count(xdg.path(), &name, overflow_tab, 3);
+    let focus = scoped_zellij(xdg.path())
+        .args([
+            "--session",
+            &name,
+            "action",
+            "focus-pane-id",
+            &format!("terminal_{}", overflow_work[1].id),
+        ])
+        .bounded_output()
+        .expect("focus-pane-id");
+    assert!(
+        focus.status.success(),
+        "focus-pane-id failed: {}",
+        String::from_utf8_lossy(&focus.stderr),
+    );
+    let sidebar_before = wait_for_named_sidebar_pane(xdg.path(), &name, overflow_tab)
+        .expect("overflow tab keeps its sidebar");
+    assert_eq!(
+        sidebar_before.x, 0,
+        "overflow tab starts with the sidebar docked left: {sidebar_before:?}",
+    );
+
+    spawn_sleep_pane(xdg.path(), &name, cwd.path());
+    let overflow_split =
+        wait_for_named_work_pane_state(xdg.path(), &name, overflow_tab, 4, |work| {
+            let work_stays_right_of_sidebar = work
+                .iter()
+                .all(|pane| pane.x >= sidebar_before.columns.saturating_sub(2));
+            let sidebar_unchanged = named_sidebar_pane_geometry(xdg.path(), &name, overflow_tab)
+                .ok()
+                .flatten()
+                .is_some_and(|sidebar| {
+                    sidebar.x == sidebar_before.x
+                        && sidebar.y == sidebar_before.y
+                        && sidebar.columns == sidebar_before.columns
+                        && sidebar.rows == sidebar_before.rows
+                });
+            work_stays_right_of_sidebar && sidebar_unchanged
+        });
+    let min_work_columns = overflow_split
+        .iter()
+        .map(|pane| pane.columns)
+        .min()
+        .expect("overflow split has panes");
+    let max_work_columns = overflow_split
+        .iter()
+        .map(|pane| pane.columns)
+        .max()
+        .expect("overflow split has panes");
+    assert!(
+        max_work_columns.abs_diff(min_work_columns) <= 8,
+        "overflow split should re-tile the work area into even columns: {overflow_split:?}",
+    );
+    let sidebar_after = named_sidebar_pane_geometry(xdg.path(), &name, overflow_tab)
+        .expect("list overflow sidebar")
+        .expect("overflow tab keeps its sidebar");
+    assert_eq!(
+        (
+            sidebar_after.x,
+            sidebar_after.y,
+            sidebar_after.columns,
+            sidebar_after.rows,
+        ),
+        (
+            sidebar_before.x,
+            sidebar_before.y,
+            sidebar_before.columns,
+            sidebar_before.rows,
+        ),
+        "no-direction overflow split must not split the sidebar: before \
+         {sidebar_before:?}, after {sidebar_after:?}",
     );
 
     let before_tabs = tab_ids(xdg.path(), &name);

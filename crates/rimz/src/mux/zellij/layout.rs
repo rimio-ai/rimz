@@ -340,11 +340,11 @@ fn render_undocked_tab_layout(opts: &TabOptions) -> Result<String> {
 /// template without one re-tiles the bar into the work area as a full-size pane
 /// (swap-layout semantics in `docs/externals/mux-adapter/zellij-reference.md`).
 ///
-/// The templates stop at two work panes. Larger static templates need a
-/// `children` placeholder to absorb extra panes, and that can make keyboard
-/// `NewPane` actions prefer the first work slot instead of the focused pane.
-/// Letting Zellij's native focus-based split path handle three-or-more work
-/// panes preserves the user's expected target.
+/// The first two templates keep the nicer one- and two-work-pane shapes. The
+/// final unbounded template catches larger tabs with a `children` work area so
+/// the sidebar and compact-bar stay pinned at any pane count. Without that
+/// catch-all, Zellij's native no-direction fallback splits the largest
+/// weighted-area pane, which is normally the full-height sidebar.
 fn rimz_swap_layout_kdl(sidebar_cols: u16) -> String {
     format!(
         r#"    swap_tiled_layout name="rimz-work-area" {{
@@ -363,6 +363,17 @@ fn rimz_swap_layout_kdl(sidebar_cols: u16) -> String {
                 pane split_direction="vertical" {{
                     pane
                     pane
+                }}
+            }}
+            pane size=1 borderless=true {{
+                plugin location="zellij:compact-bar"
+            }}
+        }}
+        tab {{
+            pane split_direction="vertical" {{
+                pane size={sidebar_cols}
+                pane split_direction="vertical" {{
+                    children
                 }}
             }}
             pane size=1 borderless=true {{
@@ -402,6 +413,17 @@ fn rimz_undocked_swap_layout(max_work_panes: u16) -> String {
 "#,
         );
     }
+    layout.push_str(
+        r#"        tab {
+            pane split_direction="vertical" {
+                children
+            }
+            pane size=1 borderless=true {
+                plugin location="zellij:compact-bar"
+            }
+        }
+"#,
+    );
     layout.push_str("    }\n");
     layout
 }

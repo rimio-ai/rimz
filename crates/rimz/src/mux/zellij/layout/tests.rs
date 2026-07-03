@@ -70,6 +70,91 @@ fn pane_header_before<'a>(layout: &'a str, needle: &str) -> &'a str {
     &layout[pane_at..args_at]
 }
 
+fn swap_layout_ranges(layout: &str) -> Vec<std::ops::Range<usize>> {
+    let marker = r#"swap_tiled_layout name="rimz-work-area""#;
+    let mut ranges = Vec::new();
+    let mut search_from = 0;
+    while let Some(relative_start) = layout[search_from..].find(marker) {
+        let start = search_from + relative_start;
+        let brace_start = start + layout[start..].find('{').expect("swap layout starts");
+        let mut depth = 0_u16;
+        let mut end = None;
+        for (offset, ch) in layout[brace_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(brace_start + offset + ch.len_utf8());
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end = end.expect("swap layout closes");
+        ranges.push(start..end);
+        search_from = end;
+    }
+    ranges
+}
+
+fn only_swap_layout(layout: &str) -> &str {
+    let ranges = swap_layout_ranges(layout);
+    assert_eq!(ranges.len(), 1, "layout carries one swap layout:\n{layout}");
+    &layout[ranges[0].clone()]
+}
+
+fn layout_without_swap_layouts(layout: &str) -> String {
+    let mut without = String::new();
+    let mut copied_until = 0;
+    for range in swap_layout_ranges(layout) {
+        without.push_str(&layout[copied_until..range.start]);
+        copied_until = range.end;
+    }
+    without.push_str(&layout[copied_until..]);
+    without
+}
+
+fn assert_children_only_in_swap_layout(layout: &str) {
+    assert!(
+        only_swap_layout(layout).contains("children"),
+        "the unbounded swap tier carries children:\n{layout}",
+    );
+    assert!(
+        !layout_without_swap_layouts(layout).contains("children"),
+        "children stays out of visible tabs and templates:\n{layout}",
+    );
+}
+
+fn assert_unbounded_swap_tier_after_budget(layout: &str, highest_max_panes: u16) {
+    let swap = only_swap_layout(layout);
+    let highest_tier = format!("tab max_panes={highest_max_panes}");
+    let highest_at = swap.find(&highest_tier).unwrap_or_else(|| {
+        panic!("swap layout carries {highest_tier} before the unbounded tier:\n{layout}")
+    });
+    let unbounded_at = swap
+        .rfind("\n        tab {\n")
+        .expect("swap layout carries a final bare tab tier");
+    let unbounded = &swap[unbounded_at..];
+    assert!(
+        unbounded_at > highest_at,
+        "unbounded swap tier follows the max_panes tiers:\n{layout}",
+    );
+    assert!(
+        unbounded.contains("children"),
+        "unbounded swap tier absorbs extra panes:\n{layout}",
+    );
+    assert!(
+        !unbounded.contains("max_panes"),
+        "unbounded swap tier has no max_panes cap:\n{layout}",
+    );
+    assert!(
+        !swap.contains(&format!("tab max_panes={}", highest_max_panes + 1)),
+        "swap layout should catch larger pane counts with the unbounded tier:\n{layout}",
+    );
+}
+
 fn assert_work_area_template(layout: &str, compact_bars: usize, focused: usize) {
     assert!(layout.contains("compact-bar"), "{layout}");
     assert!(
@@ -78,6 +163,8 @@ fn assert_work_area_template(layout: &str, compact_bars: usize, focused: usize) 
     );
     assert!(layout.contains("tab max_panes=3"), "{layout}");
     assert!(layout.contains("tab max_panes=4"), "{layout}");
+    assert_unbounded_swap_tier_after_budget(layout, 4);
+    assert_children_only_in_swap_layout(layout);
     assert_eq!(layout.matches("focus=true").count(), focused, "{layout}");
     assert_eq!(
         layout
@@ -103,10 +190,9 @@ fn resume_tab(label: &str, panes: &[&[&str]], cwd: &str) -> ResumeTab {
 fn session_layout_renders_terminal_template_bar_swap_and_runtime_args() {
     let layout =
         render_session_layout(&sidebar_opts("rimz-contract", Some(50), None), None, &[]).unwrap();
-    assert_work_area_template(&layout, 4, 3);
+    assert_work_area_template(&layout, 5, 3);
     assert!(layout.contains("pane focus=true"), "{layout}");
     assert!(layout.contains("tab focus=true"), "{layout}");
-    assert!(!layout.contains("children"), "{layout}");
     assert!(!layout.contains("default_tab_template"), "{layout}");
     assert!(layout.contains("start_suspended false"), "{layout}");
     assert!(!layout.contains("start_suspended true"), "{layout}");
@@ -171,7 +257,7 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
         ),
     ]))
     .expect("render background view layout");
-    assert_work_area_template(&layout, 3, 1);
+    assert_work_area_template(&layout, 4, 1);
     assert!(layout.contains(r#"args "stats" "--refresh""#), "{layout}");
     assert!(
         !pane_header_before(&layout, r#"args "stats" "--refresh""#).contains("size="),
@@ -200,15 +286,15 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
     );
     assert!(layout.contains(r#""sidebar" "serve""#), "{layout}");
     assert!(
-        !layout.contains("tab max_panes=6"),
-        "larger tabs should fall back to Zellij's focused split path:\n{layout}",
+        !only_swap_layout(&layout).contains("tab max_panes=5"),
+        "larger tabs should use the unbounded work-area swap tier:\n{layout}",
     );
     assert!(layout.contains(r#"cwd="/proj/worktree""#), "{layout}");
     assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
 
     let layout = render_background_view_layout(&background_view_opts(vec![]))
         .expect("render content-only background view layout");
-    assert_work_area_template(&layout, 3, 1);
+    assert_work_area_template(&layout, 4, 1);
     assert!(layout.contains(r#"args "stats" "--refresh""#), "{layout}");
     assert!(
         !layout.contains(r#"split_direction="horizontal""#),
@@ -223,7 +309,7 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
     let mut opts = background_view_opts(vec![]);
     opts.view.content.push(host(&["btop"], "/proj/worktree"));
     let layout = render_background_view_layout(&opts).expect("render multi-content layout");
-    assert_work_area_template(&layout, 3, 1);
+    assert_work_area_template(&layout, 4, 1);
     assert!(
         layout.contains(r#"pane split_direction="horizontal""#),
         "multiple content panes stack in the middle column:\n{layout}",
@@ -249,7 +335,7 @@ fn tab_layout_renders_columns_and_can_mirror_template_width() {
         sidebar,
     };
     let layout = render_tab_layout(&opts, None).expect("render tab layout");
-    assert_work_area_template(&layout, 3, 1);
+    assert_work_area_template(&layout, 4, 1);
     assert!(
         layout.contains(r#"pane size=72 name="rimz-sidebar" borderless=true"#),
         "custom tab layouts instantiate from a live client, so the \
@@ -261,8 +347,8 @@ fn tab_layout_renders_columns_and_can_mirror_template_width() {
         "custom tab layouts must not use detached percentage sizing:\n{layout}",
     );
     assert!(
-        !layout.contains("tab max_panes=6"),
-        "larger tabs should fall back to Zellij's focused split path:\n{layout}",
+        !only_swap_layout(&layout).contains("tab max_panes=5"),
+        "larger tabs should use the unbounded work-area swap tier:\n{layout}",
     );
     assert!(layout.contains("pane size=72"), "{layout}");
     assert!(
@@ -279,8 +365,8 @@ fn tab_layout_renders_columns_and_can_mirror_template_width() {
              new_tab_template instead of this command's pane-width probe:\n{layout}",
     );
     assert!(
-        layout.contains("pane size=60\n"),
-        "the tab's swap layout must mirror the live sidebar width too:\n{layout}",
+        layout.matches("pane size=60").count() == 4,
+        "the visible sidebar and three swap tiers must mirror the live width:\n{layout}",
     );
 }
 
@@ -304,7 +390,7 @@ fn tab_layout_renders_tiled_and_stacked_columns() {
 
     let layout = render_tab_layout(&opts, None).expect("render tab layout");
 
-    assert_work_area_template(&layout, 3, 1);
+    assert_work_area_template(&layout, 4, 1);
     assert!(
         layout.contains(r#"pane split_direction="horizontal""#),
         "tiled column should use horizontal split:\n{layout}",
@@ -365,13 +451,15 @@ fn tab_layout_can_omit_sidebar_for_gallery_columns() {
         "{layout}",
     );
     assert!(layout.contains("tab max_panes=2"), "{layout}");
+    assert_unbounded_swap_tier_after_budget(&layout, 2);
+    assert_children_only_in_swap_layout(&layout);
     assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
     assert_eq!(
         layout
             .matches(r#"plugin location="zellij:compact-bar""#)
             .count(),
-        2,
-        "the visible bar and gallery swap template carry compact-bar:\n{layout}",
+        3,
+        "the visible bar and gallery swap templates carry compact-bar:\n{layout}",
     );
 }
 
@@ -390,7 +478,7 @@ fn session_layout_seeds_resumed_agents_and_focuses_working_when_empty() {
         resume_tab("#main", &[&["pi", "resume", "sess-3"]], "/proj/main"),
     ];
     let layout = render_session_layout(&opts, None, &resume).expect("render resume layout");
-    assert_work_area_template(&layout, 6, 5);
+    assert_work_area_template(&layout, 7, 5);
     assert!(layout.contains(r#"command "claude""#), "{layout}");
     assert!(layout.contains(r#"args "--resume" "sess-1""#), "{layout}");
     assert!(layout.contains(r#"command "codex""#), "{layout}");
@@ -413,10 +501,9 @@ fn session_layout_seeds_resumed_agents_and_focuses_working_when_empty() {
         "a bare working terminal tab remains:\n{layout}",
     );
     assert!(layout.contains("new_tab_template"), "{layout}");
-    assert!(!layout.contains("children"), "{layout}");
 
     let layout = render_session_layout(&opts, None, &[]).expect("render layout");
-    assert_work_area_template(&layout, 4, 3);
+    assert_work_area_template(&layout, 5, 3);
     assert!(layout.contains("tab focus=true"), "{layout}");
     assert!(
         !layout.contains("tab name="),
@@ -435,7 +522,7 @@ fn session_layout_leads_daemon_tab_with_three_column_daemon_view() {
     ]);
     let layout = render_session_layout(&bg.sidebar, Some(&daemon_view(bg.view.hosts.clone())), &[])
         .expect("render session layout with daemon");
-    assert_work_area_template(&layout, 5, 4);
+    assert_work_area_template(&layout, 6, 4);
     let daemon_at = layout.find(r#"tab name="rimzd""#).expect("daemon tab");
     let work_at = layout.find("tab focus=true").expect("working tab");
     assert!(
@@ -443,7 +530,6 @@ fn session_layout_leads_daemon_tab_with_three_column_daemon_view() {
         "daemon tab must precede the working tab\n{layout}",
     );
     assert!(layout.contains("new_tab_template"), "{layout}");
-    assert!(!layout.contains("children"), "{layout}");
     assert!(layout.contains(r#"command "claude""#), "{layout}");
     assert!(
         layout.contains(r#"args "codex" "app-server" "serve""#),
@@ -467,7 +553,7 @@ fn session_layout_leads_daemon_tab_with_three_column_daemon_view() {
     let bg = background_view_opts(vec![]);
     let layout = render_session_layout(&bg.sidebar, Some(&daemon_view(vec![])), &[])
         .expect("render content-only daemon tab");
-    assert_work_area_template(&layout, 5, 4);
+    assert_work_area_template(&layout, 6, 4);
     assert!(layout.contains(r#"tab name="rimzd""#), "{layout}");
     assert!(layout.contains(r#"args "stats" "--refresh""#), "{layout}");
     assert!(
