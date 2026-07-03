@@ -235,7 +235,19 @@ pub fn resolve_many<'a>(
     current_channel: Option<&str>,
 ) -> Result<Vec<&'a AgentState>, TargetErr> {
     let candidates = root_agents(snapshot);
-    resolve_mentions(raw, worktree_flag, current_channel, &candidates)
+    resolve_agents(raw, worktree_flag, current_channel, &candidates)
+}
+
+/// Resolve a target to every matching agent from a caller-supplied durable
+/// candidate set. Message dispatch uses this over audit-scope rollups when the
+/// live projection missed a receiver.
+pub fn resolve_agents<'a>(
+    raw: &str,
+    worktree_flag: Option<&str>,
+    current_channel: Option<&str>,
+    candidates: &[&'a AgentState],
+) -> Result<Vec<&'a AgentState>, TargetErr> {
+    resolve_mentions(raw, worktree_flag, current_channel, candidates)
 }
 
 /// Resolve a live message target to every matching live agent pane: bound sessions

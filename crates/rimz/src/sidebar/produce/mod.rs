@@ -189,13 +189,23 @@ pub fn resolution_snapshot(
         session_name: workspace.session_name.clone(),
         exclude: None,
         min_pane_cache_ms: Some(crate::sidebar::timing::unix_now_ms()),
-        diag: crate::diag::DiagSink::disabled(),
+        diag: crate::diag::DiagSink::for_workspace(
+            workspace.workspace_id.clone(),
+            workspace.session_name.clone(),
+            None,
+        ),
     };
     match produce_resolution_snapshot(&mut RollupCursor::new(), &state, &runtime, &opts) {
         Ok(snapshot) => Ok(snapshot),
         // No live session / pane discovery failed: fall back to the rollup's own
         // stamped panes so a bound agent still resolves, exactly as before.
-        Err(_) => rollup_resolution_snapshot(ledger),
+        Err(err) => {
+            opts.diag
+                .emit(crate::diag::record::DiagEvent::ResolutionFallback {
+                    reason: err.to_string(),
+                });
+            rollup_resolution_snapshot(ledger)
+        }
     }
 }
 

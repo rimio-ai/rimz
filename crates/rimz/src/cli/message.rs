@@ -243,11 +243,14 @@ fn steer_message(
     }
     let channel = current_channel(&workspace);
     let sender = send::sender_from_env(channel.as_deref(), no_from);
-    let targets = match super::resolve_pane_targets(
+    let durable_agents = dispatch::durable_target_agents(&ledger)?;
+    let targets = match dispatch::queue_targets(
         &snapshot,
+        Some(&durable_agents),
         &target,
         worktree.as_deref().or(channel_flag.as_deref()),
         channel.as_deref(),
+        false,
     ) {
         Ok(targets) => targets,
         Err(_) if create => {
@@ -260,11 +263,23 @@ fn steer_message(
                 globals,
             );
         }
-        Err(err) => return message_miss(&snapshot, channel.as_deref(), &err),
+        Err(err) => {
+            record_resolution_bounce(
+                &ledger,
+                &workspace,
+                &target,
+                channel.as_deref(),
+                &sender,
+                text.len(),
+                &err,
+            )?;
+            let err = map_queue_target_err(&target, err);
+            return message_miss(&snapshot, channel.as_deref(), &err);
+        }
     };
 
     if targets.len() > 1 && !all && !rimz::harness::target::is_broadcast(&target) {
-        let labels: Vec<String> = targets.iter().map(|target| target.label()).collect();
+        let labels: Vec<String> = targets.iter().map(dispatch::QueueTarget::label).collect();
         return Err(super::ambiguous_fanout("message --steer", &target, &labels));
     }
     let text = if targets.len() > 1 || rimz::harness::target::is_broadcast(&target) {
@@ -334,6 +349,43 @@ fn message_miss(
     std::process::exit(1);
 }
 
+fn map_queue_target_err(target: &str, err: rimz::TargetErr) -> anyhow::Error {
+    let mapped: Result<()> = super::map_resolve(target, Err(err.clone()));
+    match mapped {
+        Ok(_) => unreachable!("mapping an error cannot succeed"),
+        Err(mapped) => mapped,
+    }
+}
+
+fn record_resolution_bounce(
+    ledger: &rimz::Ledger,
+    workspace: &ResolvedWorkspace,
+    target: &str,
+    channel: Option<&str>,
+    sender: &MessageSender,
+    text_len: usize,
+    err: &rimz::TargetErr,
+) -> Result<()> {
+    if !matches!(
+        err,
+        rimz::TargetErr::NoMatch { .. }
+            | rimz::TargetErr::NoMatchInChannel { .. }
+            | rimz::TargetErr::PaneUnbound { .. }
+    ) {
+        return Ok(());
+    }
+    ledger.record_unresolved_message(rimz::ledger::UnresolvedMessage {
+        workspace_id: workspace.workspace_id.clone(),
+        session_name: &workspace.session_name,
+        address: target,
+        channel,
+        sender,
+        text_len,
+        reason: "receiver not found",
+    })?;
+    Ok(())
+}
+
 /// How a queued message delivers: submit with Enter, the turn-boundary gate,
 /// whether to deliver past a pending ask, and an optional compact-first threshold.
 struct MessageSpec {
@@ -350,6 +402,8 @@ struct MessageSpec {
 #[derive(Clone, Debug, Serialize)]
 struct MessageListRow {
     message_id: MessageId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    address: Option<String>,
     kind: AgentKind,
     agent_id: AgentSessionId,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -390,6 +444,7 @@ impl MessageListRow {
     fn from_record(message: MessageRecord) -> Self {
         Self {
             message_id: message.message_id,
+            address: None,
             kind: message.kind,
             agent_id: message.agent_id,
             agent_name: message.agent_name,
@@ -425,6 +480,7 @@ impl MessageListRow {
             .or_else(|| (payload.status == MessageStatus::Delivered).then_some(event.timestamp));
         Some(Self {
             message_id: payload.message_id,
+            address: payload.address,
             kind: payload.kind,
             agent_id: payload.agent_id,
             agent_name: payload.agent_name,
@@ -499,10 +555,12 @@ fn add_message(
             snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
         }
     }
+    let durable_agents = dispatch::durable_target_agents(&ledger)?;
     let targets = match super::map_resolve(
         &target,
         dispatch::queue_targets(
             &snapshot,
+            Some(&durable_agents),
             &target,
             worktree.as_deref().or(channel_flag.as_deref()),
             channel.as_deref(),
@@ -522,6 +580,17 @@ fn add_message(
                     &text,
                     globals,
                 );
+            }
+            if let Some(target_err) = err.downcast_ref::<rimz::TargetErr>() {
+                record_resolution_bounce(
+                    &ledger,
+                    &workspace,
+                    &target,
+                    channel.as_deref(),
+                    &sender,
+                    text.len(),
+                    target_err,
+                )?;
             }
             return message_miss(&snapshot, channel.as_deref(), &err);
         }
@@ -838,27 +907,38 @@ fn report_steer(
     wait: Option<(Duration, u64)>,
     target: &str,
     total: usize,
-    outcomes: &[send::Outcome],
+    outcomes: &[dispatch::SteerOutcome],
     compacted: &[String],
 ) -> Result<()> {
     let sent = outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            send::Outcome::Sent { label, message_id } => Some(format!("{label} ({message_id})")),
+            dispatch::SteerOutcome::Sent { label, message_id } => {
+                Some(format!("{label} ({message_id})"))
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
     let sent_labels = outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            send::Outcome::Sent { label, .. } => Some(label.as_str()),
+            dispatch::SteerOutcome::Sent { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let queued = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            dispatch::SteerOutcome::Queued { label, message_id } => {
+                Some(format!("{label} ({message_id})"))
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
     let pending = outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            send::Outcome::SkippedPending {
+            dispatch::SteerOutcome::SkippedPending {
                 label, message_id, ..
             } => Some(format!("{label} ({message_id})")),
             _ => None,
@@ -868,18 +948,23 @@ fn report_steer(
         let mut failed = false;
         let deadline = std::time::Instant::now() + timeout;
         for outcome in outcomes {
-            if let send::Outcome::Sent { label, message_id } = outcome {
+            let (label, message_id, compactable) = match outcome {
+                dispatch::SteerOutcome::Sent { label, message_id } => (label, message_id, true),
+                dispatch::SteerOutcome::Queued { label, message_id } => (label, message_id, false),
+                dispatch::SteerOutcome::SkippedPending { .. } => continue,
+            };
+            if compactable {
                 print_compacted_if_needed(label, compacted);
-                if !wait_and_print_message(
-                    ledger,
-                    session_name,
-                    label,
-                    message_id,
-                    wait_base,
-                    deadline,
-                )? {
-                    failed = true;
-                }
+            }
+            if !wait_and_print_message(
+                ledger,
+                session_name,
+                label,
+                message_id,
+                wait_base,
+                deadline,
+            )? {
+                failed = true;
             }
         }
         if failed {
@@ -897,8 +982,15 @@ fn report_steer(
             }
             return Ok(());
         }
+        if !queued.is_empty() {
+            #[expect(clippy::print_stdout, reason = "message confirmation")]
+            {
+                println!("queued for {}", queued[0]);
+            }
+            return Ok(());
+        }
         match outcomes.first() {
-            Some(send::Outcome::SkippedPending {
+            Some(dispatch::SteerOutcome::SkippedPending {
                 label,
                 message_id,
                 request_id,
@@ -913,6 +1005,9 @@ fn report_steer(
     let mut line = format!("sent {} agent(s)", sent.len());
     if !sent.is_empty() {
         line.push_str(&format!(": {}", sent.join(", ")));
+    }
+    if !queued.is_empty() {
+        line.push_str(&format!("; queued: {}", queued.join(", ")));
     }
     if !compacted.is_empty() {
         line.push_str(&format!("; compacted: {}", compacted.join(", ")));
@@ -1007,6 +1102,9 @@ fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
 }
 
 fn message_target(message: &MessageListRow, agents: &[&AgentState]) -> String {
+    if let Some(address) = &message.address {
+        return address.clone();
+    }
     agents
         .iter()
         .copied()

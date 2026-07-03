@@ -588,6 +588,9 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
                 .map(|name| format!("; frames {name}"))
                 .unwrap_or_default()
         ),
+        DiagEvent::ResolutionFallback { reason } => {
+            format!("resolution snapshot fell back to rollup: {reason}")
+        }
         DiagEvent::FrameShrinkVerified { prior, fresh } => {
             format!("verified shrink {prior}->{fresh}")
         }

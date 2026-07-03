@@ -104,7 +104,7 @@ pub fn message_for_target(
     .with_force(draft.force)
     .with_pane_id(target.pane_id.clone())
     .with_auto_compact(draft.auto_compact)
-    .with_status(MessageStatus::Created)
+    .with_status(MessageStatus::Queued)
 }
 
 pub fn send_batch_to_live_pane(
@@ -138,6 +138,7 @@ pub fn send_batch_to_live_pane(
         .iter()
         .find_map(|message| compact_message_for_target(ledger, target, bound, message));
     if let Some(command) = command {
+        ledger.queue_message(&command, &workspace.session_name)?;
         match write_batch(
             workspace,
             ledger,
@@ -157,7 +158,11 @@ pub fn send_batch_to_live_pane(
                 });
             }
             Err(err) => {
-                ledger.record_send_error(&command, &err.to_string(), &workspace.session_name)?;
+                ledger.record_message_delivery_failure(
+                    &command.message_id,
+                    &err.to_string(),
+                    &workspace.session_name,
+                )?;
                 return Err(err);
             }
         }

@@ -88,6 +88,18 @@ pub enum AskExpiry {
     MovedOn,
 }
 
+/// Terminal audit-only message outcome for a target that never resolved to a
+/// durable receiver card.
+pub struct UnresolvedMessage<'a> {
+    pub workspace_id: WorkspaceId,
+    pub session_name: &'a str,
+    pub address: &'a str,
+    pub channel: Option<&'a str>,
+    pub sender: &'a crate::message::MessageSender,
+    pub text_len: usize,
+    pub reason: &'a str,
+}
+
 impl AskExpiry {
     fn reason(self) -> AbandonReason {
         match self {

@@ -162,6 +162,10 @@ impl MessageEventMethod {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MessageEventPayload {
     pub message_id: MessageId,
+    /// Raw unresolved target for a terminal bounce. Resolved message events keep
+    /// kind/agent_id as the durable receiver key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -196,6 +200,7 @@ impl MessageEventPayload {
     pub fn from_record(message: &MessageRecord, reason: Option<&str>) -> Self {
         Self {
             message_id: message.message_id.clone(),
+            address: None,
             kind: message.kind.clone(),
             agent_id: message.agent_id.clone(),
             agent_name: message.agent_name.clone(),
@@ -214,6 +219,39 @@ impl MessageEventPayload {
             enqueued_at: Some(message.enqueued_at),
             delivered_at: message.delivered_at,
             compacted_context_tokens: message.compacted_context_tokens,
+        }
+    }
+
+    pub fn unresolved(
+        message_id: MessageId,
+        address: String,
+        channel: Option<String>,
+        sender: MessageSender,
+        text_len: usize,
+        reason: String,
+        at: Timestamp,
+    ) -> Self {
+        Self {
+            agent_id: AgentSessionId::from(format!("unresolved_{}", message_id.as_str())),
+            message_id,
+            address: Some(address),
+            kind: AgentKind::new_unchecked("unknown"),
+            agent_name: None,
+            channel,
+            gate: DeliveryGate::Done,
+            status: MessageStatus::Errored,
+            body: MessageBody::Prompt,
+            pane_id: None,
+            forced: false,
+            text_len,
+            enter: true,
+            attempts: 0,
+            unconfirmed_sends: 0,
+            sender: sender.attributed(),
+            reason: Some(reason),
+            enqueued_at: Some(at),
+            delivered_at: None,
+            compacted_context_tokens: None,
         }
     }
 }
@@ -486,6 +524,31 @@ impl EventEnvelope {
             "rimz",
             "cli",
             method.as_str(),
+            params,
+        )
+    }
+
+    pub fn unresolved_message_event(
+        workspace_id: WorkspaceId,
+        session_name: impl Into<String>,
+        address: String,
+        channel: Option<String>,
+        sender: MessageSender,
+        text_len: usize,
+        reason: String,
+    ) -> Self {
+        let message_id = MessageId::new();
+        let at = Timestamp::now();
+        let params = serde_json::to_value(MessageEventPayload::unresolved(
+            message_id, address, channel, sender, text_len, reason, at,
+        ))
+        .expect("MessageEventPayload contains only JSON-serializable fields");
+        Self::new(
+            workspace_id,
+            session_name,
+            "rimz",
+            "cli",
+            MessageEventMethod::Errored.as_str(),
             params,
         )
     }

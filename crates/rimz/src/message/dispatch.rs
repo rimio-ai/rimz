@@ -49,8 +49,24 @@ pub struct AddResult {
 }
 
 pub struct SteerResult {
-    pub outcomes: Vec<send::Outcome>,
+    pub outcomes: Vec<SteerOutcome>,
     pub compacted: Vec<String>,
+}
+
+pub enum SteerOutcome {
+    Sent {
+        label: String,
+        message_id: MessageId,
+    },
+    Queued {
+        label: String,
+        message_id: MessageId,
+    },
+    SkippedPending {
+        label: String,
+        message_id: MessageId,
+        request_id: String,
+    },
 }
 
 pub struct AddContext<'a> {
@@ -113,7 +129,7 @@ struct LiveRecovery<'a> {
     ledger: &'a Ledger,
     snapshot: &'a SidebarSnapshot,
     live_send: &'a mut send::LiveSend,
-    park_on_timeout: bool,
+    park_on_failure: bool,
 }
 
 impl QueueTarget<'_> {
@@ -166,13 +182,17 @@ impl QueueTarget<'_> {
 /// [`rollup_targets_all_park_without_live`] proves no live pane is needed.
 pub fn queue_targets<'a>(
     snapshot: &'a SidebarSnapshot,
+    durable_agents: Option<&'a [AgentState]>,
     raw: &str,
     worktree: Option<&str>,
     channel: Option<&str>,
     rollup_only: bool,
 ) -> std::result::Result<Vec<QueueTarget<'a>>, TargetErr> {
     if rollup_only {
-        let agents = crate::harness::target::resolve_many(snapshot, raw, worktree, channel)?;
+        let agents = crate::harness::target::resolve_many(snapshot, raw, worktree, channel)
+            .or_else(|err| {
+                durable_targets(snapshot, durable_agents, raw, worktree, channel, err)
+            })?;
         return Ok(combine_queue_targets(snapshot, agents, Vec::new()));
     }
     let agent_result = crate::harness::target::resolve_many(snapshot, raw, worktree, channel);
@@ -181,8 +201,35 @@ pub fn queue_targets<'a>(
         (Ok(agents), Ok(panes)) => Ok(combine_queue_targets(snapshot, agents, panes)),
         (Ok(agents), Err(_)) => Ok(combine_queue_targets(snapshot, agents, Vec::new())),
         (Err(_), Ok(panes)) => Ok(combine_queue_targets(snapshot, Vec::new(), panes)),
-        (Err(err), Err(_)) => Err(err),
+        (Err(err), Err(_)) => {
+            durable_targets(snapshot, durable_agents, raw, worktree, channel, err)
+                .map(|agents| combine_queue_targets(snapshot, agents, Vec::new()))
+        }
     }
+}
+
+pub fn durable_target_agents(ledger: &Ledger) -> Result<Vec<AgentState>> {
+    Ok(ledger
+        .runtime_projection(crate::RuntimeScope::Audit)?
+        .agents
+        .into_iter()
+        .filter(|agent| agent.parent_agent_id.is_none())
+        .collect())
+}
+
+fn durable_targets<'a>(
+    _snapshot: &'a SidebarSnapshot,
+    durable_agents: Option<&'a [AgentState]>,
+    raw: &str,
+    worktree: Option<&str>,
+    channel: Option<&str>,
+    live_err: TargetErr,
+) -> std::result::Result<Vec<&'a AgentState>, TargetErr> {
+    let Some(durable_agents) = durable_agents else {
+        return Err(live_err);
+    };
+    let candidates = durable_agents.iter().collect::<Vec<_>>();
+    crate::harness::target::resolve_agents(raw, worktree, channel, &candidates)
 }
 
 pub fn handle_for_target(snapshot: &SidebarSnapshot, target: &QueueTarget<'_>) -> String {
@@ -302,6 +349,53 @@ fn agent_kind_registers_lazily(agent: &AgentState) -> bool {
         .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
 }
 
+fn live_prompt_for_target(
+    workspace_id: crate::ids::WorkspaceId,
+    target: &QueueTarget<'_>,
+    pane: &PaneAgent,
+    bound: Option<&AgentState>,
+    scope_channel: Option<&str>,
+    draft: send::MessageDraft,
+) -> MessageRecord {
+    let send::MessageDraft {
+        text,
+        body,
+        enter,
+        gate,
+        sender,
+        force,
+        auto_compact,
+    } = draft;
+    if let Some(agent) = target.agent {
+        return MessageRecord::new(workspace_id, agent, text, enter, gate)
+            .with_body(body)
+            .with_force(force)
+            .with_channel(
+                crate::harness::target::agent_channel(agent).or_else(|| {
+                    crate::harness::target::recipient_channel(pane, bound, scope_channel)
+                }),
+            )
+            .with_sender(sender)
+            .with_pane_id(pane.pane_id.clone())
+            .with_auto_compact(auto_compact);
+    }
+    send::message_for_target(
+        workspace_id,
+        pane,
+        bound,
+        scope_channel,
+        send::MessageDraft {
+            text,
+            body,
+            enter,
+            gate,
+            sender,
+            force,
+            auto_compact,
+        },
+    )
+}
+
 pub fn add_for_targets(
     ctx: AddContext<'_>,
     targets: &[QueueTarget<'_>],
@@ -318,12 +412,13 @@ pub fn add_for_targets(
     let now = Timestamp::now();
     for target in targets {
         let handle = handle_for_target(ctx.snapshot, target);
-        let mut park = spec.not_before.is_some()
+        let park = spec.not_before.is_some()
             || !target.receivable_now(ctx.snapshot, ctx.pending, spec.gate, spec.force, now);
         if !park && let Some(pane) = target.pane {
             let bound = target.bound(ctx.snapshot);
-            let message = send::message_for_target(
+            let message = live_prompt_for_target(
                 ctx.workspace.workspace_id.clone(),
+                target,
                 pane,
                 bound,
                 ctx.scope_channel,
@@ -337,12 +432,15 @@ pub fn add_for_targets(
                     auto_compact: spec.auto_compact,
                 },
             );
+            let message_id = message.message_id.clone();
+            ctx.ledger
+                .queue_message(&message, &ctx.workspace.session_name)?;
             let mut recovery = LiveRecovery {
                 workspace: ctx.workspace,
                 ledger: ctx.ledger,
                 snapshot: ctx.snapshot,
                 live_send: &mut live_send,
-                park_on_timeout: target.agent.is_some(),
+                park_on_failure: target.agent.is_some(),
             };
             match send_live_with_recovery(&mut recovery, pane, bound, &message)? {
                 LiveAttempt::Sent {
@@ -359,7 +457,29 @@ pub fn add_for_targets(
                     });
                     continue;
                 }
-                LiveAttempt::SkippedPending { .. } | LiveAttempt::ParkInstead => park = true,
+                LiveAttempt::SkippedPending { request_id, .. } => {
+                    ctx.ledger.record_message_delivery_failure(
+                        &message_id,
+                        &format!("pending ask {request_id} reserves input"),
+                        &ctx.workspace.session_name,
+                    )?;
+                    ctx.pending.push(message);
+                    outputs.push(AddOutput {
+                        label: handle,
+                        message_id,
+                        status: MessageStatus::Queued,
+                    });
+                    continue;
+                }
+                LiveAttempt::ParkInstead => {
+                    ctx.pending.push(message);
+                    outputs.push(AddOutput {
+                        label: handle,
+                        message_id,
+                        status: MessageStatus::Queued,
+                    });
+                    continue;
+                }
             }
         }
         if !park {
@@ -405,7 +525,7 @@ pub fn add_for_targets(
 
 pub fn steer_for_targets(
     ctx: SteerContext<'_>,
-    targets: &[&PaneAgent],
+    targets: &[QueueTarget<'_>],
     text: &str,
     spec: SteerSpec,
 ) -> Result<SteerResult> {
@@ -415,12 +535,40 @@ pub fn steer_for_targets(
     };
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut compacted = Vec::new();
-    for &target in targets {
-        let bound = send::bound_agent(ctx.snapshot, target);
-        let handle = send::handle_for_pane_target(ctx.snapshot, target, bound);
-        let message = send::message_for_target(
+    for target in targets {
+        let handle = handle_for_target(ctx.snapshot, target);
+        let Some(pane) = target.pane else {
+            let Some(agent) = target.agent else {
+                return Err(DispatchErr::NoDurableSession {
+                    label: target.label(),
+                });
+            };
+            preflight_queue_hooks(agent)?;
+            let message = MessageRecord::new(
+                ctx.workspace.workspace_id.clone(),
+                agent,
+                text.to_owned(),
+                spec.enter,
+                DeliveryGate::Any,
+            )
+            .with_force(spec.force)
+            .with_channel(crate::harness::target::agent_channel(agent))
+            .with_sender(ctx.sender.clone())
+            .with_auto_compact(spec.auto_compact);
+            let message_id = message.message_id.clone();
+            ctx.ledger
+                .queue_message(&message, &ctx.workspace.session_name)?;
+            outcomes.push(SteerOutcome::Queued {
+                label: handle,
+                message_id,
+            });
+            continue;
+        };
+        let bound = target.bound(ctx.snapshot);
+        let message = live_prompt_for_target(
             ctx.workspace.workspace_id.clone(),
             target,
+            pane,
             bound,
             ctx.scope_channel,
             send::MessageDraft {
@@ -433,14 +581,17 @@ pub fn steer_for_targets(
                 auto_compact: spec.auto_compact,
             },
         );
+        let message_id = message.message_id.clone();
+        ctx.ledger
+            .queue_message(&message, &ctx.workspace.session_name)?;
         let mut recovery = LiveRecovery {
             workspace: ctx.workspace,
             ledger: ctx.ledger,
             snapshot: ctx.snapshot,
             live_send: &mut live_send,
-            park_on_timeout: false,
+            park_on_failure: target.agent.is_some(),
         };
-        match send_live_with_recovery(&mut recovery, target, bound, &message)? {
+        match send_live_with_recovery(&mut recovery, pane, bound, &message)? {
             LiveAttempt::Sent {
                 message_id,
                 compacted: was_compacted,
@@ -448,7 +599,7 @@ pub fn steer_for_targets(
                 if was_compacted {
                     compacted.push(handle.clone());
                 }
-                outcomes.push(send::Outcome::Sent {
+                outcomes.push(SteerOutcome::Sent {
                     label: handle,
                     message_id,
                 });
@@ -456,12 +607,22 @@ pub fn steer_for_targets(
             LiveAttempt::SkippedPending {
                 message_id,
                 request_id,
-            } => outcomes.push(send::Outcome::SkippedPending {
+            } => {
+                ctx.ledger.record_message_delivery_failure(
+                    &message_id,
+                    &format!("pending ask {request_id} reserves input"),
+                    &ctx.workspace.session_name,
+                )?;
+                outcomes.push(SteerOutcome::SkippedPending {
+                    label: handle,
+                    message_id,
+                    request_id,
+                });
+            }
+            LiveAttempt::ParkInstead => outcomes.push(SteerOutcome::Queued {
                 label: handle,
                 message_id,
-                request_id,
             }),
-            LiveAttempt::ParkInstead => unreachable!("steer sends never park"),
         }
     }
     deliver::register_message_wake(ctx.workspace, ctx.ledger)?;
@@ -494,7 +655,13 @@ fn send_live_with_recovery(
                     compacted: false,
                 });
             }
-            if deliver::is_mux_timeout(&err) && recovery.park_on_timeout {
+            if recovery.park_on_failure {
+                recovery.ledger.record_message_delivery_failure(
+                    &message.message_id,
+                    &err.to_string(),
+                    &recovery.workspace.session_name,
+                )?;
+                deliver::register_message_wake(recovery.workspace, recovery.ledger)?;
                 return Ok(LiveAttempt::ParkInstead);
             }
             recovery.ledger.record_send_error(
@@ -676,6 +843,31 @@ mod tests {
             agent: Some(&snapshot.agents[0]),
         };
         assert_eq!(handle_for_target(&snapshot, &target), "@coder#project");
+    }
+
+    #[test]
+    fn queue_targets_fall_back_to_durable_agents_after_live_miss() {
+        let mut reviewer = agent("sess-reviewer", AgentStatus::Idle);
+        reviewer.role = Some("reviewer".to_owned());
+        let durable = vec![reviewer.clone()];
+        let snapshot = snapshot_with_panes(Vec::new(), Vec::new());
+
+        let targets = queue_targets(
+            &snapshot,
+            Some(&durable),
+            "@reviewer",
+            None,
+            Some("project"),
+            false,
+        )
+        .expect("durable target resolves");
+
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].pane.is_none());
+        assert_eq!(
+            targets[0].agent.expect("durable agent").agent_id,
+            reviewer.agent_id
+        );
     }
 
     fn workspace_id() -> WorkspaceId {

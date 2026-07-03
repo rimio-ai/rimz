@@ -9,7 +9,7 @@ use crate::message::{
     queue_head_for_message,
 };
 
-use super::super::{Ledger, Result, message_store};
+use super::super::{Ledger, Result, UnresolvedMessage, message_store};
 use super::{PublishPolicy, Txn};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -467,6 +467,8 @@ impl Ledger {
                 Err(err) => return Err(err.into()),
             };
             message.last_error = Some(error.to_owned());
+            message.pane_id = None;
+            message.batch_id = None;
             message.updated_at = Timestamp::now();
             if message.attempts >= MAX_DELIVERY_ATTEMPTS {
                 let (message, _event) = self.finalize_message_locked(
@@ -484,6 +486,25 @@ impl Ledger {
                 Ok(Some(message))
             }
         })
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub fn record_unresolved_message(&self, bounce: UnresolvedMessage<'_>) -> Result<MessageId> {
+        let event = EventEnvelope::unresolved_message_event(
+            bounce.workspace_id,
+            bounce.session_name,
+            bounce.address.to_owned(),
+            bounce.channel.map(ToOwned::to_owned),
+            bounce.sender.clone(),
+            bounce.text_len,
+            bounce.reason.to_owned(),
+        );
+        let message_id = match event.kind() {
+            crate::ledger::event::EventKind::Message { payload, .. } => payload.message_id,
+            _ => unreachable!("unresolved_message_event is a message event"),
+        };
+        self.commit(PublishPolicy::Skip, |txn| txn.append(&event))?;
+        Ok(message_id)
     }
 
     #[must_use = "durability barrier; check the result"]

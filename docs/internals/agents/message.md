@@ -4,7 +4,7 @@
 
 `rimz message` routes text to a running agent. A human, a script, a CI hook, or another agent names a target, and Rimz types the text into that agent's pane through the same bracketed-paste primitive the public `pane send` command and resolvers use.
 
-One model runs underneath every send: deliver now when the agent can take the text, otherwise park it as a durable record and deliver at the agent's next turn boundary, oldest first. Parking is what lets a message outlive a busy agent, a room that closes and reopens, or a crash between claim and send. A parked message is a record in the room ledger, and delivery is a later step that a turn-boundary hook drives.
+One model runs underneath every send: create a durable record first, deliver now when the agent can take the text, otherwise keep the record queued and deliver at the agent's next turn boundary, oldest first. The record-first path lets a message outlive a busy agent, a room that closes and reopens, a transient resolver miss, or a crash between claim and send.
 
 Three send modes place a message on that timing axis: `--steer` interrupts the live pane now, the default sends now when the target can receive and parks otherwise, and `--schedule` parks until a wall-clock time. [Send modes](#send-modes) has the detail.
 
@@ -14,19 +14,21 @@ A target is an @-mention resolved against the live fleet: `@claude` names the Cl
 
 Three modes place a send on the timing axis. All three resolve the target through the same address parser, ride the same bracketed-paste primitive, and write the same audit events.
 
-- `--steer`: interrupt the live pane immediately. Writes a durable `sent` record and prints `sent to @handle (msg_...)`. Conflicts with `--schedule` and `--on`, since it has no later boundary.
-- Default: send now when the target can receive, meaning a live pane, an open gate, no pending ask reserving input (unless `--force`), and no ready queued backlog for the same agent. [Gates and delivery conditions](#gates-and-delivery-conditions) has the full list. When any condition fails, the text parks as a `queued` record for the next qualifying turn boundary. A successful send-now writes the same durable `sent` record as `--steer`. A mux timeout with no `sent` record yet also parks, provided the target has a durable session to park against; `--steer` reports the timeout instead, because it asked for the live pane now.
+- `--steer`: interrupt the live pane immediately. It first writes a durable `queued` record, then moves it to `sent` when the paste reaches the pane. When the address resolves only to a durable card, it prints `queued for @handle (msg_...)` and the retry path delivers later. Conflicts with `--schedule` and `--on`, since it has no later gate.
+- Default: send now when the target can receive, meaning a live pane, an open gate, no pending ask reserving input (unless `--force`), and no ready queued backlog for the same agent. [Gates and delivery conditions](#gates-and-delivery-conditions) has the full list. When any condition fails, the text remains a `queued` record for the next qualifying turn boundary. A successful send-now moves that record to `sent`. A mux write failure with no `sent` record yet records `last_error`, clears pane affinity, and leaves the message queued for retry when the receiver is visible again.
 - `--schedule <DUR|HH:MM>`: always parks and stores a `not_before` timestamp. The room must be open so the sidebar elder can spawn `message sweep` when the wake stamp comes due.
 
 ## Addressing and targets
 
 The address grammar (handle classes, channel resolution, arity, fan-out, `--create`) is [harness.md § The address](./harness.md#the-address). This section covers what a target resolves to for delivery: a live pane, or the durable **card** a parked message keys on — the logical agent identity the rollup tracks, a kind plus a session id or launch placeholder ([agent.md § The rollup](./agent.md#the-rollup)).
 
-`message --steer` reaches live panes. A bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet, a lazy-registering agent (Codex) before its first turn ([agent.md § The instance lifecycle](./agent.md#the-instance-lifecycle)), because the thing a paste needs is the pane, which the producer already detects.
+Resolution climbs from the live command snapshot to the durable audit rollup. The live snapshot supplies bound panes and lazy sessionless panes. If that view misses, Rimz resolves the same address against audit-scope registered sessions and launch placeholders, bypassing runtime liveness expel and pane-frame failures. A match there creates a pane-less queued record; the next sweep or turn-boundary delivery re-resolves a live pane.
+
+`message --steer` reaches live panes. A bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet, a lazy-registering agent (Codex) before its first turn ([agent.md § The instance lifecycle](./agent.md#the-instance-lifecycle)), because the thing a paste needs is the pane, which the producer already detects. When the durable audit rollup resolves the target but no live pane is available, `--steer` parks the message instead of dropping it.
 
 The default message path uses that live pane when the target can receive now, including lazy panes with no session yet. When it must park work, it keys the durable record on the bound session or launch placeholder card so FIFO survives registration. A message queued against a provisional `launch_*` card keeps the launch id in the record; when the card registers, name-based matching ([`same_card`](../../../crates/rimz/src/message.rs)) folds it into the session's single FIFO queue: one card, one queue.
 
-A petname, kind ordinal, or real session-id prefix names a bound session in every mode; launch placeholder ids stay internal. The `@` sigil is required: a bare selector fails with a `did you mean @…?` hint, so a stray word never broadcasts, and a pane id is the one sigil-free exception. Floating Zellij panes participate in live-pane addressing.
+A petname, kind ordinal, or real session-id prefix names a bound session in every mode; launch placeholder ids stay internal. The `@` sigil is required: a bare selector fails with a `did you mean @…?` hint, so a stray word never broadcasts, and a pane id is the one sigil-free exception. Floating Zellij panes participate in live-pane addressing. A genuine no-match after the audit fallback writes a terminal `message.errored` bounce event with the raw address, so `message list --all` shows the failed hand-off.
 
 ## Send mechanics
 
@@ -90,10 +92,10 @@ Created ──► Queued ──► Claimed ──► Sent ──► Delivered
    │           ├──► Removed    (user)
    │           └──► Archived   (receiver ended, channel teardown)
    │
-   └──► Errored   (live send failed before a `sent` record)
+   └──► Errored   (unresolved receiver bounce)
 ```
 
-- `Created` never rests in the queue file: a parked record lands as `Queued`, and a live send's record first persists at `Sent`.
+- `Created` never rests in the queue file: every user-visible send first persists as `Queued`, and a live send moves that same record to `Sent` after the pane write succeeds.
 - `Queued` and `Claimed` are open (`is_open`): the message is live in the queue.
 - `Sent` means bytes were written to the pane; the record stays live in the queue until confirmation or reconciliation makes a terminal decision.
 - `Delivered` means the agent acknowledged the text: `TurnStarted` for a `Prompt`, `Compacting` for a `Command`.
@@ -150,7 +152,7 @@ One cannot confirm the other. Batched prompt records carry a shared `batch_id`, 
 
 ### Retry and failure
 
-- **Pre-send failure** (pane gone, gate closed, pending ask blocks): a claim increments `attempts`, then the failure reverts the record to `Queued` with `last_error` and the claim timestamp as throttle. The next qualifying turn boundary retries.
+- **Pre-send failure** (pane gone, gate closed, pending ask blocks): the record stays or returns to `Queued` with `last_error` and no pane affinity, so the next qualifying turn boundary re-resolves a pane. A delivery helper claim increments `attempts`; an initial send-now failure records the error before any claim exists.
 - **Unconfirmed send** (bytes were written but no matching lifecycle confirmation arrives): the sweep reconciler clears the pane id and batch id, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. A requeued batch member reforms with whatever same-lane prefix is ready at the next boundary. After the unconfirmed-send cap, the record becomes `TimedOut`.
 - **Independent caps**: `unconfirmed_sends` gates the unconfirmed-send cap (`RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS`, 3 by default); `attempts` gates the pre-send cap (`MAX_DELIVERY_ATTEMPTS`, 5). A claim increments `attempts` only, and a stale-`Sent` requeue increments `unconfirmed_sends` only.
 - **Claim TTL**: a `Claimed` record older than 15 s (`CLAIM_TTL`) is treated as expired, so a crash after claim leaves a redeliverable record. `message list --all` surfaces it.
@@ -162,7 +164,7 @@ One cannot confirm the other. Batched prompt records carry a shared `batch_id`, 
 | --- | --- |
 | Agent's next lifecycle hook confirms the body | `Delivered` |
 | Unconfirmed `Sent` record reaches the unconfirmed-send cap | `TimedOut` |
-| Live-pane send fails with no durable `sent` record to fall back on | `Errored` |
+| Genuine unresolved receiver after audit fallback | `Errored` |
 | User runs `message remove` | `Removed` |
 | Pre-send retry cap exceeded | `Abandoned` |
 | Receiver session `Ended` or channel teardown | `Archived` |
@@ -290,7 +292,7 @@ Every status transition appends a typed event to `events.log.jsonl`. The event m
 
 `message.queued` · `message.sent` · `message.delivered` · `message.timed_out` · `message.errored` · `message.removed` · `message.abandoned` · `message.archived`
 
-The payload carries `message_id`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body` (Prompt or Command), `pane_id` (when known), `forced` flag, `sender` attribution, `text_len`, `attempts`, `unconfirmed_sends`, timestamps, compaction baseline, and `reason` (on error or abandon). Message content stays in the live message record, never in the event.
+The payload carries `message_id`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body` (Prompt or Command), `pane_id` (when known), `forced` flag, `sender` attribution, `text_len`, `attempts`, `unconfirmed_sends`, timestamps, compaction baseline, and `reason` (on error or abandon). Unresolved bounces also carry `address`, the raw target that failed. Message content stays in the live message record, never in the event.
 
 ## Subcommands
 

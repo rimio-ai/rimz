@@ -540,6 +540,56 @@ fn queue_add_for_bound_agent_does_not_enumerate_panes() {
     );
 }
 
+#[test]
+fn message_add_uses_audit_resolution_for_runtime_filtered_agent() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "sess-audit-reviewer",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("quiet-reviewer".to_owned());
+            observation.launch.role = Some("reviewer".to_owned());
+            observation.worktree_branch = Some("audit-work".to_owned());
+            observation.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "sess-audit-reviewer",
+                u32::MAX,
+                Some("dead-process".to_owned()),
+            ));
+        },
+    );
+    assert!(
+        env.ledger()
+            .snapshot_cached()
+            .expect("runtime snapshot")
+            .agents
+            .is_empty(),
+        "runtime projection should expel the dead-owner agent"
+    );
+
+    let out = env
+        .rimz()
+        .args(["message", "@reviewer", "--", "handoff"])
+        .output()
+        .expect("message");
+    assert!(
+        out.status.success(),
+        "message should queue through audit fallback\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let message_id = queued_id_from_stdout(&out.stdout);
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message_id.as_str(), message_id);
+    assert_eq!(pending[0].agent_id.as_str(), "sess-audit-reviewer");
+    assert_eq!(pending[0].agent_name.as_deref(), Some("quiet-reviewer"));
+}
+
 /// Eligibility runs before the claim: an ineligible delivery pass (running
 /// agent at add time, eligible-but-paneless agent at turn end) leaves the
 /// message pending with no claim stamp, so the next real transition can
@@ -616,6 +666,46 @@ fn steer_refuses_pending_ask_before_touching_pane() {
         stderr.contains("has pending ask") && stderr.contains("--force"),
         "unexpected stderr: {stderr}"
     );
+}
+
+#[test]
+fn steer_queues_when_durable_agent_has_no_live_pane() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "sess-steer-audit",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("steady-reviewer".to_owned());
+            observation.launch.role = Some("reviewer".to_owned());
+            observation.worktree_branch = Some("audit-steer".to_owned());
+            observation.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "sess-steer-audit",
+                u32::MAX,
+                Some("dead-process".to_owned()),
+            ));
+        },
+    );
+
+    let out = env
+        .rimz()
+        .args(["message", "--steer", "@reviewer", "--", "please review"])
+        .output()
+        .expect("steer");
+    assert!(
+        out.status.success(),
+        "steer should queue through durable fallback: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let message_id = queued_id_from_stdout(&out.stdout);
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message_id.as_str(), message_id);
+    assert_eq!(pending[0].agent_id.as_str(), "sess-steer-audit");
 }
 
 /// `steer` bracket-pastes the text and then presses Enter as a discrete key
@@ -1049,6 +1139,74 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
             .any(|event| event.method == "message.delivered"),
         "delivery confirmation records a terminal event"
     );
+}
+
+#[test]
+fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-send-fail", "feature-send-fail", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-send-fail",
+            "worktree_branch": "feature-send-fail",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+
+    let failing_trace = env.project_root.join("zellij-send-fail-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &failing_trace)
+        .env("RIMZ_TEST_ZELLIJ_MODE", "fail-write")
+        .args(["message", "@claude", "--", "retry me"])
+        .output()
+        .expect("send-now message");
+    assert!(
+        out.status.success(),
+        "send failure should queue, not fail\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let message_id = queued_id_from_stdout(&out.stdout);
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message_id.as_str(), message_id);
+    assert_eq!(pending[0].status, MessageStatus::Queued);
+    assert!(pending[0].last_error.is_some(), "send error is recorded");
+    assert_eq!(pending[0].pane_id, None, "retry re-resolves a fresh pane");
+
+    let retry_trace = env.project_root.join("zellij-send-retry-trace.log");
+    let sweep = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &retry_trace)
+        .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
+        .args(["message", "sweep"])
+        .output()
+        .expect("message sweep");
+    assert!(
+        sweep.status.success(),
+        "message sweep failed: {}",
+        String::from_utf8_lossy(&sweep.stderr)
+    );
+    assert_text_then_enter(&retry_trace, "retry me");
+    let sent = env
+        .ledger()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| message.message_id.as_str() == message_id)
+        .expect("retried message");
+    assert_eq!(sent.status, MessageStatus::Sent);
+    assert_eq!(sent.attempts, 1);
 }
 
 #[test]
@@ -2023,6 +2181,35 @@ fn message_miss_lists_available_agents() {
         stderr.contains("@helper"),
         "running agent handle missing from miss table: {stderr}"
     );
+    let bounce = env
+        .read_events()
+        .into_iter()
+        .find(|event| event.method == "message.errored")
+        .expect("miss records a bounce event");
+    let params = bounce.params_value();
+    assert_eq!(params["address"], "@ghost");
+    assert_eq!(params["status"], "errored");
+    assert_eq!(params["reason"], "receiver not found");
+
+    let listed = env
+        .rimz()
+        .args(["message", "list", "--all", "--json"])
+        .output()
+        .expect("message list");
+    assert!(
+        listed.status.success(),
+        "message list failed: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
+    assert!(
+        parsed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["address"] == "@ghost" && row["status"] == "errored"),
+        "bounce row missing from list: {parsed}"
+    );
 }
 
 /// Without `--all`, a selector that matches several agents is an ambiguity that
@@ -2630,8 +2817,8 @@ fn queue_sends_now_to_unbound_codex_pane() {
         "send-now queue records message.sent: {methods:?}"
     );
     assert!(
-        methods.iter().all(|method| method != "message.queued"),
-        "send-now queue is not parked: {methods:?}"
+        methods.iter().any(|method| method == "message.queued"),
+        "send-now queue records the durable record before sending: {methods:?}"
     );
 }
 
@@ -2681,13 +2868,13 @@ fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
         "send-now queue records message.sent: {methods:?}"
     );
     assert!(
-        methods.iter().all(|method| method != "message.queued"),
-        "send-now queue is not parked: {methods:?}"
+        methods.iter().any(|method| method == "message.queued"),
+        "send-now queue records the durable record before sending: {methods:?}"
     );
 }
 
 #[test]
-fn provisional_without_live_frame_parks_queue_and_refuses_steer() {
+fn provisional_without_live_frame_parks_queue_and_steer() {
     let env = Env::new();
     env.install_agent_hooks("codex");
     trust_codex_hooks(&env);
@@ -2755,8 +2942,16 @@ fn provisional_without_live_frame_parks_queue_and_refuses_steer() {
         .output()
         .expect("message --steer");
     assert!(
-        !out.status.success(),
-        "steer to a provisional codex without a live pane should fail"
+        out.status.success(),
+        "steer to a provisional codex without a live pane should park: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let messages = env.ledger().list_messages().unwrap();
+    assert_eq!(messages.len(), 2, "steer parks a second record");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.text == "read plan" && message.status == MessageStatus::Queued)
     );
     let lines = trace_lines(&trace_log);
     assert!(

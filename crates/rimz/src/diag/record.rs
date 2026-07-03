@@ -90,6 +90,9 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         frames_ref: Option<String>,
     },
+    ResolutionFallback {
+        reason: String,
+    },
     FrameShrinkVerified {
         prior: usize,
         fresh: usize,
@@ -275,6 +278,7 @@ impl DiagEvent {
             Self::RendererPanic { .. } => DiagSeverity::Error,
             Self::RendererSignalDeath { .. } => DiagSeverity::Error,
             Self::FrameShrinkVerified { .. }
+            | Self::ResolutionFallback { .. }
             | Self::PaneCarryRefuted { .. }
             | Self::GateRelease { .. }
             | Self::ProducerElected { .. }
@@ -300,6 +304,7 @@ impl DiagEvent {
     pub fn kind_name(&self) -> &'static str {
         match self {
             Self::FrameRejected { .. } => "frame_rejected",
+            Self::ResolutionFallback { .. } => "resolution_fallback",
             Self::FrameShrinkVerified { .. } => "frame_shrink_verified",
             Self::PaneCountDrop { .. } => "pane_count_drop",
             Self::PaneCarryForward { .. } => "pane_carry_forward",
@@ -344,6 +349,7 @@ impl DiagEvent {
                 format!("{}:{rule:?}", self.kind_name())
             }
             Self::FetchFailure { reason, .. } => format!("{}:{reason}", self.kind_name()),
+            Self::ResolutionFallback { reason } => format!("{}:{reason}", self.kind_name()),
             Self::HealthAlert {
                 reason,
                 since_ms,

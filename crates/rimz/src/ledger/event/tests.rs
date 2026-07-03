@@ -509,6 +509,29 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
 }
 
 #[test]
+fn unresolved_message_event_round_trips_raw_address() {
+    let event = EventEnvelope::unresolved_message_event(
+        WorkspaceId::parse("ws_000000000000000000000000").unwrap(),
+        "session",
+        "@reviwer#docs".to_owned(),
+        Some("docs".to_owned()),
+        MessageSender::Human,
+        12,
+        "receiver not found".to_owned(),
+    );
+
+    let EventKind::Message { method, payload } = event.kind() else {
+        panic!("message.errored decodes to its typed kind");
+    };
+    assert_eq!(method, MessageEventMethod::Errored);
+    assert_eq!(payload.status, MessageStatus::Errored);
+    assert_eq!(payload.address.as_deref(), Some("@reviwer#docs"));
+    assert_eq!(payload.kind.as_str(), "unknown");
+    assert_eq!(payload.channel.as_deref(), Some("docs"));
+    assert_eq!(payload.reason.as_deref(), Some("receiver not found"));
+}
+
+#[test]
 fn message_event_methods_round_trip_archived() {
     for method in [
         MessageEventMethod::Queued,

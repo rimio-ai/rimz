@@ -98,6 +98,14 @@ fn main() {
     }
 
     let mode = env::var("RIMZ_TEST_ZELLIJ_MODE").unwrap_or_default();
+    if mode == "fail-write"
+        && cli
+            .windows(2)
+            .any(|window| window[0] == "action" && window[1].starts_with("write"))
+    {
+        write_stderr("simulated zellij write failure");
+        std::process::exit(7);
+    }
     if mode == "socket-overflow-on-birth"
         && cli.first().is_some_and(|arg| arg == "attach")
         && cli.get(1).is_some_and(|arg| arg == "--create-background")
