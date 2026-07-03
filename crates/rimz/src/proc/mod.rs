@@ -8,6 +8,11 @@
 
 mod pane_probe;
 
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
+
 pub(crate) use pane_probe::command_starts_with_elevation_wrapper;
 pub use pane_probe::{
     InPaneAgentProcess, elevated_in_pane_agent, hosted_agent_absent_under_root,
@@ -15,18 +20,131 @@ pub use pane_probe::{
     in_pane_agent_starts,
 };
 
-fn git_binary() -> &'static std::path::Path {
-    static GIT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+fn git_binary() -> &'static Path {
+    static GIT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     GIT.get_or_init(|| which::which("git").unwrap_or_else(|_| "git".into()))
 }
 
 /// `git -C <worktree>` with the binary resolved once, so repeated hot-path
 /// probes skip PATH lookup. Counts the spawn for the subprocess perf guards.
-pub(crate) fn git_command(worktree: &std::path::Path) -> std::process::Command {
+pub(crate) fn git_command(worktree: &Path) -> Command {
     testkit::count_spawn();
-    let mut cmd = std::process::Command::new(git_binary());
+    let mut cmd = Command::new(git_binary());
     cmd.arg("-C").arg(worktree);
     cmd
+}
+
+fn bin_name(stem: &str) -> String {
+    format!("{stem}{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// The `rimz` binary to execute for self-spawns.
+///
+/// Linux reports `/proc/self/exe` with a trailing ` (deleted)` after an atomic
+/// reinstall replaces the running inode. Long-lived helpers must execute the
+/// replacement at the stripped path instead of failing until the process
+/// restarts.
+pub fn rimz_exe() -> PathBuf {
+    crate::ledger::paths::env_path("RIMZ_BIN")
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| resolve_existing_or_replacement(&exe))
+        })
+        .unwrap_or_else(|| PathBuf::from(bin_name("rimz")))
+}
+
+/// Resolve an executable path reported by the OS to a real file on disk.
+pub fn resolve_existing_or_replacement(path: &Path) -> Option<PathBuf> {
+    resolve_existing_or_replacement_with(path, Path::is_file)
+}
+
+fn resolve_existing_or_replacement_with(
+    path: &Path,
+    exists: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    if exists(path) {
+        return Some(path.to_path_buf());
+    }
+    strip_deleted_suffix(path).filter(|candidate| exists(candidate))
+}
+
+#[cfg(unix)]
+fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+
+    const DELETED_SUFFIX: &[u8] = b" (deleted)";
+    let stripped = path.as_os_str().as_bytes().strip_suffix(DELETED_SUFFIX)?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(stripped)))
+}
+
+#[cfg(not(unix))]
+fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
+    path.as_os_str()
+        .to_str()
+        .and_then(|raw| raw.strip_suffix(" (deleted)"))
+        .map(PathBuf::from)
+}
+
+#[derive(Debug)]
+pub(crate) struct BoundedOutput {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) timed_out: bool,
+}
+
+/// Run a subprocess with captured stdout and a wall-clock timeout.
+///
+/// Timeout kills and reaps the child, then drains any bytes already written.
+/// This mirrors the mux bounded-command pattern without importing backend code
+/// into domain modules.
+pub(crate) fn run_bounded_output(
+    command: &mut Command,
+    timeout: Duration,
+) -> std::io::Result<BoundedOutput> {
+    testkit::count_spawn();
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout = child.stdout.take().map(read_to_end_thread);
+    let stderr = child.stderr.take().map(read_to_end_thread);
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let _ = join_reader(stderr);
+            return Ok(BoundedOutput {
+                status,
+                stdout: join_reader(stdout),
+                timed_out: false,
+            });
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let status = child.wait()?;
+            drop(join_reader(stderr));
+            return Ok(BoundedOutput {
+                status,
+                stdout: join_reader(stdout),
+                timed_out: true,
+            });
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn read_to_end_thread(mut reader: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = reader.read_to_end(&mut bytes);
+        bytes
+    })
+}
+
+fn join_reader(handle: Option<std::thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
 }
 
 /// One process as the reset sweep needs to see it: its pid, its parent, the real
@@ -554,6 +672,55 @@ mod tests {
         assert_eq!(parse_environ(blob, "ZELLIJ_PANE_ID"), None);
         // A bare key with no `=` never matches the `key=` prefix.
         assert_eq!(parse_environ(b"ZELLIJ_PANE_ID\0", "ZELLIJ_PANE_ID"), None);
+    }
+
+    #[test]
+    fn rimz_exe_resolution_keeps_existing_path() {
+        let path = Path::new("/opt/rimz/bin/rimz");
+        let resolved = resolve_existing_or_replacement_with(path, |candidate| candidate == path);
+
+        assert_eq!(resolved.as_deref(), Some(path));
+    }
+
+    #[test]
+    fn rimz_exe_resolution_strips_deleted_suffix_when_replacement_exists() {
+        let real = Path::new("/opt/rimz/bin/rimz");
+        let deleted = PathBuf::from(format!("{} (deleted)", real.display()));
+        let resolved =
+            resolve_existing_or_replacement_with(&deleted, |candidate| candidate == real);
+
+        assert_eq!(resolved.as_deref(), Some(real));
+    }
+
+    #[test]
+    fn rimz_exe_resolution_returns_none_when_deleted_and_replacement_missing() {
+        let deleted = Path::new("/opt/rimz/bin/rimz (deleted)");
+
+        assert!(resolve_existing_or_replacement_with(deleted, |_| false).is_none());
+    }
+
+    #[test]
+    fn bounded_output_captures_stdout() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "printf rimz"]);
+
+        let output = run_bounded_output(&mut cmd, Duration::from_secs(1)).expect("bounded output");
+
+        assert!(output.status.success());
+        assert!(!output.timed_out);
+        assert_eq!(output.stdout, b"rimz");
+    }
+
+    #[test]
+    fn bounded_output_kills_and_reaps_on_timeout() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 5"]);
+
+        let output =
+            run_bounded_output(&mut cmd, Duration::from_millis(20)).expect("bounded output");
+
+        assert!(output.timed_out);
+        assert!(!output.status.success());
     }
 
     #[test]

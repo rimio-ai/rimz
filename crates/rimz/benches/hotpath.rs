@@ -321,7 +321,7 @@ fn enrich_cached(bencher: Bencher) {
         .bench_local_values(|fixture| {
             divan::black_box(rimz::sidebar::enrich::enrich(
                 fixture.snapshot,
-                Some(fixture.frame),
+                Some(&fixture.frame),
                 &fixture.runtime,
                 None,
                 None,

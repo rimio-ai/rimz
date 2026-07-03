@@ -300,11 +300,13 @@ fn pr_state_cache_uses_success_and_retry_ttls() {
     let ok = PrStateCache {
         refreshed_at_ms: 1_000,
         ok: true,
+        consecutive_failures: 0,
         states: BTreeMap::new(),
     };
     let retry = PrStateCache {
         refreshed_at_ms: 1_000,
         ok: false,
+        consecutive_failures: 1,
         states: BTreeMap::new(),
     };
     let ok_ttl = PR_STATE_TTL.as_millis() as u64;

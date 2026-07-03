@@ -51,12 +51,13 @@ fn install_destinations_do_not_duplicate_usr_local_bin() {
 }
 
 #[test]
-fn dev_install_builds_debug_with_the_sentry_feature() {
-    let args = host_build_args(false, &["sentry"], &[]);
+fn dev_install_builds_profiling_with_the_sentry_feature() {
+    let args = host_build_args(HostProfile::Profiling, &["sentry"]);
 
     assert!(
-        !args.iter().any(|arg| arg == "--release"),
-        "dev install must stay a debug build so reporting defaults to development: {args:?}"
+        args.windows(2)
+            .any(|pair| pair[0] == "--profile" && pair[1] == "profiling"),
+        "dev install must use the profiling profile: {args:?}"
     );
     let features = args
         .windows(2)
@@ -67,7 +68,7 @@ fn dev_install_builds_debug_with_the_sentry_feature() {
 
 #[test]
 fn release_install_adds_no_extra_features() {
-    let args = host_build_args(true, &[], &[]);
+    let args = host_build_args(HostProfile::Release, &[]);
 
     assert!(args.iter().any(|arg| arg == "--release"));
     assert!(!args.iter().any(|arg| arg == "--features"));
@@ -79,17 +80,12 @@ fn release_install_adds_no_extra_features() {
 }
 
 #[test]
-fn dev_install_can_embed_debug_info_for_sentry_upload() {
-    let args = host_build_args(
-        false,
-        &["sentry"],
-        &["--config", r#"profile.dev.split-debuginfo="off""#],
-    );
+fn dev_install_uses_manifest_profile_debug_info() {
+    let args = host_build_args(HostProfile::Profiling, &["sentry"]);
 
-    assert!(args.iter().any(|arg| arg == "--config"));
     assert!(
-        args.iter()
-            .any(|arg| arg == r#"profile.dev.split-debuginfo="off""#)
+        !args.iter().any(|arg| arg == "--config"),
+        "profiling profile carries debug-info settings in Cargo.toml: {args:?}"
     );
 }
 

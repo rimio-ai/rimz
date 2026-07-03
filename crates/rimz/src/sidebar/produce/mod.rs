@@ -417,7 +417,7 @@ fn enrich_producing_with(
 ) -> SidebarSnapshot {
     enrich(
         snapshot,
-        frame,
+        frame.as_ref(),
         opts.runtime,
         Some(opts.messages_dir),
         opts.exclude,

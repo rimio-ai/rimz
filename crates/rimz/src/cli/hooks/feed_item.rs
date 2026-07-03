@@ -42,13 +42,7 @@ pub(super) fn build_item(
 /// latency to the agent's turn. Best-effort: a spawn failure is logged and
 /// ignored; durable queue work remains pending for a later transition.
 pub(super) fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(err) => {
-            warn!(error = %err, "lifecycle: cannot locate rimz to spawn the refresh helper");
-            return;
-        }
-    };
+    let exe = rimz::proc::rimz_exe();
     let mut cmd = Command::new(exe);
     cmd.args(&spawn.args)
         .stdin(Stdio::null())

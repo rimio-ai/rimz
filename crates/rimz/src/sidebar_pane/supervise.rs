@@ -62,7 +62,7 @@ pub fn run_worker(config: ServeConfig) -> crate::sidebar_pane::app::Result<()> {
 }
 
 pub fn run(config: ServeConfig) -> Result<()> {
-    let exe = env::current_exe().map_err(SidebarSuperviseErr::CurrentExe)?;
+    let exe = crate::proc::rimz_exe();
     let args = env::args_os().skip(1).collect::<Vec<_>>();
     let mut child = Command::new(&exe)
         .args(args)

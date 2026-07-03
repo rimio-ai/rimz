@@ -158,19 +158,7 @@ pub(crate) fn usage_probe_marker(runtime: &RuntimePaths, kind: &str) -> PathBuf 
 }
 
 fn spawn_usage_refresh(runtime: &RuntimePaths, kind: &str, merge_windows: bool) {
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(err) => {
-            tracing::warn!(
-                workspace = %runtime.workspace_id,
-                kind,
-                tags.operation = "agents.usage_refresh.locate_exe",
-                error = &err as &dyn std::error::Error,
-                "sidebar: cannot locate rimz to refresh account usage",
-            );
-            return;
-        }
-    };
+    let exe = crate::proc::rimz_exe();
     let mut cmd = crate::child_process::detached_rimz_command(exe, runtime);
     cmd.args([
         "agents",
@@ -193,9 +181,9 @@ fn spawn_usage_refresh(runtime: &RuntimePaths, kind: &str, merge_windows: bool) 
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "agents-refresh-usage")
     {
         // Best-effort enrichment on a throttled producer path. The CWD anchor
-        // clears the gc'd-worktree ENOENT; a genuinely missing/replaced `rimz`
-        // binary (upgrade-during-run) still fails here — an environment fact,
-        // not a Rimz fault. Keep it at debug! so it never reaches Sentry.
+        // clears the gc'd-worktree ENOENT; a bad RIMZ_BIN/PATH is an
+        // environment fact, not a Rimz fault. Keep it at debug! so it never
+        // reaches Sentry.
         tracing::debug!(
             workspace = %runtime.workspace_id,
             kind,

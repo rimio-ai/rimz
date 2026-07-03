@@ -56,7 +56,11 @@ fn fresh_snapshot_cache(
     } else {
         std::cmp::min(ttl, SNAPSHOT_CACHE_TTL)
     };
-    snapshot_cache_is_fresh(&cache, unix_now_ms(), min_produced_at_ms, ttl).then_some(cache)
+    snapshot_cache_is_fresh(&cache, unix_now_ms(), min_produced_at_ms, ttl).then(|| {
+        // The producer may carry/repair this frame before publishing, so the
+        // shared cache handle becomes owned at that mutation boundary.
+        std::sync::Arc::unwrap_or_clone(cache)
+    })
 }
 
 /// The session's live panes from the mux — the `list-panes` round-trip the
@@ -244,7 +248,7 @@ pub fn repaired_pane_frame_for_binding(
         observed_at_ms: listing.observed_at_ms,
         session_name: session.to_owned(),
         client_viewed: &[],
-        prior: prior.as_ref(),
+        prior: prior.as_deref(),
     });
     let diag = crate::diag::DiagSink::for_workspace(
         runtime.workspace_id.clone(),
@@ -252,7 +256,7 @@ pub fn repaired_pane_frame_for_binding(
         None,
     );
     emit_frame_diagnostics(&diag, diagnostics);
-    repair_pane_frame(&mut frame, runtime, prior.as_ref(), session, false);
+    repair_pane_frame(&mut frame, runtime, prior.as_deref(), session, false);
     Ok(frame)
 }
 
@@ -586,11 +590,17 @@ pub(super) fn cached_panes_or_produce(
                     observed_at_ms,
                     session_name: session.to_owned(),
                     client_viewed: &viewed_panes,
-                    prior: prior.as_ref(),
+                    prior: prior.as_deref(),
                 });
             frame.presence = presence;
             emit_frame_diagnostics(diag, diagnostics);
-            repair_pane_frame(&mut frame, runtime, prior.as_ref(), session, enrich_metrics);
+            repair_pane_frame(
+                &mut frame,
+                runtime,
+                prior.as_deref(),
+                session,
+                enrich_metrics,
+            );
             Ok(frame)
         };
     match single_flight::coalesce(
@@ -607,23 +617,36 @@ pub(super) fn cached_panes_or_produce(
         // cold room still has a chance to recover.
         Coalesced::ProduceLocal => {
             let prior = read_snapshot_cache(&cache_path, session);
-            if let Some(prior) = prior
-                .clone()
-                .and_then(|prior| publishable_prior(prior, own_pane, diag))
-            {
+            if let Some(prior) = prior.as_ref().and_then(|prior| {
+                publishable_prior(
+                    std::sync::Arc::unwrap_or_clone(std::sync::Arc::clone(prior)),
+                    own_pane,
+                    diag,
+                )
+            }) {
                 return Ok(prior);
             }
             let frame = produce_candidate(false, min_pane_cache_ms)?;
             let frame = confirm_and_carry(
                 frame,
-                prior.as_ref(),
+                prior.as_deref(),
                 own_pane,
                 &produce_candidate,
                 diag,
                 false,
                 runtime,
             )?;
-            validate_frame_for_publish(frame, prior, own_pane, diag, false, runtime, &cache_path)
+            validate_frame_for_publish(
+                frame,
+                prior
+                    .as_ref()
+                    .map(|prior| std::sync::Arc::unwrap_or_clone(std::sync::Arc::clone(prior))),
+                own_pane,
+                diag,
+                false,
+                runtime,
+                &cache_path,
+            )
         }
         // We won: fork `list-panes` and publish it. The guard holds the lock
         // until this arm returns.
@@ -636,14 +659,24 @@ pub(super) fn cached_panes_or_produce(
             // ladder before publishing.
             let frame = confirm_and_carry(
                 frame,
-                prior.as_ref(),
+                prior.as_deref(),
                 own_pane,
                 &produce_candidate,
                 diag,
                 true,
                 runtime,
             )?;
-            validate_frame_for_publish(frame, prior, own_pane, diag, true, runtime, &cache_path)
+            validate_frame_for_publish(
+                frame,
+                prior
+                    .as_ref()
+                    .map(|prior| std::sync::Arc::unwrap_or_clone(std::sync::Arc::clone(prior))),
+                own_pane,
+                diag,
+                true,
+                runtime,
+                &cache_path,
+            )
         }
     }
 }
@@ -937,7 +970,7 @@ fn emit_mux_error(
         reason: FrameRejectReason::MuxError {
             stderr_excerpt: excerpt(&err.to_string(), 512),
         },
-        prior_pane_count: prior.as_ref().map(pane_count).unwrap_or_default(),
+        prior_pane_count: prior.as_deref().map(pane_count).unwrap_or_default(),
         fresh_pane_count: 0,
         frames_ref: None,
     });

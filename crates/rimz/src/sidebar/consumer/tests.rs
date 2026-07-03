@@ -222,6 +222,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
     let mut pr = PrStateCache {
         refreshed_at_ms: unix_now_ms(),
         ok: true,
+        consecutive_failures: 0,
         states: BTreeMap::new(),
     };
     pr.states.insert(wt.clone(), crate::WorktreePrState::Open);
@@ -513,7 +514,7 @@ fn enrich_maps_carried_frame_to_truth_notice() {
 
     let snapshot = enrich(
         SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now()),
-        Some(frame),
+        Some(&frame),
         &runtime,
         None,
         None,

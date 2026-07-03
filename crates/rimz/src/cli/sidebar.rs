@@ -16,7 +16,6 @@ use clap::{Args, Subcommand, ValueEnum};
 use super::{GlobalFlags, current_channel, open_ledger};
 use crate::cli::render;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
-use rimz::ledger::paths::env_path;
 use rimz::ledger::workspace_record;
 use rimz::sidebar::consumer::read_published_snapshot;
 use rimz::sidebar::events::SidebarEvent;

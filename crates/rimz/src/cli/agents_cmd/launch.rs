@@ -1144,7 +1144,7 @@ pub(super) fn layout_panes_with_names(
     params: LayoutPaneParams<'_>,
     launch_identities: &[LaunchIdentity],
 ) -> Result<LayoutPanes> {
-    let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
+    let rimz_bin = rimz::proc::rimz_exe();
     let mut agent_index = 0usize;
     let mut launch_index = 0usize;
     let columns = layout

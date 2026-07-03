@@ -3,6 +3,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use jiff::Timestamp;
 
@@ -133,8 +134,10 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     };
     let len = meta.len();
     let path = paths.latest_snapshot.as_path();
-    if let Some(mut snapshot) = LATEST_PARSE_CACHE.with(|cache| cache.get(path, latest_mtime, len))
-    {
+    if let Some(snapshot) = LATEST_PARSE_CACHE.with(|cache| cache.get(path, latest_mtime, len)) {
+        // The snapshot's projection clock is reader-local, so a shared cached
+        // parse becomes owned at this mutation point.
+        let mut snapshot = Arc::unwrap_or_clone(snapshot);
         // Re-stamp the projection clock at the *read* instant: the parse cache
         // can serve a clone for minutes in a quiet room, and the enrichment
         // rebuilds (stall, compaction, reset windows) must fold against the
@@ -148,7 +151,9 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     // The parse cache is identity-keyed, not a freshness verdict — a
     // stale-stamped snapshot is still worth caching so the next delta skips
     // the re-parse.
-    LATEST_PARSE_CACHE.with(|cache| cache.store(path, latest_mtime, len, snapshot.clone()));
+    LATEST_PARSE_CACHE.with(|cache| {
+        cache.store(path, latest_mtime, len, Arc::new(snapshot.clone()));
+    });
     snapshot_is_current(&snapshot).then_some(snapshot)
 }
 

@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -191,7 +192,7 @@ pub(crate) struct RollupCache {
     pub lost: Vec<(AgentKind, AgentSessionId)>,
 }
 
-fn read_rollup_cache(path: &Path) -> Option<RollupCache> {
+fn read_rollup_cache(path: &Path) -> Option<Arc<RollupCache>> {
     let meta = fs::metadata(path).ok()?;
     let mtime = meta.modified().ok()?;
     let len = meta.len();
@@ -204,7 +205,8 @@ fn read_rollup_cache(path: &Path) -> Option<RollupCache> {
     let bytes = fs::read(path).ok()?;
     let cache: RollupCache = serde_json::from_slice(&bytes).ok()?;
     let cache = (cache.version == ROLLUP_CACHE_VERSION).then_some(cache)?;
-    ROLLUP_PARSE_CACHE.with(|slot| slot.store(path, mtime, len, cache.clone()));
+    let cache = Arc::new(cache);
+    ROLLUP_PARSE_CACHE.with(|slot| slot.store(path, mtime, len, Arc::clone(&cache)));
     Some(cache)
 }
 
@@ -308,8 +310,9 @@ pub(crate) fn catch_up_rollup(
     let log_len = fs::metadata(&paths.events_log)
         .map(|meta| meta.len())
         .unwrap_or(0);
-    let base =
-        read_rollup_cache(&paths.rollup_cache).filter(|cache| cache.extent.offset <= log_len);
+    let base = read_rollup_cache(&paths.rollup_cache)
+        .filter(|cache| cache.extent.offset <= log_len)
+        .map(Arc::unwrap_or_clone);
     catch_up_from(base, paths)
 }
 

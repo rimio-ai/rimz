@@ -126,14 +126,8 @@ pub(super) fn session_name_from_record(state: &StatePaths) -> Option<String> {
         .map(|record| record.session_name)
 }
 
-fn bin_name(stem: &str) -> String {
-    format!("{stem}{}", std::env::consts::EXE_SUFFIX)
-}
-
 pub(crate) fn rimz_cli_program() -> PathBuf {
-    env_path("RIMZ_BIN")
-        .or_else(|| std::env::current_exe().ok())
-        .unwrap_or_else(|| PathBuf::from(bin_name("rimz")))
+    rimz::proc::rimz_exe()
 }
 
 #[cfg(test)]

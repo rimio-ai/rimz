@@ -27,6 +27,11 @@ pub const FOCUS_STRANDED_EVENT_TTL: Duration = Duration::from_secs(2);
 /// changes, keeping the buffer near-current without running animations.
 pub const BACKGROUND_PAINT_MIN_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Maximum extra staleness an off-screen consumer renderer accepts before
+/// folding identity-free ledger/pane nudges. Watched renderers and the elected
+/// producer stay immediate.
+pub const UNWATCHED_FOLD_CLAMP: Duration = Duration::from_secs(1);
+
 /// How long the interactive sidebar keeps its last row/group order after a
 /// jump, tab-switch, or browse before re-sorting to live rank. Long enough to
 /// read the card you landed on, not just glance at it, so a watched row holds

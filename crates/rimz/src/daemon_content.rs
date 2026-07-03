@@ -93,7 +93,7 @@ pub fn resolve_pane(
 }
 
 pub fn run_supervisor(slot: usize, worktree_root: &Path) -> io::Result<ExitStatus> {
-    let rimz_bin = std::env::current_exe()?;
+    let rimz_bin = crate::proc::rimz_exe();
     reset_signal_flags();
     install_signal_handlers()?;
 

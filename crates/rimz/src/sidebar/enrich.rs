@@ -261,7 +261,7 @@ struct ProducerBindingFallbackLog<'a> {
 /// freshly refreshed account, spending, and PR values for projection.
 pub fn enrich(
     mut snapshot: SidebarSnapshot,
-    frame: Option<PaneFrame>,
+    frame: Option<&PaneFrame>,
     runtime: &RuntimePaths,
     messages_dir: Option<&Path>,
     exclude: Option<&PaneId>,
@@ -386,9 +386,9 @@ pub fn enrich(
         snapshot.presence = frame
             .presence
             .map(|sample| SidebarPresence::classify(sample, idle_threshold_ms));
-        snapshot.truth_degraded = truth_notice_for_frame(&frame);
+        snapshot.truth_degraded = truth_notice_for_frame(frame);
         if let Some(own) = exclude {
-            snapshot.own_view = SidebarOwnView::from_frame(own, &frame);
+            snapshot.own_view = SidebarOwnView::from_frame(own, frame);
         }
         let metrics = frame.pane_metrics().collect::<Vec<_>>();
         let panes = frame.to_pane_refs();

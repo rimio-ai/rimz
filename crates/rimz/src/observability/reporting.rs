@@ -354,13 +354,14 @@ fn resolve_from(
 }
 
 /// The default deployment environment when neither env nor config sets one: an
-/// installed release reports as `production`; a dev or CI build reports as
-/// `development`, so the production dashboard stays clear of contributor noise.
+/// installed release reports as `production`; dev, profiling, and CI builds
+/// report as `development`, so the production dashboard stays clear of
+/// contributor noise.
 fn default_environment() -> &'static str {
-    if cfg!(debug_assertions) {
-        "development"
-    } else {
+    if option_env!("RIMZ_BUILD_PROFILE") == Some("release") {
         "production"
+    } else {
+        "development"
     }
 }
 

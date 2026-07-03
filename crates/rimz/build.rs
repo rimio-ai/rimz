@@ -45,6 +45,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed={PRESENCE_PLUGIN_ENV}");
     println!("cargo:rerun-if-changed={THEME_CATALOG_DIR}");
     emit_build_version();
+    emit_build_profile();
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR set by cargo"));
     let out_path = out_dir.join("litellm-pricing.json.gz");
@@ -54,6 +55,11 @@ fn main() {
     fs::write(&out_path, compressed).expect("write embedded pricing snapshot");
     write_themes_embed(&out_dir);
     write_presence_plugin_embed(&out_dir);
+}
+
+fn emit_build_profile() {
+    let profile = env::var("PROFILE").expect("PROFILE set by cargo");
+    println!("cargo:rustc-env=RIMZ_BUILD_PROFILE={profile}");
 }
 
 fn emit_build_version() {

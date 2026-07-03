@@ -580,18 +580,7 @@ fn spawn_auto_continue(
     text: &str,
     reason: &str,
 ) -> bool {
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(err) => {
-            tracing::warn!(
-                workspace = %runtime.workspace_id,
-                tags.operation = "auto_continue.locate_exe",
-                error = &err as &dyn std::error::Error,
-                "sidebar: cannot locate rimz to auto-continue agent",
-            );
-            return false;
-        }
-    };
+    let exe = crate::proc::rimz_exe();
     let mut cmd = detached_rimz_command(exe, runtime);
     cmd.args([
         "agents",
@@ -621,9 +610,9 @@ fn spawn_auto_continue(
     );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "agent-auto-continue") {
         // Best-effort enrichment on a throttled producer path. The CWD anchor
-        // clears the gc'd-worktree ENOENT; a genuinely missing/replaced `rimz`
-        // binary (upgrade-during-run) still fails here — an environment fact,
-        // not a Rimz fault. Keep it at debug! so it never reaches Sentry.
+        // clears the gc'd-worktree ENOENT; a bad RIMZ_BIN/PATH is an
+        // environment fact, not a Rimz fault. Keep it at debug! so it never
+        // reaches Sentry.
         tracing::debug!(
             workspace = %runtime.workspace_id,
             tags.operation = "auto_continue.spawn",

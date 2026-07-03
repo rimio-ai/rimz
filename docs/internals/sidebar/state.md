@@ -116,10 +116,11 @@ The table names staleness-budget semantics; exact values and rationale live as n
 | Lane | Cadence | Where felt |
 | --- | --- | --- |
 | Pane frame | `SNAPSHOT_CACHE_TTL` in poll mode; `EVENT_PANE_TTL` while the presence stamp is fresh | Pane open/close and cwd/command regrouping with no exact event |
+| Unwatched consumer fold | ≤ `UNWATCHED_FOLD_CLAMP` for identity-free nudges; watched renderers and the producer are immediate | Off-screen `LedgerDelta` and topology nudges in active rooms |
 | Zellij topology cache | `PRESENCE_STAMP_FRESH` | Zellij pre-producer pane listing |
 | Presence stamp | `PRESENCE_STAMP_FRESH` | Switches the producer between poll and event-mode pane TTLs |
 | Git diff stats | focused: `DIFF_STATS_FOCUSED_LOCAL_TTL` local/edit facts and `DIFF_STATS_FOCUSED_COMMIT_TTL` commit/PR facts; background: `DIFF_STATS_TTL` hot and `DIFF_STATS_IDLE_TTL` idle | Worktree header churn, ahead/behind counts, landed markers, trunk-sync classification |
-| PR state | `PR_STATE_TTL` success; `PR_STATE_RETRY_TTL` failure | Worktree header PR glyphs after diverged stats |
+| PR state | `PR_STATE_TTL` success; escalating failure backoff starts at `PR_STATE_RETRY_TTL` and caps at `PR_STATE_TTL` | Worktree header PR glyphs after diverged stats; failed paths keep last-known-good state |
 | Worktree root enumeration | `WORKTREE_ROOTS_TTL` | Grouping for checkouts added without a session boundary |
 | `/proc` metrics | `METRICS_FOCUSED_SAMPLE_TTL` viewed; `METRICS_BACKGROUND_SAMPLE_TTL` background | Child pids plus per-row CPU, memory, IO, and process-state figures |
 | Spending walk | `SPENDING_TTL` | Provider dashboard, fleet ledger, and the floor under the live cockpit spend |

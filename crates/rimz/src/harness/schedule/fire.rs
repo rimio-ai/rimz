@@ -139,18 +139,7 @@ fn state_path(runtime: &RuntimePaths) -> PathBuf {
 }
 
 fn spawn_loop_run(runtime: &RuntimePaths, name: &str) {
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(err) => {
-            tracing::warn!(
-                task = name,
-                tags.operation = "loop_fire.locate_exe",
-                error = &err as &dyn std::error::Error,
-                "sidebar: cannot locate rimz to fire loop task",
-            );
-            return;
-        }
-    };
+    let exe = crate::proc::rimz_exe();
     let mut cmd = Command::new(exe);
     cmd.args(["loop", "run", name])
         .current_dir(&runtime.root)
@@ -163,9 +152,9 @@ fn spawn_loop_run(runtime: &RuntimePaths, name: &str) {
         "sidebar: firing loop task",
     );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "loop-run") {
-        // The CWD anchor clears gc'd-worktree ENOENT; missing/replaced `rimz`
-        // stays an environment fact. Keep it at debug! so Sentry ignores it,
-        // and the next elder tick retries.
+        // The CWD anchor clears gc'd-worktree ENOENT; a bad RIMZ_BIN/PATH stays
+        // an environment fact. Keep it at debug! so Sentry ignores it, and the
+        // next elder tick retries.
         tracing::debug!(
             task = name,
             tags.operation = "loop_fire.spawn",

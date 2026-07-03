@@ -5,6 +5,7 @@
 //! opportunistically, and every value can be rebuilt from live mux state.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -38,7 +39,7 @@ thread_local! {
 /// (same path, mtime, and length). On a stat miss it re-reads and re-caches; a
 /// file replaced (atomic rename) between the stat and the read just costs one
 /// redundant parse next call, never a stale or torn value.
-pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<PaneFrame> {
+pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<Arc<PaneFrame>> {
     let meta = std::fs::metadata(cache_path).ok()?;
     let mtime = meta.modified().ok()?;
     let len = meta.len();
@@ -49,7 +50,10 @@ pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<PaneFrame
             let bytes = std::fs::read(cache_path).ok()?;
             let mut parsed: PaneFrame = serde_json::from_slice(&bytes).ok()?;
             normalize_observed_stamp(&mut parsed);
-            SNAPSHOT_PARSE_CACHE.with(|cache| cache.store(cache_path, mtime, len, parsed.clone()));
+            let parsed = Arc::new(parsed);
+            SNAPSHOT_PARSE_CACHE.with(|cache| {
+                cache.store(cache_path, mtime, len, Arc::clone(&parsed));
+            });
             parsed
         }
     };

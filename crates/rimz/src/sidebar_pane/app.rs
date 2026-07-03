@@ -285,6 +285,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             // external `rimz reload` arrives as the typed event. Both resolve
             // through the same helper.
             Wakeup::Reload => {
+                state.clear_pending_fetch();
                 if let Some(target) = reload_or_refetch(&config.session_name, &mut fetch) {
                     state.reexec_to = Some(target);
                     break;

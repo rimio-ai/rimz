@@ -106,6 +106,7 @@ fn fold_snapshot(
             final_for_request: true,
             fresh_pane_frame,
             unchanged: false,
+            producer: true,
         })
         .expect("send fetch outcome");
     state
@@ -137,6 +138,23 @@ fn fixed_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
         ratatui::TerminalOptions { viewport },
     )
     .expect("terminal")
+}
+
+fn event_envelope(ws: &WorkspaceId, event: SidebarEvent) -> SidebarEventEnvelope {
+    SidebarEventEnvelope::new(
+        ws.clone(),
+        Some("rimz-test".to_owned()),
+        crate::sidebar::timing::unix_now_ms(),
+        event,
+    )
+}
+
+fn hide_consumer(state: &mut LoopState, ws: &WorkspaceId) {
+    state.current = animating_agent_snapshot(ws);
+    state.current.own_view = Some(own_view(false, false));
+    state.current.viewed_panes.clear();
+    state.last_pulled = state.current.clone();
+    state.last_known_elder = false;
 }
 
 fn hidden_attached_agent_snapshot(
@@ -197,6 +215,7 @@ fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
             final_for_request: true,
             fresh_pane_frame: false,
             unchanged: false,
+            producer: true,
         })
         .expect("send fetch outcome");
 
@@ -237,6 +256,7 @@ fn unchanged_fetch_outcome_clears_in_flight_without_dirtying_frame() {
             final_for_request: true,
             fresh_pane_frame: false,
             unchanged: true,
+            producer: true,
         })
         .expect("send unchanged outcome");
 
@@ -275,6 +295,7 @@ fn unchanged_fetch_outcome_dispatches_queued_refetch() {
             final_for_request: true,
             fresh_pane_frame: false,
             unchanged: true,
+            producer: true,
         })
         .expect("send unchanged outcome");
 
@@ -409,6 +430,172 @@ fn frame_timing_resumes_on_own_pane_focus() {
             resumes.then_some(true)
         );
     }
+}
+
+#[test]
+fn unwatched_consumer_coalesces_identity_free_fetches_until_clamp_deadline() {
+    let ws = workspace();
+    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane));
+    hide_consumer(&mut state, &ws);
+    let config = serve_config(&ws);
+    let mut terminal = fixed_terminal();
+    let (mut fetch, request_rx) = fetch_dispatcher();
+
+    for event in [
+        SidebarEvent::LedgerDelta {
+            event_method: None,
+            agent_signal: None,
+        },
+        SidebarEvent::PanesChanged,
+        SidebarEvent::LedgerDelta {
+            event_method: None,
+            agent_signal: None,
+        },
+    ] {
+        state
+            .on_event(
+                &config,
+                &mut fetch,
+                &mut terminal,
+                event_envelope(&ws, event),
+                Instant::now(),
+                &crate::diag::DiagSink::disabled(),
+            )
+            .expect("identity-free event");
+    }
+
+    assert!(
+        request_rx.try_recv().is_err(),
+        "unwatched consumer defers the burst"
+    );
+    let pending = state.pending_fetch.as_mut().expect("pending fetch");
+    assert!(
+        pending.request.is_producer_fresh_panes(),
+        "coalescing preserves the strongest freshness requirement"
+    );
+    pending.due_at = Instant::now() - Duration::from_millis(1);
+
+    let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
+    let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
+    let socket_path = sidebar_socket_path(&runtime, &SidebarInstanceId::new());
+    let (_result_tx, result_rx) = std::sync::mpsc::channel();
+    state.last_heartbeat = Some(Instant::now());
+    state.last_self_close_check = Instant::now();
+    state
+        .run_maintenance(
+            &mut fetch,
+            MaintenanceContext {
+                config: &config,
+                runtime: &runtime,
+                socket_path: &socket_path,
+                result_rx: &result_rx,
+                anim_start: Instant::now(),
+                diag: &crate::diag::DiagSink::disabled(),
+                tick: Duration::from_secs(60),
+            },
+        )
+        .expect("maintenance fires due pending fetch");
+
+    assert!(
+        request_rx
+            .try_recv()
+            .expect("one deferred fetch")
+            .is_producer_fresh_panes()
+    );
+    assert!(request_rx.try_recv().is_err(), "burst emits one fetch");
+}
+
+#[test]
+fn watched_renderer_and_elder_fetch_identity_free_events_immediately() {
+    let ws = workspace();
+    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let config = serve_config(&ws);
+    let mut terminal = fixed_terminal();
+
+    for (watched, elder) in [(true, false), (false, true)] {
+        let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
+        hide_consumer(&mut state, &ws);
+        state.last_known_elder = elder;
+        if watched {
+            state.current.own_view = Some(own_view(false, true));
+        }
+        let (mut fetch, request_rx) = fetch_dispatcher();
+
+        state
+            .on_event(
+                &config,
+                &mut fetch,
+                &mut terminal,
+                event_envelope(
+                    &ws,
+                    SidebarEvent::LedgerDelta {
+                        event_method: None,
+                        agent_signal: None,
+                    },
+                ),
+                Instant::now(),
+                &crate::diag::DiagSink::disabled(),
+            )
+            .expect("identity-free event");
+
+        assert!(request_rx.try_recv().is_ok());
+        assert!(state.pending_fetch.is_none());
+    }
+}
+
+#[test]
+fn focus_resume_flushes_pending_unwatched_fetch() {
+    let ws = workspace();
+    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
+    hide_consumer(&mut state, &ws);
+    let config = serve_config(&ws);
+    let mut terminal = fixed_terminal();
+    let (mut fetch, request_rx) = fetch_dispatcher();
+
+    state
+        .on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(
+                &ws,
+                SidebarEvent::LedgerDelta {
+                    event_method: None,
+                    agent_signal: None,
+                },
+            ),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("defer ledger delta");
+    assert!(state.pending_fetch.is_some());
+
+    state
+        .on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(
+                &ws,
+                SidebarEvent::FocusChanged {
+                    focused: vec![own_pane],
+                    unfocused: Vec::new(),
+                },
+            ),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("focus resumes");
+
+    assert!(state.pending_fetch.is_none());
+    assert!(
+        request_rx
+            .try_recv()
+            .expect("focus flushed pending fetch")
+            .is_producer_fresh_panes()
+    );
 }
 
 #[test]

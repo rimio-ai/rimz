@@ -103,6 +103,8 @@ pub(super) struct LoopState {
     pub(super) current: SidebarSnapshot,
     last_pulled: SidebarSnapshot,
     own_pane: Option<PaneId>,
+    last_known_elder: bool,
+    pending_fetch: Option<PendingFetch>,
     optimistic_watch_until: Option<Instant>,
     event_store: EventStore,
     observer: observe::Observer,
@@ -126,6 +128,12 @@ pub(super) struct LoopState {
     pub(super) should_exit: bool,
     pub(super) tab_emptied: bool,
     pub(super) reexec_to: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingFetch {
+    due_at: Instant,
+    request: FetchRequest,
 }
 
 struct InputApply {
@@ -183,6 +191,8 @@ impl LoopState {
             last_pulled: current.clone(),
             current,
             own_pane,
+            last_known_elder: true,
+            pending_fetch: None,
             optimistic_watch_until: None,
             event_store: EventStore::default(),
             observer: observe::Observer::default(),
@@ -219,7 +229,7 @@ impl LoopState {
         let watched = self.watched();
         let animating = is_animating(&self.current, &self.ui, phase, alert_active);
         let active = (watched && animating) || (self.dirty && self.dirty_paintable(watched));
-        let timeout = if active {
+        let mut timeout = if active {
             self.next_frame
                 .saturating_duration_since(Instant::now())
                 .max(FRAME_MIN_TIMEOUT)
@@ -237,6 +247,14 @@ impl LoopState {
             }
             timeout.max(FRAME_MIN_TIMEOUT)
         };
+        if let Some(pending) = self.pending_fetch {
+            timeout = timeout.min(
+                pending
+                    .due_at
+                    .saturating_duration_since(Instant::now())
+                    .max(FRAME_MIN_TIMEOUT),
+            );
+        }
         (active, timeout)
     }
 
@@ -272,6 +290,60 @@ impl LoopState {
             )
     }
 
+    fn identity_free_fetch_immediate(&self) -> bool {
+        self.watched() || self.last_known_elder
+    }
+
+    fn request_or_defer_identity_free(
+        &mut self,
+        fetch: &mut FetchDispatcher,
+        request: FetchRequest,
+    ) {
+        if self.identity_free_fetch_immediate() {
+            self.request_now_merging_pending(fetch, request, true);
+        } else {
+            self.defer_fetch(request);
+        }
+    }
+
+    fn defer_fetch(&mut self, request: FetchRequest) {
+        if let Some(pending) = &mut self.pending_fetch {
+            pending.request.merge(request);
+            return;
+        }
+        self.pending_fetch = Some(PendingFetch {
+            due_at: Instant::now() + crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
+            request,
+        });
+    }
+
+    fn request_now_merging_pending(
+        &mut self,
+        fetch: &mut FetchDispatcher,
+        mut request: FetchRequest,
+        force_after: bool,
+    ) {
+        if let Some(pending) = self.pending_fetch.take() {
+            request.merge(pending.request);
+        }
+        fetch.request(request, force_after);
+    }
+
+    pub(super) fn clear_pending_fetch(&mut self) {
+        self.pending_fetch = None;
+    }
+
+    fn fire_due_pending_fetch(&mut self, fetch: &mut FetchDispatcher) {
+        let Some(pending) = self.pending_fetch else {
+            return;
+        };
+        if Instant::now() < pending.due_at {
+            return;
+        }
+        self.pending_fetch = None;
+        fetch.request(pending.request, true);
+    }
+
     pub(super) fn on_snapshot(
         &mut self,
         config: &ServeConfig,
@@ -291,6 +363,7 @@ impl LoopState {
         }
         let mut rejected = false;
         if let Some(mut outcome) = latest {
+            self.last_known_elder = outcome.producer;
             if outcome.unchanged {
                 self.fetched_at = Instant::now();
                 if !self.should_exit
@@ -359,6 +432,7 @@ impl LoopState {
         let sent_at_ms = envelope.sent_at_ms;
         match envelope.event {
             SidebarEvent::Reload => {
+                self.clear_pending_fetch();
                 if let Some(target) = reload_or_refetch(&config.session_name, fetch) {
                     self.reexec_to = Some(target);
                     return Ok(LoopFlow::Exit);
@@ -436,6 +510,7 @@ impl LoopState {
                         final_for_request: false,
                         fresh_pane_frame: false,
                         unchanged: false,
+                        producer: self.last_known_elder,
                     },
                     anim_start,
                     diag,
@@ -444,13 +519,23 @@ impl LoopState {
                 // the fused frame now instead of waiting out a previously armed
                 // grid boundary.
                 self.next_frame = Instant::now();
+                let mut requested_verification = false;
                 if !self.should_exit && requests_verification {
-                    fetch.request(FetchRequest::producer_fresh_panes(), true);
+                    self.request_now_merging_pending(
+                        fetch,
+                        FetchRequest::producer_fresh_panes(),
+                        true,
+                    );
+                    requested_verification = true;
                 }
                 if own_focused {
                     self.optimistic_watch_until = Some(Instant::now() + FOCUS_RESUME_WATCH_WINDOW);
-                    if !self.should_exit {
-                        fetch.request(FetchRequest::producer_fresh_panes(), true);
+                    if !self.should_exit && !requested_verification {
+                        self.request_now_merging_pending(
+                            fetch,
+                            FetchRequest::producer_fresh_panes(),
+                            true,
+                        );
                     }
                 } else if own_unfocused {
                     self.optimistic_watch_until = None;
@@ -460,13 +545,13 @@ impl LoopState {
             // `PaneOpened` without a command: nothing to fuse, so refetch,
             // bypassing the pane cache when the event says topology moved.
             _ => {
-                fetch.request(
+                self.request_or_defer_identity_free(
+                    fetch,
                     if requests_verification {
                         FetchRequest::producer_fresh_panes()
                     } else {
                         FetchRequest::default()
                     },
-                    true,
                 );
             }
         }
@@ -517,7 +602,7 @@ impl LoopState {
         // A resize is the mux telling us topology changed. Pull a fresh pane
         // list through the elected producer and require a cache produced after
         // this signal.
-        fetch.request(FetchRequest::producer_fresh_panes(), true);
+        self.request_now_merging_pending(fetch, FetchRequest::producer_fresh_panes(), true);
         Ok(())
     }
 
@@ -715,10 +800,11 @@ impl LoopState {
         // path still drains the channel so startup cannot strand the
         // placeholder cockpit.
         self.on_snapshot(ctx.config, fetch, ctx.result_rx, ctx.anim_start, ctx.diag)?;
+        self.fire_due_pending_fetch(fetch);
 
         // Data backstop: catch pane/git drift no ledger delta announced. It is
         // self-gated to the data tick and no-ops while a fetch is in flight.
-        if self.fetched_at.elapsed() >= ctx.tick {
+        if self.pending_fetch.is_none() && self.fetched_at.elapsed() >= ctx.tick {
             fetch.request(FetchRequest::default(), false);
         }
 
@@ -1164,6 +1250,7 @@ impl LoopState {
                 final_for_request: false,
                 fresh_pane_frame: false,
                 unchanged: false,
+                producer: self.last_known_elder,
             },
             anim_start,
             diag,

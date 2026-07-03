@@ -17,17 +17,7 @@ pub(super) fn build_daemon_view(
     mux_config: &rimz::config::MultiplexerConfig,
     room: &RoomTarget<'_>,
 ) -> Option<BackgroundViewOptions> {
-    let rimz_bin = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(err) => {
-            tracing::warn!(
-                session = %workspace.session_name,
-                error = %err,
-                "daemon view skipped because the current executable is unavailable",
-            );
-            return None;
-        }
-    };
+    let rimz_bin = rimz::proc::rimz_exe();
     Some(build_daemon_view_options(
         remote_control,
         daemon,

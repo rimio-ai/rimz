@@ -253,24 +253,7 @@ fn read_u64_at(bytes: &[u8], offset: usize, endian: Endian) -> Option<u64> {
 /// atomic install unlinks that inode; the replacement lives at the stripped
 /// path.
 pub fn resolve_on_disk_binary(exe: &Path) -> Option<PathBuf> {
-    if exe.is_file() {
-        return Some(exe.to_path_buf());
-    }
-    strip_deleted_suffix(exe).filter(|path| path.is_file())
-}
-
-#[cfg(unix)]
-fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-
-    const DELETED_SUFFIX: &[u8] = b" (deleted)";
-    let stripped = path.as_os_str().as_bytes().strip_suffix(DELETED_SUFFIX)?;
-    Some(PathBuf::from(std::ffi::OsStr::from_bytes(stripped)))
-}
-
-#[cfg(not(unix))]
-fn strip_deleted_suffix(_path: &Path) -> Option<PathBuf> {
-    None
+    crate::proc::resolve_existing_or_replacement(exe)
 }
 
 #[cfg(target_os = "linux")]

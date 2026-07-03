@@ -33,8 +33,7 @@ pub fn presence_plugin_path() -> Option<PathBuf> {
     if let Some(path) = embedded_presence_plugin_path() {
         return Some(path);
     }
-    env::current_exe()
-        .ok()?
+    crate::proc::rimz_exe()
         .parent()?
         .join(PRESENCE_PLUGIN_FILE)
         .canonicalize()

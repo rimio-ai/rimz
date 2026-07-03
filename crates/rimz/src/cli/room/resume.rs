@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rimz::mux::{MuxBackend, SessionHealth};
 use rimz::{Ledger, RuntimePaths, StatePaths};
 
@@ -201,7 +201,7 @@ fn plan_agent_resume_at(
 ) -> Result<rimz::harness::resume::ResumePlan> {
     let ledger = Ledger::open(paths.clone(), runtime.clone())?;
     let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
-    let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
+    let rimz_bin = rimz::proc::rimz_exe();
     let plan = rimz::harness::resume::plan_resume(
         &projection.agents,
         &projection.ended,

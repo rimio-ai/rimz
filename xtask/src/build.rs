@@ -407,40 +407,64 @@ fn report_profile_build(artifact: &Path) {
 }
 
 pub(crate) fn stage_install(root: &Path) -> Result<PathBuf> {
-    stage_host_rimz(root, true, &[], &[])
+    stage_host_rimz(root, HostProfile::Release, &[], None)
 }
 
-/// Stage a dev host `rimz`: a debug build with the `sentry` feature compiled in.
+/// Stage a dev host `rimz`: an optimized profiling build with the `sentry`
+/// feature compiled in.
 fn stage_dev_install(root: &Path) -> Result<PathBuf> {
-    // Cargo config beats the manifest profile for this one build, so the
-    // staged binary embeds line tables whose build id matches the upload.
-    let stage = stage_host_rimz(
+    stage_host_rimz(
         root,
-        false,
+        HostProfile::Profiling,
         &["sentry"],
-        &["--config", r#"profile.dev.split-debuginfo="off""#],
-    )?;
-    upload_debug_files(&profile_artifact(root, "debug", "rimz"))?;
-    Ok(stage)
+        Some(PROFILING_RUSTFLAGS),
+    )
+}
+
+#[derive(Clone, Copy)]
+enum HostProfile {
+    Release,
+    Profiling,
+}
+
+impl HostProfile {
+    fn cargo_arg(self) -> &'static str {
+        match self {
+            Self::Release => "--release",
+            Self::Profiling => "--profile",
+        }
+    }
+
+    fn cargo_arg_value(self) -> Option<&'static str> {
+        match self {
+            Self::Release => None,
+            Self::Profiling => Some("profiling"),
+        }
+    }
+
+    fn target_dir(self) -> &'static str {
+        match self {
+            Self::Release => "release",
+            Self::Profiling => "profiling",
+        }
+    }
 }
 
 /// Build the host `rimz` binary for the given profile and feature set, then copy
 /// it into the install staging directory.
 fn stage_host_rimz(
     root: &Path,
-    release: bool,
+    profile: HostProfile,
     features: &[&str],
-    extra: &[&str],
+    rustflags: Option<&'static str>,
 ) -> Result<PathBuf> {
     build_plugin(root)?;
-    let envs = presence_plugin_embed_env(root);
-    run_with_env(
-        root,
-        "cargo",
-        host_build_args(release, features, extra),
-        &envs,
-    )?;
-    let profile_dir = if release { "release" } else { "debug" };
+    let mut envs = presence_plugin_embed_env(root);
+    if let Some(rustflags) = rustflags {
+        envs.push(("RUSTFLAGS", PathBuf::from(rustflags)));
+    }
+    run_with_env(root, "cargo", host_build_args(profile, features), &envs)?;
+    let profile_dir = profile.target_dir();
     let stage = stage_bin_dir(root);
     fs::create_dir_all(&stage).with_context(|| format!("creating {}", stage.display()))?;
     copy_atomically(
@@ -450,11 +474,9 @@ fn stage_host_rimz(
     Ok(stage)
 }
 
-/// Cargo args to build the host `rimz` binary. A release build optimizes the
-/// shipped binary; a debug build makes the installed binary's off-box reporting
-/// default to the `development` environment. `features` opts dev-only cargo
+/// Cargo args to build the host `rimz` binary. `features` opts dev-only cargo
 /// features (`sentry`) in.
-fn host_build_args(release: bool, features: &[&str], extra: &[&str]) -> Vec<String> {
+fn host_build_args(profile: HostProfile, features: &[&str]) -> Vec<String> {
     let mut args = vec![
         "build".to_owned(),
         "-p".to_owned(),
@@ -463,14 +485,14 @@ fn host_build_args(release: bool, features: &[&str], extra: &[&str]) -> Vec<Stri
         "rimz".to_owned(),
         "--locked".to_owned(),
     ];
-    if release {
-        args.push("--release".to_owned());
+    args.push(profile.cargo_arg().to_owned());
+    if let Some(value) = profile.cargo_arg_value() {
+        args.push(value.to_owned());
     }
     if !features.is_empty() {
         args.push("--features".to_owned());
         args.push(features.join(","));
     }
-    args.extend(extra.iter().map(|arg| (*arg).to_owned()));
     args
 }
 
@@ -514,7 +536,12 @@ fn rustc_host_target(root: &Path) -> Result<String> {
 
 fn build_host_release(root: &Path) -> Result<()> {
     let envs = presence_plugin_embed_env(root);
-    run_with_env(root, "cargo", host_build_args(true, &[], &[]), &envs)
+    run_with_env(
+        root,
+        "cargo",
+        host_build_args(HostProfile::Release, &[]),
+        &envs,
+    )
 }
 
 fn build_darwin_artifacts(root: &Path) -> Result<()> {

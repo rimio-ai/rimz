@@ -91,7 +91,7 @@ pub(super) struct RunPaneCmdArgs<'a> {
 }
 
 pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
-    let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
+    let rimz_bin = rimz::proc::rimz_exe();
     let argv = rimz::harness::launch::exec_argv(
         &rimz_bin,
         &rimz::harness::launch::ExecInvocation {

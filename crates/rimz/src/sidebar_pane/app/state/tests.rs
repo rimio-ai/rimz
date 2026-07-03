@@ -303,6 +303,7 @@ impl ApplyHarness {
             final_for_request: true,
             fresh_pane_frame: true,
             unchanged: false,
+            producer: true,
         })
     }
 
@@ -722,6 +723,7 @@ fn frameless_fold_does_not_blip_switch_in() {
         final_for_request: false,
         fresh_pane_frame: false,
         unchanged: false,
+        producer: true,
     });
     assert_eq!(a.ui.viewing_own_tab, Some(true));
 
@@ -791,6 +793,7 @@ fn non_final_fast_success_keeps_refresh_alert_active() {
         final_for_request: false,
         fresh_pane_frame: false,
         unchanged: false,
+        producer: true,
     });
 
     assert!(!applied.should_exit);

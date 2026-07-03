@@ -35,17 +35,7 @@ fn read_stamp(path: &Path) -> Option<Timestamp> {
 }
 
 fn spawn_message_sweep(runtime: &RuntimePaths) {
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(err) => {
-            tracing::warn!(
-                tags.operation = "message.fire.locate_exe",
-                error = &err as &dyn std::error::Error,
-                "sidebar: cannot locate rimz to sweep scheduled messages",
-            );
-            return;
-        }
-    };
+    let exe = crate::proc::rimz_exe();
     let mut cmd = Command::new(exe);
     if let Ok(root) = std::env::var(crate::workspace::ENV_PROJECT_ROOT) {
         cmd.args(["--root", &root]);
@@ -60,9 +50,9 @@ fn spawn_message_sweep(runtime: &RuntimePaths) {
         "sidebar: sweeping scheduled messages",
     );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "message-sweep") {
-        // The CWD anchor clears gc'd-worktree ENOENT; missing/replaced `rimz`
-        // stays an environment fact. Keep it at debug! so Sentry ignores it,
-        // and the next elder tick retries.
+        // The CWD anchor clears gc'd-worktree ENOENT; a bad RIMZ_BIN/PATH stays
+        // an environment fact. Keep it at debug! so Sentry ignores it, and the
+        // next elder tick retries.
         tracing::debug!(
             tags.operation = "message.fire.spawn",
             error = &err as &dyn std::error::Error,

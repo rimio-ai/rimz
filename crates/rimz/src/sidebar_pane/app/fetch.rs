@@ -65,6 +65,7 @@ pub(super) struct FetchOutcome {
     pub(super) final_for_request: bool,
     pub(super) fresh_pane_frame: bool,
     pub(super) unchanged: bool,
+    pub(super) producer: bool,
 }
 
 pub(super) fn apply_refresh_override(config: &ServeConfig, snapshot: &mut SidebarSnapshot) {
@@ -197,6 +198,7 @@ fn run_fetch_cycle(
             final_for_request: true,
             fresh_pane_frame: false,
             unchanged: true,
+            producer: is_producer,
         });
         return;
     }
@@ -251,6 +253,7 @@ fn run_fetch_cycle(
                 final_for_request: !produce,
                 fresh_pane_frame: fast_has_request_fresh_frame,
                 unchanged: false,
+                producer: is_producer,
             });
             deliver_notifications(config, runtime, notification_prefs, diag, deliveries);
             if !produce {
@@ -267,6 +270,7 @@ fn run_fetch_cycle(
             final_for_request: true,
             fresh_pane_frame: false,
             unchanged: false,
+            producer: is_producer,
         }),
         // An unreadable rollup on a producing cycle defers to the produce
         // below, which folds the same ledger and reports its own error.
@@ -302,6 +306,7 @@ fn run_fetch_cycle(
                     final_for_request: true,
                     fresh_pane_frame: request.mode.produces_fresh_panes(),
                     unchanged: false,
+                    producer: is_producer,
                 });
                 deliver_notifications(config, runtime, notification_prefs, diag, deliveries);
             }
@@ -311,6 +316,7 @@ fn run_fetch_cycle(
                     final_for_request: true,
                     fresh_pane_frame: request.mode.produces_fresh_panes(),
                     unchanged: false,
+                    producer: is_producer,
                 });
             }
         }
@@ -563,7 +569,7 @@ impl FetchRequest {
         matches!(self.mode, FetchMode::ProducerFreshPanes)
     }
 
-    fn merge(&mut self, other: Self) {
+    pub(super) fn merge(&mut self, other: Self) {
         self.mode = self.mode.strongest(other.mode);
         self.published_frame_hint |= other.published_frame_hint;
         self.min_pane_cache_ms = match (self.min_pane_cache_ms, other.min_pane_cache_ms) {
@@ -661,6 +667,7 @@ pub(super) fn spawn_fetch_worker(
                     final_for_request: true,
                     fresh_pane_frame: false,
                     unchanged: false,
+                    producer: false,
                 }),
             }
             if disconnected {

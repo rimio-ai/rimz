@@ -82,7 +82,7 @@ pub fn read_published_snapshot(
     let cache = read_snapshot_cache(&runtime.pane_frame_path(), session);
     Ok(enrich(
         base,
-        cache,
+        cache.as_deref(),
         runtime,
         Some(&state.messages_dir),
         exclude,

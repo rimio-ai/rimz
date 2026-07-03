@@ -199,20 +199,7 @@ fn spawn_session_context_refresh(
     session_id: &str,
     spawn: RefreshSpawn,
 ) {
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(err) => {
-            tracing::warn!(
-                kind,
-                session = %session_id,
-                workspace = %runtime.workspace_id,
-                tags.operation = "session.context_refresh.locate_exe",
-                error = &err as &dyn std::error::Error,
-                "sidebar: cannot locate rimz to refresh session context",
-            );
-            return;
-        }
-    };
+    let exe = crate::proc::rimz_exe();
     let mut cmd = crate::child_process::detached_rimz_command(exe, runtime);
     cmd.args(spawn.args);
     tracing::info!(
@@ -225,9 +212,8 @@ fn spawn_session_context_refresh(
         crate::child_process::spawn_detached_reaped(&mut cmd, "session-refresh-context")
     {
         // Best-effort enrichment on a per-frame path. The CWD anchor clears the
-        // gc'd-worktree ENOENT; a genuinely missing/replaced `rimz` binary
-        // (upgrade-during-run) still fails here — an environment fact, not a
-        // Rimz fault. Keep it at debug! so it never reaches Sentry.
+        // gc'd-worktree ENOENT; a bad RIMZ_BIN/PATH is an environment fact, not
+        // a Rimz fault. Keep it at debug! so it never reaches Sentry.
         tracing::debug!(
             kind,
             session = %session_id,

@@ -792,7 +792,7 @@ pub(crate) fn build_sidebar_opts(
     target: &RoomTarget<'_>,
     resume_tabs: Vec<rimz::mux::ResumeTab>,
 ) -> Result<SidebarPaneOptions> {
-    let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
+    let rimz_bin = rimz::proc::rimz_exe();
     Ok(SidebarPaneOptions {
         session_name: target.session_name.to_owned(),
         workspace_id: target.workspace_id.clone(),

@@ -568,7 +568,7 @@ fn cached_enrich_reaps_codex_clear_session_before_pane_binding() {
 
     let snapshot = enrich(
         snapshot,
-        Some(frame),
+        Some(&frame),
         &runtime,
         None,
         None,
@@ -709,7 +709,7 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
 
     let snapshot = enrich(
         snapshot,
-        Some(frame),
+        Some(&frame),
         &runtime,
         None,
         None,
@@ -743,7 +743,7 @@ fn frame_fold_carries_presence_onto_snapshot() {
 
     let snapshot = enrich(
         snapshot,
-        Some(frame),
+        Some(&frame),
         &runtime,
         None,
         None,
@@ -771,7 +771,7 @@ fn enrich_presence_with_default_config(
 ) -> SidebarSnapshot {
     enrich(
         snapshot,
-        Some(frame),
+        Some(&frame),
         runtime,
         None,
         None,

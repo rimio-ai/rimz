@@ -7,8 +7,9 @@
 //!
 //! Every file it fronts is republished by atomic rename of a fresh temp
 //! file, so a changed payload almost surely changes the identity; a hit
-//! returns a clone of the in-memory value instead of re-deserializing
-//! 100–500 KB of JSON, and the read itself stays page-cache-hot. The
+//! returns a shared handle to the in-memory value instead of re-deserializing
+//! or deep-cloning 100–500 KB of JSON, and the read itself stays
+//! page-cache-hot. The
 //! identity is deliberately not airtight: two republishes inside one
 //! mtime-granularity tick at equal byte length can serve the older parse.
 //! Every caller therefore re-validates the value against live truth — the
@@ -22,6 +23,7 @@
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -75,10 +77,10 @@ struct Entry<T> {
     path: PathBuf,
     mtime: SystemTime,
     len: u64,
-    value: T,
+    value: Arc<T>,
 }
 
-impl<T: Clone> ParseCache<T> {
+impl<T> ParseCache<T> {
     pub(crate) const fn new() -> Self {
         Self {
             slot: RefCell::new(None),
@@ -87,16 +89,16 @@ impl<T: Clone> ParseCache<T> {
 
     /// The cached parse when `(path, mtime, len)` matches this thread's
     /// last [`Self::store`].
-    pub(crate) fn get(&self, path: &Path, mtime: SystemTime, len: u64) -> Option<T> {
+    pub(crate) fn get(&self, path: &Path, mtime: SystemTime, len: u64) -> Option<Arc<T>> {
         self.slot.borrow().as_ref().and_then(|entry| {
             (entry.path == path && entry.mtime == mtime && entry.len == len)
-                .then(|| entry.value.clone())
+                .then(|| Arc::clone(&entry.value))
         })
     }
 
     /// Remember `value` as the parse of `(path, mtime, len)`, displacing
     /// whatever the slot held.
-    pub(crate) fn store(&self, path: &Path, mtime: SystemTime, len: u64, value: T) {
+    pub(crate) fn store(&self, path: &Path, mtime: SystemTime, len: u64, value: Arc<T>) {
         *self.slot.borrow_mut() = Some(Entry {
             path: path.to_path_buf(),
             mtime,

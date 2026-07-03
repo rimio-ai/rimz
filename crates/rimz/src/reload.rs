@@ -45,31 +45,7 @@ pub fn current_reexec_target() -> Option<PathBuf> {
 /// un-annotated path, so strip that marker and prefer whichever path is a real
 /// file. `None` means neither path exists, such as during a partial install.
 pub fn resolve_reexec_target(exe: PathBuf) -> Option<PathBuf> {
-    if exe.is_file() {
-        return Some(exe);
-    }
-    strip_deleted_suffix(&exe).filter(|path| path.is_file())
-}
-
-/// Strip the kernel's " (deleted)" annotation from a `/proc/self/exe` path.
-/// `None` when the path carries no such suffix.
-#[cfg(unix)]
-fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-
-    const DELETED_SUFFIX: &[u8] = b" (deleted)";
-    let stripped = path.as_os_str().as_bytes().strip_suffix(DELETED_SUFFIX)?;
-    Some(PathBuf::from(std::ffi::OsStr::from_bytes(stripped)))
-}
-
-/// Strip the kernel's " (deleted)" annotation from a `/proc/self/exe` path.
-/// `None` when the path carries no such suffix.
-#[cfg(not(unix))]
-fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
-    path.as_os_str()
-        .to_str()
-        .and_then(|raw| raw.strip_suffix(" (deleted)"))
-        .map(PathBuf::from)
+    crate::proc::resolve_existing_or_replacement(&exe)
 }
 
 /// What a user-wide reload did, aggregated across workspaces, for the CLI report.
@@ -160,12 +136,7 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
         return outcome;
     }
 
-    let rimz_bin = std::env::current_exe()
-        .map(|exe| crate::build_id::resolve_on_disk_binary(&exe).unwrap_or(exe))
-        .unwrap_or_else(|err| {
-            tracing::warn!(error = %err, "current executable unavailable; reload uses bare `rimz`");
-            PathBuf::from("rimz")
-        });
+    let rimz_bin = crate::proc::rimz_exe();
     let machine_config = MachineConfig::load_lenient();
     let live = LiveSessions::probe();
     let mut reconciled_sessions: HashSet<(MuxName, String)> = HashSet::new();
@@ -580,19 +551,6 @@ impl LiveSessions {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn strip_deleted_suffix_removes_only_the_kernel_annotation() {
-        assert_eq!(
-            strip_deleted_suffix(Path::new("/usr/bin/rimz (deleted)")),
-            Some(PathBuf::from("/usr/bin/rimz"))
-        );
-        assert_eq!(strip_deleted_suffix(Path::new("/usr/bin/rimz")), None);
-        assert_eq!(
-            strip_deleted_suffix(Path::new("/opt/my (deleted)/rimz")),
-            None
-        );
-    }
 
     #[test]
     fn reexec_target_resolves_the_replacement_after_an_install() {

@@ -18,6 +18,7 @@ use crate::{SidebarSnapshot, SidebarWorktreeKind, WorktreePrState};
 
 const PR_STATE_WAIT_STEP: Duration = Duration::from_millis(20);
 const PR_STATE_WAIT_STEPS: u32 = 15;
+const PR_STATE_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PARALLEL_PR_PROBES: usize = 8;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -27,6 +28,10 @@ pub struct PrStateCache {
     /// failure. A logged-in repo with no PR is a success and keeps an empty map.
     #[serde(default = "pr_state_probe_ok_default")]
     pub ok: bool,
+    /// Consecutive failed sweeps, for escalating retry backoff on deterministic
+    /// forge CLI failures.
+    #[serde(default)]
+    pub consecutive_failures: u32,
     /// PR state by absolute worktree path.
     #[serde(default)]
     pub states: BTreeMap<String, crate::WorktreePrState>,
@@ -41,10 +46,18 @@ impl PrStateCache {
         let ttl = if self.ok {
             PR_STATE_TTL
         } else {
-            PR_STATE_RETRY_TTL
+            pr_state_failure_ttl(self.consecutive_failures)
         };
         now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
     }
+}
+
+fn pr_state_failure_ttl(consecutive_failures: u32) -> Duration {
+    let retry_ms = PR_STATE_RETRY_TTL.as_millis() as u64;
+    let cap_ms = PR_STATE_TTL.as_millis() as u64;
+    let shift = consecutive_failures.saturating_sub(1).min(63);
+    let factor = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
+    Duration::from_millis(retry_ms.saturating_mul(factor).min(cap_ms))
 }
 
 pub(crate) fn produce_pr_states(
@@ -71,23 +84,48 @@ pub(crate) fn produce_pr_states(
     ) {
         crate::ledger::single_flight::Coalesced::Shared(cache) => cache.states,
         crate::ledger::single_flight::Coalesced::Produce(_guard) => {
-            let (states, ok) = probe_pr_states(snapshot);
+            let prior = read_pr_state_cache(&path);
+            let result = probe_pr_states(snapshot);
+            let (states, ok) = merge_probe_results(&prior.states, result);
             let cache = PrStateCache {
                 refreshed_at_ms: unix_now_ms(),
                 ok,
+                consecutive_failures: next_consecutive_failures(&prior, ok),
                 states,
             };
             write_pr_state_cache(&path, &cache);
             cache.states
         }
-        crate::ledger::single_flight::Coalesced::ProduceLocal => probe_pr_states(snapshot).0,
+        crate::ledger::single_flight::Coalesced::ProduceLocal => {
+            let prior = read_pr_state_cache(&path);
+            merge_probe_results(&prior.states, probe_pr_states(snapshot)).0
+        }
     }
 }
 
-fn probe_pr_states(snapshot: &SidebarSnapshot) -> (BTreeMap<String, WorktreePrState>, bool) {
+fn next_consecutive_failures(prior: &PrStateCache, ok: bool) -> u32 {
+    if ok {
+        0
+    } else {
+        prior.consecutive_failures.saturating_add(1)
+    }
+}
+
+struct ProbeBatch {
+    states: BTreeMap<String, WorktreePrState>,
+    failed_paths: Vec<String>,
+}
+
+impl ProbeBatch {
+    fn ok(&self) -> bool {
+        self.failed_paths.is_empty()
+    }
+}
+
+fn probe_pr_states(snapshot: &SidebarSnapshot) -> ProbeBatch {
     let paths = needed_pr_worktree_paths(snapshot);
     let mut states = BTreeMap::new();
-    let mut ok = true;
+    let mut failed_paths = Vec::new();
     for chunk in paths.chunks(MAX_PARALLEL_PR_PROBES) {
         std::thread::scope(|scope| {
             let handles = chunk
@@ -96,7 +134,9 @@ fn probe_pr_states(snapshot: &SidebarSnapshot) -> (BTreeMap<String, WorktreePrSt
                 .collect::<Vec<_>>();
             for handle in handles {
                 if let Ok(result) = handle.join() {
-                    ok &= result.ok;
+                    if !result.ok {
+                        failed_paths.push(result.path.clone());
+                    }
                     if let Some(state) = result.state {
                         states.insert(result.path, state);
                     }
@@ -104,7 +144,23 @@ fn probe_pr_states(snapshot: &SidebarSnapshot) -> (BTreeMap<String, WorktreePrSt
             }
         });
     }
-    (states, ok)
+    ProbeBatch {
+        states,
+        failed_paths,
+    }
+}
+
+fn merge_probe_results(
+    prior: &BTreeMap<String, WorktreePrState>,
+    mut result: ProbeBatch,
+) -> (BTreeMap<String, WorktreePrState>, bool) {
+    let ok = result.ok();
+    for path in result.failed_paths {
+        if let Some(state) = prior.get(&path).cloned() {
+            result.states.insert(path, state);
+        }
+    }
+    (result.states, ok)
 }
 
 fn needed_pr_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
@@ -266,13 +322,10 @@ fn git_line(worktree: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn command_stdout(worktree: &Path, program: &str, args: &[&str]) -> Option<String> {
-    crate::proc::testkit::count_spawn();
-    let output = Command::new(program)
-        .current_dir(worktree)
-        .args(args)
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    let mut command = Command::new(program);
+    command.current_dir(worktree).args(args);
+    let output = crate::proc::run_bounded_output(&mut command, PR_STATE_COMMAND_TIMEOUT).ok()?;
+    if output.timed_out || !output.status.success() {
         return None;
     }
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -293,5 +346,74 @@ fn write_pr_state_cache(path: &Path, cache: &PrStateCache) {
             error = &err as &dyn std::error::Error,
             "sidebar PR-state cache write failed",
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failure_ttl_escalates_to_success_ttl_cap() {
+        assert_eq!(pr_state_failure_ttl(0), PR_STATE_RETRY_TTL);
+        assert_eq!(pr_state_failure_ttl(1), PR_STATE_RETRY_TTL);
+        assert_eq!(pr_state_failure_ttl(2), Duration::from_secs(60));
+        assert_eq!(pr_state_failure_ttl(3), Duration::from_secs(120));
+        assert_eq!(pr_state_failure_ttl(4), Duration::from_secs(240));
+        assert_eq!(pr_state_failure_ttl(5), PR_STATE_TTL);
+        assert_eq!(pr_state_failure_ttl(u32::MAX), PR_STATE_TTL);
+    }
+
+    #[test]
+    fn failure_counter_resets_on_success_and_saturates_on_failure() {
+        let mut prior = PrStateCache {
+            refreshed_at_ms: 0,
+            ok: false,
+            consecutive_failures: 7,
+            states: BTreeMap::new(),
+        };
+
+        assert_eq!(next_consecutive_failures(&prior, true), 0);
+        assert_eq!(next_consecutive_failures(&prior, false), 8);
+
+        prior.consecutive_failures = u32::MAX;
+        assert_eq!(next_consecutive_failures(&prior, false), u32::MAX);
+    }
+
+    #[test]
+    fn failed_probe_path_keeps_prior_state_while_successful_absence_drops() {
+        let mut prior = BTreeMap::new();
+        prior.insert("/repo/failed".to_owned(), WorktreePrState::Open);
+        prior.insert("/repo/gone".to_owned(), WorktreePrState::Closed);
+        let mut states = BTreeMap::new();
+        states.insert("/repo/merged".to_owned(), WorktreePrState::Merged);
+        let result = ProbeBatch {
+            states,
+            failed_paths: vec!["/repo/failed".to_owned()],
+        };
+
+        let (merged, ok) = merge_probe_results(&prior, result);
+
+        assert!(!ok);
+        assert_eq!(merged.get("/repo/failed"), Some(&WorktreePrState::Open));
+        assert_eq!(merged.get("/repo/merged"), Some(&WorktreePrState::Merged));
+        assert!(
+            !merged.contains_key("/repo/gone"),
+            "paths absent from this probe are not kept just because they existed before"
+        );
+    }
+
+    #[test]
+    fn old_failure_cache_without_counter_uses_initial_retry_ttl() {
+        let cache = PrStateCache {
+            refreshed_at_ms: 1_000,
+            ok: false,
+            consecutive_failures: 0,
+            states: BTreeMap::new(),
+        };
+        let retry_ttl = PR_STATE_RETRY_TTL.as_millis() as u64;
+
+        assert!(cache.is_fresh(1_000 + retry_ttl));
+        assert!(!cache.is_fresh(1_001 + retry_ttl));
     }
 }

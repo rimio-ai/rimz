@@ -57,7 +57,7 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "install-dev",
         summary: "Build and install host rimz with off-box reporting (sentry) for dev.",
-        runs: "build-plugin, debug host rimz with --features sentry, atomically installs to Cargo bin and /usr/local/bin, then best-effort uploads debug files with sentry-cli",
+        runs: "build-plugin, host rimz with --profile profiling --features sentry and profiling RUSTFLAGS, atomically installs to Cargo bin and /usr/local/bin, then best-effort uploads debug files with sentry-cli",
     },
     TaskInfo {
         name: "profile-build",
