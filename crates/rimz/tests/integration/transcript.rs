@@ -301,6 +301,45 @@ fn resolving_agent_ask_through_cli_appends_transcript_answer() {
 }
 
 #[test]
+fn dismissing_agent_ask_through_cli_does_not_append_transcript_answer() {
+    let env = Env::new();
+    let mut item = FeedItem::new(
+        env.workspace_id.clone(),
+        Surface::NativeUi,
+        FeedKind::Permission,
+        "allow?",
+        "claude",
+        "agent-hook",
+    );
+    item.payload = json!({ "session_id": "sess-dismiss" });
+    item.worktree_branch = Some("feature-dismiss".to_owned());
+    let request_id = item.request_id.clone();
+    env.ledger()
+        .push_feed_item(&item, "rimz-test")
+        .expect("push");
+
+    let dismiss = env
+        .rimz()
+        .args([
+            "feed",
+            "dismiss",
+            request_id.as_str(),
+            "--reason",
+            "not now",
+        ])
+        .output()
+        .expect("spawn feed dismiss");
+    assert!(
+        dismiss.status.success(),
+        "dismiss failed: {}",
+        String::from_utf8_lossy(&dismiss.stderr)
+    );
+
+    let entries = rimz::chat::read_all(env.ledger().paths()).expect("transcript");
+    assert!(entries.is_empty(), "{entries:?}");
+}
+
+#[test]
 fn transcript_groups_chronological_entries_across_append_order() {
     let env = Env::new();
     let branch = "chronological-transcript";
