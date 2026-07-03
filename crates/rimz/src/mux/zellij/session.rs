@@ -85,17 +85,14 @@ impl ZellijBackend {
             .zip(workspace_id)
             .and_then(|(session, workspace_id)| read_topology_cache(session, workspace_id));
         let now_ms = unix_now_ms();
-        let active_panes = if let Some(cache) = topology_cache {
-            if pane_topology_cache_is_fresh(&cache, now_ms, min_topology_produced_at_ms) {
-                return Ok(RawPaneListing::from_topology(cache));
-            }
-            pane_topology_cache_is_fresh(&cache, now_ms, None).then_some(cache.active_panes)
-        } else {
-            None
-        };
+        if let Some(cache) = topology_cache
+            && pane_topology_cache_is_fresh(&cache, now_ms, min_topology_produced_at_ms)
+        {
+            return Ok(RawPaneListing::from_topology(cache));
+        }
         let observed_at_ms = unix_now_ms();
         self.list_panes_bounded(session, timeout)
-            .map(|panes| RawPaneListing::from_cli(panes, observed_at_ms, active_panes))
+            .map(|panes| RawPaneListing::from_cli(panes, observed_at_ms))
     }
 
     /// Classify `name`'s live room from a bounded pane listing. A running

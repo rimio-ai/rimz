@@ -203,7 +203,6 @@ impl WakeEnv {
         PaneTopologyCache {
             session_name: SESSION_NAME.to_owned(),
             produced_at_ms,
-            active_panes: std::collections::BTreeMap::new(),
             panes: vec![
                 PaneTopologyPane {
                     id: 6,
@@ -249,7 +248,6 @@ impl WakeEnv {
         PaneTopologyCache {
             session_name: SESSION_NAME.to_owned(),
             produced_at_ms,
-            active_panes: std::collections::BTreeMap::new(),
             panes: panes
                 .iter()
                 .map(|(id, tab_position, tab_name)| PaneTopologyPane {
@@ -535,8 +533,7 @@ fn wake_alive_without_telemetry_writes_no_sample() {
 #[test]
 fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
     let env = WakeEnv::new();
-    let mut topology = env.topology_cache(unix_now_ms());
-    topology.active_panes.insert(0, 7);
+    let topology = env.topology_cache(unix_now_ms());
     let topology_json = serde_json::to_string(&topology).expect("serialize topology");
     let wake = env.wake_with(
         "alive",
@@ -582,9 +579,9 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
         "topology cache production time is the frame observation time"
     );
     assert_eq!(
-        cached.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        cached.focused_pane.as_ref().map(PaneId::raw),
         Some("terminal_7"),
-        "source-resolved active pane should win frame focus"
+        "client-viewed pane should win the session focus register"
     );
     let panes = cached.to_pane_refs();
     assert!(

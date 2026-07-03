@@ -10,8 +10,8 @@ use super::remind::RemindState;
 use super::selection::{reconcile_selection, row_index_of_pane};
 use super::state::{
     ApplyOutcome, FetchDiagnostics, apply_manual_unread_guard, compute_next_state,
-    emit_diagnostics, emit_unread_cleared_trace, focused_working_pane, read_receipt_for_row,
-    read_receipts_for_tab, row_id_of_pane, set_rows_unread,
+    emit_diagnostics, emit_unread_cleared_trace, read_receipt_for_row, read_receipts_for_tab,
+    row_id_of_pane, session_focus_baseline, set_rows_unread,
 };
 use super::*;
 use crate::sidebar::read_marks::{ReadMarkStore, write_manual_read_marks};
@@ -85,6 +85,17 @@ fn row_status_key(row: &crate::SidebarRow) -> BackgroundRowStatusKey {
         crate::RowCard::Agent(card) => BackgroundRowStatusKey::Agent(card.status),
         crate::RowCard::Process(card) => BackgroundRowStatusKey::Process(card.state),
     }
+}
+
+fn own_tab_viewed(
+    snapshot: &SidebarSnapshot,
+    own_view: &crate::SidebarOwnView,
+    own_pane: &PaneId,
+) -> bool {
+    snapshot
+        .viewed_panes
+        .iter()
+        .any(|pane| pane == own_pane || own_view.working_pane_ids.contains(pane))
 }
 
 pub(super) struct LoopState {
@@ -245,8 +256,7 @@ impl LoopState {
         let Some(view) = self.current.own_view.as_ref() else {
             return true;
         };
-        view.active_pane_is_viewed
-            || (view.own_is_active && self.current.viewed_panes.contains(own_pane))
+        own_tab_viewed(&self.current, view, own_pane)
     }
 
     /// Whether a dirty data fold should paint even though animation may be idle.
@@ -545,9 +555,8 @@ impl LoopState {
         }
         if let Some(pane) = applied.focused {
             // A jump fires the one-way focus command at the resolved pane. The
-            // highlight moves only when the derived baseline catches up on a
-            // later fold — late, never wrong — and any make-up filter clears
-            // as focus leaves the tab.
+            // intent event updates the session register and repaints this turn;
+            // the producer pull verifies it on the next wakeup.
             self.record_focus_anchor(&pane);
             spawn_pane_focus(pane.clone(), &config.session_name);
             self.record_focus_intent(config, pane, anim_start, diag)?;
@@ -873,6 +882,7 @@ impl LoopState {
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
     ) -> Result<ApplyOutcome> {
+        let own_pane = self.own_pane.as_ref();
         let last_snapshot = &mut self.last_snapshot;
         let current = &mut self.current;
         let health = &mut self.health;
@@ -937,23 +947,14 @@ impl LoopState {
         *health = state.health;
         *current = state.snapshot;
         let prev_selected = ui.selected_pane.clone();
-        let contested_existing_baseline = current
-            .own_view
+        let focused_pane = session_focus_baseline(current, own_pane);
+        let viewing_register_pane = current
+            .focused_pane
             .as_ref()
-            .is_some_and(|view| view.focus_contested)
-            && ui.baseline_pane.is_some();
-        let focused_pane = if contested_existing_baseline {
-            None
-        } else {
-            focused_working_pane(current)
-        };
-        let viewing_active_pane = current
-            .own_view
-            .as_ref()
-            .is_some_and(|view| view.active_pane_is_viewed);
+            .is_some_and(|pane| current.viewed_panes.contains(pane));
         let focused_row_id = focused_pane
             .as_ref()
-            .filter(|_| viewing_active_pane)
+            .filter(|_| viewing_register_pane)
             .and_then(|pane| row_id_of_pane(current, pane));
         let marks = read_marks.load_merged();
         let live: HashSet<String> = current
@@ -969,8 +970,8 @@ impl LoopState {
             &marks,
             now,
         );
-        if let Some(view) = current.own_view.as_ref() {
-            let now_viewing = view.active_pane_is_viewed;
+        if let (Some(view), Some(own_pane)) = (current.own_view.as_ref(), own_pane) {
+            let now_viewing = own_tab_viewed(current, view, own_pane);
             let switched_in = ui.viewing_own_tab == Some(false) && now_viewing;
             ui.viewing_own_tab = Some(now_viewing);
             if switched_in {
@@ -994,21 +995,21 @@ impl LoopState {
         // Reconcile the highlight as part of the fold, before the next frame paints:
         // re-anchor the identity-keyed selection to its row (so a status-churn
         // reorder never slides it onto a neighbour) and re-derive the baseline from
-        // the own view's active pane. Selection is derived state — queried from the
-        // mux each fold and same-tab by construction — so an external tab switch or
-        // focus move lands on the very next frame. The derivation is filtered to a
-        // non-sidebar row: a sidebar-self-active or non-row active pane derives
-        // `None` and the baseline holds its last value. It is deliberately blind to
-        // the make-up filter — the active pane is real however the body is
-        // narrowed, so a hidden baseline holds rather than blanks.
+        // the session focus register. Selection is derived state, queried from the
+        // mux each fold and updated by focus events between pulls. The derivation
+        // is filtered to a non-sidebar row: a sidebar-self focus or non-row focused
+        // pane derives `None` and the baseline holds its last value. It is
+        // deliberately blind to the make-up filter — the focused pane is real
+        // however the body is narrowed, so a hidden baseline holds rather than
+        // blanks.
         let derived = focused_pane.filter(|pane| row_index_of_pane(current, None, pane).is_some());
-        let derived_active_pane = derived.is_some();
+        let derived_focus_pane = derived.is_some();
         reconcile_selection(ui, current, derived);
-        // A fresh active-pane derivation that moved the highlight is an external
+        // A fresh focus-register derivation that moved the highlight is an external
         // focus switch. Arm a one-shot reveal so the next paint brings the focused
         // card's worktree header on-screen with it. A sidebar jump also lands here,
         // but its fresh focus anchor cancels this in `apply_focus_anchor`.
-        if derived_active_pane && ui.selected_pane.is_some() && ui.selected_pane != prev_selected {
+        if derived_focus_pane && ui.selected_pane.is_some() && ui.selected_pane != prev_selected {
             ui.focus_group_reveal = true;
         }
         let interacted = !clear.ids.is_empty() || ui.selected_pane != prev_selected;

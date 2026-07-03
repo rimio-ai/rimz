@@ -315,16 +315,11 @@ fn insert_carried_pane(fresh: &mut PaneFrame, prior_tab: &TabFrame, prior_pane: 
                 view_id: prior_tab.view_id.clone(),
                 kind: prior_tab.kind,
                 name: prior_tab.name.clone(),
-                active_pane: prior_tab.active_pane.clone(),
-                focus_contested: prior_tab.focus_contested,
                 panes: Vec::new(),
             });
             fresh.tabs.last_mut().expect("just pushed tab")
         }
     };
-    if tab.active_pane.is_none() && prior_tab.active_pane.as_ref() == Some(&prior_pane.pane_id) {
-        tab.active_pane = Some(prior_pane.pane_id.clone());
-    }
     if !tab
         .panes
         .iter()
@@ -679,8 +674,6 @@ mod tests {
                 view_id: ViewId::new_unchecked("tab_9"),
                 kind: ViewKind::Tab,
                 name: Some("work".to_owned()),
-                active_pane: Some(pane_id("terminal_9")),
-                focus_contested: false,
                 panes: vec![PaneState {
                     pane_id: pane_id("terminal_9"),
                     first_seen_at_ms: Some(1),
@@ -704,6 +697,7 @@ mod tests {
             }],
             carried_panes: Vec::new(),
             viewed_panes: Vec::new(),
+            focused_pane: None,
             presence: None,
         };
         let fresh = frame(&["terminal_1"], 2);
@@ -725,6 +719,11 @@ mod tests {
             .find(|tab| tab.view_id.as_str() == "tab_9")
             .expect("prior tab recreated");
         assert_eq!(carried_tab.name.as_deref(), Some("work"));
-        assert_eq!(carried_tab.active_pane, Some(pane_id("terminal_9")));
+        assert!(
+            carried_tab
+                .panes
+                .iter()
+                .any(|pane| pane.pane_id == pane_id("terminal_9"))
+        );
     }
 }

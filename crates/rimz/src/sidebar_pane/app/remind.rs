@@ -152,10 +152,7 @@ fn unread_reminder_scope(snapshot: &SidebarSnapshot, prefs: &NotificationsPrefs)
     if working.is_empty() {
         return ReminderScope::default();
     }
-    let focused = prefs
-        .suppress_focused
-        .then_some(own_view.active_pane_id.as_ref())
-        .flatten();
+    let focused = prefs.suppress_focused.then_some(&snapshot.viewed_panes[..]);
     let worktree_targets = worktree_target_panes(snapshot, &working, focused);
     let mut scope = ReminderScope::default();
     for row in snapshot
@@ -168,7 +165,7 @@ fn unread_reminder_scope(snapshot: &SidebarSnapshot, prefs: &NotificationsPrefs)
         }
         if let Some(pane) = row.pane.as_ref() {
             if working.contains(&pane.pane_id)
-                && !focused.is_some_and(|active| active == &pane.pane_id)
+                && !focused.is_some_and(|viewed| viewed.contains(&pane.pane_id))
             {
                 scope.add_pane_row(&pane.pane_id);
             }
@@ -186,7 +183,7 @@ fn unread_reminder_scope(snapshot: &SidebarSnapshot, prefs: &NotificationsPrefs)
 fn worktree_target_panes(
     snapshot: &SidebarSnapshot,
     working: &HashSet<PaneId>,
-    focused: Option<&PaneId>,
+    focused: Option<&[PaneId]>,
 ) -> HashMap<String, Vec<PaneId>> {
     let mut targets: HashMap<String, Vec<PaneId>> = HashMap::new();
     for row in snapshot
@@ -200,7 +197,8 @@ fn worktree_target_panes(
         let Some(pane) = row.pane.as_ref() else {
             continue;
         };
-        if !working.contains(&pane.pane_id) || focused.is_some_and(|active| active == &pane.pane_id)
+        if !working.contains(&pane.pane_id)
+            || focused.is_some_and(|viewed| viewed.contains(&pane.pane_id))
         {
             continue;
         }
@@ -261,16 +259,17 @@ mod tests {
         let mut snapshot = snapshot(&workspace());
         snapshot.own_view = Some(SidebarOwnView {
             sibling_count: working.len(),
-            own_is_active: false,
-            active_pane_id: active.map(|raw| PaneId::from_parts(crate::MuxName::Zellij, raw)),
-            active_pane_is_viewed: false,
             working_pane_ids: working
                 .into_iter()
                 .map(|raw| PaneId::from_parts(crate::MuxName::Zellij, raw))
                 .collect(),
-            focus_contested: false,
             own_view_is_daemon: false,
         });
+        if let Some(active) = active {
+            snapshot
+                .viewed_panes
+                .push(PaneId::from_parts(crate::MuxName::Zellij, active));
+        }
         snapshot.worktree_groups = vec![SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),

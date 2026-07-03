@@ -373,13 +373,8 @@ pub fn enrich(
     if let Some(frame) = frame {
         snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
         snapshot.panes_observed_at_ms = Some(frame.observed_at_ms);
-        snapshot.focus_contested_panes = frame
-            .tabs
-            .iter()
-            .filter(|tab| tab.focus_contested)
-            .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
-            .collect();
         snapshot.viewed_panes = frame.viewed_panes.clone();
+        snapshot.focused_pane = frame.focused_pane.clone();
         // Remote rooms classify presence on the host, where tmux
         // `client_activity` only advances on input that crosses SSH. Trust the
         // idle threshold only for local rooms; an attached remote client is

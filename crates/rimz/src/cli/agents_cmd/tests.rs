@@ -1538,12 +1538,11 @@ mod render {
                 view_id: ViewId::new_unchecked("window-1"),
                 kind: rimz::ViewKind::Window,
                 name: None,
-                active_pane: Some(pane_id.clone()),
-                focus_contested: false,
                 panes: vec![codex_pane, host_pane],
             }],
             carried_panes: Vec::new(),
             viewed_panes: Vec::new(),
+            focused_pane: None,
             presence: None,
         };
         rimz::ledger::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)

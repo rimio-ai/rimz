@@ -227,8 +227,6 @@ pub fn repaired_pane_frame_for_binding(
         Some(fixture) => PaneListing {
             panes: fixture,
             observed_at_ms: unix_now_ms(),
-            source_active: std::collections::BTreeMap::new(),
-            source_active_authoritative: false,
             served_from_topology: false,
         },
         None => list_session_panes(
@@ -246,8 +244,6 @@ pub fn repaired_pane_frame_for_binding(
         observed_at_ms: listing.observed_at_ms,
         session_name: session.to_owned(),
         client_viewed: &[],
-        source_active: listing.source_active,
-        source_active_authoritative: listing.source_active_authoritative,
         prior: prior.as_ref(),
     });
     let diag = crate::diag::DiagSink::for_workspace(
@@ -553,8 +549,6 @@ pub(super) fn cached_panes_or_produce(
                 }
             };
             let served_from_topology = listing.served_from_topology;
-            let source_active_authoritative = listing.source_active_authoritative;
-            let source_active = listing.source_active;
             let observed_at_ms = listing.observed_at_ms;
             let panes = filter_foreign_session_panes(listing.panes, session, diag);
             let prior = read_snapshot_cache(&cache_path, session);
@@ -592,11 +586,8 @@ pub(super) fn cached_panes_or_produce(
                     observed_at_ms,
                     session_name: session.to_owned(),
                     client_viewed: &viewed_panes,
-                    source_active,
-                    source_active_authoritative,
                     prior: prior.as_ref(),
                 });
-            frame.viewed_panes = viewed_panes;
             frame.presence = presence;
             emit_frame_diagnostics(diag, diagnostics);
             repair_pane_frame(&mut frame, runtime, prior.as_ref(), session, enrich_metrics);

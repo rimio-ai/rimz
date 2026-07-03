@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::policy::{self, FocusPatch, FocusResolution, PaneFields};
+use crate::policy::{self, FocusPatch, PaneFields};
 
 /// The pipe message name the focus-sidebar keybind sends to this plugin. The
 /// chord (rimz-injected or a documented `config.kdl` bind) pipes this name, and
@@ -319,15 +319,9 @@ pub fn topology_json(
     produced_at_ms: u64,
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
     foreground: &BTreeMap<u32, String>,
-    focus_resolution: &FocusResolution,
 ) -> Option<String> {
-    let payload = policy::published_topology_payload(
-        session_name?,
-        produced_at_ms,
-        Some(tabs),
-        foreground,
-        focus_resolution,
-    )?;
+    let payload =
+        policy::published_topology_payload(session_name?, produced_at_ms, Some(tabs), foreground)?;
     serde_json::to_string(&payload).ok()
 }
 

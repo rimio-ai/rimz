@@ -8,19 +8,12 @@
 //! Process id, cwd, and resource enrichment still come from the existing
 //! `/proc` lanes.
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneTopologyCache {
     pub session_name: String,
     pub produced_at_ms: u64,
-    /// Presence-plugin resolved active panes by tab position. Raw per-pane
-    /// focus marks stay on `panes`; this field carries the authoritative,
-    /// transition-derived single active pane when the plugin can resolve one.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub active_panes: BTreeMap<u64, u64>,
     #[serde(default)]
     pub panes: Vec<PaneTopologyPane>,
 }
@@ -61,35 +54,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_topology_without_active_panes_parses() {
-        let cache: PaneTopologyCache = serde_json::from_str(
+    fn topology_without_focus_resolution_parses() {
+        let _cache: PaneTopologyCache = serde_json::from_str(
             r#"{
                 "session_name": "rimz-test",
                 "produced_at_ms": 42,
                 "panes": []
             }"#,
         )
-        .expect("legacy topology parses");
-
-        assert!(cache.active_panes.is_empty());
+        .expect("topology parses");
     }
 
     #[test]
-    fn active_panes_round_trips_when_present() {
-        let cache: PaneTopologyCache = serde_json::from_str(
-            r#"{
+    fn legacy_focus_resolution_field_is_ignored() {
+        let field = ["active", "panes"].join("_");
+        let raw = format!(
+            r#"{{
                 "session_name": "rimz-test",
                 "produced_at_ms": 42,
-                "active_panes": { "0": 7, "1": 11 },
+                "{field}": {{ "0": 7, "1": 11 }},
                 "panes": []
-            }"#,
-        )
-        .expect("topology with active panes parses");
+            }}"#
+        );
+        let cache: PaneTopologyCache = serde_json::from_str(&raw).expect("legacy topology parses");
 
-        assert_eq!(cache.active_panes.get(&0), Some(&7));
-        assert_eq!(cache.active_panes.get(&1), Some(&11));
         let encoded = serde_json::to_value(&cache).expect("topology serializes");
-        assert_eq!(encoded["active_panes"]["0"], 7);
-        assert_eq!(encoded["active_panes"]["1"], 11);
+        assert!(encoded.get(field.as_str()).is_none());
     }
 }

@@ -11,8 +11,8 @@ mod shell {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use rimz_presence_zellij::policy::{
-        self, CorrectionAction, FocusCorrection, FocusPatch, FocusResolution,
-        ForegroundCommandUpdate, PaneFields, Poke, PokePolicy, RawStablePaneFields, TimerGate,
+        self, CorrectionAction, FocusCorrection, FocusPatch, ForegroundCommandUpdate, PaneFields,
+        Poke, PokePolicy, RawStablePaneFields, TimerGate,
     };
     use rimz_presence_zellij::wire::{self, FOCUS_SIDEBAR_PIPE, SHARE_SESSION_PIPE};
     use zellij_tile::prelude::*;
@@ -28,7 +28,7 @@ mod shell {
         foreground: BTreeMap<u32, String>,
         active_tab: Option<usize>,
         active_focused_pane: Option<u32>,
-        focus_resolution: FocusResolution,
+        session_focused_pane: Option<u32>,
         /// Classifies active-tab changes after Zellij's focus marks settle.
         focus_correction: FocusCorrection,
         /// Configuration written by rimz at load time (never user config):
@@ -141,8 +141,12 @@ mod shell {
                         let opened = policy::opened_card_panes(&self.tabs, &next_tabs);
                         let focus_patch =
                             policy::focus_shortcut_if_only_focus_changed(&self.tabs, &next_tabs);
-                        self.focus_resolution
-                            .fold_pane_update(&self.tabs, &next_tabs);
+                        if let Some(focused) = focus_patch
+                            .as_ref()
+                            .and_then(|patch| focused_patch_id(patch))
+                        {
+                            self.session_focused_pane = Some(focused);
+                        }
                         self.tabs = next_tabs;
                         // Poke every opened pane — `fold`, not `any`, so a manifest
                         // carrying two new panes emits both card-create events.
@@ -190,7 +194,7 @@ mod shell {
                         self.active_focused_pane = policy::resolved_focused_pane_id(
                             &self.tabs,
                             self.active_tab,
-                            &self.focus_resolution,
+                            self.session_focused_pane,
                         );
                     }
                 }
@@ -201,7 +205,7 @@ mod shell {
                         policy::resolved_focused_pane_id(
                             &self.tabs,
                             previous_active,
-                            &self.focus_resolution,
+                            self.session_focused_pane,
                         )
                     });
                     let next_active = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
@@ -210,7 +214,7 @@ mod shell {
                     self.active_focused_pane = policy::resolved_focused_pane_id(
                         &self.tabs,
                         self.active_tab,
-                        &self.focus_resolution,
+                        self.session_focused_pane,
                     );
                     self.focus_correction.on_active_tab_change(
                         previous_active,
@@ -254,13 +258,15 @@ mod shell {
                         PaneId::Plugin(_) => None,
                     };
                     self.remove_pane(&pane_id);
-                    if let PaneId::Terminal(id) = pane_id {
-                        self.focus_resolution.remove_pane(id);
+                    if let PaneId::Terminal(id) = pane_id
+                        && self.session_focused_pane == Some(id)
+                    {
+                        self.session_focused_pane = None;
                     }
                     self.active_focused_pane = policy::resolved_focused_pane_id(
                         &self.tabs,
                         self.active_tab,
-                        &self.focus_resolution,
+                        self.session_focused_pane,
                     );
                     if !closed_terminal.is_some_and(|pane_id| {
                         self.run_wake(wire::WakeRequest::PaneClosed { pane_id }, now)
@@ -371,14 +377,16 @@ mod shell {
             match self.focus_correction.resolve(
                 &self.tabs,
                 self.active_tab,
-                &self.focus_resolution,
+                self.session_focused_pane,
                 manifest_fresh,
                 now,
             ) {
                 CorrectionAction::StrandedSidebar(pane_id) => {
+                    self.session_focused_pane = Some(pane_id);
                     self.run_wake(wire::WakeRequest::FocusStranded { pane_id }, now);
                 }
                 CorrectionAction::FocusWorkingPane { focused, unfocused } => {
+                    self.session_focused_pane = Some(focused);
                     let mut patch = vec![FocusPatch {
                         id: focused,
                         is_focused: true,
@@ -462,7 +470,6 @@ mod shell {
                 now,
                 &self.tabs,
                 &self.foreground,
-                &self.focus_resolution,
             );
             let Some(argv) = wire::wake_argv(&self.wake_context(), request, topology.as_deref())
             else {
@@ -549,6 +556,13 @@ mod shell {
                 }
             }
         }
+    }
+
+    fn focused_patch_id(patch: &[FocusPatch]) -> Option<u32> {
+        patch
+            .iter()
+            .find(|patch| patch.is_focused)
+            .map(|patch| patch.id)
     }
 
     fn project(

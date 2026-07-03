@@ -37,569 +37,144 @@ fn floating_flag_survives_frame_round_trip() {
 }
 
 #[test]
-fn contested_focus_without_better_signal_uses_lowest_candidate_and_reports() {
-    let (frame, diagnostics) = assemble_frame_with_diagnostics(
-        vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-            pane("terminal_3", "tab_1", Some("zsh"), true),
-        ],
-        7,
-        "rimz-test",
-    );
-
-    assert_eq!(
-        frame.tabs[0].active_pane,
-        Some(frame.tabs[0].panes[0].pane_id.clone())
-    );
-    assert!(frame.tabs[0].focus_contested);
-    assert_eq!(
-        frame.tabs[1].active_pane,
-        Some(frame.tabs[1].panes[0].pane_id.clone())
-    );
-    assert!(!frame.tabs[1].focus_contested);
-    assert!(matches!(
-        diagnostics.as_slice(),
-        [DiagEvent::FocusContested {
-            view_id,
-            candidates,
-            resolved
-        }] if view_id.as_str() == "tab_0"
-            && candidates.len() == 2
-            && resolved.raw() == "terminal_1"
-    ));
-    let projected = frame.to_pane_refs();
-    assert!(projected[0].is_focused);
-    assert!(!projected[1].is_focused);
-    assert!(projected[2].is_focused);
-    let (numeric, diagnostics) = assemble_frame_with_diagnostics(
-        vec![
-            pane("terminal_10", "tab_0", Some("zsh"), true),
-            pane("terminal_9", "tab_0", Some("cargo build"), true),
-        ],
-        7,
-        "rimz-test",
-    );
-
-    assert_eq!(
-        numeric.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_9")
-    );
-    assert!(matches!(
-        diagnostics.as_slice(),
-        [DiagEvent::FocusContested { resolved, .. }] if resolved.raw() == "terminal_9"
-    ));
-}
-
-#[test]
-fn source_active_settles_multivalued_focus_without_contest() {
-    let source = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-        ],
-        produced_at_ms: 8,
-        observed_at_ms: 4,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active: BTreeMap::from([(ViewId::new_unchecked("tab_0"), source.clone())]),
-        source_active_authoritative: false,
-        prior: None,
-    });
-
-    // The mux's active-pane hint names one of the marked panes, so the
-    // multi-client focus marks are settled, not contested: no badge, no record.
-    assert_eq!(frame.observed_at_ms, 4);
-    assert_eq!(frame.tabs[0].active_pane, Some(source.clone()));
-    assert!(!frame.tabs[0].focus_contested);
-    assert!(diagnostics.is_empty());
-}
-
-#[test]
-fn client_viewed_pane_settles_multivalued_focus_without_contest() {
+fn client_view_sets_session_focus_register() {
     let viewed = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
+            pane("terminal_2", "tab_1", Some("codex"), false),
         ],
-        produced_at_ms: 8,
-        observed_at_ms: 8,
+        produced_at_ms: 7,
+        observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
         client_viewed: std::slice::from_ref(&viewed),
-        source_active: BTreeMap::new(),
-        source_active_authoritative: false,
         prior: None,
     });
 
-    assert_eq!(frame.tabs[0].active_pane, Some(viewed));
-    assert!(!frame.tabs[0].focus_contested);
     assert!(diagnostics.is_empty());
+    assert_eq!(frame.focused_pane, Some(viewed));
 }
 
 #[test]
-fn client_viewed_pane_overrides_authoritative_source_active() {
-    let source = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let viewed = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+fn multiple_client_views_stick_to_prior_or_take_freshest_entry() {
+    let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let prior = PaneFrame {
+        focused_pane: Some(second.clone()),
+        ..assemble_frame(
+            vec![
+                pane("terminal_1", "tab_0", Some("zsh"), false),
+                pane("terminal_2", "tab_1", Some("codex"), false),
+            ],
+            6,
+            "rimz-test",
+        )
+    };
+
+    let (sticky, _) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), false),
+            pane("terminal_2", "tab_1", Some("codex"), false),
+        ],
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        client_viewed: &[first.clone(), second.clone()],
+        prior: Some(&prior),
+    });
+    assert_eq!(sticky.focused_pane, Some(second));
+
+    let (freshest, _) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), false),
+            pane("terminal_2", "tab_1", Some("codex"), false),
+        ],
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        client_viewed: std::slice::from_ref(&first),
+        prior: Some(&prior),
+    });
+    assert_eq!(freshest.focused_pane, Some(first));
+}
+
+#[test]
+fn detached_focus_uses_prior_then_single_raw_mark() {
+    let prior_focus = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let prior = PaneFrame {
+        focused_pane: Some(prior_focus.clone()),
+        ..assemble_frame(
+            vec![
+                pane("terminal_1", "tab_0", Some("zsh"), false),
+                pane("terminal_2", "tab_0", Some("codex"), false),
+            ],
+            6,
+            "rimz-test",
+        )
+    };
+    let (carried, _) = assemble_frame_from_inputs(FrameInputs {
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), false),
-        ],
-        produced_at_ms: 8,
-        observed_at_ms: 8,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: std::slice::from_ref(&viewed),
-        source_active: BTreeMap::from([(ViewId::new_unchecked("tab_0"), source)]),
-        source_active_authoritative: true,
-        prior: None,
-    });
-
-    assert_eq!(frame.tabs[0].active_pane, Some(viewed));
-    assert!(!frame.tabs[0].focus_contested);
-    assert!(diagnostics.is_empty());
-}
-
-#[test]
-fn client_viewed_outside_tab_leaves_contested_fallback_unchanged() {
-    let viewed = PaneId::from_parts(MuxName::Zellij, "terminal_9");
-    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-        ],
-        produced_at_ms: 8,
-        observed_at_ms: 8,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: std::slice::from_ref(&viewed),
-        source_active: BTreeMap::new(),
-        source_active_authoritative: false,
-        prior: None,
-    });
-
-    assert_eq!(
-        frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_1")
-    );
-    assert!(frame.tabs[0].focus_contested);
-    assert!(matches!(
-        diagnostics.as_slice(),
-        [DiagEvent::FocusContested { resolved, .. }] if resolved.raw() == "terminal_1"
-    ));
-}
-
-#[test]
-fn source_active_naming_a_non_candidate_stays_contested() {
-    // A non-authoritative hint only settles focus candidates. A pane outside
-    // that candidate set leaves a genuine contest, resolved by heuristic and
-    // recorded.
-    let absent = PaneId::from_parts(MuxName::Zellij, "terminal_9");
-    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-        ],
-        produced_at_ms: 8,
-        observed_at_ms: 8,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active: BTreeMap::from([(ViewId::new_unchecked("tab_0"), absent)]),
-        source_active_authoritative: false,
-        prior: None,
-    });
-
-    assert_eq!(
-        frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_1")
-    );
-    assert!(frame.tabs[0].focus_contested);
-    assert!(matches!(
-        diagnostics.as_slice(),
-        [DiagEvent::FocusContested { resolved, .. }] if resolved.raw() == "terminal_1"
-    ));
-}
-
-#[test]
-fn authoritative_source_active_overrides_raw_focus_candidates() {
-    let codex = PaneId::from_parts(MuxName::Zellij, "terminal_200");
-    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_79", "tab_1", Some("zsh"), true),
-            pane("terminal_141", "tab_1", Some("zsh"), true),
-            pane("terminal_200", "tab_1", Some("codex"), false),
-        ],
-        produced_at_ms: 8,
-        observed_at_ms: 8,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active: BTreeMap::from([(ViewId::new_unchecked("tab_1"), codex.clone())]),
-        source_active_authoritative: true,
-        prior: None,
-    });
-
-    assert_eq!(frame.tabs[0].active_pane, Some(codex));
-    assert!(!frame.tabs[0].focus_contested);
-    assert!(diagnostics.is_empty());
-}
-
-#[test]
-fn non_authoritative_source_active_outside_candidates_stays_contested() {
-    let codex = PaneId::from_parts(MuxName::Zellij, "terminal_200");
-    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_79", "tab_1", Some("zsh"), true),
-            pane("terminal_141", "tab_1", Some("zsh"), true),
-            pane("terminal_200", "tab_1", Some("codex"), false),
-        ],
-        produced_at_ms: 8,
-        observed_at_ms: 8,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active: BTreeMap::from([(ViewId::new_unchecked("tab_1"), codex)]),
-        source_active_authoritative: false,
-        prior: None,
-    });
-
-    assert_eq!(
-        frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_79")
-    );
-    assert!(frame.tabs[0].focus_contested);
-    assert!(matches!(
-        diagnostics.as_slice(),
-        [DiagEvent::FocusContested { resolved, .. }] if resolved.raw() == "terminal_79"
-    ));
-}
-
-#[test]
-fn authoritative_source_active_missing_from_tab_falls_back_to_candidates() {
-    let stale = PaneId::from_parts(MuxName::Zellij, "terminal_200");
-    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_79", "tab_1", Some("zsh"), true),
-            pane("terminal_141", "tab_1", Some("cargo build"), true),
-        ],
-        produced_at_ms: 8,
-        observed_at_ms: 8,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active: BTreeMap::from([(ViewId::new_unchecked("tab_1"), stale)]),
-        source_active_authoritative: true,
-        prior: None,
-    });
-
-    assert_eq!(
-        frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_79")
-    );
-    assert!(frame.tabs[0].focus_contested);
-    assert!(matches!(
-        diagnostics.as_slice(),
-        [DiagEvent::FocusContested { resolved, .. }] if resolved.raw() == "terminal_79"
-    ));
-}
-
-#[test]
-fn settled_focus_oscillation_keeps_focus_contest_diagnostic_silent() {
-    let terminal_1 = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let source_active = BTreeMap::from([(ViewId::new_unchecked("tab_0"), terminal_1.clone())]);
-    let (settled, diagnostics) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
+            pane("terminal_2", "tab_0", Some("codex"), false),
         ],
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
         client_viewed: &[],
-        source_active: source_active.clone(),
-        source_active_authoritative: false,
+        prior: Some(&prior),
+    });
+    assert_eq!(carried.focused_pane, Some(prior_focus));
+
+    let (raw, _) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), false),
+            pane("terminal_2", "tab_0", Some("codex"), true),
+        ],
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        client_viewed: &[],
         prior: None,
     });
     assert_eq!(
-        settled.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_1")
-    );
-    assert!(!settled.tabs[0].focus_contested);
-    assert!(diagnostics.is_empty());
-
-    let (contested, diagnostics) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-        ],
-        produced_at_ms: 8,
-        observed_at_ms: 8,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active: BTreeMap::new(),
-        source_active_authoritative: false,
-        prior: Some(&settled),
-    });
-    assert_eq!(
-        contested.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_2")
-    );
-    assert!(contested.tabs[0].focus_contested);
-    assert!(
-        diagnostics.is_empty(),
-        "settled->contested oscillation keeps the prior active pane as a candidate"
-    );
-
-    let (settled_again, diagnostics) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-        ],
-        produced_at_ms: 9,
-        observed_at_ms: 9,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active,
-        source_active_authoritative: false,
-        prior: Some(&contested),
-    });
-    assert_eq!(
-        settled_again.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_1")
-    );
-    assert!(!settled_again.tabs[0].focus_contested);
-    assert!(diagnostics.is_empty());
-
-    let (contested_again, diagnostics) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-        ],
-        produced_at_ms: 10,
-        observed_at_ms: 10,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active: BTreeMap::new(),
-        source_active_authoritative: false,
-        prior: Some(&settled_again),
-    });
-    assert_eq!(
-        contested_again.tabs[0]
-            .active_pane
-            .as_ref()
-            .map(PaneId::raw),
-        Some("terminal_2")
-    );
-    assert!(contested_again.tabs[0].focus_contested);
-    assert!(
-        diagnostics.is_empty(),
-        "the next settled->contested swing stays silent too"
+        raw.focused_pane,
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"))
     );
 }
 
 #[test]
-fn steady_contest_records_once_then_re_emits_on_resolution_change() {
-    // First contest with no prior: the multi-client tab is recorded.
-    let (prior, diagnostics) = assemble_frame_with_diagnostics(
-        vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-        ],
-        7,
-        "rimz-test",
-    );
-    assert_eq!(
-        prior.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_1")
-    );
-    assert!(matches!(
-        diagnostics.as_slice(),
-        [DiagEvent::FocusContested { resolved, .. }] if resolved.raw() == "terminal_1"
-    ));
-
-    // The same contest resolving to the same pane is steady state, not a new
-    // anomaly: the tab still carries the badge, but nothing is recorded.
-    let (steady, diagnostics) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-        ],
-        produced_at_ms: 8,
-        observed_at_ms: 8,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active: BTreeMap::new(),
-        source_active_authoritative: false,
-        prior: Some(&prior),
-    });
-    assert!(steady.tabs[0].focus_contested);
-    assert_eq!(
-        steady.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_1")
-    );
-    assert!(
-        diagnostics.is_empty(),
-        "a steady contest resolving to the same pane is not re-recorded"
-    );
-
-    // A contest that resolves to a different active pane is a focus shift, and
-    // is recorded again.
-    let shifted_prior = steady;
-    let (shifted, diagnostics) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_1", "tab_0", Some("zsh"), false),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-            pane("terminal_3", "tab_0", Some("zsh"), true),
-        ],
-        produced_at_ms: 9,
-        observed_at_ms: 9,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active: BTreeMap::new(),
-        source_active_authoritative: false,
-        prior: Some(&shifted_prior),
-    });
-    assert_ne!(
-        shifted.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_1")
-    );
-    assert!(
-        matches!(diagnostics.as_slice(), [DiagEvent::FocusContested { .. }]),
-        "a changed resolution under contest is recorded as a focus shift"
-    );
-}
-
-#[test]
-fn contested_focus_prefers_newly_marked_candidate() {
-    let prior = assemble_frame(
-        vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), false),
-        ],
-        7,
-        "rimz-test",
-    );
+fn detached_ambiguous_raw_marks_clear_without_live_prior() {
     let (frame, _) = assemble_frame_from_inputs(FrameInputs {
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-        ],
-        produced_at_ms: 8,
-        observed_at_ms: 8,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active: BTreeMap::new(),
-        source_active_authoritative: false,
-        prior: Some(&prior),
-    });
-
-    assert_eq!(
-        frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_2")
-    );
-}
-
-#[test]
-fn contested_focus_sticks_to_prior_when_no_transition_is_visible() {
-    // A three-pane prior with one clear winner: when every pane reports active
-    // (no visible transition), the active pane stays on the prior choice.
-    let prior = assemble_frame(
-        vec![
-            pane("terminal_1", "tab_0", Some("zsh"), false),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-            pane("terminal_3", "tab_0", Some("zsh"), false),
-        ],
-        7,
-        "rimz-test",
-    );
-    let (frame, _) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-            pane("terminal_3", "tab_0", Some("zsh"), true),
-        ],
-        produced_at_ms: 8,
-        observed_at_ms: 8,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active: BTreeMap::new(),
-        source_active_authoritative: false,
-        prior: Some(&prior),
-    });
-
-    assert_eq!(
-        frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_2"),
-        "three-pane: no transition keeps the prior active pane"
-    );
-
-    // A two-pane prior that is itself already contested still sticks: the prior
-    // resolves to the first pane and sets the `focus_contested` guard, and the
-    // unchanged next frame holds that same choice.
-    let (prior, _) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
+            pane("terminal_2", "tab_0", Some("codex"), true),
         ],
         produced_at_ms: 7,
         observed_at_ms: 7,
         session_name: "rimz-test".to_owned(),
         client_viewed: &[],
-        source_active: BTreeMap::new(),
-        source_active_authoritative: false,
         prior: None,
     });
-    assert_eq!(
-        prior.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_1")
-    );
-    assert!(prior.tabs[0].focus_contested);
 
-    let (frame, _) = assemble_frame_from_inputs(FrameInputs {
-        panes: vec![
-            pane("terminal_1", "tab_0", Some("zsh"), true),
-            pane("terminal_2", "tab_0", Some("cargo build"), true),
-        ],
-        produced_at_ms: 8,
-        observed_at_ms: 8,
-        session_name: "rimz-test".to_owned(),
-        client_viewed: &[],
-        source_active: BTreeMap::new(),
-        source_active_authoritative: false,
-        prior: Some(&prior),
-    });
-
-    assert_eq!(
-        frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        prior.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        "two-pane: a prior contest sticks to its prior active pane"
-    );
+    assert_eq!(frame.focused_pane, None);
 }
 
 #[test]
-fn frame_without_observed_time_or_focus_contested_defaults_stamp() {
-    let old_frame = r#"{
-        "produced_at_ms": 7,
-        "session_name": "rimz-test",
-        "tabs": [{
-            "view_id": "tab_0",
-            "kind": "tab",
-            "active_pane": "zellij:terminal_1",
-            "panes": [{
-                "pane_id": "zellij:terminal_1",
-                "current": {
-                    "command": "zsh",
-                    "cwd": "/repo/main"
-                }
-            }]
-        }]
-    }"#;
+fn sidebar_pane_can_be_the_session_focus_register() {
+    let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let (frame, _) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("rimz sidebar serve"), false),
+            pane("terminal_2", "tab_0", Some("zsh"), false),
+        ],
+        produced_at_ms: 7,
+        observed_at_ms: 7,
+        session_name: "rimz-test".to_owned(),
+        client_viewed: std::slice::from_ref(&own),
+        prior: None,
+    });
 
-    let frame: PaneFrame = serde_json::from_str(old_frame).expect("old frame parses");
-
-    assert_eq!(frame.produced_at_ms, 7);
-    assert_eq!(frame.observed_at_ms, 0);
-    assert!(frame.carried_panes.is_empty());
-    assert!(frame.viewed_panes.is_empty());
-    assert_eq!(frame.presence, None);
-    assert!(!frame.tabs[0].focus_contested);
+    assert_eq!(frame.focused_pane, Some(own));
 }
 
 #[test]
@@ -809,7 +384,7 @@ fn pid_change_rejects_prior_tenant_stamp_even_with_same_command() {
 #[test]
 fn own_view_derives_from_the_own_tab() {
     let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let sibling = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let frame = assemble_frame(
         vec![
             pane("terminal_1", "tab_0", Some("rimz-sidebar"), false),
@@ -821,45 +396,15 @@ fn own_view_derives_from_the_own_tab() {
     );
 
     // The pane in `tab_1` is not a sibling: the own view counts and names only
-    // the panes sharing the own tab, and the working set rides the fused focus
-    // filter over that same tab-local set.
+    // the panes sharing the own tab.
     let view = SidebarOwnView::from_frame(&own, &frame).expect("own pane is present");
 
     assert_eq!(view.sibling_count, 1);
-    assert!(!view.own_is_active);
-    assert_eq!(view.active_pane_id, Some(active.clone()));
     assert_eq!(
         view.working_pane_ids,
-        vec![active],
-        "the working set names only this tab's siblings — the fused \
-         focus filter rides it"
+        vec![sibling],
+        "the working set names only this tab's siblings"
     );
-}
-
-#[test]
-fn own_view_marks_active_pane_viewed_from_client_focus() {
-    let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_9");
-    let mut frame = assemble_frame(
-        vec![
-            pane("terminal_1", "tab_0", Some("rimz-sidebar"), false),
-            pane("terminal_2", "tab_0", Some("zsh"), true),
-        ],
-        1,
-        "rimz-test",
-    );
-
-    let view = SidebarOwnView::from_frame(&own, &frame).expect("own pane is present");
-    assert!(!view.active_pane_is_viewed);
-
-    frame.viewed_panes = vec![active];
-    let view = SidebarOwnView::from_frame(&own, &frame).expect("own pane is present");
-    assert!(view.active_pane_is_viewed);
-
-    frame.viewed_panes = vec![foreign];
-    let view = SidebarOwnView::from_frame(&own, &frame).expect("own pane is present");
-    assert!(!view.active_pane_is_viewed);
 }
 
 fn own_view(own: &str, panes: Vec<PaneRef>) -> Option<SidebarOwnView> {
@@ -878,18 +423,15 @@ fn own_view_edge_cases_are_explicit() {
     )
     .expect("own pane is present");
 
-    assert!(view.own_is_active);
-    assert_eq!(view.active_pane_id, None);
+    assert_eq!(
+        view.working_pane_ids,
+        vec![PaneId::from_parts(MuxName::Zellij, "terminal_2")]
+    );
 
     // A view the caller cannot find itself in is unknowable — never close.
     let panes = vec![pane("terminal_1", "tab_0", Some("zsh"), true)];
     assert!(own_view("terminal_404", panes).is_none());
 
-    // The tab has an active pane but no client is looking at it. The
-    // baseline is the tab's active pane, defined regardless of where any
-    // client is — so the sidebar in an unviewed tab still points at the
-    // pane the user would land on.
-    let active = PaneId::from_parts(MuxName::Zellij, "terminal_53");
     let unfocused_view = own_view(
         "terminal_52",
         vec![
@@ -899,8 +441,10 @@ fn own_view_edge_cases_are_explicit() {
     )
     .expect("own pane is present");
 
-    assert!(!unfocused_view.own_is_active);
-    assert_eq!(unfocused_view.active_pane_id, Some(active));
+    assert_eq!(
+        unfocused_view.working_pane_ids,
+        vec![PaneId::from_parts(MuxName::Zellij, "terminal_53")]
+    );
 }
 
 /// A pane fixture with a view name, so a test can build the `rimzd` daemon

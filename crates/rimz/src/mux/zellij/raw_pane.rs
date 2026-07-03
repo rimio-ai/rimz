@@ -10,7 +10,7 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::ids::{MuxName, PaneId, ViewId, WorkspaceId};
+use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::ledger::paths;
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 use crate::mux::{PaneListing, ViewSidebars};
@@ -528,59 +528,23 @@ pub(super) fn raw_panes_from_topology(cache: PaneTopologyCache) -> Vec<RawPane> 
 pub(super) struct RawPaneListing {
     pub(super) panes: Vec<RawPane>,
     pub(super) observed_at_ms: u64,
-    pub(super) source_active: BTreeMap<ViewId, PaneId>,
-    pub(super) source_active_authoritative: bool,
     pub(super) served_from_topology: bool,
 }
 
 impl RawPaneListing {
-    pub(super) fn from_cli(
-        panes: Vec<RawPane>,
-        observed_at_ms: u64,
-        active_panes: Option<BTreeMap<u64, u64>>,
-    ) -> Self {
-        let (source_active, source_active_authoritative) = match active_panes {
-            Some(active_panes) if !active_panes.is_empty() => {
-                (source_active_from_active_panes(&active_panes), true)
-            }
-            _ => {
-                let mut source_active = BTreeMap::new();
-                for pane in panes
-                    .iter()
-                    .filter(|pane| pane.is_listed_pane() && pane.is_focused)
-                {
-                    // Choose the first focused listed pane per tab
-                    // deterministically; frame assembly treats this as a
-                    // non-authoritative tie-breaker for raw marks.
-                    source_active
-                        .entry(ViewId::new_unchecked(format!(
-                            "tab_{}",
-                            pane.view_position()
-                        )))
-                        .or_insert_with(|| {
-                            PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id))
-                        });
-                }
-                (source_active, false)
-            }
-        };
+    pub(super) fn from_cli(panes: Vec<RawPane>, observed_at_ms: u64) -> Self {
         Self {
             panes,
             observed_at_ms,
-            source_active,
-            source_active_authoritative,
             served_from_topology: false,
         }
     }
 
     pub(super) fn from_topology(cache: PaneTopologyCache) -> Self {
         let observed_at_ms = cache.produced_at_ms;
-        let source_active = source_active_from_active_panes(&cache.active_panes);
         Self {
             panes: raw_panes_from_topology(cache),
             observed_at_ms,
-            source_active,
-            source_active_authoritative: true,
             served_from_topology: true,
         }
     }
@@ -598,23 +562,9 @@ impl RawPaneListing {
                 .filter_map(|pane| project(pane, &session_name))
                 .collect(),
             observed_at_ms: self.observed_at_ms,
-            source_active: self.source_active,
-            source_active_authoritative: self.source_active_authoritative,
             served_from_topology: self.served_from_topology,
         }
     }
-}
-
-fn source_active_from_active_panes(active_panes: &BTreeMap<u64, u64>) -> BTreeMap<ViewId, PaneId> {
-    active_panes
-        .iter()
-        .map(|(tab_position, pane_id)| {
-            (
-                ViewId::new_unchecked(format!("tab_{tab_position}")),
-                PaneId::from_parts(MuxName::Zellij, format!("terminal_{pane_id}")),
-            )
-        })
-        .collect()
 }
 
 pub(super) fn read_topology_cache(

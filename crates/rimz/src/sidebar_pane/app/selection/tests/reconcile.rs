@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn cold_start_derives_from_active_pane_or_holds_unseated() {
+fn cold_start_derives_from_focused_pane_or_holds_unseated() {
     let ws = workspace();
     let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let active_snapshot = snapshot_with_panes(

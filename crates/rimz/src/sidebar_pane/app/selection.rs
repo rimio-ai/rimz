@@ -513,16 +513,16 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 }
 
 /// Reconcile the highlight after folding a new snapshot. Selection is *derived*
-/// state: the baseline is the own view's active working pane, re-queried from
-/// the mux every fold — same-tab by construction — so the highlight always
-/// reconverges on where the user actually is; it cannot desynchronize, only lag
-/// a frame. One transient local layer rides above it: the arrow-key [`Browse`]
-/// pick. A jump moves no local state — its highlight arrives here, when the
-/// baseline catches up. Keyed on pane identity, never position.
+/// state: the baseline is the session focus register, re-queried from the mux
+/// every fold and updated by focus events between pulls; it cannot
+/// desynchronize, only lag a frame. One transient local layer rides above it:
+/// the arrow-key [`Browse`] pick. A jump moves no local state — its highlight
+/// arrives here, when the baseline catches up. Keyed on pane identity, never
+/// position.
 ///
-/// `derived` is the snapshot's active-pane derivation, pre-filtered at the call
-/// site to a non-sidebar row: `Some(pane)` iff `!own_is_active` and the view's
-/// active pane is a row in this snapshot; `None` otherwise.
+/// `derived` is the snapshot's session-register derivation, pre-filtered at the
+/// call site to a non-sidebar row: `Some(pane)` iff the focused pane is a row in
+/// this snapshot; `None` otherwise.
 ///
 /// Ordered rules:
 /// 0. **Make-up filter.** The status filter clears when its bucket's
@@ -579,7 +579,7 @@ pub(super) fn reconcile_selection(
 
     // 4. Drop state whose pane left the room — so a pick whose pane closed
     //    stops shadowing the baseline — then re-anchor by identity. The
-    //    baseline check is deliberately unfiltered: the mux's active pane is
+    //    baseline check is deliberately unfiltered: the session focus pane is
     //    real regardless of the cosmetic make-up filter, so a hidden baseline
     //    holds and re-seats the highlight the moment the filter clears. The
     //    browse pick *is* filtered — it roams the visible rows, so a pick the

@@ -25,34 +25,11 @@ pub(crate) use lazy::{
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SidebarOwnView {
     pub sibling_count: usize,
-    /// True iff the sidebar's own pane is its view's active pane — the user
-    /// focused the sidebar itself, so the derived baseline is `None` and the
-    /// renderer holds its last selection.
-    pub own_is_active: bool,
-    /// The view's active working pane: the non-sidebar sibling carrying the
-    /// per-view `is_focused` mark. The renderer derives its selection baseline
-    /// from it (see `sidebar_pane::app::selection`) — same-tab by construction,
-    /// defined whether or not a client is viewing the tab.
-    pub active_pane_id: Option<PaneId>,
-    /// True when the view's active pane is the pane an attached client is
-    /// actually viewing. This gates focus-clearing unread while the active-pane
-    /// baseline remains defined for every view.
-    #[serde(default)]
-    pub active_pane_is_viewed: bool,
-    /// The view's working (non-sidebar) sibling pane ids — the only panes a
-    /// fused focus event may retarget `active_pane_id` onto. A `FocusChanged`
-    /// patch is session-broadcast and carries every view's per-view marks, so
-    /// fusion filters against this set; empty (an older producer's frame)
-    /// degrades to pull-only baseline updates. `#[serde(default)]` keeps the
-    /// wire shape stable.
+    /// The view's working (non-sidebar) sibling pane ids. Notify targeting,
+    /// self-close, and stranded-focus repair use this set. `#[serde(default)]`
+    /// keeps the wire shape stable.
     #[serde(default)]
     pub working_pane_ids: Vec<PaneId>,
-    /// The own view's frame had multiple raw focus candidates. The renderer holds
-    /// an existing selection baseline through this state instead of replacing it
-    /// with the producer's deterministic arbitration; a fused focus event that
-    /// names one of `working_pane_ids` clears it for that fused frame.
-    #[serde(default)]
-    pub focus_contested: bool,
     /// Whether the caller's own view is the `rimzd` daemon view: its siblings,
     /// after dropping any sidebar pane, are non-empty and all daemon-dashboard
     /// infrastructure panes ([`crate::remote_control::pane_is_host`]).

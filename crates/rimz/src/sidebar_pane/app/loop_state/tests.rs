@@ -70,32 +70,25 @@ fn animating_agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     snapshot
 }
 
-fn own_view(own_is_active: bool, active_pane_is_viewed: bool) -> crate::SidebarOwnView {
+fn own_view(_own_focused: bool, _pane_viewed: bool) -> crate::SidebarOwnView {
     crate::SidebarOwnView {
         sibling_count: 1,
-        own_is_active,
-        active_pane_id: Some(pane("terminal_9", "tab_0", false).pane_id),
-        active_pane_is_viewed,
         working_pane_ids: vec![pane("terminal_9", "tab_0", false).pane_id],
-        focus_contested: false,
         own_view_is_daemon: false,
     }
 }
 
-fn snapshot_with_active_pane(ws: &WorkspaceId, active: PaneId) -> SidebarSnapshot {
+fn snapshot_with_focused_pane(ws: &WorkspaceId, active: PaneId) -> SidebarSnapshot {
     let first = pane("terminal_1", "tab_0", false);
     let second = pane("terminal_2", "tab_0", false);
     let working_pane_ids = vec![first.pane_id.clone(), second.pane_id.clone()];
     let mut snapshot = snapshot_with_panes(ws, vec![first, second]);
     snapshot.own_view = Some(crate::SidebarOwnView {
         sibling_count: 2,
-        own_is_active: false,
-        active_pane_id: Some(active),
-        active_pane_is_viewed: true,
         working_pane_ids,
-        focus_contested: false,
         own_view_is_daemon: false,
     });
+    snapshot.focused_pane = Some(active);
     snapshot
 }
 
@@ -356,6 +349,7 @@ fn frame_timing_suspends_unwatched_animation() {
     assert!(!frame_active(&state));
 
     state.current.own_view = Some(own_view(false, true));
+    state.current.viewed_panes = vec![pane("terminal_9", "tab_0", false).pane_id];
     assert!(frame_active(&state));
 
     state.current.own_view = Some(own_view(true, false));
@@ -550,7 +544,7 @@ fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
         &mut state,
         &config,
         &mut fetch,
-        snapshot_with_active_pane(&ws, target.clone()),
+        snapshot_with_focused_pane(&ws, target.clone()),
         true,
     );
 
@@ -576,14 +570,14 @@ fn external_focus_change_arms_group_reveal_once() {
         &mut state,
         &config,
         &mut fetch,
-        snapshot_with_active_pane(&ws, target.clone()),
+        snapshot_with_focused_pane(&ws, target.clone()),
         true,
     );
 
     assert_eq!(state.ui.selected_pane, Some(target.clone()));
     assert!(
         state.ui.focus_group_reveal,
-        "the first active pane learned on attach arms a one-shot group reveal"
+        "the first focused pane learned on attach arms a one-shot group reveal"
     );
 
     state.ui.focus_group_reveal = false;
@@ -591,13 +585,13 @@ fn external_focus_change_arms_group_reveal_once() {
         &mut state,
         &config,
         &mut fetch,
-        snapshot_with_active_pane(&ws, target),
+        snapshot_with_focused_pane(&ws, target),
         true,
     );
 
     assert!(
         !state.ui.focus_group_reveal,
-        "unchanged active pane refolds leave the consumed reveal off"
+        "unchanged focused pane refolds leave the consumed reveal off"
     );
 }
 
@@ -624,7 +618,7 @@ fn focus_anchor_for_other_pane_leaves_scroll_untouched() {
         &mut state,
         &config,
         &mut fetch,
-        snapshot_with_active_pane(&ws, selected.clone()),
+        snapshot_with_focused_pane(&ws, selected.clone()),
         true,
     );
 
@@ -656,7 +650,7 @@ fn focus_anchor_stamp_applies_once() {
         &mut state,
         &config,
         &mut fetch,
-        snapshot_with_active_pane(&ws, target.clone()),
+        snapshot_with_focused_pane(&ws, target.clone()),
         true,
     );
     assert_eq!(state.ui.scroll_offset, 7);
@@ -669,7 +663,7 @@ fn focus_anchor_stamp_applies_once() {
         &mut state,
         &config,
         &mut fetch,
-        snapshot_with_active_pane(&ws, target),
+        snapshot_with_focused_pane(&ws, target),
         true,
     );
 
@@ -702,7 +696,7 @@ fn stale_focus_anchor_is_ignored() {
         &mut state,
         &config,
         &mut fetch,
-        snapshot_with_active_pane(&ws, target.clone()),
+        snapshot_with_focused_pane(&ws, target.clone()),
         true,
     );
 

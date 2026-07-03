@@ -34,7 +34,7 @@ fn browse_roams_other_tabs_rows() {
 fn browse_survives_a_jump_and_ends_on_baseline_change() {
     // A jump mutates nothing, the browse included: an Enter mid-browse
     // leaves the pick in place, so the highlight holds still until the
-    // derived baseline catches up underneath it — no flicker back to the
+    // session-focus baseline catches up underneath it — no flicker back to the
     // old pane. The browse then ends on the genuine baseline change.
     let ws = workspace();
     let anchor = PaneId::from_parts(MuxName::Zellij, "terminal_1");

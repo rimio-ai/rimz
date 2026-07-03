@@ -7,7 +7,6 @@
 //! card; ledger, sidecars, and realtime events only enrich cards whose pane is
 //! present here.
 
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use jiff::Timestamp;
@@ -38,10 +37,14 @@ pub struct PaneFrame {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub carried_panes: Vec<CarriedPane>,
     /// Panes attached clients are currently viewing, one per client. Assembly
-    /// uses this as the converged focus truth for each viewed tab before
-    /// publishing it for snapshot enrichment.
+    /// uses this as focus-register input before publishing it for snapshot
+    /// enrichment.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub viewed_panes: Vec<PaneId>,
+    /// Session-global latest focused pane resolved from client views, prior
+    /// frame state, and backend raw focus marks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focused_pane: Option<PaneId>,
     /// Producer-sampled session presence. Absent on fallback paths that could
     /// not read the per-client mux state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -64,14 +67,6 @@ pub struct TabFrame {
     pub kind: ViewKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_pane: Option<PaneId>,
-    /// Focus marks for this view were multi-valued and no authoritative client
-    /// or mux active pane settled them, so `active_pane` is a heuristic
-    /// arbitration. A viewed tab, or a multi-client tab whose mux-reported
-    /// active pane names one of the marked panes, is settled, not contested.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub focus_contested: bool,
     pub panes: Vec<PaneState>,
 }
 
@@ -187,7 +182,8 @@ impl PaneFrame {
             view_id: Some(tab.view_id.to_string()),
             view_kind: Some(tab.kind),
             view_name: tab.name.clone(),
-            is_focused: tab.active_pane.as_ref() == Some(&pane.pane_id),
+            is_focused: self.focused_pane.as_ref() == Some(&pane.pane_id)
+                || self.viewed_panes.contains(&pane.pane_id),
             is_floating: pane.is_floating,
             command: pane.current.command.clone(),
             spawn_command: pane.current.spawn_command.clone(),
@@ -284,7 +280,6 @@ impl SidebarOwnView {
             .tabs
             .iter()
             .find(|tab| tab.panes.iter().any(|pane| pane.pane_id == *own))?;
-        let own_pane = tab.panes.iter().find(|pane| pane.pane_id == *own)?;
         let siblings = tab
             .panes
             .iter()
@@ -295,15 +290,6 @@ impl SidebarOwnView {
             .copied()
             .filter(|pane| !pane_is_sidebar_chrome(pane))
             .collect::<Vec<_>>();
-        let active_pane_id = tab.active_pane.as_ref().and_then(|active| {
-            non_sidebar_siblings
-                .iter()
-                .any(|pane| pane.pane_id == *active)
-                .then(|| active.clone())
-        });
-        let active_pane_is_viewed = active_pane_id
-            .as_ref()
-            .is_some_and(|pane| frame.viewed_panes.contains(pane));
         let working_pane_ids = non_sidebar_siblings
             .iter()
             .map(|pane| pane.pane_id.clone())
@@ -314,12 +300,8 @@ impl SidebarOwnView {
             });
         Some(Self {
             sibling_count: siblings.len(),
-            own_is_active: tab.active_pane.as_ref() == Some(&own_pane.pane_id),
-            active_pane_id,
-            active_pane_is_viewed,
             working_pane_ids,
             own_view_is_daemon,
-            focus_contested: tab.focus_contested,
         })
     }
 }
@@ -334,8 +316,6 @@ pub struct FrameInputs<'a> {
     pub observed_at_ms: u64,
     pub session_name: String,
     pub client_viewed: &'a [PaneId],
-    pub source_active: BTreeMap<ViewId, PaneId>,
-    pub source_active_authoritative: bool,
     pub prior: Option<&'a PaneFrame>,
 }
 
@@ -358,8 +338,6 @@ pub fn assemble_frame_with_diagnostics(
         observed_at_ms: produced_at_ms,
         session_name: session_name.into(),
         client_viewed: &[],
-        source_active: BTreeMap::new(),
-        source_active_authoritative: false,
         prior: None,
     })
 }
@@ -371,12 +349,10 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         observed_at_ms,
         session_name,
         client_viewed,
-        source_active,
-        source_active_authoritative,
         prior,
     } = inputs;
     let mut tabs: BTreeMap<ViewId, TabFrame> = BTreeMap::new();
-    let mut focused_candidates: BTreeMap<ViewId, Vec<PaneId>> = BTreeMap::new();
+    let mut raw_focused = Vec::new();
     let mut seen_panes = HashSet::new();
     let mut diagnostics = Vec::new();
     for pane in panes {
@@ -398,18 +374,13 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
             view_id,
             kind,
             name: pane.view_name.clone(),
-            active_pane: None,
-            focus_contested: false,
             panes: Vec::new(),
         });
         if tab.name.is_none() {
             tab.name = pane.view_name.clone();
         }
         if pane.is_focused {
-            focused_candidates
-                .entry(tab.view_id.clone())
-                .or_default()
-                .push(pane.pane_id.clone());
+            raw_focused.push(pane.pane_id.clone());
         }
         let resumed_session_id = pane.resumed_session_id.or_else(|| {
             pane.command
@@ -437,14 +408,15 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
             metrics: PaneMetrics::default(),
         });
     }
-    resolve_tab_focus(
-        &mut tabs,
-        focused_candidates,
+    let live = tabs
+        .values()
+        .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
+        .collect::<HashSet<_>>();
+    let focused_pane = resolve_session_focus(
+        prior.and_then(|frame| frame.focused_pane.as_ref()),
         client_viewed,
-        &source_active,
-        source_active_authoritative,
-        prior,
-        &mut diagnostics,
+        &raw_focused,
+        &live,
     );
     (
         PaneFrame {
@@ -454,162 +426,46 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
             session_name,
             tabs: tabs.into_values().collect(),
             carried_panes: Vec::new(),
-            viewed_panes: Vec::new(),
+            viewed_panes: client_viewed.to_vec(),
+            focused_pane,
             presence: None,
         },
         diagnostics,
     )
 }
 
-fn resolve_tab_focus(
-    tabs: &mut BTreeMap<ViewId, TabFrame>,
-    focused_candidates: BTreeMap<ViewId, Vec<PaneId>>,
+pub(crate) fn resolve_session_focus(
+    prior: Option<&PaneId>,
     client_viewed: &[PaneId],
-    source_active: &BTreeMap<ViewId, PaneId>,
-    source_active_authoritative: bool,
-    prior: Option<&PaneFrame>,
-    diagnostics: &mut Vec<DiagEvent>,
-) {
-    for (view_id, tab) in tabs {
-        // The attached client's focused pane is the converged single-focus
-        // truth for the tab it views. Stale multi-valued `is_focused` marks and
-        // a sticky plugin resolution never override it. Resolve to one pane per
-        // tab so the shared sidebar buffer stays renderable.
-        if let Some(active) = client_viewed
-            .iter()
-            .filter(|pane| {
-                tab.panes
-                    .iter()
-                    .any(|candidate| &candidate.pane_id == *pane)
-            })
-            .min_by(|left, right| pane_id_order(left.as_str(), right.as_str()))
-        {
-            tab.active_pane = Some(active.clone());
-            continue;
-        }
-        // The presence plugin resolves one active pane per tab from focus
-        // transitions; trust it over Zellij's multi-valued remembered
-        // `is_focused` marks. A move to another pane re-marks that pane, so the
-        // plugin's resolution already reflects real focus shifts.
-        if source_active_authoritative
-            && let Some(active) = source_active.get(view_id)
-            && tab.panes.iter().any(|pane| &pane.pane_id == active)
-        {
-            tab.active_pane = Some(active.clone());
-            continue;
-        }
-        let Some(candidates) = focused_candidates.get(view_id) else {
-            continue;
-        };
-        match candidates.as_slice() {
-            [] => {}
-            [only] => tab.active_pane = Some(only.clone()),
-            _ => {
-                // Non-authoritative sources can still settle multi-valued raw
-                // marks when they name one of the marked panes. Otherwise the
-                // tab is contested and resolved by deterministic fallback.
-                if let Some(active) = source_active
-                    .get(&tab.view_id)
-                    .filter(|pane| candidates.iter().any(|candidate| candidate == *pane))
-                {
-                    tab.active_pane = Some(active.clone());
-                } else {
-                    tab.focus_contested = true;
-                    let resolved = resolve_contested_focus(tab, candidates, prior);
-                    // A multi-client tab or a floating overlay can leave several
-                    // panes marked focused while the mux's active-pane signal
-                    // flaps between naming one candidate and omitting the tab.
-                    // Record only when the prior active pane drops out of the
-                    // current candidate set, so settled->contested oscillation
-                    // stays silent and real focus shifts still surface.
-                    if focus_contest_is_transition(prior, &tab.view_id, candidates) {
-                        diagnostics.push(DiagEvent::FocusContested {
-                            view_id: tab.view_id.clone(),
-                            candidates: candidates.clone(),
-                            resolved: resolved.clone(),
-                        });
-                    }
-                    tab.active_pane = Some(resolved);
-                }
-            }
-        }
-    }
-}
-
-/// Whether a contested-focus resolution is a new focus shift worth recording.
-/// A multi-client tab or floating overlay leaves several panes marked focused
-/// while the mux's active-pane signal flaps between naming one of them
-/// (settled) and omitting it (contested), so the view oscillates
-/// settled->contested every few frames while the same pane stays focused
-/// throughout. Keying the record on the prior frame's active pane still being
-/// among the current candidates folds that whole oscillation into silence: a
-/// record fires only when focus has genuinely moved off the previously active
-/// pane (it is no longer a candidate), or when there is no prior frame.
-fn focus_contest_is_transition(
-    prior: Option<&PaneFrame>,
-    view_id: &ViewId,
-    candidates: &[PaneId],
-) -> bool {
-    let Some(prior_active) = prior
-        .and_then(|frame| frame.tabs.iter().find(|tab| tab.view_id == *view_id))
-        .and_then(|tab| tab.active_pane.as_ref())
-    else {
-        return true;
-    };
-    !candidates.contains(prior_active)
-}
-
-fn resolve_contested_focus(
-    tab: &TabFrame,
-    candidates: &[PaneId],
-    prior: Option<&PaneFrame>,
-) -> PaneId {
-    let prior_tab = prior
-        .and_then(|frame| frame.tabs.iter().find(|prior| prior.view_id == tab.view_id))
-        .filter(|prior| prior.kind == tab.kind);
-    let prior_active = prior_tab.and_then(|prior| prior.active_pane.as_ref());
-    if !prior_tab.is_some_and(|prior| prior.focus_contested) {
-        let newly_marked = candidates
-            .iter()
-            .filter(|candidate| Some(*candidate) != prior_active)
-            .collect::<Vec<_>>();
-        if let [pane] = newly_marked.as_slice() {
-            return (*pane).clone();
-        }
-    }
-    if let Some(prior_active) =
-        prior_active.filter(|prior| candidates.iter().any(|candidate| candidate == *prior))
-    {
-        return prior_active.clone();
-    }
-    candidates
+    raw_focused: &[PaneId],
+    live: &HashSet<PaneId>,
+) -> Option<PaneId> {
+    let live_viewed = client_viewed
         .iter()
-        .min_by(|left, right| pane_id_order(left.as_str(), right.as_str()))
-        .expect("contested focus has at least two candidates")
-        .clone()
-}
-
-fn pane_id_order(left: &str, right: &str) -> Ordering {
-    match (split_numeric_suffix(left), split_numeric_suffix(right)) {
-        (Some((left_prefix, left_num)), Some((right_prefix, right_num)))
-            if left_prefix == right_prefix =>
-        {
-            left_num.cmp(&right_num).then_with(|| left.cmp(right))
+        .filter(|pane| live.contains(*pane))
+        .collect::<Vec<_>>();
+    match live_viewed.as_slice() {
+        [pane] => return Some((*pane).clone()),
+        panes if panes.len() > 1 => {
+            if let Some(prior) = prior.filter(|prior| client_viewed.contains(prior)) {
+                return Some(prior.clone());
+            }
+            return panes.first().map(|pane| (*pane).clone());
         }
-        _ => left.cmp(right),
+        _ => {}
     }
-}
 
-fn split_numeric_suffix(value: &str) -> Option<(&str, u64)> {
-    let suffix_start = value
-        .char_indices()
-        .rev()
-        .find_map(|(idx, ch)| (!ch.is_ascii_digit()).then_some(idx + ch.len_utf8()))?;
-    let suffix = value.get(suffix_start..)?;
-    if suffix.is_empty() || suffix.len() == value.len() {
-        return None;
+    if let Some(prior) = prior.filter(|prior| live.contains(prior)) {
+        return Some(prior.clone());
     }
-    Some((value.get(..suffix_start)?, suffix.parse().ok()?))
+    let live_raw = raw_focused
+        .iter()
+        .filter(|pane| live.contains(*pane))
+        .collect::<Vec<_>>();
+    match live_raw.as_slice() {
+        [pane] => Some((*pane).clone()),
+        _ => None,
+    }
 }
 
 fn pane_is_sidebar_chrome(pane: &PaneState) -> bool {

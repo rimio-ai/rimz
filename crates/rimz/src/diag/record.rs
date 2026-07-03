@@ -7,7 +7,7 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{AgentKind, AgentSessionId, PaneId, SidebarInstanceId, ViewId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, SidebarInstanceId, WorkspaceId};
 use crate::remote::link::LinkTier;
 
 pub const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
@@ -201,11 +201,6 @@ pub enum DiagEvent {
     DuplicatePaneId {
         pane_id: PaneId,
     },
-    FocusContested {
-        view_id: ViewId,
-        candidates: Vec<PaneId>,
-        resolved: PaneId,
-    },
     ForeignSessionPane {
         pane_id: PaneId,
         session: String,
@@ -275,7 +270,6 @@ impl DiagEvent {
             }
             | Self::RowConflict { .. }
             | Self::DuplicatePaneId { .. }
-            | Self::FocusContested { .. }
             | Self::ForeignSessionPane { .. } => DiagSeverity::Warn,
             Self::FrameAnomaly { .. } => DiagSeverity::Warn,
             Self::RendererPanic { .. } => DiagSeverity::Error,
@@ -321,7 +315,6 @@ impl DiagEvent {
             Self::ProducerDemoted { .. } => "producer_demoted",
             Self::RowConflict { .. } => "row_conflict",
             Self::DuplicatePaneId { .. } => "duplicate_pane_id",
-            Self::FocusContested { .. } => "focus_contested",
             Self::ForeignSessionPane { .. } => "foreign_session_pane",
             Self::GroupMigration { .. } => "group_migration",
             Self::NewbornQuarantined { .. } => "newborn_quarantined",
@@ -401,11 +394,6 @@ impl DiagEvent {
             Self::DuplicatePaneId { pane_id } | Self::NewbornQuarantined { pane_id } => {
                 format!("{}:{pane_id}", self.kind_name())
             }
-            Self::FocusContested {
-                view_id,
-                candidates,
-                ..
-            } => format!("{}:{view_id}:{candidates:?}", self.kind_name()),
             Self::ForeignSessionPane { pane_id, session } => {
                 format!("{}:{pane_id}:{session}", self.kind_name())
             }
@@ -629,10 +617,6 @@ pub enum AnomalyKind {
         declared: Vec<StatusCountSig>,
         tallied: Vec<StatusCountSig>,
     },
-    OwnViewIncoherent {
-        active_pane_id: String,
-        working_count: usize,
-    },
     SubagentTopLevelLeak {
         agent_id: String,
     },
@@ -673,7 +657,6 @@ impl AnomalyKind {
             Self::DuplicateRowId { .. } => "duplicate_row_id",
             Self::DuplicatePaneRows { .. } => "duplicate_pane_rows",
             Self::StatusCountMismatch { .. } => "status_count_mismatch",
-            Self::OwnViewIncoherent { .. } => "own_view_incoherent",
             Self::SubagentTopLevelLeak { .. } => "subagent_top_level_leak",
             Self::SubagentDoubleRender { .. } => "subagent_double_render",
             Self::FramelessRows { .. } => "frameless_rows",
@@ -698,7 +681,6 @@ impl AnomalyKind {
             Self::StatusCountMismatch { group_key, .. } | Self::OrderFlap { group_key, .. } => {
                 Some(Cow::Borrowed(group_key))
             }
-            Self::OwnViewIncoherent { active_pane_id, .. } => Some(Cow::Borrowed(active_pane_id)),
             Self::SubagentTopLevelLeak { agent_id } => Some(Cow::Borrowed(agent_id)),
             Self::SubagentDoubleRender { id } => Some(Cow::Borrowed(id)),
             Self::AggregateOscillation { aggregate, .. }

@@ -703,6 +703,7 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
         tabs: Vec::new(),
         carried_panes: Vec::new(),
         viewed_panes: vec![pane_id.clone()],
+        focused_pane: Some(pane_id.clone()),
         presence: None,
     };
 
@@ -717,6 +718,10 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
     );
 
     assert_eq!(snapshot.viewed_panes, vec![pane_id]);
+    assert_eq!(
+        snapshot.focused_pane,
+        snapshot.viewed_panes.first().cloned()
+    );
 }
 
 fn codex_root(id: &str, worktree: &str, pane_id: &str) -> AgentState {

@@ -83,7 +83,7 @@ pub struct AggregateSig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnViewSig {
     pub sibling_count: usize,
-    pub active_pane_id: Option<String>,
+    pub focused_pane: Option<String>,
     pub working_pane_ids: Vec<String>,
 }
 
@@ -186,7 +186,7 @@ pub fn extract_sig(
         aggregates: extract_aggregates(current, last_pulled),
         own_view: current.own_view.as_ref().map(|view| OwnViewSig {
             sibling_count: view.sibling_count,
-            active_pane_id: view.active_pane_id.as_ref().map(ToString::to_string),
+            focused_pane: current.focused_pane.as_ref().map(ToString::to_string),
             working_pane_ids: view
                 .working_pane_ids
                 .iter()

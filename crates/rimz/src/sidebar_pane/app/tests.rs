@@ -18,11 +18,7 @@ fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
     );
     snapshot.own_view = Some(crate::SidebarOwnView {
         sibling_count: 3,
-        own_is_active: true,
-        active_pane_id: None,
-        active_pane_is_viewed: false,
         working_pane_ids: vec![first_work.clone(), second_work.clone()],
-        focus_contested: false,
         own_view_is_daemon: false,
     });
     (snapshot, sidebar, first_work, second_work)
@@ -456,11 +452,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
         snap.panes_produced_at_ms = Some(1);
         snap.own_view = Some(crate::SidebarOwnView {
             sibling_count: 2,
-            own_is_active: true,
-            active_pane_id: None,
-            active_pane_is_viewed: false,
             working_pane_ids: vec![work.clone()],
-            focus_contested: false,
             own_view_is_daemon: daemon,
         });
         snap.worktree_groups = vec![crate::SidebarWorktreeGroup {

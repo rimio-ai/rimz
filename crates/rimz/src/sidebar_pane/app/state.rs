@@ -60,8 +60,8 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         generated_at: now,
         panes_produced_at_ms: None,
         panes_observed_at_ms: None,
-        focus_contested_panes: Vec::new(),
         viewed_panes: Vec::new(),
+        focused_pane: None,
         presence: None,
         truth_degraded: None,
         now,
@@ -252,13 +252,16 @@ fn worktree_kind_name(kind: crate::SidebarWorktreeKind) -> &'static str {
     }
 }
 
-pub(super) fn focused_working_pane(snapshot: &SidebarSnapshot) -> Option<crate::ids::PaneId> {
+pub(super) fn session_focus_baseline(
+    snapshot: &SidebarSnapshot,
+    own_pane: Option<&crate::ids::PaneId>,
+) -> Option<crate::ids::PaneId> {
     snapshot
-        .own_view
+        .focused_pane
         .as_ref()
-        .filter(|view| !view.own_is_active)
-        .and_then(|view| view.active_pane_id.clone())
+        .filter(|pane| own_pane != Some(*pane))
         .filter(|pane| row_index_of_pane(snapshot, None, pane).is_some())
+        .cloned()
 }
 
 pub(super) fn apply_manual_unread_guard(

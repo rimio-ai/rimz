@@ -142,14 +142,12 @@ impl SidebarSnapshot {
         self.worktree_groups
             .retain(|group| !group.rows.is_empty() || group.hidden_count > 0);
         if self
-            .own_view
+            .focused_pane
             .as_ref()
-            .and_then(|view| view.active_pane_id.as_ref())
-            .is_some_and(|active| active == pane_id)
-            && let Some(view) = &mut self.own_view
+            .is_some_and(|focused| focused == pane_id)
         {
-            view.active_pane_id = None;
-            view.active_pane_is_viewed = false;
+            self.focused_pane = None;
+            changed = true;
         }
         changed
     }
@@ -186,12 +184,9 @@ impl SidebarSnapshot {
         changed
     }
 
-    /// Apply a fused per-view focus patch. Row `is_focused` bits mirror the
-    /// patch for every listed pane — per-view marks are session-wide truth the
-    /// pull would also report — while the own-view baseline retargets only when
-    /// the patch names one of this view's own working panes: a focus move in
-    /// another tab is that view's mark, never this renderer's selection
-    /// baseline.
+    /// Apply a fused focus patch. Row `is_focused` bits mirror every listed
+    /// pane. A single focused pane is a session-focus transition, so it updates
+    /// the register and marks the pane viewed until the next pull.
     pub(crate) fn overlay_focus(&mut self, focused: &[PaneId], unfocused: &[PaneId]) -> bool {
         if focused.is_empty() && unfocused.is_empty() {
             return false;
@@ -212,37 +207,22 @@ impl SidebarSnapshot {
                 }
             }
         }
-        if let Some(view) = &mut self.own_view {
-            let own_focused = focused
-                .iter()
-                .filter(|&pane_id| view.working_pane_ids.contains(pane_id))
-                .find(|&pane_id| view.active_pane_id.as_ref() != Some(pane_id))
-                .or_else(|| {
-                    focused
-                        .iter()
-                        .find(|&pane_id| view.working_pane_ids.contains(pane_id))
-                });
-            if let Some(own_focused) = own_focused {
-                if view.active_pane_id.as_ref() != Some(own_focused)
-                    || view.own_is_active
-                    || view.focus_contested
-                    || !view.active_pane_is_viewed
-                {
-                    view.active_pane_id = Some(own_focused.clone());
-                    view.active_pane_is_viewed = true;
-                    view.own_is_active = false;
-                    view.focus_contested = false;
-                    changed = true;
-                }
-            } else if view
-                .active_pane_id
-                .as_ref()
-                .is_some_and(|active| unfocused.iter().any(|pane_id| pane_id == active))
-            {
-                view.active_pane_id = None;
-                view.active_pane_is_viewed = false;
+        if let [pane] = focused {
+            if self.focused_pane.as_ref() != Some(pane) {
+                self.focused_pane = Some(pane.clone());
                 changed = true;
             }
+            if !self.viewed_panes.contains(pane) {
+                self.viewed_panes.push(pane.clone());
+                changed = true;
+            }
+        } else if self
+            .focused_pane
+            .as_ref()
+            .is_some_and(|active| unfocused.iter().any(|pane_id| pane_id == active))
+        {
+            self.focused_pane = None;
+            changed = true;
         }
         changed
     }

@@ -275,7 +275,7 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     // The active pane is the sidebar split. Record its id and pre-close width;
     // a held grow keeps painted content within that width, a flash spills toward
     // the full 120 columns.
-    let (sidebar_pane, split_width) = tmux_active_pane(&socket, "room");
+    let (sidebar_pane, split_width) = tmux_current_pane(&socket, "room");
     let flash_ceiling = split_width + 5;
 
     tmux(&socket, &["kill-pane", "-t", &codex_pane]);
@@ -896,7 +896,7 @@ fn capture_all_until(
 
 /// The active pane's id and width for `session` — after a `split-window`, that
 /// is the freshly created sidebar split.
-fn tmux_active_pane(socket: &Path, session: &str) -> (String, usize) {
+fn tmux_current_pane(socket: &Path, session: &str) -> (String, usize) {
     let raw = tmux_capture(
         socket,
         &[

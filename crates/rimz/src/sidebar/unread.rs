@@ -171,7 +171,12 @@ impl UnreadEpisodes {
             let episode_ms = row.last_activity.as_millisecond();
             self.episodes.insert(row.id.clone(), episode_ms);
             changed = true;
-            opened.push(opened_unread(row, episode_ms, silent_opens));
+            let mut unread = opened_unread(row, episode_ms, silent_opens);
+            unread.focused = unread
+                .pane_id
+                .as_ref()
+                .is_some_and(|pane| snapshot.viewed_panes.contains(pane));
+            opened.push(unread);
         }
 
         derive(snapshot, self, marks);

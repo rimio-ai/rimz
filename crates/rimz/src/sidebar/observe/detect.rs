@@ -89,7 +89,6 @@ impl Observer {
     fn detect_frame_checks(&self, sig: &FrameSig, drafts: &mut Vec<AnomalyDraft>) {
         self.detect_duplicate_rows(sig, drafts);
         self.detect_status_counts(sig, drafts);
-        self.detect_own_view(sig, drafts);
         self.detect_subagents(sig, drafts);
         if sig.panes_produced_at_ms.is_none() && !sig.rows.is_empty() {
             drafts.push(AnomalyDraft::from_sig(
@@ -181,25 +180,6 @@ impl Observer {
                     None,
                 ));
             }
-        }
-    }
-
-    fn detect_own_view(&self, sig: &FrameSig, drafts: &mut Vec<AnomalyDraft>) {
-        let Some(own_view) = sig.own_view.as_ref() else {
-            return;
-        };
-        let Some(active) = own_view.active_pane_id.as_ref() else {
-            return;
-        };
-        if !own_view.working_pane_ids.is_empty() && !own_view.working_pane_ids.contains(active) {
-            drafts.push(AnomalyDraft::from_sig(
-                sig,
-                AnomalyKind::OwnViewIncoherent {
-                    active_pane_id: active.clone(),
-                    working_count: own_view.working_pane_ids.len(),
-                },
-                None,
-            ));
         }
     }
 

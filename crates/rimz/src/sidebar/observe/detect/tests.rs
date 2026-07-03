@@ -44,7 +44,7 @@ fn sig(at_ms: u64, rows: Vec<RowSig>) -> FrameSig {
         aggregates: Vec::new(),
         own_view: Some(OwnViewSig {
             sibling_count: 1,
-            active_pane_id: Some("zellij:terminal_1".to_owned()),
+            focused_pane: Some("zellij:terminal_1".to_owned()),
             working_pane_ids: vec!["zellij:terminal_1".to_owned()],
         }),
         events: EventsSig::default(),
@@ -275,17 +275,6 @@ fn single_frame_invariants_fire_without_warmup() {
         "status_count_mismatch",
         "hidden rows allow declared surplus",
     );
-
-    let mut own_view = sig(0, vec![row("a", "p1", "main")]);
-    own_view.own_view = Some(OwnViewSig {
-        sibling_count: 1,
-        active_pane_id: Some("missing".to_owned()),
-        working_pane_ids: vec!["p1".to_owned()],
-    });
-    assert!(has_kind(
-        &Observer::default().observe(own_view),
-        "own_view_incoherent"
-    ));
 
     let drafts = Observer::default().observe(sig(
         0,

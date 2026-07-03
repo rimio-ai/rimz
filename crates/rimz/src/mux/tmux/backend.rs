@@ -1,7 +1,5 @@
 //! tmux [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
-use std::collections::BTreeMap;
-
 use super::TmuxBackend;
 use super::options::{
     after_new_window_hook_set_cmd, sidebar_serve_command, tmux_views_with_sidebars,
@@ -155,8 +153,6 @@ impl MuxBackend for TmuxBackend {
         Ok(PaneListing {
             panes,
             observed_at_ms,
-            source_active: BTreeMap::new(),
-            source_active_authoritative: false,
             served_from_topology: false,
         })
     }

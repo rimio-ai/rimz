@@ -92,17 +92,15 @@ pub struct SidebarSnapshot {
     /// fold is frameless, fusion falls back to `panes_produced_at_ms`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panes_observed_at_ms: Option<u64>,
-    /// Working pane ids from views whose frame focus was contested. Fusion keeps
-    /// focus events that name one of these panes even when their sender stamp is
-    /// older than the publish stamp, because the pulled frame abstains from
-    /// being authoritative for that view's focus.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub focus_contested_panes: Vec<PaneId>,
     /// Panes attached clients are currently viewing (global focus, one per
     /// client), folded from the pane frame. Drives the focused-worktree fast
     /// tick; the pure reducer leaves it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub viewed_panes: Vec<PaneId>,
+    /// Session-global latest focused pane, folded from the pane frame and
+    /// latency-updated by single-pane focus events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focused_pane: Option<PaneId>,
     /// Whether the user is currently present in this mux session. The producer
     /// fills it from the same per-client mux sample that populates
     /// `viewed_panes`; the pure reducer leaves it `None`.
@@ -156,9 +154,9 @@ pub struct SidebarSnapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_panes: Vec<PaneAgent>,
     /// The calling sidebar's own-view summary: how many sibling panes share its
-    /// tab/window, whether its own pane holds focus, and which sibling is
-    /// focused. The renderer's self-close and selection-sync read it instead of
-    /// spawning a second `pane list` per tick. Computed by the `rimz sidebar
+    /// tab/window and which non-sidebar siblings are working panes. The renderer's
+    /// self-close, notification targeting, and stranded-focus repair read it
+    /// instead of spawning a second `pane list` per tick. Computed by the `rimz sidebar
     /// snapshot` CLI from the live pane list when `--exclude-pane-id` names the
     /// caller's pane; the pure reducer and the placeholder/persisted snapshot
     /// leave it `None` (meaning "unknown" — the renderer never self-closes on a
@@ -350,8 +348,8 @@ impl SidebarSnapshot {
             generated_at: now,
             panes_produced_at_ms: None,
             panes_observed_at_ms: None,
-            focus_contested_panes: Vec::new(),
             viewed_panes: Vec::new(),
+            focused_pane: None,
             presence: None,
             truth_degraded: None,
             now,

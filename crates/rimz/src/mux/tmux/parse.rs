@@ -59,7 +59,7 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
 }
 
 pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
-    let mut viewed_panes = Vec::new();
+    let mut viewed = Vec::new();
     let mut human_clients = 0;
     let mut last_input_ms: Option<u64> = None;
     for line in String::from_utf8_lossy(stdout).lines() {
@@ -78,14 +78,19 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
 
         human_clients += 1;
         let pane = PaneId::from_parts(MuxName::Tmux, raw_pane);
+        let activity_ms = activity_s
+            .and_then(|activity| activity.parse::<u64>().ok())
+            .map(|activity| activity.saturating_mul(1_000));
+        if let Some(activity_ms) = activity_ms {
+            last_input_ms = Some(last_input_ms.map_or(activity_ms, |known| known.max(activity_ms)));
+        }
+        viewed.push((pane, activity_ms));
+    }
+    viewed.sort_by_key(|(_, activity)| std::cmp::Reverse(activity.unwrap_or_default()));
+    let mut viewed_panes = Vec::new();
+    for (pane, _) in viewed {
         if !viewed_panes.iter().any(|known| known == &pane) {
             viewed_panes.push(pane);
-        }
-        if let Some(activity_ms) = activity_s
-            .and_then(|activity| activity.parse::<u64>().ok())
-            .map(|activity| activity.saturating_mul(1_000))
-        {
-            last_input_ms = Some(last_input_ms.map_or(activity_ms, |known| known.max(activity_ms)));
         }
     }
     ClientView {

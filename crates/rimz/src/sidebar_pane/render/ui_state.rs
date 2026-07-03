@@ -45,12 +45,11 @@ pub struct UiState {
     /// a status-churn reorder re-anchors the highlight to the same pane
     /// instead of sliding it onto a neighbour.
     pub selected_pane: Option<PaneId>,
-    /// The hold-last derived baseline: the own view's active working pane from
-    /// the last frame that reported one. Selection is *derived* — recomputed
-    /// from the queried mux state every fold, so it is same-tab by construction
-    /// and can never desynchronize, only lag a frame. It advances on a `Some`
-    /// derivation and holds across a `None` (the sidebar itself is the view's
-    /// active pane, or the active pane is not a row).
+    /// The hold-last derived baseline: the session focus register from the last
+    /// frame that named a rendered row. Selection is *derived* — recomputed from
+    /// the queried mux state every fold, so it advances on a `Some` derivation
+    /// and holds across a `None` (the sidebar itself is focused, or the focused
+    /// pane is not a row).
     pub(crate) baseline_pane: Option<PaneId>,
     /// Whether this renderer's own tab was the on-screen tab on the last fold
     /// that carried an own-view. `None` until the first own-view fold, so
@@ -75,9 +74,9 @@ pub struct UiState {
     /// anchor seeds the viewport at most once. `0` before any jump handoff.
     pub(crate) last_focus_anchor_ms: u64,
     /// Armed for one paint when a fold adopts an external focus change — a tab
-    /// switch, or the first active pane learned on attach. The next draw scrolls
-    /// the focused card's worktree header into view alongside the card, then
-    /// consumes the flag. A sidebar-initiated jump clears it in
+    /// switch, or the first focused pane learned on attach. The next draw
+    /// scrolls the focused card's worktree header into view alongside the card,
+    /// then consumes the flag. A sidebar-initiated jump clears it in
     /// `apply_focus_anchor`, because the fresh anchor freezes the clicked row.
     pub(crate) focus_group_reveal: bool,
     /// The transient wheel-scroll pin riding above the auto-follow, or `None`

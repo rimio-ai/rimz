@@ -115,13 +115,11 @@ fn row_snapshot_at(
     if focused {
         snap.own_view = Some(crate::SidebarOwnView {
             sibling_count: 2,
-            own_is_active: false,
-            active_pane_id: Some(pane_id),
-            active_pane_is_viewed: true,
-            working_pane_ids: Vec::new(),
-            focus_contested: false,
+            working_pane_ids: vec![pane_id.clone()],
             own_view_is_daemon: false,
         });
+        snap.focused_pane = Some(pane_id.clone());
+        snap.viewed_panes = vec![pane_id];
     }
     snap
 }
@@ -245,12 +243,23 @@ fn set_all_rows_unread(snapshot: &mut SidebarSnapshot) {
     }
 }
 
-fn set_viewed(snapshot: &mut SidebarSnapshot, active_pane_is_viewed: bool) {
-    snapshot
-        .own_view
-        .as_mut()
-        .expect("own view")
-        .active_pane_is_viewed = active_pane_is_viewed;
+fn set_viewed(snapshot: &mut SidebarSnapshot, viewed: bool) {
+    if viewed {
+        snapshot.viewed_panes = snapshot
+            .focused_pane
+            .iter()
+            .cloned()
+            .chain(
+                snapshot
+                    .own_view
+                    .iter()
+                    .flat_map(|view| view.working_pane_ids.iter().take(1).cloned()),
+            )
+            .take(1)
+            .collect();
+    } else {
+        snapshot.viewed_panes.clear();
+    }
 }
 
 struct ApplyHarness {
@@ -277,7 +286,7 @@ impl ApplyHarness {
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let mut state = LoopState::new(
             ws.clone(),
-            None,
+            Some(PaneId::from_parts(crate::MuxName::Tmux, "%sidebar")),
             None,
             observe_tx,
             ReadMarkStore::new(runtime, instance_id),
@@ -323,11 +332,7 @@ impl std::ops::DerefMut for ApplyHarness {
     }
 }
 
-fn two_pane_snapshot(
-    ws: &WorkspaceId,
-    active: PaneId,
-    focus_contested: bool,
-) -> (SidebarSnapshot, PaneId, PaneId) {
+fn two_pane_snapshot(ws: &WorkspaceId, active: PaneId) -> (SidebarSnapshot, PaneId, PaneId) {
     let first = PaneId::from_parts(crate::MuxName::Tmux, "%1");
     let second = PaneId::from_parts(crate::MuxName::Tmux, "%2");
     let mut snap = row_snapshot(ws, crate::agents::AgentStatus::Running, false);
@@ -339,79 +344,12 @@ fn two_pane_snapshot(
     snap.worktree_groups[0].status_counts[0].count = 2;
     snap.own_view = Some(crate::SidebarOwnView {
         sibling_count: 2,
-        own_is_active: false,
-        active_pane_id: Some(active),
-        active_pane_is_viewed: true,
         working_pane_ids: vec![first.clone(), second.clone()],
-        focus_contested,
         own_view_is_daemon: false,
     });
+    snap.focused_pane = Some(active.clone());
+    snap.viewed_panes = vec![active];
     (snap, first, second)
-}
-
-#[test]
-fn contested_own_view_holds_existing_selection_baseline() {
-    let ws = workspace();
-    let (_dir, mut h) = ApplyHarness::new(&ws);
-    let (initial, first, second) =
-        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
-
-    h.apply(initial);
-    assert_eq!(h.ui.baseline_pane, Some(first.clone()));
-
-    let (contested, _, _) = two_pane_snapshot(&ws, second, true);
-    h.apply(contested);
-
-    assert_eq!(h.ui.baseline_pane, Some(first.clone()));
-    assert_eq!(h.ui.selected_pane, Some(first));
-}
-
-#[test]
-fn focus_event_resolves_contest_then_republished_contest_holds_clicked_baseline() {
-    let ws = workspace();
-    let (_dir, mut h) = ApplyHarness::new(&ws);
-    let (initial, first, second) =
-        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
-
-    h.apply(initial);
-    assert_eq!(h.ui.selected_pane, Some(first.clone()));
-
-    let (mut contested, _, _) = two_pane_snapshot(&ws, first.clone(), true);
-    contested.focus_contested_panes = vec![first.clone(), second.clone()];
-    let mut events = crate::sidebar::events::EventStore::default();
-    events.append(
-        crate::sidebar::events::SidebarEvent::FocusChanged {
-            focused: vec![second.clone()],
-            unfocused: Vec::new(),
-        },
-        10,
-        10,
-    );
-    let fused = crate::sidebar::fuse::fuse(&contested, &events, 10);
-    assert_eq!(
-        fused
-            .own_view
-            .as_ref()
-            .and_then(|view| view.active_pane_id.clone()),
-        Some(second.clone())
-    );
-    assert!(
-        !fused
-            .own_view
-            .as_ref()
-            .is_some_and(|view| view.focus_contested),
-        "the event resolves the contested own view for this fold",
-    );
-
-    h.apply(fused);
-    assert_eq!(h.ui.selected_pane, Some(second.clone()));
-
-    h.apply(contested);
-    assert_eq!(
-        h.ui.selected_pane,
-        Some(second),
-        "after the focus event expires, a still-contested pull holds the clicked baseline",
-    );
 }
 
 #[test]
@@ -538,7 +476,7 @@ fn focused_read_clear_holds_row_order_until_order_hold_expires() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
     let (mut background, first, _) =
-        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_row_status(&mut background, "sess-1", AgentStatus::Success);
     set_row_status(&mut background, "sess-2", AgentStatus::Waiting);
     background.worktree_groups[0].rows[0].unread = true;
@@ -547,7 +485,7 @@ fn focused_read_clear_holds_row_order_until_order_hold_expires() {
     a.apply(background);
     assert_eq!(row_ids(&a.current), vec!["sess-1", "sess-2"]);
 
-    let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone(), false);
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone());
     set_row_status(&mut viewed, "sess-1", AgentStatus::Success);
     set_row_status(&mut viewed, "sess-2", AgentStatus::Waiting);
     viewed.worktree_groups[0].rows[0].unread = true;
@@ -600,7 +538,7 @@ fn focus_clears_sticky_unread_after_status_returns_to_running() {
 }
 
 #[test]
-fn background_active_pane_does_not_focus_clear_until_viewed() {
+fn background_register_pane_does_not_focus_clear_until_viewed() {
     let ws = workspace();
     let (_dir, runtime) = runtime_for(&ws);
     let instance_a = SidebarInstanceId::new();
@@ -609,18 +547,14 @@ fn background_active_pane_does_not_focus_clear_until_viewed() {
     let mut background =
         row_snapshot_at(&ws, AgentStatus::Waiting, true, fixed_time(1_700_000_000));
     background.worktree_groups[0].rows[0].unread = true;
-    background
-        .own_view
-        .as_mut()
-        .expect("own view")
-        .active_pane_is_viewed = false;
+    background.viewed_panes.clear();
 
     a.apply(background);
 
     assert!(row_unread(&a.current));
     assert!(
         !read_marks.exists(),
-        "a background tab's active pane must not write a focus receipt"
+        "a background register pane must not write a focus receipt until viewed"
     );
 
     let mut viewed = row_snapshot_at(&ws, AgentStatus::Waiting, true, fixed_time(1_700_000_000));
@@ -629,7 +563,7 @@ fn background_active_pane_does_not_focus_clear_until_viewed() {
 
     assert!(
         read_marks.exists(),
-        "viewing the active pane writes the normal focus receipt"
+        "viewing the register pane writes the normal focus receipt"
     );
     assert!(!row_unread(&a.current));
 }
@@ -641,7 +575,7 @@ fn tab_switch_in_sweeps_all_unread_in_tab() {
     let instance_a = SidebarInstanceId::new();
     let mut a = ApplyHarness::for_runtime(&ws, runtime, instance_a);
     let (mut background, first, _) =
-        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_all_rows_unread(&mut background);
     set_viewed(&mut background, false);
 
@@ -651,7 +585,7 @@ fn tab_switch_in_sweeps_all_unread_in_tab() {
     assert!(row_unread_by_id(&a.current, "sess-2"));
     assert_eq!(a.ui.viewing_own_tab, Some(false));
 
-    let (mut viewed, _, _) = two_pane_snapshot(&ws, first, false);
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first);
     set_all_rows_unread(&mut viewed);
     a.apply(viewed);
 
@@ -667,7 +601,7 @@ fn tab_switch_clear_holds_cleared_siblings_above_live_rank() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
     let (mut background, first, _) =
-        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_row_status(&mut background, "sess-1", AgentStatus::Success);
     set_row_status(&mut background, "sess-2", AgentStatus::Success);
     set_all_rows_unread(&mut background);
@@ -675,7 +609,7 @@ fn tab_switch_clear_holds_cleared_siblings_above_live_rank() {
     set_viewed(&mut background, false);
     a.apply(background);
 
-    let (mut viewed, _, _) = two_pane_snapshot(&ws, first, false);
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first);
     set_row_status(&mut viewed, "sess-1", AgentStatus::Success);
     set_row_status(&mut viewed, "sess-2", AgentStatus::Success);
     set_all_rows_unread(&mut viewed);
@@ -696,15 +630,15 @@ fn staying_on_tab_does_not_sweep_new_unread() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
     let (mut background, first, _) =
-        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_all_rows_unread(&mut background);
     set_viewed(&mut background, false);
     a.apply(background);
-    let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone(), false);
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone());
     set_all_rows_unread(&mut viewed);
     a.apply(viewed);
 
-    let (mut still_viewed, _, _) = two_pane_snapshot(&ws, first, false);
+    let (mut still_viewed, _, _) = two_pane_snapshot(&ws, first);
     still_viewed.worktree_groups[0].rows[1].unread = true;
     still_viewed.worktree_groups[0].rows[1].last_activity = fixed_time(1_700_000_200);
     a.apply(still_viewed);
@@ -718,20 +652,20 @@ fn new_unread_during_order_hold_appends_after_held_rows() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
     let (mut background, first, _) =
-        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_row_status(&mut background, "sess-1", AgentStatus::Success);
     set_row_status(&mut background, "sess-2", AgentStatus::Running);
     background.worktree_groups[0].rows[0].unread = true;
     set_viewed(&mut background, false);
     a.apply(background);
 
-    let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone(), false);
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone());
     set_row_status(&mut viewed, "sess-1", AgentStatus::Success);
     set_row_status(&mut viewed, "sess-2", AgentStatus::Running);
     viewed.worktree_groups[0].rows[0].unread = true;
     a.apply(viewed);
 
-    let (mut with_new_unread, _, _) = two_pane_snapshot(&ws, first, false);
+    let (mut with_new_unread, _, _) = two_pane_snapshot(&ws, first);
     set_row_status(&mut with_new_unread, "sess-1", AgentStatus::Success);
     set_row_status(&mut with_new_unread, "sess-2", AgentStatus::Running);
     append_agent_row(
@@ -755,8 +689,7 @@ fn new_unread_during_order_hold_appends_after_held_rows() {
 fn attach_to_viewed_tab_keeps_unread_siblings() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
-    let (mut viewed, _, _) =
-        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_all_rows_unread(&mut viewed);
 
     a.apply(viewed);
@@ -774,11 +707,11 @@ fn frameless_fold_does_not_blip_switch_in() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
     let (mut background, first, _) =
-        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
     set_all_rows_unread(&mut background);
     set_viewed(&mut background, false);
     a.apply(background);
-    let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone(), false);
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone());
     set_all_rows_unread(&mut viewed);
     a.apply(viewed);
 
@@ -792,7 +725,7 @@ fn frameless_fold_does_not_blip_switch_in() {
     });
     assert_eq!(a.ui.viewing_own_tab, Some(true));
 
-    let (mut still_viewed, _, _) = two_pane_snapshot(&ws, first, false);
+    let (mut still_viewed, _, _) = two_pane_snapshot(&ws, first);
     still_viewed.worktree_groups[0].rows[1].unread = true;
     still_viewed.worktree_groups[0].rows[1].last_activity = fixed_time(1_700_000_200);
     a.apply(still_viewed);

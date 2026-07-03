@@ -732,11 +732,6 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
             "{agent_kind}/{agent_session_id} already on {bound_pane}; suppressed {conflicting_pane}"
         ),
         DiagEvent::DuplicatePaneId { pane_id } => format!("duplicate {pane_id} suppressed"),
-        DiagEvent::FocusContested {
-            view_id,
-            candidates,
-            resolved,
-        } => format!("focus contested in {view_id}: {candidates:?}; resolved {resolved}"),
         DiagEvent::ForeignSessionPane { pane_id, session } => {
             format!("dropped {pane_id} from session {session}")
         }

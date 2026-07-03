@@ -12,7 +12,7 @@ pub(super) fn sidebar_fixture_snapshot(
         generated_at: now,
         panes_produced_at_ms: Some(1_781_009_600_000),
         panes_observed_at_ms: None,
-        focus_contested_panes: Vec::new(),
+        focused_pane: None,
         viewed_panes: Vec::new(),
         presence: None,
         truth_degraded: None,
