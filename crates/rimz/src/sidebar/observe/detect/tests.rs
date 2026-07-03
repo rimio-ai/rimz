@@ -175,130 +175,36 @@ fn extracted_spend_sig(at_ms: u64, committed_usd: f64, pulled_usd: f64) -> Frame
     )
 }
 
-fn kinds(drafts: &[AnomalyDraft]) -> Vec<&'static str> {
-    drafts.iter().map(|draft| draft.kind.key()).collect()
+fn has_kind(drafts: &[AnomalyDraft], key: &'static str) -> bool {
+    drafts.iter().any(|draft| draft.kind.key() == key)
+}
+
+fn assert_lacks_kind(drafts: &[AnomalyDraft], key: &'static str, case: &str) {
+    assert!(!has_kind(drafts, key), "{case}");
+}
+
+fn codex_mana_key() -> AggregateKey {
+    AggregateKey::ProviderMana {
+        kind: "codex".to_owned(),
+        duration_mins: Some(300),
+    }
 }
 
 #[test]
-fn roster_flap_fires_after_warmup() {
-    let mut observer = Observer::default();
-    assert!(
-        observer
-            .observe(sig(0, vec![row("a", "p1", "main")]))
-            .is_empty()
-    );
-    assert!(
-        observer
-            .observe(sig(11_000, vec![row("a", "p1", "main")]))
-            .is_empty()
-    );
-    assert!(observer.observe(sig(12_000, Vec::new())).is_empty());
-
-    let drafts = observer.observe(sig(13_000, vec![row("a", "p1", "main")]));
-
-    assert!(drafts.iter().any(|draft| matches!(
-        draft.kind,
-        AnomalyKind::RosterFlap {
-            rows_before: 1,
-            rows_after: 1,
-            ..
-        }
-    )));
-}
-
-#[test]
-fn duplicate_row_identity_invariants_fire_without_warmup() {
-    let mut observer = Observer::default();
-
-    let drafts = observer.observe(sig(
-        0,
-        vec![
-            row("a", "p1", "main"),
-            row("a", "p2", "main"),
-            row("b", "p1", "main"),
-        ],
-    ));
-
-    assert!(kinds(&drafts).contains(&"duplicate_row_id"));
-    assert!(drafts.iter().any(|draft| matches!(
-        &draft.kind,
-        AnomalyKind::DuplicatePaneRows { pane_id, row_ids }
-            if pane_id == "p1" && row_ids == &vec!["a".to_owned(), "b".to_owned()]
-    )));
-}
-
-#[test]
-fn roster_flap_suppression_edges_stay_quiet() {
-    let mut pane_closed = Observer::default();
-    pane_closed.observe(sig(0, vec![row("a", "p1", "main")]));
-    pane_closed.observe(sig(11_000, vec![row("a", "p1", "main")]));
-    pane_closed.observe(with_pane_closed(sig(12_000, Vec::new()), "p1"));
-    let drafts = pane_closed.observe(sig(13_000, vec![row("a", "p1", "main")]));
-    assert!(!kinds(&drafts).contains(&"roster_flap"));
-
-    let mut no_siblings = Observer::default();
-    no_siblings.observe(with_sibling_count(sig(0, vec![row("a", "p1", "main")]), 1));
-    no_siblings.observe(with_sibling_count(
-        sig(11_000, vec![row("a", "p1", "main")]),
-        1,
-    ));
-    no_siblings.observe(with_sibling_count(sig(12_000, Vec::new()), 0));
-    let drafts = no_siblings.observe(with_sibling_count(
-        sig(13_000, vec![row("a", "p1", "main")]),
-        0,
-    ));
-    assert!(!kinds(&drafts).contains(&"roster_flap"));
-}
-
-#[test]
-fn windowed_detectors_arm_exactly_at_warmup_expiry() {
-    let warmup_ms = OBSERVE_WARMUP.as_millis() as u64;
-    let mut before = Observer::default();
-    before.observe(sig(0, vec![row("a", "p1", "main")]));
-    assert!(before.observe(sig(warmup_ms - 1, Vec::new())).is_empty());
-    let drafts = before.observe(sig(warmup_ms, vec![row("a", "p1", "main")]));
-    assert!(!kinds(&drafts).contains(&"roster_flap"));
-
-    let mut at = Observer::default();
-    at.observe(sig(0, vec![row("a", "p1", "main")]));
-    at.observe(sig(warmup_ms, Vec::new()));
-    let drafts = at.observe(sig(warmup_ms + 1, vec![row("a", "p1", "main")]));
-    assert!(kinds(&drafts).contains(&"roster_flap"));
-}
-
-#[test]
-fn row_presence_flap_reports_single_row_disappearance() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
-    observer.observe(sig(
-        11_000,
-        vec![row("a", "p1", "main"), row("b", "p2", "main")],
-    ));
-    observer.observe(sig(12_000, vec![row("b", "p2", "main")]));
-
-    let drafts = observer.observe(sig(
-        13_000,
-        vec![row("a", "p1", "main"), row("b", "p2", "main")],
-    ));
-
-    assert!(drafts.iter().any(|draft| matches!(
-        &draft.kind,
-        AnomalyKind::RowPresenceFlap { row_id, pane_id, .. }
-            if row_id == "a" && pane_id.as_deref() == Some("p1")
-    )));
-    assert!(
-        drafts
-            .iter()
-            .all(|draft| !matches!(draft.kind, AnomalyKind::RosterFlap { .. }))
-    );
-}
-
-#[test]
-fn pending_roster_tracks_subsecond_disappearance_until_cleared() {
+fn pending_roster_records_structural_and_stamp_changes() {
     let mut observer = Observer::default();
     observer.observe(sig(0, vec![row("a", "p1", "main")]));
     let first = observer.pending_roster_update().expect("initial roster");
     assert_eq!(first.rows.len(), 1);
+
+    observer.observe(sig(250, vec![row("a", "p1", "main")]));
+    assert_eq!(
+        observer
+            .pending_roster_update()
+            .expect("pending roster")
+            .rows,
+        first.rows
+    );
     observer.clear_roster_update();
 
     observer.observe(sig(500, Vec::new()));
@@ -313,18 +219,11 @@ fn pending_roster_tracks_subsecond_disappearance_until_cleared() {
             .rows
             .is_empty()
     );
-}
-
-#[test]
-fn pending_roster_tracks_frame_stamp_advances() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row("a", "p1", "main")]));
     observer.clear_roster_update();
 
-    let mut republished = sig(500, vec![row("a", "p1", "main")]);
+    let mut republished = sig(1_000, Vec::new());
     republished.panes_produced_at_ms = Some(2);
     observer.observe(republished);
-
     assert_eq!(
         observer
             .pending_roster_update()
@@ -335,364 +234,515 @@ fn pending_roster_tracks_frame_stamp_advances() {
 }
 
 #[test]
-fn short_lived_row_catches_phantom_external() {
+fn single_frame_invariants_fire_without_warmup() {
     let mut observer = Observer::default();
-    observer.observe(sig(0, Vec::new()));
-    observer.observe(sig(11_000, vec![row("p", "p9", "external")]));
-
-    let drafts = observer.observe(sig(12_000, Vec::new()));
-
-    assert!(matches!(
-        drafts.as_slice(),
-        [AnomalyDraft {
-            kind: AnomalyKind::ShortLivedRow { row_id, group_key, .. },
-            ..
-        }] if row_id == "p" && group_key == "external"
-    ));
-}
-
-#[test]
-fn windowed_detectors_are_suppressed_during_warmup() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
-    assert!(observer.observe(sig(1_000, Vec::new())).is_empty());
-
     let drafts = observer.observe(sig(
-        2_000,
-        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+        0,
+        vec![
+            row("a", "p1", "main"),
+            row("a", "p2", "main"),
+            row("b", "p1", "main"),
+        ],
+    ));
+    assert!(drafts.iter().any(|draft| matches!(
+        &draft.kind,
+        AnomalyKind::DuplicateRowId { row_id, count } if row_id == "a" && *count == 2
+    )));
+    assert!(drafts.iter().any(|draft| matches!(
+        &draft.kind,
+        AnomalyKind::DuplicatePaneRows { pane_id, row_ids }
+            if pane_id == "p1" && row_ids == &vec!["a".to_owned(), "b".to_owned()]
+    )));
+
+    let mut visible_count = sig(0, vec![row("a", "p1", "main")]);
+    visible_count.groups[0].status_counts = vec![StatusCountSig {
+        status: "failed".to_owned(),
+        count: 1,
+    }];
+    assert!(has_kind(
+        &Observer::default().observe(visible_count),
+        "status_count_mismatch"
     ));
 
-    assert!(!kinds(&drafts).contains(&"roster_flap"));
-    assert!(!kinds(&drafts).contains(&"row_presence_flap"));
-}
-
-#[test]
-fn flap_detectors_stay_quiet_outside_window() {
-    let mut roster = Observer::default();
-    roster.observe(sig(0, vec![row("a", "p1", "main")]));
-    roster.observe(sig(11_000, vec![row("a", "p1", "main")]));
-    roster.observe(sig(12_000, Vec::new()));
-    assert!(
-        !kinds(&roster.observe(sig(23_001, vec![row("a", "p1", "main")]))).contains(&"roster_flap")
+    let mut hidden_count = sig(0, vec![row("a", "p1", "main")]);
+    hidden_count.groups[0].hidden_count = 2;
+    hidden_count.groups[0].status_counts = vec![StatusCountSig {
+        status: "running".to_owned(),
+        count: 3,
+    }];
+    assert_lacks_kind(
+        &Observer::default().observe(hidden_count),
+        "status_count_mismatch",
+        "hidden rows allow declared surplus",
     );
 
-    let mut presence = Observer::default();
-    presence.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
-    presence.observe(sig(
-        11_000,
-        vec![row("a", "p1", "main"), row("b", "p2", "main")],
-    ));
-    presence.observe(sig(12_000, vec![row("b", "p2", "main")]));
-
-    let drafts = presence.observe(sig(
-        20_001,
-        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    let mut own_view = sig(0, vec![row("a", "p1", "main")]);
+    own_view.own_view = Some(OwnViewSig {
+        sibling_count: 1,
+        active_pane_id: Some("missing".to_owned()),
+        working_pane_ids: vec!["p1".to_owned()],
+    });
+    assert!(has_kind(
+        &Observer::default().observe(own_view),
+        "own_view_incoherent"
     ));
 
-    assert!(!kinds(&drafts).contains(&"row_presence_flap"));
-}
-
-#[test]
-fn hidden_group_suppresses_presence_flap() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
-    observer.observe(sig(
-        11_000,
-        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    let drafts = Observer::default().observe(sig(
+        0,
+        vec![
+            row_with_subagents("parent", "p1", "main", vec!["child"]),
+            row("child", "p2", "main"),
+            row_with_subagents("self-nested", "p3", "main", vec!["self-nested"]),
+        ],
     ));
-    observer.observe(with_hidden_count(
-        sig(12_000, vec![row("b", "p2", "main")]),
-        "main",
-        1,
-    ));
+    assert!(drafts.iter().any(|draft| matches!(
+        &draft.kind,
+        AnomalyKind::SubagentTopLevelLeak { agent_id } if agent_id == "self-nested"
+    )));
+    assert!(drafts.iter().any(|draft| matches!(
+        &draft.kind,
+        AnomalyKind::SubagentDoubleRender { id } if id == "child"
+    )));
 
-    let drafts = observer.observe(sig(
-        13_000,
-        vec![row("a", "p1", "main"), row("b", "p2", "main")],
-    ));
-
-    assert!(!kinds(&drafts).contains(&"row_presence_flap"));
-}
-
-#[test]
-fn pane_closed_suppresses_row_presence_flap() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
-    observer.observe(sig(
-        11_000,
-        vec![row("a", "p1", "main"), row("b", "p2", "main")],
-    ));
-    observer.observe(with_pane_closed(
-        sig(12_000, vec![row("b", "p2", "main")]),
-        "p1",
-    ));
-
-    let drafts = observer.observe(sig(
-        13_000,
-        vec![row("a", "p1", "main"), row("b", "p2", "main")],
-    ));
-
-    assert!(!kinds(&drafts).contains(&"row_presence_flap"));
-}
-
-#[test]
-fn pane_closed_suppresses_short_lived_row() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, Vec::new()));
-    observer.observe(sig(11_000, vec![row("p", "p9", "external")]));
-
-    let drafts = observer.observe(with_pane_closed(sig(12_000, Vec::new()), "p9"));
-
-    assert!(!kinds(&drafts).contains(&"short_lived_row"));
-}
-
-#[test]
-fn rebound_pane_under_new_row_id_is_not_short_lived() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, Vec::new()));
-    // A worktree pane first appears under a branch-keyed identity.
-    observer.observe(sig(11_000, vec![row("branch:wt", "p9", "branch:wt")]));
-
-    // Enumeration catches up: the same pane re-keys to its path identity. The
-    // old row id is gone, but the pane still backs a row, so it was rebound,
-    // not removed.
-    let drafts = observer.observe(sig(12_000, vec![row("/repo/wt", "p9", "/repo/wt")]));
-
-    assert!(!kinds(&drafts).contains(&"short_lived_row"));
-}
-
-#[test]
-fn first_enrichment_does_not_count_as_value_oscillation() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row_with_context_pct("a", "p1", "main", None)]));
-    observer.observe(sig(
-        11_000,
-        vec![row_with_context_pct("a", "p1", "main", None)],
-    ));
-    observer.observe(sig(
-        12_000,
-        vec![row_with_context_pct("a", "p1", "main", Some(10))],
-    ));
-
-    let drafts = observer.observe(sig(
-        13_000,
-        vec![row_with_context_pct("a", "p1", "main", None)],
-    ));
-
-    assert!(!drafts.iter().any(|draft| matches!(
-        draft.kind,
-        AnomalyKind::ValueOscillation {
-            field: WatchedField::ContextPct,
-            ..
-        }
+    let mut frameless = sig(0, vec![row("a", "p1", "main")]);
+    frameless.panes_produced_at_ms = None;
+    let drafts = Observer::default().observe(frameless);
+    assert!(drafts.iter().any(|draft| matches!(
+        &draft.kind,
+        AnomalyKind::FramelessRows { rows } if rows == &vec!["a".to_owned()]
     )));
 }
 
 #[test]
-fn value_oscillation_reports_established_value_bounces() {
-    for (field, initial, via, back, expected_from, expected_via) in [
-        (
-            WatchedField::GroupKey,
-            row("a", "p1", "external"),
-            row("a", "p1", "main"),
-            row("a", "p1", "external"),
-            "external",
-            "main",
-        ),
-        (
-            WatchedField::ContextPct,
-            row_with_context_pct("a", "p1", "main", Some(10)),
-            row_with_context_pct("a", "p1", "main", None),
-            row_with_context_pct("a", "p1", "main", Some(10)),
-            "10",
-            "<none>",
-        ),
-        (
-            WatchedField::ContextPct,
-            row_with_context_pct("a", "p1", "main", Some(10)),
-            row_with_context_pct("a", "p1", "main", Some(20)),
-            row_with_context_pct("a", "p1", "main", Some(10)),
-            "10",
-            "20",
-        ),
-        (
-            WatchedField::TotalTokens,
-            row_with_total_tokens("a", "p1", "main", Some(100)),
-            row_with_total_tokens("a", "p1", "main", Some(200)),
-            row_with_total_tokens("a", "p1", "main", Some(100)),
-            "100",
-            "200",
-        ),
-        (
-            WatchedField::Model,
-            row_with_model("a", "p1", "main", Some("sonnet")),
-            row_with_model("a", "p1", "main", Some("opus")),
-            row_with_model("a", "p1", "main", Some("sonnet")),
-            "sonnet",
-            "opus",
-        ),
+fn dropped_message_count_attaches_to_first_emitted_anomaly() {
+    let mut observer = Observer {
+        dropped_msgs: 4,
+        ..Observer::default()
+    };
+
+    let drafts = observer.observe(sig(0, vec![row("a", "p1", "main"), row("a", "p2", "main")]));
+
+    assert_eq!(drafts.first().map(|draft| draft.dropped_msgs), Some(4));
+    assert!(drafts.iter().skip(1).all(|draft| draft.dropped_msgs == 0));
+    assert_eq!(observer.dropped_msgs, 0);
+}
+
+#[test]
+fn roster_flap_respects_warmup_window_and_empty_tab_guards() {
+    let mut observer = Observer::default();
+    observer.observe(sig(0, vec![row("a", "p1", "main")]));
+    observer.observe(sig(11_000, vec![row("a", "p1", "main")]));
+    observer.observe(sig(12_000, Vec::new()));
+    let drafts = observer.observe(sig(13_000, vec![row("a", "p1", "main")]));
+    assert!(drafts.iter().any(|draft| matches!(
+        draft.kind,
+        AnomalyKind::RosterFlap {
+            rows_before: 1,
+            rows_after: 1,
+            empty_at_ms: 12_000,
+            restored_at_ms: 13_000
+        }
+    )));
+
+    let mut pre_warmup = Observer::default();
+    pre_warmup.observe(sig(0, vec![row("a", "p1", "main")]));
+    pre_warmup.observe(sig(1_000, Vec::new()));
+    let drafts = pre_warmup.observe(sig(2_000, vec![row("a", "p1", "main")]));
+    assert_lacks_kind(&drafts, "roster_flap", "pre-warmup empty/refill");
+
+    let warmup_ms = OBSERVE_WARMUP.as_millis() as u64;
+    let mut before = Observer::default();
+    before.observe(sig(0, vec![row("a", "p1", "main")]));
+    assert!(before.observe(sig(warmup_ms - 1, Vec::new())).is_empty());
+    let drafts = before.observe(sig(warmup_ms, vec![row("a", "p1", "main")]));
+    assert_lacks_kind(&drafts, "roster_flap", "boundary after pre-warmup empty");
+
+    let mut at = Observer::default();
+    at.observe(sig(0, vec![row("a", "p1", "main")]));
+    at.observe(sig(warmup_ms, Vec::new()));
+    let drafts = at.observe(sig(warmup_ms + 1, vec![row("a", "p1", "main")]));
+    assert!(has_kind(&drafts, "roster_flap"));
+
+    let mut pane_closed = Observer::default();
+    pane_closed.observe(sig(0, vec![row("a", "p1", "main")]));
+    pane_closed.observe(sig(11_000, vec![row("a", "p1", "main")]));
+    pane_closed.observe(with_pane_closed(sig(12_000, Vec::new()), "p1"));
+    let drafts = pane_closed.observe(sig(13_000, vec![row("a", "p1", "main")]));
+    assert_lacks_kind(&drafts, "roster_flap", "pane closed");
+
+    let mut no_siblings = Observer::default();
+    no_siblings.observe(with_sibling_count(sig(0, vec![row("a", "p1", "main")]), 1));
+    no_siblings.observe(with_sibling_count(
+        sig(11_000, vec![row("a", "p1", "main")]),
+        1,
+    ));
+    no_siblings.observe(with_sibling_count(sig(12_000, Vec::new()), 0));
+    let drafts = no_siblings.observe(with_sibling_count(
+        sig(13_000, vec![row("a", "p1", "main")]),
+        0,
+    ));
+    assert_lacks_kind(&drafts, "roster_flap", "empty tab has no siblings");
+
+    let mut outside_window = Observer::default();
+    outside_window.observe(sig(0, vec![row("a", "p1", "main")]));
+    outside_window.observe(sig(11_000, vec![row("a", "p1", "main")]));
+    outside_window.observe(sig(12_000, Vec::new()));
+    let drafts = outside_window.observe(sig(23_001, vec![row("a", "p1", "main")]));
+    assert_lacks_kind(&drafts, "roster_flap", "refill outside window");
+}
+
+#[test]
+fn row_presence_reports_real_blinks_and_short_lived_rows() {
+    let mut observer = Observer::default();
+    observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+    observer.observe(sig(
+        11_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    observer.observe(sig(12_000, vec![row("b", "p2", "main")]));
+    let drafts = observer.observe(sig(
+        13_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    assert!(drafts.iter().any(|draft| matches!(
+        &draft.kind,
+        AnomalyKind::RowPresenceFlap {
+            row_id,
+            pane_id,
+            gone_at_ms: 12_000,
+            back_at_ms: 13_000
+        } if row_id == "a" && pane_id.as_deref() == Some("p1")
+    )));
+    assert_lacks_kind(
+        &drafts,
+        "roster_flap",
+        "single-row blink keeps roster nonempty",
+    );
+
+    let mut phantom = Observer::default();
+    phantom.observe(sig(0, Vec::new()));
+    phantom.observe(sig(11_000, vec![row("p", "p9", "external")]));
+    let drafts = phantom.observe(sig(12_000, Vec::new()));
+    assert!(matches!(
+        drafts.as_slice(),
+        [AnomalyDraft {
+            kind:
+                AnomalyKind::ShortLivedRow {
+                    row_id,
+                    pane_id,
+                    group_key,
+                    born_at_ms: 11_000,
+                    gone_at_ms: 12_000,
+                },
+            ..
+        }] if row_id == "p" && pane_id.as_deref() == Some("p9") && group_key == "external"
+    ));
+}
+
+#[test]
+fn row_presence_ignores_expected_absence_causes() {
+    let mut hidden = Observer::default();
+    hidden.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+    hidden.observe(sig(
+        11_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    hidden.observe(with_hidden_count(
+        sig(12_000, vec![row("b", "p2", "main")]),
+        "main",
+        1,
+    ));
+    let drafts = hidden.observe(sig(
+        13_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    assert_lacks_kind(&drafts, "row_presence_flap", "hidden group cap");
+
+    let mut pane_closed = Observer::default();
+    pane_closed.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+    pane_closed.observe(sig(
+        11_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    pane_closed.observe(with_pane_closed(
+        sig(12_000, vec![row("b", "p2", "main")]),
+        "p1",
+    ));
+    let drafts = pane_closed.observe(sig(
+        13_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    assert_lacks_kind(&drafts, "row_presence_flap", "closed pane absence");
+
+    let mut closed_short = Observer::default();
+    closed_short.observe(sig(0, Vec::new()));
+    closed_short.observe(sig(11_000, vec![row("p", "p9", "external")]));
+    let drafts = closed_short.observe(with_pane_closed(sig(12_000, Vec::new()), "p9"));
+    assert_lacks_kind(&drafts, "short_lived_row", "closed pane short-lived row");
+
+    let mut outside_window = Observer::default();
+    outside_window.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+    outside_window.observe(sig(
+        11_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    outside_window.observe(sig(12_000, vec![row("b", "p2", "main")]));
+    let drafts = outside_window.observe(sig(
+        20_001,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    assert_lacks_kind(&drafts, "row_presence_flap", "return outside window");
+
+    let mut rebound = Observer::default();
+    rebound.observe(sig(0, Vec::new()));
+    rebound.observe(sig(11_000, vec![row("branch:wt", "p9", "branch:wt")]));
+    let drafts = rebound.observe(sig(12_000, vec![row("/repo/wt", "p9", "/repo/wt")]));
+    assert_lacks_kind(&drafts, "short_lived_row", "branch key rebounded to path");
+}
+
+#[test]
+fn value_oscillation_reports_each_watched_field() {
+    struct Case {
+        field: WatchedField,
+        initial: RowSig,
+        via: RowSig,
+        back: RowSig,
+        expected_from: &'static str,
+        expected_via: &'static str,
+    }
+
+    for case in [
+        Case {
+            field: WatchedField::Status,
+            initial: row_with_status("a", "p1", "main", "running"),
+            via: row_with_status("a", "p1", "main", "waiting"),
+            back: row_with_status("a", "p1", "main", "running"),
+            expected_from: "running",
+            expected_via: "waiting",
+        },
+        Case {
+            field: WatchedField::GroupKey,
+            initial: row("a", "p1", "external"),
+            via: row("a", "p1", "main"),
+            back: row("a", "p1", "external"),
+            expected_from: "external",
+            expected_via: "main",
+        },
+        Case {
+            field: WatchedField::ContextPct,
+            initial: row_with_context_pct("a", "p1", "main", Some(10)),
+            via: row_with_context_pct("a", "p1", "main", Some(20)),
+            back: row_with_context_pct("a", "p1", "main", Some(10)),
+            expected_from: "10",
+            expected_via: "20",
+        },
+        Case {
+            field: WatchedField::TotalTokens,
+            initial: row_with_total_tokens("a", "p1", "main", Some(100)),
+            via: row_with_total_tokens("a", "p1", "main", Some(200)),
+            back: row_with_total_tokens("a", "p1", "main", Some(100)),
+            expected_from: "100",
+            expected_via: "200",
+        },
+        Case {
+            field: WatchedField::Model,
+            initial: row_with_model("a", "p1", "main", Some("sonnet")),
+            via: row_with_model("a", "p1", "main", Some("opus")),
+            back: row_with_model("a", "p1", "main", Some("sonnet")),
+            expected_from: "sonnet",
+            expected_via: "opus",
+        },
     ] {
         let mut observer = Observer::default();
-        observer.observe(sig(0, vec![initial.clone()]));
-        observer.observe(sig(11_000, vec![initial]));
-        observer.observe(sig(12_000, vec![via]));
+        observer.observe(sig(0, vec![case.initial.clone()]));
+        observer.observe(sig(11_000, vec![case.initial]));
+        observer.observe(sig(12_000, vec![case.via]));
 
-        let drafts = observer.observe(sig(13_000, vec![back]));
+        let drafts = observer.observe(sig(13_000, vec![case.back]));
 
         assert!(
             drafts.iter().any(|draft| matches!(
                 &draft.kind,
                 AnomalyKind::ValueOscillation {
                     row_id,
-                    field: observed,
+                    field,
                     from,
                     via,
                     ..
                 } if row_id == "a"
-                    && *observed == field
-                    && from == expected_from
-                    && via == expected_via
+                    && *field == case.field
+                    && from == case.expected_from
+                    && via == case.expected_via
             )),
-            "missing {field:?} oscillation"
+            "missing {:?} oscillation",
+            case.field
         );
     }
+
+    let mut first_enrichment = Observer::default();
+    first_enrichment.observe(sig(0, vec![row_with_context_pct("a", "p1", "main", None)]));
+    first_enrichment.observe(sig(
+        11_000,
+        vec![row_with_context_pct("a", "p1", "main", None)],
+    ));
+    first_enrichment.observe(sig(
+        12_000,
+        vec![row_with_context_pct("a", "p1", "main", Some(10))],
+    ));
+    let drafts = first_enrichment.observe(sig(
+        13_000,
+        vec![row_with_context_pct("a", "p1", "main", None)],
+    ));
+    assert_lacks_kind(
+        &drafts,
+        "value_oscillation",
+        "first None to value to None enrichment",
+    );
+
+    let mut outside_window = Observer::default();
+    outside_window.observe(sig(0, vec![row_with_status("a", "p1", "main", "running")]));
+    outside_window.observe(sig(
+        11_000,
+        vec![row_with_status("a", "p1", "main", "running")],
+    ));
+    outside_window.observe(sig(
+        12_000,
+        vec![row_with_status("a", "p1", "main", "waiting")],
+    ));
+    let drafts = outside_window.observe(sig(
+        17_001,
+        vec![row_with_status("a", "p1", "main", "running")],
+    ));
+    assert_lacks_kind(&drafts, "value_oscillation", "status bounce outside window");
 }
 
 #[test]
-fn aggregate_oscillation_reports_spend_blink_with_pulled_evidence() {
-    for (name, pulled_via) in [
-        ("producer published zero", None),
-        ("consumer zeroed", Some("1234")),
+fn status_churn_requires_four_real_transitions() {
+    let mut observer = Observer::default();
+    observer.observe(sig(0, vec![row_with_status("a", "p1", "main", "running")]));
+    observer.observe(sig(
+        11_000,
+        vec![row_with_status("a", "p1", "main", "running")],
+    ));
+    observer.observe(sig(
+        12_000,
+        vec![row_with_status("a", "p1", "main", "waiting")],
+    ));
+    let repeated = observer.observe(sig(
+        12_500,
+        vec![row_with_status("a", "p1", "main", "waiting")],
+    ));
+    assert_lacks_kind(&repeated, "status_churn", "same status repeated");
+    observer.observe(sig(
+        13_000,
+        vec![row_with_status("a", "p1", "main", "running")],
+    ));
+
+    let third_transition = observer.observe(sig(
+        14_000,
+        vec![row_with_status("a", "p1", "main", "idle")],
+    ));
+    assert_lacks_kind(&third_transition, "status_churn", "third transition");
+
+    let fourth_transition = observer.observe(sig(
+        15_000,
+        vec![row_with_status("a", "p1", "main", "running")],
+    ));
+    assert!(fourth_transition.iter().any(|draft| matches!(
+        &draft.kind,
+        AnomalyKind::StatusChurn {
+            row_id,
+            transitions: 4,
+            ..
+        } if row_id == "a"
+    )));
+}
+
+#[test]
+fn aggregate_oscillation_reports_spend_and_mana_bounces() {
+    struct Case {
+        name: &'static str,
+        key: AggregateKey,
+        from: &'static str,
+        via_committed: Option<&'static str>,
+        via_pulled: Option<&'static str>,
+        expected_pulled_via: &'static str,
+    }
+
+    for case in [
+        Case {
+            name: "cockpit producer published zero",
+            key: AggregateKey::CockpitTally,
+            from: "1234",
+            via_committed: None,
+            via_pulled: None,
+            expected_pulled_via: "0",
+        },
+        Case {
+            name: "cockpit consumer zeroed",
+            key: AggregateKey::CockpitTally,
+            from: "1234",
+            via_committed: None,
+            via_pulled: Some("1234"),
+            expected_pulled_via: "1234",
+        },
+        Case {
+            name: "provider mana bounce",
+            key: codex_mana_key(),
+            from: "88",
+            via_committed: Some("0"),
+            via_pulled: Some("0"),
+            expected_pulled_via: "0",
+        },
     ] {
         let mut observer = Observer::default();
         observer.observe(with_aggregate(
             sig(0, Vec::new()),
-            AggregateKey::CockpitTally,
-            Some("1234"),
-            Some("1234"),
+            case.key.clone(),
+            Some(case.from),
+            Some(case.from),
         ));
         observer.observe(with_aggregate(
             sig(11_000, Vec::new()),
-            AggregateKey::CockpitTally,
-            Some("1234"),
-            Some("1234"),
+            case.key.clone(),
+            Some(case.from),
+            Some(case.from),
         ));
         observer.observe(with_aggregate(
             sig(12_000, Vec::new()),
-            AggregateKey::CockpitTally,
-            None,
-            pulled_via,
+            case.key.clone(),
+            case.via_committed,
+            case.via_pulled,
         ));
 
         let drafts = observer.observe(with_aggregate(
             sig(13_000, Vec::new()),
-            AggregateKey::CockpitTally,
-            Some("1234"),
-            Some("1234"),
+            case.key.clone(),
+            Some(case.from),
+            Some(case.from),
         ));
 
         assert!(
             drafts.iter().any(|draft| matches!(
                 &draft.kind,
                 AnomalyKind::AggregateOscillation {
-                    aggregate: AggregateKey::CockpitTally,
+                    aggregate,
                     from,
                     via,
                     back,
                     pulled_via,
                     ..
-                } if from == "1234"
+                } if aggregate == &case.key
+                    && from == case.from
                     && via == "0"
-                    && back == "1234"
-                    && pulled_via.as_deref()
-                        == Some(if name == "consumer zeroed" { "1234" } else { "0" })
+                    && back == case.from
+                    && pulled_via.as_deref() == Some(case.expected_pulled_via)
             )),
-            "missing aggregate oscillation for {name}"
+            "missing aggregate oscillation for {}",
+            case.name
         );
     }
-}
 
-#[test]
-fn aggregate_reset_reports_spend_drop_to_zero() {
-    for (name, pulled) in [
-        ("producer published zero", Some("0")),
-        ("consumer zeroed", Some("1234")),
-    ] {
-        let mut observer = Observer::default();
-        observer.observe(with_aggregate(
-            sig(0, Vec::new()),
-            AggregateKey::CockpitTally,
-            Some("1234"),
-            Some("1234"),
-        ));
-        observer.observe(with_aggregate(
-            sig(11_000, Vec::new()),
-            AggregateKey::CockpitTally,
-            Some("1234"),
-            Some("1234"),
-        ));
-
-        let drafts = observer.observe(with_aggregate(
-            sig(12_000, Vec::new()),
-            AggregateKey::CockpitTally,
-            Some("0"),
-            pulled,
-        ));
-
-        assert_eq!(
-            drafts
-                .iter()
-                .filter(|draft| matches!(draft.kind, AnomalyKind::AggregateReset { .. }))
-                .count(),
-            1,
-            "wrong aggregate reset count for {name}"
-        );
-        assert!(
-            drafts.iter().any(|draft| matches!(
-                &draft.kind,
-                AnomalyKind::AggregateReset {
-                    aggregate: AggregateKey::CockpitTally,
-                    from,
-                    pulled: observed,
-                } if from == "1234" && observed.as_deref() == pulled
-            )),
-            "missing aggregate reset for {name}"
-        );
-    }
-}
-
-#[test]
-fn aggregate_reset_quiet_for_mana_window_roll() {
-    let key = AggregateKey::ProviderMana {
-        kind: "codex".to_owned(),
-        duration_mins: Some(300),
-    };
-    let mut observer = Observer::default();
-    observer.observe(with_aggregate(
-        sig(0, Vec::new()),
-        key.clone(),
-        Some("88"),
-        Some("88"),
-    ));
-    observer.observe(with_aggregate(
-        sig(11_000, Vec::new()),
-        key.clone(),
-        Some("88"),
-        Some("88"),
-    ));
-
-    let drafts = observer.observe(with_aggregate(
-        sig(12_000, Vec::new()),
-        key,
-        Some("0"),
-        Some("0"),
-    ));
-
-    assert!(!kinds(&drafts).contains(&"aggregate_reset"));
-}
-
-#[test]
-fn aggregate_reset_quiet_on_first_appearance_warmup_and_recovery() {
     let mut first_appearance = Observer::default();
     first_appearance.observe(with_aggregate(
         sig(0, Vec::new()),
@@ -706,13 +756,23 @@ fn aggregate_reset_quiet_on_first_appearance_warmup_and_recovery() {
         None,
         None,
     ));
-    let drafts = first_appearance.observe(with_aggregate(
+    first_appearance.observe(with_aggregate(
         sig(12_000, Vec::new()),
         AggregateKey::WorkspaceTally,
-        Some("0"),
-        Some("0"),
+        Some("7"),
+        Some("7"),
     ));
-    assert!(!kinds(&drafts).contains(&"aggregate_reset"));
+    let drafts = first_appearance.observe(with_aggregate(
+        sig(13_000, Vec::new()),
+        AggregateKey::WorkspaceTally,
+        None,
+        None,
+    ));
+    assert_lacks_kind(
+        &drafts,
+        "aggregate_oscillation",
+        "aggregate first appearance",
+    );
 
     let mut warmup = Observer::default();
     warmup.observe(with_aggregate(
@@ -721,8 +781,153 @@ fn aggregate_reset_quiet_on_first_appearance_warmup_and_recovery() {
         Some("7"),
         Some("7"),
     ));
+    warmup.observe(with_aggregate(
+        sig(1_000, Vec::new()),
+        AggregateKey::CockpitTally,
+        None,
+        None,
+    ));
+    let drafts = warmup.observe(with_aggregate(
+        sig(2_000, Vec::new()),
+        AggregateKey::CockpitTally,
+        Some("7"),
+        Some("7"),
+    ));
+    assert_lacks_kind(&drafts, "aggregate_oscillation", "aggregate warmup");
+}
+
+#[test]
+fn aggregate_reset_reports_spend_drops_only() {
+    struct ResetCase {
+        name: &'static str,
+        key: AggregateKey,
+        from: &'static str,
+        pulled: Option<&'static str>,
+    }
+
+    for case in [
+        ResetCase {
+            name: "cockpit producer published zero",
+            key: AggregateKey::CockpitTally,
+            from: "1234",
+            pulled: Some("0"),
+        },
+        ResetCase {
+            name: "cockpit consumer zeroed",
+            key: AggregateKey::CockpitTally,
+            from: "1234",
+            pulled: Some("1234"),
+        },
+        ResetCase {
+            name: "workspace spend reset",
+            key: AggregateKey::WorkspaceTally,
+            from: "500",
+            pulled: Some("0"),
+        },
+        ResetCase {
+            name: "provider spend reset",
+            key: AggregateKey::ProviderSpend {
+                kind: "claude".to_owned(),
+            },
+            from: "500",
+            pulled: Some("500"),
+        },
+    ] {
+        let mut observer = Observer::default();
+        observer.observe(with_aggregate(
+            sig(0, Vec::new()),
+            case.key.clone(),
+            Some(case.from),
+            Some(case.from),
+        ));
+        observer.observe(with_aggregate(
+            sig(11_000, Vec::new()),
+            case.key.clone(),
+            Some(case.from),
+            Some(case.from),
+        ));
+
+        let drafts = observer.observe(with_aggregate(
+            sig(12_000, Vec::new()),
+            case.key.clone(),
+            Some("0"),
+            case.pulled,
+        ));
+
+        assert_eq!(
+            drafts
+                .iter()
+                .filter(|draft| matches!(draft.kind, AnomalyKind::AggregateReset { .. }))
+                .count(),
+            1,
+            "wrong aggregate reset count for {}",
+            case.name
+        );
+        assert!(
+            drafts.iter().any(|draft| matches!(
+                &draft.kind,
+                AnomalyKind::AggregateReset {
+                    aggregate,
+                    from,
+                    pulled,
+                } if aggregate == &case.key && from == case.from && pulled.as_deref() == case.pulled
+            )),
+            "missing aggregate reset for {}",
+            case.name
+        );
+    }
+
+    let mut mana_roll = Observer::default();
+    mana_roll.observe(with_aggregate(
+        sig(0, Vec::new()),
+        codex_mana_key(),
+        Some("88"),
+        Some("88"),
+    ));
+    mana_roll.observe(with_aggregate(
+        sig(11_000, Vec::new()),
+        codex_mana_key(),
+        Some("88"),
+        Some("88"),
+    ));
+    let drafts = mana_roll.observe(with_aggregate(
+        sig(12_000, Vec::new()),
+        codex_mana_key(),
+        Some("0"),
+        Some("0"),
+    ));
+    assert_lacks_kind(&drafts, "aggregate_reset", "provider mana can roll to zero");
+
+    let mut first_zero = Observer::default();
+    first_zero.observe(with_aggregate(
+        sig(0, Vec::new()),
+        AggregateKey::WorkspaceTally,
+        None,
+        None,
+    ));
+    first_zero.observe(with_aggregate(
+        sig(11_000, Vec::new()),
+        AggregateKey::WorkspaceTally,
+        None,
+        None,
+    ));
+    let drafts = first_zero.observe(with_aggregate(
+        sig(12_000, Vec::new()),
+        AggregateKey::WorkspaceTally,
+        Some("0"),
+        Some("0"),
+    ));
+    assert_lacks_kind(&drafts, "aggregate_reset", "first zero");
+
+    let mut warmup_zero = Observer::default();
+    warmup_zero.observe(with_aggregate(
+        sig(0, Vec::new()),
+        AggregateKey::CockpitTally,
+        Some("7"),
+        Some("7"),
+    ));
     assert!(
-        warmup
+        warmup_zero
             .observe(with_aggregate(
                 sig(1_000, Vec::new()),
                 AggregateKey::CockpitTally,
@@ -731,13 +936,13 @@ fn aggregate_reset_quiet_on_first_appearance_warmup_and_recovery() {
             ))
             .is_empty()
     );
-    let drafts = warmup.observe(with_aggregate(
+    let drafts = warmup_zero.observe(with_aggregate(
         sig(11_000, Vec::new()),
         AggregateKey::CockpitTally,
         Some("0"),
         Some("0"),
     ));
-    assert!(!kinds(&drafts).contains(&"aggregate_reset"));
+    assert_lacks_kind(&drafts, "aggregate_reset", "warmup zero");
 
     let mut recovery = Observer::default();
     recovery.observe(with_aggregate(
@@ -764,103 +969,7 @@ fn aggregate_reset_quiet_on_first_appearance_warmup_and_recovery() {
         Some("500"),
         Some("500"),
     ));
-    assert!(!kinds(&drafts).contains(&"aggregate_reset"));
-}
-
-#[test]
-fn aggregate_first_appearance_and_warmup_stay_quiet() {
-    let mut first_appearance = Observer::default();
-    first_appearance.observe(with_aggregate(
-        sig(0, Vec::new()),
-        AggregateKey::WorkspaceTally,
-        None,
-        None,
-    ));
-    first_appearance.observe(with_aggregate(
-        sig(11_000, Vec::new()),
-        AggregateKey::WorkspaceTally,
-        None,
-        None,
-    ));
-    first_appearance.observe(with_aggregate(
-        sig(12_000, Vec::new()),
-        AggregateKey::WorkspaceTally,
-        Some("7"),
-        Some("7"),
-    ));
-    let drafts = first_appearance.observe(with_aggregate(
-        sig(13_000, Vec::new()),
-        AggregateKey::WorkspaceTally,
-        None,
-        None,
-    ));
-    assert!(!kinds(&drafts).contains(&"aggregate_oscillation"));
-
-    let mut warmup = Observer::default();
-    warmup.observe(with_aggregate(
-        sig(0, Vec::new()),
-        AggregateKey::CockpitTally,
-        Some("7"),
-        Some("7"),
-    ));
-    warmup.observe(with_aggregate(
-        sig(1_000, Vec::new()),
-        AggregateKey::CockpitTally,
-        None,
-        None,
-    ));
-    let drafts = warmup.observe(with_aggregate(
-        sig(2_000, Vec::new()),
-        AggregateKey::CockpitTally,
-        Some("7"),
-        Some("7"),
-    ));
-    assert!(!kinds(&drafts).contains(&"aggregate_oscillation"));
-}
-
-#[test]
-fn aggregate_oscillation_reports_mana_bounce() {
-    let key = AggregateKey::ProviderMana {
-        kind: "codex".to_owned(),
-        duration_mins: Some(300),
-    };
-    let mut observer = Observer::default();
-    observer.observe(with_aggregate(
-        sig(0, Vec::new()),
-        key.clone(),
-        Some("88"),
-        Some("88"),
-    ));
-    observer.observe(with_aggregate(
-        sig(11_000, Vec::new()),
-        key.clone(),
-        Some("88"),
-        Some("88"),
-    ));
-    observer.observe(with_aggregate(
-        sig(12_000, Vec::new()),
-        key.clone(),
-        Some("0"),
-        Some("0"),
-    ));
-
-    let drafts = observer.observe(with_aggregate(
-        sig(13_000, Vec::new()),
-        key.clone(),
-        Some("88"),
-        Some("88"),
-    ));
-
-    assert!(drafts.iter().any(|draft| matches!(
-        &draft.kind,
-        AnomalyKind::AggregateOscillation {
-            aggregate,
-            from,
-            via,
-            back,
-            ..
-        } if aggregate == &key && from == "88" && via == "0" && back == "88"
-    )));
+    assert_lacks_kind(&drafts, "aggregate_reset", "zero-to-nonzero recovery");
 }
 
 #[test]
@@ -878,11 +987,11 @@ fn aggregate_spend_signature_quantizes_to_cents() {
     observer.observe(extracted_spend_sig(0, 1.2340, 1.2340));
     observer.observe(extracted_spend_sig(11_000, 1.2344, 1.2344));
     let drafts = observer.observe(extracted_spend_sig(12_000, 1.2340, 1.2340));
-    assert!(!kinds(&drafts).contains(&"aggregate_oscillation"));
+    assert_lacks_kind(&drafts, "aggregate_oscillation", "same rounded cents");
 }
 
 #[test]
-fn order_flap_reports_membership_stable_reorder() {
+fn order_flap_reports_only_stable_membership_reorders() {
     let mut observer = Observer::default();
     observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
     observer.observe(sig(
@@ -893,12 +1002,10 @@ fn order_flap_reports_membership_stable_reorder() {
         12_000,
         vec![row("b", "p2", "main"), row("a", "p1", "main")],
     ));
-
     let drafts = observer.observe(sig(
         13_000,
         vec![row("a", "p1", "main"), row("b", "p2", "main")],
     ));
-
     assert!(drafts.iter().any(|draft| matches!(
         &draft.kind,
         AnomalyKind::OrderFlap {
@@ -910,10 +1017,7 @@ fn order_flap_reports_membership_stable_reorder() {
             && order == &vec!["a".to_owned(), "b".to_owned()]
             && via_order == &vec!["b".to_owned(), "a".to_owned()]
     )));
-}
 
-#[test]
-fn order_flap_stays_quiet_when_visible_membership_changes() {
     for (name, via) in [
         (
             "membership changes under same stable edge",
@@ -935,141 +1039,12 @@ fn order_flap_stays_quiet_when_visible_membership_changes() {
             13_000,
             vec![row("a", "p1", "main"), row("b", "p2", "main")],
         ));
-        assert!(!kinds(&drafts).contains(&"order_flap"), "{name}");
+        assert_lacks_kind(&drafts, "order_flap", name);
     }
 }
 
 #[test]
-fn first_anomaly_carries_and_resets_dropped_message_count() {
-    let mut observer = Observer {
-        dropped_msgs: 4,
-        ..Observer::default()
-    };
-
-    let drafts = observer.observe(sig(0, vec![row("a", "p1", "main"), row("a", "p2", "main")]));
-
-    assert_eq!(drafts.first().map(|draft| draft.dropped_msgs), Some(4));
-    assert_eq!(observer.dropped_msgs, 0);
-}
-
-#[test]
-fn status_churn_counts_only_real_transitions() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row_with_status("a", "p1", "main", "running")]));
-    observer.observe(sig(
-        11_000,
-        vec![row_with_status("a", "p1", "main", "running")],
-    ));
-    observer.observe(sig(
-        12_000,
-        vec![row_with_status("a", "p1", "main", "waiting")],
-    ));
-    observer.observe(sig(
-        13_000,
-        vec![row_with_status("a", "p1", "main", "running")],
-    ));
-
-    let third_transition = observer.observe(sig(
-        14_000,
-        vec![row_with_status("a", "p1", "main", "idle")],
-    ));
-    assert!(!kinds(&third_transition).contains(&"status_churn"));
-
-    let fourth_transition = observer.observe(sig(
-        15_000,
-        vec![row_with_status("a", "p1", "main", "running")],
-    ));
-    assert!(fourth_transition.iter().any(|draft| matches!(
-        &draft.kind,
-        AnomalyKind::StatusChurn {
-            row_id,
-            transitions: 4,
-            ..
-        } if row_id == "a"
-    )));
-}
-
-#[test]
-fn status_count_checks_respect_hidden_rows() {
-    let cases = [
-        (
-            "hidden rows allow a larger declared tally",
-            2,
-            "running",
-            3,
-            false,
-        ),
-        (
-            "visible groups require exact declared counts",
-            0,
-            "failed",
-            1,
-            true,
-        ),
-    ];
-    for (name, hidden_count, status, count, should_mismatch) in cases {
-        let mut observer = Observer::default();
-        let mut frame = sig(0, vec![row("a", "p1", "main")]);
-        frame.groups[0].hidden_count = hidden_count;
-        frame.groups[0].status_counts = vec![StatusCountSig {
-            status: status.to_owned(),
-            count,
-        }];
-
-        let drafts = observer.observe(frame);
-
-        assert_eq!(
-            kinds(&drafts).contains(&"status_count_mismatch"),
-            should_mismatch,
-            "{name}"
-        );
-    }
-}
-
-#[test]
-fn own_view_active_must_be_working_pane() {
-    let mut observer = Observer::default();
-    let mut frame = sig(0, vec![row("a", "p1", "main")]);
-    frame.own_view = Some(OwnViewSig {
-        sibling_count: 1,
-        active_pane_id: Some("missing".to_owned()),
-        working_pane_ids: vec!["p1".to_owned()],
-    });
-
-    let drafts = observer.observe(frame);
-
-    assert!(kinds(&drafts).contains(&"own_view_incoherent"));
-}
-
-#[test]
-fn subagent_projection_errors_are_detected() {
-    let mut observer = Observer::default();
-    let drafts = observer.observe(sig(
-        0,
-        vec![
-            row_with_subagents("parent", "p1", "main", vec!["child"]),
-            row("child", "p2", "main"),
-            row_with_subagents("self-nested", "p3", "main", vec!["self-nested"]),
-        ],
-    ));
-
-    assert!(kinds(&drafts).contains(&"subagent_double_render"));
-    assert!(kinds(&drafts).contains(&"subagent_top_level_leak"));
-}
-
-#[test]
-fn frameless_rows_are_detected_without_warmup() {
-    let mut observer = Observer::default();
-    let mut frame = sig(0, vec![row("a", "p1", "main")]);
-    frame.panes_produced_at_ms = None;
-
-    let drafts = observer.observe(frame);
-
-    assert!(kinds(&drafts).contains(&"frameless_rows"));
-}
-
-#[test]
-fn historical_detector_maps_prune_after_row_absence_window() {
+fn historical_detector_state_prunes_after_row_absence_window() {
     let mut observer = Observer::default();
     observer.observe(sig(0, vec![row_with_status("a", "p1", "main", "running")]));
     observer.observe(sig(
