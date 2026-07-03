@@ -10,7 +10,7 @@ use crate::common::CommandTimeoutExt;
 
 use super::support::*;
 
-fn work_area_has_main_and_stacked_column(work: &[PaneGeometry]) -> bool {
+fn work_area_has_two_by_two_grid(work: &[PaneGeometry]) -> bool {
     if work.len() != 4 {
         return false;
     }
@@ -23,29 +23,39 @@ fn work_area_has_main_and_stacked_column(work: &[PaneGeometry]) -> bool {
 
     let left: Vec<&PaneGeometry> = work.iter().filter(|pane| pane.x == xs[0]).collect();
     let right: Vec<&PaneGeometry> = work.iter().filter(|pane| pane.x == xs[1]).collect();
-    let (main, mut stack) = match (left.as_slice(), right.as_slice()) {
-        ([main], stack) if stack.len() == 3 => (*main, stack.to_vec()),
-        (stack, [main]) if stack.len() == 3 => (*main, stack.to_vec()),
-        _ => return false,
-    };
-    stack.sort_by_key(|pane| pane.y);
+    if left.len() != 2 || right.len() != 2 {
+        return false;
+    }
 
-    let stack_columns_align = stack
+    let mut columns = [left, right];
+    for column in &mut columns {
+        column.sort_by_key(|pane| pane.y);
+    }
+
+    let widths_align = work
         .iter()
         .map(|pane| pane.columns)
         .max()
-        .zip(stack.iter().map(|pane| pane.columns).min())
+        .zip(work.iter().map(|pane| pane.columns).min())
         .is_some_and(|(max, min)| max.abs_diff(min) <= 2);
-    let stack_adjacent = stack.windows(2).all(|pair| {
-        let previous_bottom = pair[0].y + pair[0].rows;
-        previous_bottom <= pair[1].y && previous_bottom.abs_diff(pair[1].y) <= 2
+    let columns_adjacent = {
+        let left_edge = columns[0]
+            .iter()
+            .map(|pane| pane.x + pane.columns)
+            .max()
+            .unwrap_or(0);
+        left_edge <= xs[1] && left_edge.abs_diff(xs[1]) <= 2
+    };
+    let rows_align = (0..2).all(|row| {
+        columns[0][row].y.abs_diff(columns[1][row].y) <= 2
+            && columns[0][row].rows.abs_diff(columns[1][row].rows) <= 2
     });
-    let stack_top = stack[0].y;
-    let stack_bottom = stack[2].y + stack[2].rows;
-    let main_spans_stack =
-        main.y.abs_diff(stack_top) <= 2 && (main.y + main.rows).abs_diff(stack_bottom) <= 2;
+    let rows_adjacent = columns.iter().all(|column| {
+        let previous_bottom = column[0].y + column[0].rows;
+        previous_bottom <= column[1].y && previous_bottom.abs_diff(column[1].y) <= 2
+    });
 
-    stack_columns_align && stack_adjacent && main_spans_stack
+    widths_align && columns_adjacent && rows_align && rows_adjacent
 }
 
 #[test]
@@ -327,14 +337,11 @@ fn work_area_swap_layout_rebalances_backend_and_native_tabs() {
                         && sidebar.columns == sidebar_before.columns
                         && sidebar.rows == sidebar_before.rows
                 });
-            work_stays_right_of_sidebar
-                && sidebar_unchanged
-                && work_area_has_main_and_stacked_column(work)
+            work_stays_right_of_sidebar && sidebar_unchanged && work_area_has_two_by_two_grid(work)
         });
     assert!(
-        work_area_has_main_and_stacked_column(&overflow_split),
-        "overflow split should re-tile the work area into one main pane plus a \
-         three-pane stack: {overflow_split:?}",
+        work_area_has_two_by_two_grid(&overflow_split),
+        "overflow split should re-tile the work area into a 2x2 grid: {overflow_split:?}",
     );
     let sidebar_after = named_sidebar_pane_geometry(xdg.path(), &name, overflow_tab)
         .expect("list overflow sidebar")

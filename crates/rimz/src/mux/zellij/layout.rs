@@ -340,164 +340,105 @@ fn render_undocked_tab_layout(opts: &TabOptions) -> Result<String> {
 /// template without one re-tiles the bar into the work area as a full-size pane
 /// (swap-layout semantics in `docs/externals/mux-adapter/zellij-reference.md`).
 ///
-/// The first two templates keep the nicer one- and two-work-pane shapes; later
-/// templates mirror Zellij's vanilla swap progression beside the pinned
-/// sidebar: one main work pane plus an overflow stack, then multi-column grids.
+/// The bounded tiers render exact balanced grids for one through twelve work
+/// panes, with columns capped at four rows and the taller columns on the right.
 /// The last tier stays unbounded so the sidebar and compact-bar stay pinned at
 /// any pane count. Without that catch-all, Zellij's native no-direction
 /// fallback splits the largest weighted-area pane, which is normally the
 /// full-height sidebar.
 fn rimz_swap_layout_kdl(sidebar_cols: u16) -> String {
-    format!(
-        r#"    swap_tiled_layout name="rimz-work-area" {{
-        tab max_panes=3 {{
-            pane split_direction="vertical" {{
-                pane size={sidebar_cols}
-                pane
-            }}
-            pane size=1 borderless=true {{
-                plugin location="zellij:compact-bar"
-            }}
-        }}
-        tab max_panes=4 {{
-            pane split_direction="vertical" {{
-                pane size={sidebar_cols}
-                pane split_direction="vertical" {{
-                    pane
-                    pane
-                }}
-            }}
-            pane size=1 borderless=true {{
-                plugin location="zellij:compact-bar"
-            }}
-        }}
-        tab max_panes=5 {{
-            pane split_direction="vertical" {{
-                pane size={sidebar_cols}
-                pane
-                pane split_direction="horizontal" {{
-                    children
-                }}
-            }}
-            pane size=1 borderless=true {{
-                plugin location="zellij:compact-bar"
-            }}
-        }}
-        tab max_panes=8 {{
-            pane split_direction="vertical" {{
-                pane size={sidebar_cols}
-                pane split_direction="horizontal" {{
-                    children
-                }}
-                pane split_direction="horizontal" {{
-                    pane
-                    pane
-                    pane
-                    pane
-                }}
-            }}
-            pane size=1 borderless=true {{
-                plugin location="zellij:compact-bar"
-            }}
-        }}
-        tab {{
-            pane split_direction="vertical" {{
-                pane size={sidebar_cols}
-                pane split_direction="horizontal" {{
-                    children
-                }}
-                pane split_direction="horizontal" {{
-                    pane
-                    pane
-                    pane
-                    pane
-                }}
-                pane split_direction="horizontal" {{
-                    pane
-                    pane
-                    pane
-                    pane
-                }}
-            }}
-            pane size=1 borderless=true {{
-                plugin location="zellij:compact-bar"
-            }}
-        }}
-    }}
-"#,
-    )
+    rimz_work_area_swap_layout(Some(sidebar_cols))
 }
 
 fn rimz_undocked_swap_layout() -> String {
-    String::from(
-        r#"    swap_tiled_layout name="rimz-work-area" {
-        tab max_panes=2 {
-            pane
-            pane size=1 borderless=true {
-                plugin location="zellij:compact-bar"
-            }
+    rimz_work_area_swap_layout(None)
+}
+
+fn rimz_work_area_swap_layout(sidebar_cols: Option<u16>) -> String {
+    let mut layout = String::from("    swap_tiled_layout name=\"rimz-work-area\" {\n");
+    for work_panes in 1..=12 {
+        layout.push_str(&render_balanced_swap_tier(work_panes, sidebar_cols));
+    }
+    layout.push_str(&render_unbounded_swap_tier(sidebar_cols));
+    layout.push_str("    }\n");
+    layout
+}
+
+fn balanced_work_columns(n: usize) -> Vec<usize> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![1];
+    }
+    let columns = 2.max(n.div_ceil(4));
+    let shorter_rows = n / columns;
+    let taller_columns = n % columns;
+    (0..columns)
+        .map(|index| shorter_rows + usize::from(index >= columns - taller_columns))
+        .collect()
+}
+
+fn render_balanced_swap_tier(work_panes: usize, sidebar_cols: Option<u16>) -> String {
+    let max_panes = work_panes + 1 + usize::from(sidebar_cols.is_some());
+    let mut tier = format!("        tab max_panes={max_panes} {{\n");
+    let columns = balanced_work_columns(work_panes);
+    if sidebar_cols.is_some() || columns.len() > 1 {
+        tier.push_str("            pane split_direction=\"vertical\" {\n");
+        if let Some(sidebar_cols) = sidebar_cols {
+            tier.push_str(&format!("                pane size={sidebar_cols}\n"));
         }
-        tab max_panes=3 {
-            pane split_direction="vertical" {
-                pane
-                pane
-            }
-            pane size=1 borderless=true {
-                plugin location="zellij:compact-bar"
-            }
-        }
-        tab max_panes=4 {
-            pane split_direction="vertical" {
-                pane
-                pane split_direction="horizontal" {
+        tier.push_str(&render_swap_work_columns(&columns, 16));
+        tier.push_str("            }\n");
+    } else {
+        tier.push_str(&render_swap_work_columns(&columns, 12));
+    }
+    tier.push_str(render_swap_compact_bar());
+    tier.push_str("        }\n");
+    tier
+}
+
+fn render_unbounded_swap_tier(sidebar_cols: Option<u16>) -> String {
+    let mut tier = String::from("        tab {\n            pane split_direction=\"vertical\" {\n");
+    if let Some(sidebar_cols) = sidebar_cols {
+        tier.push_str(&format!("                pane size={sidebar_cols}\n"));
+    }
+    tier.push_str(
+        r#"                pane split_direction="horizontal" {
                     children
                 }
+"#,
+    );
+    tier.push_str(&render_swap_work_columns(&[4, 4], 16));
+    tier.push_str("            }\n");
+    tier.push_str(render_swap_compact_bar());
+    tier.push_str("        }\n");
+    tier
+}
+
+fn render_swap_work_columns(columns: &[usize], indent: usize) -> String {
+    let mut rendered = String::new();
+    let base = " ".repeat(indent);
+    let child = " ".repeat(indent + 4);
+    for &rows in columns {
+        if rows == 1 {
+            rendered.push_str(&format!("{base}pane\n"));
+        } else {
+            rendered.push_str(&format!("{base}pane split_direction=\"horizontal\" {{\n"));
+            for _ in 0..rows {
+                rendered.push_str(&format!("{child}pane\n"));
             }
-            pane size=1 borderless=true {
-                plugin location="zellij:compact-bar"
-            }
-        }
-        tab max_panes=7 {
-            pane split_direction="vertical" {
-                pane split_direction="horizontal" {
-                    children
-                }
-                pane split_direction="horizontal" {
-                    pane
-                    pane
-                    pane
-                    pane
-                }
-            }
-            pane size=1 borderless=true {
-                plugin location="zellij:compact-bar"
-            }
-        }
-        tab {
-            pane split_direction="vertical" {
-                pane split_direction="horizontal" {
-                    children
-                }
-                pane split_direction="horizontal" {
-                    pane
-                    pane
-                    pane
-                    pane
-                }
-                pane split_direction="horizontal" {
-                    pane
-                    pane
-                    pane
-                    pane
-                }
-            }
-            pane size=1 borderless=true {
-                plugin location="zellij:compact-bar"
-            }
+            rendered.push_str(&format!("{base}}}\n"));
         }
     }
-"#,
-    )
+    rendered
+}
+
+fn render_swap_compact_bar() -> &'static str {
+    r#"            pane size=1 borderless=true {
+                plugin location="zellij:compact-bar"
+            }
+"#
 }
 
 fn render_daemon_columns(
