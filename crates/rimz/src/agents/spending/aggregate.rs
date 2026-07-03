@@ -571,28 +571,29 @@ pub(crate) fn dedup_cached_entries<'a>(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &'a SpendingDiskCache,
 ) -> SidechainDedup<Counted<'a>> {
-    let mut deduped = SidechainDedup::default();
-    for (adapter, file) in files {
-        let kind = adapter.descriptor().kind;
-        let key = file.to_string_lossy().into_owned();
-        let Some(cached_file) = cache.files.get(&key) else {
-            continue;
-        };
-        for entry in &cached_file.entries {
-            deduped.insert(Counted {
-                kind,
-                origin: cached_file.origin_path.as_deref(),
-                entry,
-            });
-        }
-    }
-    deduped
+    dedup_cached_entries_with(files, cache, |kind, cached_file, entry| Counted {
+        kind,
+        origin: cached_file.origin_path.as_deref(),
+        entry,
+    })
 }
 
 pub(crate) fn dedup_cached_entries_owned(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
 ) -> SidechainDedup<OwnedCounted> {
+    dedup_cached_entries_with(files, cache, |kind, cached_file, entry| OwnedCounted {
+        kind,
+        origin: cached_file.origin_path.clone(),
+        entry: entry.clone(),
+    })
+}
+
+fn dedup_cached_entries_with<'a, P: DedupPayload>(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &'a SpendingDiskCache,
+    make: impl Fn(&'static str, &'a FileCacheEntry, &'a CachedEntry) -> P,
+) -> SidechainDedup<P> {
     let mut deduped = SidechainDedup::default();
     for (adapter, file) in files {
         let kind = adapter.descriptor().kind;
@@ -601,11 +602,7 @@ pub(crate) fn dedup_cached_entries_owned(
             continue;
         };
         for entry in &cached_file.entries {
-            deduped.insert(OwnedCounted {
-                kind,
-                origin: cached_file.origin_path.clone(),
-                entry: entry.clone(),
-            });
+            deduped.insert(make(kind, cached_file, entry));
         }
     }
     deduped
