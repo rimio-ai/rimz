@@ -147,6 +147,30 @@ pub fn lead_unread_row(groups: &[SidebarWorktreeGroup]) -> Option<&SidebarRow> {
         .min_by_key(|row| row.last_activity)
 }
 
+/// Triage tier for the `space`/`n` inbox walk. The jump banner count, the inbox
+/// walk, and the lead unread row all read this vocabulary: unread rows that need
+/// one look first, then read actionable rows, oldest activity first within each.
+pub fn triage_key(row: &SidebarRow) -> Option<(u8, jiff::Timestamp)> {
+    let status = row.status()?;
+    if row.unread && status.needs_a_look() {
+        Some((0, row.last_activity))
+    } else if !row.unread && status.is_actionable() {
+        Some((1, row.last_activity))
+    } else {
+        None
+    }
+}
+
+/// Rows the jump banner counts: unread rows that need an answer, matching
+/// [`lead_unread_row`]'s predicate.
+pub fn actionable_unread_count(groups: &[SidebarWorktreeGroup]) -> usize {
+    groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| row.unread && row.status().is_some_and(AgentStatus::is_actionable))
+        .count()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarLinkFreshness {

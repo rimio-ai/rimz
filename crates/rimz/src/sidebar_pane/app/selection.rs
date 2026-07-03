@@ -4,7 +4,7 @@
 
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
-use crate::{SidebarSnapshot, lead_unread_row};
+use crate::{SidebarSnapshot, lead_unread_row, triage_key};
 
 use crate::sidebar_pane::render::{
     BodyFilter, Browse, DashboardTab, ManualScroll, UiState, active_dashboard_tab,
@@ -715,24 +715,15 @@ fn step_attention_index(
     selected: usize,
     forward: bool,
 ) -> Option<usize> {
-    let rows = visible_rows(snapshot, filter).collect::<Vec<_>>();
-    let mut unread: Vec<_> = rows
-        .iter()
+    let mut candidates = visible_rows(snapshot, filter)
         .enumerate()
-        .filter(|(_, row)| row.unread && row.status().is_some_and(AgentStatus::needs_a_look))
-        .collect();
-    unread.sort_by_key(|(_, row)| row.last_activity);
-    let mut actionable: Vec<_> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| !row.unread && row.status().is_some_and(AgentStatus::is_actionable))
-        .collect();
-    actionable.sort_by_key(|(_, row)| row.last_activity);
-    let candidates: Vec<usize> = unread
+        .filter_map(|(index, row)| triage_key(row).map(|key| (index, key)))
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(_, key)| *key);
+    let candidates = candidates
         .into_iter()
-        .chain(actionable)
         .map(|(index, _)| index)
-        .collect();
+        .collect::<Vec<_>>();
     if candidates.is_empty() {
         return None;
     }

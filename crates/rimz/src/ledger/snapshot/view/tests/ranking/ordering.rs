@@ -2,6 +2,7 @@ use super::*;
 use crate::SidebarWorktreeGroup;
 use crate::agents::ATTENTION_AGE_CEILING_SECS;
 use crate::ids::{MuxName, PaneId};
+use crate::ledger::snapshot::group_live_agents_by_worktree;
 
 #[test]
 fn bucket_order_puts_attention_first_and_idle_last() {
@@ -496,6 +497,72 @@ fn inactive_cohort_sinks_until_unread_member_clamps_it_live() {
         vec!["old-a", "old-b", "fresh-idle"],
         "one unread member keeps the block in the live band without changing its internal order"
     );
+}
+
+#[test]
+fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
+    let mut cohort_first =
+        agent_in("cohort-first", "/repo/main", AgentStatus::Waiting, 3_000).in_pane("%2");
+    cohort_first.launch_group = Some("launch_group_1".to_owned());
+    cohort_first.launch_ordinal = Some(0);
+    let mut cohort_second =
+        agent_in("cohort-second", "/repo/main", AgentStatus::Running, 2_000).in_pane("%3");
+    cohort_second.launch_group = Some("launch_group_1".to_owned());
+    cohort_second.launch_ordinal = Some(1);
+    let agents = vec![
+        agent_in("done-late", "/repo/main", AgentStatus::Success, 6_000).in_pane("%5"),
+        agent_in(
+            "running-early-pane",
+            "/repo/main",
+            AgentStatus::Running,
+            5_000,
+        )
+        .in_pane("%0"),
+        agent_in("wait", "/repo/main", AgentStatus::Waiting, 1_000).in_pane("%9"),
+        agent_in("done-early", "/repo/main", AgentStatus::Success, 4_000).in_pane("%1"),
+        cohort_second,
+        agent_in("paneless", "/repo/main", AgentStatus::Idle, 7_000),
+        cohort_first,
+    ];
+
+    let mut row_snapshot = room(Vec::new(), Vec::new());
+    row_snapshot.worktree_groups = vec![SidebarWorktreeGroup {
+        key: "/repo/main".to_owned(),
+        label: "main".to_owned(),
+        kind: SidebarWorktreeKind::Worktree,
+        status_counts: Vec::new(),
+        rows: agents
+            .iter()
+            .map(|agent| row_from_agent(agent, epoch()))
+            .collect(),
+        hidden_count: 0,
+        diff_added: None,
+        diff_removed: None,
+        commits_ahead: None,
+        commits_behind: None,
+        trunk: None,
+        clean: None,
+        landed: None,
+        trunk_sync: None,
+        pr_state: None,
+    }];
+    row_snapshot.sort_groups_for_presentation();
+    let row_order = row_snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.as_str())
+        .collect::<Vec<_>>();
+
+    let listing_snapshot = room(Vec::new(), agents);
+    let refs = listing_snapshot.agents.iter().collect::<Vec<_>>();
+    let groups = group_live_agents_by_worktree(&refs, &listing_snapshot);
+    let listing_order = groups
+        .iter()
+        .flat_map(|group| &group.agents)
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(row_order, listing_order);
 }
 
 fn row_mut<'a>(snapshot: &'a mut SidebarSnapshot, id: &str) -> &'a mut SidebarRow {

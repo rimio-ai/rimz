@@ -67,7 +67,7 @@ pub use crate::ledger::{
     SidebarOwnView, SidebarPresence, SidebarProviderPanel, SidebarResolverState, SidebarRow,
     SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
     SidebarWorktreeKind, StatePaths, TruthNotice, WorkspaceRecord, WorktreePrState,
-    WorktreeTrunkSync, lead_unread_row,
+    WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
 };
 pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind};
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

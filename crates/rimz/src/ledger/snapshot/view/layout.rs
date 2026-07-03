@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{AgentState, AgentStatus};
 use crate::ledger::snapshot::row::SidebarRow;
-use crate::pane::PaneRef;
 use crate::workspace::RootClass;
 
 use super::{SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
@@ -253,8 +252,8 @@ pub(super) fn sort_groups_for_presentation(groups: &mut [SidebarWorktreeGroup]) 
 }
 
 pub(super) fn sort_rows(rows: &mut [SidebarRow]) {
-    let cohorts = cohort_aggregates(rows);
-    rows.sort_by(|left, right| compare_rows_with_cohorts(left, right, &cohorts));
+    let cohorts = rank_cohort_blocks(rows.iter().map(row_rank_facts));
+    rows.sort_by_cached_key(|row| rank_key(row_rank_facts(row), &cohorts));
 }
 
 /// Trim a group's idle/process tail to `WORKTREE_ROW_CAP`, always keeping unread
@@ -294,182 +293,214 @@ pub(super) fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
     visible
 }
 
-pub(super) fn compare_rows(left: &SidebarRow, right: &SidebarRow) -> Ordering {
-    // Agent cards lead the channel; process rows are the command tail beneath
-    // them, whatever either's activity. Within each side the three layers hold:
-    // the unread inbox first, live work over dormant, then the most
-    // attention-hungry within each band. The final tiebreak is the stable `id`
-    // alone — never `name`, which mutates through the session-name → task →
-    // prompt label ladder and would reshuffle a bucket on every rename.
-    left.is_process()
-        .cmp(&right.is_process())
-        .then_with(|| row_band(left).cmp(&row_band(right)))
-        .then_with(|| row_rank(left).cmp(&row_rank(right)))
-        .then_with(|| within_bucket(left, right))
-        .then_with(|| left.id.cmp(&right.id))
+fn row_ordinal(row: &SidebarRow) -> Option<u64> {
+    row.pane
+        .as_ref()
+        .and_then(|pane| pane.pane_id.creation_ordinal())
+}
+
+/// Everything the attention ladder reads off one row or roster agent.
+#[derive(Clone, Debug)]
+struct RankFacts<'a> {
+    is_process: bool,
+    unread: bool,
+    inactive: bool,
+    status: Option<AgentStatus>,
+    last_activity: jiff::Timestamp,
+    pane_ordinal: Option<u64>,
+    cohort: Option<&'a str>,
+    launch_ordinal: Option<u32>,
+    id: &'a str,
+}
+
+fn row_rank_facts(row: &SidebarRow) -> RankFacts<'_> {
+    RankFacts {
+        is_process: row.is_process(),
+        unread: row.unread,
+        inactive: row.inactive,
+        status: row.status(),
+        last_activity: row.last_activity,
+        pane_ordinal: row_ordinal(row),
+        cohort: row.launch_cohort(),
+        launch_ordinal: row.launch_ordinal(),
+        id: row.id.as_str(),
+    }
+}
+
+fn agent_rank_facts(agent: &AgentState) -> RankFacts<'_> {
+    RankFacts {
+        is_process: false,
+        unread: false,
+        inactive: false,
+        status: Some(agent.status),
+        last_activity: agent.last_activity,
+        pane_ordinal: agent_ordinal(agent),
+        cohort: agent_launch_cohort(agent),
+        launch_ordinal: agent.launch_ordinal,
+        id: agent.agent_id.as_str(),
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct RankKey {
+    block: BlockKey,
+    within: WithinKey,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct BlockKey {
+    is_process: bool,
+    band: u8,
+    rank: u8,
+    tiebreak: BucketTiebreak,
+    identity: String,
+    cohort_absent: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct WithinKey {
+    launch_ordinal: StartKey<u32>,
+    pane_ordinal: StartKey<u64>,
+    id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+enum BucketTiebreak {
+    Attention(jiff::Timestamp),
+    Calm(StartKey<u64>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum StartKey<T> {
+    Present(T),
+    Missing,
+}
+
+impl<T> From<Option<T>> for StartKey<T> {
+    fn from(value: Option<T>) -> Self {
+        match value {
+            Some(value) => Self::Present(value),
+            None => Self::Missing,
+        }
+    }
+}
+
+impl<T: Ord> Ord for StartKey<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let left = match self {
+            Self::Present(value) => Some(value),
+            Self::Missing => None,
+        };
+        let right = match other {
+            Self::Present(value) => Some(value),
+            Self::Missing => None,
+        };
+        cmp_start_asc(left, right)
+    }
+}
+
+impl<T: Ord> PartialOrd for StartKey<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 #[derive(Clone, Debug)]
-struct CohortAggregate {
-    block_band: u8,
-    min_ordinal: Option<u64>,
+struct CohortBlock {
+    band: u8,
+    pane_ordinal: Option<u64>,
 }
 
-fn cohort_aggregates(rows: &[SidebarRow]) -> BTreeMap<String, CohortAggregate> {
-    let mut aggregates: BTreeMap<String, (u8, Option<u64>)> = BTreeMap::new();
-    for row in rows {
-        let Some(cohort) = row.launch_cohort() else {
+fn rank_cohort_blocks<'a>(
+    facts: impl Iterator<Item = RankFacts<'a>>,
+) -> BTreeMap<String, CohortBlock> {
+    let mut blocks = BTreeMap::new();
+    for facts in facts {
+        let Some(cohort) = facts.cohort else {
             continue;
         };
-        let entry = aggregates
-            .entry(cohort.to_owned())
-            .or_insert((u8::MAX, None));
-        entry.0 = entry.0.min(row_band(row));
-        entry.1 = min_optional_ordinal(entry.1, row_ordinal(row));
-    }
-    aggregates
-        .into_iter()
-        .map(|(cohort, (band, ordinal))| {
-            (
-                cohort,
-                CohortAggregate {
-                    block_band: band.max(1),
-                    min_ordinal: ordinal,
-                },
-            )
-        })
-        .collect()
-}
-
-fn min_optional_ordinal(left: Option<u64>, right: Option<u64>) -> Option<u64> {
-    match (left, right) {
-        (Some(left), Some(right)) => Some(left.min(right)),
-        (Some(left), None) => Some(left),
-        (None, Some(right)) => Some(right),
-        (None, None) => None,
-    }
-}
-
-fn compare_rows_with_cohorts(
-    left: &SidebarRow,
-    right: &SidebarRow,
-    cohorts: &BTreeMap<String, CohortAggregate>,
-) -> Ordering {
-    let left_cohort = left.launch_cohort();
-    let right_cohort = right.launch_cohort();
-    match (left_cohort, right_cohort) {
-        (Some(left_key), Some(right_key)) if left_key == right_key => {
-            compare_same_cohort_rows(left, right)
+        let block = blocks.entry(cohort.to_owned()).or_insert(CohortBlock {
+            band: u8::MAX,
+            pane_ordinal: None,
+        });
+        block.band = block.band.min(facts_band(&facts));
+        if let Some(ordinal) = facts.pane_ordinal {
+            block.pane_ordinal = Some(block.pane_ordinal.map_or(ordinal, |min| min.min(ordinal)));
         }
-        (None, None) => compare_rows(left, right),
-        _ => compare_effective_rows(left, right, left_cohort, right_cohort, cohorts),
     }
+    for block in blocks.values_mut() {
+        // An unread member lifts an inactive launch block back into live work,
+        // but never into the top unread inbox band; the block itself is still a
+        // calm launch cohort.
+        block.band = block.band.max(1);
+    }
+    blocks
 }
 
-fn compare_same_cohort_rows(left: &SidebarRow, right: &SidebarRow) -> Ordering {
-    cmp_start_asc(left.launch_ordinal(), right.launch_ordinal())
-        .then_with(|| cmp_start_asc(row_ordinal(left), row_ordinal(right)))
-        .then_with(|| left.id.cmp(&right.id))
-}
-
-fn compare_effective_rows(
-    left: &SidebarRow,
-    right: &SidebarRow,
-    left_cohort: Option<&str>,
-    right_cohort: Option<&str>,
-    cohorts: &BTreeMap<String, CohortAggregate>,
-) -> Ordering {
-    left.is_process()
-        .cmp(&right.is_process())
-        .then_with(|| {
-            effective_row_band(left, left_cohort, cohorts).cmp(&effective_row_band(
-                right,
-                right_cohort,
-                cohorts,
-            ))
-        })
-        .then_with(|| {
-            effective_row_rank(left, left_cohort).cmp(&effective_row_rank(right, right_cohort))
-        })
-        .then_with(|| {
-            cmp_start_asc(
-                effective_row_ordinal(left, left_cohort, cohorts),
-                effective_row_ordinal(right, right_cohort, cohorts),
-            )
-        })
-        .then_with(|| {
-            effective_row_key(left, left_cohort).cmp(effective_row_key(right, right_cohort))
-        })
-        .then_with(|| left_cohort.is_none().cmp(&right_cohort.is_none()))
-}
-
-fn effective_row_band(
-    row: &SidebarRow,
-    cohort: Option<&str>,
-    cohorts: &BTreeMap<String, CohortAggregate>,
-) -> u8 {
-    cohort
-        .and_then(|key| cohorts.get(key))
-        .map_or_else(|| row_band(row), |aggregate| aggregate.block_band)
-}
-
-fn effective_row_rank(row: &SidebarRow, cohort: Option<&str>) -> u8 {
-    if cohort.is_some() { 3 } else { row_rank(row) }
-}
-
-fn effective_row_ordinal(
-    row: &SidebarRow,
-    cohort: Option<&str>,
-    cohorts: &BTreeMap<String, CohortAggregate>,
-) -> Option<u64> {
-    cohort
-        .and_then(|key| cohorts.get(key))
-        .and_then(|aggregate| aggregate.min_ordinal)
-        .or_else(|| row_ordinal(row))
-}
-
-fn effective_row_key<'a>(row: &'a SidebarRow, cohort: Option<&'a str>) -> &'a str {
-    cohort.unwrap_or(row.id.as_str())
-}
-
-/// Tiebreak two rows that share a band and rank (their attention rank already
-/// tied). Attention rows (`waiting`/`failed`/`paused`) sort longest-overdue-first:
-/// a blocked or failed agent's `last_activity` is frozen, so this is both stable
-/// and the triage order the `␣` "next attention" key promises. Calm rows
-/// (`success`, `running`, `idle`) and bare process rows hold pane creation order
-/// ([`pane_creation_ordinal`]) — untouched by the activity heartbeat — so a
-/// working agent never jumps just because it finished a tool, and a fresh pane
-/// appends at the bottom of its bucket.
-fn within_bucket(left: &SidebarRow, right: &SidebarRow) -> Ordering {
-    if is_attention(left.status()) {
-        left.last_activity.cmp(&right.last_activity)
+fn rank_key(facts: RankFacts<'_>, cohorts: &BTreeMap<String, CohortBlock>) -> RankKey {
+    let block = if let Some((cohort, cohort_block)) = facts
+        .cohort
+        .and_then(|cohort| cohorts.get(cohort).map(|block| (cohort, block)))
+    {
+        BlockKey {
+            is_process: false,
+            band: cohort_block.band,
+            rank: 3,
+            tiebreak: BucketTiebreak::Calm(StartKey::from(cohort_block.pane_ordinal)),
+            identity: cohort.to_owned(),
+            cohort_absent: false,
+        }
     } else {
-        cmp_start_asc(row_ordinal(left), row_ordinal(right))
+        // Agent cards lead the channel; process rows are the command tail beneath
+        // them, whatever either's activity. Within each side the three layers hold:
+        // the unread inbox first, live work over dormant, then the most
+        // attention-hungry within each band. The final singleton tiebreak is the
+        // stable `id` alone — never `name`, which mutates through the
+        // session-name -> task -> prompt label ladder and would reshuffle a bucket
+        // on every rename.
+        BlockKey {
+            is_process: facts.is_process,
+            band: facts_band(&facts),
+            rank: facts_rank(&facts),
+            tiebreak: bucket_tiebreak(&facts),
+            identity: facts.id.to_owned(),
+            cohort_absent: true,
+        }
+    };
+    RankKey {
+        block,
+        within: WithinKey {
+            launch_ordinal: StartKey::from(facts.launch_ordinal),
+            pane_ordinal: StartKey::from(facts.pane_ordinal),
+            id: facts.id.to_owned(),
+        },
     }
 }
 
-/// The pane's creation ordinal: the monotonic integer the mux assigns each pane
-/// (`zellij:terminal_176` → 176, `tmux:%3` → 3), ascending in birth order. It is
-/// the calm tiebreak — one signal both agents in a tab share, and the order the
-/// mux itself lays panes out, so the sidebar tracks the pane order until the
-/// panes are reordered. It replaces the former `pane_process_start`/`registered_at`
-/// spawn key, which read a different clock for each agent (a derived process
-/// start for one, hook registration for the other) and inverted co-launched
-/// panes whenever the two sources disagreed.
-fn pane_creation_ordinal(pane: Option<&PaneRef>) -> Option<u64> {
-    let raw = pane?.pane_id.raw();
-    let digits_start = raw
-        .as_bytes()
-        .iter()
-        .rposition(|byte| !byte.is_ascii_digit())
-        .map_or(0, |last_non_digit| last_non_digit + 1);
-    raw.get(digits_start..)
-        .filter(|tail| !tail.is_empty())
-        .and_then(|tail| tail.parse::<u64>().ok())
+/// Tiebreak one item inside its band and rank. Attention rows
+/// (`waiting`/`failed`/`paused`) sort longest-overdue-first: a blocked or failed
+/// agent's `last_activity` is frozen, so this is both stable and the triage order
+/// the `space` "next attention" key promises. Calm rows (`success`, `running`,
+/// `idle`) and bare process rows hold pane creation order — untouched by the
+/// activity heartbeat — so a working agent never jumps just because it finished a
+/// tool, and a fresh pane appends at the bottom of its bucket.
+fn bucket_tiebreak(facts: &RankFacts<'_>) -> BucketTiebreak {
+    if is_attention(facts.status) {
+        BucketTiebreak::Attention(facts.last_activity)
+    } else {
+        BucketTiebreak::Calm(StartKey::from(facts.pane_ordinal))
+    }
 }
 
-fn row_ordinal(row: &SidebarRow) -> Option<u64> {
-    pane_creation_ordinal(row.pane.as_ref())
+fn facts_rank(facts: &RankFacts<'_>) -> u8 {
+    match facts.status {
+        Some(status) => status_rank(status),
+        None => 7,
+    }
+}
+
+fn facts_band(facts: &RankFacts<'_>) -> u8 {
+    band(facts.unread, facts.inactive)
 }
 
 fn is_attention(status: Option<AgentStatus>) -> bool {
@@ -500,69 +531,83 @@ pub(super) fn compare_groups(
     // the attention bucket (every calm status collapsed to one rank so a group
     // never leapfrogs a sibling because its top row flipped success↔running↔idle),
     // then the earliest member's pane-creation order, then label.
-    group_is_external(left)
-        .cmp(&group_is_external(right))
-        .then_with(|| group_band(left).cmp(&group_band(right)))
-        .then_with(|| group_rank(left).cmp(&group_rank(right)))
-        .then_with(|| cmp_start_asc(group_earliest_ordinal(left), group_earliest_ordinal(right)))
-        .then_with(|| left.label.cmp(&right.label))
+    group_sort_key(left.rows.iter().map(row_rank_facts), left.kind, &left.label).cmp(
+        &group_sort_key(
+            right.rows.iter().map(row_rank_facts),
+            right.kind,
+            &right.label,
+        ),
+    )
 }
 
-/// The group's band (layers 1 and 2), read from its liveliest member. Row order
-/// seats process rows below agent cards, so group liveness is computed across
-/// all rows instead of borrowed from `rows.first()`; an empty group sinks last.
-fn group_band(group: &SidebarWorktreeGroup) -> u8 {
-    group.rows.iter().map(row_band).min().unwrap_or(u8::MAX)
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct GroupRankKey {
+    external: bool,
+    band: u8,
+    rank: u8,
+    earliest_ordinal: StartKey<u64>,
+    label: String,
 }
 
-/// The group's rank within its band: an attention top row leads by its bucket
-/// (`waiting`/`failed`/`paused`); every calm status collapses to one rank so a
-/// calm group holds its place through its members' success↔running↔idle churn; a
-/// process-only group ranks just under calm agent groups; an empty group sinks
-/// last.
-fn group_rank(group: &SidebarWorktreeGroup) -> u8 {
-    let band = group_band(group);
-    group
-        .rows
-        .iter()
-        .filter(|row| row_band(row) == band)
-        .map(|row| match row.status() {
-            Some(status) if status.is_attention() => status_rank(status),
-            Some(_) => 3,
-            None => 4,
-        })
-        .min()
-        .unwrap_or(u8::MAX)
+fn group_sort_key<'a>(
+    facts: impl Iterator<Item = RankFacts<'a>>,
+    kind: SidebarWorktreeKind,
+    label: &str,
+) -> GroupRankKey {
+    // The group's band (layers 1 and 2) is read from its liveliest member. Row
+    // order seats process rows below agent cards, so group liveness is computed
+    // across all rows instead of borrowed from `rows.first()`; an empty group
+    // sinks last.
+    let mut band = u8::MAX;
+    let mut rank = u8::MAX;
+    let mut earliest_ordinal: Option<u64> = None;
+    for facts in facts {
+        let facts_band = facts_band(&facts);
+        let facts_rank = group_member_rank(&facts);
+        if facts_band < band {
+            band = facts_band;
+            rank = facts_rank;
+        } else if facts_band == band {
+            rank = rank.min(facts_rank);
+        }
+        if let Some(ordinal) = facts.pane_ordinal {
+            earliest_ordinal = Some(earliest_ordinal.map_or(ordinal, |min| min.min(ordinal)));
+        }
+    }
+    GroupRankKey {
+        external: kind == SidebarWorktreeKind::External,
+        band,
+        rank,
+        // The group's earliest member pane ordinal uses the same creation-order
+        // key as the calm tiebreak, so group order tracks the mux's pane layout
+        // even when no agent reports a process start (Zellij) instead of
+        // degrading to the label.
+        earliest_ordinal: StartKey::from(earliest_ordinal),
+        label: label.to_owned(),
+    }
 }
 
-fn group_is_external(group: &SidebarWorktreeGroup) -> bool {
-    group.kind == SidebarWorktreeKind::External
-}
-
-/// The group's earliest member pane ordinal — the same creation-order key the
-/// within-bucket calm tiebreak uses, so group order tracks the mux's pane layout
-/// even when no agent reports a process start (Zellij) instead of degrading to
-/// the label.
-fn group_earliest_ordinal(group: &SidebarWorktreeGroup) -> Option<u64> {
-    group.rows.iter().filter_map(row_ordinal).min()
-}
-
-fn row_rank(row: &SidebarRow) -> u8 {
-    match row.status() {
-        Some(status) => status_rank(status),
-        None => 7,
+fn group_member_rank(facts: &RankFacts<'_>) -> u8 {
+    match facts.status {
+        Some(status) if status.is_attention() => status_rank(status),
+        Some(_) => 3,
+        None => 4,
     }
 }
 
 /// The macro band folding layers 1 and 2: the unread inbox first, then live
 /// work, then dormant work past the inactive window. Status no longer sets the
-/// band — `row_rank` orders within one — so a fresh `idle` agent outranks a stale
-/// `waiting` one, and only `unread` or crossing the inactive window moves a row
-/// between bands. The `external` partition is group-only ([`compare_groups`]).
+/// band — `status_rank` orders within one — so a fresh `idle` agent outranks a
+/// stale `waiting` one, and only `unread` or crossing the inactive window moves a
+/// row between bands. The `external` partition is group-only ([`compare_groups`]).
 fn row_band(row: &SidebarRow) -> u8 {
-    if row.unread {
+    band(row.unread, row.inactive)
+}
+
+fn band(unread: bool, inactive: bool) -> u8 {
+    if unread {
         0
-    } else if row.inactive {
+    } else if inactive {
         2
     } else {
         1
@@ -654,139 +699,30 @@ pub fn group_live_agents_by_worktree<'a>(
     for group in &mut groups {
         sort_listing_agents(&mut group.agents);
     }
-    groups.sort_by(compare_listing_groups);
+    groups.sort_by_cached_key(|group| {
+        group_sort_key(
+            group.agents.iter().copied().map(agent_rank_facts),
+            group.kind,
+            &group.label,
+        )
+    });
     groups
 }
 
 /// The agent's pane creation ordinal — the calm tiebreak the `rimz agents list`
-/// roster shares with the sidebar ([`pane_creation_ordinal`]).
+/// roster shares with the sidebar.
 fn agent_ordinal(agent: &AgentState) -> Option<u64> {
-    pane_creation_ordinal(agent.pane.as_ref())
+    agent
+        .pane
+        .as_ref()
+        .and_then(|pane| pane.pane_id.creation_ordinal())
 }
 
 fn sort_listing_agents(agents: &mut [&AgentState]) {
-    let cohorts = listing_cohort_aggregates(agents);
-    agents.sort_by(|a, b| compare_listing_agents_with_cohorts(a, b, &cohorts));
-}
-
-fn listing_cohort_aggregates(agents: &[&AgentState]) -> BTreeMap<String, Option<u64>> {
-    let mut aggregates: BTreeMap<String, Option<u64>> = BTreeMap::new();
-    for agent in agents {
-        let Some(cohort) = agent_launch_cohort(agent) else {
-            continue;
-        };
-        let entry = aggregates.entry(cohort.to_owned()).or_insert(None);
-        *entry = min_optional_ordinal(*entry, agent_ordinal(agent));
-    }
-    aggregates
+    let cohorts = rank_cohort_blocks(agents.iter().copied().map(agent_rank_facts));
+    agents.sort_by_cached_key(|agent| rank_key(agent_rank_facts(agent), &cohorts));
 }
 
 fn agent_launch_cohort(agent: &AgentState) -> Option<&str> {
     agent.team.as_deref().or(agent.launch_group.as_deref())
-}
-
-/// [`compare_rows`] for a bare roster with no unread/inactive state: the status
-/// ladder orders the bucket, attention agents tiebreak longest-overdue-first,
-/// calm agents by pane creation order, then the durable `agent_id`.
-fn compare_listing_agents(a: &AgentState, b: &AgentState) -> Ordering {
-    status_rank(a.status)
-        .cmp(&status_rank(b.status))
-        .then_with(|| {
-            if a.status.is_attention() {
-                a.last_activity.cmp(&b.last_activity)
-            } else {
-                cmp_start_asc(agent_ordinal(a), agent_ordinal(b))
-            }
-        })
-        .then_with(|| a.agent_id.as_str().cmp(b.agent_id.as_str()))
-}
-
-fn compare_listing_agents_with_cohorts(
-    a: &AgentState,
-    b: &AgentState,
-    cohorts: &BTreeMap<String, Option<u64>>,
-) -> Ordering {
-    let a_cohort = agent_launch_cohort(a);
-    let b_cohort = agent_launch_cohort(b);
-    match (a_cohort, b_cohort) {
-        (Some(a_key), Some(b_key)) if a_key == b_key => compare_same_listing_cohort_agents(a, b),
-        (None, None) => compare_listing_agents(a, b),
-        _ => compare_effective_listing_agents(a, b, a_cohort, b_cohort, cohorts),
-    }
-}
-
-fn compare_same_listing_cohort_agents(a: &AgentState, b: &AgentState) -> Ordering {
-    cmp_start_asc(a.launch_ordinal, b.launch_ordinal)
-        .then_with(|| cmp_start_asc(agent_ordinal(a), agent_ordinal(b)))
-        .then_with(|| a.agent_id.as_str().cmp(b.agent_id.as_str()))
-}
-
-fn compare_effective_listing_agents(
-    a: &AgentState,
-    b: &AgentState,
-    a_cohort: Option<&str>,
-    b_cohort: Option<&str>,
-    cohorts: &BTreeMap<String, Option<u64>>,
-) -> Ordering {
-    effective_listing_rank(a, a_cohort)
-        .cmp(&effective_listing_rank(b, b_cohort))
-        .then_with(|| {
-            cmp_start_asc(
-                effective_listing_ordinal(a, a_cohort, cohorts),
-                effective_listing_ordinal(b, b_cohort, cohorts),
-            )
-        })
-        .then_with(|| effective_agent_key(a, a_cohort).cmp(effective_agent_key(b, b_cohort)))
-        .then_with(|| a_cohort.is_none().cmp(&b_cohort.is_none()))
-}
-
-fn effective_listing_rank(agent: &AgentState, cohort: Option<&str>) -> u8 {
-    if cohort.is_some() {
-        3
-    } else {
-        status_rank(agent.status)
-    }
-}
-
-fn effective_listing_ordinal(
-    agent: &AgentState,
-    cohort: Option<&str>,
-    cohorts: &BTreeMap<String, Option<u64>>,
-) -> Option<u64> {
-    cohort
-        .and_then(|key| cohorts.get(key).copied().flatten())
-        .or_else(|| agent_ordinal(agent))
-}
-
-fn effective_agent_key<'a>(agent: &'a AgentState, cohort: Option<&'a str>) -> &'a str {
-    cohort.unwrap_or_else(|| agent.agent_id.as_str())
-}
-
-/// [`compare_groups`] for the roster: the `external` catch-all last, then the
-/// most-urgent member, then the earliest member's pane creation order, then the
-/// label.
-fn compare_listing_groups(a: &AgentWorktreeGroup, b: &AgentWorktreeGroup) -> Ordering {
-    let earliest =
-        |group: &AgentWorktreeGroup| group.agents.iter().filter_map(|a| agent_ordinal(a)).min();
-
-    (a.kind == SidebarWorktreeKind::External)
-        .cmp(&(b.kind == SidebarWorktreeKind::External))
-        .then_with(|| listing_group_rank(a).cmp(&listing_group_rank(b)))
-        .then_with(|| cmp_start_asc(earliest(a), earliest(b)))
-        .then_with(|| a.label.cmp(&b.label))
-}
-
-fn listing_group_rank(group: &AgentWorktreeGroup) -> u8 {
-    group
-        .agents
-        .iter()
-        .map(|agent| {
-            if agent.status.is_attention() {
-                status_rank(agent.status)
-            } else {
-                3
-            }
-        })
-        .min()
-        .unwrap_or(u8::MAX)
 }

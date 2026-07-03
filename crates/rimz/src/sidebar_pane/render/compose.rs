@@ -1,6 +1,9 @@
 use crate::agents::AgentStatus;
 use crate::config::ScrollbarMode;
-use crate::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, lead_unread_row};
+use crate::{
+    SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, actionable_unread_count,
+    lead_unread_row,
+};
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -121,12 +124,7 @@ pub(crate) fn compose_lines(
 
     let mut banner_line = None;
     if show_banner && let Some(lead) = lead {
-        let count = snapshot
-            .worktree_groups
-            .iter()
-            .flat_map(|group| &group.rows)
-            .filter(|row| row.unread && row.status().is_some_and(AgentStatus::is_actionable))
-            .count();
+        let count = actionable_unread_count(&snapshot.worktree_groups);
         let status = lead.status().unwrap_or(AgentStatus::Waiting);
         // Above the pinned separator blank (last top-zone line) so cards keep
         // their breathing row. Structural in the row map — the click scrolls to

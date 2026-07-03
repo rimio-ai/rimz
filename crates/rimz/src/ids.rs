@@ -652,6 +652,26 @@ impl PaneId {
             .expect("PaneId invariant: contains ':'");
         tail
     }
+
+    /// The pane's creation ordinal: the monotonic integer the mux assigns each pane
+    /// (`zellij:terminal_176` -> 176, `tmux:%3` -> 3), ascending in birth order. It is
+    /// the calm tiebreak — one signal both agents in a tab share, and the order the
+    /// mux itself lays panes out, so the sidebar tracks the pane order until the
+    /// panes are reordered. It replaces the former `pane_process_start`/`registered_at`
+    /// spawn key, which read a different clock for each agent (a derived process
+    /// start for one, hook registration for the other) and inverted co-launched
+    /// panes whenever the two sources disagreed.
+    pub fn creation_ordinal(&self) -> Option<u64> {
+        let raw = self.raw();
+        let digits_start = raw
+            .as_bytes()
+            .iter()
+            .rposition(|byte| !byte.is_ascii_digit())
+            .map_or(0, |last_non_digit| last_non_digit + 1);
+        raw.get(digits_start..)
+            .filter(|tail| !tail.is_empty())
+            .and_then(|tail| tail.parse::<u64>().ok())
+    }
 }
 
 impl fmt::Display for PaneId {
@@ -827,6 +847,22 @@ mod tests {
         let parsed: PaneId = "tmux:%5".parse().expect("valid pane id");
         assert_eq!(parsed.mux(), MuxName::Tmux);
         assert_eq!(parsed.raw(), "%5");
+    }
+
+    #[test]
+    fn pane_id_creation_ordinal_reads_trailing_digits() {
+        assert_eq!(
+            PaneId::from_parts(MuxName::Zellij, "terminal_176").creation_ordinal(),
+            Some(176)
+        );
+        assert_eq!(
+            PaneId::from_parts(MuxName::Tmux, "%3").creation_ordinal(),
+            Some(3)
+        );
+        assert_eq!(
+            PaneId::from_parts(MuxName::Tmux, "pane").creation_ordinal(),
+            None
+        );
     }
 
     #[test]

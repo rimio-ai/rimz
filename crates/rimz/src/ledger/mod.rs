@@ -72,7 +72,7 @@ pub use crate::ledger::snapshot::{
     SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel,
     SidebarResolverState, SidebarRow, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent,
     SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync,
-    lead_unread_row,
+    actionable_unread_count, lead_unread_row, triage_key,
 };
 pub use crate::ledger::workspace_record::WorkspaceRecord;
 

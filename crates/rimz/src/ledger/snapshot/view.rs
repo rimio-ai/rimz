@@ -35,7 +35,7 @@ mod rows;
 pub use model::{
     PresenceSample, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarProviderPanel,
     SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState,
-    WorktreeTrunkSync, lead_unread_row,
+    WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
 };
 use reap::{agent_hook_session_stale, is_agent_native_item};
 

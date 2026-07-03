@@ -53,7 +53,8 @@ pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use view::{
     PresenceSample, SNAPSHOT_VERSION, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
     SidebarProviderPanel, SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup,
-    SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
+    SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync, actionable_unread_count,
+    lead_unread_row, triage_key,
 };
 
 #[derive(Debug, thiserror::Error)]
