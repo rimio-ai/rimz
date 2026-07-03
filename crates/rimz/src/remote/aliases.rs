@@ -255,15 +255,30 @@ mod tests {
     }
 
     #[test]
-    fn missing_file_loads_empty() {
+    fn template_and_missing_file_contract() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("remote.toml");
         let list = RemoteAliases::load_from(&path).unwrap();
         assert!(list.entries().is_empty());
-    }
 
-    #[test]
-    fn template_loads_empty_and_example_parses_when_uncommented() {
+        let template_path = dir.path().join("rimz").join("remote.toml");
+        assert!(RemoteAliases::ensure_template_at(&template_path).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&template_path).unwrap(),
+            REMOTE_TEMPLATE
+        );
+        std::fs::write(
+            &template_path,
+            "[[remote]]\nname = \"dev\"\ntarget = \"dev-box:app\"\n",
+        )
+        .unwrap();
+        assert!(!RemoteAliases::ensure_template_at(&template_path).unwrap());
+        assert!(
+            RemoteAliases::load_from(&template_path)
+                .unwrap()
+                .contains("dev")
+        );
+
         let list: RemoteAliases = toml::from_str(REMOTE_TEMPLATE).unwrap();
         assert!(list.entries().is_empty());
 
@@ -281,31 +296,18 @@ mod tests {
     }
 
     #[test]
-    fn ensure_template_writes_once_without_overwriting() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("rimz").join("remote.toml");
-
-        assert!(RemoteAliases::ensure_template_at(&path).unwrap());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), REMOTE_TEMPLATE);
-
-        std::fs::write(
-            &path,
-            "[[remote]]\nname = \"dev\"\ntarget = \"dev-box:app\"\n",
-        )
-        .unwrap();
-        assert!(!RemoteAliases::ensure_template_at(&path).unwrap());
-        let list = RemoteAliases::load_from(&path).unwrap();
-        assert!(list.contains("dev"));
-    }
-
-    #[test]
-    fn round_trip_preserves_entries_sorted_by_name() {
+    fn toml_round_trip_defaults_and_sorting() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("remote.toml");
         let mut list = RemoteAliases::default();
         list.add(alias("prod", "prod-box:query-engine")).unwrap();
         list.add(alias("dev", "dev-box:query-engine")).unwrap();
         list.save_to(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("reconnect = true"), "{text}");
+        assert!(!text.contains("no_resume = false"), "{text}");
+        assert!(!text.contains("mux ="), "{text}");
+
         let reloaded = RemoteAliases::load_from(&path).unwrap();
         let names: Vec<&str> = reloaded
             .entries()
@@ -313,10 +315,7 @@ mod tests {
             .map(|entry| entry.name.as_str())
             .collect();
         assert_eq!(names, vec!["dev", "prod"]);
-    }
 
-    #[test]
-    fn optional_fields_default_when_omitted() {
         let parsed: RemoteAliases = toml::from_str(
             r#"
             [[remote]]
@@ -332,68 +331,36 @@ mod tests {
     }
 
     #[test]
-    fn add_rejects_duplicate_name() {
+    fn mutations_enforce_crud_contract() {
         let mut list = RemoteAliases::default();
         list.add(alias("prod", "prod-box:query-engine")).unwrap();
         let err = list
             .add(alias("prod", "other-box:query-engine"))
             .unwrap_err();
         assert!(matches!(err, AliasErr::DuplicateName(_)));
-    }
 
-    #[test]
-    fn update_replaces_existing_entry() {
-        let mut list = RemoteAliases::default();
-        list.add(alias("prod", "prod-box:query-engine")).unwrap();
         list.update(alias("prod", "prod-box:other-engine")).unwrap();
         let entries = list.entries();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].target, "prod-box:other-engine");
-    }
 
-    #[test]
-    fn update_errors_when_absent() {
-        let mut list = RemoteAliases::default();
         let err = list
-            .update(alias("prod", "prod-box:query-engine"))
+            .update(alias("missing", "prod-box:query-engine"))
             .unwrap_err();
         assert!(matches!(err, AliasErr::NotFound(_)));
-    }
 
-    #[test]
-    fn remove_and_rename_return_not_found_when_absent() {
-        let mut list = RemoteAliases::default();
         let remove = list.remove("missing").unwrap_err();
         assert!(matches!(remove, AliasErr::NotFound(_)));
         let rename = list.rename("missing", "new".to_owned()).unwrap_err();
         assert!(matches!(rename, AliasErr::NotFound(_)));
-    }
 
-    #[test]
-    fn rename_rejects_duplicate_name() {
-        let mut list = RemoteAliases::default();
-        list.add(alias("prod", "prod-box:query-engine")).unwrap();
         list.add(alias("dev", "dev-box:query-engine")).unwrap();
         let err = list.rename("dev", "prod".to_owned()).unwrap_err();
         assert!(matches!(err, AliasErr::DuplicateName(_)));
     }
 
     #[test]
-    fn add_rejects_invalid_target() {
-        let mut list = RemoteAliases::default();
-        let err = list.add(alias("prod", "prod-box")).unwrap_err();
-        assert!(matches!(err, AliasErr::InvalidTarget(_)));
-    }
-
-    #[test]
-    fn update_rejects_invalid_target() {
-        let mut list = RemoteAliases::default();
-        let err = list.update(alias("prod", "prod-box")).unwrap_err();
-        assert!(matches!(err, AliasErr::InvalidTarget(_)));
-    }
-
-    #[test]
-    fn add_and_rename_reject_invalid_names() {
+    fn validation_rejects_invalid_names_and_targets() {
         let mut list = RemoteAliases::default();
         let long = "a".repeat(ALIAS_NAME_MAX_LEN + 1);
         for name in [
@@ -418,10 +385,18 @@ mod tests {
             list.rename("prod", "host:path".to_owned()).unwrap_err(),
             AliasErr::InvalidName(_)
         ));
-    }
 
-    #[test]
-    fn load_rejects_hand_edited_invalid_names() {
+        assert!(matches!(
+            RemoteAliases::default()
+                .add(alias("prod", "prod-box"))
+                .unwrap_err(),
+            AliasErr::InvalidTarget(_)
+        ));
+        assert!(matches!(
+            list.update(alias("prod", "prod-box")).unwrap_err(),
+            AliasErr::InvalidTarget(_)
+        ));
+
         let dir = tempdir().unwrap();
         let path = dir.path().join("remote.toml");
         std::fs::write(

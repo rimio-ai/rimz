@@ -59,6 +59,60 @@ fn write_infocmp_shim(path: &Path) {
     }
 }
 
+enum InfocmpFixture {
+    Ambient,
+    Missing,
+    Copy,
+}
+
+fn run_exec_with_term(term: &str, infocmp: InfocmpFixture) -> Vec<String> {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let mut cmd = env.rimz();
+    cmd.args(["remote", "connect", "dev-box:query-engine", "--attach"])
+        .env("RIMZ_SSH_BIN", ssh_shim())
+        .env("RIMZ_TEST_SSH_LOG", &log)
+        .env("RIMZ_REMOTE_PROBE_MS", "0")
+        .env("TERM", term);
+    match infocmp {
+        InfocmpFixture::Ambient => {}
+        InfocmpFixture::Missing => {
+            cmd.env("RIMZ_INFOCMP_BIN", env.project_root.join("missing-infocmp"));
+        }
+        InfocmpFixture::Copy => {
+            let infocmp = env.project_root.join("infocmp-shim");
+            write_infocmp_shim(&infocmp);
+            cmd.env("RIMZ_INFOCMP_BIN", infocmp);
+        }
+    }
+    let out = cmd
+        .bounded_output()
+        .expect("run rimz remote connect --attach");
+    assert!(
+        out.status.success(),
+        "shim exits 0 -> clean exit\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let invocations = shim_invocations(&log);
+    assert_eq!(invocations.len(), 1, "one ssh run");
+    let argv = invocations.into_iter().next().expect("ssh invocation");
+    assert_eq!(argv.len(), 17, "snippet is a single argv element: {argv:?}");
+    assert!(argv[0].ends_with("ssh-trace"));
+    assert_eq!(argv[1..9], SSH_TRANSPORT_OPTS);
+    assert_eq!(argv[9], "-o");
+    assert_eq!(argv[10], "ControlMaster=auto");
+    assert_eq!(argv[11], "-o");
+    assert!(argv[12].starts_with("ControlPath="), "{argv:?}");
+    assert_eq!(argv[13], "-t");
+    assert_eq!(argv[14], "--");
+    assert_eq!(argv[15], "dev-box");
+    argv
+}
+
+fn snippet(argv: &[String]) -> &str {
+    argv.last().expect("snippet")
+}
+
 fn write_link_notify_command_config(env: &Env) {
     let dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&dir).expect("mkdir rimz config dir");
@@ -148,97 +202,26 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
 }
 
 #[test]
-fn exec_hands_ssh_the_expected_argv() {
-    let env = Env::new();
-    let log = env.project_root.join("ssh-trace.log");
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
-        .env("RIMZ_REMOTE_PROBE_MS", "0")
-        .env("TERM", "xterm-256color")
-        .bounded_output()
-        .expect("run rimz remote connect --attach");
-    assert!(
-        out.status.success(),
-        "shim exits 0 → clean exit\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let invocations = shim_invocations(&log);
-    assert_eq!(invocations.len(), 1, "one ssh run");
-    let argv = &invocations[0];
-    assert_eq!(argv.len(), 17, "snippet is a single argv element: {argv:?}");
-    assert!(argv[0].ends_with("ssh-trace"));
-    assert_eq!(argv[1..9], SSH_TRANSPORT_OPTS);
-    assert_eq!(argv[9], "-o");
-    assert_eq!(argv[10], "ControlMaster=auto");
-    assert_eq!(argv[11], "-o");
-    assert!(argv[12].starts_with("ControlPath="), "{argv:?}");
-    assert_eq!(argv[13], "-t");
-    assert_eq!(argv[14], "--");
-    assert_eq!(argv[15], "dev-box");
-    assert!(argv[16].starts_with("PATH=\"$HOME/.cargo/bin"));
-    assert!(argv[16].ends_with("exec rimz attach --attach -- 'query-engine'"));
-}
+fn exec_uses_ssh_shim_and_applies_terminal_plan() {
+    let portable = run_exec_with_term("xterm-256color", InfocmpFixture::Ambient);
+    assert!(snippet(&portable).starts_with("PATH=\"$HOME/.cargo/bin"));
+    assert!(snippet(&portable).ends_with("exec rimz attach --attach -- 'query-engine'"));
 
-#[test]
-fn exec_pins_term_for_unportable_terminal() {
-    let env = Env::new();
-    let log = env.project_root.join("ssh-trace.log");
-    let missing_infocmp = env.project_root.join("missing-infocmp");
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
-        .env("RIMZ_REMOTE_PROBE_MS", "0")
-        .env("RIMZ_INFOCMP_BIN", &missing_infocmp)
-        .env("TERM", "alacritty")
-        .bounded_output()
-        .expect("run rimz remote connect --attach");
+    let downgrade = run_exec_with_term("alacritty", InfocmpFixture::Missing);
     assert!(
-        out.status.success(),
-        "shim exits 0 → clean exit\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
+        snippet(&downgrade).contains("export TERM=xterm-256color; exec rimz"),
+        "{}",
+        snippet(&downgrade)
     );
-    let invocations = shim_invocations(&log);
-    let argv = &invocations[0];
-    let snippet = argv.last().expect("snippet");
-    assert!(snippet.contains("export TERM=xterm-256color;"), "{snippet}");
-    assert!(snippet.ends_with("exec rimz attach --attach -- 'query-engine'"));
-}
 
-#[test]
-fn exec_copies_terminfo_for_unportable_terminal() {
-    let env = Env::new();
-    let log = env.project_root.join("ssh-trace.log");
-    let infocmp = env.project_root.join("infocmp-shim");
-    write_infocmp_shim(&infocmp);
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
-        .env("RIMZ_REMOTE_PROBE_MS", "0")
-        .env("RIMZ_INFOCMP_BIN", &infocmp)
-        .env("TERM", "alacritty")
-        .bounded_output()
-        .expect("run rimz remote connect --attach");
+    let copy = run_exec_with_term("alacritty", InfocmpFixture::Copy);
     assert!(
-        out.status.success(),
-        "shim exits 0 → clean exit\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let invocations = shim_invocations(&log);
-    let argv = &invocations[0];
-    let snippet = argv.last().expect("snippet");
-    assert!(
-        snippet
+        snippet(&copy)
             .contains("printf '%s\\n' 'CANNED,' | tic -x - 2>/dev/null && export TERM='alacritty'"),
-        "{snippet}"
+        "{}",
+        snippet(&copy)
     );
-    assert!(snippet.ends_with("exec rimz attach --attach -- 'query-engine'"));
+    assert!(snippet(&copy).ends_with("exec rimz attach --attach -- 'query-engine'"));
 }
 
 #[test]
@@ -384,8 +367,10 @@ fn local_link_notify_command_receives_lost_and_restored_env() {
 }
 
 #[test]
-fn remote_alias_round_trip_connects_lists_resets_and_deletes() {
+fn remote_alias_cli_lifecycle_covers_add_update_list_reset_rm() {
     let env = Env::new();
+    let remote_file = env.config_root().join("rimz").join("remote.toml");
+
     let add = env
         .rimz()
         .args(["remote", "add", "prod", "agent@prod-box:query-engine"])
@@ -396,83 +381,11 @@ fn remote_alias_round_trip_connects_lists_resets_and_deletes() {
         "add succeeds\nstderr:\n{}",
         String::from_utf8_lossy(&add.stderr),
     );
-    let remote_file = env.config_root().join("rimz").join("remote.toml");
     let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
     assert!(text.contains("name = \"prod\""), "{text}");
     assert!(
         text.contains("target = \"agent@prod-box:query-engine\""),
         "{text}"
-    );
-
-    let printed = env
-        .rimz()
-        .args(["remote", "connect", "prod", "--print"])
-        .env("TERM", "xterm-256color")
-        .bounded_output()
-        .expect("run rimz remote connect alias --print");
-    let line = stdout_line(&printed);
-    assert!(
-        line.contains("agent@prod-box"),
-        "alias target rides into ssh: {line}"
-    );
-    assert!(
-        line.contains("query-engine"),
-        "alias session rides into remote rimz: {line}"
-    );
-
-    let list = env
-        .rimz()
-        .args(["remote", "list", "--json"])
-        .bounded_output()
-        .expect("run rimz remote list --json");
-    assert!(
-        list.status.success(),
-        "list succeeds\nstderr:\n{}",
-        String::from_utf8_lossy(&list.stderr),
-    );
-    let json: serde_json::Value =
-        serde_json::from_slice(&list.stdout).expect("remote list json parses");
-    assert_eq!(json["remotes"][0]["name"], "prod");
-    assert_eq!(json["remotes"][0]["reconnect"], true);
-
-    let reset = env
-        .rimz()
-        .args(["remote", "reset", "prod", "--print"])
-        .env("TERM", "xterm-256color")
-        .bounded_output()
-        .expect("run rimz remote reset --print");
-    let line = stdout_line(&reset);
-    assert!(
-        line.contains("--no-resume"),
-        "remote reset injects --no-resume: {line}"
-    );
-
-    let rm = env
-        .rimz()
-        .args(["remote", "rm", "prod"])
-        .bounded_output()
-        .expect("run rimz remote rm");
-    assert!(
-        rm.status.success(),
-        "rm succeeds\nstderr:\n{}",
-        String::from_utf8_lossy(&rm.stderr),
-    );
-}
-
-#[test]
-fn remote_add_rejects_existing_name_and_update_replaces_target() {
-    let env = Env::new();
-    let remote_file = env.config_root().join("rimz").join("remote.toml");
-
-    let add = env
-        .rimz()
-        .args(["remote", "add", "prod", "agent@prod-box:query-engine"])
-        .bounded_output()
-        .expect("run rimz remote add");
-    assert!(
-        add.status.success(),
-        "add succeeds\nstderr:\n{}",
-        String::from_utf8_lossy(&add.stderr),
     );
 
     let dup = env
@@ -506,6 +419,49 @@ fn remote_add_rejects_existing_name_and_update_replaces_target() {
         "target replaced: {text}",
     );
 
+    let printed = env
+        .rimz()
+        .args(["remote", "connect", "prod", "--print"])
+        .env("TERM", "xterm-256color")
+        .bounded_output()
+        .expect("run rimz remote connect alias --print");
+    let line = stdout_line(&printed);
+    assert!(
+        line.contains("agent@prod-box"),
+        "alias target rides into ssh: {line}"
+    );
+    assert!(
+        line.contains("other-engine"),
+        "alias session rides into remote rimz: {line}"
+    );
+
+    let list = env
+        .rimz()
+        .args(["remote", "list", "--json"])
+        .bounded_output()
+        .expect("run rimz remote list --json");
+    assert!(
+        list.status.success(),
+        "list succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&list.stderr),
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&list.stdout).expect("remote list json parses");
+    assert_eq!(json["remotes"][0]["name"], "prod");
+    assert_eq!(json["remotes"][0]["reconnect"], true);
+
+    let reset = env
+        .rimz()
+        .args(["remote", "reset", "prod", "--print"])
+        .env("TERM", "xterm-256color")
+        .bounded_output()
+        .expect("run rimz remote reset --print");
+    let line = stdout_line(&reset);
+    assert!(
+        line.contains("--no-resume"),
+        "remote reset injects --no-resume: {line}"
+    );
+
     let missing = env
         .rimz()
         .args(["remote", "update", "nope", "host:path"])
@@ -514,5 +470,21 @@ fn remote_add_rejects_existing_name_and_update_replaces_target() {
     assert!(
         !missing.status.success(),
         "update of absent alias must fail"
+    );
+
+    let rm = env
+        .rimz()
+        .args(["remote", "rm", "prod"])
+        .bounded_output()
+        .expect("run rimz remote rm");
+    assert!(
+        rm.status.success(),
+        "rm succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&rm.stderr),
+    );
+    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
+    assert!(
+        !text.contains("name = \"prod\""),
+        "alias removed from file: {text}"
     );
 }

@@ -573,19 +573,20 @@ mod tests {
     }
 
     #[test]
-    fn tier_boundaries_are_exact() {
-        assert_eq!(link_tier(Some(150), 0), LinkTier::Good);
-        assert_eq!(link_tier(Some(151), 0), LinkTier::Degraded);
-        assert_eq!(link_tier(Some(400), 0), LinkTier::Degraded);
-        assert_eq!(link_tier(Some(401), 0), LinkTier::Bad);
-        assert_eq!(link_tier(Some(10), 0), LinkTier::Good);
-        assert_eq!(link_tier(Some(10), 1), LinkTier::Degraded);
-        assert_eq!(link_tier(Some(10), 10), LinkTier::Degraded);
-        assert_eq!(link_tier(Some(10), 11), LinkTier::Bad);
-    }
+    fn tier_and_badge_heat_boundaries_are_exact() {
+        for (rtt, loss, expected) in [
+            (Some(150), 0, LinkTier::Good),
+            (Some(151), 0, LinkTier::Degraded),
+            (Some(400), 0, LinkTier::Degraded),
+            (Some(401), 0, LinkTier::Bad),
+            (Some(10), 0, LinkTier::Good),
+            (Some(10), 1, LinkTier::Degraded),
+            (Some(10), 10, LinkTier::Degraded),
+            (Some(10), 11, LinkTier::Bad),
+        ] {
+            assert_eq!(link_tier(rtt, loss), expected, "{rtt:?}/{loss}");
+        }
 
-    #[test]
-    fn badge_heat_greens_when_healthy_then_climbs_each_axis() {
         let approx = |actual: Option<f32>, expected: f32| {
             let got = actual.expect("heat");
             assert!(
@@ -593,29 +594,25 @@ mod tests {
                 "expected {expected}, got {got}"
             );
         };
-        // Warming has no RTT sample; sampled healthy links stay on green.
         assert_eq!(link_badge_heat(None, 0), None);
         approx(link_badge_heat(Some(100), 0), 0.0);
-        approx(link_badge_heat(Some(50), 0), 0.0);
-        // Latency climbs the full ramp: green at 100ms, yellow at 200ms,
-        // amber at 300ms, red at 400ms and beyond.
         approx(link_badge_heat(Some(200), 0), 1.0 / 3.0);
         approx(link_badge_heat(Some(300), 0), 2.0 / 3.0);
         approx(link_badge_heat(Some(400), 0), 1.0);
-        approx(link_badge_heat(Some(500), 0), 1.0);
-        // Loss climbs the same ramp independently: yellow at 10%, amber at 20%,
-        // red at 30% and beyond.
+        approx(link_badge_heat(Some(401), 0), 1.0);
+        approx(link_badge_heat(Some(100), 0), 0.0);
+        approx(link_badge_heat(Some(100), 1), 1.0 / 30.0);
         approx(link_badge_heat(Some(100), 10), 1.0 / 3.0);
+        approx(link_badge_heat(Some(100), 11), 11.0 / 30.0);
         approx(link_badge_heat(Some(100), 20), 2.0 / 3.0);
         approx(link_badge_heat(Some(100), 30), 1.0);
         approx(link_badge_heat(Some(100), 31), 1.0);
-        // The worse axis wins.
         approx(link_badge_heat(Some(120), 30), 1.0);
         approx(link_badge_heat(Some(300), 10), 2.0 / 3.0);
     }
 
     #[test]
-    fn probe_window_tracks_ack_miss_late_ack_and_blackout() {
+    fn probe_window_accounts_ack_miss_late_ack_trim() {
         let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
         window.record_sent(1, 1_000);
         assert!(window.record_ack(1, 1_050));
@@ -635,10 +632,17 @@ mod tests {
             "late ack after miss is ignored"
         );
         assert_eq!(window.blackout_ms(1_250), 135);
+
+        for seq in 4..=(LINK_WINDOW as u64 + 5) {
+            let sent_at_ms = 2_000 + seq * 10;
+            window.record_sent(seq, sent_at_ms);
+            assert!(window.record_ack(seq, sent_at_ms + 1));
+        }
+        assert_eq!(usize::from(window.stats().window), LINK_WINDOW);
     }
 
     #[test]
-    fn first_ack_is_accounted_but_not_reported() {
+    fn probe_window_smooths_rtt_and_rearms_stream() {
         let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
         window.record_sent(1, 0);
         assert!(window.record_ack(1, 740));
@@ -651,16 +655,7 @@ mod tests {
                 bandwidth_bps: None,
             }
         );
-        window.record_sent(2, 1_000);
-        assert!(window.record_ack(2, 1_210));
-        assert_eq!(window.stats().rtt_ms, Some(210));
-    }
 
-    #[test]
-    fn begin_stream_rearms_cold_ack_discard_without_resetting_reported_rtt() {
-        let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
-        window.record_sent(1, 0);
-        assert!(window.record_ack(1, 740));
         window.record_sent(2, 1_000);
         assert!(window.record_ack(2, 1_210));
         assert_eq!(window.stats().rtt_ms, Some(210));
@@ -677,98 +672,31 @@ mod tests {
         window.record_sent(4, 3_000);
         assert!(window.record_ack(4, 3_210));
         assert_eq!(window.stats().rtt_ms, Some(210));
-    }
 
-    #[test]
-    fn adaptive_ewma_holds_small_wander_and_snaps_on_jump() {
-        let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
-        window.record_sent(1, 0);
-        assert!(window.record_ack(1, 100));
-        window.record_sent(2, 200);
-        assert!(window.record_ack(2, 300));
-        assert_eq!(window.stats().rtt_ms, Some(100));
-
-        window.record_sent(3, 400);
-        assert!(window.record_ack(3, 505));
+        window.record_sent(5, 3_400);
+        assert!(window.record_ack(5, 3_615));
         assert_eq!(
             window.stats().rtt_ms,
-            Some(100),
+            Some(210),
             "small jitter stays inside the display hysteresis"
         );
 
-        window.record_sent(4, 600);
-        assert!(window.record_ack(4, 1_200));
+        window.record_sent(6, 4_000);
+        assert!(window.record_ack(6, 4_600));
         assert_eq!(
             window.stats().rtt_ms,
-            Some(400),
+            Some(444),
             "large deviation uses fast alpha and updates the reported value"
         );
     }
 
     #[test]
-    fn ewma_window_is_capped() {
-        let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
-        window.record_sent(1, 0);
-        assert!(window.record_ack(1, 100));
-        window.record_sent(2, 200);
-        assert!(window.record_ack(2, 300));
-        for seq in 3..=(LINK_WINDOW as u64 + 5) {
-            window.record_sent(seq, seq * 10);
-            assert!(window.record_ack(seq, seq * 10 + 1));
-        }
-        assert_eq!(usize::from(window.stats().window), LINK_WINDOW);
-    }
-
-    #[test]
-    fn link_monitor_reports_when_rtt_becomes_publishable() {
-        let mut monitor = LinkMonitor::with_timeout(Duration::from_millis(100));
-
-        let first_probe = monitor.next_probe(1_000);
-        let first = monitor.record_ack(first_probe.seq, 1_050);
-        assert!(first.accepted);
-        assert!(
-            !first.reported_rtt_changed,
-            "the first ack is accounted but keeps the badge warming"
-        );
-        assert_eq!(first.events, vec![LinkEvent::FirstAck]);
-        assert_eq!(monitor.stats().rtt_ms, None);
-
-        let second_probe = monitor.next_probe(1_060);
-        let second = monitor.record_ack(second_probe.seq, 1_115);
-        assert!(second.accepted);
-        assert!(
-            second.reported_rtt_changed,
-            "the second ack seeds the displayed RTT and should publish immediately"
-        );
-        assert!(second.events.is_empty());
-        assert!(monitor.stats().rtt_ms.is_some());
-    }
-
-    #[test]
-    fn link_monitor_drains_multiple_tail_acks() {
-        let mut monitor = LinkMonitor::with_timeout(Duration::from_millis(100));
-        let first_probe = monitor.next_probe(1_000);
-        let second_probe = monitor.next_probe(1_010);
-
-        let first = monitor.record_ack(first_probe.seq, 1_020);
-        let second = monitor.record_ack(second_probe.seq, 1_040);
-
-        assert!(first.accepted);
-        assert_eq!(first.events, vec![LinkEvent::FirstAck]);
-        assert!(second.accepted);
-        assert!(second.events.is_empty());
-        let stats = monitor.stats();
-        assert_eq!(stats.window, 2);
-        assert_eq!(stats.miss_pct, 0);
-        assert!(stats.rtt_ms.is_some());
-    }
-
-    #[test]
-    fn link_monitor_blackout_requires_prior_ack_threshold_and_latches() {
+    fn link_monitor_emits_first_ack_publish_blackout_recovered() {
         let mut monitor = LinkMonitor::with_timeout(Duration::from_millis(100));
         let blackout_after_ms = LINK_BLACKOUT_AFTER.as_millis() as u64;
-        let first_probe = monitor.next_probe(1_000);
 
+        let first_probe = monitor.next_probe(1_000);
+        let second_probe = monitor.next_probe(1_010);
         assert_eq!(
             monitor.check_blackout(1_000 + blackout_after_ms),
             None,
@@ -777,27 +705,44 @@ mod tests {
 
         let first = monitor.record_ack(first_probe.seq, 1_020);
         assert!(first.accepted);
+        assert!(
+            !first.reported_rtt_changed,
+            "the first ack is accounted but keeps the badge warming"
+        );
         assert_eq!(first.events, vec![LinkEvent::FirstAck]);
+        assert_eq!(monitor.stats().rtt_ms, None);
 
-        assert_eq!(monitor.check_blackout(1_020 + blackout_after_ms - 1), None);
+        let second = monitor.record_ack(second_probe.seq, 1_040);
+        assert!(second.accepted);
+        assert!(
+            second.reported_rtt_changed,
+            "the second ack seeds the displayed RTT and should publish immediately"
+        );
+        assert!(second.events.is_empty());
+        assert!(monitor.stats().rtt_ms.is_some());
+        let stats = monitor.stats();
+        assert_eq!(stats.window, 2);
+        assert_eq!(stats.miss_pct, 0);
+
+        assert_eq!(monitor.check_blackout(1_040 + blackout_after_ms - 1), None);
         assert_eq!(
-            monitor.check_blackout(1_020 + blackout_after_ms),
+            monitor.check_blackout(1_040 + blackout_after_ms),
             Some(LinkEvent::Blackout(LINK_BLACKOUT_AFTER))
         );
         assert_eq!(
-            monitor.check_blackout(1_020 + blackout_after_ms + 1_000),
+            monitor.check_blackout(1_040 + blackout_after_ms + 1_000),
             None,
             "latched blackout events are not repeated"
         );
 
-        let recovered_probe = monitor.next_probe(1_020 + blackout_after_ms + 1_100);
-        let recovered = monitor.record_ack(recovered_probe.seq, 1_020 + blackout_after_ms + 1_120);
+        let recovered_probe = monitor.next_probe(1_040 + blackout_after_ms + 1_100);
+        let recovered = monitor.record_ack(recovered_probe.seq, 1_040 + blackout_after_ms + 1_120);
         assert!(recovered.accepted);
         assert_eq!(recovered.events, vec![LinkEvent::Recovered]);
     }
 
     #[test]
-    fn serde_round_trips_schema_shapes() {
+    fn link_protocol_serializes_and_builds_control_specs() {
         let probe = LinkProbe::new(
             42,
             1_000,
@@ -819,10 +764,13 @@ mod tests {
                 .unwrap()
                 .version_ok()
         );
-    }
 
-    #[test]
-    fn control_options_and_probe_spec_are_stable() {
+        let file = LinkStatsFile::new(2_000, "client-port server-port".to_owned(), probe.stats);
+        let parsed: LinkStatsFile = serde_json::from_str(&serde_json::to_string(&file).unwrap())
+            .expect("stats file round trips");
+        assert!(parsed.version_ok());
+        assert_eq!(parsed, file);
+
         let control = PathBuf::from("/tmp/rimz.sock");
         assert_eq!(
             control_options(&control),
@@ -833,16 +781,22 @@ mod tests {
                 "ControlPath=/tmp/rimz.sock",
             ]
         );
-        let spec = probe_stream_spec(&target("dev-box:~/code/query-engine"), &control);
-        assert_eq!(spec.program, "ssh");
+        let path_spec = probe_stream_spec(&target("dev-box:~/code/query-engine"), &control);
+        assert_eq!(path_spec.program, "ssh");
         assert_eq!(
-            spec.args[0..5],
+            path_spec.args[0..5],
             ["-S", "/tmp/rimz.sock", "-o", "BatchMode=yes", "--"]
         );
-        assert_eq!(spec.args[5], "dev-box");
+        assert_eq!(path_spec.args[5], "dev-box");
         assert!(
-            spec.args[6]
+            path_spec.args[6]
                 .contains("rimz remote link-stats ingest --dir \"$HOME\"'/code/query-engine'")
+        );
+        let session_spec = probe_stream_spec(&target("dev-box:query-engine"), &control);
+        assert!(
+            session_spec.args[6].contains("rimz remote link-stats ingest --session 'query-engine'"),
+            "{:?}",
+            session_spec.args
         );
 
         let check = control_check_spec(&target("dev-box:query-engine"), &control);

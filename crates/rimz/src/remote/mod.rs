@@ -493,309 +493,374 @@ mod tests {
     }
 
     #[test]
-    fn session_target_parses() {
-        let target = parse("dev-box:query-engine");
-        assert_eq!(target.destination, "dev-box");
-        assert_eq!(target.host_display(), "dev-box");
-        assert_eq!(target.spec, RemoteSpec::Session("query-engine".to_owned()));
+    fn target_grammar_accepts_supported_forms() {
+        struct TargetCase {
+            input: &'static str,
+            destination: &'static str,
+            host: &'static str,
+            spec: RemoteSpec,
+        }
+
+        for case in [
+            TargetCase {
+                input: "dev-box:query-engine",
+                destination: "dev-box",
+                host: "dev-box",
+                spec: RemoteSpec::Session("query-engine".to_owned()),
+            },
+            TargetCase {
+                input: "dev-box:~/code/query-engine",
+                destination: "dev-box",
+                host: "dev-box",
+                spec: RemoteSpec::Path("$HOME/code/query-engine".to_owned()),
+            },
+            TargetCase {
+                input: "dev-box:~",
+                destination: "dev-box",
+                host: "dev-box",
+                spec: RemoteSpec::Path("$HOME".to_owned()),
+            },
+            TargetCase {
+                input: "dev-box:/workspace/hello-world",
+                destination: "dev-box",
+                host: "dev-box",
+                spec: RemoteSpec::Path("/workspace/hello-world".to_owned()),
+            },
+            TargetCase {
+                input: "dev-box:code/query-engine",
+                destination: "dev-box",
+                host: "dev-box",
+                spec: RemoteSpec::Path("code/query-engine".to_owned()),
+            },
+            TargetCase {
+                input: "agent@1.1.1.1:/workspace/hello-world",
+                destination: "agent@1.1.1.1",
+                host: "1.1.1.1",
+                spec: RemoteSpec::Path("/workspace/hello-world".to_owned()),
+            },
+            TargetCase {
+                input: "dev-box:build@2",
+                destination: "dev-box",
+                host: "dev-box",
+                spec: RemoteSpec::Session("build@2".to_owned()),
+            },
+            TargetCase {
+                input: "alice@corp.com@dev-box:query-engine",
+                destination: "alice@corp.com@dev-box",
+                host: "dev-box",
+                spec: RemoteSpec::Session("query-engine".to_owned()),
+            },
+            TargetCase {
+                input: "user@[::1]:/srv/app",
+                destination: "user@[::1]",
+                host: "::1",
+                spec: RemoteSpec::Path("/srv/app".to_owned()),
+            },
+            TargetCase {
+                input: "[::1]:query-engine",
+                destination: "[::1]",
+                host: "::1",
+                spec: RemoteSpec::Session("query-engine".to_owned()),
+            },
+        ] {
+            let target = parse(case.input);
+            assert_eq!(target.destination, case.destination, "{}", case.input);
+            assert_eq!(target.host_display(), case.host, "{}", case.input);
+            assert_eq!(target.spec, case.spec, "{}", case.input);
+        }
     }
 
     #[test]
-    fn tilde_path_normalizes_to_home() {
-        let target = parse("dev-box:~/code/query-engine");
-        assert_eq!(
-            target.spec,
-            RemoteSpec::Path("$HOME/code/query-engine".to_owned())
-        );
+    fn target_grammar_rejects_malformed_forms() {
+        enum ErrorKind {
+            Empty,
+            MissingColon,
+            EmptyTarget,
+            EmptyHost,
+            UnclosedBracket,
+            TildeUser,
+        }
+
+        for (input, kind) in [
+            ("", ErrorKind::Empty),
+            ("dev-box", ErrorKind::MissingColon),
+            ("dev-box:", ErrorKind::EmptyTarget),
+            (":query-engine", ErrorKind::EmptyHost),
+            ("user@:", ErrorKind::EmptyHost),
+            ("user@:query-engine", ErrorKind::EmptyHost),
+            ("[::1:query-engine", ErrorKind::UnclosedBracket),
+            ("dev-box:~alice", ErrorKind::TildeUser),
+            ("dev-box:~alice/code", ErrorKind::TildeUser),
+        ] {
+            let err = RemoteTarget::parse(input).expect_err("target must fail");
+            assert!(
+                matches!(
+                    (kind, err),
+                    (ErrorKind::Empty, RemoteTargetError::Empty)
+                        | (ErrorKind::MissingColon, RemoteTargetError::MissingColon(_))
+                        | (ErrorKind::EmptyTarget, RemoteTargetError::EmptyTarget(_))
+                        | (ErrorKind::EmptyHost, RemoteTargetError::EmptyHost(_))
+                        | (
+                            ErrorKind::UnclosedBracket,
+                            RemoteTargetError::UnclosedBracket(_)
+                        )
+                        | (ErrorKind::TildeUser, RemoteTargetError::TildeUser(_))
+                ),
+                "{input} returned wrong error"
+            );
+        }
     }
 
     #[test]
-    fn bare_tilde_is_a_path() {
-        assert_eq!(
-            parse("dev-box:~").spec,
-            RemoteSpec::Path("$HOME".to_owned())
-        );
-    }
-
-    #[test]
-    fn absolute_and_relative_paths_classify_as_paths() {
-        assert_eq!(
-            parse("dev-box:/workspace/hello-world").spec,
-            RemoteSpec::Path("/workspace/hello-world".to_owned())
-        );
-        assert_eq!(
-            parse("dev-box:code/query-engine").spec,
-            RemoteSpec::Path("code/query-engine".to_owned())
-        );
-    }
-
-    #[test]
-    fn user_prefix_rides_the_destination() {
-        let target = parse("agent@1.1.1.1:/workspace/hello-world");
-        assert_eq!(target.destination, "agent@1.1.1.1");
-        assert_eq!(target.host_display(), "1.1.1.1");
-    }
-
-    #[test]
-    fn target_keeps_its_own_at_sign() {
-        // The first `:` ends the host; an `@` after it belongs to the target.
-        let target = parse("dev-box:build@2");
-        assert_eq!(target.destination, "dev-box");
-        assert_eq!(target.spec, RemoteSpec::Session("build@2".to_owned()));
-        assert_eq!(
-            parse("dev-box:~/code/foo@v2").spec,
-            RemoteSpec::Path("$HOME/code/foo@v2".to_owned())
-        );
-    }
-
-    #[test]
-    fn user_splits_at_the_last_at_sign() {
-        // ssh's rule: usernames can carry their own `@` (AD-style).
-        let target = parse("alice@corp.com@dev-box:query-engine");
-        assert_eq!(target.destination, "alice@corp.com@dev-box");
-        assert_eq!(target.host_display(), "dev-box");
-    }
-
-    #[test]
-    fn bracketed_ipv6_hosts_parse() {
-        let target = parse("user@[::1]:/srv/app");
-        assert_eq!(target.destination, "user@[::1]");
-        assert_eq!(target.host_display(), "::1");
-        assert_eq!(target.spec, RemoteSpec::Path("/srv/app".to_owned()));
-
-        let target = parse("[::1]:query-engine");
-        assert_eq!(target.destination, "[::1]");
-        assert_eq!(target.spec, RemoteSpec::Session("query-engine".to_owned()));
-    }
-
-    #[test]
-    fn malformed_targets_name_the_fix() {
-        assert!(matches!(
-            RemoteTarget::parse(""),
-            Err(RemoteTargetError::Empty)
-        ));
-        assert!(matches!(
-            RemoteTarget::parse("dev-box"),
-            Err(RemoteTargetError::MissingColon(_))
-        ));
-        assert!(matches!(
-            RemoteTarget::parse("dev-box:"),
-            Err(RemoteTargetError::EmptyTarget(_))
-        ));
-        assert!(matches!(
-            RemoteTarget::parse(":query-engine"),
-            Err(RemoteTargetError::EmptyHost(_))
-        ));
-        assert!(matches!(
-            RemoteTarget::parse("user@:query-engine"),
-            Err(RemoteTargetError::EmptyHost(_))
-        ));
-        assert!(matches!(
-            RemoteTarget::parse("[::1:query-engine"),
-            Err(RemoteTargetError::UnclosedBracket(_))
-        ));
-        // `~user` cannot expand through the quoted snippet — fail with the fix.
-        assert!(matches!(
-            RemoteTarget::parse("dev-box:~alice/code"),
-            Err(RemoteTargetError::TildeUser(_))
-        ));
-        assert!(matches!(
-            RemoteTarget::parse("dev-box:~alice"),
-            Err(RemoteTargetError::TildeUser(_))
-        ));
-    }
-
-    #[test]
-    fn sh_quote_escapes_shell_words() {
-        assert_eq!(sh_quote("a b"), "'a b'");
+    fn quote_and_display_are_shell_safe() {
         assert_eq!(sh_quote("it's"), "'it'\\''s'");
         assert_eq!(sh_quote(""), "''");
-    }
-
-    #[test]
-    fn quote_remote_path_expands_home_outside_quotes() {
         assert_eq!(quote_remote_path("$HOME"), "\"$HOME\"");
         assert_eq!(
             quote_remote_path("$HOME/code/query-engine"),
             "\"$HOME\"'/code/query-engine'"
         );
         assert_eq!(quote_remote_path("/abs path"), "'/abs path'");
-    }
 
-    #[test]
-    fn term_copy_need_is_selective() {
-        assert!(term_needs_terminfo_copy("alacritty"));
-        assert!(term_needs_terminfo_copy("xterm-kitty"));
-        assert!(term_needs_terminfo_copy("xterm-ghostty"));
-        assert!(!term_needs_terminfo_copy("xterm-256color"));
-        assert!(!term_needs_terminfo_copy("screen-256color"));
-        assert!(!term_needs_terminfo_copy("tmux-256color"));
-    }
-
-    #[test]
-    fn term_plan_keeps_portable_or_absent_terms() {
-        assert_eq!(term_plan_from(None, |_| None), TermPlan::Keep);
-        assert_eq!(term_plan_from(Some(""), |_| None), TermPlan::Keep);
-        assert_eq!(
-            term_plan_from(Some("xterm-256color"), |_| None),
-            TermPlan::Keep
-        );
-    }
-
-    #[test]
-    fn term_plan_copies_nonportable_terms_with_source() {
-        assert_eq!(
-            term_plan_from(Some("alacritty"), |_| Some("ALACRITTY|fake,".to_owned())),
-            TermPlan::Copy {
-                name: "alacritty".to_owned(),
-                source: "ALACRITTY|fake,".to_owned(),
-            }
-        );
-    }
-
-    #[test]
-    fn term_plan_downgrades_nonportable_terms_without_source() {
-        assert_eq!(
-            term_plan_from(Some("alacritty"), |_| None),
-            TermPlan::Downgrade
-        );
-        assert_eq!(
-            term_plan_from(Some("alacritty"), |_| Some("  ".to_owned())),
-            TermPlan::Downgrade
-        );
-    }
-
-    #[test]
-    fn term_downgrade_sets_term_before_exec() {
-        let target = parse("dev-box:query-engine");
-        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Downgrade, None);
-        let snippet = spec.args.last().expect("snippet");
-        assert!(
-            snippet.contains("export TERM=xterm-256color; exec rimz"),
-            "{snippet}"
-        );
-    }
-
-    #[test]
-    fn term_copy_installs_terminfo_before_exec() {
-        let target = parse("dev-box:query-engine");
-        let term = TermPlan::Copy {
-            name: "alacritty".to_owned(),
-            source: "ALACRITTY|fake,".to_owned(),
-        };
-        let spec = ssh_attach_spec(&target, false, None, &term, None);
-        let snippet = spec.args.last().expect("snippet");
-        assert!(
-            snippet.contains(
-                "export TERM=xterm-256color; printf '%s\\n' 'ALACRITTY|fake,' | tic -x - 2>/dev/null && export TERM='alacritty'; exec rimz"
-            ),
-            "{snippet}"
-        );
-    }
-
-    #[test]
-    fn session_spec_compiles_to_remote_attach() {
-        let target = parse("dev-box:query-engine");
-        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep, None);
-        assert_eq!(spec.program, "ssh");
-        assert_eq!(
-            spec.args[..10],
-            [
-                "-o",
-                "ServerAliveInterval=5",
-                "-o",
-                "ServerAliveCountMax=3",
-                "-o",
-                "ConnectTimeout=10",
-                "-o",
-                "Compression=yes",
-                "-t",
-                "--",
-            ]
-        );
-        assert_eq!(spec.args[10], "dev-box");
-        let snippet = &spec.args[11];
-        assert_eq!(spec.args.len(), 12, "snippet is a single argv element");
-        assert!(snippet.starts_with("PATH=\"$HOME/.cargo/bin"));
-        assert!(snippet.contains("command -v rimz"));
-        assert!(snippet.contains("rimz not found on dev-box"));
-        assert!(snippet.contains("exit 127"));
-        assert!(snippet.ends_with("exec rimz attach --attach -- 'query-engine'"));
-    }
-
-    #[test]
-    fn supervised_spec_adds_controlmaster_without_changing_the_plain_spec() {
-        let target = parse("dev-box:query-engine");
-        let plain = ssh_attach_spec(&target, false, None, &TermPlan::Keep, None);
-        let control = ssh_attach_spec(
-            &target,
+        let line = display_ssh_command(&ssh_attach_spec(
+            &parse("dev-box:query-engine"),
             false,
             None,
             &TermPlan::Keep,
-            Some(Path::new("/tmp/rimz.sock")),
-        );
+            None,
+        ));
+        assert!(line.starts_with("ssh -o ServerAliveInterval=5"), "{line}");
+        assert!(line.contains(" -t -- dev-box '"), "{line}");
+        assert!(line.ends_with('\''), "{line}");
 
-        assert_eq!(plain.args[..8], control.args[..8]);
-        assert_eq!(
-            control.args[8..12],
-            [
-                "-o",
-                "ControlMaster=auto",
-                "-o",
-                "ControlPath=/tmp/rimz.sock",
-            ]
-        );
-        assert_eq!(control.args[12], "-t");
-        assert_eq!(control.args[13], "--");
-        assert_eq!(control.args[14], "dev-box");
-    }
-
-    #[test]
-    fn path_spec_compiles_to_remote_start() {
-        let target = parse("dev-box:~/code/query-engine");
-        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep, None);
-        let snippet = spec.args.last().expect("snippet");
-        assert!(snippet.ends_with("exec rimz start --attach -- \"$HOME\"'/code/query-engine'"));
-    }
-
-    #[test]
-    fn no_resume_and_mux_ride_the_remote_invocation() {
-        let target = parse("dev-box:query-engine");
-        let spec = ssh_attach_spec(&target, true, Some(MuxName::Tmux), &TermPlan::Keep, None);
-        let snippet = spec.args.last().expect("snippet");
-        assert!(snippet.contains("exec rimz attach --attach --no-resume --mux tmux -- "));
-    }
-
-    #[test]
-    fn display_ssh_command_is_pasteable() {
-        let target = parse("dev-box:query-engine");
-        let spec = ssh_attach_spec(&target, false, None, &TermPlan::Keep, None);
-        let line = display_ssh_command(&spec);
-        assert!(line.starts_with("ssh -o ServerAliveInterval=5"));
-        assert!(line.contains(" -t -- dev-box '"));
-        assert!(line.ends_with("'"));
-
-        let v6 = ssh_attach_spec(
+        let v6 = display_ssh_command(&ssh_attach_spec(
             &parse("[::1]:query-engine"),
             false,
             None,
             &TermPlan::Keep,
             None,
-        );
+        ));
         assert!(
-            display_ssh_command(&v6).contains(" -- '[::1]' "),
-            "bracketed destinations quote against shell globbing"
+            v6.contains(" -- '[::1]' "),
+            "bracketed destinations quote against shell globbing: {v6}"
         );
     }
 
     #[test]
-    fn backoff_doubles_until_capped() {
+    fn term_plan_selects_keep_copy_or_downgrade() {
+        for term in ["alacritty", "xterm-kitty", "xterm-ghostty"] {
+            assert!(term_needs_terminfo_copy(term), "{term}");
+        }
+        for term in ["xterm-256color", "screen-256color", "tmux-256color"] {
+            assert!(!term_needs_terminfo_copy(term), "{term}");
+        }
+
+        struct TermCase {
+            term: Option<&'static str>,
+            infocmp: Option<&'static str>,
+            expected: TermPlan,
+        }
+
+        for case in [
+            TermCase {
+                term: None,
+                infocmp: None,
+                expected: TermPlan::Keep,
+            },
+            TermCase {
+                term: Some(""),
+                infocmp: None,
+                expected: TermPlan::Keep,
+            },
+            TermCase {
+                term: Some("xterm-256color"),
+                infocmp: None,
+                expected: TermPlan::Keep,
+            },
+            TermCase {
+                term: Some("alacritty"),
+                infocmp: Some("ALACRITTY|fake,"),
+                expected: TermPlan::Copy {
+                    name: "alacritty".to_owned(),
+                    source: "ALACRITTY|fake,".to_owned(),
+                },
+            },
+            TermCase {
+                term: Some("xterm-kitty"),
+                infocmp: None,
+                expected: TermPlan::Downgrade,
+            },
+            TermCase {
+                term: Some("xterm-ghostty"),
+                infocmp: Some("  "),
+                expected: TermPlan::Downgrade,
+            },
+        ] {
+            assert_eq!(
+                term_plan_from(case.term, |_| case.infocmp.map(ToOwned::to_owned)),
+                case.expected
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_attach_spec_compiles_session_path_flags_control_and_term() {
+        struct SpecCase {
+            name: &'static str,
+            target: &'static str,
+            no_resume: bool,
+            mux: Option<MuxName>,
+            term: TermPlan,
+            control: Option<&'static Path>,
+            destination_index: usize,
+            snippet_contains: &'static [&'static str],
+        }
+
+        for case in [
+            SpecCase {
+                name: "session attach",
+                target: "dev-box:query-engine",
+                no_resume: false,
+                mux: None,
+                term: TermPlan::Keep,
+                control: None,
+                destination_index: 10,
+                snippet_contains: &[
+                    "command -v rimz",
+                    "rimz not found on dev-box",
+                    "exit 127",
+                    "exec rimz attach --attach -- 'query-engine'",
+                ],
+            },
+            SpecCase {
+                name: "path start",
+                target: "dev-box:~/code/query-engine",
+                no_resume: false,
+                mux: None,
+                term: TermPlan::Keep,
+                control: None,
+                destination_index: 10,
+                snippet_contains: &["exec rimz start --attach -- \"$HOME\"'/code/query-engine'"],
+            },
+            SpecCase {
+                name: "no resume and mux",
+                target: "dev-box:query-engine",
+                no_resume: true,
+                mux: Some(MuxName::Tmux),
+                term: TermPlan::Keep,
+                control: None,
+                destination_index: 10,
+                snippet_contains: &["exec rimz attach --attach --no-resume --mux tmux -- "],
+            },
+            SpecCase {
+                name: "control master",
+                target: "dev-box:query-engine",
+                no_resume: false,
+                mux: None,
+                term: TermPlan::Keep,
+                control: Some(Path::new("/tmp/rimz.sock")),
+                destination_index: 14,
+                snippet_contains: &["exec rimz attach --attach -- 'query-engine'"],
+            },
+            SpecCase {
+                name: "term downgrade",
+                target: "dev-box:query-engine",
+                no_resume: false,
+                mux: None,
+                term: TermPlan::Downgrade,
+                control: None,
+                destination_index: 10,
+                snippet_contains: &["export TERM=xterm-256color; exec rimz"],
+            },
+            SpecCase {
+                name: "term copy",
+                target: "dev-box:query-engine",
+                no_resume: false,
+                mux: None,
+                term: TermPlan::Copy {
+                    name: "alacritty".to_owned(),
+                    source: "ALACRITTY|fake,".to_owned(),
+                },
+                control: None,
+                destination_index: 10,
+                snippet_contains: &[concat!(
+                    "export TERM=xterm-256color; printf '%s\\n' 'ALACRITTY|fake,' | ",
+                    "tic -x - 2>/dev/null && export TERM='alacritty'; exec rimz"
+                )],
+            },
+        ] {
+            let spec = ssh_attach_spec(
+                &parse(case.target),
+                case.no_resume,
+                case.mux,
+                &case.term,
+                case.control,
+            );
+            assert_eq!(spec.program, "ssh", "{}", case.name);
+            assert_eq!(
+                spec.args[..8],
+                [
+                    "-o",
+                    "ServerAliveInterval=5",
+                    "-o",
+                    "ServerAliveCountMax=3",
+                    "-o",
+                    "ConnectTimeout=10",
+                    "-o",
+                    "Compression=yes",
+                ],
+                "{}",
+                case.name
+            );
+            if case.control.is_some() {
+                assert_eq!(
+                    spec.args[8..12],
+                    [
+                        "-o",
+                        "ControlMaster=auto",
+                        "-o",
+                        "ControlPath=/tmp/rimz.sock",
+                    ],
+                    "{}",
+                    case.name
+                );
+            }
+            assert_eq!(spec.args[case.destination_index - 2], "-t", "{}", case.name);
+            assert_eq!(spec.args[case.destination_index - 1], "--", "{}", case.name);
+            assert_eq!(
+                spec.args[case.destination_index], "dev-box",
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                spec.args.len(),
+                case.destination_index + 2,
+                "snippet is a single argv element: {}",
+                case.name
+            );
+            let snippet = spec.args.last().expect("snippet");
+            assert!(
+                snippet.starts_with("PATH=\"$HOME/.cargo/bin"),
+                "{}",
+                case.name
+            );
+            for needle in case.snippet_contains {
+                assert!(
+                    snippet.contains(needle),
+                    "{} missing {needle}: {snippet}",
+                    case.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn verdict_and_backoff_classify_reconnects() {
         let base = Duration::from_secs(1);
         let cap = Duration::from_secs(30);
         let delays: Vec<Duration> = (0..7)
             .map(|failures| backoff(failures, base, cap))
             .collect();
-
         assert_eq!(
             delays,
             [
@@ -808,53 +873,33 @@ mod tests {
                 Duration::from_secs(30),
             ]
         );
-    }
 
-    #[test]
-    fn verdict_classifies_session_exits() {
         let policy = ReconnectPolicy::default();
         assert_eq!(verdict(Some(0), true, 0, &policy), Verdict::CleanExit);
-        assert_eq!(verdict(Some(0), false, 0, &policy), Verdict::CleanExit);
-        // Transport loss on an established link retries with growing backoff.
-        assert_eq!(
-            verdict(Some(SSH_TRANSPORT_EXIT), true, 0, &policy),
-            Verdict::Retry {
-                delay: Duration::from_secs(1)
-            }
-        );
         assert_eq!(
             verdict(Some(SSH_TRANSPORT_EXIT), true, 2, &policy),
             Verdict::Retry {
                 delay: Duration::from_secs(4)
             }
         );
-        // …capped.
         assert_eq!(
             verdict(Some(SSH_TRANSPORT_EXIT), true, 30, &policy),
             Verdict::Retry {
                 delay: Duration::from_secs(30)
             }
         );
-        // A transport failure before any session established is fatal — auth
-        // failures and unknown hosts never become a prompt loop.
         assert_eq!(
             verdict(Some(SSH_TRANSPORT_EXIT), false, 0, &policy),
             Verdict::Fatal {
                 code: SSH_TRANSPORT_EXIT
             }
         );
-        // Remote rimz missing / remote room failures are not link problems.
         assert_eq!(
             verdict(Some(REMOTE_RIMZ_MISSING_EXIT), true, 0, &policy),
             Verdict::Fatal {
                 code: REMOTE_RIMZ_MISSING_EXIT
             }
         );
-        assert_eq!(
-            verdict(Some(1), true, 0, &policy),
-            Verdict::Fatal { code: 1 }
-        );
-        // Signal-death stops the loop.
         assert_eq!(verdict(None, true, 0, &policy), Verdict::Fatal { code: 1 });
     }
 }

@@ -317,25 +317,31 @@ fn run_infocmp(term: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn alias(name: &str, target: &str, reconnect: bool, no_resume: bool) -> RemoteAlias {
+    fn alias(
+        name: &str,
+        target: &str,
+        reconnect: bool,
+        no_resume: bool,
+        mux: Option<MuxName>,
+    ) -> RemoteAlias {
         RemoteAlias {
             name: name.to_owned(),
             target: target.to_owned(),
             reconnect,
             no_resume,
-            mux: None,
+            mux,
         }
     }
 
     #[test]
-    fn build_alias_persists_mux_from_globals() {
+    fn connect_resolution_applies_alias_cli_overrides() {
         let globals = GlobalFlags {
             mux: Some(MuxName::Tmux),
             root: None,
             color: super::super::ColorWhen::Auto,
         };
 
-        let alias = build_alias(
+        let built_alias = build_alias(
             "prod".to_owned(),
             "prod-box:query-engine".to_owned(),
             false,
@@ -343,25 +349,30 @@ mod tests {
             &globals,
         );
 
-        assert_eq!(alias.mux, Some(MuxName::Tmux));
-    }
+        assert_eq!(built_alias.mux, Some(MuxName::Tmux));
 
-    #[test]
-    fn connect_resolution_applies_alias_reset_and_reconnect_policy() {
         let mut aliases = RemoteAliases::default();
         aliases
-            .add(alias("prod", "prod-box:query-engine", true, false))
+            .add(alias("prod", "prod-box:query-engine", true, false, None))
             .unwrap();
         aliases
-            .add(alias("fresh", "fresh-box:query-engine", true, true))
+            .add(alias("fresh", "fresh-box:query-engine", true, true, None))
             .unwrap();
         aliases
-            .add(alias("default", "dev-box:query-engine", true, false))
+            .add(alias(
+                "tmuxed",
+                "tmux-box:query-engine",
+                true,
+                false,
+                Some(MuxName::Tmux),
+            ))
             .unwrap();
 
-        let raw = resolve_connect("raw-box:session", false, false, None, &aliases).unwrap();
+        let raw = resolve_connect("prod:raw-session", false, false, None, &aliases).unwrap();
         let raw_spec = ssh_attach_spec(&raw.target, raw.no_resume, raw.mux, &TermPlan::Keep, None);
-        assert_eq!(raw_spec.args[10], "raw-box");
+        assert_eq!(raw_spec.args[10], "prod");
+        assert!(raw.reconnect);
+        assert!(!raw.no_resume);
 
         let named = resolve_connect("prod", false, false, None, &aliases).unwrap();
         let named_spec = ssh_attach_spec(
@@ -372,14 +383,23 @@ mod tests {
             None,
         );
         assert_eq!(named_spec.args[10], "prod-box");
+        assert!(named.reconnect);
+        assert!(!named.no_resume);
 
         let fresh = resolve_connect("fresh", false, false, None, &aliases).unwrap();
         assert!(fresh.no_resume);
 
-        let reset = resolve_connect("default", true, false, None, &aliases).unwrap();
+        let reset = resolve_connect("prod", true, false, None, &aliases).unwrap();
         assert!(reset.no_resume);
 
         let remote = resolve_connect("prod", false, true, None, &aliases).unwrap();
         assert!(!remote.reconnect);
+
+        let alias_mux = resolve_connect("tmuxed", false, false, None, &aliases).unwrap();
+        assert_eq!(alias_mux.mux, Some(MuxName::Tmux));
+
+        let cli_mux =
+            resolve_connect("tmuxed", false, false, Some(MuxName::Zellij), &aliases).unwrap();
+        assert_eq!(cli_mux.mux, Some(MuxName::Zellij));
     }
 }
