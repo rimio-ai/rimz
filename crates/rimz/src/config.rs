@@ -21,10 +21,11 @@ use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::ledger::parse_cache::StampedPath;
 use crate::ledger::paths::{self, config_home};
 
 mod accounts;
@@ -467,56 +468,17 @@ impl ConfigStamp {
         )?;
         fragments.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(Self {
-            core: stamped_path(config_path),
-            theme: stamped_path(&sibling_path(config_path, THEME_FILE)),
-            agents: stamped_path(&sibling_path(config_path, AGENTS_FILE)),
-            loop_: stamped_path(&sibling_path(config_path, LOOP_FILE)),
+            core: StampedPath::of(config_path),
+            theme: StampedPath::of(&sibling_path(config_path, THEME_FILE)),
+            agents: StampedPath::of(&sibling_path(config_path, AGENTS_FILE)),
+            loop_: StampedPath::of(&sibling_path(config_path, LOOP_FILE)),
             fragments,
         })
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct StampedPath {
-    path: PathBuf,
-    stamp: FileStamp,
-}
-
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-struct FileStamp {
-    len: u64,
-    modified_secs: u64,
-    modified_nanos: u32,
-}
-
 fn sibling_path(path: &Path, file: &str) -> PathBuf {
     path.parent().unwrap_or_else(|| Path::new(".")).join(file)
-}
-
-fn stamped_path(path: &Path) -> StampedPath {
-    StampedPath {
-        path: path.to_path_buf(),
-        stamp: file_stamp(path),
-    }
-}
-
-fn file_stamp(path: &Path) -> FileStamp {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return FileStamp {
-            len: 0,
-            modified_secs: 0,
-            modified_nanos: 0,
-        };
-    };
-    let modified = meta
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
-    FileStamp {
-        len: meta.len(),
-        modified_secs: modified.as_ref().map_or(0, |duration| duration.as_secs()),
-        modified_nanos: modified.map_or(0, |duration| duration.subsec_nanos()),
-    }
 }
 
 fn collect_agents_home_fragment_stamps(
@@ -526,7 +488,7 @@ fn collect_agents_home_fragment_stamps(
     out: &mut Vec<StampedPath>,
 ) -> Result<()> {
     for dir in child_dirs(&root.join(subdir))? {
-        out.push(stamped_path(&dir.join(fragment_file)));
+        out.push(StampedPath::of(&dir.join(fragment_file)));
     }
     Ok(())
 }

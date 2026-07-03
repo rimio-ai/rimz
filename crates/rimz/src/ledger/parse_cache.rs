@@ -2,6 +2,8 @@
 //! identity `(mtime, len)` — the shared core behind every single-slot
 //! stat-gated parse cache (`rollup.json`, `latest.json`, the published
 //! `snapshot.json`).
+//! [`FileStamp`] and [`StampedPath`] expose that same cheap identity outside a
+//! parse cache when callers only need change detection.
 //!
 //! Every file it fronts is republished by atomic rename of a fresh temp
 //! file, so a changed payload almost surely changes the identity; a hit
@@ -20,7 +22,50 @@
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) struct FileStamp {
+    pub(crate) len: u64,
+    pub(crate) modified_secs: u64,
+    pub(crate) modified_nanos: u32,
+}
+
+impl FileStamp {
+    pub(crate) fn of(path: &Path) -> Self {
+        let Ok(meta) = std::fs::metadata(path) else {
+            return Self {
+                len: 0,
+                modified_secs: 0,
+                modified_nanos: 0,
+            };
+        };
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
+        Self {
+            len: meta.len(),
+            modified_secs: modified.as_ref().map_or(0, |duration| duration.as_secs()),
+            modified_nanos: modified.map_or(0, |duration| duration.subsec_nanos()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub(crate) struct StampedPath {
+    pub(crate) path: PathBuf,
+    pub(crate) stamp: FileStamp,
+}
+
+impl StampedPath {
+    pub(crate) fn of(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            stamp: FileStamp::of(path),
+        }
+    }
+}
 
 pub(crate) struct ParseCache<T> {
     slot: RefCell<Option<Entry<T>>>,

@@ -3,10 +3,8 @@
 //! Renderers that are not the elected producer stay in this lane: no mux call,
 //! no git call, no provider probe, and no durable ledger writes.
 
-use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
-
 use crate::ids::PaneId;
+use crate::ledger::parse_cache::StampedPath;
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
 use super::cache::read_snapshot_cache;
@@ -25,19 +23,6 @@ pub struct ConsumerFoldInputsStamp {
     runtime: Vec<StampedPath>,
     dirs: Vec<StampedPath>,
     config_generation: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct StampedPath {
-    path: PathBuf,
-    stamp: FileStamp,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FileStamp {
-    len: u64,
-    modified_secs: u64,
-    modified_nanos: u32,
 }
 
 /// The event-fresh ledger rollup, read in process: `latest.json` when it
@@ -151,39 +136,13 @@ pub fn consumer_fold_inputs_stamp(
     ConsumerFoldInputsStamp {
         state: state_files
             .into_iter()
-            .map(|path| stamped_path(&path))
+            .map(|path| StampedPath::of(&path))
             .collect::<Vec<_>>(),
         runtime: runtime_files
             .iter()
-            .map(|path| stamped_path(path.as_path()))
+            .map(|path| StampedPath::of(path.as_path()))
             .collect::<Vec<_>>(),
-        dirs: dirs.into_iter().map(stamped_path).collect::<Vec<_>>(),
+        dirs: dirs.into_iter().map(StampedPath::of).collect::<Vec<_>>(),
         config_generation: crate::config::MachineConfig::load_stamp_generation(),
-    }
-}
-
-fn stamped_path(path: &Path) -> StampedPath {
-    StampedPath {
-        path: path.to_path_buf(),
-        stamp: file_stamp(path),
-    }
-}
-
-fn file_stamp(path: &Path) -> FileStamp {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return FileStamp {
-            len: 0,
-            modified_secs: 0,
-            modified_nanos: 0,
-        };
-    };
-    let modified = meta
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
-    FileStamp {
-        len: meta.len(),
-        modified_secs: modified.as_ref().map_or(0, |duration| duration.as_secs()),
-        modified_nanos: modified.map_or(0, |duration| duration.subsec_nanos()),
     }
 }

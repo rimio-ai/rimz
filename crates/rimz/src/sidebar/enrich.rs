@@ -3,17 +3,11 @@
 //! One ordered spine serves both producer and consumer reads. It projects lane
 //! caches and sidecars; it forks no subprocess and writes no cache files.
 
-use std::collections::{BTreeMap, HashMap, hash_map::DefaultHasher};
-use std::hash::{Hash, Hasher};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::UNIX_EPOCH;
+use std::sync::Arc;
 
-use crate::agents::spending::{
-    HeadlineSpec, ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
-    compute_scoped_spending, discover_spending_files, read_provider_spending_cache,
-    read_spending_cache, read_workspace_spending_cache, unix_secs_now,
-};
+use crate::agents::spending::SpendingCaches;
 use crate::harness::auto_continue::{self, ResumeMessage};
 use crate::ids::{PaneId, WorkspaceId};
 use crate::ledger::snapshot::{
@@ -34,7 +28,7 @@ use super::refresh::git_stats::{
     DiffStatsCache, DiffStatsCacheEntry, read_diff_stats_cache, worktree_group_path,
 };
 use super::refresh::live_spend::apply_live_today_spend;
-use super::refresh::pr::{PrStateCache, read_pr_state_cache};
+use super::refresh::pr::read_pr_state_cache;
 use super::refresh::rate_limits::apply_rate_limit_cache;
 use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 
@@ -173,13 +167,9 @@ pub fn project_pr_state_map(
     }
 }
 
-pub fn project_pr_states(snapshot: &mut SidebarSnapshot, cache: &PrStateCache) {
-    project_pr_state_map(snapshot, &cache.states);
-}
-
 pub(crate) fn project_cached_pr_states(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths) {
     let cache = read_pr_state_cache(&runtime.pr_state_path());
-    project_pr_states(snapshot, &cache);
+    project_pr_state_map(snapshot, &cache.states);
 }
 
 pub(crate) fn classify_trunk_sync(
@@ -546,21 +536,12 @@ fn fold_machine_config(
         );
         // Fold the producer's published spending cache rather than re-walking
         // JSONL transcript history here.
-        let cache = current_provider_spending_cache(runtime);
-        let scope = SpendScope::for_workspace(
-            snapshot.project_root.as_deref(),
-            &snapshot.worktree_roots,
-            snapshot.worktree_home.as_deref(),
+        let spending = super::refresh::spending::consumer_spending_caches(
+            runtime,
+            &snapshot,
+            &config.headline_spec(),
         );
-        let spec = config.headline_spec();
-        let workspace = cached_workspace_spending(runtime, &scope, cache.refreshed_at_ms, &spec);
-        (
-            accounts,
-            SpendingCaches {
-                provider: cache,
-                workspace,
-            },
-        )
+        (accounts, spending)
     };
     let mut snapshot = fold_machine_config_with(
         snapshot,
@@ -573,143 +554,6 @@ fn fold_machine_config(
     apply_rate_limit_cache(&mut snapshot, runtime, false);
     apply_credits_cache(&mut snapshot, runtime, &accounts_config);
     (snapshot, spending)
-}
-
-fn current_provider_spending_cache(runtime: &RuntimePaths) -> ProviderSpendingCache {
-    let cache = read_provider_spending_cache(&runtime.shared_provider_spending_path());
-    if cache.is_current_version() {
-        cache
-    } else {
-        ProviderSpendingCache::default()
-    }
-}
-
-fn cached_workspace_spending(
-    runtime: &RuntimePaths,
-    scope: &SpendScope,
-    source_refreshed_at_ms: u64,
-    spec: &HeadlineSpec,
-) -> WorkspaceSpendingCache {
-    if scope.is_empty() {
-        return Default::default();
-    }
-    let hash = scope.hash();
-    let workspace = read_workspace_spending_cache(&runtime.workspace_spending_path(&hash));
-    if workspace.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
-        && workspace.scope_hash == hash
-    {
-        return workspace;
-    }
-    derive_workspace_spending(
-        runtime,
-        scope,
-        hash,
-        source_refreshed_at_ms,
-        &discover_spending_files(),
-        spec,
-    )
-}
-
-fn derive_workspace_spending(
-    runtime: &RuntimePaths,
-    scope: &SpendScope,
-    scope_hash: String,
-    source_refreshed_at_ms: u64,
-    files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
-    spec: &HeadlineSpec,
-) -> WorkspaceSpendingCache {
-    let cursor_path = runtime.shared_spending_cursor_path();
-    let key = WorkspaceDeriveKey {
-        cursor_path: cursor_path.clone(),
-        cursor_stamp: file_stamp(&cursor_path),
-        files_signature: discovered_files_signature(files),
-        scope_hash: scope_hash.clone(),
-        source_refreshed_at_ms,
-        headline: spec.clone(),
-    };
-    if let Ok(memo) = workspace_derive_memo().lock()
-        && let Some(cached) = memo.as_ref()
-        && cached.key == key
-    {
-        return cached.workspace.clone();
-    }
-
-    let cursor = read_spending_cache(&cursor_path);
-    let scoped = compute_scoped_spending(files, &cursor, scope, unix_secs_now(), spec);
-    let workspace = WorkspaceSpendingCache {
-        version: crate::agents::spending::WORKSPACE_SPENDING_VERSION,
-        refreshed_at_ms: source_refreshed_at_ms,
-        scope_hash,
-        tally: scoped.tally,
-        headline_cutoff_secs: scoped.headline_cutoff_secs,
-        carry_usd: 0.0,
-        live_baselines: BTreeMap::new(),
-    };
-    if let Ok(mut memo) = workspace_derive_memo().lock() {
-        *memo = Some(WorkspaceDeriveMemo {
-            key,
-            workspace: workspace.clone(),
-        });
-    }
-    workspace
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct WorkspaceDeriveMemo {
-    key: WorkspaceDeriveKey,
-    workspace: WorkspaceSpendingCache,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct WorkspaceDeriveKey {
-    cursor_path: PathBuf,
-    cursor_stamp: FileStamp,
-    files_signature: u64,
-    scope_hash: String,
-    source_refreshed_at_ms: u64,
-    headline: HeadlineSpec,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FileStamp {
-    len: u64,
-    modified_secs: u64,
-    modified_nanos: u32,
-}
-
-fn workspace_derive_memo() -> &'static Mutex<Option<WorkspaceDeriveMemo>> {
-    static MEMO: OnceLock<Mutex<Option<WorkspaceDeriveMemo>>> = OnceLock::new();
-    MEMO.get_or_init(|| Mutex::new(None))
-}
-
-fn file_stamp(path: &Path) -> FileStamp {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return FileStamp {
-            len: 0,
-            modified_secs: 0,
-            modified_nanos: 0,
-        };
-    };
-    let modified = meta
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
-    FileStamp {
-        len: meta.len(),
-        modified_secs: modified.as_ref().map_or(0, |duration| duration.as_secs()),
-        modified_nanos: modified.map_or(0, |duration| duration.subsec_nanos()),
-    }
-}
-
-fn discovered_files_signature(
-    files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
-) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    for (adapter, file) in files {
-        adapter.descriptor().kind.hash(&mut hasher);
-        file.hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 /// Apply the resolved config and already-resolved accounts onto the snapshot:
