@@ -211,7 +211,7 @@ fn backfill_wrapper_spawn_commands(
 }
 
 fn stamp_first_seen(frame: &mut PaneFrame) {
-    let observed_at_ms = frame.observed_or_produced_at_ms();
+    let observed_at_ms = frame.observed_at_ms;
     for pane in frame.pane_states_mut() {
         if pane.first_seen_at_ms.is_none() {
             pane.first_seen_at_ms = Some(observed_at_ms);
@@ -906,7 +906,7 @@ fn publishable_prior(
 /// A prior frame assembled by a different build means two rimz versions are
 /// writing this workspace's snapshot — the upgrade-overlap window where stale
 /// producers cause the subtlest regressions. Info evidence, rate-limited per
-/// build pair; legacy frames without a stamp stay silent.
+/// build pair; frames without a readable build id stay silent.
 fn emit_mixed_build_writers(diag: &crate::diag::DiagSink, prior: Option<&PaneFrame>) {
     let Some(prior) = prior else {
         return;

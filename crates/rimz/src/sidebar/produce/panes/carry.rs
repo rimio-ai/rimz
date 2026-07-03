@@ -672,7 +672,7 @@ mod tests {
     fn omitted_tab_is_recreated_from_prior_metadata() {
         let mut prior = PaneFrame {
             produced_at_ms: 1,
-            observed_at_ms: Some(1),
+            observed_at_ms: 1,
             build: None,
             session_name: "s".to_owned(),
             tabs: vec![TabFrame {

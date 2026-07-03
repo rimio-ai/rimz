@@ -47,12 +47,19 @@ pub fn read_snapshot_cache(cache_path: &Path, session: &str) -> Option<PaneFrame
         Some(cache) => cache,
         None => {
             let bytes = std::fs::read(cache_path).ok()?;
-            let parsed: PaneFrame = serde_json::from_slice(&bytes).ok()?;
+            let mut parsed: PaneFrame = serde_json::from_slice(&bytes).ok()?;
+            normalize_observed_stamp(&mut parsed);
             SNAPSHOT_PARSE_CACHE.with(|cache| cache.store(cache_path, mtime, len, parsed.clone()));
             parsed
         }
     };
     (cache.session_name == session).then_some(cache)
+}
+
+fn normalize_observed_stamp(frame: &mut PaneFrame) {
+    if frame.observed_at_ms == 0 {
+        frame.observed_at_ms = frame.produced_at_ms;
+    }
 }
 
 /// Whether a same-session cache entry is young enough to serve without a
@@ -71,22 +78,16 @@ pub fn snapshot_cache_is_fresh(
     ttl: Duration,
 ) -> bool {
     let fresh = now_ms.saturating_sub(cache.produced_at_ms) <= ttl.as_millis() as u64;
-    let new_enough = min_produced_at_ms.is_none_or(|min| cache.observed_or_produced_at_ms() >= min);
+    let new_enough = min_produced_at_ms.is_none_or(|min| cache.observed_at_ms >= min);
     fresh && new_enough
 }
 
-/// The producer timestamp of the published same-session pane frame. `None`
-/// when no usable same-session frame exists.
-pub fn published_frame_produced_at_ms(runtime: &RuntimePaths, session: &str) -> Option<u64> {
+/// The producer and observation timestamps of the published same-session pane
+/// frame. `None` when no usable same-session frame exists.
+pub fn published_frame_stamps(runtime: &RuntimePaths, session: &str) -> Option<(u64, u64)> {
     let cache_path = runtime.pane_frame_path();
-    read_snapshot_cache(&cache_path, session).map(|cache| cache.produced_at_ms)
-}
-
-/// The observation timestamp of the published same-session pane frame. `None`
-/// when no usable same-session frame exists.
-pub fn published_frame_observed_at_ms(runtime: &RuntimePaths, session: &str) -> Option<u64> {
-    let cache_path = runtime.pane_frame_path();
-    read_snapshot_cache(&cache_path, session).map(|cache| cache.observed_or_produced_at_ms())
+    read_snapshot_cache(&cache_path, session)
+        .map(|cache| (cache.produced_at_ms, cache.observed_at_ms))
 }
 
 /// Whether the published same-session frame shows no attached client viewing any

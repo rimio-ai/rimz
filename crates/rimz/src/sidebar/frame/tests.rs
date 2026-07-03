@@ -110,7 +110,7 @@ fn source_active_settles_multivalued_focus_without_contest() {
 
     // The mux's active-pane hint names one of the marked panes, so the
     // multi-client focus marks are settled, not contested: no badge, no record.
-    assert_eq!(frame.observed_at_ms, Some(4));
+    assert_eq!(frame.observed_at_ms, 4);
     assert_eq!(frame.tabs[0].active_pane, Some(source.clone()));
     assert!(!frame.tabs[0].focus_contested);
     assert!(diagnostics.is_empty());
@@ -574,8 +574,8 @@ fn contested_focus_sticks_to_prior_when_no_transition_is_visible() {
 }
 
 #[test]
-fn legacy_frame_without_observed_time_or_focus_contested_parses() {
-    let legacy = r#"{
+fn frame_without_observed_time_or_focus_contested_defaults_stamp() {
+    let old_frame = r#"{
         "produced_at_ms": 7,
         "session_name": "rimz-test",
         "tabs": [{
@@ -592,19 +592,14 @@ fn legacy_frame_without_observed_time_or_focus_contested_parses() {
         }]
     }"#;
 
-    let frame: PaneFrame = serde_json::from_str(legacy).expect("legacy frame parses");
+    let frame: PaneFrame = serde_json::from_str(old_frame).expect("old frame parses");
 
     assert_eq!(frame.produced_at_ms, 7);
-    assert_eq!(frame.observed_at_ms, None);
+    assert_eq!(frame.observed_at_ms, 0);
     assert!(frame.carried_panes.is_empty());
     assert!(frame.viewed_panes.is_empty());
     assert_eq!(frame.presence, None);
     assert!(!frame.tabs[0].focus_contested);
-    assert_eq!(
-        frame.observed_or_produced_at_ms(),
-        frame.produced_at_ms,
-        "legacy frames fall back to the publish stamp",
-    );
 }
 
 #[test]

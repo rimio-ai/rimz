@@ -34,9 +34,8 @@ pub struct SidebarEventEnvelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
     /// Sender wall clock. Fusion compares this against the pulled frame's pane
-    /// observation stamp, falling back to `produced_at_ms` for legacy frames;
-    /// receivers TTL on their own clock, so sender skew can mis-order an overlay
-    /// briefly but never pin it.
+    /// observation stamp; receivers TTL on their own clock, so sender skew can
+    /// mis-order an overlay briefly but never pin it.
     pub sent_at_ms: u64,
     pub event: SidebarEvent,
 }

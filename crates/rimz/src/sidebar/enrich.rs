@@ -375,7 +375,7 @@ pub fn enrich(
 
     if let Some(frame) = frame {
         snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
-        snapshot.panes_observed_at_ms = Some(frame.observed_or_produced_at_ms());
+        snapshot.panes_observed_at_ms = Some(frame.observed_at_ms);
         snapshot.focus_contested_panes = frame
             .tabs
             .iter()

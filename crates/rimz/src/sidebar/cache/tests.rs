@@ -133,11 +133,30 @@ fn forced_pane_freshness_uses_observed_topology_time() {
     );
 
     let mut frame = cache_produced_at(now);
-    frame.observed_at_ms = Some(now - 5_000);
+    frame.observed_at_ms = now - 5_000;
     assert!(
         !snapshot_cache_is_fresh(&frame, now, Some(now - 1_000), EVENT_PANE_TTL),
         "a frame freshly republished from stale topology must not satisfy a post-event floor"
     );
+}
+
+#[test]
+fn read_snapshot_cache_normalizes_missing_observed_stamp() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("snapshot.json");
+    std::fs::write(
+        &path,
+        r#"{
+            "produced_at_ms": 42,
+            "session_name": "rimz-test",
+            "tabs": []
+        }"#,
+    )
+    .unwrap();
+
+    let frame = read_snapshot_cache(&path, "rimz-test").expect("same-session frame");
+
+    assert_eq!(frame.observed_at_ms, 42);
 }
 
 #[test]

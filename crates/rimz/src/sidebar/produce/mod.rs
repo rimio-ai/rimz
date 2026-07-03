@@ -320,7 +320,7 @@ fn fold_resolution_frame(
     snapshot.wired_lazy_kinds = lazy_kinds;
     snapshot.lazy_agent_default_models = lazy_default_models;
     snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
-    snapshot.panes_observed_at_ms = Some(frame.observed_or_produced_at_ms());
+    snapshot.panes_observed_at_ms = Some(frame.observed_at_ms);
     snapshot.with_live_panes(frame.to_pane_refs(), exclude)
 }
 

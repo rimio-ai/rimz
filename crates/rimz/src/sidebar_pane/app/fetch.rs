@@ -188,10 +188,8 @@ fn run_fetch_cycle(
     emit_producer_transition(diag, last_election, election);
     let exclude = config.own_pane.clone();
     let now_ms = crate::sidebar::timing::unix_now_ms();
-    let published_frame_produced_at_ms =
-        crate::sidebar::cache::published_frame_produced_at_ms(runtime, &config.session_name);
-    let published_frame_observed_at_ms =
-        crate::sidebar::cache::published_frame_observed_at_ms(runtime, &config.session_name);
+    let published_frame_stamps =
+        crate::sidebar::cache::published_frame_stamps(runtime, &config.session_name);
     let fold_stamp = crate::sidebar::consumer::consumer_fold_inputs_stamp(state, runtime);
     if consumer_memo.should_skip(&fold_stamp, now_ms, request, is_producer, false) {
         post(FetchOutcome {
@@ -218,7 +216,7 @@ fn run_fetch_cycle(
     let frame_age_ms = fast
         .as_ref()
         .ok()
-        .and(published_frame_produced_at_ms)
+        .and(published_frame_stamps.map(|(produced_at_ms, _)| produced_at_ms))
         .map(|produced_at_ms| now_ms.saturating_sub(produced_at_ms));
     let produce = produce_this_cycle(
         is_producer,
@@ -230,8 +228,7 @@ fn run_fetch_cycle(
         snapshot.panes_produced_at_ms.is_some()
             && (request.published_frame_hint
                 || request.min_pane_cache_ms.is_some_and(|min| {
-                    published_frame_observed_at_ms
-                        .is_some_and(|observed_at_ms| observed_at_ms >= min)
+                    published_frame_stamps.is_some_and(|(_, observed_at_ms)| observed_at_ms >= min)
                 }))
     });
     let mut folded_consumer_ok = false;

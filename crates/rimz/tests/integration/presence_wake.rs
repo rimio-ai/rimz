@@ -578,8 +578,7 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
         "client focus sample carries attached-client presence",
     );
     assert_eq!(
-        cached.observed_at_ms,
-        Some(topology.produced_at_ms),
+        cached.observed_at_ms, topology.produced_at_ms,
         "topology cache production time is the frame observation time"
     );
     assert_eq!(

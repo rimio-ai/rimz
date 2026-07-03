@@ -21,20 +21,20 @@ use crate::pane::{ElevatedAgent, PaneRef};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneFrame {
     pub produced_at_ms: u64,
-    /// When the pane source observed the topology. For legacy frames this is
-    /// absent and consumers fall back to `produced_at_ms`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observed_at_ms: Option<u64>,
+    /// When the pane source observed the topology. A zero value can appear
+    /// only when an old build's frame is read once across a reload; cache reads
+    /// normalize it to `produced_at_ms`.
+    #[serde(default)]
+    pub observed_at_ms: u64,
     /// Build id of the producer that assembled this frame
-    /// ([`crate::build_id`]); absent on frames written by builds that predate
-    /// the stamp.
+    /// ([`crate::build_id`]); absent when the running image is unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
     pub session_name: String,
     pub tabs: Vec<TabFrame>,
     /// Panes retained from the prior published frame because the latest pane
     /// source omitted them while process liveness still proved them alive.
-    /// Empty on healthy frames and on legacy frames.
+    /// Empty on healthy frames.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub carried_panes: Vec<CarriedPane>,
     /// Panes attached clients are currently viewing, one per client. Assembly
@@ -42,8 +42,8 @@ pub struct PaneFrame {
     /// publishing it for snapshot enrichment.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub viewed_panes: Vec<PaneId>,
-    /// Producer-sampled session presence. Absent on legacy frames and on
-    /// fallback paths that could not read the per-client mux state.
+    /// Producer-sampled session presence. Absent on fallback paths that could
+    /// not read the per-client mux state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presence: Option<PresenceSample>,
 }
@@ -144,10 +144,6 @@ impl PaneMetrics {
 }
 
 impl PaneFrame {
-    pub fn observed_or_produced_at_ms(&self) -> u64 {
-        self.observed_at_ms.unwrap_or(self.produced_at_ms)
-    }
-
     pub fn to_pane_refs(&self) -> Vec<PaneRef> {
         self.tabs
             .iter()
@@ -453,7 +449,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
     (
         PaneFrame {
             produced_at_ms,
-            observed_at_ms: Some(observed_at_ms),
+            observed_at_ms,
             build: crate::build_id::current().map(str::to_owned),
             session_name,
             tabs: tabs.into_values().collect(),

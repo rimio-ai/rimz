@@ -116,7 +116,7 @@ fn newborn_unknown_cwd_quarantine_only_applies_to_the_birth_frame() {
             Some(SidebarWorktreeKind::External),
         ),
         (
-            "legacy frame",
+            "frameless fold",
             PaneRef {
                 cwd: None,
                 first_seen_at_ms: None,

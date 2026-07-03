@@ -622,7 +622,7 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
     let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
     let frame = crate::sidebar::frame::PaneFrame {
         produced_at_ms: 1_000,
-        observed_at_ms: Some(1_000),
+        observed_at_ms: 1_000,
         build: None,
         session_name: "rimz-test".to_owned(),
         tabs: Vec::new(),
