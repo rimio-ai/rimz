@@ -414,35 +414,6 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         parsed["agent"]["context"]["tokens"]["current_usage"]["cache_read_input_tokens"], 300_000,
         "folded usage reaches the payload: {parsed}"
     );
-
-    let out = env
-        .rimz()
-        .args(["agents", "list", "--all"])
-        .output()
-        .expect("spawn agents list --all");
-    assert!(
-        out.status.success(),
-        "agents list --all should print the live table\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("CHANNEL"),
-        "missing channel column: {stdout}"
-    );
-    assert!(
-        !stdout.contains("LIFECYCLE"),
-        "list no longer prints audit lifecycle rows: {stdout}"
-    );
-    assert!(
-        !stdout.contains("@claude#pets"),
-        "stale card should not surface in live list: {stdout}"
-    );
-    assert!(
-        !stdout.contains("stale"),
-        "stale audit label should not surface in live list: {stdout}"
-    );
 }
 
 #[test]
@@ -485,28 +456,29 @@ fn agents_show_capture_errors_when_agent_has_no_bound_pane() {
 }
 
 #[test]
-fn agents_list_prints_channel_column_without_audit_lifecycle() {
+fn agents_list_requires_live_room() {
     let env = Env::new();
 
-    let out = env
-        .rimz()
-        .args(["agents", "list"])
-        .output()
-        .expect("spawn agents list");
+    assert_agents_list_requires_live_room(&env, &["agents", "list"]);
+    assert_agents_list_requires_live_room(&env, &["agents", "list", "--all"]);
+}
+
+fn assert_agents_list_requires_live_room(env: &Env, args: &[&str]) {
+    let out = env.rimz().args(args).output().expect("spawn agents list");
     assert!(
-        out.status.success(),
-        "agents list should print the live table\nstdout:\n{}\nstderr:\n{}",
+        !out.status.success(),
+        "agents list should require a live room\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stdout.contains("CHANNEL"),
-        "missing channel column: {stdout}"
+        stderr.contains("no live Rimz room"),
+        "missing live-room guidance: {stderr}"
     );
     assert!(
-        !stdout.contains("LIFECYCLE"),
-        "list should not print the audit lifecycle column: {stdout}"
+        stderr.contains("rimz start") && stderr.contains("rimz attach"),
+        "guidance should name start and attach: {stderr}"
     );
 }
 

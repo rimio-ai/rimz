@@ -809,9 +809,8 @@ pub struct AgentWorktreeGroup<'a> {
 /// Group root agents by worktree and rank them the way the sidebar ranks rows
 /// and groups: attention agents first (longest-overdue), calm agents in stable
 /// spawn order, the `external` catch-all last. The `rimz agents list` roster
-/// reuses this so the CLI and the room agree on order. Uncapped — the listing
-/// shows the whole roster, including paneless sessions, unlike the sidebar's
-/// per-worktree cap.
+/// reuses this so the CLI and the room agree on order. Uncapped, unlike the
+/// sidebar's per-worktree cap.
 pub fn group_live_agents_by_worktree<'a>(
     agents: &[&'a AgentState],
     snapshot: &SidebarSnapshot,

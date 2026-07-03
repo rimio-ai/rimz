@@ -108,9 +108,9 @@ Supervised runs need installed and trusted hooks, because hooks are the completi
 ### List, inspect, focus, wait, and stop
 
 ```sh
-rimz agents                              # live root-agent cards, current channel
-rimz agents list --all                   # every channel
-rimz agents list --worktree auth-refresh # one branch / worktree / dir
+rimz agents                              # room root-agent cards, current channel
+rimz agents list --all                   # every room channel
+rimz agents list --worktree auth-refresh # one room branch / worktree / dir
 rimz agents show swift-otter             # one card plus its newest run record
 rimz agents show swift-otter --capture   # card plus the pane's visible text
 rimz agents focus @claude-2#cli-docs     # jump to the pane
@@ -118,7 +118,7 @@ rimz agents wait swift-otter --stream    # block until it lands, tailing the tra
 rimz agents stop run_0123…               # cancel a run or close a pane
 ```
 
-Bare `rimz agents` lists live root-agent cards in attention order, scoped to the current channel and widened with `list --all`. The `AGENT` column is the shortest handle you can type back — its role (`@coder`), else its profile (`@planner`), else `@<kind>`, growing an ordinal only when two of a kind share one worktree. `show` prints one card and its newest attached run record, plus an `ask` line when the agent is waiting on a native prompt; `--capture` appends the bound pane's visible area as plain text, `--ansi` keeps colors, and `--json` includes the same data as a `capture` object. Capture errors when the agent has no bound pane. `--json` selects JSON for `list` and bare `agents` (supervised `-p` uses `--output-format` instead).
+Bare `rimz agents` lists the live room's pane-backed root-agent cards in attention order, scoped to the current channel and widened with `list --all`; run it inside a live room or enter one with `rimz start` or `rimz attach`. The `AGENT` column is the shortest handle you can type back — its role (`@coder`), else its profile (`@planner`), else `@<kind>`, growing an ordinal only when two of a kind share one worktree. `show` prints one card and its newest attached run record, plus an `ask` line when the agent is waiting on a native prompt; `--capture` appends the bound pane's visible area as plain text, `--ansi` keeps colors, and `--json` includes the same data as a `capture` object. Capture errors when the agent has no bound pane. `--json` selects JSON for `list` and bare `agents` (supervised `-p` uses `--output-format` instead).
 
 `focus` jumps to an agent's pane. `wait` blocks on a supervised run (by run id or pet name) or an interactive agent reaching an idle/success gate; `--stream` tails the transcript and `--from-start` replays from the top. `stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. All four resolve to exactly one agent, so a fan-out match is an error here (see [Addressing agents](#addressing-agents)).
 

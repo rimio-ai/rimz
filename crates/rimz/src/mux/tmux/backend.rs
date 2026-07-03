@@ -117,7 +117,7 @@ impl MuxBackend for TmuxBackend {
         // tmux exits 1 with `error connecting to ...` (or `no server
         // running`) on stderr when no server has been started yet. That is
         // an empty list of sessions, not an error condition; the Zellij
-        // backend mirrors this shape (exit 0, empty stdout).
+        // backend normalizes its equivalent banner the same way.
         let spec = self.cmd().args(["list-sessions", "-F", "#{session_name}"]);
         let output = spec.output_raw()?;
         if !output.status.success() {

@@ -10,30 +10,34 @@ pub(super) fn list_agents(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = crate::cli::open_ledger(&workspace)?;
+    let mux = rimz::mux::auto_detect_backend(globals.mux).map_err(|_| {
+        anyhow::anyhow!(crate::cli::agents_launch::live_session_guidance(
+            &workspace.session_name
+        ))
+    })?;
+    let backend = rimz::mux::backend_for(mux);
+    crate::cli::agents_launch::ensure_live_session(&*backend, &workspace.session_name)?;
     let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing runtime paths")?;
-    let context_records = rimz::ledger::agent_context::read_all(&runtime);
-
-    let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    apply_cached_daemon_reap(&mut snapshot, &runtime, &workspace.session_name);
-    // Group by the room's worktree checkouts the way the sidebar does: a
-    // worktree parked outside the project root still earns its own pod. The
-    // cached enumeration is read-only and best-effort, matching the sidebar's
-    // consumer path; `--json` skips it since the flat array never groups.
-    if !json && snapshot.project_root.is_some() {
-        snapshot =
-            snapshot.with_worktree_roots(rimz::sidebar::enrich::cached_worktree_roots(&runtime));
-    }
-    // Fold each session's rich statusline context so the `CTX` column reads the
-    // real used/window fill, not the carried-forward `context_pct`.
-    let snapshot = snapshot.with_agent_context(context_records);
+    let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing state paths")?;
+    state.ensure_dirs().context("preparing state directories")?;
+    let snapshot = rimz::sidebar::consumer::read_published_snapshot(
+        &mut rimz::sidebar::consumer::RollupCursor::new(),
+        &state,
+        &runtime,
+        &workspace.session_name,
+        None,
+    )
+    .context("reading the room snapshot")?;
 
     let channel = list_channel_filter(all, worktree.as_deref(), &workspace);
+    let in_room = in_room_agent_ids(&snapshot);
     let agents: Vec<&AgentState> = snapshot
         .agents
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| in_room.contains(&agent.agent_id))
         .filter(|agent| {
             channel
                 .as_deref()
@@ -48,6 +52,16 @@ pub(super) fn list_agents(
     let mut out = render::out();
     render_agents_table(&mut out, &snapshot, &agents, jiff::Timestamp::now())?;
     Ok(())
+}
+
+fn in_room_agent_ids(
+    snapshot: &rimz::SidebarSnapshot,
+) -> std::collections::HashSet<&AgentSessionId> {
+    snapshot
+        .agent_panes
+        .iter()
+        .filter_map(|pane_agent| pane_agent.agent_id.as_ref())
+        .collect()
 }
 
 pub(crate) fn render_agents_table(
@@ -1086,6 +1100,48 @@ mod tests {
     }
 
     #[test]
+    fn in_room_agent_ids_keeps_only_pane_bound_sessions() {
+        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+            rimz::WorkspaceId::parse("ws_000000000000000000000000").expect("workspace id"),
+            Vec::new(),
+            vec![
+                test_agent("sess-one"),
+                test_agent("sess-two"),
+                test_agent("sess-paneless"),
+            ],
+            jiff::Timestamp::UNIX_EPOCH,
+        );
+        snapshot.agent_panes = vec![
+            test_pane_agent("sess-one", "terminal_1"),
+            test_pane_agent("sess-two", "terminal_2"),
+            rimz::PaneAgent {
+                kind: AgentKind::new_unchecked("codex"),
+                kind_ordinal: None,
+                name: None,
+                profile: None,
+                role: None,
+                team: None,
+                channel: None,
+                agent_id: None,
+                pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_lazy"),
+                worktree_path: None,
+                worktree_branch: None,
+            },
+        ];
+
+        let in_room = in_room_agent_ids(&snapshot);
+        let kept: Vec<&str> = snapshot
+            .agents
+            .iter()
+            .filter(|agent| agent.parent_agent_id.is_none())
+            .filter(|agent| in_room.contains(&agent.agent_id))
+            .map(|agent| agent.agent_id.as_str())
+            .collect();
+
+        assert_eq!(kept, ["sess-one", "sess-two"]);
+    }
+
+    #[test]
     fn brand_style_uses_registered_agent_brand_rgb() {
         for kind in ["claude", "codex"] {
             let expected = rimz::agents::descriptor_by_kind(kind)
@@ -1096,5 +1152,68 @@ mod tests {
         }
 
         assert_eq!(brand_style("unknown"), None);
+    }
+
+    fn test_agent(id: &str) -> AgentState {
+        AgentState {
+            agent_id: AgentSessionId::from(id),
+            kind: AgentKind::new_unchecked("codex"),
+            name: None,
+            kind_ordinal: None,
+            profile: None,
+            role: None,
+            team: None,
+            launch_group: None,
+            launch_ordinal: None,
+            channel: None,
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            pane: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            description: None,
+            transcript_path: None,
+            origin: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_compact_command_tokens: None,
+            last_seen: jiff::Timestamp::UNIX_EPOCH,
+            last_activity: jiff::Timestamp::UNIX_EPOCH,
+            registered_at: Some(jiff::Timestamp::UNIX_EPOCH),
+        }
+    }
+
+    fn test_pane_agent(agent_id: &str, pane: &str) -> rimz::PaneAgent {
+        rimz::PaneAgent {
+            kind: AgentKind::new_unchecked("codex"),
+            kind_ordinal: None,
+            name: None,
+            profile: None,
+            role: None,
+            team: None,
+            channel: None,
+            agent_id: Some(AgentSessionId::from(agent_id)),
+            pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, pane),
+            worktree_path: None,
+            worktree_branch: None,
+        }
     }
 }

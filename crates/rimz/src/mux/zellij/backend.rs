@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use super::ZellijBackend;
 use super::layout::{TempLayoutFile, render_background_view_layout, render_tab_layout};
 use super::parse::{
-    SessionState, classify_session_not_found, is_session_not_found, is_transient_empty,
-    live_session_name_from_line, parse_focused_client_panes, parse_focused_terminal_client_ids,
-    trim_capture,
+    SessionState, classify_session_not_found, is_no_active_sessions, is_session_not_found,
+    is_transient_empty, live_session_name_from_line, parse_focused_client_panes,
+    parse_focused_terminal_client_ids, trim_capture,
 };
 use super::raw_pane::{
     RawPane, SessionCleanliness, SidebarDock, floating_panes_in_anchor_view, is_sidebar_pane,
@@ -256,7 +256,13 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn list_sessions(&self) -> Result<Vec<String>> {
-        let output = self.cmd().arg("list-sessions").run()?;
+        let output = match self.cmd().arg("list-sessions").run() {
+            Ok(output) => output,
+            Err(MuxErr::Command { ref stderr, .. }) if is_no_active_sessions(stderr.as_bytes()) => {
+                return Ok(Vec::new());
+            }
+            Err(err) => return Err(err),
+        };
         // Output lines look like `name [Created Ns ago]` for live sessions, or
         // `name [Created Ns ago] (EXITED - attach to resurrect)` for stopped
         // sessions. `list_sessions` is the live-session set used by `rimz list`

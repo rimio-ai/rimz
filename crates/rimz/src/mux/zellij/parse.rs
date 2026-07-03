@@ -33,6 +33,16 @@ pub(super) fn is_session_not_found(stream: &[u8]) -> bool {
         || clean == "There is no active session!"
 }
 
+pub(super) fn is_no_active_sessions(stream: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(stream);
+    let Some(first) = text.lines().next() else {
+        return false;
+    };
+    let clean = strip_ansi(first);
+    let clean = clean.trim();
+    clean == "No active zellij sessions found." || clean == "There is no active session!"
+}
+
 /// Fold zellij's nonzero-exit "Session '<name>' not found" answer into the
 /// typed error. Some versions print the banner on exit 0 (callers' post-run
 /// stream checks catch those); newer versions exit nonzero, which arrives as
@@ -490,6 +500,18 @@ mod tests {
         assert!(!is_session_not_found(b"rimzd\nTab #2\n#start\n"));
         assert!(!is_session_not_found(b""));
         assert!(!is_session_not_found(b"  \n\t"));
+    }
+
+    #[test]
+    fn no_active_sessions_detects_zellij_list_sessions_banner() {
+        assert!(is_no_active_sessions(b"No active zellij sessions found.\n"));
+        assert!(is_no_active_sessions(b"There is no active session!\n"));
+        assert!(is_no_active_sessions(
+            b"\x1b[31mNo active zellij sessions found.\x1b[m\n"
+        ));
+
+        assert!(!is_no_active_sessions(b"rimz-project [Created 6m ago]\n"));
+        assert!(!is_no_active_sessions(b"permission denied\n"));
     }
 
     #[test]

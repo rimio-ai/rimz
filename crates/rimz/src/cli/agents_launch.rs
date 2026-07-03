@@ -113,6 +113,12 @@ pub(crate) fn ensure_live_session(
     if sessions.iter().any(|session| session == session_name) {
         Ok(())
     } else {
-        bail!("no live Rimz room `{session_name}`; run `rimz start` first")
+        bail!("{}", live_session_guidance(session_name))
     }
+}
+
+pub(crate) fn live_session_guidance(session_name: &str) -> String {
+    format!(
+        "no live Rimz room `{session_name}`; run `rimz start` first or enter one with `rimz attach`"
+    )
 }
