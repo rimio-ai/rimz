@@ -10,6 +10,44 @@ use crate::common::CommandTimeoutExt;
 
 use super::support::*;
 
+fn work_area_has_main_and_stacked_column(work: &[PaneGeometry]) -> bool {
+    if work.len() != 4 {
+        return false;
+    }
+    let mut xs: Vec<u64> = work.iter().map(|pane| pane.x).collect();
+    xs.sort_unstable();
+    xs.dedup();
+    if xs.len() != 2 {
+        return false;
+    }
+
+    let left: Vec<&PaneGeometry> = work.iter().filter(|pane| pane.x == xs[0]).collect();
+    let right: Vec<&PaneGeometry> = work.iter().filter(|pane| pane.x == xs[1]).collect();
+    let (main, mut stack) = match (left.as_slice(), right.as_slice()) {
+        ([main], stack) if stack.len() == 3 => (*main, stack.to_vec()),
+        (stack, [main]) if stack.len() == 3 => (*main, stack.to_vec()),
+        _ => return false,
+    };
+    stack.sort_by_key(|pane| pane.y);
+
+    let stack_columns_align = stack
+        .iter()
+        .map(|pane| pane.columns)
+        .max()
+        .zip(stack.iter().map(|pane| pane.columns).min())
+        .is_some_and(|(max, min)| max.abs_diff(min) <= 2);
+    let stack_adjacent = stack.windows(2).all(|pair| {
+        let previous_bottom = pair[0].y + pair[0].rows;
+        previous_bottom <= pair[1].y && previous_bottom.abs_diff(pair[1].y) <= 2
+    });
+    let stack_top = stack[0].y;
+    let stack_bottom = stack[2].y + stack[2].rows;
+    let main_spans_stack =
+        main.y.abs_diff(stack_top) <= 2 && (main.y + main.rows).abs_diff(stack_bottom) <= 2;
+
+    stack_columns_align && stack_adjacent && main_spans_stack
+}
+
 #[test]
 fn open_tab_unfocused_restores_attached_client_focus() {
     require_zellij!();
@@ -289,21 +327,14 @@ fn work_area_swap_layout_rebalances_backend_and_native_tabs() {
                         && sidebar.columns == sidebar_before.columns
                         && sidebar.rows == sidebar_before.rows
                 });
-            work_stays_right_of_sidebar && sidebar_unchanged
+            work_stays_right_of_sidebar
+                && sidebar_unchanged
+                && work_area_has_main_and_stacked_column(work)
         });
-    let min_work_columns = overflow_split
-        .iter()
-        .map(|pane| pane.columns)
-        .min()
-        .expect("overflow split has panes");
-    let max_work_columns = overflow_split
-        .iter()
-        .map(|pane| pane.columns)
-        .max()
-        .expect("overflow split has panes");
     assert!(
-        max_work_columns.abs_diff(min_work_columns) <= 8,
-        "overflow split should re-tile the work area into even columns: {overflow_split:?}",
+        work_area_has_main_and_stacked_column(&overflow_split),
+        "overflow split should re-tile the work area into one main pane plus a \
+         three-pane stack: {overflow_split:?}",
     );
     let sidebar_after = named_sidebar_pane_geometry(xdg.path(), &name, overflow_tab)
         .expect("list overflow sidebar")
