@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 use super::ZellijBackend;
 use super::layout::{TempLayoutFile, render_background_view_layout, render_tab_layout};
 use super::parse::{
-    SessionState, is_session_not_found, is_transient_empty, live_session_name_from_line,
-    parse_focused_client_panes, parse_focused_terminal_client_ids, trim_capture,
+    SessionState, classify_session_not_found, is_session_not_found, is_transient_empty,
+    live_session_name_from_line, parse_focused_client_panes, parse_focused_terminal_client_ids,
+    trim_capture,
 };
 use super::raw_pane::{
     RawPane, SessionCleanliness, SidebarDock, floating_panes_in_anchor_view, is_sidebar_pane,
@@ -196,7 +197,8 @@ impl ZellijBackend {
             let output = self
                 .zellij_action(session)
                 .args(["list-tabs", "--json", "--panes"])
-                .run()?;
+                .run()
+                .map_err(|err| classify_session_not_found(err, session))?;
             if is_session_not_found(&output.stdout) || is_session_not_found(&output.stderr) {
                 return Err(MuxErr::SessionNotFound {
                     session: session.to_owned(),

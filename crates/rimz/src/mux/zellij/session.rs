@@ -3,7 +3,8 @@
 use std::time::Duration;
 
 use super::parse::{
-    SessionState, is_session_not_found, is_transient_empty, session_state_from_line,
+    SessionState, classify_session_not_found, is_session_not_found, is_transient_empty,
+    session_state_from_line,
 };
 use super::raw_pane::{
     RawPane, RawPaneListing, SessionCleanliness, classify_session_panes, read_topology_cache,
@@ -36,7 +37,12 @@ impl ZellijBackend {
             if attempt > 0 {
                 std::thread::sleep(LIST_PANES_RETRY_DELAY);
             }
-            let output = spec.run_with_timeout(timeout)?;
+            let output = match session {
+                Some(name) => spec
+                    .run_with_timeout(timeout)
+                    .map_err(|err| classify_session_not_found(err, name))?,
+                None => spec.run_with_timeout(timeout)?,
+            };
             if let Some(name) = session
                 && (is_session_not_found(&output.stdout) || is_session_not_found(&output.stderr))
             {

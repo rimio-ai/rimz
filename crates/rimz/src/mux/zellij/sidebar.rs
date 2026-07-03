@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use super::layout::{TempLayoutFile, render_session_layout};
 use super::parse::{
-    is_session_not_found, new_tab_template_sidebar_cols, parse_focused_terminal_client_ids,
-    strip_ansi,
+    classify_session_not_found, is_session_not_found, new_tab_template_sidebar_cols,
+    parse_focused_terminal_client_ids, strip_ansi,
 };
 use super::raw_pane::{
     SidebarDock, docked_sidebar_cols, is_sidebar_pane, leftmost_live_work_pane,
@@ -655,7 +655,11 @@ impl ZellijBackend {
             if attempt > 0 {
                 std::thread::sleep(TAB_NAMES_RETRY_DELAY);
             }
-            let output = self.zellij_action(session).arg("query-tab-names").run()?;
+            let output = self
+                .zellij_action(session)
+                .arg("query-tab-names")
+                .run()
+                .map_err(|err| classify_session_not_found(err, session))?;
             if is_session_not_found(&output.stdout) || is_session_not_found(&output.stderr) {
                 return Err(MuxErr::SessionNotFound {
                     session: session.to_owned(),

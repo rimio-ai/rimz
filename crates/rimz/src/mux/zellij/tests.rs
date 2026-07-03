@@ -136,6 +136,52 @@ exit 0
 
 #[cfg(unix)]
 #[test]
+fn commands_surface_session_not_found_banner_nonzero_exit() {
+    use std::time::Duration;
+
+    use crate::mux::MuxErr;
+
+    let (_temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'zellij 0.44.3\n'
+  exit 0
+fi
+
+printf "Session 'missing-room' not found. The following sessions are active:\n" >&2
+printf '\033[32;1mrimz-other\033[m [Created 6m ago]\n' >&2
+exit 1
+"#,
+    );
+    let backend = ZellijBackend::with_program_for_test(&shim);
+
+    let err = backend
+        .list_panes_bounded(Some("missing-room"), Duration::from_millis(200))
+        .expect_err("nonzero banner should classify as session-not-found");
+    assert!(
+        matches!(err, MuxErr::SessionNotFound { ref session } if session == "missing-room"),
+        "got: {err}",
+    );
+    assert!(
+        !err.to_string().contains("rimz-other"),
+        "typed error must not leak active session names: {err}",
+    );
+
+    let err = backend
+        .tab_names("missing-room")
+        .expect_err("nonzero banner should classify as session-not-found");
+    assert!(
+        matches!(err, MuxErr::SessionNotFound { ref session } if session == "missing-room"),
+        "got: {err}",
+    );
+    assert!(
+        !err.to_string().contains("rimz-other"),
+        "typed error must not leak active session names: {err}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn new_tab_confirmation_waits_for_layout_panes() {
     use crate::config::MultiplexerConfig;
     use crate::ids::WorkspaceId;

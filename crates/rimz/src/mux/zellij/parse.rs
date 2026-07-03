@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 
 use crate::ids::{MuxName, PaneId};
+use crate::mux::MuxErr;
 use crate::pane::SIDEBAR_CHROME_TITLE;
 
 /// Whether `list-panes` stdout is the transient empty race rather than a real
@@ -29,6 +30,21 @@ pub(super) fn is_session_not_found(stream: &[u8]) -> bool {
     let clean = strip_ansi(first);
     let clean = clean.trim_start();
     clean.starts_with("Session '") && clean.contains("' not found")
+}
+
+/// Fold zellij's nonzero-exit "Session '<name>' not found" answer into the
+/// typed error. Some versions print the banner on exit 0 (callers' post-run
+/// stream checks catch those); newer versions exit nonzero, which arrives as
+/// `MuxErr::Command` with the banner on stderr.
+pub(super) fn classify_session_not_found(err: MuxErr, session: &str) -> MuxErr {
+    match err {
+        MuxErr::Command { ref stderr, .. } if is_session_not_found(stderr.as_bytes()) => {
+            MuxErr::SessionNotFound {
+                session: session.to_owned(),
+            }
+        }
+        _ => err,
+    }
 }
 
 /// Liveness of a Zellij session, as reported by `zellij list-sessions`.
@@ -406,6 +422,7 @@ mod tests {
 
     use super::*;
     use crate::ids::{MuxName, PaneId};
+    use crate::mux::MuxErr;
 
     #[test]
     fn parse_focused_client_panes_reads_unique_terminals_and_skips_noise() {
@@ -471,6 +488,45 @@ mod tests {
         assert!(!is_session_not_found(b"rimzd\nTab #2\n#start\n"));
         assert!(!is_session_not_found(b""));
         assert!(!is_session_not_found(b"  \n\t"));
+    }
+
+    #[test]
+    fn classify_session_not_found_maps_command_banner() {
+        let err = MuxErr::Command {
+            program: "zellij".to_owned(),
+            args: "--session missing-room action list-panes".to_owned(),
+            stderr: "Session 'missing-room' not found. The following sessions are active:\n\
+                     rimz-other [Created 6m ago]\n"
+                .to_owned(),
+        };
+
+        assert!(matches!(
+            classify_session_not_found(err, "missing-room"),
+            MuxErr::SessionNotFound { ref session } if session == "missing-room"
+        ));
+    }
+
+    #[test]
+    fn classify_session_not_found_preserves_unrelated_errors() {
+        let err = classify_session_not_found(
+            MuxErr::Command {
+                program: "zellij".to_owned(),
+                args: "action list-panes".to_owned(),
+                stderr: "permission denied".to_owned(),
+            },
+            "missing-room",
+        );
+        assert!(matches!(err, MuxErr::Command { ref stderr, .. } if stderr == "permission denied"));
+
+        let err = classify_session_not_found(
+            MuxErr::Timeout {
+                program: "zellij".to_owned(),
+                args: "action list-panes".to_owned(),
+                seconds: 8,
+            },
+            "missing-room",
+        );
+        assert!(matches!(err, MuxErr::Timeout { seconds: 8, .. }));
     }
 
     #[test]
