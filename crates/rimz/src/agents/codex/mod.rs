@@ -113,11 +113,11 @@ const DEFAULT_CONTEXT_WINDOW: u64 = 272_000;
 const DEFAULT_MODEL: &str = "gpt-5.5-codex";
 
 /// Marker Rimz sets on every `codex app-server` it spawns for read-only
-/// enrichment (the cold-spawn and daemon-proxy in [`app_server`], and the warm
-/// [`broker`]). Such a server is not a user session, yet Codex still fires its
-/// configured lifecycle hooks (e.g. `SessionStart`) when it starts. Those hook
-/// children inherit this marker, and `rimz hooks feed` no-ops on it — which
-/// breaks the `refresh-context → cold-spawn app-server → SessionStart hook →
+/// enrichment (the cold-spawn in [`app_server`] and the warm [`broker`]). Such a
+/// server is not a user session, yet Codex still fires its configured lifecycle
+/// hooks (e.g. `SessionStart`) when it starts. Those hook children inherit this
+/// marker, and `rimz hooks feed` no-ops on it — which breaks the
+/// `refresh-context → cold-spawn app-server → SessionStart hook →
 /// context_refresh_spawn → refresh-context` recursion that would otherwise
 /// spawn unboundedly. Empty value means unset.
 pub const ENV_INTERNAL_APP_SERVER: &str = "RIMZ_CODEX_INTERNAL_APP_SERVER";

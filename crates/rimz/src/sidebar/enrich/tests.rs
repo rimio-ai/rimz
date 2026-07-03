@@ -426,7 +426,8 @@ fn cleared_codex_reap_drops_only_fresh_same_pane_roots() {
     snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
         daemon_pids: &BTreeSet::new(),
         loaded: None,
-        live_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
+        frame_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
+        exclude_pane: None,
     });
 
     let ids: Vec<_> = snapshot
@@ -458,7 +459,8 @@ fn cleared_codex_reap_requires_both_sessions_on_live_pane() {
     snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
         daemon_pids: &BTreeSet::new(),
         loaded: None,
-        live_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
+        frame_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
+        exclude_pane: None,
     });
 
     assert_eq!(snapshot.agents.len(), 2);
@@ -482,7 +484,8 @@ fn cleared_codex_reap_keeps_unknown_lineage() {
     snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
         daemon_pids: &BTreeSet::new(),
         loaded: None,
-        live_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
+        frame_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
+        exclude_pane: None,
     });
 
     assert_eq!(snapshot.agents.len(), 2);

@@ -41,6 +41,12 @@ deny = [
     { name = "fs2", reason = "unmaintained; use std `File` locking instead" },
 ]
 skip = [
+    # `tungstenite`'s WebSocket handshake uses `sha1` 0.10, whose RustCrypto
+    # stack trails the workspace's `sha2` 0.11 line; drop when sha1 updates.
+    { crate = "block-buffer@0.10.4", reason = "tungstenite's sha1 0.10 handshake stack trails workspace sha2 0.11" },
+    { crate = "cpufeatures@0.2.17", reason = "tungstenite's sha1 0.10 handshake stack trails workspace sha2 0.11" },
+    { crate = "crypto-common@0.1.7", reason = "tungstenite's sha1 0.10 handshake stack trails workspace sha2 0.11" },
+    { crate = "digest@0.10.7", reason = "tungstenite's sha1 0.10 handshake stack trails workspace sha2 0.11" },
     # The `ring` crypto backend reached via `ureq`/`rustls` pins older support
     # crates than the rest of the tree; isolated to the TLS stack, drop when ring
     # catches up. (The former wit-bindgen and windows-sys skips left with the

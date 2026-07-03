@@ -125,8 +125,8 @@ fn should_ensure_codex_daemon(codex_enabled: bool, standalone_present: bool) -> 
 /// idempotent — it no-ops once the per-user daemon is up — and returns as soon
 /// as the daemon is running, so this adds no latency and prints nothing to the
 /// terminal. Best-effort: a spawn failure is logged and ignored, because the
-/// app-server is enrichment, not correctness — the proxy client cold-spawns a
-/// server when the daemon is absent.
+/// app-server is enrichment, not correctness — the enrichment client cold-spawns
+/// a server when the daemon is absent.
 fn spawn_codex_daemon(bin: &Path) {
     let argv = codex_command(bin);
     let mut parts = argv.iter();

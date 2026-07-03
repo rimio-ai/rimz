@@ -263,12 +263,14 @@ pub(super) fn apply_cached_daemon_reap(
     session: &str,
 ) {
     let cache = rimz::sidebar::refresh::read_codex_daemon_reap(runtime).unwrap_or_default();
-    let live_panes = rimz::sidebar::cache::read_snapshot_cache(&runtime.pane_frame_path(), session)
-        .map(|frame| rimz::SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None));
+    let frame_panes =
+        rimz::sidebar::cache::read_snapshot_cache(&runtime.pane_frame_path(), session)
+            .map(|frame| frame.to_pane_refs());
     snapshot.reap_runtime(rimz::ledger::snapshot::RuntimeReapInputs {
         daemon_pids: &cache.daemon_pids,
         loaded: cache.loaded.as_ref(),
-        live_panes: live_panes.as_deref(),
+        frame_panes: frame_panes.as_deref(),
+        exclude_pane: None,
     });
 }
 

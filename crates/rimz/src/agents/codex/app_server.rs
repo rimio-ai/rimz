@@ -17,11 +17,11 @@
 //! ([`crate::agents::codex::broker`]) over its unix socket — a held, already
 //! handshaked `codex app-server` that amortizes the per-datapoint handshake;
 //! then the per-user daemon `codex remote-control start` brings up (which
-//! [`crate::remote_control`] can auto-launch), re-used via `codex app-server
-//! proxy`; then a fresh cold-spawned `codex app-server`. The cold-spawn is always
-//! the final fallback, so enrichment never depends on either being up (headless /
-//! no-mux just cold-spawns). Set `RIMZ_CODEX_APP_SERVER_SOCK` to an empty value to
-//! drop the daemon from the order.
+//! [`crate::remote_control`] can auto-launch), re-used over its WebSocket control
+//! socket; then a fresh cold-spawned `codex app-server`. The cold-spawn is
+//! always the final fallback, so enrichment never depends on either being up
+//! (headless / no-mux just cold-spawns). Set `RIMZ_CODEX_APP_SERVER_SOCK` to an
+//! empty value to drop the daemon from the order.
 //!
 //! Why no token gauge here: as of the pinned Codex app-server, token /
 //! context-window usage is exposed only on the live `thread/tokenUsage/updated`
@@ -48,11 +48,11 @@ mod tests;
 mod transport;
 mod wire;
 
-use transport::FramedTransport;
 pub(crate) use transport::{
     AppServerErr, JsonRpcTransport, codex_bin, codex_home, recv_response, spawn_frame_reader,
     write_frame,
 };
+use transport::{FramedTransport, WsTransport};
 use wire::{
     MatchedModel, ModelListResponse, RateLimitsResponse, ThreadListResponse, ThreadReadResponse,
     ThreadSummary, codex_version_from_user_agent, collect_credits, collect_windows, into_context,
@@ -65,14 +65,13 @@ use wire::{
 /// wedged app-server is killed rather than lingering.
 const APP_SERVER_DEADLINE: Duration = Duration::from_secs(6);
 
-/// Shorter budget for the daemon `proxy` probe. The proxy either bridges to a
-/// live daemon promptly or it does not; a tight bound means a stale socket
-/// costs little before the cold-spawn fallback takes over. The sidebar's daemon
+/// Short budget for warm unix-socket probes. A stale broker or daemon socket
+/// costs little before the cold-spawn fallback takes over; the sidebar's daemon
 /// ghost reap pays this only from the cache refresher, behind its own TTL.
-const PROXY_PROBE_DEADLINE: Duration = Duration::from_secs(2);
+const DAEMON_PROBE_DEADLINE: Duration = Duration::from_secs(2);
 
-/// Override for the daemon control socket. A path re-uses that daemon via
-/// `proxy`; an empty value forces the cold-spawn path (tests, opt-out).
+/// Override for the daemon control socket. A path re-uses that daemon directly;
+/// an empty value forces the cold-spawn path (tests, opt-out).
 const CODEX_APP_SERVER_SOCK_ENV: &str = "RIMZ_CODEX_APP_SERVER_SOCK";
 const LOADED_THREADS_MAX_PAGES: usize = 16;
 
@@ -101,15 +100,38 @@ enum ConnectAttempt {
     /// Connect to the warm per-session broker over its unix socket — the fast
     /// path, on the short probe budget.
     Broker(PathBuf),
-    /// Spawn a `codex` invocation: the per-user daemon via `proxy --sock …`, or
-    /// a throwaway cold-spawn fallback. Carries argv (program omitted) + budget.
+    /// Connect to the per-user daemon's WebSocket control socket.
+    DaemonWs(PathBuf),
+    /// Spawn a `codex` invocation for the throwaway cold-spawn fallback. Carries
+    /// argv (program omitted) + budget.
     Spawn(Vec<String>, Duration),
 }
 
-impl CodexAppServer<FramedTransport> {
+pub(crate) enum Transport {
+    Framed(FramedTransport),
+    Ws(WsTransport),
+}
+
+impl JsonRpcTransport for Transport {
+    fn request(&mut self, method: &str, params: Value) -> Result<Value, AppServerErr> {
+        match self {
+            Self::Framed(transport) => transport.request(method, params),
+            Self::Ws(transport) => transport.request(method, params),
+        }
+    }
+
+    fn notify(&mut self, method: &str, params: Value) -> Result<(), AppServerErr> {
+        match self {
+            Self::Framed(transport) => transport.notify(method, params),
+            Self::Ws(transport) => transport.notify(method, params),
+        }
+    }
+}
+
+impl CodexAppServer<Transport> {
     /// Connect to a Codex app-server and complete the initialize handshake,
     /// trying each attempt in preference order: the per-session broker socket
-    /// (warm) first, then the per-user daemon via `proxy`, then a fresh
+    /// (warm) first, then the per-user daemon control socket, then a fresh
     /// cold-spawned `app-server`. The first that handshakes wins. `None` when none
     /// do (codex missing, not runnable, protocol mismatch) — best-effort.
     pub(crate) fn connect(broker_socket: Option<&Path>) -> Option<Self> {
@@ -117,10 +139,13 @@ impl CodexAppServer<FramedTransport> {
         for attempt in connect_attempts(broker_socket) {
             let transport = match &attempt {
                 ConnectAttempt::Broker(path) => {
-                    FramedTransport::connect(path, PROXY_PROBE_DEADLINE)
+                    FramedTransport::connect(path, DAEMON_PROBE_DEADLINE).map(Transport::Framed)
+                }
+                ConnectAttempt::DaemonWs(path) => {
+                    WsTransport::connect(path, DAEMON_PROBE_DEADLINE).map(Transport::Ws)
                 }
                 ConnectAttempt::Spawn(args, deadline) => {
-                    FramedTransport::spawn(&bin, args, *deadline)
+                    FramedTransport::spawn(&bin, args, *deadline).map(Transport::Framed)
                 }
             };
             let Ok(transport) = transport else {
@@ -133,25 +158,20 @@ impl CodexAppServer<FramedTransport> {
         }
         None
     }
+}
 
+impl CodexAppServer<WsTransport> {
     /// Connect to the **per-user daemon specifically** and handshake — the only
     /// app-server whose `thread/loaded/list` is authoritative for daemon-mode
     /// sessions. No broker, and deliberately no cold-spawn fallback: a fresh
     /// `app-server` holds no threads, so reporting its empty loaded set would mass-
     /// reap every daemon-mode session. `None` when no daemon control socket exists
-    /// or it does not handshake — the liveness caller reads that as "unknown, keep
-    /// all", never as "zero loaded". Used only by the sidebar cache refresher's
-    /// TTL-gated ghost reap.
+    /// or it does not speak the current WebSocket control protocol — the liveness
+    /// caller reads that as "unknown, keep all", never as "zero loaded". Used
+    /// only by the sidebar cache refresher's TTL-gated ghost reap.
     pub(crate) fn connect_daemon() -> Option<Self> {
         let socket = daemon_socket().filter(|path| path.exists())?;
-        let bin = codex_bin();
-        let args = vec![
-            "app-server".to_owned(),
-            "proxy".to_owned(),
-            "--sock".to_owned(),
-            socket.to_string_lossy().into_owned(),
-        ];
-        let transport = FramedTransport::spawn(&bin, &args, PROXY_PROBE_DEADLINE).ok()?;
+        let transport = WsTransport::connect(&socket, DAEMON_PROBE_DEADLINE).ok()?;
         let mut client = Self::new(transport);
         client.handshake().ok()?;
         Some(client)
@@ -169,7 +189,7 @@ fn connect_attempts(broker_socket: Option<&Path>) -> Vec<ConnectAttempt> {
 
 /// Pure core of [`connect_attempts`]: given a reachable per-session `broker`
 /// socket and/or per-user `daemon` socket (each present only when it exists on
-/// disk), order the attempts — broker (warm) first, then the daemon via `proxy`,
+/// disk), order the attempts — broker (warm) first, then the daemon WebSocket,
 /// always followed by a cold-spawned `app-server` fallback so enrichment never
 /// depends on either being up.
 fn attempts_for(broker: Option<&Path>, daemon: Option<&Path>) -> Vec<ConnectAttempt> {
@@ -178,15 +198,7 @@ fn attempts_for(broker: Option<&Path>, daemon: Option<&Path>) -> Vec<ConnectAtte
         attempts.push(ConnectAttempt::Broker(broker.to_path_buf()));
     }
     if let Some(daemon) = daemon {
-        attempts.push(ConnectAttempt::Spawn(
-            vec![
-                "app-server".to_owned(),
-                "proxy".to_owned(),
-                "--sock".to_owned(),
-                daemon.to_string_lossy().into_owned(),
-            ],
-            PROXY_PROBE_DEADLINE,
-        ));
+        attempts.push(ConnectAttempt::DaemonWs(daemon.to_path_buf()));
     }
     attempts.push(ConnectAttempt::Spawn(
         vec!["app-server".to_owned()],

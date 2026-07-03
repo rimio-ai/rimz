@@ -61,13 +61,13 @@ pub struct SidebarOwnView {
     pub own_view_is_daemon: bool,
 }
 
-/// Whether `agent` is a daemon-mode session: a root (non-subagent)
-/// daemon-hooked session with no stamped pane whose recorded hook owner is a
-/// shared app-server daemon ([`crate::agents::codex::codex_daemon_pids`] today).
-pub(super) fn is_daemon_mode(agent: &AgentState, daemon_pids: &BTreeSet<u32>) -> bool {
+/// Whether `agent` is owned by a shared app-server daemon
+/// ([`crate::agents::codex::codex_daemon_pids`] today): a root (non-subagent)
+/// daemon-hooked session whose recorded hook owner is a daemon by kind or pid.
+pub(super) fn is_daemon_owned(agent: &AgentState, daemon_pids: &BTreeSet<u32>) -> bool {
     let daemon_hooked = crate::agents::descriptor_by_kind(agent.kind.as_str())
         .is_some_and(|descriptor| descriptor.capabilities.daemon_hooked_sessions);
-    if !daemon_hooked || agent.pane.is_some() || agent.parent_agent_id.is_some() {
+    if !daemon_hooked || agent.parent_agent_id.is_some() {
         return false;
     }
     if agent

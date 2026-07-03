@@ -50,7 +50,7 @@ fn should_probe_codex_daemon_reap(agents: &[AgentState]) -> bool {
     agents.iter().any(|agent| {
         let daemon_hooked = crate::agents::descriptor_by_kind(agent.kind.as_str())
             .is_some_and(|descriptor| descriptor.capabilities.daemon_hooked_sessions);
-        daemon_hooked && agent.pane.is_none() && agent.parent_agent_id.is_none()
+        daemon_hooked && agent.parent_agent_id.is_none()
     })
 }
 
@@ -120,6 +120,19 @@ mod tests {
     }
 
     #[test]
+    fn daemon_reap_probe_source_includes_pane_stamped_roots() {
+        let mut codex = root_agent("codex", "pane-stamped", None);
+        codex.pane = Some(crate::pane::PaneRef::from_id(
+            crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1"),
+        ));
+        let mut sub = root_agent("codex", "sub", None);
+        sub.parent_agent_id = Some("pane-stamped".into());
+
+        assert!(should_probe_codex_daemon_reap(&[codex]));
+        assert!(!should_probe_codex_daemon_reap(&[sub]));
+    }
+
+    #[test]
     fn refresh_uses_pre_reap_daemon_probe_source() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
@@ -157,7 +170,8 @@ mod tests {
         base.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
             daemon_pids: &daemon_pids,
             loaded: Some(&loaded),
-            live_panes: None,
+            frame_panes: None,
+            exclude_pane: None,
         });
         assert!(
             base.agents.is_empty(),

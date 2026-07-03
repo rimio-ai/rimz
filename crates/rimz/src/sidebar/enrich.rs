@@ -344,18 +344,17 @@ pub fn enrich(
     // Reap daemon-mode Codex ghosts the app-server no longer holds. The cache
     // refresher publishes the live daemon pids plus `thread/loaded/list` on the
     // reap TTL; the fetch and consumer lanes read that file, so they never scan
-    // proc or spawn the app-server. The probe itself stays gated on a pane-less
-    // root `codex` session, so the common room pays no proc scan. Best-effort
-    // and fail-safe: no daemon process, absent cache, or an untrusted loaded
-    // list keeps every session.
+    // proc or contact the app-server. The probe itself stays gated on any root
+    // daemon-hooked session, so pane-stamped daemon ghosts still trigger a
+    // refresh. Best-effort and fail-safe: no daemon process, absent cache, or
+    // an untrusted loaded list keeps every session.
     let daemon_inputs = read_codex_daemon_reap(runtime).unwrap_or_default();
-    let admitted_reap_panes = frame
-        .as_ref()
-        .map(|frame| SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), exclude));
+    let reap_frame_panes = frame.as_ref().map(|frame| frame.to_pane_refs());
     snapshot.reap_runtime(RuntimeReapInputs {
         daemon_pids: &daemon_inputs.daemon_pids,
         loaded: daemon_inputs.loaded.as_ref(),
-        live_panes: admitted_reap_panes.as_deref(),
+        frame_panes: reap_frame_panes.as_deref(),
+        exclude_pane: exclude,
     });
 
     let account_budgets = crate::agents::account_budgets_from_caches(runtime, snapshot.now);

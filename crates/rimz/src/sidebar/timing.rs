@@ -209,9 +209,9 @@ pub const SESSION_PROBE_MARKER_TTL: Duration = Duration::from_secs(5 * 60);
 /// stamps.
 pub const SESSION_PROBE_MARKER_PREFIX: &str = "session-context-probe.";
 
-/// Minimum gap between Codex daemon ghost-reap probes. A failed daemon proxy
-/// attempt can burn the full 2s app-server proxy deadline, so success and
-/// failure share one coarse cache stamp and the fetch lane only reads it.
+/// Minimum gap between Codex daemon ghost-reap probes. A failed daemon control
+/// socket attempt can burn the full 2s deadline, so success and failure share
+/// one coarse cache stamp and the fetch lane only reads it.
 pub const CODEX_DAEMON_REAP_TTL: Duration = Duration::from_secs(30);
 
 /// Link stats are stale after three missed two-second publishes plus slack.

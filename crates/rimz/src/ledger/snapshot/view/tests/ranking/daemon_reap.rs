@@ -102,10 +102,102 @@ fn daemon_session_reap_handles_loaded_set_edges() {
         snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
             daemon_pids: &daemon_pids,
             loaded: loaded.as_ref(),
-            live_panes: None,
+            frame_panes: None,
+            exclude_pane: None,
         });
         assert_eq!(rollup_ids(&snapshot), case.expected, "{}", case.label);
     }
+}
+
+#[test]
+fn daemon_session_reap_handles_stamped_pane_liveness() {
+    struct Case {
+        label: &'static str,
+        agent: AgentState,
+        frame_panes: Option<Vec<PaneRef>>,
+        expected: Vec<&'static str>,
+    }
+
+    for case in [
+        Case {
+            label: "dead stamped pane is reaped when absent from live frame",
+            agent: daemon_codex("t-gone", "/repo/a", 7).in_pane("%dead"),
+            frame_panes: Some(vec![pane("%other", "codex", "/repo/a")]),
+            expected: Vec::new(),
+        },
+        Case {
+            label: "live stamped pane keeps absent loaded thread",
+            agent: daemon_codex("t-gone", "/repo/a", 7).in_pane("%live"),
+            frame_panes: Some(vec![pane("%live", "codex", "/repo/a")]),
+            expected: vec!["t-gone"],
+        },
+        Case {
+            label: "absent frame keeps stamped daemon session",
+            agent: daemon_codex("t-gone", "/repo/a", 7).in_pane("%dead"),
+            frame_panes: None,
+            expected: vec!["t-gone"],
+        },
+        Case {
+            label: "paneless absent loaded thread still reaps",
+            agent: daemon_codex("t-gone", "/repo/a", 7),
+            frame_panes: Some(vec![pane("%other", "codex", "/repo/a")]),
+            expected: Vec::new(),
+        },
+    ] {
+        let daemon_pids = BTreeSet::from([7]);
+        let loaded = BTreeSet::new();
+        let mut snapshot = room(Vec::new(), vec![case.agent]);
+        snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+            daemon_pids: &daemon_pids,
+            loaded: Some(&loaded),
+            frame_panes: case.frame_panes.as_deref(),
+            exclude_pane: None,
+        });
+        assert_eq!(rollup_ids(&snapshot), case.expected, "{}", case.label);
+    }
+}
+
+#[test]
+fn host_pane_roots_are_dropped_only_when_frame_is_present() {
+    let host_root = agent("claude", "host-root", AgentStatus::Running, 1_000)
+        .worktree("/repo/daemon")
+        .in_pane("%host");
+    let mut host_child = agent("claude", "host-child", AgentStatus::Running, 1_001)
+        .worktree("/repo/daemon")
+        .in_pane("%host");
+    host_child.parent_agent_id = Some("host-root".into());
+    let normal = agent("claude", "normal", AgentStatus::Running, 1_002)
+        .worktree("/repo/main")
+        .in_pane("%work");
+    let mut host_pane = pane("%host", "claude", "/repo/daemon");
+    host_pane.spawn_command = Some("claude remote-control --spawn worktree".to_owned());
+    let work_pane = pane("%work", "claude", "/repo/main");
+    let mut snapshot = room(
+        Vec::new(),
+        vec![host_root.clone(), host_child.clone(), normal.clone()],
+    );
+
+    snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+        daemon_pids: &BTreeSet::new(),
+        loaded: None,
+        frame_panes: Some(&[host_pane, work_pane]),
+        exclude_pane: None,
+    });
+
+    assert_eq!(rollup_ids(&snapshot), vec!["normal"]);
+
+    let mut snapshot = room(Vec::new(), vec![host_root, host_child, normal]);
+    snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+        daemon_pids: &BTreeSet::new(),
+        loaded: None,
+        frame_panes: None,
+        exclude_pane: None,
+    });
+
+    assert_eq!(
+        rollup_ids(&snapshot),
+        vec!["host-child", "host-root", "normal"]
+    );
 }
 
 #[test]
@@ -214,7 +306,8 @@ fn cleared_codex_session_reap_handles_lineage_and_scope_edges() {
         snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
             daemon_pids: &BTreeSet::new(),
             loaded: None,
-            live_panes: Some(&case.live_panes),
+            frame_panes: Some(&case.live_panes),
+            exclude_pane: None,
         });
         assert_eq!(rollup_ids(&snapshot), case.expected, "{}", case.label);
     }

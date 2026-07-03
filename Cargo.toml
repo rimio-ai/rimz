@@ -92,6 +92,12 @@ similar = "2"
 # small, synchronous, rustls-backed client — the right shape for a one-shot
 # background fetch and an xtask, with no async-runtime drag.
 ureq = "3"
+# Codex app-server daemon control sockets speak RFC6455 WebSocket over a Unix
+# stream. `tungstenite` supplies the handshake, framing, ping/pong, close, and
+# fragmentation state machine over any `Read + Write`; hand-rolling that would
+# put protocol correctness on Rimz for a transport that must fail safe. Default
+# features are enough here; TLS stays out because the stream is UDS-local.
+tungstenite = "0.29"
 
 # Off-box error/event reporting. Rimz `warn!`/`error!` and observed agent
 # rate-limit/overload conditions surface in a Sentry project an operator can

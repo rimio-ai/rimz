@@ -480,6 +480,16 @@ fn assert_spawn(attempt: &ConnectAttempt, args: &[&str], deadline: Duration) {
             assert_eq!(*got_deadline, deadline);
         }
         ConnectAttempt::Broker(path) => panic!("expected a spawn attempt, got broker {path:?}"),
+        ConnectAttempt::DaemonWs(path) => {
+            panic!("expected a spawn attempt, got daemon websocket {path:?}")
+        }
+    }
+}
+
+fn assert_daemon_ws(attempt: &ConnectAttempt, expected: &Path) {
+    match attempt {
+        ConnectAttempt::DaemonWs(path) => assert_eq!(path, expected),
+        other => panic!("expected daemon websocket attempt, got {other:?}"),
     }
 }
 
@@ -492,16 +502,7 @@ fn connection_attempts_prefer_warm_paths_before_cold_spawn() {
     let daemon = Path::new("/run/codex/app-server-control.sock");
     let attempts = attempts_for(None, Some(daemon));
     assert_eq!(attempts.len(), 2);
-    assert_spawn(
-        &attempts[0],
-        &[
-            "app-server",
-            "proxy",
-            "--sock",
-            "/run/codex/app-server-control.sock",
-        ],
-        PROXY_PROBE_DEADLINE,
-    );
+    assert_daemon_ws(&attempts[0], daemon);
     assert_spawn(&attempts[1], &["app-server"], APP_SERVER_DEADLINE);
 
     let broker = Path::new("/run/user/1000/rimz/w/sock/codex-app-server.sock");
@@ -511,16 +512,7 @@ fn connection_attempts_prefer_warm_paths_before_cold_spawn() {
         ConnectAttempt::Broker(path) => assert_eq!(path, broker),
         other => panic!("broker must come first, got {other:?}"),
     }
-    assert_spawn(
-        &attempts[1],
-        &[
-            "app-server",
-            "proxy",
-            "--sock",
-            "/run/codex/app-server-control.sock",
-        ],
-        PROXY_PROBE_DEADLINE,
-    );
+    assert_daemon_ws(&attempts[1], daemon);
     assert_spawn(&attempts[2], &["app-server"], APP_SERVER_DEADLINE);
 
     let attempts = attempts_for(Some(broker), None);

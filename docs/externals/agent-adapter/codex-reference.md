@@ -18,6 +18,7 @@ Re-fetch these pages — and, for the app-server, re-run the schema generators �
 | Advanced config (`notify` payload) | <https://developers.openai.com/codex/config-advanced> |
 | App-server API (protocol, methods, notifications) | <https://developers.openai.com/codex/app-server> |
 | App-server README + schema generation | <https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md> |
+| App-server control socket WebSocket transport | <https://github.com/openai/codex/pull/21843> |
 | Rollout/session JSONL + `auth.json` shape | open-source `codex-rs` types — <https://github.com/openai/codex> |
 | OAuth usage endpoint | Codex credential-file traffic; no public schema page |
 
@@ -156,7 +157,7 @@ notification_condition = "unfocused"  # unfocused | always
 
 ## App-server API
 
-Codex has no statusline, so Rimz reads its rich context out of band from the **app-server**: a bidirectional JSON-RPC 2.0 service (the `"jsonrpc":"2.0"` header is omitted on the wire), streamed as JSONL over stdio by default. Transports: `stdio://` (default), `ws://IP:PORT`, `unix://[PATH]`, or `off`. Start with `codex app-server` (or `--listen …`). A client must send one `initialize` request per connection, then an `initialized` notification, before any other method.
+Codex has no statusline, so Rimz reads its rich context out of band from the **app-server**: a bidirectional JSON-RPC 2.0 service (the `"jsonrpc":"2.0"` header is omitted on the wire), streamed as JSONL over stdio by default. Transports: `stdio://` (default), `ws://IP:PORT`, `unix://[PATH]`, or `off`. Start with `codex app-server` (or `--listen …`). The remote-control daemon's unix-domain control socket speaks standard WebSocket HTTP upgrade over that UDS, then carries the same JSON-RPC payloads as text frames. A client must send one `initialize` request per connection, then an `initialized` notification, before any other method.
 
 The protocol is organized around three primitives: an **Item** (atomic input/output unit with a `started` → optional `delta` → `completed` lifecycle), a **Turn** (the items from one unit of agent work), and a **Thread** (the durable session container).
 

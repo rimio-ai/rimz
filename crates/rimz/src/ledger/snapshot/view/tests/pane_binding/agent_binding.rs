@@ -216,7 +216,8 @@ fn cleared_fresh_session_reap_repins_shared_pane_but_fork_keeps_primary() {
         snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
             daemon_pids: &BTreeSet::new(),
             loaded: None,
-            live_panes: Some(&[pane("%1", "codex", "/repo/main")]),
+            frame_panes: Some(&[pane("%1", "codex", "/repo/main")]),
+            exclude_pane: None,
         });
         let snapshot = snapshot.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
 

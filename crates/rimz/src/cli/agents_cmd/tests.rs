@@ -7,7 +7,7 @@ use rimz::config::LaunchPlacement;
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::spec::Column;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, ViewId, WorkspaceId};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -1433,12 +1433,14 @@ mod render {
     use super::*;
 
     #[test]
-    fn cached_agents_reap_uses_published_live_panes_for_clear_lineage() {
+    fn cached_agents_reap_uses_published_live_panes_for_runtime_reaps() {
         let dir = tempfile::tempdir().unwrap();
         let workspace_id = WorkspaceId::from_project_root(dir.path());
         let runtime = rimz::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
         let pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
+        let dead_pane_id = PaneId::from_parts(MuxName::Tmux, "%dead");
+        let host_pane_id = PaneId::from_parts(MuxName::Tmux, "%host");
         let mut old = agent_with_status(
             "old",
             rimz::agents::AgentStatus::Running,
@@ -1458,12 +1460,75 @@ mod render {
             agent.origin = Some(rimz::agents::SessionOrigin::Fresh);
             agent.pane = Some(rimz::pane::PaneRef::from_id(pane_id.clone()));
         }
+        let mut dead_daemon = agent_with_status(
+            "dead-daemon",
+            rimz::agents::AgentStatus::Success,
+            rimz::agents::TurnPhase::Idle,
+            900,
+        );
+        dead_daemon.kind = AgentKind::new_unchecked("codex");
+        dead_daemon.worktree_path = Some("/repo/main".to_owned());
+        dead_daemon.pane = Some(rimz::pane::PaneRef::from_id(dead_pane_id));
+        dead_daemon.runtime_owner = Some(rimz::RuntimeOwner::new(
+            rimz::RuntimeOwnerKind::Agent,
+            "dead-daemon",
+            77,
+            None,
+        ));
+        let mut host = agent_with_status(
+            "host",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            800,
+        );
+        host.kind = AgentKind::new_unchecked("claude");
+        host.worktree_path = Some("/repo/daemon".to_owned());
+        host.pane = Some(rimz::pane::PaneRef::from_id(host_pane_id.clone()));
         let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
             workspace_id,
             Vec::new(),
-            vec![old, new],
+            vec![old, new, dead_daemon, host],
             jiff::Timestamp::from_second(1_020).unwrap(),
         );
+        rimz::sidebar::refresh::write_codex_daemon_reap(
+            &runtime,
+            &rimz::sidebar::refresh::CodexDaemonReap {
+                produced_at_ms: 1,
+                daemon_pids: BTreeSet::from([77]),
+                loaded: Some(BTreeSet::new()),
+            },
+        )
+        .unwrap();
+        let codex_pane = rimz::sidebar::frame::PaneState {
+            pane_id: pane_id.clone(),
+            first_seen_at_ms: None,
+            hosted_carry_since_ms: None,
+            is_floating: false,
+            current: rimz::sidebar::frame::PaneProcess {
+                pid: None,
+                command: Some("codex".to_owned()),
+                spawn_command: None,
+                cwd: Some("/repo/main".to_owned()),
+                started_at: None,
+                hosted_agent_kind: None,
+                hosted_agent_process_start: None,
+                resumed_session_id: None,
+                elevated_agent: None,
+            },
+            previous: None,
+            children: Vec::new(),
+            metrics: rimz::sidebar::frame::PaneMetrics::default(),
+        };
+        let host_pane = rimz::sidebar::frame::PaneState {
+            pane_id: host_pane_id,
+            current: rimz::sidebar::frame::PaneProcess {
+                command: Some("claude".to_owned()),
+                spawn_command: Some("claude remote-control --spawn worktree".to_owned()),
+                cwd: Some("/repo/daemon".to_owned()),
+                ..codex_pane.current.clone()
+            },
+            ..codex_pane.clone()
+        };
         let frame = rimz::sidebar::frame::PaneFrame {
             produced_at_ms: 1,
             observed_at_ms: 1,
@@ -1475,26 +1540,7 @@ mod render {
                 name: None,
                 active_pane: Some(pane_id.clone()),
                 focus_contested: false,
-                panes: vec![rimz::sidebar::frame::PaneState {
-                    pane_id,
-                    first_seen_at_ms: None,
-                    hosted_carry_since_ms: None,
-                    is_floating: false,
-                    current: rimz::sidebar::frame::PaneProcess {
-                        pid: None,
-                        command: Some("codex".to_owned()),
-                        spawn_command: None,
-                        cwd: Some("/repo/main".to_owned()),
-                        started_at: None,
-                        hosted_agent_kind: None,
-                        hosted_agent_process_start: None,
-                        resumed_session_id: None,
-                        elevated_agent: None,
-                    },
-                    previous: None,
-                    children: Vec::new(),
-                    metrics: rimz::sidebar::frame::PaneMetrics::default(),
-                }],
+                panes: vec![codex_pane, host_pane],
             }],
             carried_panes: Vec::new(),
             viewed_panes: Vec::new(),

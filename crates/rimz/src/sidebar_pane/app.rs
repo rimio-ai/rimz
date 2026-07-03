@@ -363,7 +363,7 @@ fn reap_inherited_zombies() {
     use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
     use nix::unistd::Pid;
 
-    // A reload re-exec can orphan an in-flight Codex app-server proxy child by
+    // A reload re-exec can orphan an in-flight Codex app-server child by
     // replacing the process image while its `Child` handle exists. At serve
     // startup no Rust-owned child handles exist yet, so a non-blocking
     // waitpid(-1) drain cannot steal another component's child status.

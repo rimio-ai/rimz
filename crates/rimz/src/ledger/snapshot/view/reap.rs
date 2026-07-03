@@ -5,7 +5,8 @@ use jiff::Timestamp;
 use crate::agents::AgentState;
 use crate::agents::SessionOrigin;
 use crate::feed::FeedItem;
-use crate::ledger::snapshot::panes::{agent_owner_pid, is_daemon_mode};
+use crate::ids::{AgentSessionId, PaneId};
+use crate::ledger::snapshot::panes::{agent_owner_pid, is_daemon_owned};
 use crate::ledger::snapshot::process::{
     command_is_sidebar_chrome, pane_agent_kind, pane_worktree_path,
 };
@@ -20,7 +21,8 @@ use super::rows::agent_id_from_item;
 pub struct RuntimeReapInputs<'a> {
     pub daemon_pids: &'a BTreeSet<u32>,
     pub loaded: Option<&'a BTreeSet<String>>,
-    pub live_panes: Option<&'a [PaneRef]>,
+    pub frame_panes: Option<&'a [PaneRef]>,
+    pub exclude_pane: Option<&'a PaneId>,
 }
 
 impl SidebarSnapshot {
@@ -45,21 +47,35 @@ impl SidebarSnapshot {
     /// status, model, tokens, and pending ask onto a live `codex` pane by cwd
     /// ([`agent_pane_for_pane`]).
     ///
-    /// Tri-state, and fail-safe by construction (the loaded-thread set is a
-    /// liveness improvement, not a perfect pane signal, so it never mass-reaps):
+    /// Tri-state, and fail-safe by construction (the loaded-thread set and live
+    /// panes are liveness improvements, not a perfect pane signal, so they never
+    /// mass-reap):
     /// - `loaded` is `None` — the daemon was unreachable or its `thread/loaded/list`
     ///   could not be trusted — keep every session;
     /// - `daemon_pids` is empty — no daemon is running, so every session is
     ///   standalone — keep every session;
-    /// - a session is daemon-mode ([`is_daemon_mode`]) and its id is absent
-    ///   from `loaded` — reap it;
+    /// - a session is daemon-owned ([`is_daemon_owned`]), its id is absent from
+    ///   `loaded`, and it has no pane or its stamped pane is absent from the
+    ///   admitted live-pane set — reap it;
+    /// - a root agent stamped on a daemon-dashboard host pane is hidden with
+    ///   its subagents;
     /// - anything else — keep it.
     ///
     /// The render lanes run this before the live-pane fold, so a reaped session
     /// can neither render a row nor attach stale stats to a live pane.
     pub fn reap_runtime(&mut self, inputs: RuntimeReapInputs<'_>) {
-        self.drop_dead_daemon_sessions(inputs.daemon_pids, inputs.loaded);
-        if let Some(live_panes) = inputs.live_panes {
+        let admitted_panes = inputs
+            .frame_panes
+            .map(|panes| Self::card_admitted_live_panes(panes.to_vec(), inputs.exclude_pane));
+        if let Some(frame_panes) = inputs.frame_panes {
+            self.drop_host_pane_agents(frame_panes);
+        }
+        self.drop_dead_daemon_sessions(
+            inputs.daemon_pids,
+            inputs.loaded,
+            admitted_panes.as_deref(),
+        );
+        if let Some(live_panes) = admitted_panes.as_deref() {
             self.drop_cleared_sessions(live_panes);
         }
     }
@@ -68,15 +84,64 @@ impl SidebarSnapshot {
         &mut self,
         daemon_pids: &BTreeSet<u32>,
         loaded: Option<&BTreeSet<String>>,
+        admitted_live_panes: Option<&[PaneRef]>,
     ) {
         let Some(loaded) = loaded else { return };
         if daemon_pids.is_empty() {
             return;
         }
+        let live_pane_ids = admitted_live_panes.map(|panes| {
+            panes
+                .iter()
+                .map(|pane| pane.pane_id.clone())
+                .collect::<Vec<_>>()
+        });
         self.agents.retain(|agent| {
-            let reapable =
-                is_daemon_mode(agent, daemon_pids) && !loaded.contains(agent.agent_id.as_str());
+            let absent_from_daemon =
+                is_daemon_owned(agent, daemon_pids) && !loaded.contains(agent.agent_id.as_str());
+            let pane_absent = match agent.pane.as_ref() {
+                None => true,
+                Some(pane) => live_pane_ids
+                    .as_ref()
+                    .is_some_and(|ids| !ids.iter().any(|id| id == &pane.pane_id)),
+            };
+            let reapable = absent_from_daemon && pane_absent;
             !reapable
+        });
+    }
+
+    fn drop_host_pane_agents(&mut self, frame_panes: &[PaneRef]) {
+        let host_pane_ids = frame_panes
+            .iter()
+            .filter(|pane| remote_control::pane_is_host(pane))
+            .map(|pane| pane.pane_id.clone())
+            .collect::<Vec<_>>();
+        if host_pane_ids.is_empty() {
+            return;
+        }
+        let dropped_roots = self
+            .agents
+            .iter()
+            .filter(|agent| {
+                agent.parent_agent_id.is_none()
+                    && agent
+                        .pane
+                        .as_ref()
+                        .is_some_and(|pane| host_pane_ids.iter().any(|id| id == &pane.pane_id))
+            })
+            .map(|agent| agent.agent_id.clone())
+            .collect::<BTreeSet<AgentSessionId>>();
+        if dropped_roots.is_empty() {
+            return;
+        }
+        self.agents.retain(|agent| {
+            if agent.parent_agent_id.is_none() {
+                return !dropped_roots.contains(&agent.agent_id);
+            }
+            agent
+                .parent_agent_id
+                .as_ref()
+                .is_none_or(|parent| !dropped_roots.contains(parent))
         });
     }
 
