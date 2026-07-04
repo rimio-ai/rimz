@@ -1,6 +1,6 @@
 # Configure tmux
 
-Rimz runs inside the tmux you already use, and sets the room's behavior for you: on every session birth and reattach it applies the mouse, focus-event, passthrough, history, CSI-u soft-newline key, and clipboard options agents need ([installation → configure your multiplexer](./installation.md#configure-your-multiplexer), [configuration → multiplexer room options](../reference/configuration.md#multiplexer-room-options)). Your `~/.tmux.conf` owns what Rimz leaves to you — true-color rendering, copy-mode, the status bar, and your keybindings — so those settings matter even inside the room, and they own your tmux sessions outside Rimz entirely.
+Rimz runs inside the tmux you already use, and sets the room's behavior for you: on every session birth and reattach it applies the mouse, focus-event, passthrough, synchronized-output, history, CSI-u soft-newline key, and clipboard options agents need ([installation → configure your multiplexer](./installation.md#configure-your-multiplexer), [configuration → multiplexer room options](../reference/configuration.md#multiplexer-room-options)). Your `~/.tmux.conf` owns what Rimz leaves to you — true-color rendering, copy-mode, the status bar, and your keybindings — so those settings matter even inside the room, and they own your tmux sessions outside Rimz entirely.
 
 This guide is a baseline that makes tmux modern and pleasant everywhere. The file lives at `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`); reload it with `tmux source-file ~/.tmux.conf` or the `prefix` + `r` binding below. Every option here is catalogued in the [tmux upstream reference](../externals/mux-adapter/tmux-reference.md#options).
 
@@ -13,12 +13,12 @@ Two groups. The first — **true color** — sets your terminal type and RGB pas
 set -g default-terminal "tmux-256color"
 set -ga terminal-overrides ",*256col*:RGB,alacritty:RGB,wezterm:RGB"
 set -ga terminal-features ",*:RGB,*:usstyle,*:clipboard"
-set -ga terminal-features ",*:sync"   # atomic redraws: flicker-free pixel pets and TUIs
 
 # Behaviors a modern TUI agent relies on.
 set -g  mouse on                 # scroll, select panes, resize
 set -g  history-limit 100000     # long Claude/Codex output stays in scrollback
 set -sg escape-time 0            # no ESC lag in helix, nvim, fzf, agent TUIs
+set -ga terminal-features ",*:sync"   # atomic redraws for tmux sessions outside Rimz
 set -g  focus-events on          # editors and agents see focus changes
 set -g  allow-passthrough on     # let desktop notifications pass through tmux
 set -s  extended-keys on             # distinguish modified Enter from Enter
@@ -29,7 +29,7 @@ bind-key -n M-Enter send-keys Escape "[13;3u"
 set -g  set-clipboard on         # yank into the host clipboard over OSC52
 ```
 
-`escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. Synchronized output (DECSET 2026), paired with `escape-time 0`, lets tmux buffer a frame's writes and forward them to your terminal as one atomic redraw, so rapid repaints such as Rimz's animated pixel pets and full-screen TUIs never show a half-painted frame. `extended-keys`, `extended-keys-format csi-u`, and `terminal-features … extkeys` let an agent's composer receive Shift+Enter and Alt+Enter as CSI-u soft newlines while plain Enter still submits; the explicit `S-Enter` / `M-Enter` binds make those keys reach agents that do not request modifyOtherKeys themselves. On tmux 3.5.x, this trades clean multiline clipboard paste while extended keys are active; use Ctrl+J, `\`+Enter, or tmux 3.6+ for both modified-Enter newlines and clean paste. `set-clipboard on` carries a yank out through OSC52, so you can copy agent output to your local clipboard even over SSH. `allow-passthrough on` lets the desktop-notification bytes Rimz emits reach your terminal ([notifications](../internals/sidebar/notifications.md)).
+`escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. Synchronized output (DECSET 2026), paired with `escape-time 0`, lets tmux buffer a frame's writes and forward them to your terminal as one atomic redraw, so rapid repaints such as Rimz's animated pixel pets and full-screen TUIs never show a half-painted frame; Rimz applies it inside the room, and the config line above gives your own tmux sessions the same behavior. `extended-keys`, `extended-keys-format csi-u`, and `terminal-features … extkeys` let an agent's composer receive Shift+Enter and Alt+Enter as CSI-u soft newlines while plain Enter still submits; the explicit `S-Enter` / `M-Enter` binds make those keys reach agents that do not request modifyOtherKeys themselves. On tmux 3.5.x, this trades clean multiline clipboard paste while extended keys are active; use Ctrl+J, `\`+Enter, or tmux 3.6+ for both modified-Enter newlines and clean paste. `set-clipboard on` carries a yank out through OSC52, so you can copy agent output to your local clipboard even over SSH. `allow-passthrough on` lets the desktop-notification bytes Rimz emits reach your terminal ([notifications](../internals/sidebar/notifications.md)).
 
 ## Recommended
 

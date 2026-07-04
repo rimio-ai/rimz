@@ -175,7 +175,8 @@ impl TmuxBackend {
                 value,
             ]);
         }
-        // Re-appending `*:extkeys` is idempotent for tmux and preserves user entries.
+        // Re-appending `*:sync` / `*:extkeys` is idempotent for tmux and
+        // preserves user entries.
         for (key, value) in tmux_server_append_options(config) {
             commands.push(vec![
                 "set-option".to_owned(),

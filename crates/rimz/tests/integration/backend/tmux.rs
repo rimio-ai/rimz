@@ -581,6 +581,10 @@ fn ensure_session_applies_room_options_in_one_batch() {
         terminal_features.contains("extkeys"),
         "extkeys terminal-feature lets Alt+Enter reach agents as CSI-u",
     );
+    assert!(
+        terminal_features.contains("sync"),
+        "sync terminal-feature lets tmux forward atomic redraws for flicker-free pets and TUIs",
+    );
     let root_keys = server.list_keys("root");
     assert!(
         root_keys

@@ -75,7 +75,7 @@ Cell art stays pane-local across tmux, Zellij, detached sessions, plain terminal
 
 The pixel tier renders the same decoded WebP frames through the kitty graphics protocol after ratatui draws the dashboard. The renderer reserves blank cells and records the absolute placeholder rect; the serve loop owns stdout and writes placement escapes for that rect.
 
-Ghostty's kitty support covers image placement while animation-frame actions (`a=f`/`a=a`) remain unavailable, so the renderer drives frames by cycling image ids and rewriting placeholder cells. Each frame is emitted under synchronized output (DECSET 2026) so the swap lands as one atomic redraw and skips partial or blank intermediate frames; tmux buffers the bracketed writes and forwards the window to the terminal when `terminal-features …:sync` is set.
+Ghostty's kitty support covers image placement while animation-frame actions (`a=f`/`a=a`) remain unavailable, so the renderer drives frames by cycling image ids and rewriting placeholder cells. Each frame is emitted under synchronized output (DECSET 2026) so the swap lands as one atomic redraw and skips partial or blank intermediate frames; Rimz applies `*:sync` during tmux room setup, so tmux buffers the bracketed writes and forwards the window to the terminal by default.
 
 tmux receives every graphics escape through its passthrough DCS wrapper, and placement uses kitty Unicode placeholders so redraws and pane repaints keep ownership in the sidebar pane. The live sidebar, gallery, and `rimz list-pets` share the same fixed footprints. Gallery columns paint through separate image-id ranges so one column cannot delete or ghost another column's image.
 

@@ -204,6 +204,7 @@ Four scope tables — server, session, window, pane — each in a global and a l
 | `set-clipboard` | server | **on** \| external \| off | `on` both accepts OSC 52 from apps (into a tmux buffer) and forwards to the outer terminal (needs terminfo `Ms`); `external` forwards only, ignoring app sets |
 | `extended-keys` | server | tmux accepts on/off/always; Rimz writes **on** by default | modifyOtherKeys: `on` honours app requests for mode 1/2; on tmux 3.5.x it contaminates bracketed paste, and 3.6 fixes that cost |
 | `extended-keys-format` | server | **csi-u** \| xterm | `C-S-a` → `^[[65;6u` (csi-u) vs `^[[27;6;65~` (xterm); **3.5+** |
+| `terminal-features` (append `*:sync`) | server | **`*:sync`** | tells tmux the outer terminal honours synchronized output, so bracketed frame writes forward as atomic redraws for pixel pets and full-screen TUIs; appended rather than replaced, so the user's RGB and clipboard features survive |
 | `terminal-features` (append `*:extkeys`) | server | **`*:extkeys`** when extended keys are enabled | requests extended keys from the outer terminal so modified keys, including Shift+Enter and Alt+Enter, arrive as CSI-u; appended rather than replaced, so the user's RGB and clipboard features survive |
 | `escape-time` | server | ms, **0** | ESC-disambiguation delay; upstream default 10 since 3.5 (500 before) |
 | `mouse` | session | **on** \| off | mouse events become bindable keys; click focuses panes |

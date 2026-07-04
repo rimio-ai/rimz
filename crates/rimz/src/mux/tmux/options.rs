@@ -134,9 +134,11 @@ pub(super) fn tmux_server_options(config: &TmuxConfig) -> Vec<(&'static str, Str
 }
 
 /// Server options Rimz appends so the user's existing array entries survive.
-/// `*:extkeys` asks the outer terminal to send modified keys.
+/// `*:sync` enables atomic redraws, and `*:extkeys` asks the outer terminal to
+/// send modified keys.
 pub(super) fn tmux_server_append_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
     let mut opts = Vec::new();
+    opts.push(("terminal-features", "*:sync".to_owned()));
     if config.extended_keys {
         opts.push(("terminal-features", "*:extkeys".to_owned()));
     }
@@ -405,7 +407,10 @@ mod tests {
         );
         assert_eq!(
             tmux_server_append_options(&config),
-            vec![("terminal-features", "*:extkeys".to_owned())],
+            vec![
+                ("terminal-features", "*:sync".to_owned()),
+                ("terminal-features", "*:extkeys".to_owned()),
+            ],
         );
         assert_eq!(
             tmux_session_options(&config),
@@ -455,6 +460,9 @@ mod tests {
             extended_keys: false,
             ..TmuxConfig::default()
         };
-        assert!(tmux_server_append_options(&config).is_empty());
+        assert_eq!(
+            tmux_server_append_options(&config),
+            vec![("terminal-features", "*:sync".to_owned())],
+        );
     }
 }
