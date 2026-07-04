@@ -218,6 +218,33 @@ fn cohort_resume_starts_fresh_for_kind_without_resume_cli() {
 }
 
 #[test]
+fn cohort_resume_starts_fresh_for_provisional_launch_placeholder() {
+    let mut coder = agent(
+        "codex",
+        "launch_019f2cecea067320b667c5946d266e64",
+        "/code/pets-l",
+        Some("pets-l"),
+        4,
+    );
+    coder.team = Some("forge".to_owned());
+    coder.role = Some("coder".to_owned());
+
+    let plan = plan_cohort_resume(
+        &[coder],
+        &no_ended(),
+        dead,
+        &[cohort_cell("codex", Some("coder"))],
+        Some("forge"),
+        |_| true,
+    )
+    .expect("provisional placeholder still matched the cohort");
+
+    assert_eq!(plan.seeds, vec![CohortSeed::Fresh]);
+    assert_eq!(plan.fresh, vec!["codex:pets-l".to_owned()]);
+    assert_eq!(plan.cwd.as_deref(), Some(Path::new("/code/pets-l")));
+}
+
+#[test]
 fn cohort_resume_matches_inline_group_by_launch_ordinal() {
     let mut old = agent("claude", "old", "/code/old", None, 50);
     old.launch_group = Some("launch_old".to_owned());
