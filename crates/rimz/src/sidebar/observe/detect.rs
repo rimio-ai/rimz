@@ -346,8 +346,9 @@ impl Observer {
             // The row id vanished while its pane still backs another row: the
             // pane was rebound to a new identity (e.g. a worktree group re-keys
             // from `branch:<name>` to its path as enumeration catches up), not
-            // removed. `group_migration` records that transition; the pane never
-            // blinked, so this is not a short-lived row.
+            // removed. Rebound detection comes from pane continuity; only
+            // directory-changing cross-group moves also emit `group_migration`.
+            // The pane never blinked, so this is not a short-lived row.
             let rebound = presence
                 .pane_id
                 .as_deref()
