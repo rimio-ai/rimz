@@ -1558,10 +1558,27 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         resume_tabs: vec![rimz::mux::ResumeTab {
             label: "#feature".to_owned(),
             cwd: std::env::temp_dir(),
-            panes: vec![
-                vec!["sleep".to_owned(), "120".to_owned()],
-                vec!["sleep".to_owned(), "120".to_owned()],
-            ],
+            layout: rimz::mux::LayoutPanes {
+                columns: vec![
+                    rimz::mux::LayoutColumn {
+                        panes: vec![rimz::mux::PaneCmd {
+                            argv: vec!["sleep".to_owned(), "120".to_owned()],
+                        }],
+                        stacked: false,
+                    },
+                    rimz::mux::LayoutColumn {
+                        panes: vec![
+                            rimz::mux::PaneCmd {
+                                argv: vec!["sleep".to_owned(), "120".to_owned()],
+                            },
+                            rimz::mux::PaneCmd {
+                                argv: vec!["sleep".to_owned(), "120".to_owned()],
+                            },
+                        ],
+                        stacked: false,
+                    },
+                ],
+            },
         }],
         refresh_ms: None,
     };
@@ -1591,8 +1608,30 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         .filter(|pane| pane.view_name.as_deref() == Some("#feature"))
         .count();
     assert_eq!(
-        agent_panes, 3,
+        agent_panes, 4,
         "resumed window should be born sidebar | agents"
+    );
+    let panes = server.wait_for_panes("rimz-resume:#feature", 4);
+    let work = panes
+        .iter()
+        .filter(|pane| pane.left > 0)
+        .collect::<Vec<_>>();
+    assert_eq!(work.len(), 3, "expected three work panes: {panes:?}");
+    let left_column = work.iter().map(|pane| pane.left).min().expect("work pane");
+    let right_column = work.iter().map(|pane| pane.left).max().expect("work pane");
+    assert_ne!(
+        left_column, right_column,
+        "team restore should create two work columns: {panes:?}"
+    );
+    assert_eq!(
+        work.iter().filter(|pane| pane.left == left_column).count(),
+        1,
+        "planner column stays full-height on the left: {panes:?}"
+    );
+    assert_eq!(
+        work.iter().filter(|pane| pane.left == right_column).count(),
+        2,
+        "coder/reviewer column stays stacked on the right: {panes:?}"
     );
     assert_eq!(
         left_pane_width(&server, "rimz-resume:#feature"),

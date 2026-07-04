@@ -89,6 +89,17 @@ fn resume_argv(kind: &str, id: &str, name: &str) -> Vec<String> {
     ]
 }
 
+fn single_column(tab: &rimz::mux::ResumeTab) -> Vec<Vec<String>> {
+    tab.layout
+        .columns
+        .first()
+        .expect("resume tab has one column")
+        .panes
+        .iter()
+        .map(|pane| pane.argv.clone())
+        .collect()
+}
+
 fn lifecycle(
     h: &Harness,
     kind: &str,
@@ -121,7 +132,7 @@ fn resumes_an_agent_stamped_in_the_real_rollup() {
         "the stamped agent is resumed from the real fold"
     );
     assert_eq!(
-        plan.tabs[0].panes,
+        single_column(&plan.tabs[0]),
         vec![resume_argv("claude", "sess-claude", "warm-drift")]
     );
     assert_eq!(plan.tabs[0].label, "#feature");
@@ -147,7 +158,7 @@ fn resume_replays_role_and_team() {
     let plan = plan_from_rollup(&h);
     assert_eq!(plan.tabs.len(), 1);
     assert_eq!(
-        plan.tabs[0].panes,
+        single_column(&plan.tabs[0]),
         vec![
             vec![
                 "/bin/rimz",
@@ -196,7 +207,7 @@ fn two_same_kind_agents_in_one_worktree_each_resume_their_own_pane() {
         "two concurrent same-kind agents in one worktree share one resume tab"
     );
     assert_eq!(plan.tabs[0].label, "#shared");
-    assert_eq!(plan.tabs[0].panes.len(), 2);
+    assert_eq!(single_column(&plan.tabs[0]).len(), 2);
 }
 
 #[test]
@@ -283,7 +294,7 @@ fn a_stamp_after_the_rebirth_boundary_survives_and_is_resumed() {
     let plan = plan_from_rollup(&h);
     assert_eq!(plan.tabs.len(), 1, "the post-boundary re-stamp is resumed");
     assert_eq!(
-        plan.tabs[0].panes,
+        single_column(&plan.tabs[0]),
         vec![resume_argv("codex", "sess-codex", "calm-harbor")]
     );
 }

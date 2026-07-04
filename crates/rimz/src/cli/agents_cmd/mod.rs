@@ -7,6 +7,7 @@ mod launch;
 mod reconcile;
 mod refresh_usage;
 mod supervised;
+pub(crate) mod team_restore;
 
 use std::collections::BTreeMap;
 use std::io::Write;

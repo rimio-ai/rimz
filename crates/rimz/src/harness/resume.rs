@@ -205,7 +205,7 @@ pub fn plan_resume(
             });
             continue;
         }
-        let seeded = tabs.iter().map(|tab| tab.tab.panes.len()).sum::<usize>();
+        let seeded = tabs.iter().map(|tab| tab.tab.pane_count()).sum::<usize>();
         if seeded >= max {
             plan.skipped.push(ResumeSkip {
                 label,
@@ -222,15 +222,13 @@ pub fn plan_resume(
         let tab_label = channel_label(agent.channel.as_deref(), &cwd);
         let identity = resume_tab_identity(agent.channel.as_deref(), &cwd);
         if let Some(tab) = tabs.iter_mut().find(|tab| tab.identity == identity) {
-            tab.tab.panes.push(command);
+            if let Some(column) = tab.tab.layout.columns.first_mut() {
+                column.panes.push(crate::mux::PaneCmd { argv: command });
+            }
         } else {
             tabs.push(PlannedResumeTab {
                 identity,
-                tab: ResumeTab {
-                    label: tab_label,
-                    cwd,
-                    panes: vec![command],
-                },
+                tab: ResumeTab::flat(tab_label, cwd, vec![command]),
             });
         }
     }

@@ -159,7 +159,7 @@ pub(super) fn render_session_layout(
     let mut agent_tabs = String::new();
     for (index, tab) in resume.iter().enumerate() {
         let tab_name = kdl_string(&tab.label)?;
-        let agent_panes = if tab.panes.is_empty() {
+        let agent_panes = if tab.layout.columns.is_empty() {
             render_command_pane(
                 &crate::harness::launch::channel_label_shell_argv(
                     &opts.workspace_id,
@@ -173,13 +173,18 @@ pub(super) fn render_session_layout(
                 None,
             )?
         } else {
-            tab.panes
-                .iter()
-                .enumerate()
-                .map(|(pane_index, argv)| {
-                    render_command_pane(argv, &tab.cwd, pane_index == 0, 16, None)
-                })
-                .collect::<Result<String>>()?
+            let mut focused = false;
+            let mut columns = String::new();
+            for column in &tab.layout.columns {
+                columns.push_str(&render_tab_column(
+                    &column.panes,
+                    column.stacked,
+                    &tab.cwd,
+                    &mut focused,
+                    16,
+                )?);
+            }
+            columns
         };
         let body = render_sidebar_work_area(&sidebar, &agent_panes, 8);
         let focus_attr = if index == 0 { " focus=true" } else { "" };

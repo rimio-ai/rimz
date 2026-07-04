@@ -19,7 +19,7 @@ use rimz::mux::{
     BackgroundViewOptions, DaemonView, MuxBackend, PresencePluginOptions, SessionOptions,
     SidebarPaneOptions, SidebarWidth,
 };
-use rimz::{RuntimePaths, WorkspaceRecord};
+use rimz::{RuntimePaths, StatePaths, WorkspaceRecord};
 
 use crate::cli::{
     AttachArgs, GlobalFlags, StartArgs, confirm_with_default, machine_config, record_workspace,
@@ -33,7 +33,7 @@ use coroner::{inspect_previous_incarnation, report_previous_session_death};
 use daemon_view::{build_daemon_view, maybe_launch_remote_control};
 use hook_install::ensure_detected_agent_hooks;
 pub(crate) use hook_install::{detected_installable_adapters, render_dry_run};
-use resume::{plan_room_resume, record_rebirth_boundary, report_resume};
+use resume::{materialize_room_resume, plan_room_resume, record_rebirth_boundary, report_resume};
 pub(crate) use room_recovery::gate_room_before_attach;
 use session_record::retire_renamed_session;
 use start_notice::report_start_notices;
@@ -633,39 +633,71 @@ pub(crate) fn register_focus_key(
 fn resume_plan_for_birth(
     was_live: bool,
     recover_agents: bool,
-    workspace_id: &WorkspaceId,
-    session_name: &str,
-    resume_cfg: &rimz::config::ResumeConfig,
+    room: &RoomTarget<'_>,
+    machine_config: &rimz::config::MachineConfig,
     no_resume: bool,
 ) -> Result<rimz::harness::resume::ResumePlan> {
     if was_live {
         return Ok(rimz::harness::resume::ResumePlan::default());
     }
+    let effective_launch = rimz::config::effective::load(
+        &machine_config.agents,
+        room.project_root,
+        &rimz::ledger::paths::config_home(),
+    );
+    let (teams, profiles) = match &effective_launch {
+        Ok(launch) => (&launch.teams, &launch.profiles),
+        Err(err) => {
+            tracing::warn!(
+                workspace = %room.workspace_id,
+                error = %err,
+                "effective agent config unavailable; team resume uses machine config only",
+            );
+            (
+                &machine_config.agents.teams,
+                &machine_config.agents.profiles,
+            )
+        }
+    };
     let plan = plan_room_resume(
-        workspace_id,
-        session_name,
-        resume_cfg,
+        room.workspace_id,
+        &machine_config.resume,
         no_resume,
         recover_agents,
+        teams,
+        profiles,
+        &machine_config.agents.commands,
     );
-    let plan = prompt_recover_or_fresh(plan)?;
-    record_rebirth_boundary(workspace_id, session_name);
+    let plan = match prompt_recover_or_fresh(plan)? {
+        Some(plan) => {
+            let paths = StatePaths::for_workspace(room.workspace_id.clone());
+            let runtime = RuntimePaths::for_workspace(room.workspace_id.clone());
+            match (paths, runtime) {
+                (Ok(paths), Ok(runtime)) => {
+                    materialize_room_resume(plan, &paths, &runtime, room.session_name, teams)
+                }
+                (Err(err), _) | (_, Err(err)) => {
+                    tracing::warn!(
+                        workspace = %room.workspace_id,
+                        error = %err,
+                        "resume materialization skipped",
+                    );
+                    rimz::harness::resume::ResumePlan::default()
+                }
+            }
+        }
+        None => rimz::harness::resume::ResumePlan::default(),
+    };
+    record_rebirth_boundary(room.workspace_id, room.session_name);
     Ok(plan)
 }
 
-fn prompt_recover_or_fresh(
-    plan: rimz::harness::resume::ResumePlan,
-) -> Result<rimz::harness::resume::ResumePlan> {
-    let agents = plan.tabs.iter().map(|tab| tab.panes.len()).sum::<usize>();
+fn prompt_recover_or_fresh(plan: resume::RoomResumePlan) -> Result<Option<resume::RoomResumePlan>> {
+    let agents = plan.pane_count();
     if agents == 0 || !std::io::stdin().is_terminal() {
-        return Ok(plan);
+        return Ok(Some(plan));
     }
-    let labels = plan
-        .tabs
-        .iter()
-        .map(|tab| tab.label.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let labels = plan.labels().join(", ");
     if confirm_with_default(
         &format!(
             "Recover {agents} agent{} ({labels})?",
@@ -673,9 +705,9 @@ fn prompt_recover_or_fresh(
         ),
         true,
     )? {
-        Ok(plan)
+        Ok(Some(plan))
     } else {
-        Ok(rimz::harness::resume::ResumePlan::default())
+        Ok(None)
     }
 }
 
@@ -742,9 +774,8 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
     let resume_plan = resume_plan_for_birth(
         birth.was_live,
         recovery.recover_agents,
-        room.workspace_id,
-        room.session_name,
-        &machine_config.resume,
+        room,
+        machine_config,
         birth.no_resume,
     )?;
     launch_sidebar_for_workspace(

@@ -441,7 +441,7 @@ fn agent_matches_worktree_filter(agent: &AgentState, target: &Path) -> bool {
     })
 }
 
-fn cohort_cells(layout: &LayoutSpec) -> Vec<rimz::harness::resume::CohortCell> {
+pub(super) fn cohort_cells(layout: &LayoutSpec) -> Vec<rimz::harness::resume::CohortCell> {
     layout
         .agent_cells()
         .filter_map(|cell| match cell {
@@ -468,7 +468,7 @@ fn cohort_resume_error(err: rimz::harness::resume::CohortResumeErr, spec: &str) 
     }
 }
 
-fn fresh_resume_launch_requests(
+pub(super) fn fresh_resume_launch_requests(
     layout: &LayoutSpec,
     plan: &rimz::harness::resume::CohortResumePlan,
     team: Option<&str>,

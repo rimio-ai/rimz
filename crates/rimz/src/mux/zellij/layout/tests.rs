@@ -104,13 +104,34 @@ fn assert_undocked_work_area_template(layout: &str, visible_compact_bars: usize,
 }
 
 fn resume_tab(label: &str, panes: &[&[&str]], cwd: &str) -> ResumeTab {
-    ResumeTab {
-        label: label.to_owned(),
-        cwd: PathBuf::from(cwd),
-        panes: panes
+    ResumeTab::flat(
+        label.to_owned(),
+        PathBuf::from(cwd),
+        panes
             .iter()
             .map(|argv| argv.iter().map(|arg| arg.to_string()).collect())
             .collect(),
+    )
+}
+
+fn resume_tab_with_columns(label: &str, columns: &[&[&[&str]]], cwd: &str) -> ResumeTab {
+    ResumeTab {
+        label: label.to_owned(),
+        cwd: PathBuf::from(cwd),
+        layout: crate::mux::LayoutPanes {
+            columns: columns
+                .iter()
+                .map(|column| crate::mux::LayoutColumn {
+                    panes: column
+                        .iter()
+                        .map(|argv| crate::mux::PaneCmd {
+                            argv: argv.iter().map(|arg| arg.to_string()).collect(),
+                        })
+                        .collect(),
+                    stacked: false,
+                })
+                .collect(),
+        },
     }
 }
 
@@ -415,6 +436,33 @@ fn session_layout_seeds_resumed_agents_and_focuses_working_when_empty() {
         !layout.contains("tab name="),
         "no daemon or agent tabs without a daemon or resume set:\n{layout}",
     );
+}
+
+#[test]
+fn session_layout_renders_resume_columns() {
+    let opts = background_view_opts(vec![]).sidebar;
+    let resume = vec![resume_tab_with_columns(
+        "#team",
+        &[
+            &[&["planner", "resume"]],
+            &[&["coder", "resume"], &["reviewer", "resume"]],
+        ],
+        "/proj/team",
+    )];
+
+    let layout = render_session_layout(&opts, None, &resume).expect("render resume layout");
+
+    assert!(
+        layout.contains(r##"tab name="#team" focus=true"##),
+        "{layout}"
+    );
+    assert!(
+        layout.contains(r#"pane split_direction="horizontal" {"#),
+        "right column rows stay nested instead of flattening into peer columns:\n{layout}",
+    );
+    assert!(layout.contains(r#"command "planner""#), "{layout}");
+    assert!(layout.contains(r#"command "coder""#), "{layout}");
+    assert!(layout.contains(r#"command "reviewer""#), "{layout}");
 }
 
 #[test]

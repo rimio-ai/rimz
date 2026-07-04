@@ -349,10 +349,10 @@ pub(crate) fn sidebar_serve_args(mux: MuxName, opts: &SidebarPaneOptions) -> Vec
     args
 }
 
-/// One worktree channel the reborn session re-seeds: a fresh tab running every
-/// resumable agent from that worktree, restoring each conversation idle (no
-/// auto-prompt, no new token spend until the user types). Pure data — the
-/// backend seeds `{panes, cwd}` and knows nothing of agents or the ledger.
+/// One worktree channel the reborn session re-seeds: a fresh tab running the
+/// restored pane layout for that channel, keeping resumed conversations idle
+/// (no auto-prompt, no new token spend until the user types). Pure data — the
+/// backend seeds `{layout, cwd}` and knows nothing of agents or the ledger.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResumeTab {
     /// Short display and view label, e.g. `#feature-migration`. Doubles as the
@@ -360,10 +360,38 @@ pub struct ResumeTab {
     pub label: String,
     /// The channel's worktree: the cwd every resumed pane runs in.
     pub cwd: PathBuf,
-    /// Resume argv per agent, program first — the supervised exec wrapper, e.g.
-    /// `["<rimz>", "agents", "exec", "claude", "--resume", "<uuid>"]`, so the
-    /// resumed agent gets the same launch-env injection as a fresh launch.
-    pub panes: Vec<Vec<String>>,
+    /// Pane layout to recreate. Resume panes run the supervised exec wrapper,
+    /// e.g. `["<rimz>", "agents", "exec", "claude", "--resume", "<uuid>"]`,
+    /// so a resumed agent gets the same launch-env injection as a fresh launch.
+    pub layout: LayoutPanes,
+}
+
+impl ResumeTab {
+    /// Wrap flat resume argvs in one tiled column, preserving legacy non-team
+    /// resume geometry.
+    pub fn flat(label: String, cwd: PathBuf, panes: Vec<Vec<String>>) -> Self {
+        let columns = if panes.is_empty() {
+            Vec::new()
+        } else {
+            vec![LayoutColumn {
+                panes: panes.into_iter().map(|argv| PaneCmd { argv }).collect(),
+                stacked: false,
+            }]
+        };
+        Self {
+            label,
+            cwd,
+            layout: LayoutPanes { columns },
+        }
+    }
+
+    pub fn pane_count(&self) -> usize {
+        self.layout
+            .columns
+            .iter()
+            .map(|column| column.panes.len())
+            .sum()
+    }
 }
 
 #[derive(Clone, Debug, Default)]

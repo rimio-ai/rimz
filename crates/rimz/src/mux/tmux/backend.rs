@@ -1,5 +1,7 @@
 //! tmux [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
+use std::path::Path;
+
 use super::TmuxBackend;
 use super::options::{
     after_new_window_hook_set_cmd, birth_split_commands, sidebar_serve_command,
@@ -8,6 +10,7 @@ use super::options::{
 use super::parse::{parse_client_view, parse_new_window_ids, parse_pane_line};
 use super::window::sanitize_window_name;
 use crate::ids::{MuxName, PaneId};
+use crate::mux::LayoutPanes;
 use crate::mux::{
     AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
     BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend,
@@ -560,13 +563,13 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn open_tab(&self, opts: &TabOptions) -> Result<()> {
-        let Some((first_column, rest_columns)) = opts.panes.columns.split_first() else {
+        let Some((first_column, _)) = opts.panes.columns.split_first() else {
             return Err(MuxErr::Output {
                 program: "tmux".to_owned(),
                 reason: "tab layout has no columns".to_owned(),
             });
         };
-        let Some((first, first_column_rest)) = first_column.panes.split_first() else {
+        let Some((first, _)) = first_column.panes.split_first() else {
             return Err(MuxErr::Output {
                 program: "tmux".to_owned(),
                 reason: "tab layout has an empty column".to_owned(),
@@ -601,34 +604,8 @@ impl MuxBackend for TmuxBackend {
         // the sidebar before the splits so the columns land at full width.
         let normalized = self.normalize_tab_birth_width(&window_id, &first_pane, &opts.sidebar);
 
-        let split_result = (|| {
-            let mut column_anchors = vec![first_pane.clone()];
-            let mut previous_in_column = first_pane.clone();
-            for pane in first_column_rest {
-                previous_in_column =
-                    self.split_printed("-v", &previous_in_column, None, &opts.cwd, &pane.argv)?;
-            }
-            for column in rest_columns {
-                // tmux has no native stack, so stacked columns use tiled rows.
-                let Some((top, rows)) = column.panes.split_first() else {
-                    return Err(MuxErr::Output {
-                        program: "tmux".to_owned(),
-                        reason: "tab layout has an empty column".to_owned(),
-                    });
-                };
-                let target = column_anchors
-                    .last()
-                    .cloned()
-                    .unwrap_or_else(|| window_id.clone());
-                let new_column = self.split_printed("-h", &target, None, &opts.cwd, &top.argv)?;
-                column_anchors.push(new_column.clone());
-                let mut previous = new_column;
-                for row in rows {
-                    previous = self.split_printed("-v", &previous, None, &opts.cwd, &row.argv)?;
-                }
-            }
-            Ok(())
-        })();
+        let split_result =
+            self.split_layout_columns(&window_id, &first_pane, &opts.cwd, &opts.panes);
         if normalized {
             // `resize-window` pins `window-size=manual`; undo it so the tab
             // tracks client size again like every other tab.
@@ -662,6 +639,50 @@ impl MuxBackend for TmuxBackend {
 }
 
 impl TmuxBackend {
+    pub(super) fn split_layout_columns(
+        &self,
+        window_id: &str,
+        first_pane: &str,
+        cwd: &Path,
+        panes: &LayoutPanes,
+    ) -> Result<()> {
+        let Some((first_column, rest_columns)) = panes.columns.split_first() else {
+            return Ok(());
+        };
+        let Some((_, first_column_rest)) = first_column.panes.split_first() else {
+            return Err(MuxErr::Output {
+                program: "tmux".to_owned(),
+                reason: "tab layout has an empty column".to_owned(),
+            });
+        };
+        let mut column_anchors = vec![first_pane.to_owned()];
+        let mut previous_in_column = first_pane.to_owned();
+        for pane in first_column_rest {
+            previous_in_column =
+                self.split_printed("-v", &previous_in_column, None, cwd, &pane.argv)?;
+        }
+        for column in rest_columns {
+            // tmux has no native stack, so stacked columns use tiled rows.
+            let Some((top, rows)) = column.panes.split_first() else {
+                return Err(MuxErr::Output {
+                    program: "tmux".to_owned(),
+                    reason: "tab layout has an empty column".to_owned(),
+                });
+            };
+            let target = column_anchors
+                .last()
+                .cloned()
+                .unwrap_or_else(|| window_id.to_owned());
+            let new_column = self.split_printed("-h", &target, None, cwd, &top.argv)?;
+            column_anchors.push(new_column.clone());
+            let mut previous = new_column;
+            for row in rows {
+                previous = self.split_printed("-v", &previous, None, cwd, &row.argv)?;
+            }
+        }
+        Ok(())
+    }
+
     fn sole_current_window_pane(&self, session: &str) -> Result<Option<String>> {
         let output = self
             .cmd()

@@ -1,11 +1,17 @@
 //! Resume planning and reboot detection for room rebirth.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use jiff::Timestamp;
 use rimz::mux::{MuxBackend, SessionHealth};
 use rimz::{Ledger, RuntimePaths, StatePaths};
+
+use crate::cli::agents_cmd::team_restore::{
+    PlannedTeamTab, materialize_team_restore_tab, plan_team_restore_tabs,
+    planned_team_matches_agent,
+};
 
 pub(crate) fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
     let exists = backend
@@ -150,35 +156,72 @@ pub(super) fn reboot_since_last_birth(workspace_id: &rimz::WorkspaceId) -> bool 
 /// `--no-resume`, or any planning read error never blocks the launch.
 pub(super) fn plan_room_resume(
     workspace_id: &rimz::WorkspaceId,
-    session_name: &str,
     resume_cfg: &rimz::config::ResumeConfig,
     disabled: bool,
     recover_agents: bool,
-) -> rimz::harness::resume::ResumePlan {
+    teams: &rimz::config::TeamsConfig,
+    profiles: &rimz::config::ProfilesConfig,
+    commands: &rimz::config::CommandsConfig,
+) -> RoomResumePlan {
     if disabled || !resume_cfg.on_rebirth {
-        return rimz::harness::resume::ResumePlan::default();
+        return RoomResumePlan::default();
     }
-    let planned = (|| -> Result<rimz::harness::resume::ResumePlan> {
+    let planned = (|| -> Result<RoomResumePlan> {
         let paths = StatePaths::for_workspace(workspace_id.clone())?;
         let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
-        plan_room_resume_at(&paths, &runtime, session_name, resume_cfg, recover_agents)
+        plan_room_resume_at(
+            &paths,
+            &runtime,
+            resume_cfg,
+            recover_agents,
+            teams,
+            profiles,
+            commands,
+        )
     })();
     planned.unwrap_or_else(|err| {
         tracing::warn!(workspace = %workspace_id, error = %err, "resume planning skipped");
-        rimz::harness::resume::ResumePlan::default()
+        RoomResumePlan::default()
     })
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct RoomResumePlan {
+    flat: rimz::harness::resume::ResumePlan,
+    team: Vec<PlannedTeamTab>,
+}
+
+impl RoomResumePlan {
+    pub(super) fn pane_count(&self) -> usize {
+        self.flat
+            .tabs
+            .iter()
+            .map(rimz::mux::ResumeTab::pane_count)
+            .sum::<usize>()
+            + self.team.iter().map(planned_team_pane_count).sum::<usize>()
+    }
+
+    pub(super) fn labels(&self) -> Vec<String> {
+        self.team
+            .iter()
+            .map(|tab| tab.label.clone())
+            .chain(self.flat.tabs.iter().map(|tab| tab.label.clone()))
+            .collect()
+    }
 }
 
 fn plan_room_resume_at(
     paths: &StatePaths,
     runtime: &RuntimePaths,
-    session_name: &str,
     resume_cfg: &rimz::config::ResumeConfig,
     recover_agents: bool,
-) -> Result<rimz::harness::resume::ResumePlan> {
-    let mut plan = rimz::harness::resume::ResumePlan::default();
+    teams: &rimz::config::TeamsConfig,
+    profiles: &rimz::config::ProfilesConfig,
+    commands: &rimz::config::CommandsConfig,
+) -> Result<RoomResumePlan> {
+    let mut plan = RoomResumePlan::default();
     if recover_agents {
-        match plan_agent_resume_at(paths, runtime, session_name, resume_cfg) {
+        match plan_agent_resume_at(paths, runtime, resume_cfg, teams, profiles, commands) {
             Ok(agent_plan) => plan = agent_plan,
             Err(err) => {
                 tracing::warn!(
@@ -189,28 +232,174 @@ fn plan_room_resume_at(
             }
         }
     }
-    add_empty_named_channel_tabs(paths, &mut plan);
     Ok(plan)
 }
 
 fn plan_agent_resume_at(
     paths: &StatePaths,
     runtime: &RuntimePaths,
-    session_name: &str,
     resume_cfg: &rimz::config::ResumeConfig,
-) -> Result<rimz::harness::resume::ResumePlan> {
+    teams: &rimz::config::TeamsConfig,
+    profiles: &rimz::config::ProfilesConfig,
+    commands: &rimz::config::CommandsConfig,
+) -> Result<RoomResumePlan> {
     let ledger = Ledger::open(paths.clone(), runtime.clone())?;
     let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
     let rimz_bin = rimz::proc::rimz_exe();
-    let plan = rimz::harness::resume::plan_resume(
+    let team = plan_team_restore_tabs(
         &projection.agents,
         &projection.ended,
-        resume_cfg.max,
+        teams,
+        profiles,
+        commands,
+        |path| path.is_dir(),
+    );
+    let flat_agents = projection
+        .agents
+        .iter()
+        .filter(|agent| {
+            !team
+                .iter()
+                .any(|planned| planned_team_matches_agent(planned, agent))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let team_panes = team.iter().map(planned_team_pane_count).sum::<usize>();
+    let flat = rimz::harness::resume::plan_resume(
+        &flat_agents,
+        &projection.ended,
+        resume_cfg.max.saturating_sub(team_panes),
         |path| path.is_dir(),
         &rimz_bin,
     );
-    record_worktree_gone_tombstones(&ledger, &paths.workspace_id, session_name, &plan);
-    Ok(plan)
+    Ok(RoomResumePlan { flat, team })
+}
+
+pub(super) fn materialize_room_resume(
+    plan: RoomResumePlan,
+    paths: &StatePaths,
+    runtime: &RuntimePaths,
+    session_name: &str,
+    teams: &rimz::config::TeamsConfig,
+) -> rimz::harness::resume::ResumePlan {
+    let mut final_plan = rimz::harness::resume::ResumePlan {
+        tabs: Vec::new(),
+        skipped: plan.flat.skipped,
+        tombstone: plan.flat.tombstone,
+    };
+    let ledger = match Ledger::open(paths.clone(), runtime.clone()) {
+        Ok(ledger) => Some(ledger),
+        Err(err) => {
+            tracing::warn!(
+                workspace = %paths.workspace_id,
+                error = %err,
+                "team resume materialization skipped",
+            );
+            None
+        }
+    };
+
+    let flat_agents = ledger
+        .as_ref()
+        .and_then(|ledger| {
+            ledger
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .ok()
+                .map(|projection| projection.agents)
+        })
+        .unwrap_or_default();
+    let mut tabs = Vec::new();
+    for planned in &plan.team {
+        let Some(ledger) = ledger.as_ref() else {
+            continue;
+        };
+        match materialize_team_restore_tab(
+            ledger,
+            &paths.workspace_id,
+            session_name,
+            teams,
+            planned,
+        ) {
+            Ok(tab) => tabs.push(MaterializedTab {
+                freshest: Some(planned.freshest),
+                tab,
+            }),
+            Err(err) => tracing::warn!(
+                workspace = %paths.workspace_id,
+                team = %planned.team,
+                error = %err,
+                "team resume materialization skipped",
+            ),
+        }
+    }
+    for tab in plan.flat.tabs {
+        let freshest = flat_tab_freshness(&tab, &flat_agents);
+        tabs.push(MaterializedTab { tab, freshest });
+    }
+    tabs.sort_by(materialized_tab_cmp);
+    final_plan.tabs = tabs.into_iter().map(|tab| tab.tab).collect();
+    add_empty_named_channel_tabs(paths, &mut final_plan);
+    if let Some(ledger) = ledger.as_ref() {
+        record_worktree_gone_tombstones(ledger, &paths.workspace_id, session_name, &final_plan);
+    }
+    final_plan
+}
+
+struct MaterializedTab {
+    tab: rimz::mux::ResumeTab,
+    freshest: Option<Timestamp>,
+}
+
+fn materialized_tab_cmp(left: &MaterializedTab, right: &MaterializedTab) -> std::cmp::Ordering {
+    match (left.freshest, right.freshest) {
+        (Some(left), Some(right)) => right.cmp(&left),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+    .then_with(|| left.tab.label.cmp(&right.tab.label))
+}
+
+fn planned_team_pane_count(tab: &PlannedTeamTab) -> usize {
+    tab.layout
+        .columns
+        .iter()
+        .map(|column| column.rows.len())
+        .sum()
+}
+
+fn flat_tab_freshness(
+    tab: &rimz::mux::ResumeTab,
+    agents: &[rimz::agents::AgentState],
+) -> Option<Timestamp> {
+    agents
+        .iter()
+        .filter(|agent| flat_agent_matches_tab(agent, tab))
+        .map(|agent| agent.last_activity)
+        .max()
+}
+
+fn flat_agent_matches_tab(agent: &rimz::agents::AgentState, tab: &rimz::mux::ResumeTab) -> bool {
+    if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() || agent.pane.is_none() {
+        return false;
+    }
+    let Some(worktree) = agent
+        .worktree_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+    else {
+        return false;
+    };
+    let cwd = PathBuf::from(worktree);
+    if let Some(channel) = agent
+        .channel
+        .as_deref()
+        .filter(|channel| !channel.is_empty())
+    {
+        tab.label == format!("#{channel}")
+    } else {
+        tab.cwd == cwd
+    }
 }
 
 fn add_empty_named_channel_tabs(paths: &StatePaths, plan: &mut rimz::harness::resume::ResumePlan) {
@@ -225,11 +414,11 @@ fn add_empty_named_channel_tabs(paths: &StatePaths, plan: &mut rimz::harness::re
         if plan.tabs.iter().any(|tab| tab.label == label) {
             continue;
         }
-        plan.tabs.push(rimz::mux::ResumeTab {
+        plan.tabs.push(rimz::mux::ResumeTab::flat(
             label,
-            cwd: record.project_root.clone(),
-            panes: Vec::new(),
-        });
+            record.project_root.clone(),
+            Vec::new(),
+        ));
     }
 }
 
@@ -260,7 +449,11 @@ pub(super) fn record_rebirth_boundary(workspace_id: &rimz::WorkspaceId, session_
 /// scripting. Silent when there is nothing to resume.
 pub(super) fn report_resume(plan: &rimz::harness::resume::ResumePlan) {
     if !plan.tabs.is_empty() {
-        let agents = plan.tabs.iter().map(|tab| tab.panes.len()).sum::<usize>();
+        let agents = plan
+            .tabs
+            .iter()
+            .map(rimz::mux::ResumeTab::pane_count)
+            .sum::<usize>();
         let labels = plan
             .tabs
             .iter()
@@ -410,9 +603,11 @@ processes 2915
         let blocked = plan_room_resume_at(
             &paths,
             &runtime,
-            "rimz-test",
             &rimz::config::ResumeConfig::default(),
             false,
+            &rimz::config::TeamsConfig::default(),
+            &rimz::config::ProfilesConfig::default(),
+            &rimz::config::CommandsConfig::default(),
         )
         .expect("plan with gate closed");
         assert_eq!(agent_count(&blocked), 0);
@@ -420,15 +615,17 @@ processes 2915
         let allowed = plan_room_resume_at(
             &paths,
             &runtime,
-            "rimz-test",
             &rimz::config::ResumeConfig::default(),
             true,
+            &rimz::config::TeamsConfig::default(),
+            &rimz::config::ProfilesConfig::default(),
+            &rimz::config::CommandsConfig::default(),
         )
         .expect("plan with gate open");
         assert_eq!(agent_count(&allowed), 1);
     }
 
-    fn agent_count(plan: &rimz::harness::resume::ResumePlan) -> usize {
-        plan.tabs.iter().map(|tab| tab.panes.len()).sum()
+    fn agent_count(plan: &RoomResumePlan) -> usize {
+        plan.pane_count()
     }
 }

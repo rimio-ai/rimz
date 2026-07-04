@@ -74,6 +74,22 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
     ]
 }
 
+fn single_column(tab: &ResumeTab) -> Vec<Vec<String>> {
+    let column = tab
+        .layout
+        .columns
+        .first()
+        .expect("resume tab has one column");
+    column.panes.iter().map(|pane| pane.argv.clone()).collect()
+}
+
+fn first_argv(tab: &ResumeTab) -> Vec<String> {
+    single_column(tab)
+        .into_iter()
+        .next()
+        .expect("resume tab has a pane")
+}
+
 fn cohort_cell(kind: &str, role: Option<&str>) -> CohortCell {
     CohortCell {
         kind: AgentKind::new_unchecked(kind),
@@ -320,10 +336,16 @@ fn resumes_root_agents_most_recent_first() {
     assert_eq!(plan.tabs[0].label, "#qe-feature");
     // Wrapper argv: the pane funnels through `rimz agents exec`, which
     // injects launch env before spawning the adapter's resume argv.
-    assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "a1")]);
+    assert_eq!(
+        single_column(&plan.tabs[0]),
+        vec![exec_resume("claude", "a1")]
+    );
     assert_eq!(plan.tabs[0].cwd, PathBuf::from("/code/qe-feature"));
     assert_eq!(plan.tabs[1].label, "#query-engine");
-    assert_eq!(plan.tabs[1].panes, vec![exec_resume("codex", "c1")]);
+    assert_eq!(
+        single_column(&plan.tabs[1]),
+        vec![exec_resume("codex", "c1")]
+    );
 }
 
 #[test]
@@ -371,10 +393,16 @@ fn disambiguates_reborn_tabs_with_the_same_basename() {
     assert_eq!(plan.tabs.len(), 2);
     assert_eq!(plan.tabs[0].cwd, PathBuf::from("/work/repoA/main"));
     assert_eq!(plan.tabs[0].label, "#repoA/main");
-    assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "a1")]);
+    assert_eq!(
+        single_column(&plan.tabs[0]),
+        vec![exec_resume("claude", "a1")]
+    );
     assert_eq!(plan.tabs[1].cwd, PathBuf::from("/work/repoB/main"));
     assert_eq!(plan.tabs[1].label, "#repoB/main");
-    assert_eq!(plan.tabs[1].panes, vec![exec_resume("codex", "c1")]);
+    assert_eq!(
+        single_column(&plan.tabs[1]),
+        vec![exec_resume("codex", "c1")]
+    );
 }
 
 #[test]
@@ -490,7 +518,10 @@ fn dedups_a_relaunched_agent_keeping_the_newest() {
         Path::new("/bin/rimz"),
     );
     assert_eq!(plan.tabs.len(), 1);
-    assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "new")]);
+    assert_eq!(
+        single_column(&plan.tabs[0]),
+        vec![exec_resume("claude", "new")]
+    );
     // The superseded relaunch is dropped silently, not reported as a skip.
     assert!(plan.skipped.is_empty());
 }
@@ -526,7 +557,10 @@ fn collapses_a_relaunch_that_changed_branch_on_one_pane() {
         Path::new("/bin/rimz"),
     );
     assert_eq!(plan.tabs.len(), 1);
-    assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "new")]);
+    assert_eq!(
+        single_column(&plan.tabs[0]),
+        vec![exec_resume("claude", "new")]
+    );
 }
 
 #[test]
@@ -564,7 +598,7 @@ fn keeps_two_same_kind_agents_in_one_worktree() {
     assert_eq!(plan.tabs[0].label, "#query-engine");
     // Freshest leads within the tab; all same-worktree sessions are resumed.
     assert_eq!(
-        plan.tabs[0].panes,
+        single_column(&plan.tabs[0]),
         vec![
             exec_resume("claude", "a1"),
             exec_resume("claude", "a2"),
@@ -582,7 +616,10 @@ fn caps_and_reports_the_overflow() {
     let plan = plan_resume(&agents, &no_ended(), 1, |_| true, Path::new("/bin/rimz"));
     assert_eq!(plan.tabs.len(), 1);
     // The freshest survives the cap; the older overflows.
-    assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "a1")]);
+    assert_eq!(
+        single_column(&plan.tabs[0]),
+        vec![exec_resume("claude", "a1")]
+    );
     assert_eq!(plan.skipped.len(), 1);
     assert_eq!(plan.skipped[0].reason, ResumeSkipReason::OverCap);
 }
@@ -627,10 +664,10 @@ fn named_channel_groups_by_explicit_channel_and_replays_identity() {
         "codex:design"
     );
     assert!(
-        plan.tabs[0].panes[0]
+        first_argv(&plan.tabs[0])
             .windows(2)
             .any(|pair| { pair[0].as_str() == "--agent-channel" && pair[1].as_str() == "design" }),
         "resume argv re-stamps the named channel: {:?}",
-        plan.tabs[0].panes[0]
+        first_argv(&plan.tabs[0])
     );
 }

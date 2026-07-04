@@ -8,6 +8,7 @@ use crate::mux::{MuxErr, Result, SidebarPaneOptions, ensure_pane_backend};
 
 use super::TmuxBackend;
 use super::options::sidebar_serve_command;
+use super::parse::parse_new_window_ids;
 
 /// A tmux window name with its reserved separators neutralized. tmux parses a
 /// colon as the `session:window` boundary and a dot as the `window.pane`
@@ -409,8 +410,13 @@ impl TmuxBackend {
                 continue; // already seeded by an earlier birth
             }
             let fallback_shell;
-            let first = if let Some(first) = tab.panes.first() {
-                first
+            let first = if let Some(first) = tab
+                .layout
+                .columns
+                .first()
+                .and_then(|column| column.panes.first())
+            {
+                &first.argv
             } else {
                 fallback_shell = crate::harness::launch::channel_label_shell_argv(
                     &opts.workspace_id,
@@ -432,7 +438,7 @@ impl TmuxBackend {
                     "-d".to_owned(),
                     "-P".to_owned(),
                     "-F".to_owned(),
-                    "#{window_id}".to_owned(),
+                    "#{window_id}\t#{pane_id}".to_owned(),
                     "-t".to_owned(),
                     opts.session_name.clone(),
                     "-n".to_owned(),
@@ -440,11 +446,23 @@ impl TmuxBackend {
                     "-c".to_owned(),
                     tab.cwd.to_string_lossy().into_owned(),
                 ])
-                .args(first.clone())
+                .args(first.iter().cloned())
                 .run();
             match launched {
                 Ok(output) => {
-                    let window_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                    let (window_id, first_pane) = match parse_new_window_ids(&output.stdout) {
+                        Ok(ids) => ids,
+                        Err(err) => {
+                            tracing::warn!(
+                                session = %opts.session_name,
+                                tab = %tab.label,
+                                tags.operation = "tmux.resume.launch_window",
+                                error = &err as &dyn std::error::Error,
+                                "resume: launch window id parse failed; leaving extra panes out",
+                            );
+                            continue;
+                        }
+                    };
                     if focus_window.is_none() && !window_id.is_empty() {
                         focus_window = Some(window_id.clone());
                     }
@@ -452,28 +470,16 @@ impl TmuxBackend {
                     // sidebar: `select-layout` retiles every pane in the window,
                     // including the managed left sidebar. Additional agents split
                     // the active work area and preserve the sidebar's fixed width.
-                    for argv in tab.panes.iter().skip(1) {
-                        if let Err(err) = self
-                            .cmd()
-                            .args([
-                                "split-window".to_owned(),
-                                "-d".to_owned(),
-                                "-t".to_owned(),
-                                window_id.clone(),
-                                "-c".to_owned(),
-                                tab.cwd.to_string_lossy().into_owned(),
-                            ])
-                            .args(argv.clone())
-                            .run()
-                        {
-                            tracing::warn!(
-                                session = %opts.session_name,
-                                tab = %tab.label,
-                                tags.operation = "tmux.resume.split_window",
-                                error = &err as &dyn std::error::Error,
-                                "resume: launching an agent pane failed; leaving it out",
-                            );
-                        }
+                    if let Err(err) =
+                        self.split_layout_columns(&window_id, &first_pane, &tab.cwd, &tab.layout)
+                    {
+                        tracing::warn!(
+                            session = %opts.session_name,
+                            tab = %tab.label,
+                            tags.operation = "tmux.resume.split_window",
+                            error = &err as &dyn std::error::Error,
+                            "resume: launching an agent pane failed; leaving it out",
+                        );
                     }
                 }
                 Err(err) => tracing::warn!(

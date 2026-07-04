@@ -67,7 +67,7 @@ Named-team relaunch reconciliation runs after the live-room preflight and before
 
 ### Cohort resume
 
-Resume planning has two admits. Room rebirth uses the audit rollup to seed one tab per remembered channel or worktree before the new mux session starts. `rimz agents <spec> --resume` uses the same rollup in a live room to bring back the newest prior cohort matching the spec after a tab or pane was closed.
+Resume planning has two admits. Room rebirth uses the audit rollup to seed one tab per remembered channel or worktree before the new mux session starts. A named-team channel restores in the team's declared layout, resuming members that can resume and fresh-launching missing or unsupported agent cells so the shape stays whole; non-team channels restore as one column. `rimz agents <spec> --resume` uses the same rollup in a live room to bring back the newest prior cohort matching the spec after a tab or pane was closed.
 
 A named team spec matches prior root agents with the same `team` and then maps role cells by role, taking the newest member per role. An inline multi-agent spec matches the newest `launch_group` that maps onto the agent cells by `launch_ordinal`, falling back to kind when old records lack ordinals. A single-agent spec ignores cohort membership and resumes the newest dead or unknown root session of that kind. Missing cells launch fresh in the matched cohort's cwd and channel, so the layout stays whole.
 
