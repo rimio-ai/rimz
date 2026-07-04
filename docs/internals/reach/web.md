@@ -51,9 +51,13 @@ enabled = true
 [web.zellij]
 base_url = "https://devbox.example/zellij"
 auto_start = true
+font = "JetBrainsMono Nerd Font Mono"
+style_client = true
 ```
 
 `[web] enabled` defaults to true and allows Rimz to auto-grant its embedded Zellij presence plugin, enable browser sharing, and start the Zellij web server when allowed. When it is false, `rimz web open` fails before any room side effect with guidance to change the config on the machine serving the room; `rimz remote connect --web` relays that remote-side failure from the prep command. This section is per-machine policy and stays outside the project trust hash because it executes no command and commonly names private hostnames or local tunnels.
+
+When `style_client` is true, Rimz derives a top-level Zellij `web_client` block from the active `[theme]` Alacritty palette and `font`, merges it over the user's resolved Zellij config, writes the generated copy to the Rimz state directory, and starts `zellij web` with `ZELLIJ_CONFIG_FILE` pointing at that copy. The generated block replaces any existing top-level `web_client` in the copied config while preserving other Zellij settings. Browser styling is machine-global for the Zellij web daemon and applies when Rimz starts the server; an already-online server keeps its current config until restart. If the user's Zellij config is unreadable or invalid, or the active scheme palette is incomplete, Rimz skips browser styling with a one-line stderr note and starts the server on the user's real config.
 
 Zellij's own config still controls server defaults and sharing policy:
 

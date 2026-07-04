@@ -42,6 +42,8 @@ scheme = "Catppuccin Mocha"
 
 Rimz embeds the Alacritty export from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) — the [bundled catalog](../../crates/rimz/themes/alacritty) is refreshed with `cargo xtask theme-refresh`, with provenance and license in [themes/README.md](../../crates/rimz/themes/README.md) and [themes/LICENSE](../../crates/rimz/themes/LICENSE) — so a name resolves the same across terminals and muxes. Names with spaces need TOML quotes.
 
+Zellij web rooms use the active scheme for the browser terminal when `[web.zellij] style_client` is true; see [Web CLI](./cli/web.md).
+
 To paste a palette inline instead, drop an Alacritty `[colors.*]` block at the root of `theme.toml`; an inline palette wins over `scheme`. The required keys are `colors.primary.background` / `foreground` and the six `colors.normal` hues; `colors.bright.blue` (the selection accent, falling back to `normal.blue`) and `colors.selection.background` (the selected-card band) are optional. A missing or malformed entry is named at load.
 
 ```toml

@@ -10,13 +10,17 @@ use clap::{Args, Subcommand};
 
 use super::{GlobalFlags, machine_config};
 use crate::cli::room;
+use rimz::config::MachineConfig;
 use rimz::ids::MuxName;
+use rimz::ledger::{atomic, paths};
 use rimz::mux::{CommandSpec, PaneListOptions};
+use rimz::sidebar_pane::render::scheme;
 use rimz::web::{
-    ParsedWebStatus, WebOpenPayload, WebServerStatus, WebStartOptions, WebStatusPayload,
-    WebTokenCommand, ZellijWebEndpoint, effective_base_url, endpoint_from_status_base,
-    join_session_url, parse_status, parse_token_count, web_help_spec, web_start_spec,
-    web_status_spec, web_stop_spec, web_token_spec,
+    ParsedWebStatus, WebClientColors, WebOpenPayload, WebServerStatus, WebStartOptions,
+    WebStatusPayload, WebTokenCommand, ZellijWebEndpoint, active_zellij_config_path,
+    effective_base_url, endpoint_from_status_base, join_session_url, merge_web_client_config,
+    parse_status, parse_token_count, web_help_spec, web_start_spec, web_status_spec, web_stop_spec,
+    web_token_spec,
 };
 
 #[derive(Debug, Args)]
@@ -129,13 +133,18 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
         WebSubcmd::Open(args) => open(args, globals),
         WebSubcmd::Url(args) => url(args, globals),
         WebSubcmd::Status(args) => status(args),
-        WebSubcmd::Start(args) => run_inherited(web_start_spec(&WebStartOptions {
-            daemonize: args.daemonize,
-            ip: args.ip,
-            port: args.port,
-            cert: args.cert.map(|path| path.display().to_string()),
-            key: args.key.map(|path| path.display().to_string()),
-        })),
+        WebSubcmd::Start(args) => {
+            let config = machine_config();
+            let config_file = web_client_config_file(&config);
+            run_inherited(web_start_spec(&WebStartOptions {
+                daemonize: args.daemonize,
+                ip: args.ip,
+                port: args.port,
+                cert: args.cert.map(|path| path.display().to_string()),
+                key: args.key.map(|path| path.display().to_string()),
+                config_file,
+            }))
+        }
         WebSubcmd::Stop => run_inherited(web_stop_spec()),
         WebSubcmd::Token { command } => run_inherited(web_token_spec(&match command {
             WebTokenSubcmd::Create { read_only, name } => {
@@ -173,6 +182,7 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
             may_start: config.web.zellij.auto_start && !args.no_start,
             require_online: true,
         },
+        Some(&config),
     )?;
     let backend = rimz::mux::backend_for(MuxName::Zellij);
     if room::enable_web_sharing(
@@ -306,6 +316,7 @@ fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
             may_start: false,
             require_online: false,
         },
+        None,
     )?;
     if args.json {
         print_json(&payload)
@@ -340,12 +351,15 @@ fn web_payload(
     session: &str,
     configured_base_url: Option<&str>,
     start: StartPolicy,
+    config: Option<&MachineConfig>,
 ) -> Result<WebOpenPayload> {
     let mut status = read_web_status()?;
     if !status.online {
         if start.may_start {
+            let config_file = config.and_then(web_client_config_file);
             run_captured_to_stderr(web_start_spec(&WebStartOptions {
                 daemonize: true,
+                config_file,
                 ..WebStartOptions::default()
             }))?;
             status = read_web_status()?;
@@ -370,6 +384,56 @@ fn web_payload(
         endpoint,
         token_count,
     ))
+}
+
+fn web_client_config_file(config: &MachineConfig) -> Option<PathBuf> {
+    if !config.web.enabled || !config.web.zellij.style_client {
+        return None;
+    }
+    let colors = match WebClientColors::from_palette(&scheme::resolve_inline_palette(&config.theme))
+    {
+        Some(colors) => colors,
+        None => {
+            note_browser_theme_skip("scheme palette is incomplete or malformed");
+            return None;
+        }
+    };
+    let existing = match active_zellij_config_path() {
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(text) => Some(text),
+            Err(err) => {
+                note_browser_theme_skip(format_args!(
+                    "could not read Zellij config `{}`: {err}",
+                    path.display()
+                ));
+                return None;
+            }
+        },
+        None => None,
+    };
+    let kdl = match merge_web_client_config(existing.as_deref(), &config.web.zellij.font, &colors) {
+        Ok(kdl) => kdl,
+        Err(err) => {
+            note_browser_theme_skip(err);
+            return None;
+        }
+    };
+    let path = paths::state_home()
+        .join("rimz")
+        .join("zellij-web-config.kdl");
+    if let Err(err) = atomic::write_bytes_atomically(&path, kdl.as_bytes()) {
+        note_browser_theme_skip(format_args!(
+            "could not write generated Zellij config `{}`: {err}",
+            path.display()
+        ));
+        return None;
+    }
+    Some(path)
+}
+
+fn note_browser_theme_skip(detail: impl std::fmt::Display) {
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "rimz: skipping browser theme: {detail}");
 }
 
 fn read_web_status() -> Result<WebServerStatus> {

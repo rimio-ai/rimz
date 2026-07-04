@@ -125,6 +125,8 @@ pub struct InlinePalette {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bright: Option<InlineAnsiColors>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<InlineCursorColors>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub selection: Option<InlineSelectionColors>,
 }
 
@@ -142,6 +144,15 @@ pub struct InlinePrimaryColors {
 pub struct InlineSelectionColors {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct InlineCursorColors {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
 }

@@ -23,12 +23,15 @@ impl Default for WebPrefs {
     }
 }
 
+/// Zellij web server and browser-terminal preferences.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ZellijWebPrefs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     pub auto_start: bool,
+    pub font: String,
+    pub style_client: bool,
 }
 
 impl Default for ZellijWebPrefs {
@@ -36,6 +39,8 @@ impl Default for ZellijWebPrefs {
         Self {
             base_url: None,
             auto_start: true,
+            font: "JetBrainsMono Nerd Font Mono".to_owned(),
+            style_client: true,
         }
     }
 }

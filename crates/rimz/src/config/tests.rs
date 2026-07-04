@@ -100,6 +100,8 @@ fn assert_zellij_web_config(config: &MachineConfig) {
         Some("https://devbox.example/zellij")
     );
     assert!(!config.web.zellij.auto_start);
+    assert_eq!(config.web.zellij.font, "FiraCode Nerd Font Mono");
+    assert!(!config.web.zellij.style_client);
 }
 
 fn assert_remote_control_config(config: &MachineConfig) {
@@ -1418,7 +1420,9 @@ fn scalar_sections_parse_non_default_values() {
              enabled = false\n\
              [web.zellij]\n\
              base_url = \"https://devbox.example/zellij\"\n\
-             auto_start = false\n",
+             auto_start = false\n\
+             font = \"FiraCode Nerd Font Mono\"\n\
+             style_client = false\n",
             assert_zellij_web_config,
         ),
         (

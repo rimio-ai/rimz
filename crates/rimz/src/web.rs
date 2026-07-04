@@ -1,15 +1,19 @@
 //! Zellij web domain logic: URL construction, command argv, status parsing,
 //! JSON payloads, and deterministic local tunnel ports.
 //!
-//! Process I/O and human presentation live in `cli/`; this module is pure
-//! except for the local bind probe used to find an available tunnel port.
+//! Process execution and human presentation live in `cli/`; this module is pure
+//! except for the local bind probe and Zellij config-path lookup.
 
+use std::env;
 use std::io;
 use std::net::TcpListener;
 use std::ops::RangeInclusive;
+use std::path::PathBuf;
 
+use kdl::{KdlDocument, KdlEntry, KdlNode};
 use serde::{Deserialize, Serialize};
 
+use crate::config::{InlinePalette, parse_hex};
 use crate::mux::CommandSpec;
 
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v1";
@@ -119,6 +123,73 @@ pub struct WebStartOptions {
     pub port: Option<u16>,
     pub cert: Option<String>,
     pub key: Option<String>,
+    pub config_file: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebClientColors {
+    pub background: (u8, u8, u8),
+    pub foreground: (u8, u8, u8),
+    pub cursor: (u8, u8, u8),
+    pub cursor_accent: (u8, u8, u8),
+    pub normal: [(u8, u8, u8); 8],
+    pub bright: [(u8, u8, u8); 8],
+    pub selection_background: Option<(u8, u8, u8)>,
+    pub selection_foreground: Option<(u8, u8, u8)>,
+}
+
+impl WebClientColors {
+    /// Build Zellij web-client colors from an Alacritty palette. Missing
+    /// optional colors fall back to terminal conventions; malformed provided
+    /// colors return `None` so callers can skip browser theming without
+    /// discarding the user's Zellij config.
+    pub fn from_palette(palette: &InlinePalette) -> Option<Self> {
+        let primary = palette.primary.as_ref()?;
+        let normal = palette.normal.as_ref()?;
+        let background = parse_required_color(primary.background.as_deref())?;
+        let foreground = parse_required_color(primary.foreground.as_deref())?;
+        let normal = [
+            parse_optional_color(normal.black.as_deref())?.unwrap_or(background),
+            parse_required_color(normal.red.as_deref())?,
+            parse_required_color(normal.green.as_deref())?,
+            parse_required_color(normal.yellow.as_deref())?,
+            parse_required_color(normal.blue.as_deref())?,
+            parse_required_color(normal.magenta.as_deref())?,
+            parse_required_color(normal.cyan.as_deref())?,
+            parse_optional_color(normal.white.as_deref())?.unwrap_or(foreground),
+        ];
+        let bright = match palette.bright.as_ref() {
+            Some(bright) => [
+                parse_optional_color(bright.black.as_deref())?.unwrap_or(normal[0]),
+                parse_optional_color(bright.red.as_deref())?.unwrap_or(normal[1]),
+                parse_optional_color(bright.green.as_deref())?.unwrap_or(normal[2]),
+                parse_optional_color(bright.yellow.as_deref())?.unwrap_or(normal[3]),
+                parse_optional_color(bright.blue.as_deref())?.unwrap_or(normal[4]),
+                parse_optional_color(bright.magenta.as_deref())?.unwrap_or(normal[5]),
+                parse_optional_color(bright.cyan.as_deref())?.unwrap_or(normal[6]),
+                parse_optional_color(bright.white.as_deref())?.unwrap_or(normal[7]),
+            ],
+            None => normal,
+        };
+        let cursor = palette.cursor.as_ref();
+        let cursor_color =
+            parse_optional_color(cursor.and_then(|c| c.cursor.as_deref()))?.unwrap_or(foreground);
+        let cursor_accent =
+            parse_optional_color(cursor.and_then(|c| c.text.as_deref()))?.unwrap_or(background);
+        let selection = palette.selection.as_ref();
+        Some(Self {
+            background,
+            foreground,
+            cursor: cursor_color,
+            cursor_accent,
+            normal,
+            bright,
+            selection_background: parse_optional_color(
+                selection.and_then(|s| s.background.as_deref()),
+            )?,
+            selection_foreground: parse_optional_color(selection.and_then(|s| s.text.as_deref()))?,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +209,33 @@ pub fn zellij_program() -> String {
     std::env::var(ZELLIJ_BIN_ENV).unwrap_or_else(|_| "zellij".to_owned())
 }
 
+pub fn active_zellij_config_path() -> Option<PathBuf> {
+    config_file_from_env()
+        .or_else(config_dir_from_env)
+        .or_else(home_zellij_config)
+        .or_else(platform_zellij_config)
+        .or_else(system_zellij_config)
+}
+
+pub fn merge_web_client_config(
+    existing: Option<&str>,
+    font: &str,
+    colors: &WebClientColors,
+) -> std::result::Result<String, String> {
+    let mut document = match existing {
+        Some(text) => text
+            .parse::<KdlDocument>()
+            .map_err(|err| format!("parsing Zellij config KDL: {err}"))?,
+        None => KdlDocument::new(),
+    };
+    document
+        .nodes_mut()
+        .retain(|node| node.name().value() != "web_client");
+    document.nodes_mut().push(web_client_node(font, colors));
+    document.fmt();
+    Ok(document.to_string())
+}
+
 pub fn web_help_spec() -> CommandSpec {
     CommandSpec::new(zellij_program()).args(["web", "--help"])
 }
@@ -148,6 +246,9 @@ pub fn web_status_spec() -> CommandSpec {
 
 pub fn web_start_spec(opts: &WebStartOptions) -> CommandSpec {
     let mut spec = CommandSpec::new(zellij_program()).args(["web", "--start"]);
+    if let Some(path) = &opts.config_file {
+        spec = spec.env("ZELLIJ_CONFIG_FILE", path.display().to_string());
+    }
     if opts.daemonize {
         spec = spec.arg("--daemonize");
     }
@@ -333,8 +434,135 @@ fn encode_path_segment(segment: &str) -> String {
     out
 }
 
+fn web_client_node(font: &str, colors: &WebClientColors) -> KdlNode {
+    let mut node = KdlNode::new("web_client");
+    let children = node.ensure_children();
+    let mut font_node = KdlNode::new("font");
+    font_node.push(KdlEntry::new(font.to_owned()));
+    children.nodes_mut().push(font_node);
+
+    let mut theme_node = KdlNode::new("theme");
+    let theme = theme_node.ensure_children();
+    push_color_node(theme, "background", colors.background);
+    push_color_node(theme, "foreground", colors.foreground);
+    for (name, rgb) in NORMAL_WEB_COLOR_NAMES
+        .iter()
+        .copied()
+        .zip(colors.normal.iter().copied())
+    {
+        push_color_node(theme, name, rgb);
+    }
+    for (name, rgb) in BRIGHT_WEB_COLOR_NAMES
+        .iter()
+        .copied()
+        .zip(colors.bright.iter().copied())
+    {
+        push_color_node(theme, name, rgb);
+    }
+    push_color_node(theme, "cursor", colors.cursor);
+    push_color_node(theme, "cursor_accent", colors.cursor_accent);
+    if let Some(rgb) = colors.selection_background {
+        push_color_node(theme, "selection_background", rgb);
+    }
+    if let Some(rgb) = colors.selection_foreground {
+        push_color_node(theme, "selection_foreground", rgb);
+    }
+    children.nodes_mut().push(theme_node);
+    node
+}
+
+fn push_color_node(document: &mut KdlDocument, name: &str, (red, green, blue): (u8, u8, u8)) {
+    let mut node = KdlNode::new(name);
+    node.push(KdlEntry::new(i64::from(red)));
+    node.push(KdlEntry::new(i64::from(green)));
+    node.push(KdlEntry::new(i64::from(blue)));
+    document.nodes_mut().push(node);
+}
+
+fn parse_required_color(value: Option<&str>) -> Option<(u8, u8, u8)> {
+    parse_hex(value?).ok()
+}
+
+fn parse_optional_color(value: Option<&str>) -> Option<Option<(u8, u8, u8)>> {
+    match value {
+        Some(value) => parse_hex(value).ok().map(Some),
+        None => Some(None),
+    }
+}
+
+const NORMAL_WEB_COLOR_NAMES: [&str; 8] = [
+    "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+];
+
+const BRIGHT_WEB_COLOR_NAMES: [&str; 8] = [
+    "bright_black",
+    "bright_red",
+    "bright_green",
+    "bright_yellow",
+    "bright_blue",
+    "bright_magenta",
+    "bright_cyan",
+    "bright_white",
+];
+
+fn config_file_from_env() -> Option<PathBuf> {
+    env_path("ZELLIJ_CONFIG_FILE").and_then(existing_file)
+}
+
+fn config_dir_from_env() -> Option<PathBuf> {
+    env_path("ZELLIJ_CONFIG_DIR")
+        .map(|dir| dir.join("config.kdl"))
+        .and_then(existing_file)
+}
+
+fn home_zellij_config() -> Option<PathBuf> {
+    env_path("HOME")
+        .map(|home| home.join(".config").join("zellij").join("config.kdl"))
+        .and_then(existing_file)
+}
+
+fn platform_zellij_config() -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        macos_zellij_config()
+    } else {
+        xdg_zellij_config()
+    }
+}
+
+fn xdg_zellij_config() -> Option<PathBuf> {
+    env_path("XDG_CONFIG_HOME")
+        .map(|home| home.join("zellij").join("config.kdl"))
+        .and_then(existing_file)
+}
+
+fn macos_zellij_config() -> Option<PathBuf> {
+    env_path("HOME")
+        .map(|home| {
+            home.join("Library")
+                .join("Application Support")
+                .join("org.Zellij-Contributors.Zellij")
+                .join("config.kdl")
+        })
+        .and_then(existing_file)
+}
+
+fn system_zellij_config() -> Option<PathBuf> {
+    existing_file(PathBuf::from("/etc/zellij/config.kdl"))
+}
+
+fn env_path(key: &str) -> Option<PathBuf> {
+    let value = env::var_os(key)?;
+    (!value.as_os_str().is_empty()).then(|| PathBuf::from(value))
+}
+
+fn existing_file(path: PathBuf) -> Option<PathBuf> {
+    path.is_file().then_some(path)
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::config::{InlineAnsiColors, InlinePalette, InlinePrimaryColors};
+
     use super::*;
 
     #[test]
@@ -385,6 +613,7 @@ mod tests {
             port: Some(8082),
             cert: Some("/cert.pem".to_owned()),
             key: Some("/key.pem".to_owned()),
+            config_file: Some(PathBuf::from("/zellij-web.kdl")),
         });
         assert_eq!(
             start.args,
@@ -401,6 +630,10 @@ mod tests {
                 "--key",
                 "/key.pem"
             ]
+        );
+        assert_eq!(
+            start.env.get("ZELLIJ_CONFIG_FILE").map(String::as_str),
+            Some("/zellij-web.kdl")
         );
 
         let token = web_token_spec(&WebTokenCommand::Create {
@@ -452,5 +685,159 @@ mod tests {
                 port: 9443,
             }
         );
+    }
+
+    #[test]
+    fn web_client_colors_apply_terminal_fallbacks() {
+        let colors = WebClientColors::from_palette(&minimal_palette()).expect("colors");
+        assert_eq!(colors.background, (0x01, 0x02, 0x03));
+        assert_eq!(colors.foreground, (0xfa, 0xfb, 0xfc));
+        assert_eq!(colors.normal[0], colors.background);
+        assert_eq!(colors.normal[7], colors.foreground);
+        assert_eq!(colors.bright, colors.normal);
+        assert_eq!(colors.cursor, colors.foreground);
+        assert_eq!(colors.cursor_accent, colors.background);
+        assert_eq!(colors.selection_background, None);
+        assert_eq!(colors.selection_foreground, None);
+    }
+
+    #[test]
+    fn web_client_colors_reject_missing_or_malformed_required_colors() {
+        let mut missing = minimal_palette();
+        missing.normal.as_mut().expect("normal").green = None;
+        assert_eq!(WebClientColors::from_palette(&missing), None);
+
+        let mut malformed = minimal_palette();
+        malformed.bright = Some(InlineAnsiColors {
+            red: Some("not-hex".to_owned()),
+            ..InlineAnsiColors::default()
+        });
+        assert_eq!(WebClientColors::from_palette(&malformed), None);
+    }
+
+    #[test]
+    fn merge_web_client_config_builds_standalone_theme() {
+        let rendered = merge_web_client_config(None, "JetBrains \"Mono\"", &sample_web_colors())
+            .expect("merge");
+        assert!(
+            rendered.contains("font \"JetBrains \\\"Mono\\\"\""),
+            "font is emitted as escaped KDL string: {rendered}"
+        );
+        let doc: KdlDocument = rendered.parse().expect("parse rendered");
+        assert_eq!(doc.nodes().len(), 1);
+        let web_client = doc.get("web_client").expect("web_client");
+        let children = web_client.children().expect("web_client children");
+        assert_eq!(
+            children.get_arg("font").and_then(|value| value.as_string()),
+            Some("JetBrains \"Mono\"")
+        );
+        let theme = children
+            .get("theme")
+            .and_then(KdlNode::children)
+            .expect("theme children");
+        assert_eq!(color_args(theme, "background"), [1, 2, 3]);
+        assert_eq!(color_args(theme, "black"), [10, 11, 12]);
+        assert_eq!(color_args(theme, "bright_white"), [87, 88, 89]);
+        assert_eq!(color_args(theme, "cursor_accent"), [7, 8, 9]);
+        assert!(theme.get("selection_background").is_none());
+        assert!(theme.get("selection_foreground").is_none());
+    }
+
+    #[test]
+    fn merge_web_client_config_preserves_foreign_nodes_and_replaces_stale_web_client() {
+        let mut colors = sample_web_colors();
+        colors.selection_background = Some((90, 91, 92));
+        colors.selection_foreground = Some((93, 94, 95));
+        let rendered = merge_web_client_config(
+            Some("web_server true\nweb_client {\n  font \"old\"\n}\n"),
+            "JetBrainsMono Nerd Font Mono",
+            &colors,
+        )
+        .expect("merge");
+        let doc: KdlDocument = rendered.parse().expect("parse rendered");
+        assert_eq!(
+            doc.nodes()
+                .iter()
+                .filter(|node| node.name().value() == "web_client")
+                .count(),
+            1
+        );
+        assert_eq!(
+            doc.get_arg("web_server").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        let theme = doc
+            .get("web_client")
+            .and_then(KdlNode::children)
+            .and_then(|children| children.get("theme"))
+            .and_then(KdlNode::children)
+            .expect("theme children");
+        assert_eq!(color_args(theme, "selection_background"), [90, 91, 92]);
+        assert_eq!(color_args(theme, "selection_foreground"), [93, 94, 95]);
+        assert!(!rendered.contains("old"));
+    }
+
+    #[test]
+    fn merge_web_client_config_rejects_invalid_existing_kdl() {
+        assert!(merge_web_client_config(Some("{"), "font", &sample_web_colors()).is_err());
+    }
+
+    fn minimal_palette() -> InlinePalette {
+        InlinePalette {
+            primary: Some(InlinePrimaryColors {
+                background: Some("#010203".to_owned()),
+                foreground: Some("#fafbfc".to_owned()),
+            }),
+            normal: Some(InlineAnsiColors {
+                red: Some("#111213".to_owned()),
+                green: Some("#212223".to_owned()),
+                yellow: Some("#313233".to_owned()),
+                blue: Some("#414243".to_owned()),
+                magenta: Some("#515253".to_owned()),
+                cyan: Some("#616263".to_owned()),
+                ..InlineAnsiColors::default()
+            }),
+            ..InlinePalette::default()
+        }
+    }
+
+    fn sample_web_colors() -> WebClientColors {
+        WebClientColors {
+            background: (1, 2, 3),
+            foreground: (4, 5, 6),
+            cursor: (5, 6, 7),
+            cursor_accent: (7, 8, 9),
+            normal: [
+                (10, 11, 12),
+                (20, 21, 22),
+                (30, 31, 32),
+                (40, 41, 42),
+                (50, 51, 52),
+                (60, 61, 62),
+                (70, 71, 72),
+                (80, 81, 82),
+            ],
+            bright: [
+                (17, 18, 19),
+                (27, 28, 29),
+                (37, 38, 39),
+                (47, 48, 49),
+                (57, 58, 59),
+                (67, 68, 69),
+                (77, 78, 79),
+                (87, 88, 89),
+            ],
+            selection_background: None,
+            selection_foreground: None,
+        }
+    }
+
+    fn color_args(document: &KdlDocument, name: &str) -> [i64; 3] {
+        let values: Vec<i64> = document
+            .get_args(name)
+            .into_iter()
+            .map(|value| value.as_i64().expect("integer color entry"))
+            .collect();
+        values.try_into().expect("three color entries")
     }
 }

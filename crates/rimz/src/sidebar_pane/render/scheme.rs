@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::config::{InlinePalette, Semantic, parse_hex};
+use crate::config::{InlinePalette, Semantic, ThemeConfig, parse_hex};
 
 use super::embedded_themes;
 use super::oklab::Rgb;
@@ -51,6 +51,20 @@ pub(crate) fn default_raw_palette() -> RawPalette {
     explicit_raw_palette(super::theme::DEFAULT_SCHEME).unwrap_or(RawPalette::DEFAULT)
 }
 
+/// Resolve the active scheme as a full Alacritty palette: inline `[colors]`
+/// wins, then a named/path scheme, then the bundled default. Bad scheme names
+/// fall back to the default, matching the renderer's lenient behavior.
+pub fn resolve_inline_palette(theme: &ThemeConfig) -> InlinePalette {
+    if let Some(colors) = &theme.colors {
+        return colors.clone();
+    }
+    theme
+        .scheme
+        .as_deref()
+        .and_then(|name_or_path| load_explicit_inline_palette(name_or_path).ok())
+        .unwrap_or_else(default_inline_palette)
+}
+
 pub fn validate_explicit_scheme(name_or_path: &str) -> Result<(), String> {
     load_explicit_palette_tones(name_or_path).map(|_| ())
 }
@@ -73,6 +87,15 @@ fn load_explicit_raw_palette(name_or_path: &str) -> Result<RawPalette, String> {
     load_external_raw_palette(name_or_path)
 }
 
+fn load_explicit_inline_palette(name_or_path: &str) -> Result<InlinePalette, String> {
+    if let Some(text) = embedded_themes::theme_toml(name_or_path) {
+        return parse_inline_palette(text).map_err(|err| {
+            format!("invalid bundled sidebar theme scheme `{name_or_path}`: {err}")
+        });
+    }
+    load_external_inline_palette(name_or_path)
+}
+
 fn load_external_raw_palette(name_or_path: &str) -> Result<RawPalette, String> {
     let path = resolve_external_scheme_path(name_or_path).ok_or_else(|| {
         format!(
@@ -83,6 +106,19 @@ fn load_external_raw_palette(name_or_path: &str) -> Result<RawPalette, String> {
     let text = std::fs::read_to_string(&path)
         .map_err(|err| format!("reading sidebar theme scheme `{}`: {err}", path.display()))?;
     parse_raw_palette(&text)
+        .map_err(|err| format!("invalid sidebar theme scheme `{}`: {err}", path.display()))
+}
+
+fn load_external_inline_palette(name_or_path: &str) -> Result<InlinePalette, String> {
+    let path = resolve_external_scheme_path(name_or_path).ok_or_else(|| {
+        format!(
+            "unknown sidebar theme scheme `{name_or_path}`; {}",
+            theme_lookup_hint()
+        )
+    })?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|err| format!("reading sidebar theme scheme `{}`: {err}", path.display()))?;
+    parse_inline_palette(&text)
         .map_err(|err| format!("invalid sidebar theme scheme `{}`: {err}", path.display()))
 }
 
@@ -129,6 +165,16 @@ fn parse_raw_palette(text: &str) -> Result<RawPalette, String> {
     let theme: AlacrittyTheme =
         toml::from_str(text).map_err(|err| format!("parsing Alacritty theme TOML: {err}"))?;
     raw_palette_from_colors(&theme.colors.unwrap_or_default())
+}
+
+fn parse_inline_palette(text: &str) -> Result<InlinePalette, String> {
+    let theme: AlacrittyTheme =
+        toml::from_str(text).map_err(|err| format!("parsing Alacritty theme TOML: {err}"))?;
+    Ok(theme.colors.unwrap_or_default())
+}
+
+fn default_inline_palette() -> InlinePalette {
+    load_explicit_inline_palette(super::theme::DEFAULT_SCHEME).unwrap_or_default()
 }
 
 fn raw_palette_from_colors(colors: &InlinePalette) -> Result<RawPalette, String> {
@@ -254,6 +300,59 @@ foreground = '#657b83'
         let swatch = scheme_swatch("TokyoNight Night").expect("bundled scheme");
         assert_eq!(swatch.background, (0x1a, 0x1b, 0x26));
         assert_eq!(swatch.green, (0x9e, 0xce, 0x6a));
+    }
+
+    #[test]
+    fn resolve_inline_palette_keeps_bundled_full_palette() {
+        let palette = resolve_inline_palette(&ThemeConfig {
+            scheme: Some("TokyoNight Night".to_owned()),
+            ..ThemeConfig::default()
+        });
+        let normal = palette.normal.expect("normal colors");
+        let bright = palette.bright.expect("bright colors");
+        let cursor = palette.cursor.expect("cursor colors");
+        let selection = palette.selection.expect("selection colors");
+        assert_eq!(normal.black.as_deref(), Some("#15161e"));
+        assert_eq!(normal.white.as_deref(), Some("#a9b1d6"));
+        assert_eq!(bright.red.as_deref(), Some("#f7768e"));
+        assert_eq!(bright.white.as_deref(), Some("#c0caf5"));
+        assert_eq!(cursor.cursor.as_deref(), Some("#c0caf5"));
+        assert_eq!(cursor.text.as_deref(), Some("#1a1b26"));
+        assert_eq!(selection.text.as_deref(), Some("#c0caf5"));
+    }
+
+    #[test]
+    fn resolve_inline_palette_honors_inline_colors() {
+        let inline = InlinePalette {
+            primary: Some(crate::config::InlinePrimaryColors {
+                background: Some("#010203".to_owned()),
+                foreground: Some("#040506".to_owned()),
+            }),
+            ..InlinePalette::default()
+        };
+        let palette = resolve_inline_palette(&ThemeConfig {
+            scheme: Some("TokyoNight Night".to_owned()),
+            colors: Some(inline),
+            ..ThemeConfig::default()
+        });
+        assert_eq!(
+            palette
+                .primary
+                .and_then(|primary| primary.background)
+                .as_deref(),
+            Some("#010203")
+        );
+        assert!(palette.normal.is_none());
+    }
+
+    #[test]
+    fn resolve_inline_palette_falls_back_to_default_on_unknown_scheme() {
+        let default = resolve_inline_palette(&ThemeConfig::default());
+        let unknown = resolve_inline_palette(&ThemeConfig {
+            scheme: Some("missing scheme".to_owned()),
+            ..ThemeConfig::default()
+        });
+        assert_eq!(unknown, default);
     }
 
     #[test]

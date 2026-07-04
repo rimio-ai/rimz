@@ -250,9 +250,11 @@ enabled = true
 [web.zellij]
 base_url = "https://devbox.example/zellij"
 auto_start = true
+font = "JetBrainsMono Nerd Font Mono"
+style_client = true
 ```
 
-`[web] enabled` defaults to true and gates `rimz web open` plus `rimz remote connect --web`. When enabled, Rimz seeds Zellij's permission cache for its own presence plugin so sidebar pokes and runtime browser sharing work without a one-time prompt; when disabled, web commands fail before room changes and tell you to change the config on the machine serving the room. `[web.zellij]` tunes browser access through Zellij's web server. `base_url` is the URL prefix Rimz prints for `rimz web open` and `rimz web url`, useful when a reverse proxy serves Zellij under a public host or path. `auto_start` lets `rimz web open` run `zellij web --start --daemonize` when the server is offline; set it to `false` when another supervisor owns the server. These keys are per-machine and outside the project trust hash because they run no command and often name private hostnames or tunnels. Command details are in [web.md](./cli/web.md), and remote browser tunnels are in [remote.md](../internals/reach/remote.md#web-access).
+`[web] enabled` defaults to true and gates `rimz web open` plus `rimz remote connect --web`. When enabled, Rimz seeds Zellij's permission cache for its own presence plugin so sidebar pokes and runtime browser sharing work without a one-time prompt; when disabled, web commands fail before room changes and tell you to change the config on the machine serving the room. `[web.zellij]` tunes browser access through Zellij's web server. `base_url` is the URL prefix Rimz prints for `rimz web open` and `rimz web url`, useful when a reverse proxy serves Zellij under a public host or path. `auto_start` lets `rimz web open` run `zellij web --start --daemonize` when the server is offline; set it to `false` when another supervisor owns the server. `style_client` lets Rimz write a generated Zellij `web_client` block on server start so the browser terminal uses `[theme]`; `font` sets that browser terminal font. These keys are per-machine and outside the project trust hash because they run no command and often name private hostnames or tunnels. Command details are in [web.md](./cli/web.md), and remote browser tunnels are in [remote.md](../internals/reach/remote.md#web-access).
 
 ### Daemon view
 

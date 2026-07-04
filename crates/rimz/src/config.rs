@@ -90,8 +90,8 @@ pub use resume::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 pub use sentry::SentryConfig;
 pub use sidebar::{DEFAULT_AFK_AFTER_SECS, SidebarConfig, SidebarKeys};
 pub use theme::{
-    InlineAnsiColors, InlinePalette, InlinePrimaryColors, InlineSelectionColors, ThemeConfig,
-    ThemeProviderStyle, ThemeStyle,
+    InlineAnsiColors, InlineCursorColors, InlinePalette, InlinePrimaryColors,
+    InlineSelectionColors, ThemeConfig, ThemeProviderStyle, ThemeStyle,
 };
 pub use web::{WebPrefs, ZellijWebPrefs};
 pub use worktree::{WorktreeBase, WorktreeConfig};
