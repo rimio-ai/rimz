@@ -450,6 +450,8 @@ fn self_close_watchdog_bypasses_unchanged_skip_while_empty_confirming() {
         working_pane_ids: Vec::new(),
         own_view_is_daemon: false,
     });
+    // Birth/resurrection path: no sibling observed yet, so zero enters the
+    // confirm window and the watchdog forces a fresh producer fold.
     fold_snapshot(&mut state, &config, &mut fetch, empty, true);
     assert!(state.self_close.confirming_empty());
     state.last_heartbeat = Some(Instant::now());
@@ -1313,12 +1315,13 @@ fn paint_path_does_not_arm_resize_hold_without_grow() {
 }
 
 #[test]
-fn empty_confirmation_suppresses_widened_paint_until_verdict() {
+fn empty_close_suppresses_widened_paint_until_exit() {
     let ws = workspace();
     let (_dir, mut state) = loop_state(&ws);
     let config = serve_config(&ws);
     let (mut fetch, _request_rx) = fetch_dispatcher();
     state.current = agent_snapshot(&ws);
+    state.self_close.seen_sibling = true;
     state.paint_hold.engage(Instant::now(), 100);
 
     let mut empty = agent_snapshot_observed(&ws, 200);
@@ -1330,25 +1333,20 @@ fn empty_confirmation_suppresses_widened_paint_until_verdict() {
     fold_snapshot(&mut state, &config, &mut fetch, empty, true);
 
     assert!(
-        state.self_close.confirming_empty(),
-        "zero siblings starts the confirm window"
+        state.should_exit,
+        "seen-sibling zero exits on the producer-verified empty fold"
     );
     assert!(
-        state.paint_hold.is_engaged(),
-        "fresh zero-sibling verdict must not release the grow hold"
+        !state.self_close.confirming_empty(),
+        "seen-sibling empty tabs skip the confirm window"
     );
-    assert!(
-        !frame_active(&state),
-        "empty confirmation suppresses active paint cadence"
-    );
-
     let mut terminal = fixed_terminal();
     state
         .paint_frame_if_due(&mut terminal, Instant::now(), true)
         .expect("paint attempt");
     assert!(
         state.dirty,
-        "empty confirmation suppresses full-width paint instead of clearing dirty"
+        "the closing fold suppresses full-width paint instead of clearing dirty"
     );
 }
 

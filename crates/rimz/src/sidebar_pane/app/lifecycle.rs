@@ -7,10 +7,11 @@ use std::time::Instant;
 /// shares a tab/view with the user's working pane(s); when the last of them
 /// exits, the sidebar is alone and has no reason to stay.
 ///
-/// A zero-sibling read must persist for the confirm window before close. During
-/// session birth or resurrection the sidebar can run before Zellij materializes
-/// sibling panes, and under load a mux can briefly under-report panes; a tab
-/// born permanently sidebar-only still cleans itself up once the window elapses.
+/// A zero-sibling read after a real sibling was observed closes immediately:
+/// the producer verified the shrink before publishing the empty count. The
+/// confirm window guards only session birth or resurrection, where the sidebar
+/// can run before Zellij materializes sibling panes; a tab born permanently
+/// sidebar-only still cleans itself up once the window elapses.
 ///
 /// `sibling_count` is `None` when the count could not be determined (the
 /// snapshot carries no `own_view` — no mux pane env var, so no
@@ -47,6 +48,13 @@ impl SelfCloseState {
     fn should_close(&mut self, sibling_count: Option<usize>, now: Instant) -> bool {
         match sibling_count {
             Some(0) => {
+                // A working pane we had observed is gone. The producer verifies
+                // any shrink toward empty before publishing a zero, carrying live
+                // panes by /proc liveness, so this zero is real. Only the
+                // birth/resurrection path waits out the confirm window.
+                if self.seen_sibling {
+                    return true;
+                }
                 let empty_since = *self.empty_since.get_or_insert(now);
                 now.duration_since(empty_since) >= SELF_CLOSE_EMPTY_CONFIRM
             }

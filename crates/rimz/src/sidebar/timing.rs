@@ -39,10 +39,11 @@ pub const UNWATCHED_FOLD_CLAMP: Duration = Duration::from_secs(1);
 /// burst holds one stable list and it tidies once you settle.
 pub const REORDER_HOLD: Duration = Duration::from_secs(5);
 
-/// How long the sidebar's own view must report zero working siblings before
-/// the renderer exits and lets its pane close. The producer already repairs
-/// brief mux under-counts, but this receiver-side confirmation protects startup
-/// resurrection and any remaining single-frame pane-list flap.
+/// How long a never-seen-sibling sidebar must report zero working siblings
+/// before the renderer exits and lets its pane close. A tab that already had a
+/// working pane exits on the first producer-verified zero; this receiver-side
+/// confirmation protects only startup/resurrection and any remaining
+/// single-frame pane-list flap before a sibling has been observed.
 pub const SELF_CLOSE_EMPTY_CONFIRM: Duration = Duration::from_secs(5);
 
 /// How long a jump scroll anchor stays applicable. Long enough for the
