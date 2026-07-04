@@ -2445,7 +2445,10 @@ fn run_hook(env: &Env, payload: serde_json::Value, pane_env: &[(&str, &str)]) {
     let payload = serde_json::to_string(&payload).expect("payload");
     let mut cmd = env.hook_command("claude");
     scrub_launch_identity(&mut cmd);
-    cmd.env("RIMZ_AGENT_PID", "");
+    let owner = dummy_agent_process();
+    let owner_pid = owner.id();
+    reap_later(owner);
+    cmd.env("RIMZ_AGENT_PID", owner_pid.to_string());
     for (key, value) in pane_env {
         cmd.env(key, value);
     }
@@ -2458,6 +2461,20 @@ fn run_hook(env: &Env, payload: serde_json::Value, pane_env: &[(&str, &str)]) {
         "hook failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn dummy_agent_process() -> std::process::Child {
+    let mut cmd = std::process::Command::new("sleep");
+    scrub_launch_identity(&mut cmd);
+    // ponytail: bounded sleeper keeps hook-owned agents live for test snapshots;
+    // add a per-test owner guard if tests start lasting longer than this window.
+    cmd.arg("30").spawn().expect("spawn dummy agent process")
+}
+
+fn reap_later(mut child: std::process::Child) {
+    let _ = std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 }
 
 fn scrub_launch_identity(cmd: &mut std::process::Command) {
