@@ -224,6 +224,7 @@ exit 0
         birth_size: SidebarWidth::default().birth_size(Some(120)),
         rimz_bin: std::path::PathBuf::from("rimz"),
         replace_existing: false,
+        pristine_birth: false,
         config: MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,
