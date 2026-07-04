@@ -39,6 +39,15 @@ fn expire_load_memo() {
     }
 }
 
+fn set_modified_time(path: &Path, modified: std::time::SystemTime) {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("open config file");
+    file.set_times(std::fs::FileTimes::new().set_modified(modified))
+        .expect("set modified time");
+}
+
 fn write_agents_home_fragment(
     root: &Path,
     subdir: &str,
@@ -229,32 +238,29 @@ fn load_memo_skips_torn_theme_pet_rewrite() {
     assert!(first.theme.pets.enabled);
     assert_eq!(first.theme.pets.pet, "dewey");
 
-    let (torn_tx, torn_rx) = std::sync::mpsc::channel();
-    let writer = std::thread::spawn({
-        let theme_path = theme_path.clone();
-        move || {
-            std::fs::write(&theme_path, "[theme.pets]\nenabled = true\n")
-                .expect("write torn theme");
-            torn_tx.send(()).expect("signal torn theme");
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            std::fs::write(
-                &theme_path,
-                "[theme.pets]\nenabled = true\npet = \"seedy\"\n",
-            )
-            .expect("finish theme rewrite");
-        }
-    });
-    torn_rx.recv().expect("wait for torn theme");
+    std::fs::write(&theme_path, "[theme.pets]\nenabled = true\n").expect("write torn theme");
+    set_modified_time(
+        &theme_path,
+        std::time::SystemTime::now() + std::time::Duration::from_secs(1),
+    );
 
     expire_load_memo();
     let during_rewrite = MachineConfig::load_with_memo(&config_path, agents_home.path());
-    writer.join().expect("finish writer");
 
     assert!(during_rewrite.theme.pets.enabled);
-    assert!(
-        matches!(during_rewrite.theme.pets.pet.as_str(), "dewey" | "seedy"),
-        "torn theme read must not surface default pet {:?}",
-        during_rewrite.theme.pets,
+    assert_eq!(
+        during_rewrite.theme.pets.pet, "dewey",
+        "torn theme read must keep last-known-good pet"
+    );
+
+    std::fs::write(
+        &theme_path,
+        "[theme.pets]\nenabled = true\npet = \"seedy\"\n",
+    )
+    .expect("finish theme rewrite");
+    set_modified_time(
+        &theme_path,
+        std::time::SystemTime::now() - std::time::Duration::from_secs(1),
     );
 
     expire_load_memo();
