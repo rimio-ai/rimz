@@ -8,6 +8,9 @@ use rimz::sidebar_pane::pets::{self, PetPixelPreview, PetPreview, PreviewCell};
 
 use super::{GlobalFlags, machine_config};
 use crate::cli::render;
+use pacing::{LiveGraphicsPacer, PixelPacer};
+
+mod pacing;
 
 const GAP: u16 = 2;
 
@@ -53,6 +56,7 @@ pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
             .max(1),
     );
     if tier == pets::PetRenderTier::Pixel {
+        let mut pacer = wrap_pixels.then(LiveGraphicsPacer::open).flatten();
         let mut next_image_id = 1_u32;
         let previews = pets::load_pixel_previews().into_iter().map(move |preview| {
             let image_id = next_image_id;
@@ -64,7 +68,7 @@ pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
             previews,
             per_row,
             |(_image_id, preview)| preview.frame.is_err(),
-            |out, chunk| write_pixel_pet_row(out, chunk, wrap_pixels),
+            |out, chunk| write_pixel_pet_row_with_pacer(out, chunk, wrap_pixels, pacer.as_mut()),
         )?;
         return Ok(());
     }
@@ -145,30 +149,38 @@ fn write_pet_row(
     writeln!(out)
 }
 
-fn write_pixel_pet_row(
+fn write_pixel_pet_row_with_pacer<P: PixelPacer>(
     out: &mut impl Write,
     chunk: &[(u32, PetPixelPreview)],
     wrap: bool,
+    mut pacer: Option<&mut P>,
 ) -> std::io::Result<()> {
-    pets::write_synchronized_pixel_output(out, |out| {
-        for (image_id, preview) in chunk {
-            let Ok(frame) = &preview.frame else {
-                continue;
-            };
-            for packet in
-                pets::transmit_rgba_chunks(*image_id, frame.width, frame.height, &frame.data)
-            {
-                out.write_all(&pets::wrap_pixel_payload(&packet, wrap))?;
-            }
-            out.write_all(&pets::wrap_pixel_payload(
-                &pets::virtual_place(
-                    *image_id,
-                    pets::DASHBOARD_PIXEL_PET.cols,
-                    pets::DASHBOARD_PIXEL_PET.rows,
-                ),
-                wrap,
-            ))?;
+    for (image_id, preview) in chunk {
+        let Ok(frame) = &preview.frame else {
+            continue;
+        };
+        for packet in pets::transmit_rgba_chunks(*image_id, frame.width, frame.height, &frame.data)
+        {
+            out.write_all(&pets::wrap_pixel_payload(&packet, wrap))?;
         }
+        let pacing = pacer.as_ref().is_some_and(|pacer| pacer.active());
+        out.write_all(&pets::wrap_pixel_payload(
+            &pets::virtual_place(
+                *image_id,
+                pets::DASHBOARD_PIXEL_PET.cols,
+                pets::DASHBOARD_PIXEL_PET.rows,
+                if pacing { 0 } else { 2 },
+            ),
+            wrap,
+        ))?;
+        if pacing {
+            out.flush()?;
+            if let Some(pacer) = pacer.as_mut() {
+                pacer.wait_for_barrier();
+            }
+        }
+    }
+    pets::write_synchronized_pixel_output(out, |out| {
         for row in 0..pets::DASHBOARD_PIXEL_PET.rows {
             for (index, (image_id, preview)) in chunk.iter().enumerate() {
                 if index > 0 {
@@ -310,7 +322,9 @@ mod tests {
                 frame: Err("offline".to_owned()),
             },
         )];
-        let rendered = strip(|w| write_pixel_pet_row(w, &failed, false));
+        let rendered = strip(|w| {
+            write_pixel_pet_row_with_pacer(w, &failed, false, None::<&mut FakePixelPacer>)
+        });
         let lines = rendered.lines().collect::<Vec<_>>();
 
         assert_eq!(lines.len(), usize::from(pets::DASHBOARD_PIXEL_PET.rows) + 1);
@@ -339,10 +353,21 @@ mod tests {
         )];
         let mut bytes = Vec::new();
 
-        write_pixel_pet_row(&mut bytes, &preview, true).expect("render pixel row");
+        write_pixel_pet_row_with_pacer(&mut bytes, &preview, true, None::<&mut FakePixelPacer>)
+            .expect("render pixel row");
 
-        assert!(bytes.starts_with(b"\x1b[?2026h"));
+        let begin_sync = bytes
+            .windows(b"\x1b[?2026h".len())
+            .position(|window| window == b"\x1b[?2026h")
+            .expect("draw phase starts synchronized output");
+        let end_sync = bytes
+            .windows(b"\x1b[?2026l".len())
+            .rposition(|window| window == b"\x1b[?2026l")
+            .expect("draw phase ends synchronized output");
+        assert!(bytes[..begin_sync].starts_with(b"\x1bPtmux;\x1b\x1b_Ga=t,"));
+        assert!(bytes[..begin_sync].ends_with(b"q=2;\x1b\x1b\\\x1b\\"));
         assert!(bytes.ends_with(b"\x1b[?2026l"));
+        assert!(begin_sync < end_sync);
         assert!(
             !bytes
                 .windows(b"\x1bPtmux;\x1b\x1b[?2026h".len())
@@ -353,5 +378,47 @@ mod tests {
                 .windows(b"\x1bPtmux;\x1b\x1b[?2026l".len())
                 .any(|window| window == b"\x1bPtmux;\x1b\x1b[?2026l")
         );
+    }
+
+    #[test]
+    fn pixel_preview_row_uses_verbose_placement_when_paced() {
+        let preview = [(
+            42,
+            PetPixelPreview {
+                id: "codex".to_owned(),
+                frame: Ok(pets::PixelPreviewFrame {
+                    width: 1,
+                    height: 1,
+                    data: vec![0, 1, 2, 3],
+                }),
+            },
+        )];
+        let mut pacer = FakePixelPacer {
+            active: true,
+            waits: 0,
+        };
+        let mut bytes = Vec::new();
+
+        write_pixel_pet_row_with_pacer(&mut bytes, &preview, true, Some(&mut pacer))
+            .expect("render paced pixel row");
+
+        let text = String::from_utf8(bytes).expect("kitty escapes are utf8");
+        assert!(text.contains("a=p,U=1,i=42,c=15,r=9,q=0"));
+        assert_eq!(pacer.waits, 1);
+    }
+
+    struct FakePixelPacer {
+        active: bool,
+        waits: usize,
+    }
+
+    impl PixelPacer for FakePixelPacer {
+        fn active(&self) -> bool {
+            self.active
+        }
+
+        fn wait_for_barrier(&mut self) {
+            self.waits += 1;
+        }
     }
 }

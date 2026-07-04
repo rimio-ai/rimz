@@ -91,6 +91,7 @@ impl PixelPainter {
                 image_id,
                 pixel.size.cols,
                 pixel.size.rows,
+                2,
             )))?;
         }
         Ok(())
@@ -176,8 +177,11 @@ fn transmit_chunks(image_id: u32, image: &RgbaImage) -> Vec<Vec<u8>> {
     transmit_rgba_chunks(image_id, image.width, image.height, &image.data)
 }
 
-pub fn virtual_place(image_id: u32, cols: u16, rows: u16) -> Vec<u8> {
-    kitty_escape(&format!("a=p,U=1,i={image_id},c={cols},r={rows},q=2"), &[])
+pub fn virtual_place(image_id: u32, cols: u16, rows: u16, quiet: u8) -> Vec<u8> {
+    kitty_escape(
+        &format!("a=p,U=1,i={image_id},c={cols},r={rows},q={quiet}"),
+        &[],
+    )
 }
 
 pub(super) fn delete(image_id: u32) -> Vec<u8> {
@@ -343,7 +347,7 @@ mod tests {
     #[test]
     fn place_delete_and_passthrough_encode_protocol_bytes() {
         assert_eq!(
-            virtual_place(42, 12, 6),
+            virtual_place(42, 12, 6, 2),
             b"\x1b_Ga=p,U=1,i=42,c=12,r=6,q=2;\x1b\\".to_vec()
         );
         assert_eq!(delete(42), b"\x1b_Ga=d,d=i,i=42,q=2;\x1b\\".to_vec());

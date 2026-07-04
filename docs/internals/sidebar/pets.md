@@ -81,6 +81,8 @@ Rimz keeps sprite images and virtual placements resident for the renderer sessio
 
 tmux receives every graphics escape through its passthrough DCS wrapper, and placement uses kitty Unicode placeholders so redraws and pane repaints keep ownership in the sidebar pane. The live sidebar and gallery share the ratatui-buffer placeholder path, while `rimz list-pets` keeps its standalone one-shot renderer. All three use the same fixed footprints. Gallery columns paint through separate image-id ranges so one column cannot delete or ghost another column's image.
 
+`rimz list-pets` paces multi-image pixel previews inside tmux by waiting for the terminal's kitty graphics acknowledgement after each pet image transmit. The acknowledgement proves the real terminal consumed the passthrough before the next image starts, so tmux's output-discard repaint path cannot drop later pet image data. A terminal that does not answer within the short timeout falls back to the unpaced best-effort path for the rest of the command.
+
 The probe reads `tmux -V`, `allow-passthrough`, session-scoped `list-clients -F '#{client_control_mode} #{client_termname}'`, `tmux display-message -p '#{session_name}'`, and `$TERM` for standalone preview detection. Live tmux re-probes fold failures onto the previous caps: version or passthrough command failures keep the previous transport fact, and command failures or empty rendering-client lists keep the previous kitty-terminal fact. These are runtime probes, not command-executing config.
 
 ## Assets
