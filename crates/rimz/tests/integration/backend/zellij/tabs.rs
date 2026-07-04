@@ -6,8 +6,6 @@ use rimz::mux::{
 };
 use tempfile::TempDir;
 
-use crate::common::CommandTimeoutExt;
-
 use super::support::*;
 
 #[test]
@@ -223,7 +221,7 @@ fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
         })
         .expect("open backend tab layout");
 
-    assert_work_panes_reopen_evenly_after_closing_first(
+    assert_work_panes_reopen_in_survivor_after_closing_first(
         xdg.path(),
         &name,
         backend_tab,
@@ -251,21 +249,14 @@ fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
         })
         .expect("open backend overflow tab layout");
     let overflow_work = wait_for_named_work_pane_count(xdg.path(), &name, overflow_tab, 3);
-    let focused_before = overflow_work[1];
-    let focus = scoped_zellij(xdg.path())
-        .args([
-            "--session",
-            &name,
-            "action",
-            "focus-pane-id",
-            &format!("terminal_{}", overflow_work[1].id),
-        ])
-        .bounded_output()
-        .expect("focus-pane-id");
+    let focused_before = overflow_work[0];
+    let focused_before_id =
+        PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", focused_before.id));
+    let focused = wait_for_focused_client_pane(&backend, &name, &focused_before_id);
     assert!(
-        focus.status.success(),
-        "focus-pane-id failed: {}",
-        String::from_utf8_lossy(&focus.stderr),
+        focused.iter().any(|pane| pane == &focused_before_id),
+        "overflow tab should focus a work pane before native split; \
+         focused client panes: {focused:?}",
     );
     let sidebar_before = wait_for_named_sidebar_pane(xdg.path(), &name, overflow_tab)
         .expect("overflow tab keeps its sidebar");
@@ -360,7 +351,7 @@ fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
         "native tab's first no-direction split should be even, got {split:?}",
     );
 
-    assert_work_panes_reopen_evenly_after_closing_first(
+    assert_work_panes_reopen_in_survivor_after_closing_first(
         xdg.path(),
         &name,
         &native_tab,

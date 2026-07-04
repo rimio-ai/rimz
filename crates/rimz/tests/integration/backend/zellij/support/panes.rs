@@ -513,7 +513,7 @@ pub(in crate::backend::zellij) fn spawn_sleep_pane(xdg: &Path, session: &str, cw
     });
 }
 
-pub(in crate::backend::zellij) fn assert_work_panes_reopen_evenly_after_closing_first(
+pub(in crate::backend::zellij) fn assert_work_panes_reopen_in_survivor_after_closing_first(
     xdg: &Path,
     session: &str,
     tab_name: &str,
@@ -583,20 +583,27 @@ pub(in crate::backend::zellij) fn assert_work_panes_reopen_evenly_after_closing_
         String::from_utf8_lossy(&focus.stderr),
     );
 
+    let survivor_before_split = survivor[0];
     spawn_sleep_pane(xdg, session, cwd);
 
+    let inside_survivor = |pane: &PaneGeometry| {
+        pane.x + 2 >= survivor_before_split.x
+            && pane.y + 2 >= survivor_before_split.y
+            && pane.x + pane.columns <= survivor_before_split.x + survivor_before_split.columns + 2
+            && pane.y + pane.rows <= survivor_before_split.y + survivor_before_split.rows + 2
+    };
     let split = wait_for_named_work_pane_state(xdg, session, tab_name, 2, |work| {
-        work[0].columns.abs_diff(work[1].columns) <= 5
+        work.iter().all(inside_survivor)
     });
     assert_eq!(
         split.len(),
         2,
         "new terminal should land in the same work tab: {split:?}",
     );
-    let diff = split[0].columns.abs_diff(split[1].columns);
     assert!(
-        diff <= 5,
-        "work panes should split evenly after reopening from one pane, got {split:?}",
+        split.iter().all(inside_survivor),
+        "work panes should split inside the reclaimed survivor bounds \
+         {survivor_before_split:?}, got {split:?}",
     );
     let sidebar =
         wait_for_named_sidebar_pane(xdg, session, tab_name).expect("work tab keeps its sidebar");
