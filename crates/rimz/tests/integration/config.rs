@@ -89,7 +89,7 @@ fn config_get_set_round_trip_preserves_template_comments() {
         .args(["config", "get", "notifications.triggers"])
         .assert()
         .success()
-        .stdout("[\"waiting\", \"failed\", \"paused\", \"success\"]\n");
+        .stdout("[\"waiting\", \"failed\"]\n");
 
     env.rimz()
         .args(["config", "set", "theme.display.max_cols", "80"])

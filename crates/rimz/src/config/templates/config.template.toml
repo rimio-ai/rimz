@@ -32,7 +32,7 @@
 
 [notifications]
 # enabled = true
-# triggers = ["waiting", "failed", "paused", "success"]
+# triggers = ["waiting", "failed"]
 # desktop = "auto"                    # "auto", "osc", or "off"
 # sound = "bell"                      # "bell" or "off"
 # suppress_focused = true

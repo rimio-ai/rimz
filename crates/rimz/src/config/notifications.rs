@@ -39,7 +39,7 @@ impl Default for NotificationsPrefs {
     fn default() -> Self {
         Self {
             enabled: true,
-            triggers: NotificationTrigger::all().to_vec(),
+            triggers: vec![NotificationTrigger::Waiting, NotificationTrigger::Failed],
             desktop: DesktopNotificationMode::Auto,
             sound: NotificationSoundMode::Bell,
             suppress_focused: true,
@@ -257,12 +257,6 @@ pub enum NotificationTrigger {
 }
 
 impl NotificationTrigger {
-    pub const ALL: [Self; 4] = [Self::Waiting, Self::Failed, Self::Paused, Self::Success];
-
-    pub const fn all() -> &'static [Self; 4] {
-        &Self::ALL
-    }
-
     pub const fn from_status(status: AgentStatus) -> Option<Self> {
         match status {
             AgentStatus::Waiting => Some(Self::Waiting),
@@ -415,6 +409,19 @@ mod tests {
         vars.insert("body", "codex is waiting; touch nothing");
         vars.insert("task", "\"; rm -rf /");
         vars
+    }
+
+    #[test]
+    fn default_triggers_cover_actionable_statuses_only() {
+        let prefs = NotificationsPrefs::default();
+        assert_eq!(
+            prefs.triggers,
+            vec![NotificationTrigger::Waiting, NotificationTrigger::Failed]
+        );
+        assert!(prefs.triggers_status(AgentStatus::Waiting));
+        assert!(prefs.triggers_status(AgentStatus::Failed));
+        assert!(!prefs.triggers_status(AgentStatus::Paused));
+        assert!(!prefs.triggers_status(AgentStatus::Success));
     }
 
     #[test]
