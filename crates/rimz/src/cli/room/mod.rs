@@ -179,10 +179,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     )
 }
 
-pub(crate) fn ensure_workspace_room_for_web(
-    path: &Path,
-    globals: &GlobalFlags,
-) -> Result<rimz::ResolvedWorkspace> {
+pub(crate) fn ensure_workspace_room_for_web(path: &Path, globals: &GlobalFlags) -> Result<WebRoom> {
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
@@ -196,20 +193,21 @@ pub(crate) fn ensure_workspace_room_for_web(
             render::home_relative(&config_dir.display().to_string())
         )?;
     }
-    prepare_room(
+    let ready = prepare_room(
         RoomEntry::StartWeb {
             workspace: workspace.clone(),
             mux,
         },
         globals,
     )?;
-    Ok(workspace)
+    Ok(WebRoom {
+        session_name: workspace.session_name,
+        workspace_id: workspace.workspace_id,
+        born_web_shared: !ready.was_live,
+    })
 }
 
-pub(crate) fn ensure_session_room_for_web(
-    session: &str,
-    globals: &GlobalFlags,
-) -> Result<WorkspaceRecord> {
+pub(crate) fn ensure_session_room_for_web(session: &str, globals: &GlobalFlags) -> Result<WebRoom> {
     let record = workspace_record_for_session(session).context("checking Rimz workspace record")?;
     let Some(record) = record else {
         bail!(
@@ -220,8 +218,20 @@ pub(crate) fn ensure_session_room_for_web(
     if mux != MuxName::Zellij {
         bail!("session `{session}` is not a Zellij session; `rimz web` supports Zellij only");
     }
-    prepare_room(RoomEntry::WebSession { record: &record }, globals)?;
-    Ok(record)
+    let ready = prepare_room(RoomEntry::WebSession { record: &record }, globals)?;
+    Ok(WebRoom {
+        session_name: record.session_name,
+        workspace_id: record.workspace_id,
+        born_web_shared: !ready.was_live,
+    })
+}
+
+pub(crate) struct WebRoom {
+    pub session_name: String,
+    pub workspace_id: WorkspaceId,
+    /// Born fresh in this call with `--web-sharing on`, so browser sharing is
+    /// already authoritative and the runtime share pipe is redundant.
+    pub born_web_shared: bool,
 }
 
 pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
@@ -271,6 +281,7 @@ struct ReadyRoom {
     workspace_id: Option<WorkspaceId>,
     mux_config: rimz::config::MultiplexerConfig,
     mux: MuxName,
+    was_live: bool,
 }
 
 fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
@@ -468,6 +479,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         workspace_id: attached_workspace_id,
         mux_config,
         mux,
+        was_live,
     })
 }
 

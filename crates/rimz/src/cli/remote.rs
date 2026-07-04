@@ -66,9 +66,6 @@ enum RemoteSubcmd {
         /// Local tunnel port for `--web`.
         #[arg(long, requires = "web")]
         web_port: Option<u16>,
-        /// Create and relay a Zellij web login token before opening (needs --web).
-        #[arg(long, requires = "web")]
-        web_token: bool,
         #[command(flatten)]
         attach: AttachFlags,
     },
@@ -84,9 +81,6 @@ enum RemoteSubcmd {
         /// Local tunnel port for `--web`.
         #[arg(long, requires = "web")]
         web_port: Option<u16>,
-        /// Create and relay a Zellij web login token before opening (needs --web).
-        #[arg(long, requires = "web")]
-        web_token: bool,
         #[command(flatten)]
         attach: AttachFlags,
     },
@@ -196,7 +190,6 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             no_reconnect,
             web,
             web_port,
-            web_token,
             attach,
         } => connect(
             alias_or_target,
@@ -205,7 +198,6 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             web::RemoteWebOptions {
                 enabled: web,
                 port: web_port,
-                token: web_token,
             },
             attach,
             globals,
@@ -215,7 +207,6 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             no_reconnect,
             web,
             web_port,
-            web_token,
             attach,
         } => connect(
             alias_or_target,
@@ -224,7 +215,6 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             web::RemoteWebOptions {
                 enabled: web,
                 port: web_port,
-                token: web_token,
             },
             attach,
             globals,

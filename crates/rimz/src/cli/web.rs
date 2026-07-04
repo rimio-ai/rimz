@@ -149,14 +149,17 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
-    let (session, workspace_id) = if let Some(session) = args.session {
-        let record = room::ensure_session_room_for_web(&session, globals)?;
-        (record.session_name, record.workspace_id)
+    let web_room = if let Some(session) = args.session {
+        room::ensure_session_room_for_web(&session, globals)?
     } else {
         let path = args.path.unwrap_or_else(|| PathBuf::from("."));
-        let workspace = room::ensure_workspace_room_for_web(&path, globals)?;
-        (workspace.session_name, workspace.workspace_id)
+        room::ensure_workspace_room_for_web(&path, globals)?
     };
+    let room::WebRoom {
+        session_name: session,
+        workspace_id,
+        born_web_shared,
+    } = web_room;
     ensure_session_addressable_for_web(&session, &workspace_id)?;
     let config = machine_config();
     let payload = web_payload(
@@ -167,23 +170,65 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
             require_online: true,
         },
     )?;
-    let backend = rimz::mux::backend_for(MuxName::Zellij);
-    room::enable_web_sharing(
-        backend.as_ref(),
-        &session,
-        &workspace_id,
-        &config.zellij,
-        config.sidebar.focus_key_label(),
-    );
+    if !born_web_shared {
+        // A pre-existing room may have been born without web sharing; ask the
+        // presence plugin to flip it on. A fresh room already carries
+        // `--web-sharing on`, so the runtime pipe is redundant.
+        let backend = rimz::mux::backend_for(MuxName::Zellij);
+        room::enable_web_sharing(
+            backend.as_ref(),
+            &session,
+            &workspace_id,
+            &config.zellij,
+            config.sidebar.focus_key_label(),
+        );
+    }
     if args.json {
         print_json(&payload)?;
         return Ok(());
     }
     print_url(&payload.url)?;
+    provide_web_login_token();
     if !args.print {
         open_browser_best_effort(&payload.url);
     }
     Ok(())
+}
+
+fn provide_web_login_token() {
+    let spec = web_token_spec(&WebTokenCommand::Create {
+        read_only: false,
+        name: None,
+    });
+    let mut stderr = std::io::stderr().lock();
+    match spec.output_raw() {
+        Ok(output) if output.status.success() => {
+            let _ = writeln!(
+                stderr,
+                "Zellij web login token (shown once; paste it into the browser's \"Security Token Required\" page):"
+            );
+            let _ = stderr.write_all(&output.stdout);
+            if !output.stdout.ends_with(b"\n") {
+                let _ = writeln!(stderr);
+            }
+        }
+        Ok(output) => {
+            let mut detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            if detail.is_empty() {
+                detail = output.status.to_string();
+            }
+            let _ = writeln!(
+                stderr,
+                "rimz: could not mint a Zellij web login token ({detail}); create one with `rimz web token create`."
+            );
+        }
+        Err(err) => {
+            let _ = writeln!(
+                stderr,
+                "rimz: could not mint a Zellij web login token ({err}); create one with `rimz web token create`."
+            );
+        }
+    }
 }
 
 fn ensure_session_addressable_for_web(

@@ -65,6 +65,14 @@ fn main() {
                 {
                     write_stdout_raw(&stdout);
                 }
+                if (cli.get(1).is_some_and(|arg| arg == "--create-token")
+                    || cli
+                        .get(1)
+                        .is_some_and(|arg| arg == "--create-read-only-token"))
+                    && let Ok(stdout) = env::var("RIMZ_TEST_ZELLIJ_WEB_CREATE_TOKEN")
+                {
+                    write_stdout_raw(&stdout);
+                }
                 return;
             }
             _ => {}

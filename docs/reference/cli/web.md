@@ -14,7 +14,7 @@ rimz web token revoke <name>
 rimz web token revoke-all
 ```
 
-`rimz web` is `rimz web open`. `open` starts from `PATH` or `.` and births the Rimz room with Zellij `web_sharing on` if needed; for an existing room, it asks the presence plugin to enable sharing at runtime. `--session <name>` targets an existing Rimz workspace session by exact session name. `--print` skips browser launch, `--no-start` refuses when `zellij web` is offline, and `--json` emits the `rimz.web.v1` payload instead of human output.
+`rimz web` is `rimz web open`. `open` starts from `PATH` or `.` and births the Rimz room with Zellij `web_sharing on` if needed; for an existing room, it asks the presence plugin to enable sharing at runtime. Human output prints the URL and a freshly minted one-time Zellij login token; `--json` emits the `rimz.web.v1` payload without minting a token. `--session <name>` targets an existing Rimz workspace session by exact session name. `--print` skips browser launch, and `--no-start` refuses when `zellij web` is offline.
 
 `url` prints the route without birthing a room or starting the server. It requires an existing Rimz workspace record, so a script never receives a URL that would create a bare Zellij session without the Rimz sidebar.
 

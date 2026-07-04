@@ -14,7 +14,6 @@ use super::RemoteConnect;
 pub(super) struct RemoteWebOptions {
     pub(super) enabled: bool,
     pub(super) port: Option<u16>,
-    pub(super) token: bool,
 }
 
 struct RemoteWebGuard {
@@ -80,15 +79,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
             payload.version
         );
     }
-    if remote.web.token {
-        relay_web_token(remote)?;
-    } else {
-        writeln!(
-            std::io::stderr().lock(),
-            "Zellij web asks for a login token on this browser's first visit to {}; re-run with --web-token to mint one.",
-            remote.target.host_display()
-        )?;
-    }
+    relay_web_token(remote);
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
     let tunnel_spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
@@ -113,17 +104,42 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
     guard.wait()
 }
 
-fn relay_web_token(remote: &RemoteConnect) -> Result<()> {
-    let output = run_one_shot(
-        &rimz::remote::web::web_token_create_spec(&remote.target),
-        "creating Zellij web token",
-    )?;
+fn relay_web_token(remote: &RemoteConnect) {
+    let spec = rimz::remote::web::web_token_create_spec(&remote.target);
+    let output = match spec.to_command().output() {
+        Ok(output) => output,
+        Err(err) => {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "rimz: could not mint a Zellij web login token on {} ({err}); create one with `rimz web token create` on the remote host.",
+                remote.target.host_display(),
+            );
+            return;
+        }
+    };
     let mut stderr = std::io::stderr().lock();
-    writeln!(stderr, "Zellij web login token — shown once")?;
-    drop(stderr);
-    std::io::stdout().lock().write_all(&output.stdout)?;
-    std::io::stderr().lock().write_all(&output.stderr)?;
-    Ok(())
+    if !output.status.success() {
+        let mut detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        if detail.is_empty() {
+            detail = output.status.to_string();
+        }
+        let _ = writeln!(
+            stderr,
+            "rimz: could not mint a Zellij web login token on {} ({detail}); create one with `rimz web token create` on the remote host.",
+            remote.target.host_display(),
+        );
+        return;
+    }
+    let _ = writeln!(
+        stderr,
+        "Zellij web login token from {} (shown once):",
+        remote.target.host_display(),
+    );
+    let _ = stderr.write_all(&output.stdout);
+    if !output.stdout.ends_with(b"\n") {
+        let _ = writeln!(stderr);
+    }
+    let _ = stderr.write_all(&output.stderr);
 }
 
 fn run_one_shot(spec: &rimz::mux::CommandSpec, label: &str) -> Result<Output> {
