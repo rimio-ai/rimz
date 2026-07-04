@@ -182,7 +182,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
 pub(crate) fn ensure_workspace_room_for_web(path: &Path, globals: &GlobalFlags) -> Result<WebRoom> {
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
-    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+    let mux = MuxName::Zellij;
     if setup::ensure_default_config()? {
         let config_path = rimz::config::MachineConfig::config_path();
         let config_dir = config_path.parent().unwrap_or(config_path.as_path());
@@ -214,10 +214,7 @@ pub(crate) fn ensure_session_room_for_web(session: &str, globals: &GlobalFlags) 
             "session `{session}` is not a known Rimz workspace session; run `rimz list` or open the workspace with `rimz start` first"
         );
     };
-    let mux = pick_mux_for_session(session, globals.mux, MissingSessionReport::Silent)?;
-    if mux != MuxName::Zellij {
-        bail!("session `{session}` is not a Zellij session; `rimz web` supports Zellij only");
-    }
+    ensure_single_backend_room(MuxName::Zellij, session)?;
     let ready = prepare_room(RoomEntry::WebSession { record: &record }, globals)?;
     Ok(WebRoom {
         session_name: record.session_name,

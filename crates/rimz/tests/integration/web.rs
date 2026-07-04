@@ -127,6 +127,87 @@ fn web_open_json_keeps_autostart_banner_off_stdout() {
 }
 
 #[test]
+fn web_open_assumes_zellij_without_mux_flag() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let log = env.project_root.join("zellij-web-open-default-mux.log");
+    let output = env
+        .rimz()
+        .args(["web", "open", "--session"])
+        .arg(&workspace.session_name)
+        .args(["--print", "--json"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 0s ago]\n", workspace.session_name),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_WEB_STATUS_AFTER_START",
+            "Web server online with version: 0.44.3. Checked: http://127.0.0.1:8082\n",
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_WEB_START_STDOUT",
+            "Web Server started on 127.0.0.1 port 8082\n",
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            materialized_room_panes_json(),
+        )
+        .bounded_output()
+        .expect("run rimz web open");
+
+    assert!(
+        output.status.success(),
+        "open succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Web Server started"),
+        "stdout should contain only JSON: {stdout}"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("open json parses");
+    assert_eq!(json["version"], "rimz.web.v1");
+    assert_eq!(
+        json["session"].as_str(),
+        Some(workspace.session_name.as_str())
+    );
+    assert_eq!(
+        json["url"],
+        format!("http://127.0.0.1:8082/{}", workspace.session_name)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Web Server started on 127.0.0.1 port 8082"),
+        "autostart banner should move to stderr: {stderr}"
+    );
+
+    let log = std::fs::read_to_string(log).expect("read zellij log");
+    assert!(log.contains("web\t--start\t--daemonize"), "{log}");
+    assert!(log.contains("web\t--status"), "{log}");
+    assert!(log.contains("web\t--list-tokens"), "{log}");
+    assert!(!log.contains("web\t--create-token"), "{log}");
+    assert!(
+        log.contains("\tattach\t--create-background\t") && log.contains("\t--web-sharing\ton\t"),
+        "web open --session should prepare a web-shareable room before printing JSON: {log}"
+    );
+    assert!(
+        log.contains(&format!(
+            "--session\t{}\tpipe\t--plugin",
+            workspace.session_name
+        )),
+        "web open should pipe the presence plugin for this session: {log}"
+    );
+    assert!(
+        log.contains("\t--name\trimz:share_session\t--\tshare"),
+        "web open should request runtime web sharing through the presence plugin: {log}"
+    );
+}
+
+#[test]
 fn web_open_fresh_birth_skips_share_pipe() {
     let env = Env::new();
     env.record(&env.project_root);

@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
 use super::{GlobalFlags, machine_config};
-use crate::cli::room::{self, MissingSessionReport};
+use crate::cli::room;
 use rimz::ids::MuxName;
 use rimz::mux::{CommandSpec, PaneListOptions};
 use rimz::web::{
@@ -260,7 +260,7 @@ fn ensure_session_addressable_for_web(
 
 fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
     let session = if let Some(session) = args.session {
-        require_workspace_record_for_session(&session, globals.mux)?;
+        require_workspace_record_for_session(&session)?;
         session
     } else {
         let path = args.path.unwrap_or_else(|| PathBuf::from("."));
@@ -276,6 +276,7 @@ fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
                 path.display(),
             );
         };
+        room::ensure_single_backend_room(MuxName::Zellij, &record.session_name)?;
         record.session_name
     };
     let config = machine_config();
@@ -378,10 +379,7 @@ fn read_token_count() -> Result<usize> {
     Ok(parse_token_count(&output.stdout))
 }
 
-fn require_workspace_record_for_session(
-    session: &str,
-    explicit_mux: Option<MuxName>,
-) -> Result<rimz::WorkspaceRecord> {
+fn require_workspace_record_for_session(session: &str) -> Result<rimz::WorkspaceRecord> {
     let record =
         room::workspace_record_for_session(session).context("checking Rimz workspace record")?;
     let Some(record) = record else {
@@ -389,19 +387,13 @@ fn require_workspace_record_for_session(
             "session `{session}` is not a known Rimz workspace session; run `rimz list` or open the workspace with `rimz start` first"
         );
     };
-    let mux = room::pick_mux_for_session(session, explicit_mux, MissingSessionReport::Silent)?;
-    if mux != MuxName::Zellij {
-        bail!("session `{session}` is not a Zellij session; `rimz web` supports Zellij only");
-    }
+    room::ensure_single_backend_room(MuxName::Zellij, session)?;
     Ok(record)
 }
 
 fn ensure_zellij_selected(globals: &GlobalFlags) -> Result<()> {
-    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    if mux != MuxName::Zellij {
-        bail!(
-            "`rimz web` supports Zellij only; selected backend is `{mux}`. Use `rimz attach` for tmux rooms, or rerun with `--mux zellij`."
-        );
+    if globals.mux == Some(MuxName::Tmux) {
+        bail!("`rimz web` supports Zellij only; drop `--mux tmux` (web always uses Zellij).");
     }
     Ok(())
 }
