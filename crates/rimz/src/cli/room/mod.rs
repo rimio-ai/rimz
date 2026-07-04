@@ -35,13 +35,15 @@ use hook_install::ensure_detected_agent_hooks;
 pub(crate) use hook_install::{detected_installable_adapters, render_dry_run};
 use resume::{plan_room_resume, record_rebirth_boundary, report_resume};
 pub(crate) use room_recovery::gate_room_before_attach;
-use session_record::{ensure_single_backend_room, retire_renamed_session};
+use session_record::retire_renamed_session;
 use start_notice::report_start_notices;
 
 pub(crate) use attach_exec::{attach_action, exec_attach_command};
 pub(crate) use resume::session_is_healthy_live;
 pub(crate) use room_recovery::{print_reset_report, rebirth_room};
-pub(crate) use session_record::{pick_mux_for_session, workspace_record_for_session};
+pub(crate) use session_record::{
+    ensure_single_backend_room, pick_mux_for_session, workspace_record_for_session,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttachMode {
@@ -140,7 +142,14 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
                 .with_context(|| format!("resolving workspace at {}", args.path.display()));
         }
     };
-    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+    // A live room owns this path's session, so attach on its backend rather
+    // than the auto-selected default. An explicit rival `--mux` still flows to
+    // the birth guard below and refuses the cross-backend split.
+    let mux = pick_mux_for_session(
+        &workspace.session_name,
+        globals.mux,
+        MissingSessionReport::Silent,
+    )?;
     // A same-mux room can't be nested: if we're already inside this backend's
     // session, report the directory's room and stop before any launch side
     // effect — hook install, session birth, sidebar, or the doomed nested

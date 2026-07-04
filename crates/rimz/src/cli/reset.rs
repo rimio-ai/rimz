@@ -1,7 +1,7 @@
-//! `rimz reset` — the explicit escape hatch for a wedged room. Tears the Zellij
-//! session down to a clean slate (delete + cache purge + orphan sweep) and, by
-//! default, rebuilds and re-enters it. Attached `rimz start` auto-reset runs the
-//! same [`rimz::mux::recovery::teardown_room`] routine.
+//! `rimz reset` — the explicit escape hatch for a wedged room. Tears the live
+//! room's mux session down to a clean slate (delete + cache purge + orphan
+//! sweep) and, by default, rebuilds and re-enters it. Attached `rimz start`
+//! auto-reset runs the same [`rimz::mux::recovery::teardown_room`] routine.
 
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -10,7 +10,10 @@ use anyhow::{Context, Result};
 use clap::Args;
 
 use super::GlobalFlags;
-use crate::cli::room::{print_reset_report, rebirth_room};
+use crate::cli::room::{
+    MissingSessionReport, ensure_single_backend_room, pick_mux_for_session, print_reset_report,
+    rebirth_room,
+};
 use rimz::RuntimePaths;
 use rimz::workspace::WorkspaceResolver;
 
@@ -34,6 +37,16 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(&args.path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", args.path.display()))?;
 
+    // Reset the backend that owns the live room, so teardown and shared-ledger
+    // reset target the same session. An explicit rival `--mux` refuses before
+    // prompting or destroying anything.
+    let mux = pick_mux_for_session(
+        &workspace.session_name,
+        globals.mux,
+        MissingSessionReport::Silent,
+    )?;
+    ensure_single_backend_room(mux, &workspace.session_name)?;
+
     if !args.yes {
         if !std::io::stdin().is_terminal() {
             anyhow::bail!(
@@ -53,7 +66,6 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
     }
 
     let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
-    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     let report = rimz::mux::recovery::teardown_room(
         backend.as_ref(),

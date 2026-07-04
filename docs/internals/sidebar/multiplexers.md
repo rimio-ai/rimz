@@ -15,7 +15,7 @@ Zellij and tmux carry different communities, and Rimz serves both as first-class
 
 Selection is stable across worktrees: every worktree of one repo resolves to the same session on the same backend.
 
-Room identity is path-derived and shared across backends, so a live rival session under the same derived name would share the ledger while its panes stay unreachable. `rimz start` and `rimz web` call `ensure_single_backend_room` before birth and refuse that split; `rimz attach` from the workspace resolves through `pick_mux_for_session` to the live backend instead of the ambient one.
+Room identity is path-derived and shared across backends, so a live rival session under the same derived name would share the ledger while its panes stay unreachable. `rimz start`, `rimz reset`, and `rimz attach` resolve the backend through `pick_mux_for_session`, so an auto-selected launch lands on the backend that already owns the live room: start attaches to it, and reset tears it down there before rebirthing on the resolved default. `ensure_single_backend_room` still guards birth, now refusing only an explicit `--mux` that names a backend other than the live room's owner; `rimz web` stays Zellij-only and refuses any cross-backend split.
 
 ## `MuxBackend`
 
