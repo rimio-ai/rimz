@@ -1807,7 +1807,7 @@ fn closing_agent_tab_disposes_clean_worktree_when_session_survives() {
 }
 
 #[test]
-fn failing_close_pane_agent_stays_visible_until_enter() {
+fn failing_close_pane_agent_drops_to_shell() {
     require_tmux!();
 
     let env = Env::new();
@@ -1828,6 +1828,7 @@ fn failing_close_pane_agent_stays_visible_until_enter() {
 
     let agent_bin = write_failing_agent_shim(&env, "codex", 7);
     let command = tmux_failing_agent_exec_command(&env, &agent_bin, "launch_tmux_failure");
+    let shell_marker = env.home_root.join("tmux-failure-shell.marker");
     let (_stub_dir, stub) = sidebar_command_stub();
     server
         .backend
@@ -1873,9 +1874,18 @@ fn failing_close_pane_agent_stays_visible_until_enter() {
 
     server
         .backend
-        .send_key(&pane_id, NamedKey::Enter)
-        .expect("send Enter");
-    wait_for_pane_absent(&server, &workspace.session_name, &pane_id);
+        .send_keys(
+            &pane_id,
+            &format!("printf rimz-shell-ready > {}\n", shell_marker.display()),
+        )
+        .expect("send shell marker command");
+    wait_for_path(&shell_marker, "dropped shell did not run marker command");
+    assert!(
+        list_session_panes(&server, &workspace.session_name)
+            .iter()
+            .any(|pane| pane.pane_id == pane_id),
+        "clean startup failure should leave the pane open as a shell"
+    );
 }
 
 /// `open_tab` builds a caller-specified multi-column layout imperatively: the
@@ -2712,22 +2722,6 @@ fn wait_for_path_absent(path: &Path, message: &str) {
         thread::sleep(Duration::from_millis(25));
     }
     panic!("{message}: {}", path.display());
-}
-
-fn wait_for_pane_absent(server: &TmuxServer, session: &str, pane_id: &PaneId) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if list_session_panes(server, session)
-            .iter()
-            .all(|pane| pane.pane_id != *pane_id)
-        {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("pane {pane_id} stayed open after Enter");
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
 }
 
 fn wait_for_agent_tombstone(env: &Env, agent_id: &str) {
