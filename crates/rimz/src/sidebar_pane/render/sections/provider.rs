@@ -450,15 +450,6 @@ pub(crate) struct ProviderTabHit {
     pub(crate) kind: String,
 }
 
-/// Pixel pet body placement relative to the unpadded dashboard panel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PetPixelRect {
-    pub(crate) line: usize,
-    pub(crate) col: usize,
-    pub(crate) width: u16,
-    pub(crate) height: u16,
-}
-
 /// The pinned per-provider dashboard. In stacked mode every account paints its
 /// own block — the dashboard's top hairline, then each provider header and
 /// brand/budget/spend body separated from the next by a blank row. In
@@ -484,22 +475,14 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
     width: usize,
     zones: &BudgetBarConfig,
     now: Timestamp,
-) -> (
-    Vec<Line<'static>>,
-    Vec<ProviderTabHit>,
-    Option<PetPixelRect>,
-) {
+) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
     let mut lines = Vec::new();
     let first = providers.first();
     if first.is_none() && !pets_enabled {
-        return (lines, Vec::new(), None);
+        return (lines, Vec::new());
     }
     if first.is_none() {
-        return (
-            super::pets::pet_panel_lines(pet, theme, width),
-            Vec::new(),
-            None,
-        );
+        return (super::pets::pet_panel_lines(pet, theme, width), Vec::new());
     }
     if !tabbed {
         let mut blocks = Vec::new();
@@ -511,7 +494,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
             }
             blocks.extend(single_block_lines(theme, panel, width, zones, now));
         }
-        return (blocks, Vec::new(), None);
+        return (blocks, Vec::new());
     }
 
     let active_kind = active_tab
@@ -551,17 +534,6 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
                 let pet_rows = pet_lines.len();
                 let rows = block_rows.max(pet_rows);
                 let pet_top = rows.saturating_sub(pet_rows);
-                let pet_pixel_rect = pet
-                    .and_then(|view| match view.body.as_ref()? {
-                        PetBody::Pixel(pixel) => Some(pixel),
-                        PetBody::Cell(_) => None,
-                    })
-                    .map(|pixel| PetPixelRect {
-                        line: 2 + pet_top,
-                        col: block_w + PET_COLUMN_GAP,
-                        width: pet_w as u16,
-                        height: pixel.size.rows,
-                    });
                 let footer = folded_footer
                     .clone()
                     .map(|footer| folded_footer_line(footer, block_w));
@@ -573,7 +545,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
                     width,
                 };
                 lines.extend(zip_provider_pet_lines(block, pet_lines, footer, layout));
-                return (lines, hits, pet_pixel_rect);
+                return (lines, hits);
             } else {
                 // A blank line below the rail sets the tabs apart from the active
                 // account's tall spend block when the pet column is unavailable.
@@ -611,7 +583,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
             ));
         }
     }
-    (lines, hits, None)
+    (lines, hits)
 }
 
 fn single_block_lines(

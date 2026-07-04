@@ -1,4 +1,6 @@
-use crate::sidebar_pane::pets::{PetBody, PetCellGrid, PetView};
+use crate::sidebar_pane::pets::{
+    PetBody, PetCellGrid, PetView, image_id_color, placeholder_cluster,
+};
 use crate::sidebar_pane::render::layout::{clip, text_width};
 use crate::sidebar_pane::render::theme::Theme;
 use ratatui::style::Style;
@@ -43,8 +45,21 @@ pub(super) fn dashboard_pet_grid_lines(
         .then(|| pet.and_then(|view| pet_pixel(view)))
         .flatten()
     {
+        let pixel_style = Style::default().fg(image_id_color(pixel.image_id));
+        let pet_width = usize::from(pixel.size.cols).min(width);
+        let left = width.saturating_sub(pet_width);
         let mut lines = (0..pixel.size.rows)
-            .map(|_| Line::from(" ".repeat(width)))
+            .map(|row| {
+                let mut spans = Vec::with_capacity(pet_width + usize::from(left > 0));
+                if left > 0 {
+                    spans.push(Span::raw(" ".repeat(left)));
+                }
+                spans
+                    .extend((0..pet_width).map(|col| {
+                        Span::styled(placeholder_cluster(row, col as u16), pixel_style)
+                    }));
+                Line::from(spans)
+            })
             .collect::<Vec<_>>();
         lines.push(Line::from(" ".repeat(width)));
         return lines;

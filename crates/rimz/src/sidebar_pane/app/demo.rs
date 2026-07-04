@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use ratatui::Terminal;
-use ratatui::backend::{ClearType, CrosstermBackend};
+use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use crate::MuxName;
@@ -99,18 +99,12 @@ pub fn serve_gallery(
         }
         terminal.backend_mut().write_all(BEGIN_SYNC)?;
         let body_result = (|| {
-            draw_gallery_to_terminal(&mut terminal, &mut states)?;
-            if states
-                .iter()
-                .any(|state| state.paint.needs_full_redraw(&state.ui))
-            {
-                ratatui::backend::Backend::clear_region(terminal.backend_mut(), ClearType::All)?;
-                terminal.swap_buffers();
-                draw_gallery_to_terminal(&mut terminal, &mut states)?;
-            }
             for state in &mut states {
-                state.paint.paint_after_draw(&state.ui, &mut terminal)?;
+                state
+                    .paint
+                    .ensure_pixel_transmitted(terminal.backend_mut(), &state.ui)?;
             }
+            draw_gallery_to_terminal(&mut terminal, &mut states)?;
             Ok(())
         })();
         let end_result = terminal.backend_mut().write_all(END_SYNC);

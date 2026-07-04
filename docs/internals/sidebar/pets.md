@@ -15,7 +15,7 @@ The renderer receives a `PetView`: one optional body, caption text, loading stat
 | `asset.rs` | Selector resolution, HTTPS fetches, per-machine cache installs, local sheet reads, petdex manifest reads, offline mode, and cache eviction. |
 | `frames.rs` | WebP/PNG sheet decode and slicing into `RgbaImage` frames. |
 | `cellart.rs` | Sextant downsampling from RGBA frames into terminal cells. |
-| `pixel.rs` | Kitty graphics payloads, tmux passthrough wrapping, image ids, placeholders, and stale-image cleanup. |
+| `pixel.rs` | Kitty graphics payloads, tmux passthrough wrapping, image ids, placeholders, and teardown cleanup. |
 | `pixel/probe.rs` | Runtime capability probe for tmux passthrough and standalone kitty-style preview terminals. |
 | `model.rs` | Pet actions, animation tracks, composed tracks, and per-track timing. |
 | `voice.rs` | Canned captions keyed by action transitions. |
@@ -27,9 +27,9 @@ Each frame starts from `[theme.pets] pet`. `asset::resolve_pet_source` turns the
 
 The loader path resolves bytes through `asset`, decodes and slices the WebP or PNG sheet through `frames`, and stores frames in `LoadedPet`. A failed fetched cache entry can be removed; local user sheets are read directly. A latched failed load retries after the cooldown so a transient miss heals without a per-frame fetch storm.
 
-The serve loop in `app.rs` projects the selected visible row into a `PetAction`, observes newly unread rows, resolves the effective render tier, passes the optional body tier, and calls `PetAssets::view`. `PetAssets` chooses the track in `model`: action changes and newly unread rows play `jumping` once, then the steady action track takes over. The selected sprite becomes a single `PetView` body: either a memoized `PetCellGrid` through `cellart` or a `PetPixelView` for the post-ratatui kitty graphics paint path.
+The serve loop in `app.rs` projects the selected visible row into a `PetAction`, observes newly unread rows, resolves the effective render tier, passes the optional body tier and image-id base, and calls `PetAssets::view`. `PetAssets` chooses the track in `model`: action changes and newly unread rows play `jumping` once, then the steady action track takes over. The selected sprite becomes a single `PetView` body: either a memoized `PetCellGrid` through `cellart` or a `PetPixelView` carrying the placeholder size, sprite index, and image id.
 
-Rendering consumes only the resulting `PetView`. Cell art is copied into the ratatui buffer. Pixel art reserves blank placeholder cells in the dashboard and the serve loop writes the kitty graphics placement after ratatui flushes stdout.
+Rendering consumes only the resulting `PetView`. Cell art is copied into the ratatui buffer. Pixel art writes kitty placeholder cells into the same buffer; the serve loop transmits the sprite image and virtual placement before the draw that first references the image id.
 
 ## Tier decision
 
@@ -39,7 +39,7 @@ Rendering consumes only the resulting `PetView`. Cell art is copied into the rat
 
 Pixel capability in the live sidebar is a tmux enrichment: tmux 3.6 or newer and `allow-passthrough` set to `on` or `all` provide the pixel transport fact; an attached rendering client whose terminfo is `xterm-ghostty`, `ghostty`, `xterm-kitty`, or `kitty` provides the kitty-terminal fact. `glyphs = "auto"` requires both facts, while `glyphs = "pixel"` requires only the transport fact. Zellij resolves to cell art. `rimz list-pets` can use native kitty graphics in standalone Ghostty or kitty, and wraps the same graphics stream through tmux passthrough when run inside tmux.
 
-The downgrade target is sextant because it is the portable cell-art baseline. Capability misses, Zellij, `NO_COLOR`, bodyless frames, and sessions with no provider block all converge on a cell path; a narrow rendered dashboard can still clear a pixel placement when the placeholder rect has no usable room.
+The downgrade target is sextant because it is the portable cell-art baseline. Capability misses, Zellij, `NO_COLOR`, bodyless frames, and sessions with no provider block all converge on a cell path; a narrow rendered dashboard can still resolve to the cell path when the provider column has no usable room.
 
 Geometry follows the effective tier. Pixel pets reserve `15x9` cells, and cell-art pets reserve `18x9` cells; the dashboard adds one empty row under either body.
 
@@ -73,13 +73,13 @@ Cell art stays pane-local across tmux, Zellij, detached sessions, plain terminal
 
 ## Pixel tier
 
-The pixel tier renders the same decoded frames through the kitty graphics protocol after ratatui draws the dashboard. The renderer reserves blank cells and records the absolute placeholder rect; the serve loop owns stdout and writes placement escapes for that rect.
+The pixel tier renders the same decoded frames through the kitty graphics protocol and ratatui's normal buffer diff. The renderer paints each placeholder as one styled grapheme cluster: U+10EEEE plus row and column combining marks, with the foreground RGB encoding the kitty image id.
 
-Ghostty's kitty support covers image placement while animation-frame actions (`a=f`/`a=a`) remain unavailable, so the renderer drives frames by cycling image ids and rewriting placeholder cells. The frame painter owns synchronized output (DECSET 2026) around the ratatui draw, full-redraw recovery, and pixel placeholder rewrite so each frame lands as one atomic redraw; Rimz applies `*:sync` during tmux room setup, so tmux buffers the bracketed writes and forwards the window to the terminal by default.
+Ghostty's kitty support covers image placement while animation-frame actions (`a=f`/`a=a`) remain unavailable, so the renderer drives frames by cycling image ids. The frame painter owns synchronized output (DECSET 2026) around the image transmit and ratatui draw so each frame lands as one atomic redraw; Rimz applies `*:sync` during tmux room setup, so tmux buffers the bracketed writes and forwards the window to the terminal by default.
 
-Rimz keeps sprite images and virtual placements resident for the renderer session. Sprite image ids are stable slots, and a pet change transmits the new sheet through the same ids so terminal image data is replaced in place; rect shifts and frame changes rewrite only placeholder cells. Deletes happen at renderer teardown. Graphics APCs stay one-shot because macOS terminals can re-evaluate the mouse pointer on each image update.
+Rimz keeps sprite images and virtual placements resident for the renderer session. Sprite image ids are stable slots, and a pet change transmits the new sheet through the same ids so terminal image data is replaced in place; rect shifts and frame changes are ordinary ratatui cell diffs. Deletes happen at renderer teardown. Graphics APCs stay one-shot because macOS terminals can re-evaluate the mouse pointer on each image update.
 
-tmux receives every graphics escape through its passthrough DCS wrapper, and placement uses kitty Unicode placeholders so redraws and pane repaints keep ownership in the sidebar pane. The live sidebar, gallery, and `rimz list-pets` share the same fixed footprints. Gallery columns paint through separate image-id ranges so one column cannot delete or ghost another column's image.
+tmux receives every graphics escape through its passthrough DCS wrapper, and placement uses kitty Unicode placeholders so redraws and pane repaints keep ownership in the sidebar pane. The live sidebar and gallery share the ratatui-buffer placeholder path, while `rimz list-pets` keeps its standalone one-shot renderer. All three use the same fixed footprints. Gallery columns paint through separate image-id ranges so one column cannot delete or ghost another column's image.
 
 The probe reads `tmux -V`, `allow-passthrough`, session-scoped `list-clients -F '#{client_control_mode} #{client_termname}'`, `tmux display-message -p '#{session_name}'`, and `$TERM` for standalone preview detection. Live tmux re-probes fold failures onto the previous caps: version or passthrough command failures keep the previous transport fact, and command failures or empty rendering-client lists keep the previous kitty-terminal fact. These are runtime probes, not command-executing config.
 

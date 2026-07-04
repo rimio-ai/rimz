@@ -4,7 +4,6 @@ use crate::{
     SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, actionable_unread_count,
     lead_unread_row,
 };
-use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
@@ -77,8 +76,7 @@ pub(crate) fn compose_lines(
     // The tab hits arrive from the bottom chrome relative to its own lines;
     // they are translated to absolute screen coordinates once the block's final
     // position is known, below.
-    let (bottom, mut tab_hits, mut pet_pixel_rect) =
-        build_bottom_chrome(snapshot, alert, theme, inner, ui);
+    let (bottom, mut tab_hits) = build_bottom_chrome(snapshot, alert, theme, inner, ui);
 
     let height = usize::from(height);
     let bottom_height = bottom
@@ -198,9 +196,6 @@ pub(crate) fn compose_lines(
     for hit in &mut tab_hits {
         hit.line += lines.len();
     }
-    if let Some(rect) = pet_pixel_rect.as_mut() {
-        rect.y = rect.y.saturating_add(lines.len() as u16);
-    }
     // The footer and alert are pinned chrome, never jump targets: one `None`
     // per line. The dashboard's tabs are the bottom block's only hit
     // targets, carried by `tab_hits` rather than the row map.
@@ -211,7 +206,6 @@ pub(crate) fn compose_lines(
         line_map: map,
         tab_hits,
         make_up_hits,
-        pet_pixel_rect,
         banner_line,
         scroll_offset: offset,
         top_height: top_shown,
@@ -233,11 +227,10 @@ pub(super) fn build_bottom_chrome(
     theme: &Theme,
     inner: usize,
     ui: &UiState,
-) -> (Vec<Line<'static>>, Vec<ProviderTabHit>, Option<Rect>) {
+) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
     let active = alert.is_some_and(Alert::is_active);
     let mut bottom: Vec<Line<'static>> = Vec::new();
     let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
-    let mut pet_pixel_rect: Option<Rect> = None;
     let dashboard_present = dashboard_present(snapshot, active);
     let tabbed = dashboard_present && dashboard_tabbed(snapshot);
     let dashboard_owns_ledger = dashboard_present
@@ -258,7 +251,7 @@ pub(super) fn build_bottom_chrome(
         // register), so its line 0 lands after the separator.
         let panel_base = bottom.len();
         let active_tab = active_dashboard_tab(snapshot, ui);
-        let (panel_lines, panel_hits, panel_pet_pixel_rect) = dashboard_panel_lines_with_footer(
+        let (panel_lines, panel_hits) = dashboard_panel_lines_with_footer(
             theme,
             &snapshot.providers,
             active_tab.as_ref(),
@@ -283,14 +276,6 @@ pub(super) fn build_bottom_chrome(
                 kind: hit.kind,
             })
             .collect();
-        pet_pixel_rect = panel_pet_pixel_rect.map(|rect| {
-            Rect::new(
-                (rect.col + 1) as u16,
-                (panel_base + rect.line) as u16,
-                rect.width,
-                rect.height,
-            )
-        });
         bottom.extend(panel_lines.into_iter().map(pad_chrome));
     }
     // The static `W:`/`M:` rows seal the main dashboard. The pet-enabled tall
@@ -338,7 +323,7 @@ pub(super) fn build_bottom_chrome(
                 .map(pad_chrome),
         );
     }
-    (bottom, tab_hits, pet_pixel_rect)
+    (bottom, tab_hits)
 }
 
 /// One draw's composed output: the final line vector plus the byproducts the
@@ -350,7 +335,6 @@ pub(crate) struct ComposedFrame {
     pub(crate) line_map: Vec<Option<usize>>,
     pub(crate) tab_hits: Vec<ProviderTabHit>,
     pub(crate) make_up_hits: Vec<MakeUpHit>,
-    pub(crate) pet_pixel_rect: Option<Rect>,
     pub(crate) banner_line: Option<usize>,
     pub(crate) scroll_offset: usize,
     pub(crate) top_height: usize,

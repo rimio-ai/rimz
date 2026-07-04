@@ -26,6 +26,7 @@ pub(crate) use model::PetAction;
 pub(crate) use pixel::probe::detect as detect_pet_render_caps;
 pub use pixel::probe::{PetRenderCaps, detect_env as detect_pet_render_env};
 pub(crate) use pixel::{BEGIN_SYNC, END_SYNC, PixelPainter};
+pub(crate) use pixel::{image_id_color, placeholder_cluster};
 pub use pixel::{
     inline_placeholder_row, transmit_rgba_chunks, virtual_place, wrap_pixel_payload,
     write_synchronized_pixel_output,
@@ -57,6 +58,7 @@ pub(crate) enum PetBody {
 pub(crate) struct PetPixelView {
     pub(crate) pet_id: String,
     pub(crate) sprite_index: usize,
+    pub(crate) image_id: u32,
     pub(crate) size: PetGridSize,
 }
 
@@ -78,6 +80,7 @@ pub(crate) struct PetViewFrame {
     pub(crate) phase: u64,
     pub(crate) refresh_ms: u16,
     pub(crate) body: Option<PetRenderTier>,
+    pub(crate) pixel_id_base: u32,
     pub(crate) motion_enabled: bool,
     pub(crate) unread_triggered: bool,
 }
@@ -255,6 +258,7 @@ impl PetAssets {
             phase,
             refresh_ms,
             body: body_tier,
+            pixel_id_base,
             motion_enabled: _,
             unread_triggered: _,
         } = frame;
@@ -310,6 +314,7 @@ impl PetAssets {
                     Some(PetBody::Pixel(PetPixelView {
                         pet_id: id.to_owned(),
                         sprite_index,
+                        image_id: pixel::sprite_image_id(pixel_id_base, sprite_index),
                         size,
                     }))
                 }

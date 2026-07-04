@@ -3,7 +3,9 @@ use super::*;
 use crate::sidebar_pane::app::fixtures::{
     agent_snapshot, pane, snapshot, snapshot_with_panes, workspace,
 };
-use crate::sidebar_pane::pets::{BEGIN_SYNC, END_SYNC, PetAssets, PetPixelView, PetRenderCaps};
+use crate::sidebar_pane::pets::{
+    BEGIN_SYNC, END_SYNC, PetAssets, PetPixelView, PetRenderCaps, placeholder_cluster,
+};
 use jiff::Timestamp;
 
 fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
@@ -308,7 +310,7 @@ fn refresh_pet_view_uses_fixed_pet_size_when_dashboard_present() {
 }
 
 #[test]
-fn pixel_shift_clear_uses_fresh_rect_from_draw() {
+fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
     let ws = workspace();
     let mut snapshot = snapshot(&ws);
     snapshot.providers = vec![crate::sidebar::test_support::provider_panel(
@@ -321,9 +323,9 @@ fn pixel_shift_clear_uses_fresh_rect_from_draw() {
     let pixel = PetPixelView {
         pet_id: "codex".to_owned(),
         sprite_index: 0,
+        image_id: 0x120000,
         size: crate::sidebar_pane::pets::PetGridSize { cols: 2, rows: 1 },
     };
-    let stale_rect = ratatui::layout::Rect::new(0, 0, 2, 1);
     let mut ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: Some(crate::sidebar_pane::pets::PetBody::Pixel(pixel.clone())),
@@ -332,7 +334,6 @@ fn pixel_shift_clear_uses_fresh_rect_from_draw() {
             action: crate::sidebar_pane::pets::PetAction::Idle,
             active_track: "idle",
         }),
-        pet_pixel_rect: Some(stale_rect),
         ..Default::default()
     };
     let mut painter = paint::FramePainter::with_assets(
@@ -340,9 +341,6 @@ fn pixel_shift_clear_uses_fresh_rect_from_draw() {
         PetRenderCaps::default(),
         true,
     );
-    painter
-        .seed_pixel_for_test(&mut Vec::new(), stale_rect, &pixel)
-        .expect("seed old pixel placement");
     #[derive(Clone)]
     struct SharedBuffer(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
     impl std::io::Write for SharedBuffer {
@@ -357,40 +355,75 @@ fn pixel_shift_clear_uses_fresh_rect_from_draw() {
     }
     let output = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let backend = CrosstermBackend::new(SharedBuffer(output.clone()));
-    let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24));
+    let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 12));
     let mut terminal =
         Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).expect("terminal");
 
     painter
         .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
-        .expect("draw");
-    let output = output.borrow();
-    let output = String::from_utf8_lossy(&output);
+        .expect("first draw");
+    let first_len = output.borrow().len();
 
-    assert_ne!(
-        ui.pet_pixel_rect,
-        Some(stale_rect),
-        "draw computes the fresh pixel rect after the stale pre-draw state"
+    snapshot.providers[0].windows = vec![
+        crate::agents::RateLimitWindow {
+            used_percentage: Some(25),
+            duration_mins: Some(300),
+            ..Default::default()
+        },
+        crate::agents::RateLimitWindow {
+            used_percentage: Some(40),
+            duration_mins: Some(10_080),
+            ..Default::default()
+        },
+    ];
+    painter
+        .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
+        .expect("shifted draw");
+    let second_len = output.borrow().len();
+
+    painter
+        .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
+        .expect("steady draw");
+    let output = output.borrow();
+    let second = String::from_utf8_lossy(&output[first_len..second_len]);
+    let steady = String::from_utf8_lossy(&output[second_len..]);
+
+    assert!(
+        !second.contains("\u{1b}[2J"),
+        "layout shift must not full-clear the terminal"
     );
     assert!(
-        output.contains("\u{1b}[2J") || output.contains("\u{1b}[J") || output.contains("\u{1b}[K"),
-        "stale rect must trigger a full terminal clear after the fresh draw"
+        second.contains(&placeholder_cluster(0, 0)),
+        "ratatui owns and rewrites shifted placeholder cells"
     );
+    assert!(
+        !second.contains("\u{1b}_G"),
+        "resident sprite is not re-transmitted on layout shift"
+    );
+    assert!(
+        !steady.contains(&placeholder_cluster(0, 0)),
+        "unchanged frame emits no placeholder bytes"
+    );
+    assert!(
+        !steady.contains("\u{1b}_G"),
+        "unchanged frame emits no kitty graphics bytes"
+    );
+    let output = String::from_utf8_lossy(&output);
     assert_eq!(
         output
             .matches(std::str::from_utf8(BEGIN_SYNC).unwrap())
             .count(),
-        1
+        3
     );
     assert_eq!(
         output
             .matches(std::str::from_utf8(END_SYNC).unwrap())
             .count(),
-        1
+        3
     );
     assert!(
         !output.contains("a=d,d=i"),
-        "placement shifts must keep resident kitty images alive"
+        "layout shifts must keep resident kitty images alive"
     );
 }
 

@@ -1,4 +1,6 @@
 use super::*;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 
 /// The pinned per-provider dashboard, tabbed: the tab rail names every account
 /// (the active tab a brand-filled chip set into the top hairline), and only the
@@ -133,7 +135,7 @@ fn render_pets_dashboard_body_uses_pet_view() {
         active_track: "idle",
     };
 
-    let (lines, hits, _) = dashboard_panel_lines_with_footer(
+    let (lines, hits) = dashboard_panel_lines_with_footer(
         &theme,
         &[],
         None,
@@ -171,7 +173,7 @@ fn render_pets_dashboard_body_drops_sprite_under_no_color() {
         active_track: "ask",
     };
 
-    let (lines, _, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = dashboard_panel_lines_with_footer(
         &theme,
         &[],
         None,
@@ -191,7 +193,7 @@ fn render_pets_dashboard_body_drops_sprite_under_no_color() {
 }
 
 #[test]
-fn render_provider_dashboard_pixel_pet_reserves_blank_column_and_records_rect() {
+fn render_provider_dashboard_pixel_pet_renders_placeholder_clusters() {
     let theme = Theme::fixed(false);
     let providers = two_provider_panels();
     let pet = crate::sidebar_pane::pets::PetView {
@@ -199,6 +201,7 @@ fn render_provider_dashboard_pixel_pet_reserves_blank_column_and_records_rect() 
             crate::sidebar_pane::pets::PetPixelView {
                 pet_id: "codex".to_owned(),
                 sprite_index: 0,
+                image_id: 0x123456,
                 size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
             },
         )),
@@ -209,7 +212,7 @@ fn render_provider_dashboard_pixel_pet_reserves_blank_column_and_records_rect() 
     };
     let active = "claude".to_owned();
 
-    let (lines, _, rect) = dashboard_panel_lines_with_footer(
+    let (lines, _) = dashboard_panel_lines_with_footer(
         &theme,
         &providers,
         Some(&active),
@@ -224,24 +227,18 @@ fn render_provider_dashboard_pixel_pet_reserves_blank_column_and_records_rect() 
     );
     let texts = line_texts(&lines);
     let rendered = texts.join("\n");
-    let rect = rect.expect("pixel rect");
 
-    assert_eq!(rect.line + usize::from(rect.height), lines.len() - 1);
-    assert_eq!(rect.col, 54);
-    assert_eq!(rect.width, 12);
-    assert_eq!(rect.height, 3);
     assert!(
-        texts
-            .iter()
-            .skip(rect.line)
-            .take(usize::from(rect.height))
-            .all(|line| {
-                line.chars()
-                    .skip(rect.col)
-                    .take(usize::from(rect.width))
-                    .all(|ch| ch == ' ')
-            }),
-        "pixel column is reserved as blanks:\n{rendered}"
+        rendered.contains(&crate::sidebar_pane::pets::placeholder_cluster(0, 0)),
+        "pixel placeholder cells render:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(&crate::sidebar_pane::pets::placeholder_cluster(0, 1)),
+        "placeholder columns carry distinct diacritics:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(&crate::sidebar_pane::pets::placeholder_cluster(1, 0)),
+        "placeholder rows carry distinct diacritics:\n{rendered}"
     );
     assert!(
         !rendered.contains('▀'),
@@ -250,7 +247,7 @@ fn render_provider_dashboard_pixel_pet_reserves_blank_column_and_records_rect() 
 }
 
 #[test]
-fn render_provider_dashboard_pixel_pet_rect_is_absolute_in_composed_frame() {
+fn render_provider_dashboard_pixel_pet_buffer_cells_carry_image_id_color() {
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -270,6 +267,7 @@ fn render_provider_dashboard_pixel_pet_rect_is_absolute_in_composed_frame() {
                 crate::sidebar_pane::pets::PetPixelView {
                     pet_id: "codex".to_owned(),
                     sprite_index: 0,
+                    image_id: 0x123456,
                     size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
                 },
             )),
@@ -281,23 +279,27 @@ fn render_provider_dashboard_pixel_pet_rect_is_absolute_in_composed_frame() {
         ..Default::default()
     };
 
-    let theme = Theme::for_sidebar(&snapshot.theme);
-    let frame = compose_lines(&snapshot, None, &ui, &theme, 54, 34);
-    let texts = line_texts(&frame.lines);
-    let rail = texts
-        .iter()
-        .position(|line| line.contains("Claude") && line.contains("Codex"))
-        .expect("tab rail");
+    let backend = TestBackend::new(54, 34);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut ui = ui;
+    draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    let buffer = terminal.backend().buffer();
+    let first = crate::sidebar_pane::pets::placeholder_cluster(0, 0);
+    let (x, y) = (0..buffer.area.height)
+        .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+        .find(|(x, y)| buffer[(*x, *y)].symbol() == first)
+        .expect("first placeholder cell");
 
-    let rect = frame.pet_pixel_rect.expect("absolute pixel rect");
-    assert_eq!(rect.x, 41);
-    assert!(usize::from(rect.y) > rail + 2);
+    assert_eq!(buffer[(x, y)].fg, Color::Rgb(0x12, 0x34, 0x56));
     assert_eq!(
-        usize::from(rect.y) + usize::from(rect.height),
-        texts.len() - 1
+        buffer[(x + 1, y)].symbol(),
+        crate::sidebar_pane::pets::placeholder_cluster(0, 1)
     );
-    assert_eq!(rect.width, 12);
-    assert_eq!(rect.height, 3);
+    assert_eq!(
+        buffer[(x, y + 1)].symbol(),
+        crate::sidebar_pane::pets::placeholder_cluster(1, 0)
+    );
+    assert_eq!(buffer[(x + 1, y)].fg, Color::Rgb(0x12, 0x34, 0x56));
 }
 
 #[test]
@@ -309,6 +311,7 @@ fn render_provider_dashboard_pixel_pet_keeps_total_spacer_row() {
             crate::sidebar_pane::pets::PetPixelView {
                 pet_id: "codex".to_owned(),
                 sprite_index: 0,
+                image_id: 0x123456,
                 size: crate::sidebar_pane::pets::PetGridSize { cols: 12, rows: 3 },
             },
         )),
@@ -319,7 +322,7 @@ fn render_provider_dashboard_pixel_pet_keeps_total_spacer_row() {
     };
     let active = "claude".to_owned();
 
-    let (lines, _, rect) = dashboard_panel_lines_with_footer(
+    let (lines, _) = dashboard_panel_lines_with_footer(
         &theme,
         &providers,
         Some(&active),
@@ -333,7 +336,6 @@ fn render_provider_dashboard_pixel_pet_keeps_total_spacer_row() {
         fixed_now(),
     );
     let texts = line_texts(&lines);
-    let rect = rect.expect("pixel rect");
     let total_index = texts
         .iter()
         .position(|line| line.contains("Total:"))
@@ -341,7 +343,7 @@ fn render_provider_dashboard_pixel_pet_keeps_total_spacer_row() {
     let above_total = texts
         .get(total_index.saturating_sub(1))
         .expect("row above total");
-    let provider_above_total = above_total.chars().take(rect.col).collect::<String>();
+    let provider_above_total = above_total.chars().take(54).collect::<String>();
 
     assert!(
         provider_above_total.trim().is_empty(),
@@ -398,7 +400,7 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
     };
     let active = "claude".to_owned();
 
-    let (lines, hits, _) = dashboard_panel_lines_with_footer(
+    let (lines, hits) = dashboard_panel_lines_with_footer(
         &theme,
         &providers,
         Some(&active),
@@ -542,7 +544,7 @@ fn render_provider_dashboard_pet_caption_leaves_inner_gap() {
     };
     let active = "claude".to_owned();
 
-    let (lines, _, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = dashboard_panel_lines_with_footer(
         &theme,
         &providers,
         Some(&active),
@@ -584,7 +586,7 @@ fn render_provider_dashboard_pet_caption_uses_full_width() {
     };
     let active = "claude".to_owned();
 
-    let (lines, _, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = dashboard_panel_lines_with_footer(
         &theme,
         &providers,
         Some(&active),
@@ -617,7 +619,7 @@ fn render_provider_dashboard_without_pet_uses_main_stats_body() {
     providers[0].plan = Some("Claude Max Enterprise".to_owned());
     let active = "claude".to_owned();
 
-    let (lines, _, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = dashboard_panel_lines_with_footer(
         &theme,
         &providers,
         Some(&active),
@@ -651,7 +653,7 @@ fn render_provider_dashboard_narrow_hides_io_tokens_and_version() {
     providers[0].plan = Some("Claude Max Enterprise".to_owned());
     let active = "claude".to_owned();
 
-    let (lines, _, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = dashboard_panel_lines_with_footer(
         &theme,
         &providers,
         Some(&active),

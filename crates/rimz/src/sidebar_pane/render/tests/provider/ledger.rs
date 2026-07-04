@@ -159,7 +159,7 @@ fn render_fleet_ledger_keeps_zero_rows_for_missing_or_zero_tally() {
 
     let panel = provider_panel("claude", "Claude", 173, true, true, Some((25, 40)));
     let active = panel.kind.clone();
-    let (lines, _, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = dashboard_panel_lines_with_footer(
         &theme,
         std::slice::from_ref(&panel),
         Some(&active),

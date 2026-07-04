@@ -612,11 +612,7 @@ impl LoopState {
             self.dirty = true;
             self.paint_hold
                 .engage(Instant::now(), crate::sidebar::timing::unix_now_ms());
-            self.blank_pixel(terminal);
         } else {
-            if grew {
-                self.blank_pixel(terminal);
-            }
             if self
                 .apply_input(Wakeup::Resize, terminal, anim_start)?
                 .painted
@@ -901,12 +897,6 @@ impl LoopState {
     pub(super) fn clear_pixel(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) {
         if let Err(err) = self.paint.clear(terminal.backend_mut()) {
             debug!(error = %err, "pet pixel clear failed");
-        }
-    }
-
-    pub(super) fn blank_pixel(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) {
-        if let Err(err) = self.paint.blank(terminal.backend_mut()) {
-            debug!(error = %err, "pet pixel blank failed");
         }
     }
 

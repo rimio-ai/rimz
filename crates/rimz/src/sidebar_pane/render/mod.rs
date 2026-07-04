@@ -118,11 +118,6 @@ fn draw_into(
     ui.tab_hits = composed.tab_hits;
     ui.make_up_hits = composed.make_up_hits;
     ui.banner_line = composed.banner_line;
-    ui.pet_pixel_rect = composed.pet_pixel_rect.map(|mut rect| {
-        rect.x = rect.x.saturating_add(area.x);
-        rect.y = rect.y.saturating_add(area.y);
-        rect
-    });
     ui.scrollbar
         .observe(composed.scroll_offset, ui.animation_phase);
     ui.scroll_offset = composed.scroll_offset;

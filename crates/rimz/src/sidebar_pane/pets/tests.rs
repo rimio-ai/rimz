@@ -14,6 +14,7 @@ fn frame(
         phase,
         refresh_ms,
         body,
+        pixel_id_base: 0x120000,
         motion_enabled,
         unread_triggered,
     }
@@ -317,6 +318,7 @@ fn pixel_view_resolves_sprite_without_cell_grid() {
                 phase: 0,
                 refresh_ms: 100,
                 body: Some(PetRenderTier::Pixel),
+                pixel_id_base: 0x120000,
                 motion_enabled: true,
                 unread_triggered: false,
             },
@@ -328,6 +330,7 @@ fn pixel_view_resolves_sprite_without_cell_grid() {
     };
     assert_eq!(pixel.pet_id, "codex");
     assert_eq!(pixel.size, DASHBOARD_PIXEL_PET);
+    assert_eq!(pixel.image_id, 0x120000 + pixel.sprite_index as u32);
     assert_eq!(view.active_track, model::TRACK_JUMPING);
     assert!(
         assets

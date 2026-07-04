@@ -58,7 +58,7 @@ fn provider_panel_lines(
     now: Timestamp,
 ) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
     let active_tab = active_kind.map(str::to_owned);
-    let (lines, hits, _) = dashboard_panel_lines_with_footer(
+    let (lines, hits) = dashboard_panel_lines_with_footer(
         theme,
         providers,
         active_tab.as_ref(),
@@ -483,7 +483,7 @@ fn bottom_chrome_texts_with_ui(
     ui: &UiState,
 ) -> (Vec<String>, Vec<ProviderTabHit>) {
     let theme = Theme::fixed(true);
-    let (lines, hits, _) = build_bottom_chrome(snapshot, alert, &theme, 40, ui);
+    let (lines, hits) = build_bottom_chrome(snapshot, alert, &theme, 40, ui);
     (line_texts(&lines), hits)
 }
 
