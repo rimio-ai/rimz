@@ -265,6 +265,11 @@ fn set_viewed(snapshot: &mut SidebarSnapshot, viewed: bool) {
     }
 }
 
+fn force_tab_dwell_elapsed(harness: &mut ApplyHarness) {
+    harness.tab_read_dwell_until =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+}
+
 struct ApplyHarness {
     config: ServeConfig,
     state: LoopState,
@@ -570,7 +575,7 @@ fn background_register_pane_does_not_focus_clear_until_viewed() {
 }
 
 #[test]
-fn tab_switch_in_sweeps_all_unread_in_tab() {
+fn tab_switch_in_arms_sibling_read_dwell() {
     let ws = workspace();
     let (_dir, runtime) = runtime_for(&ws);
     let instance_a = SidebarInstanceId::new();
@@ -590,6 +595,43 @@ fn tab_switch_in_sweeps_all_unread_in_tab() {
     set_all_rows_unread(&mut viewed);
     a.apply(viewed);
 
+    assert!(
+        a.tab_read_dwell_until.is_some(),
+        "switching into the tab arms the sibling dwell"
+    );
+    assert!(
+        !row_unread_by_id(&a.current, "sess-1"),
+        "the focused row reads immediately"
+    );
+    assert!(
+        row_unread_by_id(&a.current, "sess-2"),
+        "the sibling waits for dwell"
+    );
+    let marks = a.read_marks.load_merged();
+    assert!(marks.cleared_at_ms("sess-1").is_some());
+    assert!(marks.cleared_at_ms("sess-2").is_none());
+}
+
+#[test]
+fn tab_dwell_elapsed_while_viewing_sweeps_siblings() {
+    let ws = workspace();
+    let (_dir, runtime) = runtime_for(&ws);
+    let instance_a = SidebarInstanceId::new();
+    let mut a = ApplyHarness::for_runtime(&ws, runtime, instance_a);
+    let (mut background, first, _) =
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
+    set_all_rows_unread(&mut background);
+    set_viewed(&mut background, false);
+    a.apply(background);
+
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first);
+    set_all_rows_unread(&mut viewed);
+    a.apply(viewed.clone());
+
+    force_tab_dwell_elapsed(&mut a);
+    a.apply(viewed);
+
+    assert_eq!(a.tab_read_dwell_until, None);
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert!(!row_unread_by_id(&a.current, "sess-2"));
     let marks = a.read_marks.load_merged();
@@ -615,6 +657,8 @@ fn tab_switch_clear_keeps_live_rank_when_siblings_become_read() {
     set_row_status(&mut viewed, "sess-2", AgentStatus::Success);
     set_all_rows_unread(&mut viewed);
     append_agent_row(&mut viewed, "sess-3", "%3", AgentStatus::Waiting, false);
+    a.apply(viewed.clone());
+    force_tab_dwell_elapsed(&mut a);
     a.apply(viewed);
 
     assert_eq!(
@@ -624,6 +668,35 @@ fn tab_switch_clear_keeps_live_rank_when_siblings_become_read() {
     );
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert!(!row_unread_by_id(&a.current, "sess-2"));
+}
+
+#[test]
+fn tab_switch_out_before_dwell_leaves_siblings_unread() {
+    let ws = workspace();
+    let (_dir, runtime) = runtime_for(&ws);
+    let instance_a = SidebarInstanceId::new();
+    let mut a = ApplyHarness::for_runtime(&ws, runtime, instance_a);
+    let (mut background, first, _) =
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
+    set_all_rows_unread(&mut background);
+    set_viewed(&mut background, false);
+    a.apply(background);
+
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first);
+    set_all_rows_unread(&mut viewed);
+    a.apply(viewed);
+    assert!(a.tab_read_dwell_until.is_some());
+
+    let mut left = a.current.clone();
+    set_viewed(&mut left, false);
+    a.apply(left);
+
+    assert_eq!(a.tab_read_dwell_until, None);
+    assert!(!row_unread_by_id(&a.current, "sess-1"));
+    assert!(row_unread_by_id(&a.current, "sess-2"));
+    let marks = a.read_marks.load_merged();
+    assert!(marks.cleared_at_ms("sess-1").is_some());
+    assert!(marks.cleared_at_ms("sess-2").is_none());
 }
 
 #[test]

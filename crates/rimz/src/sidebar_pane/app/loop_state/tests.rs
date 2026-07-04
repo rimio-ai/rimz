@@ -361,6 +361,81 @@ fn maintenance_requests_releasing_fetch_when_order_hold_expires() {
 }
 
 #[test]
+fn maintenance_requests_force_fold_when_tab_read_dwell_expires() {
+    let ws = workspace();
+    let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
+    let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
+    let socket_path = sidebar_socket_path(&runtime, &SidebarInstanceId::new());
+    let (_dir, mut state) = loop_state(&ws);
+    state.current.own_view = Some(own_view(false, true));
+    state.last_heartbeat = Some(Instant::now());
+    state.last_self_close_check = Instant::now();
+    state.tab_read_dwell_until = Some(Instant::now() - Duration::from_secs(1));
+    let config = serve_config(&ws);
+    let (mut fetch, request_rx) = fetch_dispatcher();
+    let (_result_tx, result_rx) = std::sync::mpsc::channel();
+
+    state
+        .run_maintenance(
+            &mut fetch,
+            MaintenanceContext {
+                config: &config,
+                runtime: &runtime,
+                socket_path: &socket_path,
+                result_rx: &result_rx,
+                anim_start: Instant::now(),
+                diag: &crate::diag::DiagSink::disabled(),
+                tick: Duration::from_secs(60),
+            },
+        )
+        .expect("maintenance requests tab dwell fold");
+
+    assert!(
+        request_rx
+            .try_recv()
+            .expect("tab dwell fold request")
+            .forces_fold(),
+        "expired tab dwell must bypass the unchanged-input skip"
+    );
+}
+
+#[test]
+fn maintenance_waits_for_own_view_before_tab_read_dwell_fetch() {
+    let ws = workspace();
+    let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
+    let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
+    let socket_path = sidebar_socket_path(&runtime, &SidebarInstanceId::new());
+    let (_dir, mut state) = loop_state(&ws);
+    state.current.own_view = None;
+    state.last_heartbeat = Some(Instant::now());
+    state.last_self_close_check = Instant::now();
+    state.tab_read_dwell_until = Some(Instant::now() - Duration::from_secs(1));
+    let config = serve_config(&ws);
+    let (mut fetch, request_rx) = fetch_dispatcher();
+    let (_result_tx, result_rx) = std::sync::mpsc::channel();
+
+    state
+        .run_maintenance(
+            &mut fetch,
+            MaintenanceContext {
+                config: &config,
+                runtime: &runtime,
+                socket_path: &socket_path,
+                result_rx: &result_rx,
+                anim_start: Instant::now(),
+                diag: &crate::diag::DiagSink::disabled(),
+                tick: Duration::from_secs(60),
+            },
+        )
+        .expect("maintenance handles missing own-view");
+
+    assert!(
+        request_rx.try_recv().is_err(),
+        "a frameless snapshot cannot prove the tab is still viewed"
+    );
+}
+
+#[test]
 fn self_close_watchdog_bypasses_unchanged_skip_while_empty_confirming() {
     let ws = workspace();
     let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
@@ -424,6 +499,23 @@ fn frame_timing_suspends_unwatched_animation() {
     state.current.own_view = Some(own_view(true, false));
     state.current.viewed_panes = vec![own_pane];
     assert!(frame_active(&state));
+}
+
+#[test]
+fn frame_timing_wakes_for_elapsed_tab_read_dwell() {
+    let ws = workspace();
+    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane));
+    state.current = animating_agent_snapshot(&ws);
+    state.current.own_view = Some(own_view(false, false));
+    state.current.viewed_panes.clear();
+    state.dirty = false;
+    state.tab_read_dwell_until = Some(Instant::now() - Duration::from_secs(1));
+
+    let (active, timeout) = state.frame_timing(Duration::from_secs(60), Instant::now());
+
+    assert!(!active);
+    assert_eq!(timeout, FRAME_MIN_TIMEOUT);
 }
 
 #[test]

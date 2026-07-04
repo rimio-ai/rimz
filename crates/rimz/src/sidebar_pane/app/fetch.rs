@@ -507,6 +507,7 @@ pub(super) struct FetchRequest {
     mode: FetchMode,
     min_pane_cache_ms: Option<u64>,
     published_frame_hint: bool,
+    force_fold: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -545,6 +546,7 @@ impl FetchRequest {
             mode: FetchMode::ProducerFreshPanes,
             min_pane_cache_ms: Some(crate::sidebar::timing::unix_now_ms()),
             published_frame_hint: false,
+            force_fold: false,
         }
     }
 
@@ -553,6 +555,7 @@ impl FetchRequest {
             mode: FetchMode::HardRefresh,
             min_pane_cache_ms: Some(crate::sidebar::timing::unix_now_ms()),
             published_frame_hint: false,
+            force_fold: false,
         }
     }
 
@@ -561,6 +564,19 @@ impl FetchRequest {
             mode: FetchMode::Normal,
             min_pane_cache_ms: None,
             published_frame_hint: true,
+            force_fold: false,
+        }
+    }
+
+    /// Fold from current caches even when the worker's unchanged-input memo
+    /// would skip. Renderer-local timers use this when fold side effects depend
+    /// on local state rather than ledger or pane-frame inputs.
+    pub(super) fn force_fold() -> Self {
+        Self {
+            mode: FetchMode::Normal,
+            min_pane_cache_ms: None,
+            published_frame_hint: false,
+            force_fold: true,
         }
     }
 
@@ -569,9 +585,15 @@ impl FetchRequest {
         matches!(self.mode, FetchMode::ProducerFreshPanes)
     }
 
+    #[cfg(test)]
+    pub(super) fn forces_fold(self) -> bool {
+        self.force_fold
+    }
+
     pub(super) fn merge(&mut self, other: Self) {
         self.mode = self.mode.strongest(other.mode);
         self.published_frame_hint |= other.published_frame_hint;
+        self.force_fold |= other.force_fold;
         self.min_pane_cache_ms = match (self.min_pane_cache_ms, other.min_pane_cache_ms) {
             (Some(current), Some(next)) => Some(current.max(next)),
             (Some(current), None) => Some(current),
@@ -584,6 +606,7 @@ impl FetchRequest {
         self.mode == FetchMode::Normal
             && self.min_pane_cache_ms.is_none()
             && !self.published_frame_hint
+            && !self.force_fold
     }
 }
 

@@ -195,6 +195,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         mode: FetchMode::HardRefresh,
         min_pane_cache_ms: None,
         published_frame_hint: false,
+        force_fold: false,
     };
     let mut cursor = RollupCursor::new();
     let mut consumer_memo = ConsumerFoldMemo::default();
@@ -490,6 +491,39 @@ fn unchanged_consumer_inputs_skip_the_second_fold() {
 }
 
 #[test]
+fn force_fold_bypasses_consumer_unchanged_skip_without_fresh_pane_claim() {
+    let fixture = ConsumerFixture::new();
+    fixture.write_pane_frame();
+    let mut rollup = SidebarSnapshot::build(
+        fixture.workspace_id.clone(),
+        Vec::new(),
+        Vec::new(),
+        jiff::Timestamp::now(),
+    );
+    rollup.reflects_log = Some(crate::ledger::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    std::fs::write(
+        &fixture.state.latest_snapshot,
+        serde_json::to_vec(&rollup).unwrap(),
+    )
+    .unwrap();
+    let mut cursor = RollupCursor::new();
+    let mut consumer_memo = ConsumerFoldMemo::default();
+    assert!(
+        !fixture.run_with(FetchRequest::default(), &mut cursor, &mut consumer_memo)[0].unchanged
+    );
+
+    let forced = fixture.run_with(FetchRequest::force_fold(), &mut cursor, &mut consumer_memo);
+
+    assert_eq!(forced.len(), 1);
+    assert!(!forced[0].unchanged);
+    assert!(!forced[0].fresh_pane_frame);
+    assert!(forced[0].snapshot.is_ok());
+}
+
+#[test]
 fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
     let fixture = ConsumerFixture::new();
     let mut rollup = SidebarSnapshot::build(
@@ -586,6 +620,13 @@ fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     let request = FetchRequest::pane_frame_published();
     assert_eq!(request.mode, FetchMode::Normal);
     assert!(request.published_frame_hint);
+    assert!(!request.force_fold);
+
+    let request = FetchRequest::force_fold();
+    assert_eq!(request.mode, FetchMode::Normal);
+    assert!(request.force_fold);
+    assert!(!request.published_frame_hint);
+    assert!(request.min_pane_cache_ms.is_none());
 }
 
 #[test]

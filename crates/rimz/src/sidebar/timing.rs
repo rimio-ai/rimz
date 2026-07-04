@@ -50,6 +50,13 @@ pub const SELF_CLOSE_EMPTY_CONFIRM: Duration = Duration::from_secs(5);
 /// `FocusChanged` broadcast; an older anchor is a stale jump and is ignored.
 pub const FOCUS_ANCHOR_FRESH: Duration = Duration::from_millis(2500);
 
+/// How long the user must stay in a tab before its unread siblings clear.
+/// A card you focus reads instantly; a sibling you never clicked reads only
+/// once you have dwelled long enough to have seen it. Leaving before this
+/// elapses leaves it unread, so a pass-through jump never flickers a read
+/// wash off the neighbours as a click side effect.
+pub const TAB_READ_DWELL: Duration = Duration::from_millis(2500);
+
 /// Coalescing window for the shared snapshot cache — the **poll-mode** pane
 /// TTL, in effect whenever the presence push channel is dead or absent. Just
 /// under the default 1s data tick: when one ledger-delta wakeup wakes every

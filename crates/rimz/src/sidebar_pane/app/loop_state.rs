@@ -108,6 +108,11 @@ pub(super) struct LoopState {
     last_known_elder: bool,
     pending_fetch: Option<PendingFetch>,
     optimistic_watch_until: Option<Instant>,
+    /// Deadline for the tab-view read sweep: armed when the own tab comes on
+    /// screen, disarmed when it leaves. The sweep fires on the first fold at or
+    /// past it while the tab is still viewed, so a pass-through never clears
+    /// siblings. `None` when no dwell is pending.
+    pub(super) tab_read_dwell_until: Option<Instant>,
     event_store: EventStore,
     observer: observe::Observer,
     observe_tx: SyncSender<ObserveMsg>,
@@ -197,6 +202,7 @@ impl LoopState {
             last_known_elder: true,
             pending_fetch: None,
             optimistic_watch_until: None,
+            tab_read_dwell_until: None,
             event_store: EventStore::default(),
             observer: observe::Observer::default(),
             observe_tx,
@@ -256,6 +262,16 @@ impl LoopState {
             timeout = timeout.min(
                 pending
                     .due_at
+                    .saturating_duration_since(Instant::now())
+                    .max(FRAME_MIN_TIMEOUT),
+            );
+        }
+        if let Some(until) = self
+            .tab_read_dwell_until
+            .filter(|_| self.current.own_view.is_some())
+        {
+            timeout = timeout.min(
+                until
                     .saturating_duration_since(Instant::now())
                     .max(FRAME_MIN_TIMEOUT),
             );
@@ -817,6 +833,17 @@ impl LoopState {
         self.on_snapshot(ctx.config, fetch, ctx.result_rx, ctx.anim_start, ctx.diag)?;
         self.fire_due_pending_fetch(fetch);
 
+        // Tab-view read dwell: once the user has stayed past the dwell, provoke
+        // a fold so the normal clear path sweeps the unread siblings. The fold
+        // disarms the deadline, so this fires at most a fetch or two.
+        if self
+            .tab_read_dwell_until
+            .filter(|_| self.current.own_view.is_some())
+            .is_some_and(|until| Instant::now() >= until)
+        {
+            fetch.request(FetchRequest::force_fold(), false);
+        }
+
         // Data backstop: catch pane/git drift no ledger delta announced. It is
         // self-gated to the data tick and no-ops while a fetch is in flight.
         if self.pending_fetch.is_none() && self.fetched_at.elapsed() >= ctx.tick {
@@ -999,6 +1026,7 @@ impl LoopState {
         let self_close = &mut self.self_close;
         let ui = &mut self.ui;
         let read_marks = &mut self.read_marks;
+        let tab_read_dwell = &mut self.tab_read_dwell_until;
 
         // The gate compares the incoming snapshot against the last frame we actually
         // committed; `current` still holds it until we overwrite it below.
@@ -1083,7 +1111,14 @@ impl LoopState {
             let now_viewing = own_tab_viewed(current, view, own_pane);
             let switched_in = ui.viewing_own_tab == Some(false) && now_viewing;
             ui.viewing_own_tab = Some(now_viewing);
-            if switched_in {
+            if !now_viewing {
+                // Left the tab: a scan, not a read. Drop the pending sweep.
+                *tab_read_dwell = None;
+            } else if switched_in {
+                *tab_read_dwell = Some(Instant::now() + TAB_READ_DWELL);
+            }
+            if now_viewing && tab_read_dwell.is_some_and(|until| Instant::now() >= until) {
+                *tab_read_dwell = None;
                 clear.merge(read_receipts_for_tab(
                     current,
                     &view.working_pane_ids,
