@@ -105,6 +105,16 @@ fn main() {
         return;
     }
 
+    if cli
+        .windows(2)
+        .any(|window| window[0] == "--name" && window[1] == "rimz:share_session")
+    {
+        if let Some(session) = arg_after(cli, "--session") {
+            write_web_clients_allowed_metadata(session);
+        }
+        return;
+    }
+
     let mode = env::var("RIMZ_TEST_ZELLIJ_MODE").unwrap_or_default();
     if mode == "fail-write"
         && cli
@@ -128,6 +138,33 @@ fn main() {
         write_stderr("simulated zellij birth failure");
         std::process::exit(5);
     }
+}
+
+fn arg_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    args.windows(2)
+        .find(|window| window[0] == flag)
+        .map(|window| window[1].as_str())
+}
+
+fn write_web_clients_allowed_metadata(session: &str) {
+    let path = cache_home()
+        .join("zellij")
+        .join("contract_version_1")
+        .join("session_info")
+        .join(session);
+    std::fs::create_dir_all(&path).expect("create fake session metadata dir");
+    std::fs::write(
+        path.join("session-metadata.kdl"),
+        "web_clients_allowed true\n",
+    )
+    .expect("write fake session metadata");
+}
+
+fn cache_home() -> std::path::PathBuf {
+    env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cache")))
+        .unwrap_or_else(env::temp_dir)
 }
 
 fn web_status_output(log_path: &Path) -> String {

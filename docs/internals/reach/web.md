@@ -24,7 +24,7 @@ rimz web token revoke <name>
 rimz web token revoke-all
 ```
 
-`rimz web` is `rimz web open`. `open` resolves the workspace, assumes Zellij unless the command explicitly passes `--mux tmux`, ensures the Rimz room exists with the normal sidebar layout, births new rooms with Zellij `web_sharing on`, asks the presence plugin to enable sharing for already-running rooms, starts `zellij web --start --daemonize` when allowed and offline, prints the URL, prints a one-time login token for human output, and opens the local browser unless `--print` or `--json` is set. `url` resolves the same session and prints the URL without starting the server, birthing a room, changing sharing state, or minting a token; it requires an existing Rimz workspace record so a URL never points at a bare Zellij session. `--session <name>` targets an existing Rimz workspace session by exact session name for local scripting and remote prep.
+`rimz web` is `rimz web open`. `open` resolves the workspace, assumes Zellij unless the command explicitly passes `--mux tmux`, ensures the Rimz room exists with the normal sidebar layout, loads and grants the presence plugin, asks that plugin to enable browser sharing for the session, starts `zellij web --start --daemonize` when allowed and offline, prints the URL, prints a one-time login token for human output, and opens the local browser unless `--print` or `--json` is set. `url` resolves the same session and prints the URL without starting the server, birthing a room, changing sharing state, or minting a token; it requires an existing Rimz workspace record so a URL never points at a bare Zellij session. `--session <name>` targets an existing Rimz workspace session by exact session name for local scripting and remote prep.
 
 `status`, `start`, `stop`, and `token` are thin wrappers over Zellij's web CLI. Token commands relay only Zellij's output. `status --json`, `open --json`, and `url --json` emit versioned JSON with `version = "rimz.web.v1"`; the `open`/`url` payload includes `url`, `session`, `base_url`, `ip`, `port`, and `token_count`.
 
@@ -61,10 +61,9 @@ Zellij's own config still controls server defaults and sharing policy:
 web_server true
 web_server_ip "127.0.0.1"
 web_server_port 8082
-web_sharing "on"
 ```
 
-Fresh rooms opened through `rimz web open` are shared at birth by Zellij's `web_sharing on` option. If a room already existed with Zellij web sharing off, Rimz first seeds Zellij's `permissions.kdl` cache for its own presence plugin with `ReadApplicationState`, `RunCommands`, `Reconfigure`, and `StartWebServer`, keyed to the plugin's canonical path, then sends the plugin a `rimz:share_session` pipe for that session. Zellij grants cached permissions without a floating prompt, so the runtime share works for clientless rooms. If the pipe times out or fails, Rimz still prints the URL and writes a stderr note naming the remaining checks: Zellij version, presence-plugin artifact availability, and `[web] enabled = true`. If Zellij config locks web sharing to `disabled`, Zellij rejects browser clients until that config changes and the session restarts.
+Every `rimz web open` enables browser sharing at runtime. Rimz first seeds Zellij's `permissions.kdl` cache for its own presence plugin with `ReadApplicationState`, `RunCommands`, `Reconfigure`, and `StartWebServer`, keyed to the plugin's canonical path, then sends a boot pipe so the plugin is loaded and granted before sending the `rimz:share_session` pipe that calls Zellij's `share_current_session()`. Zellij grants cached permissions without a floating prompt, so the runtime share works for clientless rooms. If the pipe fails or the session metadata never confirms `web_clients_allowed true`, Rimz still prints the URL and writes a stderr note naming the remaining checks: Zellij version, presence-plugin artifact availability, and `[web] enabled = true`. If Zellij config locks web sharing to `disabled`, Zellij rejects browser clients until that config changes and the session restarts.
 
 ## Remote rooms
 
@@ -76,7 +75,7 @@ The local process first runs a non-PTY prep command on the remote host:
 ssh -o ConnectTimeout=10 -- <host> '<PATH repair>; exec rimz web open --print --json ...'
 ```
 
-That remote `rimz web open` resolves or verifies the workspace, births the Rimz room with `web_sharing on` when the target is a path, asks the presence plugin to share an already-running room, starts the remote Zellij web server when allowed, and returns `rimz.web.v1` without minting a token. A project whose room is already live under tmux, old remote Rimz, old Zellij, or disabled web capability fails here before browser access opens.
+That remote `rimz web open` resolves or verifies the workspace, births the Rimz room when the target is a path, enables sharing through the presence plugin, starts the remote Zellij web server when allowed, relays its stderr notes through the local tunnel command, and returns `rimz.web.v1` without minting a token. A project whose room is already live under tmux, old remote Rimz, old Zellij, or disabled web capability fails here before browser access opens.
 
 Remote web creates and relays a one-time Zellij login token under a short banner before opening the browser. Local `rimz web open` also mints and shows a one-time token for human output. `token_count` remains in `rimz.web.v1` as server state, not as proof this browser is logged in or that the user still holds a token value. Rimz never stores the token and never puts it in the URL.
 

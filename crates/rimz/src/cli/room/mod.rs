@@ -119,10 +119,6 @@ impl RoomEntry<'_> {
         }
     }
 
-    fn requests_web_sharing(&self) -> bool {
-        matches!(self, Self::StartWeb { .. } | Self::WebSession { .. })
-    }
-
     fn session_name(&self) -> &str {
         match self {
             Self::Start { workspace, .. }
@@ -193,7 +189,7 @@ pub(crate) fn ensure_workspace_room_for_web(path: &Path, globals: &GlobalFlags) 
             render::home_relative(&config_dir.display().to_string())
         )?;
     }
-    let ready = prepare_room(
+    prepare_room(
         RoomEntry::StartWeb {
             workspace: workspace.clone(),
             mux,
@@ -203,7 +199,6 @@ pub(crate) fn ensure_workspace_room_for_web(path: &Path, globals: &GlobalFlags) 
     Ok(WebRoom {
         session_name: workspace.session_name,
         workspace_id: workspace.workspace_id,
-        born_web_shared: !ready.was_live,
     })
 }
 
@@ -215,20 +210,16 @@ pub(crate) fn ensure_session_room_for_web(session: &str, globals: &GlobalFlags) 
         );
     };
     ensure_single_backend_room(MuxName::Zellij, session)?;
-    let ready = prepare_room(RoomEntry::WebSession { record: &record }, globals)?;
+    prepare_room(RoomEntry::WebSession { record: &record }, globals)?;
     Ok(WebRoom {
         session_name: record.session_name,
         workspace_id: record.workspace_id,
-        born_web_shared: !ready.was_live,
     })
 }
 
 pub(crate) struct WebRoom {
     pub session_name: String,
     pub workspace_id: WorkspaceId,
-    /// Born fresh in this call with `--web-sharing on`, so browser sharing is
-    /// already authoritative and the runtime share pipe is redundant.
-    pub born_web_shared: bool,
 }
 
 pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
@@ -278,15 +269,11 @@ struct ReadyRoom {
     workspace_id: Option<WorkspaceId>,
     mux_config: rimz::config::MultiplexerConfig,
     mux: MuxName,
-    was_live: bool,
 }
 
 fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
     let machine_config = machine_config();
-    let mut mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
-    if entry.requests_web_sharing() {
-        mux_config.zellij.web_sharing = true;
-    }
+    let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
     let sidebar_width = SidebarWidth::from_config(&machine_config.theme.display);
     // One terminal probe per command flow: the width picks every sidebar
     // pane's birth size; the pair sizes a detached tmux birth.
@@ -476,7 +463,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         workspace_id: attached_workspace_id,
         mux_config,
         mux,
-        was_live,
     })
 }
 
@@ -567,7 +553,7 @@ pub(crate) fn enable_web_sharing(
     zellij_config: &rimz::config::ZellijConfig,
     seed_permissions: bool,
     focus_key: Option<&str>,
-) {
+) -> bool {
     let Some(opts) = presence_plugin_options(
         session_name,
         workspace_id,
@@ -579,7 +565,8 @@ pub(crate) fn enable_web_sharing(
             session = %session_name,
             "presence plugin unavailable; Zellij web sharing was not requested",
         );
-        return;
+        warn_web_sharing_unconfirmed(session_name);
+        return false;
     };
     if let Err(err) = backend.share_web_session(&opts) {
         tracing::debug!(
@@ -587,11 +574,17 @@ pub(crate) fn enable_web_sharing(
             error = %err,
             "Zellij web-sharing pipe failed",
         );
-        let _ = writeln!(
-            std::io::stderr().lock(),
-            "rimz: could not confirm Zellij web sharing for `{session_name}`; if the browser says \"Web clients are not allowed to attach to this session\", check that Zellij is new enough, Rimz's presence plugin is available, and `[web] enabled = true` in `rimz config path`, then rerun `rimz web open`."
-        );
+        warn_web_sharing_unconfirmed(session_name);
+        return false;
     }
+    true
+}
+
+pub(crate) fn warn_web_sharing_unconfirmed(session_name: &str) {
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "rimz: could not confirm Zellij web sharing for `{session_name}`; if the browser says \"Web clients are not allowed to attach to this session\", check that Zellij is new enough, Rimz's presence plugin is available, and `[web] enabled = true` in `rimz config path`, then rerun `rimz web open`."
+    );
 }
 
 fn presence_plugin_options(

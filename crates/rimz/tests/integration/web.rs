@@ -165,9 +165,10 @@ fn web_open_json_keeps_autostart_banner_off_stdout() {
     assert!(log.contains("web\t--status"), "{log}");
     assert!(log.contains("web\t--list-tokens"), "{log}");
     assert!(!log.contains("web\t--create-token"), "{log}");
+    assert!(log.contains("\tattach\t--create-background\t"), "{log}");
     assert!(
-        log.contains("\tattach\t--create-background\t") && log.contains("\t--web-sharing\ton\t"),
-        "web open --session should prepare a web-shareable room before printing JSON: {log}"
+        !log.contains("\t--web-sharing\ton\t"),
+        "runtime plugin sharing is authoritative; birth-time --web-sharing is dead: {log}"
     );
     assert!(
         log.contains(&format!(
@@ -269,9 +270,10 @@ fn web_open_assumes_zellij_without_mux_flag() {
     assert!(log.contains("web\t--status"), "{log}");
     assert!(log.contains("web\t--list-tokens"), "{log}");
     assert!(!log.contains("web\t--create-token"), "{log}");
+    assert!(log.contains("\tattach\t--create-background\t"), "{log}");
     assert!(
-        log.contains("\tattach\t--create-background\t") && log.contains("\t--web-sharing\ton\t"),
-        "web open --session should prepare a web-shareable room before printing JSON: {log}"
+        !log.contains("\t--web-sharing\ton\t"),
+        "runtime plugin sharing is authoritative; birth-time --web-sharing is dead: {log}"
     );
     assert!(
         log.contains(&format!(
@@ -287,7 +289,7 @@ fn web_open_assumes_zellij_without_mux_flag() {
 }
 
 #[test]
-fn web_open_fresh_birth_skips_share_pipe() {
+fn web_open_fresh_birth_uses_runtime_share_pipe() {
     let env = Env::new();
     env.record(&env.project_root);
     let workspace =
@@ -320,12 +322,12 @@ fn web_open_fresh_birth_skips_share_pipe() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !stderr.contains("could not confirm Zellij web sharing"),
-        "fresh birth should not warn about redundant runtime sharing: {stderr}"
+        "fresh birth should confirm the runtime share path: {stderr}"
     );
     let log = std::fs::read_to_string(log).expect("read zellij log");
     assert!(log.contains("attach\t--create-background"), "{log}");
-    assert!(log.contains("--web-sharing\ton"), "{log}");
-    assert!(!log.contains("rimz:share_session"), "{log}");
+    assert!(!log.contains("--web-sharing\ton"), "{log}");
+    assert!(log.contains("rimz:share_session"), "{log}");
 }
 
 #[test]

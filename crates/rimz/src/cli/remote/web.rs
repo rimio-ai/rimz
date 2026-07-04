@@ -79,6 +79,9 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
             payload.version
         );
     }
+    if !prep.stderr.is_empty() {
+        std::io::stderr().lock().write_all(&prep.stderr)?;
+    }
     relay_web_token(remote);
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;

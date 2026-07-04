@@ -164,7 +164,6 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
     let room::WebRoom {
         session_name: session,
         workspace_id,
-        born_web_shared,
     } = web_room;
     ensure_session_addressable_for_web(&session, &workspace_id)?;
     let payload = web_payload(
@@ -175,19 +174,16 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
             require_online: true,
         },
     )?;
-    if !born_web_shared {
-        // A pre-existing room may have been born without web sharing; ask the
-        // presence plugin to flip it on. A fresh room already carries
-        // `--web-sharing on`, so the runtime pipe is redundant.
-        let backend = rimz::mux::backend_for(MuxName::Zellij);
-        room::enable_web_sharing(
-            backend.as_ref(),
-            &session,
-            &workspace_id,
-            &config.zellij,
-            config.web.enabled,
-            config.sidebar.focus_key_label(),
-        );
+    let backend = rimz::mux::backend_for(MuxName::Zellij);
+    if room::enable_web_sharing(
+        backend.as_ref(),
+        &session,
+        &workspace_id,
+        &config.zellij,
+        config.web.enabled,
+        config.sidebar.focus_key_label(),
+    ) {
+        warn_if_web_sharing_unconfirmed(&session);
     }
     if args.json {
         print_json(&payload)?;
@@ -259,6 +255,23 @@ fn ensure_session_addressable_for_web(
                     );
                 }
             }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn warn_if_web_sharing_unconfirmed(session: &str) {
+    let cache_root = rimz::ledger::paths::cache_home();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if rimz::mux::recovery::zellij_session_web_clients_allowed_in(&cache_root, session)
+            == Some(true)
+        {
+            return;
+        }
+        if Instant::now() >= deadline {
+            room::warn_web_sharing_unconfirmed(session);
+            return;
         }
         std::thread::sleep(Duration::from_millis(100));
     }

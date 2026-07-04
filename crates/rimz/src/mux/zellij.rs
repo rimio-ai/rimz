@@ -221,9 +221,6 @@ fn zellij_options_args(
         parsed_version,
         MIN_STACKED_RESIZE_VERSION,
     ));
-    if config.web_sharing {
-        args.extend(["--web-sharing".to_owned(), "on".to_owned()]);
-    }
     args.extend(mouse_click_through_args(
         config.mouse_click_through,
         parsed_version,
@@ -284,6 +281,9 @@ fn zellij_options_args(
 pub struct ZellijBackend {
     /// Override for `XDG_RUNTIME_DIR`, where Zellij locates its server socket.
     runtime_dir: Option<PathBuf>,
+    /// Test-scoped cache root paired with `runtime_dir`; production uses the
+    /// process XDG cache root.
+    cache_root: Option<PathBuf>,
     /// Memoized `zellij --version` stdout ([`MuxBackend::version`]).
     version: std::sync::OnceLock<String>,
     /// Test-only command override that avoids process-global env mutation.
@@ -297,10 +297,13 @@ impl ZellijBackend {
     }
 
     /// Pin every Zellij command this backend runs to `dir` as `XDG_RUNTIME_DIR`,
-    /// so a test's server, sessions, and sockets never touch the user's.
+    /// and write Zellij-side cache state there, so a test's server, sessions,
+    /// sockets, and permission grants never touch the user's.
     pub fn with_runtime_dir(dir: impl Into<PathBuf>) -> Self {
+        let dir = dir.into();
         Self {
-            runtime_dir: Some(dir.into()),
+            runtime_dir: Some(dir.clone()),
+            cache_root: Some(dir),
             ..Self::default()
         }
     }
@@ -318,8 +321,10 @@ impl ZellijBackend {
         program: impl Into<PathBuf>,
         runtime_dir: impl Into<PathBuf>,
     ) -> Self {
+        let runtime_dir = runtime_dir.into();
         Self {
-            runtime_dir: Some(runtime_dir.into()),
+            runtime_dir: Some(runtime_dir.clone()),
+            cache_root: Some(runtime_dir),
             program: Some(program.into()),
             ..Self::default()
         }

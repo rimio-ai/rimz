@@ -164,7 +164,7 @@ impl ZellijBackend {
         if !self.presence_plugin_supported(opts, PRESENCE_BOOT_PIPE) {
             return Ok(());
         }
-        seed_presence_permissions(opts);
+        self.seed_presence_permissions(opts);
         let url = format!("file:{}", opts.wasm.display());
         let configuration = presence_plugin_configuration(opts);
         if opts.converge {
@@ -204,10 +204,17 @@ impl ZellijBackend {
         &self,
         opts: &super::super::PresencePluginOptions,
     ) -> Result<()> {
-        seed_presence_permissions(opts);
-        // Target the same (url, configuration) as the boot path: it launches the
-        // plugin if absent and reaches the running instance otherwise.
+        // Load and grant the plugin before sharing. Zellij 0.44.3 can drop
+        // share_current_session() when the same pipe also launches the plugin:
+        // the call races its permission grant, and cached grants emit no
+        // PermissionRequestResult replay.
+        self.ensure_presence_plugin_for(opts)?;
         self.pipe_to_presence_plugin(opts, PRESENCE_SHARE_PIPE, "share")
+    }
+
+    fn seed_presence_permissions(&self, opts: &super::super::PresencePluginOptions) {
+        let cache_root = self.cache_root.clone().unwrap_or_else(paths::cache_home);
+        seed_presence_permissions_in(&cache_root, opts);
     }
 
     fn pipe_to_presence_plugin(
@@ -262,11 +269,11 @@ impl ZellijBackend {
     }
 }
 
-fn seed_presence_permissions(opts: &super::super::PresencePluginOptions) {
+fn seed_presence_permissions_in(cache_root: &Path, opts: &super::super::PresencePluginOptions) {
     if !opts.seed_permissions {
         return;
     }
-    let path = paths::cache_home().join("zellij").join("permissions.kdl");
+    let path = cache_root.join("zellij").join("permissions.kdl");
     // Zellij 0.44.3 keys the permission cache on the plugin path string, not
     // the `file:` URL accepted by `zellij pipe --plugin`; the live integration
     // test seeds this bare path and proves the grant is honored.
@@ -492,6 +499,10 @@ fi
         assert!(
             log.contains("--session rimz-test pipe --plugin file:/tmp/rimz-presence-zellij.wasm"),
             "share should target the presence plugin by session and wasm URL:\n{log}",
+        );
+        assert!(
+            log.contains("--name rimz_presence_boot -- load"),
+            "share should first load and grant the presence plugin:\n{log}",
         );
         assert!(
             log.contains("--name rimz:share_session -- share"),

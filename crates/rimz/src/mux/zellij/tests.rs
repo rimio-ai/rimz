@@ -621,20 +621,6 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
 }
 
 #[test]
-fn zellij_options_enable_web_sharing_for_web_born_rooms() {
-    let config = ZellijConfig {
-        web_sharing: true,
-        ..ZellijConfig::default()
-    };
-    let args = zellij_options_args(&config, Some((0, 44, 3)));
-    assert!(
-        args.windows(2)
-            .any(|pair| pair[0] == "--web-sharing" && pair[1] == "on"),
-        "{args:?}"
-    );
-}
-
-#[test]
 fn zellij_options_render_configured_optionals() {
     let config = ZellijConfig {
         mouse_mode: Some(false),
