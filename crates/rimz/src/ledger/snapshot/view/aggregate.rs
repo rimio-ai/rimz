@@ -162,9 +162,8 @@ pub(super) fn build_worktree_groups_from_rows(
 /// archive sink, and the fixed-point score every later presentation sort reads.
 /// Process rows are exempt from the sinks because their activity clock is
 /// foreground-process start, not attention, and row ordering already seats them
-/// below every agent card. Durable `unread` still outranks both sinks. Both
-/// boundaries are strict (`>`), so the configured second is the last member of
-/// the previous band.
+/// below every agent card. Both boundaries are strict (`>`), so the configured
+/// second is the last member of the previous band.
 fn stamp_attention(rows: &mut [SidebarRow], now: Timestamp, windows: AttentionWindows) {
     for row in rows {
         let age_secs = score::age_secs(now, row.last_activity);

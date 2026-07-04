@@ -546,7 +546,7 @@ fn mark_keys_ignore_process_rows() {
 #[test]
 fn the_unread_snap_overrides_selection_follow_to_the_top() {
     use crate::agents::AgentStatus;
-    // A tall room: a top-ranked unread waiting lead, then nine calm rows.
+    // A tall room: a lead actionable unread row, then nine calm rows.
     let ws = workspace();
     let mut snapshot = snapshot(&ws);
     let mut lead = filter_row(
@@ -597,15 +597,15 @@ fn the_unread_snap_overrides_selection_follow_to_the_top() {
         render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 40, 15).scroll_offset;
     assert!(
         following > 0,
-        "following the bottom selection scrolls down off the top-ranked unread",
+        "following the bottom selection scrolls down off the lead unread row",
     );
 
     // Arming the snap returns the viewport to the top to reveal the lead, even
-    // though the selection still sits at the bottom — unread outranks selection.
+    // though the selection still sits at the bottom.
     ui.unread_focus = Some("agent-lead".to_owned());
     let snapped = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 40, 15).scroll_offset;
     assert_eq!(
         snapped, 0,
-        "the unread snap outranks selection-follow and reaches the top",
+        "the unread snap overrides selection-follow and reaches the top",
     );
 }

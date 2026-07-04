@@ -30,7 +30,7 @@ pub struct SidebarRow {
     pub unread: bool,
     /// Producer-stamped staleness: this row's latest activity has aged past the
     /// inactive window, sinking it beneath every live row whatever its status.
-    /// Renderer-local `unread` still outranks this sink.
+    /// Unread state does not change this sink.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inactive: bool,
     /// Producer-stamped archive sink: this row has aged past the archive
@@ -38,8 +38,7 @@ pub struct SidebarRow {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
     /// Producer-stamped fixed-point attention score in milli-units for every
-    /// presentation sort after the fold. Unread rows recompute their flat inbox
-    /// rank from status because unread is derived after this score is stamped.
+    /// presentation sort after the fold.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub attention_score: u32,
     pub last_activity: Timestamp,

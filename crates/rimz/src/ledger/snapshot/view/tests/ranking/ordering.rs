@@ -208,7 +208,7 @@ fn archive_band_parks_rows_below_warm_and_keeps_attention_above_idle() {
 }
 
 #[test]
-fn unread_rows_lead_read_attention() {
+fn read_state_never_changes_the_band() {
     let mut snapshot = room_with_agent_panes(
         Vec::new(),
         vec![
@@ -220,8 +220,8 @@ fn unread_rows_lead_read_attention() {
     snapshot.sort_groups_for_presentation();
     assert_eq!(
         group_labels(&snapshot),
-        vec!["b", "a"],
-        "unread result rows form the top inbox tier, above read attention"
+        vec!["a", "b"],
+        "read ask outranks unread result; read state never changes the band"
     );
 
     let mut snapshot = room_with_agent_panes(
@@ -238,31 +238,10 @@ fn unread_rows_lead_read_attention() {
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    assert_eq!(order, vec!["new-wait", "read-old"]);
-}
-
-#[test]
-fn unread_band_uses_flat_status_order_not_decayed_score() {
-    let mut snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            agent_in("old-fail", "/repo/main", AgentStatus::Failed, 1_000).active_ago(50 * 60),
-            agent_in("fresh-wait", "/repo/main", AgentStatus::Waiting, 2_000).active_ago(120),
-        ],
-    );
-    row_mut(&mut snapshot, "old-fail").unread = true;
-    row_mut(&mut snapshot, "fresh-wait").unread = true;
-    snapshot.sort_groups_for_presentation();
-
-    let order = snapshot.worktree_groups[0]
-        .rows
-        .iter()
-        .map(|row| row.id.clone())
-        .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["fresh-wait", "old-fail"],
-        "unread status order stays waiting before failed even when hot score would interleave them"
+        vec!["read-old", "new-wait"],
+        "among asks, the longest-overdue row leads regardless of read state"
     );
 }
 
@@ -450,7 +429,7 @@ fn cap_keeps_inactive_success_above_hidden_idle_tail() {
 }
 
 #[test]
-fn cohort_rows_hold_launch_order_across_status_and_unread_churn() {
+fn cohort_rows_hold_launch_order_across_status_churn() {
     let mut snapshot = room_with_agent_panes(
         Vec::new(),
         vec![
@@ -492,12 +471,12 @@ fn cohort_rows_hold_launch_order_across_status_and_unread_churn() {
     assert_eq!(
         order,
         vec![
-            "loose-unread",
             "cohort-first",
             "cohort-second",
             "cohort-tail",
+            "loose-unread",
         ],
-        "loose unread rows stay above the block; cohort rows keep launch order and ordinal-less members tail"
+        "an unread calm row no longer jumps a blocked cohort; cohort rows keep launch order and ordinal-less members tail"
     );
 }
 
@@ -607,7 +586,7 @@ fn team_blocks_rank_by_derived_state_and_stay_contiguous() {
 }
 
 #[test]
-fn inactive_cohort_sinks_until_unread_member_clamps_it_live() {
+fn inactive_cohort_stays_sunk_when_a_member_is_unread() {
     let mut snapshot = room_with_agent_panes(
         Vec::new(),
         vec![
@@ -648,8 +627,8 @@ fn inactive_cohort_sinks_until_unread_member_clamps_it_live() {
         .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["old-a", "old-b", "fresh-idle"],
-        "one unread member keeps the block in the live band without changing its internal order"
+        vec!["fresh-idle", "old-a", "old-b"],
+        "read state never changes the band"
     );
 }
 

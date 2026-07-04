@@ -476,7 +476,7 @@ fn focus_writes_read_receipt_and_clears_current_unread_row() {
 }
 
 #[test]
-fn focused_read_clear_holds_row_order_until_order_hold_expires() {
+fn focused_read_clear_keeps_live_rank_when_unread_clears() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
     let (mut background, first, _) =
@@ -487,7 +487,7 @@ fn focused_read_clear_holds_row_order_until_order_hold_expires() {
     set_viewed(&mut background, false);
 
     a.apply(background);
-    assert_eq!(row_ids(&a.current), vec!["sess-1", "sess-2"]);
+    assert_eq!(row_ids(&a.current), vec!["sess-2", "sess-1"]);
 
     let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone());
     set_row_status(&mut viewed, "sess-1", AgentStatus::Success);
@@ -497,13 +497,13 @@ fn focused_read_clear_holds_row_order_until_order_hold_expires() {
 
     assert_eq!(
         row_ids(&a.current),
-        vec!["sess-1", "sess-2"],
-        "the focused row stays where it was for the landing glance"
+        vec!["sess-2", "sess-1"],
+        "clearing unread keeps the focused row in live time/status rank"
     );
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert_eq!(
-        a.ui.selected_index, 0,
-        "selection re-anchors to the held position"
+        a.ui.selected_index, 1,
+        "selection re-anchors to the focused row's ranked position"
     );
 
     let mut settled = viewed;
@@ -515,12 +515,9 @@ fn focused_read_clear_holds_row_order_until_order_hold_expires() {
     assert_eq!(
         row_ids(&a.current),
         vec!["sess-2", "sess-1"],
-        "after the hold expires the live rank can settle"
+        "after the hold expires the live rank stays unchanged"
     );
-    assert_eq!(
-        a.ui.selected_index, 1,
-        "selection follows the same pane after live re-sort"
-    );
+    assert_eq!(a.ui.selected_index, 1, "selection follows the same pane");
 }
 
 #[test]
@@ -601,7 +598,7 @@ fn tab_switch_in_sweeps_all_unread_in_tab() {
 }
 
 #[test]
-fn tab_switch_clear_holds_cleared_siblings_above_live_rank() {
+fn tab_switch_clear_keeps_live_rank_when_siblings_become_read() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
     let (mut background, first, _) =
@@ -622,8 +619,8 @@ fn tab_switch_clear_holds_cleared_siblings_above_live_rank() {
 
     assert_eq!(
         row_ids(&a.current),
-        vec!["sess-1", "sess-2", "sess-3"],
-        "tab-view read clears do not let a read attention row jump over the just-read siblings"
+        vec!["sess-3", "sess-1", "sess-2"],
+        "tab-view read clears do not let unread siblings pin above a waiting row"
     );
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert!(!row_unread_by_id(&a.current, "sess-2"));

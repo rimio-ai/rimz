@@ -368,8 +368,8 @@ fn resolve_scroll_offset(
         return offset;
     }
     let resolved = if let Some(target) = unread_focus_ordinal(snapshot, ui) {
-        // A freshly-arrived unread outranks everything: it ranks to the top,
-        // so targeting it scrolls to the top.
+        // A freshly-arrived actionable unread drives auto-follow even when the
+        // selected row sits elsewhere.
         auto_scroll_to_selection(scroll_map, target, offset, viewport)
     } else if ui.focus_group_reveal
         && let Some(group_first) =
@@ -382,11 +382,10 @@ fn resolve_scroll_offset(
     resolved.min(max_offset)
 }
 
-/// True when the lead-unread row (oldest actionable unread — it ranks to the
-/// very top) has a line inside the window `[offset, offset + viewport)`. The
-/// banner is the "get back to it" affordance, so it shows only when this is
-/// false. A zero-height viewport or a lead the make-up filter hides reads as
-/// not visible.
+/// True when the lead-unread row selected by the triage key has a line inside
+/// the window `[offset, offset + viewport)`. The banner is the "get back to it"
+/// affordance, so it shows only when this is false. A zero-height viewport or a
+/// lead the make-up filter hides reads as not visible.
 fn lead_unread_visible(
     snapshot: &SidebarSnapshot,
     ui: &UiState,

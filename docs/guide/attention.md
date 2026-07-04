@@ -27,11 +27,11 @@ Glance, jump, answer: that loop is the product. When routine answers start to re
 
 ## How the column is ordered
 
-Within a worktree, agent cards lead and process rows (shells, builds, servers) form a quiet tail. The cards themselves sort by four questions asked in order: have you seen it, how long has it waited, what does it offer, and, among calm work, is it landed.
+Within a worktree, agent cards lead and process rows (shells, builds, servers) form a quiet tail. The cards themselves sort by three questions asked in order: how long has it waited, what does it offer, and, among calm work, is it landed.
 
-### The unread inbox leads
+### The unread inbox surfaces in place
 
-The top of the column is an inbox. A card turns *unread* the moment it enters `waiting`, `failed`, `paused`, or `success`, and stays unread until you focus its pane or mark it read, even after the agent recovers and moves on. Unread outranks every other card because it is exactly the set of events that happened for you: results, asks, and parked recoveries you have yet to see. The inbox holds a stable order, the most pressing kind first (asks, then failures, then parks, then results) and each oldest-first, so the jump key walks it predictably and the card you are about to read never slides out from under you. Reading a card is what releases it from the inbox into the aging order below.
+A card turns *unread* the moment it enters `waiting`, `failed`, `paused`, or `success`, and stays unread until you focus its pane or mark it read, even after the agent recovers and moves on. The wash and blink mark it, the jump key walks unread rows oldest-actionable-first, and notifications ring it. The card keeps its place in the time and status order while the inbox gets you to it.
 
 ### Urgency rises through the first hour
 
@@ -43,8 +43,6 @@ Time reshapes the rest, measured from each card's last activity, in three window
 
 **Past twenty-four hours, a card sleeps.** It parks in an archive at the back, keeping only its state order, so an archived ask still reads above an archived idle agent without competing against hot or warm work.
 
-The unread inbox is exempt from all three windows: a result you have not seen holds the top regardless of age, and reading it is what lets the card age.
-
 ### Teams read as one
 
 A co-launched team is one line of work, so it holds one contiguous block and takes one state derived from its members: any member asking or failed makes the team **blocked**, else a parked member makes it **paused**, else a running member makes it **working**, else a finished member makes it **success**, else it is **idle**. One blocked member lifts the whole block, so a planner waiting on you blocks its coder and reviewer too, whatever they are doing; a team where one member finished while others still run reads as working, because the team is done only when every member is. The block ranks by that derived state on its oldest blocked member's clock and stays contiguous, so teammates sit side by side in their declared role order.
@@ -55,9 +53,8 @@ Attention always outranks git: a worktree with a blocked agent leads whatever it
 
 ### The shape that always holds
 
-Three partitions hold regardless of any score, so the column keeps one stable outline:
+Two partitions hold regardless of any score, so the column keeps one stable outline:
 
-- **The unread inbox leads everything.**
 - **Agent cards lead their worktree; process rows form the tail.** Shells, builds, and servers are context, so they seat below every agent card.
 - **Project worktrees lead; out-of-project panes tail.** Panes outside every project checkout fold into a dim `external` divider that always sorts last, keeping an attention-only tally (`? n` / `! n`) so an out-of-project ask still surfaces.
 

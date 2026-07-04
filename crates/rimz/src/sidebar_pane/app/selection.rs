@@ -667,12 +667,12 @@ pub(super) fn reconcile_selection(
     }
 
     // 7. Unread focus: a freshly-arrived actionable unread snaps the viewport to
-    //    it (it ranks to the top, so the snap reaches the top) with priority over
-    //    following the selection, holding there until the user engages (any input
-    //    clears it) or it stops being the lead. A manual scroll pin is respected —
-    //    a new unread arriving mid-browse never yanks the view; the jump banner
-    //    keeps it reachable. The edge fires once per fresh lead, so a lead the
-    //    user dismissed is not re-snapped while it lingers.
+    //    it with priority over following the selection, holding there until the
+    //    user engages (any input clears it) or it stops being the lead. A manual
+    //    scroll pin is respected — a new unread arriving mid-browse never yanks
+    //    the view; the jump banner keeps it reachable. The edge fires once per
+    //    fresh lead, so a lead the user dismissed is not re-snapped while it
+    //    lingers.
     let lead = lead_unread_row(&snapshot.worktree_groups).map(|row| row.id.clone());
     if lead != ui.last_lead_unread {
         if lead.is_some() && ui.manual_scroll.is_none() {

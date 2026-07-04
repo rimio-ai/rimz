@@ -83,12 +83,11 @@ pub struct UiState {
     /// while the viewport follows the selection (see [`ManualScroll`]).
     pub(crate) manual_scroll: Option<ManualScroll>,
     /// The unread row id the viewport is snapped to: armed when a fresh
-    /// actionable unread arrives (it ranks to the top, so the snap reaches the
-    /// top) and held — overriding selection-follow, the higher-priority target —
-    /// until the user engages or the row stops being the actionable lead. A
-    /// manual scroll pin is respected: a new unread arriving mid-browse never
-    /// yanks the view (the jump banner keeps it reachable). Crate-internal
-    /// renderer state, like `manual_scroll`.
+    /// actionable unread arrives and held — overriding selection-follow, the
+    /// higher-priority target — until the user engages or the row stops being
+    /// the actionable lead. A manual scroll pin is respected: a new unread
+    /// arriving mid-browse never yanks the view (the jump banner keeps it
+    /// reachable). Crate-internal renderer state, like `manual_scroll`.
     pub(crate) unread_focus: Option<String>,
     /// The row id a manual mark-unread just reopened while it is the focused
     /// pane. While armed, focus-read auto-clear skips that row; moving focus

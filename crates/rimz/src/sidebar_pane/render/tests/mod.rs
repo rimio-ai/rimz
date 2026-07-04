@@ -775,8 +775,8 @@ fn overflowing_fleet() -> SidebarSnapshot {
     snapshot_with(Vec::new(), agents)
 }
 
-/// One top-ranked unread lead plus enough calm rows in a single worktree to
-/// overflow the small sidebar frames. The lead ranks to visible row 0, so a
+/// One lead actionable unread row plus enough calm rows in a single worktree to
+/// overflow the small sidebar frames. The lead sits at visible row 0, so a
 /// scroll-to-top reveals it.
 fn overflowing_fleet_with_unread_lead() -> SidebarSnapshot {
     let now = fixed_now();

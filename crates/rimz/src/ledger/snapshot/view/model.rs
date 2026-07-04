@@ -133,11 +133,11 @@ pub struct SidebarStatusCount {
 
 /// The single highest-priority unread row: the oldest (min `last_activity`)
 /// unread row that needs an *answer* (`waiting`/`failed`). The one global
-/// attention lead the sidebar ranks to the top, shimmers, and snaps the viewport
-/// to — computed over the whole unfiltered roster so a make-up filter never
-/// shifts it, mirroring the `␣` triage head (oldest actionable first). `None`
-/// when nothing unread needs an answer. The single home for the lead-unread rule;
-/// the renderer's `lead_unread` and the viewport's unread-focus snap both read it.
+/// attention lead the sidebar shimmers and snaps the viewport to — computed over
+/// the whole unfiltered roster so a make-up filter never shifts it, mirroring
+/// the `␣` triage head (oldest actionable first). `None` when nothing unread
+/// needs an answer. The single home for the lead-unread rule; the renderer's
+/// `lead_unread` and the viewport's unread-focus snap both read it.
 pub fn lead_unread_row(groups: &[SidebarWorktreeGroup]) -> Option<&SidebarRow> {
     groups
         .iter()

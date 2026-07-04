@@ -140,7 +140,12 @@ fn gallery_fixture_states_carry_feature_flags() {
     let lead_kinds = states.iter().map(top_agent_kind).collect::<Vec<_>>();
     assert_eq!(
         lead_kinds,
-        vec![Some("codex"), Some("codex"), Some("opencode"), Some("pi")]
+        vec![
+            Some("claude"),
+            Some("codex"),
+            Some("opencode"),
+            Some("claude")
+        ]
     );
 
     let focus = sidebar_fixture_snapshot(SidebarFixtureState::Focus).unwrap();
@@ -325,18 +330,21 @@ fn gallery_fixture_states_carry_feature_flags() {
 
 #[test]
 fn gallery_fixture_frames_render_decisive_markers() {
-    assert_fixture_frame_contains(SidebarFixtureState::Cockpit, &["mux-merge", "away", "48ms"]);
+    assert_fixture_frame_contains(
+        SidebarFixtureState::Cockpit,
+        &["stabilize render diff", "away", "48ms"],
+    );
     assert_fixture_frame_contains(
         SidebarFixtureState::Focus,
         &["planner", "coder", "reviewer"],
     );
     assert_fixture_frame_contains(
         SidebarFixtureState::Economy,
-        &["OpenAI OAuth", "usage-alerts", "GPT 5.5"],
+        &["OpenAI OAuth", "provider-ledger", "GPT 5.5"],
     );
     assert_fixture_frame_contains(
         SidebarFixtureState::Reach,
-        &["vpn-check", "edge-cache", "OpenAI OAuth"],
+        &["remote-link", "edge-cache", "Claude Max"],
     );
 }
 

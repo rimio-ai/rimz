@@ -266,14 +266,14 @@ pub(super) fn sort_rows(rows: &mut [SidebarRow]) {
 /// one. Ordinary inactive idle rows are the first calm rows hidden behind `+K
 /// more`.
 pub(super) fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
-    let process_is_only_live_member = rows.iter().map(row_band).min() == Some(1)
+    let process_is_only_live_member = rows.iter().map(row_band).min() == Some(0)
         && rows
             .iter()
-            .filter(|row| row_band(row) == 1)
+            .filter(|row| row_band(row) == 0)
             .all(SidebarRow::is_process);
     let liveness_process_id = if process_is_only_live_member {
         rows.iter()
-            .find(|row| row.is_process() && row_band(row) == 1)
+            .find(|row| row.is_process() && row_band(row) == 0)
             .map(|row| row.id.clone())
     } else {
         None
@@ -304,7 +304,6 @@ fn row_ordinal(row: &SidebarRow) -> Option<u64> {
 #[derive(Clone, Debug)]
 struct RankFacts<'a> {
     is_process: bool,
-    unread: bool,
     inactive: bool,
     archived: bool,
     status: Option<AgentStatus>,
@@ -320,7 +319,6 @@ struct RankFacts<'a> {
 fn row_rank_facts(row: &SidebarRow) -> RankFacts<'_> {
     RankFacts {
         is_process: row.is_process(),
-        unread: row.unread,
         inactive: row.inactive,
         archived: row.archived,
         status: row.status(),
@@ -349,7 +347,6 @@ fn agent_rank_facts(
     );
     RankFacts {
         is_process: false,
-        unread: false,
         inactive: age_secs > inactive_after_secs,
         archived: age_secs > archive_after_secs,
         status: Some(agent.status),
@@ -553,10 +550,9 @@ impl CohortAccum {
     }
 
     fn finish(self) -> CohortBlock {
-        // An unread member lifts an inactive launch block back into live work,
-        // but never into the top unread inbox band; the block itself is ranked
-        // by its derived team state.
-        let band = self.band.max(1);
+        // A launch block's band is the minimum member time band; read state
+        // never lifts it.
+        let band = self.band;
         if let Some(driver) = self.best_actionable {
             return CohortBlock {
                 band,
@@ -613,15 +609,14 @@ fn rank_key(facts: RankFacts<'_>, cohorts: &BTreeMap<String, CohortBlock>) -> Ra
     } else {
         // Agent cards lead the channel; process rows are the command tail beneath
         // them, whatever either's activity. Within each side the bands hold:
-        // unread inbox, hot work, warm work, then archive; the fixed-point
-        // urgency score orders within a band. The final singleton tiebreak is
-        // the stable `id` alone — never `name`, which mutates through the
-        // session-name -> task -> prompt label ladder and would reshuffle a
-        // bucket on every rename.
+        // hot work, warm work, then archive; the fixed-point urgency score
+        // orders within a band. The final singleton tiebreak is the stable `id`
+        // alone — never `name`, which mutates through the session-name -> task
+        // -> prompt label ladder and would reshuffle a bucket on every rename.
         BlockKey {
             is_process: facts.is_process,
             band: facts_band(&facts),
-            urgency: Reverse(facts_urgency(&facts)),
+            urgency: Reverse(facts.score),
             tiebreak: bucket_tiebreak(&facts),
             identity: facts.id.to_owned(),
             cohort_absent: true,
@@ -653,15 +648,7 @@ fn bucket_tiebreak(facts: &RankFacts<'_>) -> BucketTiebreak {
 }
 
 fn facts_band(facts: &RankFacts<'_>) -> u8 {
-    band(facts.unread, facts.inactive, facts.archived)
-}
-
-fn facts_urgency(facts: &RankFacts<'_>) -> u32 {
-    if facts_band(facts) == 0 {
-        score::status_weight_opt(facts.status)
-    } else {
-        facts.score
-    }
+    band(facts.inactive, facts.archived)
 }
 
 fn is_attention(status: Option<AgentStatus>) -> bool {
@@ -688,10 +675,10 @@ pub(super) fn compare_groups(
     // displaces project work, so it sorts below every project group — below even
     // archived groups, and regardless of any `waiting`/`failed` member it holds.
     // Among project groups the same macro bands apply, read off the liveliest
-    // member: unread inbox, hot work, warm work, archive. Score decides
-    // attention rows inside the winning band, calm members collapse to one
-    // constant, process-only live groups tail calm agent groups, git decides
-    // among calm worktree groups, then pane creation and label settle ties.
+    // member: hot work, warm work, archive. Score decides attention rows inside
+    // the winning band, calm members collapse to one constant, process-only live
+    // groups tail calm agent groups, git decides among calm worktree groups,
+    // then pane creation and label settle ties.
     group_sort_key(
         left.rows.iter().map(row_rank_facts),
         left.kind,
@@ -734,10 +721,10 @@ fn group_sort_key<'a>(
         let facts_band = facts_band(&facts);
         if facts_band < band {
             band = facts_band;
-            urgency = group_member_urgency(&facts, facts_band);
+            urgency = group_member_urgency(&facts);
             agentless = facts.status.is_none();
         } else if facts_band == band {
-            urgency = urgency.max(group_member_urgency(&facts, facts_band));
+            urgency = urgency.max(group_member_urgency(&facts));
             agentless &= facts.status.is_none();
         }
         if let Some(ordinal) = facts.pane_ordinal {
@@ -767,34 +754,30 @@ fn group_git_rung(group: &SidebarWorktreeGroup) -> GitRung {
     }
 }
 
-fn group_member_urgency(facts: &RankFacts<'_>, band: u8) -> u32 {
-    if band == 0 {
-        score::status_weight_opt(facts.status)
-    } else if is_attention(facts.status) {
+fn group_member_urgency(facts: &RankFacts<'_>) -> u32 {
+    if is_attention(facts.status) {
         facts.score
     } else {
         0
     }
 }
 
-/// Macro bands: unread inbox first, then hot work, warm work past the inactive
-/// window, and archived work past the archive window. Status no longer sets the
-/// band — score orders within one — so a fresh `idle` agent outranks a warm or
-/// archived `waiting` one. The `external` partition is group-only
+/// Macro bands: hot work, warm work past the inactive window, and archived work
+/// past the archive window. Read state never changes the band. Status no longer
+/// sets the band — score orders within one — so a fresh `idle` agent outranks a
+/// warm or archived `waiting` one. The `external` partition is group-only
 /// ([`compare_groups`]).
 fn row_band(row: &SidebarRow) -> u8 {
-    band(row.unread, row.inactive, row.archived)
+    band(row.inactive, row.archived)
 }
 
-fn band(unread: bool, inactive: bool, archived: bool) -> u8 {
-    if unread {
-        0
-    } else if archived {
-        3
-    } else if inactive {
+fn band(inactive: bool, archived: bool) -> u8 {
+    if archived {
         2
-    } else {
+    } else if inactive {
         1
+    } else {
+        0
     }
 }
 
