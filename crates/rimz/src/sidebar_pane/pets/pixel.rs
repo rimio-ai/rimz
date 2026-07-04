@@ -94,12 +94,14 @@ impl PixelPainter {
                 for chunk in transmit_chunks(image_id, frame) {
                     writer.write_all(&self.wrap_payload(&chunk))?;
                 }
+                // Kitty virtual placements persist; placeholder cells re-materialize the
+                // image on redraw, so per-frame placement APCs only add cursor flicker.
+                writer.write_all(&self.wrap_payload(&virtual_place(
+                    image_id,
+                    rect.width,
+                    rect.height,
+                )))?;
             }
-            writer.write_all(&self.wrap_payload(&virtual_place(
-                image_id,
-                rect.width,
-                rect.height,
-            )))?;
             writer.write_all(&placeholder_grid(image_id, rect))
         })?;
         writer.flush()?;
@@ -485,6 +487,56 @@ mod tests {
         assert!(text.contains("a=d,d=i,i=1179648,q=2"));
         assert!(text.contains("a=t,f=32,s=1,v=1,i=1179648,q=2;AAECAw=="));
         assert!(text.contains("\x1b[2;2H"));
+    }
+
+    #[test]
+    fn paint_places_each_sprite_once_then_only_rewrites_placeholders() {
+        let mut painter = PixelPainter::with_id_base(0x120000, true);
+        let pixel = PetPixelView {
+            pet_id: "codex".to_owned(),
+            sprite_index: 0,
+            size: super::super::PetGridSize { cols: 2, rows: 1 },
+        };
+        let other_pixel = PetPixelView {
+            sprite_index: 1,
+            ..pixel.clone()
+        };
+        let frame = image(vec![0, 1, 2, 3]);
+        let rect = Rect::new(0, 0, 2, 1);
+
+        painter
+            .paint(&mut Vec::new(), rect, &pixel, &frame)
+            .expect("first paint");
+
+        let mut steady = Vec::new();
+        painter
+            .paint(&mut steady, rect, &pixel, &frame)
+            .expect("steady paint");
+        assert_sync_bracketed(&steady);
+        assert!(!bytes_contains(&steady, b"\x1b_G"));
+        let text = String::from_utf8(steady).expect("utf8 steady paint");
+        assert!(text.contains("\x1b[1;1H"));
+        assert!(text.contains("\u{10eeee}"));
+
+        let mut new_sprite = Vec::new();
+        painter
+            .paint(&mut new_sprite, rect, &other_pixel, &frame)
+            .expect("new sprite paint");
+        assert!(bytes_contains(
+            &new_sprite,
+            b"a=t,f=32,s=1,v=1,i=1179649,q=2"
+        ));
+        assert!(bytes_contains(
+            &new_sprite,
+            b"a=p,U=1,i=1179649,c=2,r=1,q=2"
+        ));
+
+        let mut reused_sprite = Vec::new();
+        painter
+            .paint(&mut reused_sprite, rect, &pixel, &frame)
+            .expect("reused sprite paint");
+        assert_sync_bracketed(&reused_sprite);
+        assert!(!bytes_contains(&reused_sprite, b"\x1b_G"));
     }
 
     #[test]

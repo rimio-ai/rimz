@@ -176,6 +176,8 @@ Bring-your-own sources use the same key:
 
 `glyphs` controls the render tier. Crisp pixels need a Ghostty or kitty terminal; inside tmux they also need tmux 3.6 or newer with `allow-passthrough on` or `allow-passthrough all`. Zellij renders cell art.
 
+On macOS, terminal graphics updates can make AppKit re-evaluate the pointer shape while kitty pixel pets animate; Rimz emits each sprite image once to minimize that traffic, and `glyphs = "sextant"` uses the same flicker-free cell-art path as Zellij when you want it fully gone.
+
 | `glyphs` | effect |
 | --- | --- |
 | `auto` | Use pixels when the runtime is ready, then fall back to sextant cell art. |
