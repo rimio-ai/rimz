@@ -119,6 +119,9 @@ pub struct DisplayConfig {
     /// mana bar leaves green for yellow, amber, and red as the remaining budget
     /// shrinks. Display-only; it tunes the color ramp, never the ledger.
     pub budget_bar: BudgetBarConfig,
+    /// How far the selected-card band and unread-row wash step off the
+    /// `selection_bg` panel, in units of 0.01 OKLab lightness. Display-only.
+    pub highlight_steps: HighlightStepsConfig,
 }
 
 impl Default for DisplayConfig {
@@ -133,6 +136,7 @@ impl Default for DisplayConfig {
             card_density: CardDensityMode::default(),
             context_meter: ContextMeterConfig::default(),
             budget_bar: BudgetBarConfig::default(),
+            highlight_steps: HighlightStepsConfig::default(),
         }
     }
 }
@@ -254,6 +258,37 @@ impl Default for BudgetBurnRateConfig {
             yellow: 100,
             amber: 150,
             red: 200,
+        }
+    }
+}
+
+/// `[theme.display.highlight_steps]`: how far the selected-card band and the
+/// unread-row wash step off the `selection_bg` panel, counted in units of 0.01
+/// OKLab lightness: `band = 5` is a 0.05 step. The band recesses below the
+/// panel and the wash lifts above it; at truecolor each is its own sub-cell
+/// step, while `indexed` is the single one-cell step the 256-color cube takes
+/// either side of the panel (band darker, wash lighter) so the cube carries the
+/// same ordering the finer truecolor steps draw. Display-only.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct HighlightStepsConfig {
+    /// Truecolor: OKLab-lightness units the selected-card band recesses below
+    /// `selection_bg`.
+    pub band: u8,
+    /// Truecolor: OKLab-lightness units the unread-row wash lifts above
+    /// `selection_bg`.
+    pub wash: u8,
+    /// 256-color: the one-cell OKLab-lightness step taken either side of the
+    /// panel: band darker, wash lighter.
+    pub indexed: u8,
+}
+
+impl Default for HighlightStepsConfig {
+    fn default() -> Self {
+        Self {
+            band: 5,
+            wash: 1,
+            indexed: 4,
         }
     }
 }

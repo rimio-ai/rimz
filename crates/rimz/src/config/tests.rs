@@ -1022,6 +1022,14 @@ fn display_enums_lists_and_nested_bands_parse() {
         ),
         (100, 150, 200)
     );
+    assert_eq!(
+        (
+            defaults.highlight_steps.band,
+            defaults.highlight_steps.wash,
+            defaults.highlight_steps.indexed
+        ),
+        (5, 1, 4)
+    );
 
     let config = load_no_fragments(&write_named(
         &dir,
@@ -1035,7 +1043,9 @@ fn display_enums_lists_and_nested_bands_parse() {
              [theme.display.budget_bar]\n\
              red = 20\n\
              [theme.display.budget_bar.burn_rate]\n\
-             red = 300\n",
+             red = 300\n\
+             [theme.display.highlight_steps]\n\
+             band = 10\n",
     ))
     .expect("load");
     let display = &config.theme.display;
@@ -1071,6 +1081,18 @@ fn display_enums_lists_and_nested_bands_parse() {
             defaults.budget_bar.burn_rate.yellow,
             defaults.budget_bar.burn_rate.amber,
             300
+        )
+    );
+    assert_eq!(
+        (
+            display.highlight_steps.band,
+            display.highlight_steps.wash,
+            display.highlight_steps.indexed
+        ),
+        (
+            10,
+            defaults.highlight_steps.wash,
+            defaults.highlight_steps.indexed
         )
     );
 

@@ -59,6 +59,14 @@
 ## amber = 150
 ## red = 200
 
+[theme.display.highlight_steps]
+# Selected-band and unread-wash offsets from the selection_bg panel, in units of
+# 0.01 OKLab lightness (band = 5 is a 0.05 step). indexed is the 256-color
+# one-cell step taken either side of the panel.
+## band = 5      # truecolor: selected-card recess below selection_bg
+## wash = 1      # truecolor: unread-row wash lift above selection_bg
+## indexed = 4   # 256-color: one-cell step either side (band darker, wash lighter)
+
 [theme.pets]
 # Opt-in animated companion in the provider dashboard. All optional.
 ## enabled = true                   # opt-in animated companion in the provider dashboard

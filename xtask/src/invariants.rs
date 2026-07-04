@@ -618,6 +618,7 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
                 "[theme.display.context_meter]",
                 "[theme.display.budget_bar]",
                 "[theme.display.budget_bar.burn_rate]",
+                "[theme.display.highlight_steps]",
                 "[theme.pets]",
                 "[theme.animations]",
                 "[theme.glyphs]",

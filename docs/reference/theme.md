@@ -73,7 +73,7 @@ mode = "auto"        # or "truecolor", "256"
 
 ### Subtle steps and color depth
 
-Some cues are a sub-cell lightness step — a calm card name dimmed a touch, the selected band recessed below its panel, the unread wash lifted above it, a breathing pulse. These render as color only at truecolor depth. The 256-color cube spaces its levels too coarsely to carry a sub-cell shift, so at indexed depth a subtle cue falls back to the discrete signal the cube carries honestly: a weight modifier (`DIM`/`BOLD`) for motion, or the plain base tone for a static recession — the same shape `NO_COLOR` uses. Cues that already span a full cube cell — the neutral ladder, the health ramp, the one-cell selection and unread steps — stay color at every depth. The precise steps are tuned constants in the renderer's `theme.rs`.
+Some cues are a sub-cell lightness step — a calm card name dimmed a touch, the selected band recessed below its panel, the unread wash lifted above it, a breathing pulse. These render as color only at truecolor depth. The 256-color cube spaces its levels too coarsely to carry a sub-cell shift, so at indexed depth a subtle cue falls back to the discrete signal the cube carries honestly: a weight modifier (`DIM`/`BOLD`) for motion, or the plain base tone for a static recession — the same shape `NO_COLOR` uses. Cues that already span a full cube cell — the neutral ladder, the health ramp, the one-cell selection and unread steps — stay color at every depth. Selection and unread step magnitudes live in `[theme.display.highlight_steps]`: `band`, `wash`, and `indexed`, counted in 0.01 OKLab-lightness units.
 
 ## Palette slots
 
@@ -137,6 +137,15 @@ amber = { percent = 75, tokens = 258000 }
 yellow = 50
 amber = 25
 red = 10
+```
+
+`[theme.display.highlight_steps]` sets the selected-band and unread-wash offsets from `selection_bg` in 0.01 OKLab-lightness units. `band` recesses the selected card at truecolor depth, `wash` lifts the unread row at truecolor depth, and `indexed` is the 256-color one-cell step used darker for the band and lighter for the wash.
+
+```toml
+[theme.display.highlight_steps]
+band = 5
+wash = 1
+indexed = 4
 ```
 
 ## Pets

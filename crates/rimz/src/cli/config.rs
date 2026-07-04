@@ -689,7 +689,7 @@ fn is_disallowed_set_container(path: &[String]) -> bool {
         || matches!(path, [root, child, _, ..] if root == "agents" && child == "commands" && path.len() > 3)
         || matches!(path, [root, child, _] if root == "agents" && matches!(child.as_str(), "profiles" | "teams"))
         || matches!(path, [root, child] if root == "theme" && matches!(child.as_str(), "display" | "colors" | "providers" | "animations"))
-        || matches!(path, [root, display, child] if root == "theme" && display == "display" && matches!(child.as_str(), "context_meter" | "budget_bar"))
+        || matches!(path, [root, display, child] if root == "theme" && display == "display" && matches!(child.as_str(), "context_meter" | "budget_bar" | "highlight_steps"))
         || matches!(path, [root, display, budget, child] if root == "theme" && display == "display" && budget == "budget_bar" && child == "burn_rate")
         || matches!(path, [root, child, _] if root == "theme" && matches!(child.as_str(), "colors" | "providers"))
         || matches!(path, [root, child, role] if root == "theme" && child == "animations" && role != "unread")

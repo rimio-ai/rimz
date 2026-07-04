@@ -12,7 +12,7 @@
 //! `TokyoNight Night`; per-slot overrides then win over the selected scheme. The
 //! renderer resolves depth because terminal capability is a renderer-local fact.
 
-use crate::config::{ColorDepth, GlyphRole, ThemeConfig};
+use crate::config::{ColorDepth, GlyphRole, HighlightStepsConfig, ThemeConfig};
 use ratatui::style::{Color, Modifier, Style};
 
 use super::animation::{BreathSample, ResolvedAnimations};
@@ -40,42 +40,10 @@ use palette::{HEAT_RAMP_WARM_START, ramp_tone, rgb_color};
 /// recession visible for every brand, including one already at the body weight.
 const SOFT_BRAND_DIM: f32 = 0.05;
 
-/// The selected card's background band recesses a flat `SELECTION_BAND_DIM` below
-/// `selection_bg` in OKLab lightness, so the selected card reads as a recessed well
-/// marked by its bright `▌` spine, sitting clearly apart from the lighter unread
-/// wash that rises above the card surface. This is the truecolor sub-cell step; the
-/// indexed depth carries the same recess by stepping one xterm cell darker
-/// ([`INDEXED_SELECTION_STEP`]).
-const SELECTION_BAND_DIM: f32 = 0.05;
-
-/// The one-cell OKLab-lightness step the indexed band and wash take from
-/// `selection_bg`, sized to cross a single xterm cell so the cube carries the same
-/// ordering the truecolor sub-cell steps draw: the selected band steps one cell
-/// darker, the unread wash one cell lighter, and `selection_bg`'s own cell sits
-/// between them. The truecolor `SELECTION_BAND_DIM`/`UNREAD_WASH_LIFT` steps are
-/// finer than one cell, so the cube would collapse them onto the panel; this lift
-/// is tuned (against the default scheme's near-background panel, which lands on the
-/// fine 24-step gray ramp) to land cleanly on the neighbouring cell instead of
-/// flattening. Symmetric: the band and wash sit one cell either side of the panel.
-const INDEXED_SELECTION_STEP: f32 = 0.04;
-
-/// The unread card wash: a soft, uniform background marking an unread row at a
-/// scanning glance — the shade-marks-unread pattern of a mail inbox, with the row's
-/// status carried by its `?`/`!`/`✓` glyph. It is a lighter tint of the selection
-/// blue: the `selection_bg` panel lifted in OKLab lightness with its cool hue held,
-/// landing on the same cool-blue family the scheme derives for the selection band,
-/// one clear step brighter. The selected card keeps the attention through its
-/// bright `▌` spine and recessed band, so the unread wash can take the
-/// brighter fill — the "needs you" surface — while the selection band stays the
-/// selected card's signature and wins when a card is both selected and unread. One
-/// tone for every unread row, perfectly still: the fleet stays calm and the single
-/// lead row keeps the only motion. This is the truecolor sub-cell step; the indexed
-/// depth carries the same wash by stepping one xterm cell lighter
-/// ([`INDEXED_SELECTION_STEP`]), so the unread surface holds across depths and
-/// `NO_COLOR` leans on the unread bold weight alone. Lever: `UNREAD_WASH_LIFT`, the
-/// lightness step above the selection band — a larger lift makes a brighter, more
-/// present marker.
-const UNREAD_WASH_LIFT: f32 = 0.01;
+/// One highlight step in OKLab lightness. `[theme.display.highlight_steps]`
+/// counts the selected-band and unread-wash offsets in these units, so
+/// `band = 5` is a 0.05 step.
+const HIGHLIGHT_STEP_UNIT: f32 = 0.01;
 
 /// The chip ink: a fixed near-black laid on a colored chip fill, crisp on every
 /// mid-brightness fill — the provider tab rail's brand fill and the make-up
@@ -106,6 +74,7 @@ pub(crate) struct Theme {
     depth: ColorDepth,
     palette: Palette,
     glyphs: GlyphSet,
+    highlight_steps: HighlightStepsConfig,
     pub(crate) animations: ResolvedAnimations,
 }
 
@@ -126,6 +95,7 @@ impl Theme {
             animations,
             glyphs,
             palette,
+            highlight_steps: theme.display.highlight_steps,
         }
     }
 
@@ -345,13 +315,18 @@ impl Theme {
         self.style(self.palette.selection, Modifier::BOLD)
     }
 
+    fn step(&self, units: u8) -> f32 {
+        f32::from(units) * HIGHLIGHT_STEP_UNIT
+    }
+
     /// A selection surface: `selection_bg` stepped in OKLab lightness, emitted at
     /// the active depth, or `None` under `NO_COLOR` where the bright spine and bold
     /// weight carry the cue alone. `truecolor_delta` is the sub-cell perceptual
-    /// step the RGB path renders directly; `indexed_delta` is the one-cell step the
-    /// cube needs to carry the same ordering ([`INDEXED_SELECTION_STEP`]) rather than
-    /// collapse the finer step onto the panel. Shared by the recessed selected band
-    /// and the lifted unread wash, which sit one step either side of the panel.
+    /// step the RGB path renders directly; `indexed_delta` is the one-cell step
+    /// `[theme.display.highlight_steps].indexed` gives the cube to carry the same
+    /// ordering rather than collapse the finer step onto the panel. Shared by the
+    /// recessed selected band and the lifted unread wash, which sit one step either
+    /// side of the panel.
     fn selection_surface(&self, truecolor_delta: f32, indexed_delta: f32) -> Option<Color> {
         if self.no_color {
             return None;
@@ -368,31 +343,38 @@ impl Theme {
 
     /// The selected card's background band, one flat tone behind every line of the
     /// card, or `None` under `NO_COLOR`. The band recesses below `selection_bg` in
-    /// OKLab lightness, so the whole card reads as one recessed well — depth, no
-    /// motion — set off from the lighter unread wash: a fine [`SELECTION_BAND_DIM`]
-    /// sub-cell step at truecolor, one xterm cell darker
-    /// ([`INDEXED_SELECTION_STEP`]) at indexed depth. `None` under `NO_COLOR`, where
-    /// the bright spine and bold weight carry the selection alone.
+    /// OKLab lightness, so the whole card reads as one recessed well: depth, no
+    /// motion, set off from the lighter unread wash. `[theme.display.highlight_steps].band`
+    /// controls the fine truecolor sub-cell step, and `.indexed` controls the one
+    /// xterm cell step at indexed depth. `None` under `NO_COLOR`, where the bright
+    /// spine and bold weight carry the selection alone.
     pub(super) fn selection_band(&self) -> Option<Color> {
-        self.selection_surface(-SELECTION_BAND_DIM, -INDEXED_SELECTION_STEP)
+        self.selection_surface(
+            -self.step(self.highlight_steps.band),
+            -self.step(self.highlight_steps.indexed),
+        )
     }
 
     /// The soft, uniform background an unread card rests on: a lighter tint of the
     /// selection blue — the `selection_bg` panel lifted in lightness with its cool
     /// hue held, so the whole card reads as the same cool-blue family as the
     /// selection band, one clear step brighter, the prominent "needs you" surface. A
-    /// fine [`UNREAD_WASH_LIFT`] sub-cell step at truecolor, one xterm cell lighter
-    /// ([`INDEXED_SELECTION_STEP`]) at indexed depth, and `None` under `NO_COLOR`
-    /// where the unread bold weight carries the cue. One tone for every unread status
-    /// — the row's meaning rides its `?`/`!`/`✓` glyph, the wash only says "unseen"
-    /// — and it holds still, so motion stays reserved to the single lead row. The
-    /// selected card keeps its identity through the bright `▌` spine and its recessed
-    /// band, so the brighter unread fill never reads as selection; the wash is a
-    /// distinct, lighter tone than the band, and the band wins when a card is both
-    /// selected and unread. The caller applies it only to the unread look-worthy rows
-    /// (the `Blink` card emphasis), so no status branch is needed here.
+    /// fine `[theme.display.highlight_steps].wash` sub-cell step at truecolor, one
+    /// `.indexed` xterm cell lighter at indexed depth, and `None` under `NO_COLOR`
+    /// where the unread bold weight carries the cue. One tone for every unread
+    /// status — the row's meaning rides its `?`/`!`/`✓` glyph, the wash only says
+    /// "unseen" — and it holds still, so motion stays reserved to the single lead
+    /// row. The selected card keeps its identity through the bright `▌` spine and
+    /// its recessed band, so the brighter unread fill never reads as selection; the
+    /// wash is a distinct, lighter tone than the band, and the band wins when a card
+    /// is both selected and unread. The caller applies it only to the unread
+    /// look-worthy rows (the `Blink` card emphasis), so no status branch is needed
+    /// here.
     pub(super) fn unread_wash(&self) -> Option<Color> {
-        self.selection_surface(UNREAD_WASH_LIFT, INDEXED_SELECTION_STEP)
+        self.selection_surface(
+            self.step(self.highlight_steps.wash),
+            self.step(self.highlight_steps.indexed),
+        )
     }
 
     /// Flat health-tone accessors for fixed chrome: `good` for the positive tier

@@ -580,6 +580,23 @@ fn selection_band_recesses_flat_below_selection_bg_at_truecolor() {
 }
 
 #[test]
+fn highlight_steps_config_recesses_selection_band_deeper_at_truecolor() {
+    let default = truecolor_default();
+    let mut config = ThemeConfig {
+        mode: ThemeMode::Truecolor,
+        ..ThemeConfig::default()
+    };
+    config.display.highlight_steps.band = 10;
+    let deeper = Theme::fixed_for_theme(false, &config);
+
+    assert!(
+        luminance(deeper.selection_band().expect("configured band"))
+            < luminance(default.selection_band().expect("default band")),
+        "larger band step recesses deeper than the default"
+    );
+}
+
+#[test]
 fn indexed_band_and_wash_step_one_cell_either_side_of_the_panel() {
     let theme = Theme::fixed(false);
     let panel = theme.palette.selection_bg;
@@ -591,7 +608,7 @@ fn indexed_band_and_wash_step_one_cell_either_side_of_the_panel() {
     // cell darker, the wash one cell lighter, the panel's own cell between them.
     // Three distinct, ordered cells carry the truecolor ordering at the cube's
     // resolution. Pinned to the default scheme's gray-ramp neighbours so a retune of
-    // `INDEXED_SELECTION_STEP` that re-collapses or overshoots fails here.
+    // `highlight_steps.indexed` that re-collapses or overshoots fails here.
     assert_eq!(
         panel,
         Color::Indexed(235),

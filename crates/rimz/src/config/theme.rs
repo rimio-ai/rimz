@@ -66,8 +66,8 @@ pub struct ThemeConfig {
     pub selection: Option<ThemeColor>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection_bg: Option<ThemeColor>,
-    /// Sidebar render preferences: cadence, sizing, dashboard layout, and
-    /// display-only meter bands.
+    /// Sidebar render preferences: cadence, sizing, dashboard layout, meter
+    /// bands, and highlight steps.
     #[serde(default, skip_serializing_if = "DisplayConfig::is_unset")]
     pub display: DisplayConfig,
     #[serde(skip_serializing_if = "ThemeGlyphsConfig::is_unset")]
