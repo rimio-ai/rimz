@@ -133,6 +133,48 @@ fn reset_targets_live_backend_and_rebirths_on_default() {
     );
 }
 
+#[test]
+fn reset_explicit_rival_refuses_before_teardown() {
+    let Some(room) = ZellijRoom::start() else {
+        return;
+    };
+
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let archive_count_before = archive_entry_count(&paths.events_archive_dir);
+    let output = room
+        .rimz()
+        .args(["--mux", "tmux", "reset", "--yes"])
+        .bounded_output()
+        .expect("run rival reset");
+
+    assert!(
+        !output.status.success(),
+        "rival reset should fail: {:?}",
+        output.status,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("already running under")
+            && stderr.contains("zellij")
+            && stderr.contains("tmux")
+            && stderr.contains(&room.session_name),
+        "stderr should describe the backend conflict, got: {stderr}",
+    );
+    assert!(
+        room.zellij_sessions().contains(&room.session_name),
+        "refused reset must leave the zellij room live",
+    );
+    assert!(
+        !room.tmux_sessions().contains(&room.session_name),
+        "refused reset must not birth a tmux room",
+    );
+    assert_eq!(
+        archive_count_before,
+        archive_entry_count(&paths.events_archive_dir),
+        "refused reset must not archive room records",
+    );
+}
+
 struct TmuxRoom {
     env: Env,
     session_name: String,
@@ -328,6 +370,14 @@ fn live_zellij_session_name(line: &str) -> Option<String> {
     let clean = line.trim();
     let name = clean.split_whitespace().next()?;
     (!clean.contains("EXITED")).then(|| name.to_owned())
+}
+
+fn archive_entry_count(dir: &Path) -> usize {
+    match std::fs::read_dir(dir) {
+        Ok(entries) => entries.count(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(err) => panic!("read archive dir {}: {err}", dir.display()),
+    }
 }
 
 fn tmux_output(tmpdir: &Path, args: &[&str]) -> std::process::Output {
