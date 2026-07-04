@@ -796,16 +796,20 @@ fn insights_sessions_scope_to_the_active_window() {
         total: SpendTally::default(),
     };
     stats.total.week.sessions = 2;
+    stats.total.week.usd = 12.0;
     stats.total.year.sessions = 7;
+    stats.total.year.usd = 99.0;
     let mut lines = Vec::new();
 
     insights_lines(&mut lines, &stats, 0, 80, Window::Week);
 
+    let row = strip_ansi(&lines[0]);
     assert!(
-        strip_ansi(&lines[0])
-            .trim_start()
-            .starts_with("Sessions: 2")
+        row.trim_start().starts_with("Sessions: 2"),
+        "row was {row:?}"
     );
+    assert!(row.contains("$12"), "row was {row:?}");
+    assert!(!row.contains("$99"), "row was {row:?}");
 }
 
 #[test]

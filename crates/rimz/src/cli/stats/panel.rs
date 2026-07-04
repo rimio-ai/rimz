@@ -700,17 +700,13 @@ pub(super) fn insights_lines(
 ) {
     let activity = Activity::of(&stats.by_day, today_day, active);
     let selected = active.select(&stats.total);
-    lines.push(format!(
-        "  {} {}",
-        render::paint(render::palette::MUTED, "Sessions:"),
-        group_thousands(selected.sessions as u64)
-    ));
 
     let most = activity
         .most_active
         .map(fmt_day)
         .unwrap_or_else(|| "—".to_string());
     let left = [
+        kv("Sessions:", &group_thousands(selected.sessions as u64)),
         kv(
             "Active days:",
             &format!("{}/{}", activity.active_count, activity.window_days),
@@ -718,6 +714,7 @@ pub(super) fn insights_lines(
         kv("Most active day:", &most),
     ];
     let right = [
+        kv("Spend:", &fmt_usd(selected.usd)),
         kv("Longest streak:", &plural_days(activity.longest_streak)),
         kv("Current streak:", &plural_days(activity.current_streak)),
     ];
