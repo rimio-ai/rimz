@@ -15,10 +15,10 @@ use crate::sidebar_pane::render::theme::Theme;
 
 use super::{pin_right, trim_spans_to_width};
 
-/// One clickable status bucket in the cockpit make-up line: the line index
+/// One clickable filter bucket in the cockpit make-up line: the line index
 /// within [`fleet_header_lines`]'s returned lines (always 0 — the make-up is
 /// one row), the half-open column range the bucket's footprint occupies
-/// relative to the unpadded content, and the status it filters the body to.
+/// relative to the unpadded content, and the filter it applies to the body.
 /// `compose_lines` translates the position to absolute screen coordinates
 /// (the cockpit base and the one-cell chrome gutter) before storing it on
 /// `UiState::make_up_hits` for the mouse hit-test. A zero-count bucket emits
@@ -28,7 +28,7 @@ pub(crate) struct MakeUpHit {
     pub(crate) line: usize,
     pub(crate) col_start: u16,
     pub(crate) col_end: u16,
-    pub(crate) status: AgentStatus,
+    pub(crate) filter: BodyFilter,
 }
 
 /// The fixed fleet header — the cockpit's make-up line, below the repo
@@ -328,7 +328,7 @@ impl<'a> Cluster<'a> {
             line: 0,
             col_start: start as u16,
             col_end: self.col as u16,
-            status,
+            filter: BodyFilter::Status(status),
         });
     }
 

@@ -585,11 +585,12 @@ pub(super) fn scroll_thumb(offset: usize, scroll_len: usize, viewport: usize) ->
 /// Compose the top-pinned cockpit zone and, in lockstep, its hit-test maps.
 /// Populated rooms end this fixed zone with a separator blank, so scrolled
 /// cards never touch the cockpit make-up line.
-/// Identity, summary, and the make-up line are never jump targets, so they map to
-/// `None`; the make-up line's status buckets are *filter* targets, returned as
-/// [`MakeUpHit`]s already translated to this zone's line indices and the
-/// chrome-gutter column space. Fixed height for a given room population, never
-/// windowed, so the scroll zone below starts at a stable row.
+/// Identity, summary, and the make-up line are never jump targets, so they map
+/// to `None`; the make-up line's status buckets and the summary's unread count
+/// are *filter* targets, returned as [`MakeUpHit`]s already translated to this
+/// zone's line indices and the chrome-gutter column space. Fixed height for a
+/// given room population, never windowed, so the scroll zone below starts at a
+/// stable row.
 pub(super) fn top_lines(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
@@ -633,15 +634,18 @@ pub(super) fn top_lines(
         .today_spend_live_usd
         .or(headline.map(|window| window.usd))
         .unwrap_or(0.0);
-    header.push(cockpit_spend_line(
+    let spend_line = header.len();
+    let unread_picked = ui.make_up_filter == Some(BodyFilter::Unread);
+    let (spend, unread_range) = cockpit_spend_line(
         theme,
         live_agents,
-        unread_agents,
+        (unread_agents, unread_picked),
         today_usd,
         &ui.tally,
         ui.animation_phase,
         inner,
-    ));
+    );
+    header.push(spend);
     header.push(hairline_rule(theme, inner));
     extend_inert(&mut lines, &mut map, header);
 
@@ -649,7 +653,7 @@ pub(super) fn top_lines(
     // height — one line for a populated room, none for an empty one — so the body
     // below never shifts vertically as agents change state. It is chrome, never a
     // jump target, so every header line maps to `None` in the row map; its
-    // status buckets carry their own hit map instead, translated here onto the
+    // filter targets carry their own hit map instead, translated here onto the
     // zone's line index and into the `pad_chrome` gutter's column space.
     let make_up_base = lines.len();
     let lead_unread_status = lead_unread(&snapshot.worktree_groups).map(|(_, status)| status);
@@ -666,6 +670,14 @@ pub(super) fn top_lines(
         hit.line += make_up_base;
         hit.col_start += 1;
         hit.col_end += 1;
+    }
+    if let Some((col_start, col_end)) = unread_range {
+        make_up_hits.push(MakeUpHit {
+            line: spend_line,
+            col_start: col_start + 1,
+            col_end: col_end + 1,
+            filter: BodyFilter::Unread,
+        });
     }
     extend_inert(&mut lines, &mut map, fleet_lines);
     if !snapshot.worktree_groups.is_empty() {

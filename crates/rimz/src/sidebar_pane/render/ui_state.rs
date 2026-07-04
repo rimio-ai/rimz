@@ -122,19 +122,19 @@ pub struct UiState {
     /// cap-to-cap footprint, written as a byproduct of every draw like
     /// `line_map`. Empty when no rail is on screen.
     pub(crate) tab_hits: Vec<ProviderTabHit>,
-    /// The cockpit make-up bucket the user clicked to filter the agent-card
-    /// body to one status, or `None` for the resting show-all view.
+    /// The cockpit filter target the user picked to filter the agent-card
+    /// body, or `None` for the resting show-all view.
     /// Renderer-local display state — the producer, the ledger, and the
     /// cockpit counts (always the full fleet) are untouched; only the body
     /// iteration narrows, through the one shared [`row_passes_filter`]
-    /// predicate. A pure toggle: a click on the active bucket clears it, and
-    /// it auto-clears when its bucket's count drops to zero — the make-up
+    /// predicate. A pure toggle: a click on the active target clears it, and
+    /// it auto-clears when its count drops to zero — the make-up
     /// twin of a dashboard tab pick ending when its panel leaves.
     pub(crate) make_up_filter: Option<BodyFilter>,
-    /// Hit-test map of the cockpit make-up line in the most recently drawn
+    /// Hit-test map of the cockpit filter targets in the most recently drawn
     /// frame: the absolute screen line and column range of each non-zero
-    /// bucket's footprint, written as a byproduct of every draw like
-    /// `line_map` and `tab_hits`. Empty when no make-up line is on screen.
+    /// make-up bucket and the unread count's footprint, written as a
+    /// byproduct of every draw like `line_map` and `tab_hits`.
     pub(crate) make_up_hits: Vec<MakeUpHit>,
     /// Screen row of the `↑ N need you` jump banner in the most recently drawn
     /// frame, or `None` when the lead-unread card is in view and the banner is

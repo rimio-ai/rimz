@@ -33,13 +33,13 @@ fn make_up_click_picks_switches_and_clears_the_filter() {
                 line: 5,
                 col_start: 5,
                 col_end: 8,
-                status: AgentStatus::Failed,
+                filter: BodyFilter::Status(AgentStatus::Failed),
             },
             render::MakeUpHit {
                 line: 5,
                 col_start: 28,
                 col_end: 31,
-                status: AgentStatus::Running,
+                filter: BodyFilter::Status(AgentStatus::Running),
             },
         ],
         ..Default::default()
@@ -150,19 +150,19 @@ fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
                 .collect()
         })
         .collect();
-    let footprints: Vec<(AgentStatus, String)> = composed
+    let footprints: Vec<(BodyFilter, String)> = composed
         .make_up_hits
         .iter()
         .map(|hit| {
             let text = text_cell_range(&texts[hit.line], hit.col_start, hit.col_end);
-            (hit.status, text)
+            (hit.filter, text)
         })
         .collect();
     assert_eq!(
         footprints,
         vec![
-            (AgentStatus::Failed, "! 1".to_owned()),
-            (AgentStatus::Running, "⢿ 1".to_owned()),
+            (BodyFilter::Status(AgentStatus::Failed), "! 1".to_owned()),
+            (BodyFilter::Status(AgentStatus::Running), "⢿ 1".to_owned()),
         ],
         "one hit per non-zero bucket, each covering its painted text"
     );
@@ -175,6 +175,93 @@ fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
     assert_eq!(
         ui.make_up_filter,
         Some(BodyFilter::Status(AgentStatus::Failed))
+    );
+}
+
+#[test]
+fn unread_count_click_toggles_the_unread_lens() {
+    let ws = workspace();
+    let mut snapshot = filterable_snapshot(&ws);
+    snapshot.worktree_groups[0].rows[0].unread = true;
+    snapshot.worktree_groups[1].rows[0].unread = true;
+    let mut ui = UiState::default();
+    let theme = ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let texts: Vec<String> = composed
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect();
+    let unread_hit = composed
+        .make_up_hits
+        .iter()
+        .find(|hit| hit.filter == BodyFilter::Unread)
+        .expect("unread count emits a hit when unread rows exist");
+    assert_eq!(
+        text_cell_range(
+            &texts[unread_hit.line],
+            unread_hit.col_start,
+            unread_hit.col_end
+        ),
+        "(2)",
+        "unread hit covers only the count, not its leading space"
+    );
+    let unread_column = unread_hit.col_start;
+    let unread_row = u16::try_from(unread_hit.line).unwrap();
+
+    ui.make_up_hits = composed.make_up_hits;
+    let outcome = handle_mouse_click(unread_column, unread_row, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert!(outcome.focus.is_none());
+    assert_eq!(ui.make_up_filter, Some(BodyFilter::Unread));
+    let theme = ui.theme(&snapshot.theme);
+    let picked = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let picked_count = picked.lines[usize::from(unread_row)]
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == " (2)")
+        .expect("picked unread count stays one span");
+    assert!(
+        picked_count.style.bg.is_some()
+            || picked_count
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::REVERSED),
+        "picked unread count reads as a chip"
+    );
+    assert!(
+        picked_count
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD),
+        "picked unread count keeps the count weight"
+    );
+
+    let outcome = handle_mouse_click(unread_column, unread_row, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.make_up_filter, None);
+
+    for row in snapshot
+        .worktree_groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+    {
+        row.unread = false;
+    }
+    let mut ui = UiState::default();
+    let theme = ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    assert!(
+        composed
+            .make_up_hits
+            .iter()
+            .all(|hit| hit.filter != BodyFilter::Unread),
+        "zero unread rows leave the cockpit count inert"
     );
 }
 

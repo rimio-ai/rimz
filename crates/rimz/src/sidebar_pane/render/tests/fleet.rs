@@ -268,7 +268,7 @@ fn make_up_filter_keeps_every_glyph_still_across_picks() {
         let text = make_up_text(lines);
         let hit = hits
             .iter()
-            .find(|hit| hit.status == status)
+            .find(|hit| hit.filter == BodyFilter::Status(status))
             .expect("active bucket keeps its hit");
         let footprint = text_cell_range(&text, hit.col_start, hit.col_end);
         assert_eq!(footprint, expected, "hit covers the fixed bucket");
@@ -311,7 +311,7 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
     );
     let hit = hits
         .iter()
-        .find(|hit| hit.status == AgentStatus::Failed)
+        .find(|hit| hit.filter == BodyFilter::Status(AgentStatus::Failed))
         .expect("the picked bucket keeps its hit");
     let footprint = text_cell_range(&text, hit.col_start, hit.col_end);
     assert_eq!(footprint, "! 1", "the hit covers the fixed bucket");
@@ -379,15 +379,21 @@ fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
     );
     let text = make_up_text(&lines);
     assert_eq!(
-        hits.iter().map(|hit| hit.status).collect::<Vec<_>>(),
-        vec![AgentStatus::Failed, AgentStatus::Running],
+        hits.iter().map(|hit| hit.filter).collect::<Vec<_>>(),
+        vec![
+            BodyFilter::Status(AgentStatus::Failed),
+            BodyFilter::Status(AgentStatus::Running),
+        ],
         "only the non-zero buckets are tabs"
     );
     for hit in &hits {
         let footprint = text_cell_range(&text, hit.col_start, hit.col_end);
+        let BodyFilter::Status(status) = hit.filter else {
+            panic!("fleet line emits only status buckets");
+        };
         assert_eq!(
             footprint,
-            format!("{} 1", labels::status_glyph(&theme, hit.status)),
+            format!("{} 1", labels::status_glyph(&theme, status)),
             "the hit sits exactly on its bucket:\n{text}"
         );
     }
@@ -414,8 +420,8 @@ fn make_up_clipped_bucket_drops_its_hit() {
         "no hit points past the visible edge: {hits:?}"
     );
     assert_eq!(
-        hits.iter().map(|hit| hit.status).collect::<Vec<_>>(),
-        vec![AgentStatus::Failed],
+        hits.iter().map(|hit| hit.filter).collect::<Vec<_>>(),
+        vec![BodyFilter::Status(AgentStatus::Failed)],
         "the clipped working bucket keeps no hit"
     );
 }

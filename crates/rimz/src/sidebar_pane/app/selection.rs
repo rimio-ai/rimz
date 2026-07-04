@@ -2,7 +2,6 @@
 //! the transient arrow-key browse layer above it, the key/mouse handlers that
 //! act on it, and the hit-test reader over the render-built line map.
 
-use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::{SidebarSnapshot, lead_unread_row, triage_key};
 
@@ -298,10 +297,10 @@ pub(super) fn handle_mouse_click(
         pick_dashboard_tab(ui, snapshot, tab);
         return InputOutcome::redraw();
     }
-    // The cockpit's make-up buckets are the top block's only hit targets — a
-    // click on one toggles the body's status filter in place, never a jump.
-    if let Some(status) = make_up_status_at(ui, column, row) {
-        return if toggle_make_up_filter(ui, snapshot, BodyFilter::Status(status)) {
+    // The cockpit's make-up buckets and unread count are the top block's hit
+    // targets — a click toggles that body filter in place, never a jump.
+    if let Some(filter) = make_up_filter_at(ui, column, row) {
+        return if toggle_make_up_filter(ui, snapshot, filter) {
             InputOutcome::redraw()
         } else {
             InputOutcome::default()
@@ -362,15 +361,15 @@ fn tab_kind_at(ui: &UiState, column: u16, row: u16) -> Option<String> {
         .map(|hit| hit.kind.clone())
 }
 
-/// The status whose make-up bucket sits under a click, from the make-up hit
+/// The filter target that sits under a click, from the make-up hit
 /// map the renderer emitted in lockstep with the frame (`UiState::make_up_hits`,
 /// the cockpit's twin of `tab_hits`). A zero bucket emitted no hit, so it can
 /// never match — inert, as if not a tab.
-fn make_up_status_at(ui: &UiState, column: u16, row: u16) -> Option<AgentStatus> {
+fn make_up_filter_at(ui: &UiState, column: u16, row: u16) -> Option<BodyFilter> {
     ui.make_up_hits
         .iter()
         .find(|hit| hit.line == usize::from(row) && column >= hit.col_start && column < hit.col_end)
-        .map(|hit| hit.status)
+        .map(|hit| hit.filter)
 }
 
 /// Flip the make-up filter a bucket click asked for: the active bucket clears

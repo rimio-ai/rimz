@@ -2,6 +2,7 @@
 //! the live-agent count with the animated count-up spend.
 
 use crate::SpendWindow;
+use crate::agents::AgentStatus;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
@@ -11,7 +12,7 @@ use crate::sidebar_pane::render::fmt::{dollars2, tokens_int};
 use crate::sidebar_pane::render::labels::token_breakdown_spans;
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
-use super::{metric_spans, pin_right};
+use super::{metric_spans, pin_right, spans_width};
 
 /// The cockpit's first summary line, directly beneath the repo identity:
 /// `◎ {sessions}` — the threads that have run in the configured headline
@@ -58,35 +59,17 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 /// figure — and brightens for a beat the instant it settles (the W/M ledger
 /// rows below stay static). Always present — an empty room reads `¤ 0`; the
 /// bold dollar-green `$` joins the right edge once the headline records spend.
+/// The steady unread count is a click-to-filter target and paints as a picked
+/// chip while the unread lens is active.
 pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     theme: &Theme,
     live_agents: usize,
-    unread_agents: usize,
+    unread: (usize, bool),
     today_usd: f64,
     anim: &TallyAnim,
     phase: u64,
     width: usize,
-) -> Line<'static> {
-    let mut left = metric_spans(
-        theme,
-        theme.glyph(GlyphRole::CockpitAgents),
-        theme.clay(),
-        &live_agents.to_string(),
-    );
-    if unread_agents > 0 {
-        // A steady tally, not a blink — the attention blink lives on the cards
-        // and the make-up buckets; the cockpit count holds its attention tone.
-        left.push(Span::styled(
-            format!(" ({unread_agents})"),
-            theme.style(
-                theme
-                    .animations
-                    .status(crate::agents::AgentStatus::Waiting)
-                    .color(),
-                Modifier::BOLD,
-            ),
-        ));
-    }
+) -> (Line<'static>, Option<(u16, u16)>) {
     let right = if today_usd > 0.0 {
         let usd = anim.today_usd.display(today_usd, phase);
         let style = if anim.today_usd.flashing(phase) {
@@ -98,5 +81,38 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     } else {
         Vec::new()
     };
-    pin_right(left, right, width)
+    let right_width = spans_width(&right);
+    let mut left = metric_spans(
+        theme,
+        theme.glyph(GlyphRole::CockpitAgents),
+        theme.clay(),
+        &live_agents.to_string(),
+    );
+    let mut unread_range = None;
+    let (unread_agents, unread_picked) = unread;
+    if unread_agents > 0 {
+        // A steady tally, not a blink — the attention blink lives on the cards
+        // and the make-up buckets; the cockpit count holds its attention tone.
+        let start = spans_width(&left) + 1;
+        let waiting = theme.animations.status(AgentStatus::Waiting).color();
+        let style = if unread_picked {
+            let chip = theme.chip(waiting, Modifier::BOLD);
+            if chip.bg.is_none() {
+                chip.add_modifier(Modifier::REVERSED)
+            } else {
+                chip
+            }
+        } else {
+            theme.style(waiting, Modifier::BOLD)
+        };
+        left.push(Span::styled(format!(" ({unread_agents})"), style));
+        let end = spans_width(&left);
+        let left_budget = if right.is_empty() {
+            width
+        } else {
+            width.saturating_sub(right_width + 1)
+        };
+        unread_range = (end <= left_budget).then_some((start as u16, end as u16));
+    }
+    (pin_right(left, right, width), unread_range)
 }
