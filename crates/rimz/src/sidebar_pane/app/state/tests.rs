@@ -373,6 +373,22 @@ fn cwd_flap_within_one_group_is_not_a_migration() {
 }
 
 #[test]
+fn newborn_worktree_settle_with_stable_cwd_is_not_a_migration() {
+    use crate::SidebarWorktreeKind::{External, Worktree};
+    // The pane is born in `external` before the worktree backing resolves, then
+    // reclassifies to `worktree` while its cwd was the worktree dir all along.
+    let prev = snapshot_in_group(External, "external", "terminal_1", Some("/repo/feature"));
+    let next = snapshot_in_group(
+        Worktree,
+        "/repo/feature",
+        "terminal_1",
+        Some("/repo/feature"),
+    );
+
+    assert!(diff_group_migrations(&prev, &next).is_empty());
+}
+
+#[test]
 fn moving_between_groups_records_one_migration() {
     let prev = snapshot_in_group(
         crate::SidebarWorktreeKind::External,

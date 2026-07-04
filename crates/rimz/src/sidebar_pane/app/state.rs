@@ -196,11 +196,15 @@ fn diff_group_migrations(prev: &SidebarSnapshot, next: &SidebarSnapshot) -> Vec<
         let Some(prev_group) = prev_rows.get(&pane_id) else {
             continue;
         };
-        // A group migration is a row moving between groups. A cwd that changes
-        // while the group identity holds (e.g. a worktree pane whose cwd flaps
-        // between two paths that both fold to `external`) is not a migration —
-        // gating on cwd here recorded spurious `external -> external` self-moves.
+        // A group migration is a pane changing cwd across a group boundary.
+        // A cwd that changes while the group identity holds (e.g. a worktree
+        // pane whose cwd flaps between two paths that both fold to `external`)
+        // is not a migration, and neither is a stable-cwd reclassification
+        // while a newborn worktree pane settles from `external` to `worktree`.
         if prev_group.group == next_group.group {
+            continue;
+        }
+        if prev_group.cwd == next_group.cwd {
             continue;
         }
         events.push(DiagEvent::GroupMigration {
