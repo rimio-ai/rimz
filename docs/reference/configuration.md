@@ -321,12 +321,17 @@ This section applies only to Rimz builds compiled with the non-default `sentry` 
 
 Rimz applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without editing your global Zellij or tmux config. The `[zellij]` and `[tmux]` tables tune those settings; `rimz config init --print` lists every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/sidebar/multiplexers.md).
 
+The `[mux]` table selects the default backend after the `--mux <name>` and active Zellij/tmux environment checks. Leave `default` unset to choose tmux when both backends are installed, or set it to `"zellij"` or `"tmux"` to require that backend. A configured backend that is not installed makes `rimz start` refuse with a fix message.
+
 The two backends differ in how a key takes effect:
 
 - **`[zellij]`** carries a few invariants Rimz always applies — locked mode, click-through with focus-follows-mouse off, no session serialization (Rimz owns rebirth), disabled session metadata, and native focused-pane splitting — plus optional keys (`pane_frames`, `copy_clipboard`, …) that apply only when you set them and otherwise fall through to your `~/.config/zellij/config.kdl`. The sidebar pane is always borderless so its hit-testing stays stable regardless of `pane_frames`.
 - **`[tmux]`** applies its room invariants on every birth, each key carrying a Rimz default you can override. The pane-border keys are optional overrides; unset, they fall through to your `~/.tmux.conf` or tmux defaults just like `pane_frames`. Setting `pane_border_status` makes Rimz own `pane-border-format` too, blanking the sidebar border row and overriding any `~/.tmux.conf` format; unset, your tmux config wins and may title the sidebar. The table spans session, window, and server scope, including clipboard and rich-key handling, because tmux has no per-session form for those.
 
 ```toml
+[mux]
+default = "tmux"
+
 [zellij]
 pane_frames = true          # an optional override; unset, your config.kdl wins
 

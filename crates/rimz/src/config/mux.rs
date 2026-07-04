@@ -1,6 +1,18 @@
 use serde::{Deserialize, Serialize};
 
+use crate::ids::MuxName;
+
 use super::MachineConfig;
+
+/// Backend-selection preference. `default` is consulted after `--mux` and an
+/// active mux env; unset resolves from installed binaries with tmux as the
+/// tiebreak. A set-but-uninstalled backend fails fast at selection.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct MuxConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<MuxName>,
+}
 
 /// Multiplexer-only preferences, split out so CLI launch code can thread just
 /// the settings a backend needs instead of the whole per-machine config.

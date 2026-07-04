@@ -10,7 +10,8 @@ Zellij and tmux carry different communities, and Rimz serves both as first-class
 
 1. the `--mux <name>` flag,
 2. the active environment (`ZELLIJ` / `ZELLIJ_PANE_ID`, then `TMUX` / `TMUX_PANE`),
-3. the installed binary, Zellij preferred when both are present.
+3. `[mux] default` from per-machine config, failing fast when it names an uninstalled backend,
+4. the installed binary, tmux preferred when both are present.
 
 Selection is stable across worktrees: every worktree of one repo resolves to the same session on the same backend.
 

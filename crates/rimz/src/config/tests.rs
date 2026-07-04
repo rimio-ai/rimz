@@ -1,5 +1,6 @@
 use super::*;
 use crate::harness::run::PermissionMode;
+use crate::ids::MuxName;
 use std::num::NonZeroU16;
 use tempfile::tempdir;
 
@@ -899,6 +900,21 @@ fn tmux_room_options_parse_and_defaults_are_agent_friendly() {
         config.tmux.pane_border_lines,
         Some(TmuxPaneBorderLines::Heavy)
     );
+}
+
+#[test]
+fn mux_default_parse_and_defaults_to_unset() {
+    let dir = tempdir().expect("tempdir");
+    let defaults = load_no_fragments(&write(&dir, "")).expect("load");
+    assert_eq!(defaults.mux.default, None);
+
+    let config = load_no_fragments(&write(
+        &dir,
+        "[mux]\n\
+             default = \"tmux\"\n",
+    ))
+    .expect("load");
+    assert_eq!(config.mux.default, Some(MuxName::Tmux));
 }
 
 #[test]

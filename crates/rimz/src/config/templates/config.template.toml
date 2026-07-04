@@ -72,6 +72,9 @@
 ## base_url = "https://devbox.example/zellij"
 # auto_start = true                   # `rimz web open` starts `zellij web` when offline
 
+[mux]
+## default = "tmux"                   # preferred backend when both zellij and tmux are installed; unset resolves to tmux
+
 [zellij]
 # Critical room invariants Rimz always applies:
 mouse_click_through = true            # single click on a card jumps to the agent (Zellij >= 0.44.0)

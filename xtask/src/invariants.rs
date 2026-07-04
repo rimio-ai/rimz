@@ -604,6 +604,7 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
                 "[accounts.usage_limit_usd]",
                 "[notifications]",
                 "[sidebar]",
+                "[mux]",
                 "[zellij]",
                 "[tmux]",
                 "[resume]",

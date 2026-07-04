@@ -76,7 +76,7 @@ pub use glyphs::{
 pub use harness::{HarnessConfig, RtkMode};
 pub use loop_::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
 pub use mux::{
-    MultiplexerConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
+    MultiplexerConfig, MuxConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,
 };
 pub use notifications::{
@@ -165,6 +165,7 @@ pub struct MachineConfig {
     /// falls back to the system zone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
+    pub mux: MuxConfig,
     pub accounts: AccountsConfig,
     pub remote_control: RemoteControlConfig,
     pub daemon: DaemonConfig,
@@ -370,6 +371,7 @@ impl MachineConfig {
     ) -> Self {
         Self {
             timezone: core.timezone,
+            mux: core.mux,
             accounts: core.accounts,
             remote_control: core.remote_control,
             daemon: core.daemon,
@@ -520,6 +522,7 @@ pub fn resolve_time_zone(name: Option<&str>) -> jiff::tz::TimeZone {
 #[serde(default)]
 struct CoreConfig {
     timezone: Option<String>,
+    mux: MuxConfig,
     accounts: AccountsConfig,
     remote_control: RemoteControlConfig,
     daemon: DaemonConfig,
