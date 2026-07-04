@@ -535,10 +535,16 @@ pub(crate) fn ensure_presence_plugin(
     session_name: &str,
     workspace_id: &WorkspaceId,
     zellij_config: &rimz::config::ZellijConfig,
+    seed_permissions: bool,
     focus_key: Option<&str>,
 ) {
-    let Some(opts) = presence_plugin_options(session_name, workspace_id, zellij_config, focus_key)
-    else {
+    let Some(opts) = presence_plugin_options(
+        session_name,
+        workspace_id,
+        zellij_config,
+        seed_permissions,
+        focus_key,
+    ) else {
         tracing::debug!(
             session = %session_name,
             "presence plugin unavailable; the producer keeps its pane poll",
@@ -559,10 +565,16 @@ pub(crate) fn enable_web_sharing(
     session_name: &str,
     workspace_id: &WorkspaceId,
     zellij_config: &rimz::config::ZellijConfig,
+    seed_permissions: bool,
     focus_key: Option<&str>,
 ) {
-    let Some(opts) = presence_plugin_options(session_name, workspace_id, zellij_config, focus_key)
-    else {
+    let Some(opts) = presence_plugin_options(
+        session_name,
+        workspace_id,
+        zellij_config,
+        seed_permissions,
+        focus_key,
+    ) else {
         tracing::debug!(
             session = %session_name,
             "presence plugin unavailable; Zellij web sharing was not requested",
@@ -577,7 +589,7 @@ pub(crate) fn enable_web_sharing(
         );
         let _ = writeln!(
             std::io::stderr().lock(),
-            "rimz: could not confirm Zellij web sharing for `{session_name}`; if the browser says \"Web clients are not allowed to attach to this session\", attach to the room once, accept the plugin permission prompt, and rerun `rimz web open`."
+            "rimz: could not confirm Zellij web sharing for `{session_name}`; if the browser says \"Web clients are not allowed to attach to this session\", check that Zellij is new enough, Rimz's presence plugin is available, and `[web] enabled = true` in `rimz config path`, then rerun `rimz web open`."
         );
     }
 }
@@ -586,6 +598,7 @@ fn presence_plugin_options(
     session_name: &str,
     workspace_id: &WorkspaceId,
     zellij_config: &rimz::config::ZellijConfig,
+    seed_permissions: bool,
     focus_key: Option<&str>,
 ) -> Option<PresencePluginOptions> {
     let wasm = rimz::mux::zellij::presence_plugin_path()?;
@@ -595,6 +608,7 @@ fn presence_plugin_options(
         wasm,
         rimz_bin: sidebar::rimz_cli_program(),
         converge: false,
+        seed_permissions,
         focus_key: focus_key.map(str::to_owned),
         focus_follows_mouse: zellij_config.focus_follows_mouse,
         mouse_click_through: zellij_config.mouse_click_through,
@@ -801,6 +815,7 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
         room.session_name,
         room.workspace_id,
         &room.mux_config.zellij,
+        machine_config.web.enabled,
         machine_config.sidebar.focus_key_label(),
     );
     Ok(())

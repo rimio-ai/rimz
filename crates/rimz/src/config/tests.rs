@@ -94,6 +94,7 @@ fn assert_sentry_config(config: &MachineConfig) {
 }
 
 fn assert_zellij_web_config(config: &MachineConfig) {
+    assert!(!config.web.enabled);
     assert_eq!(
         config.web.zellij.base_url.as_deref(),
         Some("https://devbox.example/zellij")
@@ -1395,6 +1396,15 @@ fn notifications_parse_per_machine_preferences() {
 }
 
 #[test]
+fn web_enabled_defaults_on_and_parses_off() {
+    assert!(WebPrefs::default().enabled);
+
+    let dir = tempdir().expect("tempdir");
+    let config = load_no_fragments(&write(&dir, "[web]\nenabled = false\n")).expect("load");
+    assert!(!config.web.enabled);
+}
+
+#[test]
 fn scalar_sections_parse_non_default_values() {
     let cases: [(&str, ConfigAssertion); 3] = [
         (
@@ -1404,7 +1414,9 @@ fn scalar_sections_parse_non_default_values() {
             assert_sentry_config,
         ),
         (
-            "[web.zellij]\n\
+            "[web]\n\
+             enabled = false\n\
+             [web.zellij]\n\
              base_url = \"https://devbox.example/zellij\"\n\
              auto_start = false\n",
             assert_zellij_web_config,

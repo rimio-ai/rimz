@@ -10,6 +10,24 @@ fn materialized_room_panes_json() -> &'static str {
     r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#
 }
 
+fn write_machine_config(env: &Env, text: &str) {
+    let path = env.config_root().join("rimz").join("config.toml");
+    std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir config parent");
+    std::fs::write(path, text).expect("write machine config");
+}
+
+fn permission_children(document: &kdl::KdlDocument, key: &str) -> Vec<String> {
+    document
+        .get(key)
+        .expect("presence plugin permission node")
+        .children()
+        .expect("presence plugin permission children")
+        .nodes()
+        .iter()
+        .map(|node| node.name().value().to_owned())
+        .collect()
+}
+
 #[test]
 fn web_status_json_parses_zellij_status_and_token_count() {
     let env = Env::new();
@@ -43,6 +61,44 @@ fn web_status_json_parses_zellij_status_and_token_count() {
     assert!(log.contains("web\t--help"), "{log}");
     assert!(log.contains("web\t--status"), "{log}");
     assert!(log.contains("web\t--list-tokens"), "{log}");
+}
+
+#[test]
+fn web_open_disabled_fails_before_room_side_effects() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_machine_config(&env, "[web]\nenabled = false\n");
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let log = env.project_root.join("zellij-web-disabled.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "web", "open", "--session"])
+        .arg(&workspace.session_name)
+        .args(["--print", "--json"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .bounded_output()
+        .expect("run rimz web open");
+
+    assert!(!output.status.success(), "disabled web should fail");
+    assert!(
+        output.stdout.is_empty(),
+        "disabled web should not print a URL: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Zellij web access is disabled")
+            && stderr.contains("machine serving this room"),
+        "stderr should name the serving-machine config fix: {stderr}"
+    );
+    let log = std::fs::read_to_string(log).expect("read zellij log");
+    assert!(log.contains("web\t--help"), "{log}");
+    assert!(!log.contains("\tattach\t"), "{log}");
+    assert!(!log.contains("web\t--start"), "{log}");
+    assert!(!log.contains("web\t--status"), "{log}");
+    assert!(!log.contains("\tpipe\t"), "{log}");
 }
 
 #[test]
@@ -123,6 +179,29 @@ fn web_open_json_keeps_autostart_banner_off_stdout() {
     assert!(
         log.contains("\t--name\trimz:share_session\t--\tshare"),
         "web open should request runtime web sharing through the presence plugin: {log}"
+    );
+
+    let permissions_path = env.home_root.join(".cache/zellij/permissions.kdl");
+    let permissions = std::fs::read_to_string(&permissions_path).unwrap_or_else(|err| {
+        panic!(
+            "read seeded Zellij permission cache at {}: {err}",
+            permissions_path.display()
+        )
+    });
+    let document: kdl::KdlDocument = permissions.parse().expect("permissions KDL parses");
+    let plugin_key = env
+        .home_root
+        .join(".local/share/rimz/plugins/rimz-presence-zellij.wasm")
+        .display()
+        .to_string();
+    assert_eq!(
+        permission_children(&document, &plugin_key),
+        [
+            "ReadApplicationState",
+            "RunCommands",
+            "Reconfigure",
+            "StartWebServer"
+        ]
     );
 }
 

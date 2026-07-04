@@ -437,6 +437,9 @@ pub struct PresencePluginOptions {
     /// upgrade verb `rimz reload` passes; routine loads leave a healthy
     /// running plugin untouched.
     pub converge: bool,
+    /// Seed the Zellij permission cache for this plugin so the sidebar poke and
+    /// web sharing work without the one-time prompt; set from `[web] enabled`.
+    pub seed_permissions: bool,
     /// The focus-key chord (`[sidebar] focus_key`, e.g. `Alt+p`) the plugin
     /// binds at load so the key reaches the sidebar from any pane; `None` when
     /// the user disabled it. tmux binds the same chord through `bind-key`

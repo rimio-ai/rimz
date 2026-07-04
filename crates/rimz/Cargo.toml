@@ -123,6 +123,7 @@ glob.workspace = true
 hex.workspace = true
 image-webp.workspace = true
 jiff.workspace = true
+kdl.workspace = true
 notify.workspace = true
 png.workspace = true
 sentry = { workspace = true, optional = true }

@@ -23,9 +23,14 @@ rimz web token revoke-all
 Configure reverse-proxy URLs under per-machine config:
 
 ```toml
+[web]
+enabled = true
+
 [web.zellij]
 base_url = "https://devbox.example/zellij"
 auto_start = true
 ```
+
+`[web] enabled` defaults to true. Set it to false to make `rimz web open` and `rimz remote connect --web` fail before room changes or permission-cache seeding.
 
 Remote browser access is `rimz remote connect <target> --web`; see [Getting started → Remote rooms](./getting-started.md#remote-rooms) and [web internals](../../internals/reach/web.md#remote-rooms).

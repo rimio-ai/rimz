@@ -58,6 +58,11 @@ skip = [
     # `toml_edit`/`indexmap` has moved to hashbrown 0.17 while the ratatui
     # stack still carries 0.16; drop when either upstream converges.
     { crate = "hashbrown@0.17.1", reason = "toml_edit/indexmap pins hashbrown 0.17; ratatui stack pins 0.16" },
+    # `kdl` 4.7.1 matches Zellij 0.44.3's permission-cache serializer and pins
+    # the older miette/thiserror/unicode-width line; drop when Zellij moves.
+    { crate = "thiserror@1.0.69", reason = "kdl 4.7.1 pins thiserror 1; workspace otherwise on 2" },
+    { crate = "thiserror-impl@1.0.69", reason = "kdl 4.7.1 pins thiserror 1; workspace otherwise on 2" },
+    { crate = "unicode-width@0.1.14", reason = "kdl 4.7.1's miette stack pins unicode-width 0.1; workspace otherwise on 0.2" },
 ]
 
 [advisories]

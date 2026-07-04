@@ -186,7 +186,18 @@ Integer-width inconsistency to keep straight: `TabInfo.tab_id` is `usize`, `clos
 | `WriteToClipboard` | Write to the clipboard |
 | `ReadSessionEnvironmentVariables` | Read env vars present at session creation |
 
-`request_permission(&[…])` raises one floating prompt for the whole batch; the answer arrives as `PermissionRequestResult`. Zellij persists grants in its permission cache **keyed on the exact plugin path string** — canonicalize before loading or the grant misses ([multiplexers.md](../../internals/sidebar/multiplexers.md#zellij-presence-channel)). A cached grant re-delivers **no** `PermissionRequestResult` on later loads; treat subscribed state flowing as the grant signal. Upstream documents no cache file location or revocation UX beyond the plugin manager.
+`request_permission(&[…])` raises one floating prompt for the whole batch; the answer arrives as `PermissionRequestResult`. Zellij persists grants in `<cache-dir>/zellij/permissions.kdl`, keyed on the exact plugin path string — canonicalize before loading or the grant misses ([multiplexers.md](../../internals/sidebar/multiplexers.md#zellij-presence-channel)). The KDL shape is a plugin-path node with one child node per permission:
+
+```kdl
+"/home/user/.local/share/rimz/plugins/rimz-presence-zellij.wasm" {
+    ReadApplicationState
+    RunCommands
+    Reconfigure
+    StartWebServer
+}
+```
+
+A cached grant re-delivers **no** `PermissionRequestResult` on later loads; treat subscribed state flowing as the grant signal. Revocation UX is the Zellij plugin manager.
 
 ### Workers
 

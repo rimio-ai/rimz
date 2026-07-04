@@ -41,6 +41,10 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 # Format-preserving TOML edits for `rimz config set`; keeps the generated
 # config template's comments intact while changing one key.
 toml_edit = "0.25"
+# Zellij stores plugin permission grants as KDL (`permissions.kdl`). Rimz seeds
+# its own presence-plugin grant by parsing and merging that shared file instead
+# of string-splicing a format Zellij itself owns.
+kdl = "4.7.1"
 
 # Error handling
 thiserror = "2"

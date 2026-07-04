@@ -149,6 +149,12 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
+    let config = machine_config();
+    if !config.web.enabled {
+        bail!(
+            "Zellij web access is disabled: set `[web] enabled = true` in the Rimz config on the machine serving this room (`rimz config path`) to allow browser sharing."
+        );
+    }
     let web_room = if let Some(session) = args.session {
         room::ensure_session_room_for_web(&session, globals)?
     } else {
@@ -161,7 +167,6 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         born_web_shared,
     } = web_room;
     ensure_session_addressable_for_web(&session, &workspace_id)?;
-    let config = machine_config();
     let payload = web_payload(
         &session,
         config.web.zellij.base_url.as_deref(),
@@ -180,6 +185,7 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
             &session,
             &workspace_id,
             &config.zellij,
+            config.web.enabled,
             config.sidebar.focus_key_label(),
         );
     }

@@ -66,6 +66,9 @@
 # screen_top = "H"
 # screen_bottom = "L"
 
+[web]
+# enabled = true                     # allow rimz web / remote --web to enable Zellij browser sharing (auto-grants the Rimz presence plugin)
+
 [web.zellij]
 # Zellij browser access. base_url is the URL users open; set it when a reverse
 # proxy serves Zellij under a public host or path.

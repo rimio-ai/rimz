@@ -600,6 +600,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         &workspace.session_name,
         &workspace.workspace_id,
         &mux_config.zellij,
+        machine_config.web.enabled,
         machine_config.sidebar.focus_key_label(),
     );
 

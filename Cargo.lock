@@ -3027,6 +3027,7 @@ dependencies = [
  "image-webp",
  "insta",
  "jiff",
+ "kdl",
  "nix 0.31.3",
  "notify 8.2.0",
  "png",

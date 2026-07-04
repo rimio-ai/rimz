@@ -1,7 +1,9 @@
 //! Zellij presence-plugin materialization and wakeup pipe helpers.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{env, fs};
+
+use kdl::{KdlDocument, KdlNode};
 
 use super::{
     PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_PLUGIN_MIN_ZELLIJ, PRESENCE_SHARE_PIPE,
@@ -13,6 +15,13 @@ use crate::mux::{MuxBackend, MuxErr, Result};
 const EMBEDDED_PRESENCE_PLUGIN: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/rimz-presence-zellij.wasm"));
 const PRESENCE_PLUGIN_FILE: &str = "rimz-presence-zellij.wasm";
+// Must match `crates/rimz-presence-zellij/src/main.rs`'s request_permission batch.
+const PRESENCE_PLUGIN_PERMISSIONS: [&str; 4] = [
+    "ReadApplicationState",
+    "RunCommands",
+    "Reconfigure",
+    "StartWebServer",
+];
 
 /// Locate the presence-plugin wasm: the `RIMZ_PRESENCE_PLUGIN` override, else
 /// the embedded plugin materialized under `$XDG_DATA_HOME/rimz/plugins/`, else
@@ -152,6 +161,7 @@ impl ZellijBackend {
         &self,
         opts: &super::super::PresencePluginOptions,
     ) -> Result<()> {
+        seed_presence_permissions(opts);
         if !self.presence_plugin_supported(opts, PRESENCE_BOOT_PIPE) {
             return Ok(());
         }
@@ -194,6 +204,7 @@ impl ZellijBackend {
         &self,
         opts: &super::super::PresencePluginOptions,
     ) -> Result<()> {
+        seed_presence_permissions(opts);
         // Target the same (url, configuration) as the boot path: it launches the
         // plugin if absent and reaches the running instance otherwise.
         self.pipe_to_presence_plugin(opts, PRESENCE_SHARE_PIPE, "share")
@@ -251,6 +262,90 @@ impl ZellijBackend {
     }
 }
 
+fn seed_presence_permissions(opts: &super::super::PresencePluginOptions) {
+    if !opts.seed_permissions {
+        return;
+    }
+    let path = paths::cache_home().join("zellij").join("permissions.kdl");
+    // Zellij 0.44.3 keys the permission cache on the plugin path string, not
+    // the `file:` URL accepted by `zellij pipe --plugin`; the live integration
+    // test seeds this bare path and proves the grant is honored.
+    let key = opts.wasm.display().to_string();
+    let Some(mut document) = read_presence_permissions_document(&path) else {
+        return;
+    };
+    if !ensure_presence_permissions_document(&mut document, &key) {
+        return;
+    }
+    document.fmt();
+    if let Err(err) = atomic::write_bytes_atomically(&path, document.to_string().as_bytes()) {
+        tracing::debug!(
+            path = %path.display(),
+            error = %err,
+            "seeding Zellij presence-plugin permissions failed",
+        );
+    }
+}
+
+fn read_presence_permissions_document(path: &Path) -> Option<KdlDocument> {
+    match fs::read_to_string(path) {
+        Ok(raw) => match raw.parse() {
+            Ok(document) => Some(document),
+            Err(err) => {
+                tracing::debug!(
+                    path = %path.display(),
+                    error = %err,
+                    "parsing Zellij permission cache failed; rebuilding Rimz presence grant only",
+                );
+                Some(KdlDocument::new())
+            }
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(KdlDocument::new()),
+        Err(err) => {
+            tracing::debug!(
+                path = %path.display(),
+                error = %err,
+                "reading Zellij permission cache failed",
+            );
+            None
+        }
+    }
+}
+
+fn ensure_presence_permissions_document(document: &mut KdlDocument, key: &str) -> bool {
+    let mut found = false;
+    let mut changed = false;
+    for node in document
+        .nodes_mut()
+        .iter_mut()
+        .filter(|node| node.name().value() == key)
+    {
+        found = true;
+        changed |= ensure_presence_permissions_node(node);
+    }
+    if found {
+        return changed;
+    }
+
+    let mut node = KdlNode::new(key);
+    ensure_presence_permissions_node(&mut node);
+    document.nodes_mut().push(node);
+    true
+}
+
+fn ensure_presence_permissions_node(node: &mut KdlNode) -> bool {
+    let had_children = node.children().is_some();
+    let children = node.ensure_children();
+    let mut changed = !had_children;
+    for permission in PRESENCE_PLUGIN_PERMISSIONS {
+        if children.get(permission).is_none() {
+            children.nodes_mut().push(KdlNode::new(permission));
+            changed = true;
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{MIN_ZELLIJ_VERSION, PRESENCE_PLUGIN_MIN_ZELLIJ};
@@ -263,10 +358,93 @@ mod tests {
             wasm: std::path::PathBuf::from("/tmp/rimz-presence-zellij.wasm"),
             rimz_bin: std::path::PathBuf::from(rimz_bin),
             converge: false,
+            seed_permissions: false,
             focus_key: None,
             focus_follows_mouse: false,
             mouse_click_through: true,
         }
+    }
+
+    fn permission_children(document: &KdlDocument, key: &str) -> Vec<String> {
+        document
+            .get(key)
+            .expect("permission node exists")
+            .children()
+            .expect("permission node has children")
+            .nodes()
+            .iter()
+            .map(|node| node.name().value().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn seed_presence_permissions_adds_node_to_empty_document() {
+        let key = "/tmp/rimz-presence-zellij.wasm";
+        let mut document = KdlDocument::new();
+
+        assert!(ensure_presence_permissions_document(&mut document, key));
+        document.fmt();
+        let rendered = document.to_string();
+        rendered
+            .parse::<KdlDocument>()
+            .expect("seeded KDL round-trips");
+        assert_eq!(
+            permission_children(&document, key),
+            PRESENCE_PLUGIN_PERMISSIONS
+        );
+        assert!(
+            rendered.starts_with("\"/tmp/rimz-presence-zellij.wasm\""),
+            "path cache key is quoted as a KDL node name: {rendered}"
+        );
+    }
+
+    #[test]
+    fn seed_presence_permissions_merges_partial_node_and_preserves_foreign_nodes() {
+        let key = "/tmp/rimz-presence-zellij.wasm";
+        let mut document: KdlDocument = r#""/other-plugin.wasm" {
+    RunCommands
+}
+"/tmp/rimz-presence-zellij.wasm" {
+    ReadApplicationState
+    RunCommands
+    Reconfigure
+}
+"#
+        .parse()
+        .expect("parse starting permissions");
+
+        assert!(ensure_presence_permissions_document(&mut document, key));
+        document.fmt();
+        document
+            .to_string()
+            .parse::<KdlDocument>()
+            .expect("merged KDL round-trips");
+        assert_eq!(
+            permission_children(&document, "/other-plugin.wasm"),
+            ["RunCommands"]
+        );
+        assert_eq!(
+            permission_children(&document, key),
+            [
+                "ReadApplicationState",
+                "RunCommands",
+                "Reconfigure",
+                "StartWebServer"
+            ]
+        );
+    }
+
+    #[test]
+    fn seed_presence_permissions_is_noop_when_complete() {
+        let key = "/tmp/rimz-presence-zellij.wasm";
+        let mut document = KdlDocument::new();
+        assert!(ensure_presence_permissions_document(&mut document, key));
+        document.fmt();
+        let once = document.to_string();
+
+        assert!(!ensure_presence_permissions_document(&mut document, key));
+        document.fmt();
+        assert_eq!(document.to_string(), once);
     }
 
     #[cfg(unix)]

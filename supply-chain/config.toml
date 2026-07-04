@@ -84,7 +84,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.backtrace-ext]]
 version = "0.2.1"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.bitflags]]
 version = "2.13.0"
@@ -448,7 +448,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.hermit-abi]]
 version = "0.5.2"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.http]]
 version = "0.2.12"
@@ -520,11 +520,11 @@ criteria = "safe-to-run"
 
 [[exemptions.is-terminal]]
 version = "0.4.17"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.is_ci]]
 version = "1.2.0"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.is_terminal_polyfill]]
 version = "1.70.2"
@@ -568,7 +568,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.kdl]]
 version = "4.7.1"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.kqueue]]
 version = "1.2.0"
@@ -660,11 +660,11 @@ criteria = "safe-to-deploy"
 
 [[exemptions.miette]]
 version = "5.10.0"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.miette-derive]]
 version = "5.10.0"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.minimal-lexical]]
 version = "0.2.1"
@@ -744,7 +744,7 @@ criteria = "safe-to-run"
 
 [[exemptions.owo-colors]]
 version = "3.5.0"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.palette]]
 version = "0.7.6"
@@ -1084,7 +1084,7 @@ criteria = "safe-to-run"
 
 [[exemptions.smawk]]
 version = "0.3.3"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.socket2]]
 version = "0.6.4"
@@ -1128,15 +1128,15 @@ criteria = "safe-to-run"
 
 [[exemptions.supports-color]]
 version = "2.1.0"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.supports-hyperlinks]]
 version = "2.1.0"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.supports-unicode]]
 version = "2.1.0"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.syn]]
 version = "1.0.109"

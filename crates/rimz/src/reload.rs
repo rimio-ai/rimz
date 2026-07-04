@@ -318,6 +318,7 @@ fn reconcile_live(
             wasm,
             rimz_bin: rimz_bin.to_path_buf(),
             converge: true,
+            seed_permissions: machine_config.web.enabled,
             focus_key: machine_config.sidebar.focus_key_label().map(str::to_owned),
             focus_follows_mouse: mux_config.zellij.focus_follows_mouse,
             mouse_click_through: mux_config.zellij.mouse_click_through,

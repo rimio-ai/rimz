@@ -45,12 +45,15 @@ With the default Zellij web listener this is `http://127.0.0.1:8082/rimz-project
 Rimz checks server state with `zellij web --status`, parses the Zellij 0.44.3 online/offline strings, and treats unknown output as a typed parse failure with the raw line in the diagnostic. The default base URL is `http://127.0.0.1:8082`; a configured `[web.zellij].base_url` overrides the URL users open, while the parsed status URL still supplies the loopback `ip` and `port` for remote tunneling.
 
 ```toml
+[web]
+enabled = true
+
 [web.zellij]
 base_url = "https://devbox.example/zellij"
 auto_start = true
 ```
 
-This section is per-machine policy. It does not enter the project trust hash because it executes no command and commonly names private hostnames or local tunnels.
+`[web] enabled` defaults to true and allows Rimz to auto-grant its embedded Zellij presence plugin, enable browser sharing, and start the Zellij web server when allowed. When it is false, `rimz web open` fails before any room side effect with guidance to change the config on the machine serving the room; `rimz remote connect --web` relays that remote-side failure from the prep command. This section is per-machine policy and stays outside the project trust hash because it executes no command and commonly names private hostnames or local tunnels.
 
 Zellij's own config still controls server defaults and sharing policy:
 
@@ -61,7 +64,7 @@ web_server_port 8082
 web_sharing "on"
 ```
 
-Fresh rooms opened through `rimz web open` are shared at birth by Zellij's `web_sharing on` option. If a room already existed with Zellij web sharing off, `rimz web open` sends the presence plugin a `StartWebServer`-permissioned share request for that session. Existing plugin grants that predate the permission surface prompt once in the room UI; a clientless room shows the prompt on the next attach, and the plugin re-issues the share when the grant lands. If the pipe times out or fails, Rimz still prints the URL and writes a stderr note explaining that the browser's "Web clients are not allowed to attach to this session" error means the user should attach once, accept the plugin permission prompt, and retry. If Zellij config locks web sharing to `disabled`, Zellij rejects browser clients until that config changes and the session restarts.
+Fresh rooms opened through `rimz web open` are shared at birth by Zellij's `web_sharing on` option. If a room already existed with Zellij web sharing off, Rimz first seeds Zellij's `permissions.kdl` cache for its own presence plugin with `ReadApplicationState`, `RunCommands`, `Reconfigure`, and `StartWebServer`, keyed to the plugin's canonical path, then sends the plugin a `rimz:share_session` pipe for that session. Zellij grants cached permissions without a floating prompt, so the runtime share works for clientless rooms. If the pipe times out or fails, Rimz still prints the URL and writes a stderr note naming the remaining checks: Zellij version, presence-plugin artifact availability, and `[web] enabled = true`. If Zellij config locks web sharing to `disabled`, Zellij rejects browser clients until that config changes and the session restarts.
 
 ## Remote rooms
 
