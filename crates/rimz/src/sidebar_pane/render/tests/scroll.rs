@@ -127,9 +127,14 @@ fn help_overlay_floats_over_cards_with_scrollbar() {
         28,
     );
 
+    let lines = rendered.lines().collect::<Vec<_>>();
     assert!(
-        line_containing(&rendered, "⑂ alpha").ends_with('▐'),
-        "the always scrollbar rail stays visible while help floats:\n{rendered}"
+        lines[0].contains("⌘ query-engine"),
+        "cockpit stays pinned while help is open:\n{rendered}"
+    );
+    assert!(
+        lines.last().unwrap().contains("? for help"),
+        "footer stays pinned while help is open:\n{rendered}"
     );
     assert!(
         rendered.contains("keys & legend") && rendered.contains("╭") && rendered.contains("╰"),
@@ -140,8 +145,8 @@ fn help_overlay_floats_over_cards_with_scrollbar() {
         "help chrome survives narrow framing:\n{rendered}"
     );
     assert!(
-        rendered.contains("task-0"),
-        "cards keep rendering under the floating help box:\n{rendered}"
+        !rendered.contains("task-0"),
+        "the card body clears behind the floating help box:\n{rendered}"
     );
 }
 #[test]

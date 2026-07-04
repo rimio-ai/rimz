@@ -425,25 +425,25 @@ When the renderer is holding a successful-but-regressive fetch behind the last g
 
 These notices clear when the next accepted pane frame lands. A health alert takes over the bottom line while a fetch failure is active.
 
-**Help overlay** (`?`). The legend and keys replace the card body as a centered floating block in the faint chrome tier — summoned reference, not live state:
+**Help overlay** (`?`). The legend and keys replace the card body as a centered floating block in the faint chrome tier — summoned reference, not live state. The cockpit and footer/dashboard rails stay pinned, the cleared card-body zone gives the modal a clean backdrop, legend glyphs carry their semantic status colors, and any key or focus leaving the sidebar closes it.
 
 ```
-╭ keys & legend ───────────────────────╮
-│ ↕ j/k rows   J/K worktrees  g/G ends │
-│ ↕ ^f/^b page   H/L screen             │
-│ ⏎ l focus    1-9 direct              │
-│ ␣ n/N needs-you  (Space = n)         │
-│ ✉ m/M read / unread                  │
-│ ↔ ←/→ account tabs                   │
-│ filter                               │
-│   ? q waiting    ! e attention       │
-│   ⏸︎ p paused     ✓ d done            │
-│   ⢿ w working    ○ o idle            │
-│   u unread       a all               │
-│ global  Alt+p sidebar (toggle)       │
-│ ⟳ r reload   ✕ x dismiss             │
-│   ⠁ thinking     ⢄ delegating        │
-╰──────────────────────────────────────╯
+╭ keys & legend ─────────────────────────────────────────╮
+│ keys                                                   │
+│ ↕ j/k rows                    ↕ J/K worktrees          │
+│ ↕ g/G ends                    ↕ ^f/^b page  H/L screen │
+│ ⏎ l focus                     ⏎ 1-9 direct             │
+│ ␣ n/N needs-you  (Space = n)  ✉ m/M read / unread      │
+│ ↔ ←/→ account tabs            ⟳ r reload               │
+│ ✕ x dismiss                   Alt+p sidebar (toggle)   │
+│ filter                                                 │
+│ ? q waiting  ! e attention                             │
+│ ⏸︎ p paused   ✓ d done                                  │
+│ ⢿ w working  ○ o idle                                  │
+│ u unread     a all                                     │
+│ legend                                                 │
+│ ⠁ thinking  ⢄ delegating                               │
+╰─────────────────── any key to close ───────────────────╯
 ```
 
 **Health alert.** When the refresh loop can't read the room, a sticky line takes over the bottom and the footer steps aside — an empty body under a failed fetch is a missing snapshot, not an empty room:

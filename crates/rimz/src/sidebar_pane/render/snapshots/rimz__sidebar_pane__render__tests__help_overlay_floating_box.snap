@@ -1,5 +1,6 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+assertion_line: 155
 expression: screen
 ---
  ⌘ query-engine
@@ -9,22 +10,22 @@ expression: screen
  ──────────────────────────────────────────────────────────────────────────────
  ? 1   ! 0   ⏸︎ 0   ✓ 0                                                ⢿ 0   ○ 0
 
-▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╭ keys & legend ───────────────────────╮🮇
-▌? codex                               │ ↕ j/k rows   J/K worktrees  g/G ends │▐
-▌  allow?                              │ ↕ ^f/^b page   H/L screen            │▐
-▌  ▢ ──────────────────────────────────│ ⏎ l focus    1-9 direct              │▐
-                                       │ ␣ n/N needs-you  (Space = n)         │
-                                       │ ✉ m/M read / unread                  │
-                                       │ ↔ ←/→ account tabs                   │
-                                       │ filter                               │
-                                       │   ? q waiting    ! e attention       │
-                                       │   ⏸︎ p paused     ✓ d done            │
-                                       │   ⢿ w working    ○ o idle            │
-                                       │   u unread       a all               │
-                                       │ global  Alt+p sidebar (toggle)       │
-                                       │ ⟳ r reload   ✕ x dismiss             │
-                                       │   ⠁ thinking     ⢄ delegating        │
-                                       ╰────────── any key to close ──────────╯
+           ╭ keys & legend ─────────────────────────────────────────╮
+           │ keys                                                   │
+           │ ↕ j/k rows                    ↕ J/K worktrees          │
+           │ ↕ g/G ends                    ↕ ^f/^b page  H/L screen │
+           │ ⏎ l focus                     ⏎ 1-9 direct             │
+           │ ␣ n/N needs-you  (Space = n)  ✉ m/M read / unread      │
+           │ ↔ ←/→ account tabs            ⟳ r reload               │
+           │ ✕ x dismiss                   Alt+p sidebar (toggle)   │
+           │ filter                                                 │
+           │ ? q waiting  ! e attention                             │
+           │ ⏸︎ p paused   ✓ d done                                  │
+           │ ⢿ w working  ○ o idle                                  │
+           │ u unread     a all                                     │
+           │ legend                                                 │
+           │ ⠁ thinking  ⢄ delegating                               │
+           ╰─────────────────── any key to close ───────────────────╯
  ──────────────────────────────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00
   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00

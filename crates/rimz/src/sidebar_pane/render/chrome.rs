@@ -2,11 +2,11 @@ use crate::agents::AgentStatus;
 use crate::config::{AnimationRole, GlyphRole, SidebarKeys};
 use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarSnapshot};
 use jiff::Timestamp;
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::fmt::{age_label, age_short};
-use super::labels::{role_glyph, status_glyph};
+use super::labels::{role_glyph, status_glyph, status_rest_style};
 use super::layout;
 use super::theme::Theme;
 use super::{Alert, GateNotice};
@@ -344,102 +344,149 @@ fn help_body_rows(
     focus_key: Option<&str>,
     keys: &SidebarKeys,
 ) -> Vec<Line<'static>> {
-    let waiting = status_glyph(theme, AgentStatus::Waiting);
-    let attention = status_glyph(theme, AgentStatus::Failed);
-    let paused = status_glyph(theme, AgentStatus::Paused);
-    let done = status_glyph(theme, AgentStatus::Success);
-    let working = status_glyph(theme, AgentStatus::Running);
-    let idle = status_glyph(theme, AgentStatus::Idle);
-    let thinking = role_glyph(theme, AnimationRole::Thinking, 0);
-    let delegating = role_glyph(theme, AnimationRole::Delegating, 0);
-    let mut lines = vec![
-        key_row(
-            theme,
-            GlyphRole::KeysMove,
-            &format!(
-                "{}/{} rows   {}/{} worktrees  {}/{} ends",
-                chord_label(&keys.down),
-                chord_label(&keys.up),
-                chord_label(&keys.worktree_down),
-                chord_label(&keys.worktree_up),
-                chord_label(&keys.top),
-                chord_label(&keys.bottom)
+    let mut key_rows = vec![
+        (
+            key_cell(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysMove)),
+                &format!("{}/{}", chord_label(&keys.down), chord_label(&keys.up)),
+                "rows",
+            ),
+            Some(key_cell(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysMove)),
+                &format!(
+                    "{}/{}",
+                    chord_label(&keys.worktree_down),
+                    chord_label(&keys.worktree_up)
+                ),
+                "worktrees",
+            )),
+        ),
+        (
+            key_cell(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysMove)),
+                &format!("{}/{}", chord_label(&keys.top), chord_label(&keys.bottom)),
+                "ends",
+            ),
+            Some(
+                key_cell(
+                    theme,
+                    Some(key_icon(theme, GlyphRole::KeysMove)),
+                    &format!(
+                        "{}/{}",
+                        chord_label(&keys.page_down),
+                        chord_label(&keys.page_up)
+                    ),
+                    "page",
+                )
+                .into_iter()
+                .chain([
+                    Span::raw("  "),
+                    Span::styled(
+                        format!(
+                            "{}/{}",
+                            chord_label(&keys.screen_top),
+                            chord_label(&keys.screen_bottom)
+                        ),
+                        theme.body().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled("screen".to_owned(), theme.faint()),
+                ])
+                .collect(),
             ),
         ),
-        key_row(
-            theme,
-            GlyphRole::KeysMove,
-            &format!(
-                "{}/{} page   {}/{} screen",
-                chord_label(&keys.page_down),
-                chord_label(&keys.page_up),
-                chord_label(&keys.screen_top),
-                chord_label(&keys.screen_bottom)
+        (
+            key_cell(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysFocus)),
+                "l",
+                "focus",
             ),
+            Some(key_cell(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysFocus)),
+                "1-9",
+                "direct",
+            )),
         ),
-        key_row(theme, GlyphRole::KeysFocus, "l focus    1-9 direct"),
-        key_row(theme, GlyphRole::KeysInbox, "n/N needs-you  (Space = n)"),
-        key_row(theme, GlyphRole::KeysRead, "m/M read / unread"),
-        key_row(theme, GlyphRole::KeysAccounts, "←/→ account tabs"),
-        plain_row(theme, "filter"),
-        help_row(
-            theme,
-            vec![
-                Span::raw("  "),
-                Span::raw(waiting),
-                Span::raw(" q waiting    "),
-                Span::raw(attention),
-                Span::raw(" e attention"),
-            ],
+        (
+            key_cell(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysInbox)),
+                "n/N",
+                "needs-you  (Space = n)",
+            ),
+            Some(key_cell(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysRead)),
+                "m/M",
+                "read / unread",
+            )),
         ),
-        help_row(
-            theme,
-            vec![
-                Span::raw("  "),
-                Span::raw(paused),
-                Span::raw(" p paused     "),
-                Span::raw(done),
-                Span::raw(" d done"),
-            ],
+        (
+            key_cell(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysAccounts)),
+                "←/→",
+                "account tabs",
+            ),
+            Some(key_cell(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysReload)),
+                "r",
+                "reload",
+            )),
         ),
-        help_row(
-            theme,
-            vec![
-                Span::raw("  "),
-                Span::raw(working),
-                Span::raw(" w working    "),
-                Span::raw(idle),
-                Span::raw(" o idle"),
-            ],
+        (
+            key_cell(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysDismiss)),
+                "x",
+                "dismiss",
+            ),
+            focus_key.map(|key| key_cell(theme, None, key, "sidebar (toggle)")),
         ),
-        plain_row(theme, "  u unread       a all"),
     ];
-    // The focus chord is a mux-level binding the renderer can't fire itself; it
-    // shows only when one is configured, naming the user's actual key.
-    if let Some(key) = focus_key {
-        lines.push(plain_row(theme, format!("global  {key} sidebar (toggle)")));
-    }
-    lines.extend([
-        help_row(
-            theme,
-            vec![
-                Span::raw(theme.glyph(GlyphRole::KeysReload).to_owned()),
-                Span::raw(" r reload   "),
-                Span::raw(theme.glyph(GlyphRole::KeysDismiss).to_owned()),
-                Span::raw(" x dismiss"),
-            ],
-        ),
-        help_row(
-            theme,
-            vec![
-                Span::raw("  "),
-                Span::raw(thinking),
-                Span::raw(" thinking     "),
-                Span::raw(delegating),
-                Span::raw(" delegating"),
-            ],
-        ),
-    ]);
+
+    let mut lines = vec![subheader(theme, "keys")];
+    lines.extend(two_column(theme, key_rows));
+    lines.push(subheader(theme, "filter"));
+    lines.extend(two_column(
+        theme,
+        vec![
+            (
+                status_cell(theme, AgentStatus::Waiting, "q", "waiting"),
+                Some(status_cell(theme, AgentStatus::Failed, "e", "attention")),
+            ),
+            (
+                status_cell(theme, AgentStatus::Paused, "p", "paused"),
+                Some(status_cell(theme, AgentStatus::Success, "d", "done")),
+            ),
+            (
+                status_cell(theme, AgentStatus::Running, "w", "working"),
+                Some(status_cell(theme, AgentStatus::Idle, "o", "idle")),
+            ),
+            (
+                key_cell(theme, None, "u", "unread"),
+                Some(key_cell(theme, None, "a", "all")),
+            ),
+        ],
+    ));
+    lines.push(subheader(theme, "legend"));
+    lines.extend(two_column(
+        theme,
+        vec![(
+            animation_cell(theme, AnimationRole::Thinking, "thinking"),
+            Some(animation_cell(
+                theme,
+                AnimationRole::Delegating,
+                "delegating",
+            )),
+        )],
+    ));
     lines
 }
 
@@ -480,23 +527,84 @@ fn key_label(base: &str) -> String {
     }
 }
 
-fn key_row(theme: &Theme, role: GlyphRole, text: &str) -> Line<'static> {
-    help_row(
-        theme,
-        vec![
-            Span::raw(theme.glyph(role).to_owned()),
-            Span::raw(" "),
-            Span::raw(text.to_owned()),
-        ],
+fn two_column(
+    theme: &Theme,
+    rows: Vec<(Vec<Span<'static>>, Option<Vec<Span<'static>>>)>,
+) -> Vec<Line<'static>> {
+    const GAP: usize = 2;
+
+    let left_w = rows
+        .iter()
+        .filter_map(|(left, right)| right.as_ref().map(|_| layout::spans_width(left)))
+        .max()
+        .unwrap_or(0);
+
+    rows.into_iter()
+        .map(|(mut left, right)| {
+            if let Some(right) = right {
+                let pad = left_w.saturating_sub(layout::spans_width(&left)) + GAP;
+                left.push(Span::raw(" ".repeat(pad)));
+                left.extend(right);
+            }
+            Line::from(left).style(theme.body())
+        })
+        .collect()
+}
+
+fn key_cell(
+    theme: &Theme,
+    glyph: Option<Span<'static>>,
+    keys: &str,
+    label: &str,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::with_capacity(5);
+    if let Some(glyph) = glyph {
+        spans.push(glyph);
+        spans.push(Span::raw(" "));
+    }
+    spans.push(Span::styled(
+        keys.to_owned(),
+        theme.body().add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(label.to_owned(), theme.faint()));
+    spans
+}
+
+fn status_cell(theme: &Theme, status: AgentStatus, keys: &str, label: &str) -> Vec<Span<'static>> {
+    key_cell(theme, Some(status_icon(theme, status)), keys, label)
+}
+
+fn animation_cell(theme: &Theme, role: AnimationRole, label: &str) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(role_glyph(theme, role, 0), animation_style(theme, role)),
+        Span::raw(" "),
+        Span::styled(label.to_owned(), theme.faint()),
+    ]
+}
+
+fn subheader(theme: &Theme, text: &str) -> Line<'static> {
+    Line::styled(text.to_owned(), theme.faint())
+}
+
+fn key_icon(theme: &Theme, role: GlyphRole) -> Span<'static> {
+    Span::styled(theme.glyph(role).to_owned(), theme.muted())
+}
+
+fn status_icon(theme: &Theme, status: AgentStatus) -> Span<'static> {
+    let style = if status == AgentStatus::Idle {
+        theme.body()
+    } else {
+        status_rest_style(theme, status)
+    };
+    Span::styled(status_glyph(theme, status), style)
+}
+
+fn animation_style(theme: &Theme, role: AnimationRole) -> Style {
+    theme.animations.natural_color(role).map_or_else(
+        || theme.body(),
+        |color| theme.style(color, Modifier::empty()),
     )
-}
-
-fn plain_row(theme: &Theme, text: impl Into<String>) -> Line<'static> {
-    Line::from(text.into()).style(theme.body())
-}
-
-fn help_row(theme: &Theme, spans: Vec<Span<'static>>) -> Line<'static> {
-    Line::from(spans).style(theme.body())
 }
 
 fn framed_box(

@@ -154,7 +154,9 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
     );
 
     for wakeup in [
+        Wakeup::ReloadKey,
         Wakeup::Key(KeyAction::Down),
+        Wakeup::Key(KeyAction::Other),
         Wakeup::MouseClick { column: 1, row: 0 },
         Wakeup::Scroll { down: true },
     ] {

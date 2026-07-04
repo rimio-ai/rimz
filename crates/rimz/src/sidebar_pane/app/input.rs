@@ -26,6 +26,9 @@ pub(super) enum Wakeup {
     /// `rimz reload` asks the renderer to re-exec its own binary in place so a
     /// freshly-installed build takes effect without a session rebirth.
     Reload,
+    /// The local `r` key reload request. Kept separate so the help overlay can
+    /// consume keypresses without swallowing external `rimz reload` events.
+    ReloadKey,
     Key(KeyAction),
     MouseClick {
         column: u16,
@@ -72,6 +75,9 @@ pub(super) enum KeyAction {
     /// `←`/`→` — cycle the provider dashboard's tab.
     TabPrev,
     TabNext,
+    /// Otherwise-unbound keypress. Closes the help overlay; no-op when it is
+    /// already closed.
+    Other,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,10 +132,8 @@ pub(super) fn encode_key(keymap: &NavKeymap, code: KeyCode, mods: KeyModifiers) 
         KeyCode::Char('d') => "key:filter:success",
         KeyCode::Char('x') => "key:dismiss",
         KeyCode::Char(c @ '1'..='9') => return Some(format!("key:digit:{c}")),
-        // `r` rides the very reload control word `rimz reload` posts, so a
-        // keypress and the CLI converge on the one re-exec path in `super`.
-        KeyCode::Char('r') => RELOAD_CONTROL_WORD,
-        _ => return None,
+        KeyCode::Char('r') => "key:reload",
+        _ => "key:other",
     };
     Some(wire.to_owned())
 }
@@ -170,6 +174,7 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "snapshot" => Wakeup::Snapshot,
         "resize" => Wakeup::Resize,
         RELOAD_CONTROL_WORD => Wakeup::Reload,
+        "key:reload" => Wakeup::ReloadKey,
         KEY_UP => Wakeup::Key(KeyAction::Up),
         KEY_DOWN => Wakeup::Key(KeyAction::Down),
         KEY_WORKTREE_UP => Wakeup::Key(KeyAction::WorktreeUp),
@@ -182,6 +187,7 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         KEY_SCREEN_BOTTOM => Wakeup::Key(KeyAction::ScreenBottom),
         "key:tab_prev" => Wakeup::Key(KeyAction::TabPrev),
         "key:tab_next" => Wakeup::Key(KeyAction::TabNext),
+        "key:other" => Wakeup::Key(KeyAction::Other),
         "key:enter" => Wakeup::Key(KeyAction::Enter),
         "key:inbox_next" => Wakeup::Key(KeyAction::InboxNext),
         "key:inbox_prev" => Wakeup::Key(KeyAction::InboxPrev),
@@ -310,10 +316,14 @@ mod tests {
 
     #[test]
     fn r_key_triggers_a_reload() {
-        // Pressing `r` re-execs the renderer in place through the local input
-        // control word; external reloads arrive as typed sidebar events.
+        // Pressing `r` re-execs the renderer in place unless the help overlay
+        // consumes it first; external reloads keep the shared control word.
         let encoded = encode_default(KeyCode::Char('r')).expect("r is bound");
-        assert_eq!(decode_wakeup(encoded.as_bytes()), Wakeup::Reload);
+        assert_eq!(decode_wakeup(encoded.as_bytes()), Wakeup::ReloadKey);
+        assert_eq!(
+            decode_wakeup(RELOAD_CONTROL_WORD.as_bytes()),
+            Wakeup::Reload
+        );
     }
 
     #[test]
@@ -601,6 +611,8 @@ mod tests {
             (KeyCode::Char('x'), KeyModifiers::NONE),
             (KeyCode::Char('r'), KeyModifiers::NONE),
             (KeyCode::Char('1'), KeyModifiers::NONE),
+            (KeyCode::Esc, KeyModifiers::NONE),
+            (KeyCode::Char('z'), KeyModifiers::NONE),
         ] {
             if let Some(w) = encode_key(&keymap, code, mods) {
                 words.push(w);
@@ -630,9 +642,26 @@ mod tests {
         }
         // '0' and out-of-range digit wire strings are not selectable rows.
         assert_eq!(
-            encode_key(&keymap, KeyCode::Char('0'), KeyModifiers::NONE),
-            None
+            decode_wakeup(
+                encode_key(&keymap, KeyCode::Char('0'), KeyModifiers::NONE)
+                    .expect("unbound keys close help")
+                    .as_bytes()
+            ),
+            Wakeup::Key(KeyAction::Other)
         );
         assert_eq!(decode_wakeup(b"key:digit:0"), Wakeup::Tick);
+    }
+
+    #[test]
+    fn unbound_keys_round_trip_as_other() {
+        let keymap = default_keymap();
+        for code in [KeyCode::Esc, KeyCode::Char('z')] {
+            let encoded =
+                encode_key(&keymap, code, KeyModifiers::NONE).expect("unbound key is encoded");
+            assert_eq!(
+                decode_wakeup(encoded.as_bytes()),
+                Wakeup::Key(KeyAction::Other)
+            );
+        }
     }
 }

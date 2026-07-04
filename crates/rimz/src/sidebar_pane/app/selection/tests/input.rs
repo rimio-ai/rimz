@@ -354,6 +354,29 @@ fn help_key_opens_without_touching_the_viewport() {
         "opening help no longer resets card scroll state"
     );
 }
+
+#[test]
+fn other_key_is_noop_when_help_is_closed() {
+    let ws = workspace();
+    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
+    let mut ui = UiState {
+        unread_focus: Some("agent-lead".to_owned()),
+        selected_index: 1,
+        scroll_offset: 6,
+        ..Default::default()
+    };
+
+    let outcome = handle_key(KeyAction::Other, &mut ui, &snapshot);
+
+    assert_eq!(outcome, InputOutcome::default());
+    assert!(
+        ui.unread_focus.is_some(),
+        "unbound keys should not count as sidebar engagement when help is closed"
+    );
+    assert_eq!(ui.selected_index, 1);
+    assert_eq!(ui.scroll_offset, 6);
+}
+
 #[test]
 fn top_and_bottom_keys_browse_to_the_ends() {
     let ws = workspace();

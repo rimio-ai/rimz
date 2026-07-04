@@ -214,6 +214,7 @@ pub(crate) fn compose_lines(
         pet_pixel_rect,
         banner_line,
         scroll_offset: offset,
+        top_height: top_shown,
         bottom_height,
     }
 }
@@ -352,6 +353,7 @@ pub(crate) struct ComposedFrame {
     pub(crate) pet_pixel_rect: Option<Rect>,
     pub(crate) banner_line: Option<usize>,
     pub(crate) scroll_offset: usize,
+    pub(crate) top_height: usize,
     pub(crate) bottom_height: usize,
 }
 

@@ -112,6 +112,7 @@ fn draw_into(
     // the geometry of the frame the user is actually looking at.
     let theme = ui.theme(&snapshot.theme);
     let composed = compose_lines(snapshot, alert, ui, theme.as_ref(), area.width, area.height);
+    let top_height = composed.top_height;
     let bottom_height = composed.bottom_height;
     ui.line_map = composed.line_map;
     ui.tab_hits = composed.tab_hits;
@@ -137,6 +138,7 @@ fn draw_into(
             snapshot.sidebar.focus_key_label(),
             &snapshot.sidebar.keys,
             area,
+            top_height,
             bottom_height,
         );
     }
@@ -148,43 +150,63 @@ fn draw_help_overlay(
     focus_key: Option<&str>,
     keys: &crate::config::SidebarKeys,
     area: Rect,
+    top_height: usize,
     bottom_height: usize,
 ) {
-    const RIGHT_MARGIN: u16 = 1;
-
-    let avail = area.width.saturating_sub(RIGHT_MARGIN);
-    if avail == 0 {
+    if area.width == 0 {
         return;
     }
-    let lines = help_lines(theme, focus_key, keys, usize::from(avail));
-    let box_w = lines.iter().map(|line| line.width()).max().unwrap_or(0) as u16;
-    let box_h = lines.len() as u16;
+
+    let area_bottom = area.bottom();
+    let region_top = area
+        .y
+        .saturating_add(top_height.min(usize::from(u16::MAX)) as u16)
+        .min(area_bottom);
+    let mut region_bottom = area_bottom
+        .saturating_sub(bottom_height.min(usize::from(u16::MAX)) as u16)
+        .min(area_bottom);
+    if region_bottom < region_top {
+        region_bottom = region_top;
+    }
+    let region_h = region_bottom.saturating_sub(region_top);
+    if region_h == 0 {
+        return;
+    }
+
+    let lines = help_lines(theme, focus_key, keys, usize::from(area.width));
+    let box_w = lines
+        .iter()
+        .map(|line| line.width())
+        .max()
+        .unwrap_or(0)
+        .min(usize::from(area.width)) as u16;
+    let box_h = (lines.len() as u16).min(region_h);
     if box_w == 0 || box_h == 0 {
         return;
     }
 
-    let bottom = area.bottom().saturating_sub(bottom_height as u16);
-    let top = bottom.saturating_sub(box_h).max(area.y);
-    let height = bottom.saturating_sub(top);
-    if height == 0 {
-        return;
-    }
-    let x = area
-        .right()
-        .saturating_sub(RIGHT_MARGIN.saturating_add(box_w))
-        .max(area.x);
+    let x = area.x.saturating_add(area.width.saturating_sub(box_w) / 2);
+    let y = region_top.saturating_add(region_h.saturating_sub(box_h) / 2);
     let width = box_w.min(area.right().saturating_sub(x));
     if width == 0 {
         return;
     }
 
+    frame.render_widget(
+        Clear,
+        Rect {
+            x: area.x,
+            y: region_top,
+            width: area.width,
+            height: region_h,
+        },
+    );
     let rect = Rect {
         x,
-        y: top,
+        y,
         width,
-        height,
+        height: box_h,
     };
-    frame.render_widget(Clear, rect);
     frame.render_widget(Paragraph::new(Text::from(lines)), rect);
 }
 

@@ -157,7 +157,7 @@ pub(super) fn handle_wakeup(
     if ui.help_visible
         && matches!(
             wakeup,
-            Wakeup::Key(_) | Wakeup::MouseClick { .. } | Wakeup::Scroll { .. }
+            Wakeup::ReloadKey | Wakeup::Key(_) | Wakeup::MouseClick { .. } | Wakeup::Scroll { .. }
         )
     {
         ui.help_visible = false;
@@ -171,7 +171,7 @@ pub(super) fn handle_wakeup(
         // The serve loop intercepts these before dispatching here: a tick, a
         // typed sidebar event is a re-fetch trigger, worker completions are
         // folded, and a reload re-execs.
-        Wakeup::Tick | Wakeup::Event(_) | Wakeup::Reload | Wakeup::Snapshot => {
+        Wakeup::Tick | Wakeup::Event(_) | Wakeup::Reload | Wakeup::ReloadKey | Wakeup::Snapshot => {
             InputOutcome::default()
         }
     }
@@ -280,6 +280,10 @@ impl LoopState {
             return true;
         };
         own_tab_viewed(&self.current, view, own_pane)
+    }
+
+    pub(super) fn help_visible(&self) -> bool {
+        self.ui.help_visible
     }
 
     /// Whether a dirty data fold should paint even though animation may be idle.
@@ -547,6 +551,7 @@ impl LoopState {
                     }
                 } else if own_unfocused {
                     self.optimistic_watch_until = None;
+                    self.ui.help_visible = false;
                 }
             }
             // Identity-free nudges — `LedgerDelta`, `PanesChanged`, a

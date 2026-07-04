@@ -648,6 +648,41 @@ fn focus_resume_flushes_pending_unwatched_fetch() {
 }
 
 #[test]
+fn focus_out_closes_help_popup() {
+    let ws = workspace();
+    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
+    let snapshot = snapshot_with_focused_pane(&ws, own_pane.clone());
+    state.last_pulled = snapshot.clone();
+    state.current = snapshot;
+    state.ui.help_visible = true;
+    state.optimistic_watch_until = Some(Instant::now() + Duration::from_secs(1));
+    let config = serve_config(&ws);
+    let mut terminal = fixed_terminal();
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    state
+        .on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(
+                &ws,
+                SidebarEvent::FocusChanged {
+                    focused: Vec::new(),
+                    unfocused: vec![own_pane],
+                },
+            ),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("focus-out event folds");
+
+    assert!(!state.ui.help_visible);
+    assert!(state.optimistic_watch_until.is_none());
+}
+
+#[test]
 fn frame_timing_keeps_unknown_or_detached_dirty_hot_but_holds_hidden_dirty() {
     let ws = workspace();
     let (_dir, mut state) = loop_state_with_own_pane(&ws, None);

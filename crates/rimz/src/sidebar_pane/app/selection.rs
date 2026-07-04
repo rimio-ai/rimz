@@ -173,6 +173,9 @@ pub(super) fn handle_key(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
+    if action == KeyAction::Other {
+        return InputOutcome::default();
+    }
     // Any keystroke is engagement: dismiss the unread snap so navigation follows
     // the selection again. A still-unanswered lead is one keystroke away on the
     // jump banner, and a genuinely new unread re-arms the snap on its next fold.
@@ -241,6 +244,7 @@ pub(super) fn handle_key(
         }
         KeyAction::TabPrev => cycle_dashboard_tab(ui, snapshot, -1),
         KeyAction::TabNext => cycle_dashboard_tab(ui, snapshot, 1),
+        KeyAction::Other => InputOutcome::default(),
     }
 }
 

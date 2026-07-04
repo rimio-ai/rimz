@@ -42,6 +42,9 @@ fn render_footer_and_help_overlay() {
     assert!(help.contains("╭"), "{help}");
     assert!(help.contains("│"), "{help}");
     assert!(help.contains("╰"), "{help}");
+    assert!(help.contains("keys"), "{help}");
+    assert!(help.contains("filter"), "{help}");
+    assert!(help.contains("legend"), "{help}");
     assert!(help.contains("j/k rows"));
     assert!(help.contains("J/K worktrees"));
     assert!(help.contains("g/G ends"));
@@ -56,8 +59,8 @@ fn render_footer_and_help_overlay() {
     assert!(help.contains("○ o idle"));
     assert!(help.contains("any key to close"));
     assert!(
-        help.contains("allow?"),
-        "cards render under the floating box"
+        !help.contains("allow?"),
+        "the card body clears behind the modal"
     );
     assert!(
         !help.contains("? close"),
@@ -128,7 +131,7 @@ fn help_overlay_falls_back_borderless_when_too_narrow() {
         "narrow help rows share one left gutter:\n{text}"
     );
     assert!(
-        text_lines[6].starts_with(" filter"),
+        text_lines.iter().any(|line| line.starts_with(" filter")),
         "the filter header stays on the shared left edge:\n{text}"
     );
 }

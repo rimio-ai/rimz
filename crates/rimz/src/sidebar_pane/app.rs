@@ -279,10 +279,26 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             Wakeup::Resize => {
                 state.on_resize(&config, &mut fetch, &mut terminal, anim_start)?;
             }
-            // The `r` keypress rides the local `reload` control word; an
-            // external `rimz reload` arrives as the typed event. Both resolve
-            // through the same helper.
             Wakeup::Reload => {
+                state.clear_pending_fetch();
+                if reload_or_refetch(&config.session_name, &mut fetch) {
+                    state.reload_requested = true;
+                    break;
+                }
+            }
+            // The local `r` key uses a key-specific wakeup so the help overlay
+            // can close on the keypress before it reaches the reload path.
+            Wakeup::ReloadKey if state.help_visible() => {
+                state.on_input(
+                    &config,
+                    Wakeup::ReloadKey,
+                    &mut terminal,
+                    &mut fetch,
+                    anim_start,
+                    &diag,
+                )?;
+            }
+            Wakeup::ReloadKey => {
                 state.clear_pending_fetch();
                 if reload_or_refetch(&config.session_name, &mut fetch) {
                     state.reload_requested = true;
