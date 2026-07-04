@@ -97,7 +97,7 @@ Focus drives a dynamic fast tick for the work the user is viewing. The producer 
 
 Client presence rides the same producer sample as viewed panes. The mux `client_view` read returns attached human clients plus the panes they view; tmux also returns the freshest `client_activity` epoch, so `SidebarPresence::classify` marks `Idle` once input is quiet for the configured `[sidebar] afk_after_secs` window (15 minutes by default) and `Detached` when no human client remains. Zellij exposes attach state but no per-client input-idle timestamp, so an attached Zellij room stays `Active` until every terminal client detaches.
 
-Remote rooms identified by a live link-stats sidecar suppress the idle window the same way: remote tmux `client_activity` is only a proxy for input that crosses SSH, so only a fully detached client reads away. A remote launch with link probing disabled has no sidecar to identify the room as remote and keeps tmux idle classification. A topology-cache hit skips the expensive pane-list command while still sampling `client_view`; if that focus probe fails, the producer carries the prior presence sample from `snapshot.json` with the prior viewed panes.
+Remote tmux honors `afk_after_secs`: host `client_activity` advances only on input crossing SSH, which makes it a faithful idle proxy. The link-stats sidecar drives only the remote-link badge. A topology-cache hit skips the expensive pane-list command while still sampling `client_view`; if that focus probe fails, the producer carries the prior presence sample from `snapshot.json` with the prior viewed panes.
 
 ## Fusion rules
 

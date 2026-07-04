@@ -386,14 +386,9 @@ pub fn enrich(
         snapshot.panes_observed_at_ms = Some(frame.observed_at_ms);
         snapshot.viewed_panes = frame.viewed_panes.clone();
         snapshot.focused_pane = frame.focused_pane.clone();
-        // Remote rooms classify presence on the host, where tmux
-        // `client_activity` only advances on input that crosses SSH. Trust the
-        // idle threshold only for local rooms; an attached remote client is
-        // present until it detaches.
-        let idle_threshold_ms = snapshot
-            .link
-            .is_none()
-            .then(|| machine_config.sidebar.afk_after_ms());
+        // tmux `client_activity` is the idle signal for local and remote rooms;
+        // Zellij self-suppresses idle through an absent `last_input_ms`.
+        let idle_threshold_ms = machine_config.sidebar.afk_after_ms();
         snapshot.presence = frame
             .presence
             .map(|sample| SidebarPresence::classify(sample, idle_threshold_ms));

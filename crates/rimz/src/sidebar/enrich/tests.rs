@@ -885,7 +885,7 @@ fn local_tmux_presence_keeps_idle_detection() {
 }
 
 #[test]
-fn remote_tmux_presence_stays_active_while_attached() {
+fn remote_tmux_presence_detects_idle() {
     let (_dir, runtime, snapshot) = runtime();
     let file = LinkStatsFile::new(unix_now_ms(), "client".to_owned(), stats(Some(42), 0));
     atomic::write_temp_then_rename_cache(&crate::remote::link::stats_path(&runtime), &file)
@@ -893,7 +893,10 @@ fn remote_tmux_presence_stays_active_while_attached() {
 
     let snapshot = enrich_presence_with_default_config(snapshot, stale_presence_frame(), &runtime);
 
-    assert_eq!(snapshot.presence, Some(crate::SidebarPresence::Active));
+    assert_eq!(
+        snapshot.presence,
+        Some(crate::SidebarPresence::Idle { idle_ms: 999_000 })
+    );
 }
 
 #[test]
