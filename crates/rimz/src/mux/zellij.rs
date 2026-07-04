@@ -303,6 +303,18 @@ impl ZellijBackend {
         }
     }
 
+    #[cfg(test)]
+    fn with_program_and_runtime_for_test(
+        program: impl Into<PathBuf>,
+        runtime_dir: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            runtime_dir: Some(runtime_dir.into()),
+            program: Some(program.into()),
+            ..Self::default()
+        }
+    }
+
     /// Base `CommandSpec` for every Zellij invocation — the single chokepoint.
     pub(super) fn cmd(&self) -> CommandSpec {
         #[cfg(test)]

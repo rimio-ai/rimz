@@ -97,6 +97,126 @@ esac
 
 #[cfg(unix)]
 #[test]
+fn reconcile_relists_before_tab_targeted_writes_from_topology_cache() {
+    use crate::config::MultiplexerConfig;
+    use crate::ids::WorkspaceId;
+    use crate::ledger::paths::RuntimePaths;
+    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
+    use crate::mux::{SidebarLiveness, SidebarPaneOptions, SidebarWidth};
+    use crate::sidebar::cache::write_pane_topology_cache;
+    use crate::sidebar::timing::unix_now_ms;
+
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+log="$dir/zellij.log"
+state="$dir/sidebar-added"
+printf '%s\n' "$*" >> "$log"
+
+if [ "$1" = "--version" ]; then
+  printf 'zellij 0.44.3\n'
+  exit 0
+fi
+
+case " $* " in
+  *" action dump-layout "*)
+    exit 0
+    ;;
+  *" action list-clients "*)
+    printf '%s\n' 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND'
+    printf '%s\n' '1 terminal_7 zsh'
+    exit 0
+    ;;
+  *" action list-panes "*)
+    if [ -f "$state" ]; then
+      printf '%s\n' '[{"id":7,"is_plugin":false,"tab_id":42,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90},{"id":8,"is_plugin":false,"tab_id":42,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}]'
+    else
+      printf '%s\n' '[{"id":7,"is_plugin":false,"tab_id":42,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":120}]'
+    fi
+    exit 0
+    ;;
+  *" action new-pane "*)
+    printf '%s\n' "mounted" > "$state"
+    printf '%s\n' 'terminal_8'
+    exit 0
+    ;;
+  *" action focus-pane-id "*|*" action move-pane "*|*" action resize "*)
+    exit 0
+    ;;
+esac
+
+exit 0
+"#,
+    );
+    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    let workspace_id = WorkspaceId::from_project_root(&project_root);
+    let runtime = RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    write_pane_topology_cache(
+        &runtime,
+        &PaneTopologyCache {
+            session_name: "rimz-test".to_owned(),
+            produced_at_ms: unix_now_ms(),
+            focused_pane: Some(7),
+            panes: vec![PaneTopologyPane {
+                id: 7,
+                is_plugin: false,
+                is_held: false,
+                exited: false,
+                is_suppressed: false,
+                is_floating: false,
+                is_focused: true,
+                tab_position: 1,
+                tab_name: Some("work".to_owned()),
+                pane_columns: Some(120),
+                pane_x: Some(0),
+                title: Some("zsh".to_owned()),
+                pane_command: Some("zsh".to_owned()),
+                terminal_command: Some("zsh".to_owned()),
+            }],
+        },
+    )
+    .expect("write topology cache");
+
+    let opts = SidebarPaneOptions {
+        session_name: "rimz-test".to_owned(),
+        workspace_id,
+        project_root: project_root.clone(),
+        cwd: project_root,
+        birth_size: SidebarWidth::default().birth_size(Some(120)),
+        rimz_bin: std::path::PathBuf::from("rimz"),
+        replace_existing: false,
+        config: MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path());
+    let report = backend
+        .reconcile_sidebars(&opts, &SidebarLiveness::default())
+        .expect("reconcile_sidebars");
+
+    assert_eq!(report.recovered, 1, "missing sidebar is added");
+    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
+    let new_panes: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains(" action new-pane "))
+        .collect();
+    assert_eq!(new_panes.len(), 1, "one add issued:\n{log}");
+    assert!(
+        new_panes[0].contains("--tab-id 42"),
+        "add must use CLI internal tab id after cache-triggered re-list:\n{log}",
+    );
+    assert!(
+        !new_panes[0].contains("--tab-id 1"),
+        "cache tab position must not target writes:\n{log}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn commands_surface_session_not_found_banner() {
     use std::time::Duration;
 

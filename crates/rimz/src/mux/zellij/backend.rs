@@ -558,19 +558,18 @@ impl MuxBackend for ZellijBackend {
         // and add one by splitting right, moving it left, and resizing it to the
         // session's fixed birth width. This never rebirths the session, so the
         // working panes survive.
-        let panes = self
-            .list_panes_cached_or_cli(
-                Some(&opts.session_name),
-                Some(&opts.workspace_id),
-                None,
-                crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
-            )?
-            .panes;
+        let listing = self.list_panes_cached_or_cli(
+            Some(&opts.session_name),
+            Some(&opts.workspace_id),
+            None,
+            crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+        )?;
         let canonical = self
             .session_sidebar_cols(&opts.session_name)
             .unwrap_or(opts.birth_size.cols);
         let mut opts = opts.clone();
         opts.birth_size.cols = canonical;
+        let panes = listing.panes;
         let views = views_with_sidebars(&panes);
         let plan = super::super::plan_reconcile(&views, live);
         // Kept sidebars (not planned for closing) whose geometry sits off the
@@ -578,6 +577,22 @@ impl MuxBackend for ZellijBackend {
         // this pass, renderer untouched.
         let off_spec =
             off_spec_sidebars(&panes, &plan.close, u64::from(opts.birth_size.cols.get()));
+        let (panes, plan, off_spec) =
+            if listing.served_from_topology && (!plan.add.is_empty() || !off_spec.is_empty()) {
+                // The topology cache exposes tab positions, not Zellij's
+                // internal tab ids. Re-list before tab-targeted writes.
+                let panes = self.list_panes_bounded(
+                    Some(&opts.session_name),
+                    crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+                )?;
+                let views = views_with_sidebars(&panes);
+                let plan = super::super::plan_reconcile(&views, live);
+                let off_spec =
+                    off_spec_sidebars(&panes, &plan.close, u64::from(opts.birth_size.cols.get()));
+                (panes, plan, off_spec)
+            } else {
+                (panes, plan, off_spec)
+            };
         if plan.close.is_empty() && plan.add.is_empty() && off_spec.is_empty() {
             return Ok(SidebarRecovery::default());
         }

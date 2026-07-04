@@ -6,13 +6,12 @@ use super::parse::{
     SessionState, classify_session_not_found, is_session_not_found, is_transient_empty,
     session_state_from_line,
 };
-use super::raw_pane::{
-    RawPane, RawPaneListing, SessionCleanliness, classify_session_panes, read_topology_cache,
-};
+use super::raw_pane::{RawPane, RawPaneListing, SessionCleanliness, classify_session_panes};
 use super::{HEALTH_PROBE_TIMEOUT, LIST_PANES_ATTEMPTS, LIST_PANES_RETRY_DELAY, ZellijBackend};
 use crate::ids::WorkspaceId;
+use crate::ledger::paths::RuntimePaths;
 use crate::mux::{MuxErr, Result};
-use crate::sidebar::cache::pane_topology_cache_is_fresh;
+use crate::sidebar::cache::{pane_topology_cache_is_fresh, read_pane_topology_cache};
 use crate::sidebar::timing::unix_now_ms;
 
 impl ZellijBackend {
@@ -83,7 +82,13 @@ impl ZellijBackend {
     ) -> Result<RawPaneListing> {
         let topology_cache = session
             .zip(workspace_id)
-            .and_then(|(session, workspace_id)| read_topology_cache(session, workspace_id));
+            .and_then(|(session, workspace_id)| {
+                let runtime = match &self.runtime_dir {
+                    Some(dir) => RuntimePaths::under(workspace_id.clone(), dir).ok()?,
+                    None => RuntimePaths::for_workspace(workspace_id.clone()).ok()?,
+                };
+                read_pane_topology_cache(&runtime, session)
+            });
         let now_ms = unix_now_ms();
         if let Some(cache) = topology_cache
             && pane_topology_cache_is_fresh(&cache, now_ms, min_topology_produced_at_ms)

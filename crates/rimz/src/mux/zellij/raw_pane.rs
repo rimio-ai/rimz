@@ -10,8 +10,7 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::ledger::paths;
+use crate::ids::{MuxName, PaneId};
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 use crate::mux::{PaneListing, ViewSidebars};
 use crate::pane::SIDEBAR_CHROME_TITLE;
@@ -570,14 +569,6 @@ impl RawPaneListing {
             authoritative_focus: self.authoritative_focus,
         }
     }
-}
-
-pub(super) fn read_topology_cache(
-    session: &str,
-    workspace_id: &WorkspaceId,
-) -> Option<PaneTopologyCache> {
-    let runtime = paths::RuntimePaths::for_workspace(workspace_id.clone()).ok()?;
-    crate::sidebar::cache::read_pane_topology_cache(&runtime, session)
 }
 
 pub(super) fn timestamp_from_json(value: &Value) -> Option<Timestamp> {
