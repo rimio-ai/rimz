@@ -23,9 +23,9 @@ use crate::config::{PetsConfig, PetsGlyphMode};
 pub(crate) use cellart::PetCell;
 pub(crate) use cellart::PetCellGrid;
 pub(crate) use model::PetAction;
-pub(crate) use pixel::PixelPainter;
 pub(crate) use pixel::probe::detect as detect_pet_render_caps;
 pub use pixel::probe::{PetRenderCaps, detect_env as detect_pet_render_env};
+pub(crate) use pixel::{BEGIN_SYNC, END_SYNC, PixelPainter};
 pub use pixel::{
     inline_placeholder_row, transmit_rgba_chunks, virtual_place, wrap_pixel_payload,
     write_synchronized_pixel_output,

@@ -26,7 +26,7 @@ use crate::sidebar::fuse::fuse;
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL, TAB_READ_DWELL};
-use crate::sidebar_pane::pets::detect_pet_render_caps;
+use crate::sidebar_pane::pets::{PetRenderCaps, detect_pet_render_caps};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::{ClearType, CrosstermBackend};
@@ -147,7 +147,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // ledger uses, so a resize is just another wakeup; without it the first
     // usable frame waits for the next `tick`, reading as a blank sidebar.
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout)?;
-    let pet_render_caps = detect_pet_render_caps(config.mux, &config.session_name);
+    let pet_render_caps =
+        detect_pet_render_caps(config.mux, &config.session_name, PetRenderCaps::default());
     spawn_event_waker(socket_path.clone(), config.nav_keys.clone());
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;

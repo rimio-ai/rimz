@@ -3,7 +3,7 @@ use super::*;
 use crate::sidebar_pane::app::fixtures::{
     agent_snapshot, pane, snapshot, snapshot_with_panes, workspace,
 };
-use crate::sidebar_pane::pets::{PetAssets, PetPixelView, PetRenderCaps};
+use crate::sidebar_pane::pets::{BEGIN_SYNC, END_SYNC, PetAssets, PetPixelView, PetRenderCaps};
 use jiff::Timestamp;
 
 fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
@@ -375,6 +375,22 @@ fn pixel_shift_clear_uses_fresh_rect_from_draw() {
     assert!(
         output.contains("\u{1b}[2J") || output.contains("\u{1b}[J") || output.contains("\u{1b}[K"),
         "stale rect must trigger a full terminal clear after the fresh draw"
+    );
+    assert_eq!(
+        output
+            .matches(std::str::from_utf8(BEGIN_SYNC).unwrap())
+            .count(),
+        1
+    );
+    assert_eq!(
+        output
+            .matches(std::str::from_utf8(END_SYNC).unwrap())
+            .count(),
+        1
+    );
+    assert!(
+        !output.contains("a=d,d=i"),
+        "placement shifts must keep resident kitty images alive"
     );
 }
 

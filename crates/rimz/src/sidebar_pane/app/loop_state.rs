@@ -612,10 +612,10 @@ impl LoopState {
             self.dirty = true;
             self.paint_hold
                 .engage(Instant::now(), crate::sidebar::timing::unix_now_ms());
-            self.clear_pixel(terminal);
+            self.blank_pixel(terminal);
         } else {
             if grew {
-                self.clear_pixel(terminal);
+                self.blank_pixel(terminal);
             }
             if self
                 .apply_input(Wakeup::Resize, terminal, anim_start)?
@@ -640,7 +640,7 @@ impl LoopState {
         &mut self,
         mux: MuxName,
         session_name: &str,
-        detect: impl FnOnce(MuxName, &str) -> PetRenderCaps,
+        detect: impl FnOnce(MuxName, &str, PetRenderCaps) -> PetRenderCaps,
     ) {
         self.paint.refresh_caps_with(mux, session_name, detect);
     }
@@ -901,6 +901,12 @@ impl LoopState {
     pub(super) fn clear_pixel(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) {
         if let Err(err) = self.paint.clear(terminal.backend_mut()) {
             debug!(error = %err, "pet pixel clear failed");
+        }
+    }
+
+    pub(super) fn blank_pixel(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) {
+        if let Err(err) = self.paint.blank(terminal.backend_mut()) {
+            debug!(error = %err, "pet pixel blank failed");
         }
     }
 

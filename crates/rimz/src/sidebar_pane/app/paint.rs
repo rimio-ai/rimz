@@ -9,8 +9,8 @@ use ratatui::layout::Rect;
 use crate::MuxName;
 use crate::SidebarSnapshot;
 use crate::sidebar_pane::pets::{
-    PetAssets, PetBody, PetPixelView, PetRenderCaps, PetViewFrame, PixelPainter,
-    detect_pet_render_caps, effective_render_tier,
+    BEGIN_SYNC, END_SYNC, PetAssets, PetBody, PetPixelView, PetRenderCaps, PetViewFrame,
+    PixelPainter, detect_pet_render_caps, effective_render_tier,
 };
 use crate::sidebar_pane::render::{self, UiState};
 
@@ -78,9 +78,9 @@ impl FramePainter {
         &mut self,
         mux: MuxName,
         session_name: &str,
-        detect: impl FnOnce(MuxName, &str) -> PetRenderCaps,
+        detect: impl FnOnce(MuxName, &str, PetRenderCaps) -> PetRenderCaps,
     ) {
-        self.caps = detect(mux, session_name);
+        self.caps = detect(mux, session_name, self.caps);
     }
 
     pub(super) fn refresh_view(
@@ -126,18 +126,24 @@ impl FramePainter {
         alert: Option<&render::Alert>,
         ui: &mut UiState,
     ) -> io::Result<()> {
-        render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
-        // `draw_into` writes the fresh pixel rect into `ui`, so placement-shift
-        // recovery must run after one draw. A pre-draw check only sees the
-        // previous frame's rect and misses the steady same-pet layout shift.
-        if self.needs_full_redraw(ui) {
-            ratatui::backend::Backend::clear_region(terminal.backend_mut(), ClearType::All)?;
-            // The terminal contents are gone, so make ratatui diff against an
-            // empty previous buffer on the redraw without querying the real cursor.
-            terminal.swap_buffers();
+        terminal.backend_mut().write_all(BEGIN_SYNC)?;
+        let body_result = (|| {
             render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
-        }
-        self.paint_after_draw(ui, terminal)
+            // `draw_into` writes the fresh pixel rect into `ui`, so placement-shift
+            // recovery must run after one draw. A pre-draw check only sees the
+            // previous frame's rect and misses the steady same-pet layout shift.
+            if self.needs_full_redraw(ui) {
+                ratatui::backend::Backend::clear_region(terminal.backend_mut(), ClearType::All)?;
+                // The terminal contents are gone, so make ratatui diff against an
+                // empty previous buffer on the redraw without querying the real cursor.
+                terminal.swap_buffers();
+                render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
+            }
+            self.paint_after_draw(ui, terminal)
+        })();
+        let end_result = terminal.backend_mut().write_all(END_SYNC);
+        let flush_result = terminal.backend_mut().flush();
+        body_result.and(end_result).and(flush_result)
     }
 
     pub(super) fn needs_full_redraw(&self, ui: &UiState) -> bool {
@@ -160,7 +166,12 @@ impl FramePainter {
                 .painter
                 .paint(terminal.backend_mut(), rect, &pixel, frame);
         }
-        self.painter.hide_after_draw(terminal.backend_mut())
+        self.painter.hide_after_draw();
+        Ok(())
+    }
+
+    pub(super) fn blank<W: Write>(&mut self, backend: &mut W) -> io::Result<()> {
+        self.painter.blank(backend)
     }
 
     pub(super) fn clear<W: Write>(&mut self, backend: &mut W) -> io::Result<()> {

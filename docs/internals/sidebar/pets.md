@@ -75,13 +75,13 @@ Cell art stays pane-local across tmux, Zellij, detached sessions, plain terminal
 
 The pixel tier renders the same decoded frames through the kitty graphics protocol after ratatui draws the dashboard. The renderer reserves blank cells and records the absolute placeholder rect; the serve loop owns stdout and writes placement escapes for that rect.
 
-Ghostty's kitty support covers image placement while animation-frame actions (`a=f`/`a=a`) remain unavailable, so the renderer drives frames by cycling image ids and rewriting placeholder cells. Each frame is emitted under synchronized output (DECSET 2026) so the swap lands as one atomic redraw and skips partial or blank intermediate frames; Rimz applies `*:sync` during tmux room setup, so tmux buffers the bracketed writes and forwards the window to the terminal by default.
+Ghostty's kitty support covers image placement while animation-frame actions (`a=f`/`a=a`) remain unavailable, so the renderer drives frames by cycling image ids and rewriting placeholder cells. The frame painter owns synchronized output (DECSET 2026) around the ratatui draw, full-redraw recovery, and pixel placeholder rewrite so each frame lands as one atomic redraw; Rimz applies `*:sync` during tmux room setup, so tmux buffers the bracketed writes and forwards the window to the terminal by default.
 
-Rimz transmits each sprite image and emits its virtual placement once per sprite id for the current pet and rect; frame changes then rewrite only placeholder cells. Graphics APCs stay one-shot because macOS terminals can re-evaluate the mouse pointer on each image update.
+Rimz keeps sprite images and virtual placements resident for the renderer session. Sprite image ids are stable slots, and a pet change transmits the new sheet through the same ids so terminal image data is replaced in place; rect shifts and frame changes rewrite only placeholder cells. Deletes happen at renderer teardown. Graphics APCs stay one-shot because macOS terminals can re-evaluate the mouse pointer on each image update.
 
 tmux receives every graphics escape through its passthrough DCS wrapper, and placement uses kitty Unicode placeholders so redraws and pane repaints keep ownership in the sidebar pane. The live sidebar, gallery, and `rimz list-pets` share the same fixed footprints. Gallery columns paint through separate image-id ranges so one column cannot delete or ghost another column's image.
 
-The probe reads `tmux -V`, `allow-passthrough`, session-scoped `list-clients -F '#{client_control_mode} #{client_termname}'`, `tmux display-message -p '#{session_name}'`, and `$TERM` for standalone preview detection. These are runtime probes, not command-executing config.
+The probe reads `tmux -V`, `allow-passthrough`, session-scoped `list-clients -F '#{client_control_mode} #{client_termname}'`, `tmux display-message -p '#{session_name}'`, and `$TERM` for standalone preview detection. Live tmux re-probes fold failures onto the previous caps: version or passthrough command failures keep the previous transport fact, and command failures or empty rendering-client lists keep the previous kitty-terminal fact. These are runtime probes, not command-executing config.
 
 ## Assets
 

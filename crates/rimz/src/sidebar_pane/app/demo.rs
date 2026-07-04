@@ -1,13 +1,15 @@
-use std::io;
+use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{ClearType, CrosstermBackend};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use crate::MuxName;
 use crate::SidebarSnapshot;
-use crate::sidebar_pane::pets::{PixelPainter, detect_pet_render_caps};
+use crate::sidebar_pane::pets::{
+    BEGIN_SYNC, END_SYNC, PetRenderCaps, PixelPainter, detect_pet_render_caps,
+};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::tui::{MouseCapture, TerminalModeGuard};
 
@@ -32,7 +34,7 @@ pub fn serve_fixture(
     terminal.clear()?;
 
     let mut ui = UiState::default();
-    let caps = detect_pet_render_caps(mux, session_name);
+    let caps = detect_pet_render_caps(mux, session_name, PetRenderCaps::default());
     let mut paint = FramePainter::new(caps, mux == MuxName::Tmux);
     let anim_start = Instant::now();
     let cadence = Duration::from_millis(u64::from(refresh_ms));
@@ -66,7 +68,7 @@ pub fn serve_gallery(
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let caps = detect_pet_render_caps(mux, session_name);
+    let caps = detect_pet_render_caps(mux, session_name, PetRenderCaps::default());
     let id_base = PixelPainter::runtime_id_base();
     let mut states = columns
         .into_iter()
@@ -95,17 +97,25 @@ pub fn serve_gallery(
                 .paint
                 .refresh_view(&mut state.ui, &state.snapshot, false);
         }
-        draw_gallery_to_terminal(&mut terminal, &mut states)?;
-        if states
-            .iter()
-            .any(|state| state.paint.needs_full_redraw(&state.ui))
-        {
-            terminal.clear()?;
+        terminal.backend_mut().write_all(BEGIN_SYNC)?;
+        let body_result = (|| {
             draw_gallery_to_terminal(&mut terminal, &mut states)?;
-        }
-        for state in &mut states {
-            state.paint.paint_after_draw(&state.ui, &mut terminal)?;
-        }
+            if states
+                .iter()
+                .any(|state| state.paint.needs_full_redraw(&state.ui))
+            {
+                ratatui::backend::Backend::clear_region(terminal.backend_mut(), ClearType::All)?;
+                terminal.swap_buffers();
+                draw_gallery_to_terminal(&mut terminal, &mut states)?;
+            }
+            for state in &mut states {
+                state.paint.paint_after_draw(&state.ui, &mut terminal)?;
+            }
+            Ok(())
+        })();
+        let end_result = terminal.backend_mut().write_all(END_SYNC);
+        let flush_result = terminal.backend_mut().flush();
+        body_result.and(end_result).and(flush_result)?;
 
         if !event::poll(cadence)? {
             continue;

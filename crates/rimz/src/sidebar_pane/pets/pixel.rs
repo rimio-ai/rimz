@@ -1,5 +1,5 @@
 //! Emits kitty graphics payloads for pixel pets and tracks pane-local image
-//! placement so stale sprites are deleted before redraw.
+//! placement so sprites stay resident until renderer teardown.
 
 pub(crate) mod probe;
 
@@ -13,8 +13,8 @@ use super::PetPixelView;
 use super::frames::RgbaImage;
 
 const ESC: u8 = 0x1b;
-const BEGIN_SYNC: &[u8] = b"\x1b[?2026h";
-const END_SYNC: &[u8] = b"\x1b[?2026l";
+pub(crate) const BEGIN_SYNC: &[u8] = b"\x1b[?2026h";
+pub(crate) const END_SYNC: &[u8] = b"\x1b[?2026l";
 const CHUNK_SIZE: usize = 4096;
 const IMAGE_ID_COLOR_MASK: u32 = 0x00ff_ffff;
 const PLACEHOLDER: char = '\u{10eeee}';
@@ -32,6 +32,7 @@ pub(crate) struct PixelPainter {
     wrap: bool,
     pet_id: Option<String>,
     transmitted: BTreeSet<usize>,
+    resident: BTreeSet<usize>,
     last_rect: Option<Rect>,
 }
 
@@ -52,6 +53,7 @@ impl PixelPainter {
             wrap,
             pet_id: None,
             transmitted: BTreeSet::new(),
+            resident: BTreeSet::new(),
             last_rect: None,
         }
     }
@@ -80,41 +82,44 @@ impl PixelPainter {
         frame: &RgbaImage,
     ) -> io::Result<()> {
         let pet_changed = self.pet_id.as_deref() != Some(pixel.pet_id.as_str());
-        let rect_changed = self.last_rect.is_some_and(|last| last != rect);
-        write_synchronized_pixel_output(writer, |writer| {
-            if pet_changed || rect_changed {
-                self.delete_transmitted(writer)?;
-            }
-            if pet_changed {
-                self.pet_id = Some(pixel.pet_id.clone());
-            }
+        if pet_changed {
+            // The same sprite ids are re-transmitted with the new sheet and
+            // replace image data in place; no delete APC is emitted mid-session.
+            self.transmitted.clear();
+            self.pet_id = Some(pixel.pet_id.clone());
+        }
 
-            let image_id = self.image_id(pixel.sprite_index);
-            if self.transmitted.insert(pixel.sprite_index) {
-                for chunk in transmit_chunks(image_id, frame) {
-                    writer.write_all(&self.wrap_payload(&chunk))?;
-                }
-                // Kitty virtual placements persist; placeholder cells re-materialize the
-                // image on redraw, so per-frame placement APCs only add cursor flicker.
-                writer.write_all(&self.wrap_payload(&virtual_place(
-                    image_id,
-                    rect.width,
-                    rect.height,
-                )))?;
+        let image_id = self.image_id(pixel.sprite_index);
+        if self.transmitted.insert(pixel.sprite_index) {
+            self.resident.insert(pixel.sprite_index);
+            for chunk in transmit_chunks(image_id, frame) {
+                writer.write_all(&self.wrap_payload(&chunk))?;
             }
-            writer.write_all(&placeholder_grid(image_id, rect))
-        })?;
+            // Kitty virtual placements persist; placeholder cells re-materialize the
+            // image on redraw, so per-frame placement APCs only add cursor flicker.
+            writer.write_all(&self.wrap_payload(&virtual_place(
+                image_id,
+                rect.width,
+                rect.height,
+            )))?;
+        }
+        writer.write_all(&placeholder_grid(image_id, rect))?;
         writer.flush()?;
         self.last_rect = Some(rect);
         Ok(())
     }
 
-    pub(crate) fn hide_after_draw<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        // This runs after ratatui draws the frame. Delete only kitty images here;
-        // blanking cells would desync ratatui's diff buffer from the terminal.
+    pub(crate) fn hide_after_draw(&mut self) {
         self.last_rect = None;
-        write_synchronized_pixel_output(writer, |writer| self.delete_transmitted(writer))?;
-        self.pet_id = None;
+    }
+
+    pub(crate) fn blank<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        write_synchronized_pixel_output(writer, |writer| {
+            if let Some(rect) = self.last_rect.take() {
+                clear_rect(writer, rect)?;
+            }
+            Ok(())
+        })?;
         writer.flush()
     }
 
@@ -130,10 +135,11 @@ impl PixelPainter {
     }
 
     fn delete_transmitted<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        let sprite_indexes = std::mem::take(&mut self.transmitted);
+        let sprite_indexes = std::mem::take(&mut self.resident);
         for sprite_index in sprite_indexes {
             writer.write_all(&self.wrap_payload(&delete(self.image_id(sprite_index))))?;
         }
+        self.transmitted.clear();
         Ok(())
     }
 
@@ -337,6 +343,11 @@ mod tests {
         assert!(!bytes_contains(bytes, b"\x1bPtmux;\x1b\x1b[?2026l"));
     }
 
+    fn assert_not_sync_bracketed(bytes: &[u8]) {
+        assert!(!bytes.starts_with(BEGIN_SYNC));
+        assert!(!bytes.ends_with(END_SYNC));
+    }
+
     fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
         haystack
             .windows(needle.len())
@@ -408,6 +419,7 @@ mod tests {
         let mut painter = PixelPainter::with_id_base(0x120000, true);
         painter.pet_id = Some("codex".to_owned());
         painter.transmitted.insert(3);
+        painter.resident.insert(3);
         painter.last_rect = Some(Rect::new(1, 2, 2, 1));
         let mut bytes = Vec::new();
 
@@ -418,6 +430,7 @@ mod tests {
         assert!(text.contains("\x1b[3;2H  "));
         assert!(text.contains("\x1bPtmux;\x1b\x1b_Ga=d,d=i,i=1179651,q=2;"));
         assert!(painter.transmitted.is_empty());
+        assert!(painter.resident.is_empty());
         assert!(painter.last_rect.is_none());
     }
 
@@ -446,25 +459,44 @@ mod tests {
     }
 
     #[test]
-    fn hide_after_draw_deletes_cached_images_without_blanking_last_rect() {
+    fn hide_after_draw_drops_rect_without_writing_or_forgetting_images() {
         let mut painter = PixelPainter::with_id_base(0x120000, true);
         painter.pet_id = Some("codex".to_owned());
         painter.transmitted.insert(3);
+        painter.resident.insert(3);
         painter.last_rect = Some(Rect::new(1, 2, 2, 1));
-        let mut bytes = Vec::new();
 
-        painter.hide_after_draw(&mut bytes).expect("hide");
-        assert_sync_bracketed(&bytes);
-        let text = String::from_utf8(bytes).expect("utf8 hide");
+        painter.hide_after_draw();
 
-        assert!(!text.contains("\x1b[3;2H  "));
-        assert!(text.contains("\x1bPtmux;\x1b\x1b_Ga=d,d=i,i=1179651,q=2;"));
-        assert!(painter.transmitted.is_empty());
+        assert_eq!(painter.pet_id.as_deref(), Some("codex"));
+        assert!(painter.transmitted.contains(&3));
+        assert!(painter.resident.contains(&3));
         assert!(painter.last_rect.is_none());
     }
 
     #[test]
-    fn paint_rect_shift_deletes_images_without_blanking_old_cells() {
+    fn blank_blanks_last_rect_and_keeps_images_resident() {
+        let mut painter = PixelPainter::with_id_base(0x120000, true);
+        painter.pet_id = Some("codex".to_owned());
+        painter.transmitted.insert(3);
+        painter.resident.insert(3);
+        painter.last_rect = Some(Rect::new(1, 2, 2, 1));
+        let mut bytes = Vec::new();
+
+        painter.blank(&mut bytes).expect("blank");
+        assert_sync_bracketed(&bytes);
+        let text = String::from_utf8(bytes).expect("utf8 blank");
+
+        assert!(text.contains("\x1b[3;2H  "));
+        assert!(!text.contains("a=d,d=i,i=1179651,q=2"));
+        assert!(painter.transmitted.contains(&3));
+        assert!(painter.resident.contains(&3));
+        assert_eq!(painter.pet_id.as_deref(), Some("codex"));
+        assert!(painter.last_rect.is_none());
+    }
+
+    #[test]
+    fn paint_rect_shift_rewrites_placeholders_without_deleting_or_retransmitting() {
         let mut painter = PixelPainter::with_id_base(0x120000, true);
         let pixel = PetPixelView {
             pet_id: "codex".to_owned(),
@@ -482,11 +514,59 @@ mod tests {
             .expect("shifted paint");
         let text = String::from_utf8(bytes).expect("utf8 shifted paint");
 
+        assert_not_sync_bracketed(text.as_bytes());
         assert!(!text.contains("\x1b[8;6H   "));
         assert!(!text.contains("\x1b[9;6H   "));
-        assert!(text.contains("a=d,d=i,i=1179648,q=2"));
-        assert!(text.contains("a=t,f=32,s=1,v=1,i=1179648,q=2;AAECAw=="));
+        assert!(!text.contains("a=d,d=i,i=1179648,q=2"));
+        assert!(!text.contains("a=t,f=32,s=1,v=1,i=1179648,q=2;AAECAw=="));
         assert!(text.contains("\x1b[2;2H"));
+    }
+
+    #[test]
+    fn pet_change_replaces_same_id_without_delete_and_keeps_old_slots_for_teardown() {
+        let mut painter = PixelPainter::with_id_base(0x120000, true);
+        let codex = PetPixelView {
+            pet_id: "codex".to_owned(),
+            sprite_index: 0,
+            size: super::super::PetGridSize { cols: 2, rows: 1 },
+        };
+        let codex_other_sprite = PetPixelView {
+            sprite_index: 1,
+            ..codex.clone()
+        };
+        let claude = PetPixelView {
+            pet_id: "claude".to_owned(),
+            ..codex.clone()
+        };
+        let frame = image(vec![0, 1, 2, 3]);
+        let rect = Rect::new(0, 0, 2, 1);
+
+        painter
+            .paint(&mut Vec::new(), rect, &codex, &frame)
+            .expect("first sprite");
+        painter
+            .paint(&mut Vec::new(), rect, &codex_other_sprite, &frame)
+            .expect("second sprite");
+        let mut bytes = Vec::new();
+        painter
+            .paint(&mut bytes, rect, &claude, &frame)
+            .expect("pet changed");
+        let text = String::from_utf8(bytes).expect("utf8 pet change");
+
+        assert_not_sync_bracketed(text.as_bytes());
+        assert!(!text.contains("a=d,d=i"));
+        assert!(text.contains("a=t,f=32,s=1,v=1,i=1179648,q=2;AAECAw=="));
+        assert!(text.contains("a=p,U=1,i=1179648,c=2,r=1,q=2"));
+        assert!(painter.transmitted.contains(&0));
+        assert!(!painter.transmitted.contains(&1));
+        assert!(painter.resident.contains(&0));
+        assert!(painter.resident.contains(&1));
+
+        let mut clear = Vec::new();
+        painter.clear(&mut clear).expect("clear");
+        let clear_text = String::from_utf8(clear).expect("utf8 clear");
+        assert!(clear_text.contains("a=d,d=i,i=1179648,q=2"));
+        assert!(clear_text.contains("a=d,d=i,i=1179649,q=2"));
     }
 
     #[test]
@@ -512,7 +592,7 @@ mod tests {
         painter
             .paint(&mut steady, rect, &pixel, &frame)
             .expect("steady paint");
-        assert_sync_bracketed(&steady);
+        assert_not_sync_bracketed(&steady);
         assert!(!bytes_contains(&steady, b"\x1b_G"));
         let text = String::from_utf8(steady).expect("utf8 steady paint");
         assert!(text.contains("\x1b[1;1H"));
@@ -535,7 +615,7 @@ mod tests {
         painter
             .paint(&mut reused_sprite, rect, &pixel, &frame)
             .expect("reused sprite paint");
-        assert_sync_bracketed(&reused_sprite);
+        assert_not_sync_bracketed(&reused_sprite);
         assert!(!bytes_contains(&reused_sprite, b"\x1b_G"));
     }
 
@@ -558,7 +638,7 @@ mod tests {
             )
             .expect("paint");
 
-        assert_sync_bracketed(&bytes);
+        assert_not_sync_bracketed(&bytes);
         assert_eq!(
             bytes
                 .windows(b"\x1bPtmux;".len())
@@ -587,7 +667,7 @@ mod tests {
                 &image(vec![0, 1, 2, 3]),
             )
             .expect("paint");
-        assert_sync_bracketed(&bytes);
+        assert_not_sync_bracketed(&bytes);
         let text = String::from_utf8(bytes).expect("utf8 paint");
 
         assert!(!text.contains("\x1bPtmux;"));

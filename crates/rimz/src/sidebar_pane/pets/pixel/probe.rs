@@ -15,8 +15,8 @@ pub struct PetRenderCaps {
     pub kitty_term: bool,
 }
 
-pub(crate) fn detect(mux: MuxName, session_name: &str) -> PetRenderCaps {
-    detect_with(mux, session_name, &LiveProbe)
+pub(crate) fn detect(mux: MuxName, session_name: &str, prev: PetRenderCaps) -> PetRenderCaps {
+    detect_with(mux, session_name, prev, &LiveProbe)
 }
 
 pub fn detect_env() -> (PetRenderCaps, bool) {
@@ -31,9 +31,14 @@ trait Probe {
     fn env_var(&self, key: &str) -> Option<String>;
 }
 
-fn detect_with(probed_mux: MuxName, session_name: &str, probe: &impl Probe) -> PetRenderCaps {
+fn detect_with(
+    probed_mux: MuxName,
+    session_name: &str,
+    prev: PetRenderCaps,
+    probe: &impl Probe,
+) -> PetRenderCaps {
     match probed_mux {
-        MuxName::Tmux => detect_tmux(session_name, probe),
+        MuxName::Tmux => detect_tmux(session_name, probe, prev),
         MuxName::Zellij => detect_zellij(probe),
     }
 }
@@ -42,7 +47,7 @@ fn detect_env_with(probe: &impl Probe) -> (PetRenderCaps, bool) {
     if env_present(probe, "TMUX") {
         let caps = probe
             .tmux_session_name()
-            .map(|session_name| detect_tmux(&session_name, probe))
+            .map(|session_name| detect_tmux(&session_name, probe, PetRenderCaps::default()))
             .unwrap_or_default();
         return (caps, true);
     }
@@ -52,20 +57,22 @@ fn detect_env_with(probe: &impl Probe) -> (PetRenderCaps, bool) {
     (detect_standalone(probe), false)
 }
 
-fn detect_tmux(session_name: &str, probe: &impl Probe) -> PetRenderCaps {
-    let kitty_term = probe
-        .tmux_client_termnames(session_name)
-        .is_ok_and(|termnames| termnames_allowed(&termnames));
-    let version_ok = probe
-        .tmux_version()
-        .ok()
-        .and_then(|version| crate::mux::tmux::parse_version(&version))
-        .is_some_and(|version| version >= MIN_PIXEL_TMUX_VERSION);
-    let passthrough_ok = probe
-        .tmux_allow_passthrough()
-        .is_ok_and(|allow| matches!(allow.trim(), "on" | "all"));
+fn detect_tmux(session_name: &str, probe: &impl Probe, prev: PetRenderCaps) -> PetRenderCaps {
+    let kitty_term = match probe.tmux_client_termnames(session_name) {
+        Ok(termnames) if !termnames.is_empty() => termnames_allowed(&termnames),
+        _ => prev.kitty_term,
+    };
+    let pixel_transport = match (probe.tmux_version(), probe.tmux_allow_passthrough()) {
+        (Ok(version), Ok(allow)) => {
+            let version_ok = crate::mux::tmux::parse_version(&version)
+                .is_some_and(|version| version >= MIN_PIXEL_TMUX_VERSION);
+            let passthrough_ok = matches!(allow.trim(), "on" | "all");
+            version_ok && passthrough_ok
+        }
+        _ => prev.pixel_transport,
+    };
     PetRenderCaps {
-        pixel_transport: version_ok && passthrough_ok,
+        pixel_transport,
         kitty_term,
     }
 }
@@ -220,7 +227,12 @@ mod tests {
     #[test]
     fn tmux_pixel_gate_requires_version_passthrough_and_allowed_termname() {
         assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, &FakeProbe::ok()),
+            detect_with(
+                MuxName::Tmux,
+                TEST_SESSION,
+                PetRenderCaps::default(),
+                &FakeProbe::ok()
+            ),
             PetRenderCaps {
                 pixel_transport: true,
                 kitty_term: true,
@@ -231,6 +243,7 @@ mod tests {
             detect_with(
                 MuxName::Zellij,
                 TEST_SESSION,
+                PetRenderCaps::default(),
                 &FakeProbe::ok().with_env("TERM", "xterm-ghostty")
             ),
             PetRenderCaps::default()
@@ -241,7 +254,7 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, &old),
+            detect_with(MuxName::Tmux, TEST_SESSION, PetRenderCaps::default(), &old),
             PetRenderCaps {
                 pixel_transport: false,
                 kitty_term: true,
@@ -253,7 +266,7 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, &off),
+            detect_with(MuxName::Tmux, TEST_SESSION, PetRenderCaps::default(), &off),
             PetRenderCaps {
                 pixel_transport: false,
                 kitty_term: true,
@@ -265,7 +278,7 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, &all),
+            detect_with(MuxName::Tmux, TEST_SESSION, PetRenderCaps::default(), &all),
             PetRenderCaps {
                 pixel_transport: true,
                 kitty_term: true,
@@ -277,7 +290,12 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, &unsupported_term),
+            detect_with(
+                MuxName::Tmux,
+                TEST_SESSION,
+                PetRenderCaps::default(),
+                &unsupported_term
+            ),
             PetRenderCaps {
                 pixel_transport: true,
                 kitty_term: false,
@@ -289,10 +307,109 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, &unattached),
+            detect_with(
+                MuxName::Tmux,
+                TEST_SESSION,
+                PetRenderCaps::default(),
+                &unattached
+            ),
             PetRenderCaps {
                 pixel_transport: true,
                 kitty_term: false,
+            }
+        );
+    }
+
+    #[test]
+    fn tmux_probe_failures_keep_previous_fact_values() {
+        let prev = PetRenderCaps {
+            pixel_transport: true,
+            kitty_term: true,
+        };
+
+        let version_error = FakeProbe {
+            version: None,
+            termnames: Some(vec!["screen-256color".to_owned()]),
+            ..FakeProbe::ok()
+        };
+        assert_eq!(
+            detect_with(MuxName::Tmux, TEST_SESSION, prev, &version_error),
+            PetRenderCaps {
+                pixel_transport: true,
+                kitty_term: false,
+            }
+        );
+
+        let passthrough_error = FakeProbe {
+            allow_passthrough: None,
+            ..FakeProbe::ok()
+        };
+        assert_eq!(
+            detect_with(MuxName::Tmux, TEST_SESSION, prev, &passthrough_error),
+            prev
+        );
+
+        let term_error = FakeProbe {
+            termnames: None,
+            allow_passthrough: Some("off".to_owned()),
+            ..FakeProbe::ok()
+        };
+        assert_eq!(
+            detect_with(MuxName::Tmux, TEST_SESSION, prev, &term_error),
+            PetRenderCaps {
+                pixel_transport: false,
+                kitty_term: true,
+            }
+        );
+    }
+
+    #[test]
+    fn tmux_empty_rendering_client_list_keeps_previous_kitty_fact() {
+        let prev = PetRenderCaps {
+            pixel_transport: false,
+            kitty_term: true,
+        };
+        let unattached = FakeProbe {
+            termnames: Some(Vec::new()),
+            ..FakeProbe::ok()
+        };
+
+        assert_eq!(
+            detect_with(MuxName::Tmux, TEST_SESSION, prev, &unattached),
+            PetRenderCaps {
+                pixel_transport: true,
+                kitty_term: true,
+            }
+        );
+    }
+
+    #[test]
+    fn tmux_successful_probe_overrides_previous_facts() {
+        let prev = PetRenderCaps {
+            pixel_transport: true,
+            kitty_term: true,
+        };
+        let unsupported = FakeProbe {
+            version: Some("tmux 3.5a".to_owned()),
+            allow_passthrough: Some("off".to_owned()),
+            termnames: Some(vec!["screen-256color".to_owned()]),
+            ..FakeProbe::ok()
+        };
+
+        assert_eq!(
+            detect_with(MuxName::Tmux, TEST_SESSION, prev, &unsupported),
+            PetRenderCaps::default()
+        );
+        assert_eq!(
+            detect_with(
+                MuxName::Tmux,
+                TEST_SESSION,
+                PetRenderCaps::default(),
+                &FakeProbe::ok()
+            ),
+            PetRenderCaps {
+                pixel_transport: true,
+                kitty_term: true,
             }
         );
     }
@@ -312,7 +429,13 @@ mod tests {
             };
 
             assert!(
-                detect_with(MuxName::Tmux, TEST_SESSION, &probe).kitty_term,
+                detect_with(
+                    MuxName::Tmux,
+                    TEST_SESSION,
+                    PetRenderCaps::default(),
+                    &probe
+                )
+                .kitty_term,
                 "{termname} should enable pixels"
             );
         }
@@ -321,7 +444,15 @@ mod tests {
             termnames: Some(vec!["xterm-ghostty".to_owned(), "kitty".to_owned()]),
             ..FakeProbe::ok()
         };
-        assert!(detect_with(MuxName::Tmux, TEST_SESSION, &allowed).kitty_term);
+        assert!(
+            detect_with(
+                MuxName::Tmux,
+                TEST_SESSION,
+                PetRenderCaps::default(),
+                &allowed
+            )
+            .kitty_term
+        );
 
         let mixed = FakeProbe {
             termnames: Some(vec![
@@ -330,7 +461,15 @@ mod tests {
             ]),
             ..FakeProbe::ok()
         };
-        assert!(!detect_with(MuxName::Tmux, TEST_SESSION, &mixed).kitty_term);
+        assert!(
+            !detect_with(
+                MuxName::Tmux,
+                TEST_SESSION,
+                PetRenderCaps::default(),
+                &mixed
+            )
+            .kitty_term
+        );
 
         assert_eq!(
             rendering_termnames("0 xterm-ghostty\n1 tmux-256color"),
@@ -341,7 +480,15 @@ mod tests {
             termnames: Some(rendering_termnames("0 xterm-ghostty\n1 tmux-256color")),
             ..FakeProbe::ok()
         };
-        assert!(detect_with(MuxName::Tmux, TEST_SESSION, &probe).kitty_term);
+        assert!(
+            detect_with(
+                MuxName::Tmux,
+                TEST_SESSION,
+                PetRenderCaps::default(),
+                &probe
+            )
+            .kitty_term
+        );
     }
 
     #[test]
