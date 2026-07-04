@@ -228,10 +228,11 @@ fn prompt_with_shell_metacharacters_stays_one_argument() {
 
 #[cfg(unix)]
 #[test]
-fn close_pane_exec_reports_startup_failure_before_exiting_with_child_status() {
+fn close_pane_exec_reports_startup_failure_before_dropping_to_shell() {
     let env = Env::new();
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let shim_dir = write_failing_agent_shim(&env, "codex", 7);
+    let idle_shell_marker = env.home_root.join("idle-shell.marker");
     let launch_id = "launch_startup_failure";
     seed_provisional_agent_launch(&env, launch_id, "pruner");
 
@@ -253,12 +254,18 @@ fn close_pane_exec_reports_startup_failure_before_exiting_with_child_status() {
         ])
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
+        .env("RIMZ_TEST_IDLE_SHELL_MARKER", &idle_shell_marker)
         .bounded_output()
         .expect("agents exec returns without waiting on non-tty stdin");
 
-    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(&idle_shell_marker).expect("idle shell marker"),
+        "idle shell\n"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("failed to start"), "{stderr}");
+    assert!(stderr.contains("exit status: 7"), "{stderr}");
     assert!(stderr.contains("rimz agents trim.pruner"), "{stderr}");
 }
 

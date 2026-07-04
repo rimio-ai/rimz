@@ -400,7 +400,7 @@ fn worktree_new_with_at_base_keeps_pending_commits() {
 
 #[cfg(unix)]
 #[test]
-fn agents_exec_clean_exit_removes_clean_worktree() {
+fn agents_exec_clean_exit_leaves_clean_worktree_until_gc() {
     if git_missing() {
         return;
     }
@@ -420,15 +420,31 @@ fn agents_exec_clean_exit_removes_clean_worktree() {
     );
     let _status = wait_for_exit(&mut child, &env.home_root.join("clean.pid"));
 
-    wait_for_path_absent(&path, "clean worktree removed after clean exit");
+    assert!(
+        path.exists(),
+        "clean quit leaves worktree for shell inspection"
+    );
+    assert!(
+        branch_exists(&env.project_root, "demo"),
+        "clean quit keeps worktree branch"
+    );
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("worktrees"))
+        .stdout(contains("1 swept"));
+
+    wait_for_path_absent(&path, "clean worktree removed by gc");
     assert!(
         !branch_exists(&env.project_root, "demo"),
-        "worktree branch deleted"
+        "worktree branch deleted by gc"
     );
     assert!(
         !git_stdout(&env.project_root, &["worktree", "list", "--porcelain"])
             .contains(&path.display().to_string()),
-        "git worktree list forgets the removed worktree"
+        "git worktree list forgets the gc-removed worktree"
     );
 }
 
@@ -892,10 +908,26 @@ fn auto_remove_force_deletes_branch_merged_into_explicit_base() {
     );
     let _status = wait_for_exit(&mut child, &env.home_root.join("explicit-base.pid"));
 
-    wait_for_path_absent(&path, "explicit-base worktree removed");
+    assert!(
+        path.exists(),
+        "explicit-base clean quit leaves worktree for shell inspection"
+    );
+    assert!(
+        branch_exists(&env.project_root, "demo"),
+        "explicit-base clean quit keeps worktree branch"
+    );
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("worktrees"))
+        .stdout(contains("1 swept"));
+
+    wait_for_path_absent(&path, "explicit-base worktree removed by gc");
     assert!(
         !branch_exists(&env.project_root, "demo"),
-        "branch deleted after proving it landed on develop"
+        "gc deletes branch after proving it landed on develop"
     );
     assert!(
         branch_exists(&env.project_root, "develop"),

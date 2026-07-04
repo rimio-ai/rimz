@@ -116,7 +116,14 @@ pub fn write_fake_login_shell(env: &Env, name: &str, exports: &[(&str, &str)]) -
         body.push_str(&format!("export {key}='{value}'\n"));
     }
     body.push_str(
-        "while [ \"$#\" -gt 0 ]; do\n\
+        "if [ \"$#\" -eq 0 ]; then\n\
+           if [ -n \"${RIMZ_TEST_IDLE_SHELL_MARKER:-}\" ]; then\n\
+             printf 'idle shell\\n' > \"$RIMZ_TEST_IDLE_SHELL_MARKER\"\n\
+             exit 0\n\
+           fi\n\
+           exit 127\n\
+         fi\n\
+         while [ \"$#\" -gt 0 ]; do\n\
            case \"$1\" in\n\
              -c)\n\
                shift\n\

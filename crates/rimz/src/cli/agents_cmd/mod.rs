@@ -8,7 +8,7 @@ mod refresh_usage;
 mod supervised;
 
 use std::collections::BTreeMap;
-use std::io::{IsTerminal, Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
