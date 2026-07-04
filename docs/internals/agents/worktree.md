@@ -47,6 +47,8 @@ The decision is pure, over four inputs — the marker, `git status --porcelain`,
 
 Branch deletion follows the same proof. The automatic path tries `git branch -d`, escalates to `git branch -D` only after the landed check passes again, and otherwise keeps the branch. Force removal — `remove --force`, or the interactive `remove` on a dirty tree — is the human explicitly choosing destruction, so it uses Git's force path.
 
+Named-team relaunch uses the same status oracle. When `rimz agents <team> -w <name>` finds closed team history in a clean content-landed worktree, it offers to run the ordinary marked-worktree removal path, archives the worktree channel messages as recreated, and then lets the launch path create the worktree again.
+
 ## `rimz gc`
 
 `rimz gc` sweeps every clean, marked, content-landed worktree in the current repo that no live user pane occupies and no live-or-unknown agent session binds by recorded launch path or live process cwd, measures the checkout bytes it reclaims, then runs `git worktree prune`. The sweep requires a readable agent roster and skips worktree reclamation when it cannot get one. `gc` reclaims crash residue, trees left after clean agent quits dropped panes to shells, and trees that became safe only after later Git, pane, or agent state changed. A `fresh`-based worktree compares against `origin/…`, so an unfetched merge keeps the tree until a fetch updates the remote-tracking base. Named-channel records stay until `rimz channel rm`; `gc` acts on worktrees only.

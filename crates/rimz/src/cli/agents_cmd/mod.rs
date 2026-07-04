@@ -4,6 +4,7 @@ mod auto_continue;
 mod commands;
 mod exec;
 mod launch;
+mod reconcile;
 mod refresh_usage;
 mod supervised;
 

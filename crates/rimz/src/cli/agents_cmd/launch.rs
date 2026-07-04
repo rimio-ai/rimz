@@ -48,6 +48,7 @@ pub(super) fn launch_layout(
             layout,
             team_name,
             single_cell,
+            None,
         );
     }
     let worktree_launch = args.worktree.is_some() || args.from_pr.is_some();
@@ -68,7 +69,44 @@ pub(super) fn launch_layout(
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     agents_launch::ensure_live_session(backend.as_ref(), &workspace.session_name)?;
-    record_workspace(&workspace)?;
+    let ledger = open_ledger(&workspace)?;
+
+    if let Some(team) = team_name.as_deref() {
+        let explicit_worktree_name = args
+            .worktree
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        if let Some(name) = explicit_worktree_name
+            && args.from_pr.is_none()
+        {
+            match reconcile::reconcile_named_team_launch(
+                &workspace,
+                &machine_config,
+                backend.as_ref(),
+                &ledger,
+                name,
+                team,
+            )? {
+                reconcile::Reconciled::Done => return Ok(()),
+                reconcile::Reconciled::Resume(path) => {
+                    return launch_resume_layout(
+                        args,
+                        globals,
+                        allow_in_place,
+                        &workspace,
+                        &machine_config,
+                        &teams,
+                        layout,
+                        team_name,
+                        single_cell,
+                        Some(&path),
+                    );
+                }
+                reconcile::Reconciled::Continue => {}
+            }
+        }
+    }
 
     let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
     let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
@@ -78,7 +116,6 @@ pub(super) fn launch_layout(
         args.worktree.as_deref(),
         args.from_pr.as_ref(),
     )?;
-    let ledger = open_ledger(&workspace)?;
     if let Some(channel) = args.channel.as_deref() {
         crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
         rimz::channel::register(ledger.paths(), channel)?;
@@ -226,13 +263,25 @@ fn launch_resume_layout(
     layout: LayoutSpec,
     team_name: Option<String>,
     single_cell: bool,
+    worktree_filter: Option<&Path>,
 ) -> Result<()> {
     let ledger = open_ledger(workspace)?;
     let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let agents = match worktree_filter {
+        Some(target) => {
+            let target = rimz::worktree::normalize_path_lexical(target);
+            projection
+                .agents
+                .into_iter()
+                .filter(|agent| agent_matches_worktree_filter(agent, &target))
+                .collect::<Vec<_>>()
+        }
+        None => projection.agents,
+    };
     let cells = cohort_cells(&layout);
     let spec = args.spec.as_deref().unwrap_or("<spec>");
     let plan = rimz::harness::resume::plan_cohort_resume(
-        &projection.agents,
+        &agents,
         &projection.ended,
         rimz::ledger::runtime::agent_liveness,
         &cells,
@@ -384,6 +433,12 @@ fn launch_resume_layout(
     }
     report_cohort_resume(&plan);
     Ok(())
+}
+
+fn agent_matches_worktree_filter(agent: &AgentState, target: &Path) -> bool {
+    agent.worktree_path.as_deref().is_some_and(|worktree| {
+        rimz::worktree::normalize_path_lexical(Path::new(worktree)) == target
+    })
 }
 
 fn cohort_cells(layout: &LayoutSpec) -> Vec<rimz::harness::resume::CohortCell> {
@@ -1304,4 +1359,71 @@ pub(super) fn validate_agent_name(name: &str) -> Result<()> {
 pub(super) fn valid_agent_name_candidate(name: &str) -> bool {
     rimz::harness::petname::valid_name(name)
         && !rimz::harness::petname::collides_with_reserved_prefix(name, rimz::agents::known_kinds())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worktree_filter_matches_normalized_agent_paths() {
+        let target = rimz::worktree::normalize_path_lexical(Path::new("/repo-worktrees/demo"));
+        let mut agent = test_agent("sess-demo");
+        agent.worktree_path = Some("/repo/../repo-worktrees/demo".to_owned());
+
+        assert!(agent_matches_worktree_filter(&agent, &target));
+
+        agent.worktree_path = Some("/repo-worktrees/other".to_owned());
+        assert!(!agent_matches_worktree_filter(&agent, &target));
+
+        agent.worktree_path = None;
+        assert!(!agent_matches_worktree_filter(&agent, &target));
+    }
+
+    fn test_agent(id: &str) -> AgentState {
+        AgentState {
+            agent_id: AgentSessionId::from(id),
+            kind: AgentKind::new_unchecked("codex"),
+            name: None,
+            kind_ordinal: None,
+            profile: None,
+            role: None,
+            team: None,
+            launch_group: None,
+            launch_ordinal: None,
+            channel: None,
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            pane: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            description: None,
+            transcript_path: None,
+            origin: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_compact_command_tokens: None,
+            last_seen: jiff::Timestamp::UNIX_EPOCH,
+            last_activity: jiff::Timestamp::UNIX_EPOCH,
+            registered_at: Some(jiff::Timestamp::UNIX_EPOCH),
+        }
+    }
 }
